@@ -20,6 +20,7 @@ from gf_common.domain import (
     CATALOG_META,
     END_PROJECTION_VERSION,
     POLICY_INPUT_VERSION,
+    SIMULATOR_REVISION,
     ContractError,
     Json,
     canonical,
@@ -30,6 +31,7 @@ from gf_common.domain import (
 from gf_models.lightgbm.config import ModelConfig, TrainingConfig, encoder_config, model_config
 from gf_models.lightgbm.encoder import ENCODER_VERSION, Array, feature_names, signature
 
+INFERENCE_SCHEMA = 2
 ADAPTER_VERSION = "native-lightgbm-q-v1"
 NATIVE_VERSION = "4.7.0"
 NUMPY_VERSION = "2.5.4"
@@ -115,7 +117,7 @@ def save_artifact(booster: Any, directory: Path, model: ModelConfig, action_conf
     _, versions = runtime()
     directory.mkdir(parents=True, exist_ok=False)
     booster.save_model(str(directory / "model.txt"))
-    manifest = {"schema_version": 1, "adapter_version": ADAPTER_VERSION, "model_id": "lightgbm", "model_version": "1",
+    manifest = {"schema_version": INFERENCE_SCHEMA, "simulator_contract_revision": SIMULATOR_REVISION, "adapter_version": ADAPTER_VERSION, "model_id": "lightgbm", "model_version": "1",
                 "model_sha256": hashlib.sha256((directory / "model.txt").read_bytes()).hexdigest(),
                 "encoder_version": ENCODER_VERSION, "encoder": asdict(model.encoder), "encoder_signature": signature(model.encoder),
                 "feature_names": feature_names(model.encoder), "network": asdict(model.network),
@@ -151,9 +153,9 @@ def inspect_artifact(directory: Path, *, expected_digest: str | None = None, act
         required = {"schema_version", "adapter_version", "model_id", "model_version", "model_sha256", "encoder_version",
                     "encoder", "encoder_signature", "feature_names", "network", "initialization", "runtime", "policy_input_version",
                     "catalog", "reward_version", "end_projection_version", "generator_version", "scorer_version",
-                    "action_config_hash", "purpose", "ready"}
+                    "action_config_hash", "purpose", "ready", "simulator_contract_revision"}
         closed(manifest, required)
-        constants = {"schema_version": 1, "adapter_version": ADAPTER_VERSION, "model_id": "lightgbm", "model_version": "1",
+        constants = {"schema_version": INFERENCE_SCHEMA, "simulator_contract_revision": SIMULATOR_REVISION, "adapter_version": ADAPTER_VERSION, "model_id": "lightgbm", "model_version": "1",
                      "encoder_version": ENCODER_VERSION, "policy_input_version": POLICY_INPUT_VERSION, "catalog": CATALOG_META,
                      "reward_version": REWARD_VERSION, "end_projection_version": END_PROJECTION_VERSION,
                      "generator_version": GENERATOR_VERSION, "scorer_version": SCORER_VERSION}

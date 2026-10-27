@@ -1,0 +1,99 @@
+{
+  "observation": {
+    "action_schema_version": 1,
+    "actionable": true,
+    "active_player": 2,
+    "current_player": 2,
+    "end_times": false,
+    "first_player": 1,
+    "observation_schema_version": "1",
+    "opponent": {
+      "ascended": false,
+      "hp": 40,
+      "learned_miracles": [],
+      "money": 20,
+      "mp": 10,
+      "player_id": 1,
+      "status": {
+        "dark_cloud": false,
+        "disease": null,
+        "dream": false,
+        "flash": false,
+        "fog": false
+      }
+    },
+    "own": {
+      "ascended": false,
+      "guardian": null,
+      "hand": [
+        {
+          "definition_id": "torch",
+          "instance_id": 10
+        },
+        {
+          "definition_id": "guardian-pot",
+          "instance_id": 12
+        },
+        {
+          "definition_id": "spear-in-fine-view",
+          "instance_id": 15
+        },
+        {
+          "definition_id": "angel-knife",
+          "instance_id": 16
+        },
+        {
+          "definition_id": "chill-cup",
+          "instance_id": 18
+        }
+      ],
+      "hp": 20,
+      "learned_miracles": [],
+      "money": 20,
+      "mp": 10,
+      "player_id": 2,
+      "status": {
+        "dark_cloud": false,
+        "disease": null,
+        "dream": false,
+        "flash": false,
+        "fog": false
+      }
+    },
+    "phase": "resolving",
+    "required_choice": "buy_accept_reject",
+    "result": null,
+    "state_revision": 7,
+    "turn": 4,
+    "turns_until_end_of_world": 146,
+    "typed_action_schema": [
+      {
+        "additional_fields": false,
+        "optional_fields": {},
+        "required_fields": {
+          "accept": {
+            "type": "boolean"
+          }
+        },
+        "type": "buy_decision"
+      }
+    ],
+    "viewer_player_id": 2
+  },
+  "action_options_response": {
+    "action_options": {
+      "buy_artifacts": [],
+      "can_allow": false,
+      "can_discard": false,
+      "can_pray": false,
+      "can_sacrifice": false,
+      "exchange_artifacts": [],
+      "required_choice": "buy_accept_reject",
+      "sell_artifacts": [],
+      "usable_hand_elements": [],
+      "usable_learned_miracles": [],
+      "valid_targets": []
+    },
+    "state_revision": 7
+  }
+}

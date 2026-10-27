@@ -56,7 +56,7 @@ report_reserve_seconds = 1
 max_decisions = 20000
 
 [server]
-simulator_revision = "44a26e3a16b808e826deb332fa72acfc5037d3ef"
+simulator_revision = "860d8b92db4ce82012e040510f221b52241f28aa"
 source_dir = "../../../GodFieldSimurator"
 binary = "../../../GodFieldSimurator/target/debug/gf-test-server"
 config = "../test-server.toml"

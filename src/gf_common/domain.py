@@ -7,14 +7,20 @@ from dataclasses import asdict, dataclass, field
 from typing import Any, Protocol
 
 Json = dict[str, Any]
-SIMULATOR_REVISION = "44a26e3a16b808e826deb332fa72acfc5037d3ef"
+SIMULATOR_REVISION = "860d8b92db4ce82012e040510f221b52241f28aa"
 RULE_SET = "true-match-1v1-v1"
 POLICY_INPUT_VERSION = "player-atomic-options-v1"
 REVIEWED_SPEC_HASHES = {
     "docs/spec/00-specification-overview.md": "a2ef3bbf2d8a1e88300d94f75bccfd1956a9b0ea18c14dce2dc0c1c41845a03d",
+    "docs/spec/03-game-engine.md": "4e6a3ff1eaea998cffbdb29383f2713bbd4efa16876d59ad0e481ca0c72feee9",
+    "docs/spec/05-observation.md": "8d8326c1eed4a8d2f81c822f1ed6c6b2782dfec309f1efbcc250d3c4f727cda9",
+    "docs/spec/06-persistence-history.md": "85bbf2461d9445c143dfce304967e36cfb8705580620e01b622134136ae06fdd",
     "docs/spec/07-external-interfaces-adapters.md": "057577a3a3678cdc76a427bf578bd50295433fc0f096e50be3352a1f6e38062b",
-    "docs/spec/08-test-requirements.md": "179d18cf95f1d8e8f4c925dc1998ae367a9e86fd32effbf9fe69272d359d48b7",
+    "docs/spec/08-test-requirements.md": "2d3f41349ff796e27590a6dd70b469fb2d547134ff5d659aba770fb02cb9a731",
+    "docs/spec/09-gameplay-rules.md": "7d3721fd5b4cd86c6c39b995e3378784542e34fd1be6c4a08707555c8fb66e33",
+    "docs/spec/10-cli-client.md": "31a0ad7fcc310d987d54bef1e6805aff3fdb31cb28e18b563f715206eb06588b",
 }
+
 END_PROJECTION_VERSION = "simulator-closure-v1"
 CATALOG_HASH = "4bb3ac87e4567798767f7c74a9f9280208adf931277c6afc7deeb865ef4d0673"
 CATALOG_META: Json = {

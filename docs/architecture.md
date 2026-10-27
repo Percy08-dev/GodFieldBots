@@ -33,6 +33,13 @@ gated fresh training. Independent final reviews and verification are recorded in
 [Phase 4 verification](verification/lightgbm-phase4.md). The current failed
 feasibility pilot cannot authorize a real-data fit; explicitly synthetic component
 verification is permitted by the implementation plan.
+The user now authorizes the corrected Simulator integration and fresh evaluation/
+pilot. [ADR0007](adr/0007-staged-buy-contract-adoption.md) has independent design
+READY: a narrow resolving/buyer input condition, new revision/spec snapshots and
+inference schema 2 bound to gameplay identity. Implementation and independent
+final reviews are READY; the complete new pilot is pending. See
+[adoption verification](verification/buy-contract-adoption.md). No old outcome
+or dataset is reinterpreted.
 The [rejection diagnosis](issues/0001-public-observation-legality-investigation.md)
 now explains the four cases as a protected-discard rule absent from the public
 normative text and attribute-incompatible defenses with insufficient permitted
@@ -56,7 +63,7 @@ cancellation case: every exceptional path drains owned tasks, including child
 TimeoutError. Nominal cleanup expiry is recorded once as unsuccessful; joining
 continues without new work or resetting deadlines under the existing OS/I/O debt.
 
-Simulator pin: `44a26e3a16b808e826deb332fa72acfc5037d3ef`; HTTP `/v1`,
+Simulator pin: `860d8b92db4ce82012e040510f221b52241f28aa`; HTTP `/v1`,
 `true-match-1v1-v1`, Observation `"1"`, Action metadata `1`, TestServer info `1`.
 Catalog: `public-ja-v1`, schema `1`, locale `ja`, 296 definitions,
 SHA-256 `4bb3ac87e4567798767f7c74a9f9280208adf931277c6afc7deeb865ef4d0673`.
@@ -112,6 +119,14 @@ input file hashes and resolved paths. Version defaults in the effective config.
 Workers receive policy ID/sampling seed and action settings plus an optional safe
 checkpoint path/digest binding, never full experiment/server config, raw GameSeed
 or diagnostic metadata.
+
+The adopted Simulator permits input for the current nonterminal viewer during
+awaiting_action/awaiting_response and, narrowly, resolving with
+buy_accept_reject. Its exact existing buy_decision descriptor is required.
+Other resolving states remain non-actionable. The buyer comes from current_player,
+not active_player; the target's preceding Allow/Mirror response and the buyer's
+purchase choice are separate decisions. These public rules follow the new pin;
+full-possession Buy behavior is project-provisional under Simulator09 §17.3.
 
 All limits are configurable: initial beam width 64, 512 candidates, 20,000
 expansion attempts, sequence length 3; concurrency 2; training sampling seeds 3;
@@ -324,7 +339,7 @@ never retain only successful episodes or manufacture bootstrap labels.
 ## LightGBM training and inference
 
 `gf_models.lightgbm` owns stdlib-only typed model settings, NumPy feature encoding,
-native CPU fit/predict and artifact schema 1. The encoder `participant-action-v1`
+native CPU fit/predict and inference artifact schema 2. The encoder `participant-action-v1`
 supports current observation and bounded public-event aggregates. Own visible
 definitions, ordered hand/learned references, missingness and same-revision atomic
 hints are encoded; candidate position, numeric instance IDs and management
@@ -370,6 +385,9 @@ owned cleanup task without resetting its first deadline, preserving the original
 operation error until process, thread and streams have been reclaimed.
 
 Artifacts contain native `model.txt` and closed inference JSON, without pickles.
+Schema 2 requires simulator_contract_revision equal to the supported pin; old
+schema-1 artifacts and wrong/missing identities are explicitly unsupported before
+native loading, including toy loads. Training completion stays schema 1.
 Model, encoder, runtime, catalog, input/reward/projection and candidate-generation
 identities must match. `purpose=toy` permits explicit synthetic component tests
 only; formal commands reject it before startup. Only fresh training is supported;

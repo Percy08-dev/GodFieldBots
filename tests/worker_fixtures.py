@@ -86,3 +86,23 @@ class ResistantReadyPolicy(AuditPolicy):
 
 def resistant_ready_factory(model_id):
     return ResistantReadyPolicy()
+
+
+class FixedBuyChoicePolicy(AuditPolicy):
+    """Controlled test choices only; no saved prefix or experiment controls."""
+    def __init__(self, accept):
+        self.accept = accept
+
+    def select(self, value, candidates):
+        if value.observation["required_choice"] == "defense":
+            wanted = {"type": "respond", "ordered_defenses": []}
+        else:
+            assert value.observation["phase"] == "resolving"
+            assert value.observation["required_choice"] == "buy_accept_reject"
+            wanted = {"type": "buy_decision", "accept": self.accept}
+        return PolicyDecision(candidates.actions.index(wanted), "fixed-buy-component-v1")
+
+
+def fixed_buy_choice_factory(model_id):
+    assert model_id in ("accept", "reject")
+    return FixedBuyChoicePolicy(model_id == "accept")

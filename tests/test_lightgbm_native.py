@@ -62,6 +62,8 @@ def test_native_tiny_fit_save_load_predictions_early_stop_and_safe_text(toy_arti
     for forbidden in (str(path.parent), "00000000-0000-0000-0000-000000000001", "http://", "train_runs", "pilot_run", "game_seed", "ancestry"):
         assert forbidden not in text and forbidden not in safe_json
     assert "seed" in text  # legitimate native model RNG metadata
+    from gf_common.domain import SIMULATOR_REVISION
+    assert manifest["schema_version"] == 2 and manifest["simulator_contract_revision"] == SIMULATOR_REVISION
     assert manifest["purpose"] == "toy"
     with pytest.raises(ContractError, match="toy"):
         inspect_artifact(path)
@@ -327,3 +329,36 @@ def test_current_fit_code_provenance_stays_parent_only_and_is_budgeted(tmp_path,
     assert manifest["charged_prior_seconds"] >= .03
     text = (directory / "request.json").read_text() + (directory / "checkpoint" / "model.txt").read_text() + (directory / "checkpoint" / "inference.json").read_text()
     assert "current-fit-revision-sentinel" not in text and "/current-fit-control-path-sentinel" not in text
+
+
+@pytest.mark.parametrize("damage", ["schema1", "missing_pin", "wrong_pin"])
+def test_gameplay_identity_rejects_before_runtime_native_worker_or_listener(toy_artifact, tmp_path, monkeypatch, damage):
+    import gf_cli
+    import gf_models.lightgbm.model as adapter
+    from gf_cli.config import load_config
+    path, model, _, _ = toy_artifact
+    manifest = json.loads((path / "inference.json").read_text())
+    if damage == "schema1":
+        manifest["schema_version"] = 1
+    elif damage == "missing_pin":
+        manifest.pop("simulator_contract_revision")
+    else:
+        manifest["simulator_contract_revision"] = "44a26e3a16b808e826deb332fa72acfc5037d3ef"
+    (path / "inference.json").write_text(canonical(manifest))
+    monkeypatch.setattr(adapter, "runtime_metadata", lambda: pytest.fail("invalid contract must reject before runtime inspection"))
+    monkeypatch.setattr(adapter, "runtime", lambda: pytest.fail("invalid contract must reject before native import"))
+    monkeypatch.setattr(gf_cli, "SimulatorEnvironment", lambda *a, **k: pytest.fail("invalid checkpoint must not create listener"))
+    with pytest.raises(ContractError):
+        load_artifact(path, allow_toy=True)
+    loaded = load_config("configs/experiments/smoke.toml", {"model": {**asdict(model), "checkpoint": str(path)},
+                         "run": {"output_dir": str(tmp_path / "output")}})
+    with pytest.raises(ContractError):
+        asyncio.run(gf_cli.run_experiment(loaded, "evaluate"))
+    assert not (tmp_path / "output").exists()
+    async def child():
+        worker = ParticipantWorker(make_policy, "lightgbm", 17, ActionConfig(), 3,
+                                   policy_options={"checkpoint": str(path), "expected_manifest_digest": manifest_digest(str(path)), "allow_toy": True})
+        with pytest.raises(RuntimeError, match="ContractError"):
+            await worker.initialize()
+        assert worker.closed and worker.process.poll() is not None
+    asyncio.run(child())

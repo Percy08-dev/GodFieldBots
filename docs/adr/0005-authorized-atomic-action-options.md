@@ -7,6 +7,9 @@
   and raw wire DTO verified; no blocking findings. Final conformance is required.
 - Implementation: complete, including the reviewed v3 singleton amendment.
   Independent correctness/conformance READY; [verification](../verification/action-options.md).
+- Contract amendment: [ADR0007](0007-staged-buy-contract-adoption.md) supersedes
+  this record's original Simulator pin/spec snapshots for corrected Buy control.
+  The authorization, input/storage formats and candidate rules remain in force.
 
 ## Context and authority
 

@@ -5,6 +5,10 @@ Date: 2026-10-28. Scope: verify the user's Simulator correction for
 existing prebuilt test executables. This is diagnostic verification, not Bots
 contract adoption, a training collection run or a passed learning gate.
 
+Follow-up: [ADR0007 and current adoption verification](buy-contract-adoption.md)
+record the subsequently authorized Bots integration and fresh reruns. The
+compatibility findings below describe the initial confirmation, before adoption.
+
 ## Source and executable identity
 
 - Simulator HEAD: `860d8b92db4ce82012e040510f221b52241f28aa`.

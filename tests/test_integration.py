@@ -103,3 +103,119 @@ def test_bounded_real_episode_decision_cutoff_keeps_accepted_action_without_term
         assert not any(r["kind"] == "transition" and r["terminal"] for r in records)
     accepted = [r for path in directory.glob("s*-seat*/player-*.jsonl") for r in read_journal(path) if r["kind"] == "acknowledgement"]
     assert len(accepted) == 2 and all(r["response"]["status"] == "active" for r in accepted)
+
+
+def test_staged_buy_allow_and_both_decisions_use_strict_client_workers_and_journals(tmp_path):
+    """ADR0007 fixed control prefix; its seed/requests stay in this driver only."""
+    import json
+    from dataclasses import asdict
+
+    from gf_common.domain import PolicyDecision, digest
+    from gf_common.validation import reconcile_replay
+    from gf_simulator_client.workers import ParticipantWorker
+    from gf_training.journal import ParticipantJournal
+    from tests.worker_fixtures import fixed_buy_choice_factory
+
+    async def run():
+        control = json.loads((ROOT / "docs/issues/cases/0003-buy-choice-control.json").read_text())
+        seed = control["experiment_control"]["seed"]
+        server_config = load_config(ROOT / "configs/experiments/smoke.toml").config.server
+        server = ManagedServer(server_config.binary, server_config.config, seed, 2, tmp_path / "buy-server")
+        client = None
+        settings = ActionConfig(strategy="enumerate", max_candidates=4096, max_expansions=20000)
+        total_accepted = 0
+        try:
+            startup = await server.start()
+            client = AttestedClient(startup["base_url"], expected_fingerprint=seed_fingerprint(seed), fixed_seed_experiment=True,
+                                    expected_effective=server.expected, startup_info=startup["test_server_info"])
+            await client.attest()
+            definitions = await client.public_catalog()
+            for accept in (True, False):
+                game = (await client.create())["game_id"]
+                for _ in range(2):
+                    await client.join(game, str(uuid.uuid4()))
+                directory = tmp_path / ("accept" if accept else "reject")
+                directory.mkdir()
+                run_id = str(uuid.uuid4())
+                journals = {viewer: ParticipantJournal(directory, "buy-component", viewer, "fixed-buy-control", run_id=run_id,
+                             game_id=game, action_config_hash=digest(asdict(settings))) for viewer in (1, 2)}
+                workers = {viewer: ParticipantWorker(fixed_buy_choice_factory, "accept" if accept else "reject", 17,
+                                                     settings, 3) for viewer in (1, 2)}
+                histories, cursors, accepted = {1: [], 2: []}, {1: None, 2: None}, {1: [], 2: []}
+                async def current(viewer, game=game, cursors=cursors, histories=histories):
+                    obs = await client.observe(game, viewer)
+                    assert obs["actionable"] and obs["current_player"] == viewer
+                    options = await client.actor_options(game, viewer, obs)
+                    events, cursors[viewer] = await client.events(game, viewer, cursors[viewer])
+                    histories[viewer].extend(events)
+                    return decision_input(obs, histories[viewer], cursors[viewer], definitions, options)
+                async def submit(viewer, value, candidates, selection, game=game, journals=journals, accepted=accepted):
+                    nonlocal total_accepted
+                    command = {"command_id": str(uuid.uuid4()), "expected_revision": value.observation["state_revision"],
+                               "action": candidates.actions[selection.index]}
+                    index = journals[viewer].begin(value, candidates, selection, command, 0)
+                    ack = await client.act(game, viewer, command)
+                    journals[viewer].acknowledge(index, ack)
+                    accepted[viewer].append(command["action"])
+                    total_accepted += 1
+                    return ack
+                try:
+                    for step in control["actions_before_observation"]:
+                        viewer = step["player_id"]
+                        value = await current(viewer)
+                        assert value.observation["state_revision"] == step["expected_revision"]
+                        candidates = PublicCandidateGenerator(settings).generate(value)
+                        selected = PolicyDecision(candidates.actions.index(step["typed_action"]), "saved-public-prefix-component-v1")
+                        await submit(viewer, value, candidates, selected)
+                    target = await current(1)
+                    assert target.observation["state_revision"] == 6
+                    assert (target.observation["phase"], target.observation["required_choice"]) == ("awaiting_response", "defense")
+                    assert target.action_options["action_options"]["can_allow"] is True
+                    candidates, selected = await workers[1].select(target)
+                    assert candidates.actions[selected.index] == {"type": "respond", "ordered_defenses": []}
+                    await submit(1, target, candidates, selected)
+                    buyer = await current(2)
+                    assert buyer.observation["state_revision"] == 7
+                    assert (buyer.observation["phase"], buyer.observation["required_choice"]) == ("resolving", "buy_accept_reject")
+                    assert buyer.action_options["action_options"]["can_allow"] is False
+                    nonactor = await client.observe(game, 1)
+                    assert not nonactor["actionable"] and nonactor["typed_action_schema"] == []
+                    assert nonactor["current_player"] == 2
+                    with pytest.raises(ValueError):
+                        await client.actor_options(game, 1, nonactor)
+                    seller_before = nonactor["own"]
+                    buyer_before = buyer.observation["own"]
+                    offer = next(event for event in reversed(buyer.events) if event["type"] == "buy_offered")
+                    assert offer["buyer"] == 2 and offer["seller"] == 1 and offer["definition_id"] == "wood-shield" and offer["price"] == 4
+                    candidates, selected = await workers[2].select(buyer)
+                    assert candidates.actions == ({"type": "buy_decision", "accept": False}, {"type": "buy_decision", "accept": True})
+                    assert candidates.actions[selected.index] == {"type": "buy_decision", "accept": accept}
+                    await submit(2, buyer, candidates, selected)
+                    after = {viewer: await client.observe(game, viewer) for viewer in (1, 2)}
+                    assert after[2]["own"]["money"] == buyer_before["money"] - (4 if accept else 0)
+                    assert after[1]["own"]["money"] == seller_before["money"] + (4 if accept else 0)
+                    assert (any(card["definition_id"] == "wood-shield" for card in after[2]["own"]["hand"])) == accept
+                    assert (any(card["instance_id"] == 7 for card in after[1]["own"]["hand"])) == (not accept)
+                    events, _ = await client.events(game, 2, cursors[2])
+                    transfers = [event for event in events if event["type"] == "artifact_transferred"]
+                    assert len(transfers) == int(accept)
+                    for viewer in (1, 2):
+                        replay = await client.replay(game, viewer)
+                        reconcile_replay(replay, viewer, accepted[viewer], None)
+                        journals[viewer].finish("truncated", None)
+                        records = read_journal(journals[viewer].final_path)
+                        assert records[-1]["terminal_reward"] is None and records[-1]["pending_decisions"] == []
+                    assert read_journal(journals[2].final_path)[-2]["response"]["previous_revision"] == 7
+                finally:
+                    for journal in journals.values():
+                        journal.close_incomplete()
+                    for worker in workers.values():
+                        await worker.close()
+                await client.delete(game)
+        finally:
+            if client:
+                await client.close()
+            await server.stop()
+        assert total_accepted == 16  # six-prefix + Allow + purchase, both branches
+        assert server.process.returncode == 0 and server.health["shutdown"] == "stdin_eof"
+    asyncio.run(run())

@@ -3,7 +3,7 @@
 公開された本人の観測・可視イベント・typed Action metadata・許可された本人向けActionOptionsから行動を選ぶPython Botです。
 Phase 0〜3のRandom／heuristic、候補生成、TestServer対戦、本人別journal、固定評価を実装しています。
 Phase 4のCPU LightGBM、特徴変換、checkpoint推論、学習CLIも実装しています。
-実対戦データでの学習はclean pilot未成立のため停止中です。PPOは後続Phaseです。
+実対戦学習に必要なclean pilotの判定は[購入契約更新・再検証記録](docs/verification/buy-contract-adoption.md)を参照してください。PPOは後続Phaseです。
 合成データでの数値検証とBotの学習成立は別に判定します。
 現在の検証結果・Gate・制約は [ActionOptions検証記録](docs/verification/action-options.md)、
 [LightGBM検証記録](docs/verification/lightgbm-phase4.md)、過去の基盤検証は
@@ -19,7 +19,7 @@ uv run gf-bots smoke --config configs/experiments/smoke.toml
 ```
 
 既定の配置では、事前ビルドされた `../GodFieldSimurator/target/debug/gf-test-server` を使います。
-Simulator契約はrevision `44a26e3a16b808e826deb332fa72acfc5037d3ef`、HTTP `/v1`、
+Simulator契約はrevision `860d8b92db4ce82012e040510f221b52241f28aa`、HTTP `/v1`、
 `true-match-1v1-v1`、Observation `"1"`、Action metadata `1`、catalog `public-ja-v1` に固定します。
 実行にはlocalhostのlistenerを起動できる環境が必要です。
 
@@ -70,15 +70,18 @@ uv run --extra data --extra lightgbm gf-bots train --config configs/experiments/
 
 最後のコマンドは初期presetではエラーになります。完全なtrain／validation run、
 64試合×3方策seedのclean pilot、事前に固定したaccepted-decision目標を設定する必要があります。
-現在のpilotは[Simulatorの購入待ちmetadata問題](docs/issues/0003-buy-choice-control-metadata.md)を
-含むため、成功した試合だけを抜き出して学習することはできません。`resume`は未対応として拒否します。
+当初のpilotは[Simulatorの購入待ちmetadata問題](docs/issues/0003-buy-choice-control-metadata.md)を
+含むため不適格です。成功した試合だけを抜き出して学習することはできません。
+修正の取り込みと新しいpilotは[再検証記録](docs/verification/buy-contract-adoption.md)に残します。
+`resume`は未対応として拒否します。
 
 学習runは各seedにつき元の時間予算を持ち、データ収集の記録済みコスト、変換、fit、保存、
 子プロセス回収を計上します。native fitとモデル読込は専用子プロセスで実行します。
-checkpointの推論JSONには特徴・候補生成・catalog・報酬などの互換情報を保存し、
+checkpointの推論JSONはschema 2で、Simulator revision・特徴・候補生成・catalog・報酬などの互換情報を保存し、
 学習元のseedや接続情報は別の`training.json`に残します。
 正式な対戦には完了した`training.json`と`checkpoint/`を含むrun bundleが必要です。
 合成データのモデルは`purpose=toy`となり、通常の対戦コマンドは起動前に拒否します。
+schema 1の旧モデルや異なるSimulator版のモデルは自動移行せず拒否します。
 
 ## 保存・データ変換
 
@@ -133,8 +136,9 @@ OSの強制回収やローカル保存の停止不能な待ちにはhard real-ti
 最終検証は引き続きSimulatorが行います。通常のdiscardでは公開された破棄禁止ルールも適用します。
 `can_discard`などの全体フラグや通常使用一覧を、個別の破棄対象／売却対象一覧とは解釈しません。
 使用可能なマジカルステッキは、固定の攻撃値がなくても単独候補を構成します。未検証のMP効果や
-組み合わせは推測しません。購入承諾を要求しながら`actionable=false`となる既存サーバーの問題は、
-[別タスク](docs/issues/0003-buy-choice-control-metadata.md)として記録しています。
+組み合わせは推測しません。購入承諾待ちは新しい契約に従い、購入者本人の
+`resolving / buy_accept_reject`だけを入力可能として扱います。
+[旧サーバーの問題と修正確認](docs/issues/0003-buy-choice-control-metadata.md)も保持しています。
 詳細は [actions.py](src/gf_common/actions.py) の版付きcoverageを参照してください。
 探索予算切れの理由・公開枝刈り・beamによる近似除外を別記録し、候補空を祈りで埋めません。
 

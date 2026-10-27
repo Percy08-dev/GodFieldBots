@@ -12,6 +12,9 @@
   inference implemented; final checks/reviews in
   [Phase 4 verification](../verification/lightgbm-phase4.md). Real-data learning
   remains gated by the unresolved Simulator pending-buy contract.
+- Compatibility amendment: [ADR0007](0007-staged-buy-contract-adoption.md)
+  supersedes the inference schema-1 identity policy for the corrected Buy rules;
+  the original design and verification below remain historical evidence.
 
 ## Context and requirements
 

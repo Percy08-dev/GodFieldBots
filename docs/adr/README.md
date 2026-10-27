@@ -22,6 +22,7 @@
 | [0004](0004-coordinated-cancellation.md) | Accepted | キャンセル時もCLIが所有グループの後始末完了を待つ |
 | [0005](0005-authorized-atomic-action-options.md) | Accepted | 同revision・本人向けActionOptionsをatomic hintsとして使用 |
 | [0006](0006-lightgbm-action-value.md) | Accepted | 公開特徴のLightGBM行動価値・checkpoint・Gate付き学習 |
+| [0007](0007-staged-buy-contract-adoption.md) | Accepted | 購入応答・承諾の新契約とモデルのSimulator版固定 |
 
 ## 記録テンプレート
 

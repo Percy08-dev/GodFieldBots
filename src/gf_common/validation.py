@@ -136,7 +136,9 @@ def observation(value: Any, viewer: int | None = None) -> Json:
             raise ContractError("duplicate hand instance")
         ids.add(artifact["instance_id"])
     result(value["result"])
-    can_act = value["current_player"] == value["viewer_player_id"] and value["result"] is None and value["phase"] in ("awaiting_action", "awaiting_response")
+    input_phase = value["phase"] in ("awaiting_action", "awaiting_response") or (
+        value["phase"] == "resolving" and value["required_choice"] == "buy_accept_reject")
+    can_act = value["current_player"] == value["viewer_player_id"] and value["result"] is None and input_phase
     if can_act and value["required_choice"] == "additional_choice":
         raise UnsupportedContract("additional_choice has no v1 action contract")
     expected = action_descriptors(value["required_choice"]) if can_act else []
