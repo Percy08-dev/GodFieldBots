@@ -1,10 +1,32 @@
 # Separate Simulator task: actionable metadata for a pending BuyDecision
 
-- Status: reproduced; Simulator adapter/spec correction required.
+- Status: Simulator correction verified on 2026-10-28; Bots contract adoption
+  and a new complete pilot remain pending. Historical failure is retained below.
 - Source pin: `44a26e3a16b808e826deb332fa72acfc5037d3ef` plus reviewed dirty
   documentation hashes in ADR0005. Binary build revision remains unknown.
 - Binary SHA-256:
   `d9c774d214e0e732fed040e7ef2e386979fc1f42e225429c1dbcfc642b49831f`.
+
+## Correction verification — 2026-10-28
+
+Simulator commit `860d8b92db4ce82012e040510f221b52241f28aa` introduces the
+target's Allow/Mirror response before the offer, then permits the current buyer's
+`resolving / buy_accept_reject` input with the existing `buy_decision` descriptor.
+The normative CLI contract documents that narrow exception.
+
+The updated prebuilt TestServer passed the saved six-action case plus an Allow
+response and both buyer decisions in separate same-seed games. Actor metadata,
+nonactor false/empty metadata, same-revision ActionOptions, card/money effects,
+stable repeated reads and clean process shutdown passed. A separate existing
+prebuilt HTTP regression also passed. Source checkout identity does not prove
+either executable's build revision.
+
+Current Bots still pins the old contract and rejects the new actionable
+resolving Observation with `typed metadata mismatch`. No production validator,
+pin, dataset, checkpoint or pilot has been changed by this confirmation.
+Bots adoption requires the architecture gate, a narrowly scoped validator
+update and fresh integration/pilot verification. The old failed pilot remains
+ineligible. See [verification evidence](../verification/simulator-buy-fix.md).
 
 ## Observable mismatch
 
@@ -22,12 +44,12 @@ The fixed prefix was reproduced on the recorded binary in 0.099s at
 `runs/diagnostics/buy-contract-a9d2723895e3`, followed by owned deletion and clean
 stdin-EOF exit 0. No descriptor was fabricated and no action followed false.
 
-## Cause and required fix in the owning repository
+## Historical cause and handoff at the original pin
 
-- [economy.rs](../../../GodFieldSimurator/src/engine/resolution/economy.rs),
+- At the original revision, [economy.rs](../../../GodFieldSimurator/src/engine/resolution/economy.rs),
   lines 201–211, creates pending buy with `GamePhase::Resolving`,
   `RequiredChoice::BuyAcceptReject` and the buyer as current player.
-- [dto.rs](../../../GodFieldSimurator/src/server/transport/http/dto.rs),
+- At the original revision, [dto.rs](../../../GodFieldSimurator/src/server/transport/http/dto.rs),
   lines 724–750, emits action metadata only in AwaitingAction/AwaitingResponse.
   Its BuyAcceptReject mapping therefore does not handle actual pending buys.
 - The protocol already declares `buy_decision` with boolean `accept`.
