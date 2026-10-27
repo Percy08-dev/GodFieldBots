@@ -1,0 +1,39 @@
+schema_version = 1
+kind = "experiment"
+
+[references]
+actions = "../actions/beam.toml"
+model = "../models/heuristic.toml"
+opponent = "../models/random.toml"
+
+[run]
+name = "baseline-smoke"
+split = "validation"
+output_dir = "../../runs/smoke"
+seeds = ["00000000-0000-0000-0000-000000000001"]
+sampling_seeds = [17]
+pairs_per_seed = 1
+concurrency = 2
+wall_seconds = 180
+admission_seconds = 90
+execution_seconds = 120
+finalization_seconds = 60
+report_reserve_seconds = 1
+max_decisions = 10000
+
+[server]
+simulator_revision = "44a26e3a16b808e826deb332fa72acfc5037d3ef"
+source_dir = "../../../GodFieldSimurator"
+binary = "../../../GodFieldSimurator/target/debug/gf-test-server"
+config = "../test-server.toml"
+fixed_seed_experiment = true
+startup_seconds = 15
+request_seconds = 10
+worker_seconds = 10
+shutdown_seconds = 30
+cleanup_reserve_seconds = 2
+transport_retries = 2
+
+[evaluation]
+bootstrap_samples = 2000
+bootstrap_seed = 0

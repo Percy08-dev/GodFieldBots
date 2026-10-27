@@ -1,0 +1,10 @@
+{
+  "game_id": "01M5WN0YQY49FDW5YQ7W4J74H2",
+  "status": "waiting_for_players",
+  "required_players": 2,
+  "joined_players": 0,
+  "state_revision": null,
+  "rule_set_version": "true-match-1v1-v1",
+  "random_algorithm": "xoshiro256pp",
+  "random_algorithm_version": "1"
+}

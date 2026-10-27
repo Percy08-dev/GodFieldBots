@@ -1,0 +1,13 @@
+# Project-scoped defaults. Explicit CLI/session settings may override these.
+model = "gpt-6.1-sol"
+model_reasoning_effort = "xhigh"
+
+model_context_window = 1000000
+model_auto_compact_token_limit = 900000
+
+# Leave service_tier unset; use Standard speed unless explicitly requested.
+[agents]
+enabled = true
+max_concurrent_threads_per_session = 3
+default_subagent_model = "gpt-6.1-sol"
+default_subagent_reasoning_effort = "high"

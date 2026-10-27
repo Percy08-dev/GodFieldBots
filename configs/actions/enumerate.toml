@@ -1,0 +1,13 @@
+schema_version = 1
+kind = "actions"
+
+[actions]
+use_action_options = true
+strategy = "enumerate"
+scorer = "public_heuristic_v1"
+beam_width = 64
+max_sequence_length = 3
+max_candidates = 512
+max_expansions = 20000
+exchange_allocations = ["balanced", "hp", "mp", "money"]
+targets = ["opponent", "self"]

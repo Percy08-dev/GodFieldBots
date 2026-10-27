@@ -1,0 +1,86 @@
+{
+  "observation_schema_version": "1",
+  "action_schema_version": 1,
+  "actionable": false,
+  "typed_action_schema": [],
+  "state_revision": 0,
+  "viewer_player_id": 2,
+  "turn": 1,
+  "turns_until_end_of_world": 149,
+  "first_player": 1,
+  "active_player": 1,
+  "current_player": 1,
+  "phase": "awaiting_action",
+  "required_choice": "turn_action",
+  "end_times": false,
+  "own": {
+    "player_id": 2,
+    "hp": 40,
+    "mp": 10,
+    "money": 20,
+    "hand": [
+      {
+        "instance_id": 10,
+        "definition_id": "hatchet"
+      },
+      {
+        "instance_id": 11,
+        "definition_id": "leather-cap"
+      },
+      {
+        "instance_id": 12,
+        "definition_id": "heart-dew"
+      },
+      {
+        "instance_id": 13,
+        "definition_id": "gravity-mace"
+      },
+      {
+        "instance_id": 14,
+        "definition_id": "steel-shield"
+      },
+      {
+        "instance_id": 15,
+        "definition_id": "heart-dew"
+      },
+      {
+        "instance_id": 16,
+        "definition_id": "avalanche"
+      },
+      {
+        "instance_id": 17,
+        "definition_id": "flame-mail"
+      },
+      {
+        "instance_id": 18,
+        "definition_id": "heart-shell"
+      }
+    ],
+    "learned_miracles": [],
+    "status": {
+      "disease": null,
+      "fog": false,
+      "flash": false,
+      "dream": false,
+      "dark_cloud": false
+    },
+    "guardian": null,
+    "ascended": false
+  },
+  "opponent": {
+    "player_id": 1,
+    "hp": 40,
+    "mp": 10,
+    "money": 20,
+    "learned_miracles": [],
+    "status": {
+      "disease": null,
+      "fog": false,
+      "flash": false,
+      "dream": false,
+      "dark_cloud": false
+    },
+    "ascended": false
+  },
+  "result": null
+}

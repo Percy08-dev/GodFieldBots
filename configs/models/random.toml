@@ -1,0 +1,6 @@
+schema_version = 1
+kind = "model"
+
+[model]
+model_id = "random"
+version = "1"

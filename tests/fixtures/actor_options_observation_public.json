@@ -1,0 +1,291 @@
+{
+  "observation_schema_version": "1",
+  "action_schema_version": 1,
+  "actionable": true,
+  "typed_action_schema": [
+    {
+      "type": "pray",
+      "required_fields": {},
+      "optional_fields": {},
+      "additional_fields": false
+    },
+    {
+      "type": "play_sequence",
+      "required_fields": {
+        "ordered_elements": {
+          "items": {
+            "one_of": [
+              {
+                "additional_fields": false,
+                "optional_fields": {},
+                "required_fields": {
+                  "instance_id": {
+                    "maximum": 18446744073709551615,
+                    "minimum": 0,
+                    "sources": [
+                      "own.hand[].instance_id"
+                    ],
+                    "type": "integer"
+                  },
+                  "source": {
+                    "const": "hand_artifact",
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              },
+              {
+                "additional_fields": false,
+                "optional_fields": {},
+                "required_fields": {
+                  "definition_id": {
+                    "sources": [
+                      "own.learned_miracles[]"
+                    ],
+                    "type": "string"
+                  },
+                  "source": {
+                    "const": "learned_miracle",
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              }
+            ]
+          },
+          "ordered": true,
+          "type": "array"
+        }
+      },
+      "optional_fields": {
+        "target": {
+          "one_of": [
+            {
+              "enum": [
+                1,
+                2
+              ],
+              "sources": [
+                "own.player_id",
+                "opponent.player_id"
+              ],
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additional_fields": false
+    },
+    {
+      "type": "discard",
+      "required_fields": {
+        "instance_ids": {
+          "items": {
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "sources": [
+              "own.hand[].instance_id"
+            ],
+            "type": "integer"
+          },
+          "ordered": true,
+          "type": "array"
+        }
+      },
+      "optional_fields": {},
+      "additional_fields": false
+    },
+    {
+      "type": "sacrifice",
+      "required_fields": {
+        "instance_ids": {
+          "items": {
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "sources": [
+              "own.hand[].instance_id"
+            ],
+            "type": "integer"
+          },
+          "ordered": true,
+          "type": "array"
+        }
+      },
+      "optional_fields": {},
+      "additional_fields": false
+    },
+    {
+      "type": "exchange",
+      "required_fields": {
+        "artifact": {
+          "maximum": 18446744073709551615,
+          "minimum": 0,
+          "sources": [
+            "own.hand[].instance_id"
+          ],
+          "type": "integer"
+        },
+        "hp": {
+          "maximum": 2147483647,
+          "minimum": -2147483648,
+          "type": "integer"
+        },
+        "money": {
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "mp": {
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "optional_fields": {},
+      "additional_fields": false
+    },
+    {
+      "type": "sell",
+      "required_fields": {
+        "artifact": {
+          "maximum": 18446744073709551615,
+          "minimum": 0,
+          "sources": [
+            "own.hand[].instance_id"
+          ],
+          "type": "integer"
+        },
+        "sold_artifact": {
+          "maximum": 18446744073709551615,
+          "minimum": 0,
+          "sources": [
+            "own.hand[].instance_id"
+          ],
+          "type": "integer"
+        },
+        "target": {
+          "enum": [
+            1,
+            2
+          ],
+          "sources": [
+            "own.player_id",
+            "opponent.player_id"
+          ],
+          "type": "integer"
+        }
+      },
+      "optional_fields": {},
+      "additional_fields": false
+    },
+    {
+      "type": "buy",
+      "required_fields": {
+        "artifact": {
+          "maximum": 18446744073709551615,
+          "minimum": 0,
+          "sources": [
+            "own.hand[].instance_id"
+          ],
+          "type": "integer"
+        },
+        "target": {
+          "enum": [
+            1,
+            2
+          ],
+          "sources": [
+            "own.player_id",
+            "opponent.player_id"
+          ],
+          "type": "integer"
+        }
+      },
+      "optional_fields": {},
+      "additional_fields": false
+    }
+  ],
+  "state_revision": 0,
+  "viewer_player_id": 1,
+  "turn": 1,
+  "turns_until_end_of_world": 149,
+  "first_player": 1,
+  "active_player": 1,
+  "current_player": 1,
+  "phase": "awaiting_action",
+  "required_choice": "turn_action",
+  "end_times": false,
+  "own": {
+    "player_id": 1,
+    "hp": 40,
+    "mp": 10,
+    "money": 20,
+    "hand": [
+      {
+        "instance_id": 1,
+        "definition_id": "smile-shell"
+      },
+      {
+        "instance_id": 2,
+        "definition_id": "moonlight-helm"
+      },
+      {
+        "instance_id": 3,
+        "definition_id": "sell"
+      },
+      {
+        "instance_id": 4,
+        "definition_id": "steel-armor"
+      },
+      {
+        "instance_id": 5,
+        "definition_id": "energy-helm"
+      },
+      {
+        "instance_id": 6,
+        "definition_id": "glittering-dress"
+      },
+      {
+        "instance_id": 7,
+        "definition_id": "bouncing-sword"
+      },
+      {
+        "instance_id": 8,
+        "definition_id": "flame-mail"
+      },
+      {
+        "instance_id": 9,
+        "definition_id": "mudflow"
+      }
+    ],
+    "learned_miracles": [],
+    "status": {
+      "disease": null,
+      "fog": false,
+      "flash": false,
+      "dream": false,
+      "dark_cloud": false
+    },
+    "guardian": null,
+    "ascended": false
+  },
+  "opponent": {
+    "player_id": 2,
+    "hp": 40,
+    "mp": 10,
+    "money": 20,
+    "learned_miracles": [],
+    "status": {
+      "disease": null,
+      "fog": false,
+      "flash": false,
+      "dream": false,
+      "dark_cloud": false
+    },
+    "ascended": false
+  },
+  "result": null
+}

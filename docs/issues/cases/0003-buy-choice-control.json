@@ -1,0 +1,187 @@
+{
+  "case_kind": "diagnostic_only_saved_public_http_prefix",
+  "policy_eligible": false,
+  "simulator_source_revision": "44a26e3a16b808e826deb332fa72acfc5037d3ef",
+  "experiment_control": {
+    "seed": "00000000-0000-0000-0000-000000000003",
+    "note": "diagnostic only; reproduce as the first newly created game on a repeated-seed TestServer"
+  },
+  "source": {
+    "pilot_path": "runs/pilot/baseline-feasibility-pilot-354f64ce-747",
+    "http_log_path": "runs/pilot/baseline-feasibility-pilot-354f64ce-747/server-s2-m0-r0-seat0/http/http.jsonl",
+    "http_log_sha256": "4ff293624341282a7a52e7ed7d27b51599a97cf159c3a3a967fee8173d402a7a",
+    "manifest_path": "runs/pilot/baseline-feasibility-pilot-354f64ce-747/manifest.json",
+    "manifest_sha256": "2450c3cc3c72c81e27985081a55df723e308705b95a98bc03fd9d88e38969238",
+    "report_path": "runs/pilot/baseline-feasibility-pilot-354f64ce-747/report.json",
+    "report_sha256": "a17108ea5810d919a38389644cd7ed59e2df496991df7332ceaecb0b611ffd4a",
+    "episode_id": "s2-m2-r0-seat0",
+    "game_id": "01M5XQA5NJAQGSMFTJ2RDH1EN4",
+    "observation_request_id": "d5390e75-6633-43a5-be56-2efc0f5e723c"
+  },
+  "actions_before_observation": [
+    {
+      "saved_request_id": "3b1a2ad2-aaa9-47f9-8f6e-6b2e325dff1e",
+      "player_id": 1,
+      "expected_revision": 0,
+      "typed_action": {
+        "ordered_elements": [
+          {
+            "instance_id": 4,
+            "source": "hand_artifact"
+          },
+          {
+            "instance_id": 3,
+            "source": "hand_artifact"
+          }
+        ],
+        "target": 2,
+        "type": "play_sequence"
+      },
+      "http_status": 200
+    },
+    {
+      "saved_request_id": "f3f359e4-b838-4468-9bf1-e08177dcace9",
+      "player_id": 2,
+      "expected_revision": 1,
+      "typed_action": {
+        "ordered_defenses": [
+          {
+            "instance_id": 11,
+            "source": "hand_artifact"
+          }
+        ],
+        "type": "respond_sequence"
+      },
+      "http_status": 200
+    },
+    {
+      "saved_request_id": "306a8458-5908-4582-b0b5-528678bfd2cd",
+      "player_id": 2,
+      "expected_revision": 2,
+      "typed_action": {
+        "instance_ids": [
+          13,
+          17,
+          14
+        ],
+        "type": "discard"
+      },
+      "http_status": 200
+    },
+    {
+      "saved_request_id": "ffb84226-7314-4dc0-9870-233ecf124d51",
+      "player_id": 1,
+      "expected_revision": 3,
+      "typed_action": {
+        "ordered_elements": [
+          {
+            "instance_id": 20,
+            "source": "hand_artifact"
+          }
+        ],
+        "target": 2,
+        "type": "play_sequence"
+      },
+      "http_status": 200
+    },
+    {
+      "saved_request_id": "156cc075-47d2-4837-8849-55f6c435aeef",
+      "player_id": 2,
+      "expected_revision": 4,
+      "typed_action": {
+        "ordered_defenses": [],
+        "type": "respond"
+      },
+      "http_status": 200
+    },
+    {
+      "saved_request_id": "dc48cdcb-852d-429a-80a6-90dce94f06f0",
+      "player_id": 2,
+      "expected_revision": 5,
+      "typed_action": {
+        "artifact": 21,
+        "target": 1,
+        "type": "buy"
+      },
+      "http_status": 200
+    }
+  ],
+  "observation": {
+    "observation_schema_version": "1",
+    "action_schema_version": 1,
+    "actionable": false,
+    "typed_action_schema": [],
+    "state_revision": 6,
+    "viewer_player_id": 2,
+    "turn": 4,
+    "turns_until_end_of_world": 146,
+    "first_player": 1,
+    "active_player": 2,
+    "current_player": 2,
+    "phase": "resolving",
+    "required_choice": "buy_accept_reject",
+    "end_times": false,
+    "own": {
+      "player_id": 2,
+      "hp": 20,
+      "mp": 10,
+      "money": 20,
+      "hand": [
+        {
+          "instance_id": 10,
+          "definition_id": "torch"
+        },
+        {
+          "instance_id": 12,
+          "definition_id": "guardian-pot"
+        },
+        {
+          "instance_id": 15,
+          "definition_id": "spear-in-fine-view"
+        },
+        {
+          "instance_id": 16,
+          "definition_id": "angel-knife"
+        },
+        {
+          "instance_id": 18,
+          "definition_id": "chill-cup"
+        }
+      ],
+      "learned_miracles": [],
+      "status": {
+        "disease": null,
+        "fog": false,
+        "flash": false,
+        "dream": false,
+        "dark_cloud": false
+      },
+      "guardian": null,
+      "ascended": false
+    },
+    "opponent": {
+      "player_id": 1,
+      "hp": 40,
+      "mp": 10,
+      "money": 20,
+      "learned_miracles": [],
+      "status": {
+        "disease": null,
+        "fog": false,
+        "flash": false,
+        "dream": false,
+        "dark_cloud": false
+      },
+      "ascended": false
+    },
+    "result": null
+  },
+  "same_revision_actor_action_options": null,
+  "exclusions": [
+    "no sequence-options",
+    "no rejection detail",
+    "no canonical hidden state",
+    "no opponent private observation",
+    "no fabricated action descriptor"
+  ]
+}

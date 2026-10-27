@@ -1,0 +1,10 @@
+[test_server]
+seed_use_limit = 2
+server_idle_timeout_secs = 0
+graceful_shutdown_timeout_secs = 30
+
+[lifecycle]
+max_invalid_attempts_per_decision = 3
+waiting_for_players_timeout_secs = 60
+player_action_timeout_secs = 300
+max_game_turns = 2000

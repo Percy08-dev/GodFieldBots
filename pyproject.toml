@@ -1,0 +1,55 @@
+[project]
+name = "godfieldbots"
+version = "0.1.0"
+description = "Public-information GodField bots, reproducible collection and evaluation"
+readme = "README.md"
+authors = [
+    { name = "Percy", email = "s.suzuki23@keio.jp" }
+]
+requires-python = ">=3.14,<3.15"
+dependencies = ["httpx>=0.28,<1", "numpy>=2.3,<3"]
+
+[project.optional-dependencies]
+data = ["pyarrow>=22,<30"]
+lightgbm = ["lightgbm>=4.6,<5"]
+torch = ["torch>=2.9,<3"]
+
+[dependency-groups]
+dev = ["pytest>=8.4,<10", "ruff>=0.14,<1", "mypy>=1.18,<2"]
+
+[project.scripts]
+godfieldbots = "godfieldbots:main"
+gf-bots = "gf_cli:main"
+
+[build-system]
+requires = ["uv_build>=0.13.5,<0.14.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = ["godfieldbots", "gf_common", "gf_simulator_client", "gf_training", "gf_evaluation", "gf_models", "gf_cli"]
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux' or sys_platform == 'win32'" }]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["integration: opt-in checks using a prebuilt external TestServer"]
+
+[tool.ruff]
+target-version = "py314"
+line-length = 100
+
+[tool.mypy]
+python_version = "3.14"
+check_untyped_defs = true
+disallow_untyped_defs = true
+warn_unused_ignores = true
+
+[[tool.mypy.overrides]]
+module = ["pyarrow", "pyarrow.*", "lightgbm", "lightgbm.*"]
+ignore_missing_imports = true

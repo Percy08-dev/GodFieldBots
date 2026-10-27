@@ -1,0 +1,14 @@
+{
+  "error": {
+    "code": "INVALID_ACTION",
+    "details": {
+      "invalid_attempt_count": 1,
+      "max_invalid_attempts_per_decision": 3,
+      "rejection_code": "invalid_parameter",
+      "rejection_reason": "prayer is unavailable while a usable weapon exists",
+      "state_revision": 0,
+      "status": "active"
+    },
+    "message": "invalid action: prayer is unavailable while a usable weapon exists"
+  }
+}

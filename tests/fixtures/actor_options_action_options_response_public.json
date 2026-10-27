@@ -1,0 +1,25 @@
+{
+  "state_revision": 0,
+  "action_options": {
+    "required_choice": "turn_action",
+    "usable_hand_elements": [
+      1,
+      7,
+      9
+    ],
+    "usable_learned_miracles": [],
+    "exchange_artifacts": [],
+    "sell_artifacts": [
+      3
+    ],
+    "buy_artifacts": [],
+    "valid_targets": [
+      1,
+      2
+    ],
+    "can_pray": false,
+    "can_discard": true,
+    "can_sacrifice": false,
+    "can_allow": false
+  }
+}

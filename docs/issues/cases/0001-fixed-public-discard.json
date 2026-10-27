@@ -1,0 +1,132 @@
+{
+  "case_kind": "diagnostic_only_fixed_public_http_sequence",
+  "simulator_source_revision": "44a26e3a16b808e826deb332fa72acfc5037d3ef",
+  "prebuilt_binary_sha256": "d9c774d214e0e732fed040e7ef2e386979fc1f42e225429c1dbcfc642b49831f",
+  "prebuilt_binary_build_revision": "unknown",
+  "source_evidence": {
+    "http_log_path": "runs/final-verification/baseline-validation-a760b624-dd0/server-s1-m0-r0-seat0/http/http.jsonl",
+    "http_log_sha256": "2a710342412bd445db19e72c6d6c5ec5ed4e06730edc119eeb73537e96326142",
+    "run_manifest_path": "runs/final-verification/baseline-validation-a760b624-dd0/manifest.json",
+    "run_manifest_sha256": "e22970fea7311d0793cafae321f5b47bc8b06bb77122366367de077f1efb23b4",
+    "game_id": "01M5WQJ3HXYF7N5AAXZNJFP8X9",
+    "episode_id": "s1-m0-r0-seat0"
+  },
+  "experiment_control": {
+    "game_seed_hex": "00000000000000000000000000000002",
+    "scope": "diagnostic only; never policy input"
+  },
+  "actions": [
+    {
+      "saved_request_id": "930116ad-8c6c-4bee-af52-647a03097735",
+      "actor_player_id": 2,
+      "expected_revision": 0,
+      "typed_action": {
+        "type": "discard",
+        "instance_ids": [
+          11,
+          13,
+          16
+        ]
+      },
+      "expected_http_status": 200
+    },
+    {
+      "saved_request_id": "ebfb5c4b-5815-4048-ad6c-eed841c1265e",
+      "actor_player_id": 1,
+      "expected_revision": 1,
+      "typed_action": {
+        "type": "play_sequence",
+        "ordered_elements": [
+          {
+            "source": "hand_artifact",
+            "instance_id": 7
+          },
+          {
+            "source": "hand_artifact",
+            "instance_id": 5
+          },
+          {
+            "source": "hand_artifact",
+            "instance_id": 2
+          }
+        ],
+        "target": 2
+      },
+      "expected_http_status": 200
+    },
+    {
+      "saved_request_id": "a8ecf564-e272-4e0d-8128-22609593bf06",
+      "actor_player_id": 2,
+      "expected_revision": 2,
+      "typed_action": {
+        "type": "respond_sequence",
+        "ordered_defenses": [
+          {
+            "source": "hand_artifact",
+            "instance_id": 17
+          },
+          {
+            "source": "hand_artifact",
+            "instance_id": 10
+          }
+        ]
+      },
+      "expected_http_status": 200
+    },
+    {
+      "saved_request_id": "d5f295f3-0ece-40fe-90e3-c8a9a5d27a47",
+      "actor_player_id": 2,
+      "expected_revision": 3,
+      "typed_action": {
+        "type": "discard",
+        "instance_ids": [
+          23,
+          15
+        ]
+      },
+      "expected_http_status": 422,
+      "expected_error": {
+        "code": "INVALID_ACTION",
+        "rejection_code": "invalid_parameter",
+        "rejection_reason": "discard/sacrifice cannot target a weapon",
+        "state_revision": 3
+      }
+    }
+  ],
+  "last_observation": {
+    "saved_request_id": "a4b3aa24-4077-4674-85c3-8e527a487d76",
+    "method": "GET",
+    "path": "/v1/games/01M5WQJ3HXYF7N5AAXZNJFP8X9/observations/2",
+    "observation_schema_version": "1",
+    "action_schema_version": 1,
+    "viewer_player_id": 2,
+    "state_revision": 3,
+    "current_player": 2,
+    "phase": "awaiting_action",
+    "required_choice": "turn_action",
+    "end_times": false,
+    "own_status": {
+      "disease": null,
+      "fog": false,
+      "flash": false,
+      "dream": false,
+      "dark_cloud": false
+    },
+    "own_hand_relevant": [
+      {
+        "instance_id": 23,
+        "definition_id": "steel-armor"
+      },
+      {
+        "instance_id": 15,
+        "definition_id": "sun-amulet"
+      }
+    ]
+  },
+  "excluded_inputs": [
+    "ActionOptions",
+    "SequenceOptions",
+    "debug dump",
+    "canonical state/history"
+  ]
+}
