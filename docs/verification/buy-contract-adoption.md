@@ -4,8 +4,10 @@ Date: 2026-10-28. Scope: the user's authorized Bots update and rerun after
 Simulator purchase-control confirmation. Design is accepted in
 [ADR0007](../adr/0007-staged-buy-contract-adoption.md). Implementation verification
 and independent final correctness/conformance reviews are READY, without
-blocking findings. Fixed live evaluation and the complete fresh feasibility
-pilot have not yet run at this point.
+blocking findings. The fixed 12-game evaluation and the complete new 192-game
+pilot both finished naturally without failures. Full-source feasibility
+recomputation passed; this is a provisional learning-start feasibility gate,
+not model training or model-quality evidence.
 
 ## Adopted identity and boundary
 
@@ -92,8 +94,9 @@ All runs receive new unique directories and retain earlier failed evidence.
   support is not added; existing supported Allow remains usable. Simulator09's
   full-possession Buy behavior is explicitly project-provisional.
 
-Root will commit the reviewed integration before these runs so the recorded Bots
-source is clean and fixed. Gate assessment recomputes all linked original
+Root committed the reviewed integration as
+`da20c9ddc869399e79ff755f02fb3f9e4399bdf1` before these runs; both manifests record
+that revision with `dirty=false`. Gate assessment recomputes all linked original
 journals/report/Replay/health with `gf_training.gates.feasibility`; no successful
 episode substitution, guessed bootstrap, or edited success sidecar is allowed.
 Any failure leaves the gate unmet. A clean pilot is provisional execution
@@ -102,4 +105,81 @@ this rerun.
 
 ## Rerun result
 
-NOT RUN pending final code verification and independent reviews.
+| Run | Natural / planned | Failures and health errors | CLI-reported elapsed |
+| --- | --- | --- | --- |
+| Validation `runs/buy-contract-validation/baseline-validation-c5e164f6-2c4` | 12 / 12 | 0 | 5.645s |
+| Pilot `runs/buy-contract-pilot/baseline-feasibility-pilot-da11e8fb-9f8` | 192 / 192 | 0 | 64.906s |
+
+Both comparisons are valid; no action rejection, unsupported state, truncation,
+save, communication or process-health error was recorded. Validation has 179
+accepted decisions and pilot 2,982. Pilot contains 26 completed purchase choices
+(9 accept, 17 reject), so the corrected path is exercised during actual play.
+The three policy-seed groups each contain exactly 64 natural games. Pilot's
+heuristic perspective is 190 wins, zero draws, two losses; it is not evidence
+about a learned model. The older failed pilot used generator v2; this rerun uses
+the already accepted v3 fix and corrected Simulator, so failure-count changes
+must not be attributed to one change or treated as a causal quality comparison.
+
+Commands (with the same `env -u VIRTUAL_ENV UV_CACHE_DIR=/tmp/gfb-uv-cache`
+prefix) changed only the output directory through an operational CLI override:
+
+```console
+uv run --no-sync gf-bots evaluate --config configs/experiments/baseline.toml --set 'run.output_dir="runs/buy-contract-validation"'
+uv run --no-sync gf-bots collect --config configs/experiments/pilot.toml --set 'run.output_dir="runs/buy-contract-pilot"'
+uv run --no-sync python /tmp/gfb-assess-buy-pilot.py runs/buy-contract-pilot/baseline-feasibility-pilot-da11e8fb-9f8
+```
+
+The actual effective config hashes including those output paths are:
+
+- Validation: `9dcffd23b5232ac9283d40cdfb9800d93276e1449bb0742fa3508ce494e3ccb4`.
+- Pilot: `8fdc2afb0447809e5a94cc29e0586ef20e95fc764f683275fb04cb1d2e2e690d`.
+
+The assessment used the actual `gf_training.gates.feasibility` implementation to
+validate the fixed schedule, all 384 participant journals, original health/end
+records, report/Replay consistency, split and semantic identities. It measured
+2,982 positive acknowledgements, equal to recorded decisions, with no pending
+record. The source action-config hash is
+`90efec6c9c4d3f3380ceb57ca95d6a9c23f32c88450f91184055b31adc11e44d`.
+Pilot manifest collection time is 64.903s within its original 7,200s budget;
+the returned total includes final persistence at 64.906s. Shared feasibility
+validation took a separately measured 3.471s. No new collection budget was
+granted to replace failed games.
+
+Assessment:
+`runs/assessments/baseline-feasibility-pilot-da11e8fb-9f8-feasibility.json`,
+`qualified=true`, SHA-256
+`ab227b380cbd62bcb529aeadbc1dc010b5026bab3ac684aeb67929c70a08c404`.
+Validated source-set hash:
+`5ff2af59443bb258c17203791568785e67adf876294835071a6769c680b4bb04`.
+The raw CLI manifest's generic `learning_gate=not_run` field is retained;
+external recomputation is recorded separately, and real training recomputes the
+proof from original sources instead of trusting this assessment flag.
+
+Independent post-run correctness evidence review is **READY**, without blockers.
+Its read-only probe reconciled both complete schedules, 24/384 journals,
+179/2,982 positive acknowledgements, the 64-game policy-seed groups, absence of
+pending/health/process failures, fixed code/config/pin/spec/budget identities and
+report/assessment hash links. It verified the old pilot remains incomplete.
+The reviewer did not rerun full projection, another pilot or fitting. This
+supports the provisional gate for these fixed conditions; it does not guarantee
+zero failures in future collection or equivalence to live-game rules.
+
+| Evidence | Manifest SHA-256 | Report SHA-256 |
+| --- | --- | --- |
+| Validation | `8568f23517dc7d846d6d8297ab39cc13b33f7720977bb11220625f53cbcace31` | `2245cd30802d7b2b1a944e29fe0143f9b5ee256d69e186c829ef90bb19661eed` |
+| Pilot | `7fe90a7baa9abb8df6807ccfc237cafd8b2505018c4f0a7ab7fded2f3b7c9d37` | `cbd88a66e1cab8d39427b31187d0a76d22e798a0b7ca2f8934b93cd9527af65a` |
+
+Source HEAD, all eight reviewed document hashes and the binary hash matched
+before and after both runs. Simulator worktree edits were preserved. Validation
+data export covers all 24 journals/179 eligible selected decisions: two independent
+Parquet regenerations are byte-identical, SHA-256
+`5058dd34856541c6a61da30395b940eec0727ad58acba55037538d1d54df8d78`,
+under `/tmp/gfb-buy-contract-export/validation-{a,b}.parquet` with sidecars.
+
+The actual earlier complete v3 validation source is rejected under the new pin
+(`incompatible source simulator semantics`), and the retained failed 192-game
+pilot remains rejected (`training requires a finalized complete healthy run`).
+No original artifact or result was edited. GPU, real-data fit, model selection
+and a learned-policy quality evaluation are **NOT RUN**. A future training run
+still needs explicit complete train/validation sources and a preregistered
+accepted-decision target; no dataset or target is invented by this acceptance.

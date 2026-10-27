@@ -25,19 +25,24 @@ The old observation-only evaluation had 4/12 rejections. With authorized atomic
 hints the fixed 12-game evaluation is clean. The first frozen 192-game pilot
 recorded 182 natural games, 9 unsupported buy-control states and one omitted
 dynamic-weapon singleton. The latter is fixed in generator v3; the whole failed
-pilot is retained and the learning gate remains unfulfilled. Phases 5–9 are not
+pilot is retained and remains ineligible. The corrected-contract pilot described
+below now passes provisional feasibility. Phases 5–9 are not
 implemented. See the [current verification](verification/action-options.md).
 Phase 4 implements [ADR0006](adr/0006-lightgbm-action-value.md): native
 CPU LightGBM action scoring, versioned public encoders, checkpoint inference and
 gated fresh training. Independent final reviews and verification are recorded in
-[Phase 4 verification](verification/lightgbm-phase4.md). The current failed
-feasibility pilot cannot authorize a real-data fit; explicitly synthetic component
+[Phase 4 verification](verification/lightgbm-phase4.md). The preserved original
+failed pilot cannot authorize a real-data fit; explicitly synthetic component
 verification is permitted by the implementation plan.
 The user now authorizes the corrected Simulator integration and fresh evaluation/
 pilot. [ADR0007](adr/0007-staged-buy-contract-adoption.md) has independent design
 READY: a narrow resolving/buyer input condition, new revision/spec snapshots and
 inference schema 2 bound to gameplay identity. Implementation and independent
-final reviews are READY; the complete new pilot is pending. See
+final reviews are READY. Fresh evaluation is 12/12 natural, and the complete new
+pilot is 192/192 natural with no rejection or health error. Recomputed feasibility
+from all 384 participant journals passes; 2,982 accepted decisions include 26
+purchase choices. This is provisional execution feasibility, with no real-data
+fit or model-quality evaluation. See
 [adoption verification](verification/buy-contract-adoption.md). No old outcome
 or dataset is reinterpreted.
 The [rejection diagnosis](issues/0001-public-observation-legality-investigation.md)

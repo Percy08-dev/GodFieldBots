@@ -1,7 +1,8 @@
 # Separate Simulator task: actionable metadata for a pending BuyDecision
 
 - Status: Simulator correction and Bots adoption verified on 2026-10-28;
-  a new complete pilot is pending. Historical failure is retained below.
+  the new complete 192-game pilot passes provisional feasibility. Historical
+  failure is retained below.
 - Source pin: `44a26e3a16b808e826deb332fa72acfc5037d3ef` plus reviewed dirty
   documentation hashes in ADR0005. Binary build revision remains unknown.
 - Binary SHA-256:
@@ -26,7 +27,8 @@ resolving Observation with `typed metadata mismatch`. No production validator,
 pin, dataset, checkpoint or pilot has been changed by this confirmation.
 Bots adoption has since passed the architecture gate, a narrowly scoped validator
 update and fresh integration checks under [ADR0007](../adr/0007-staged-buy-contract-adoption.md).
-The complete new pilot remains pending; the old failed pilot stays ineligible.
+The complete new pilot now finishes 192/192 naturally with no health error and
+passes recomputed provisional feasibility; the old failed pilot stays ineligible.
 See the [initial confirmation](../verification/simulator-buy-fix.md) and
 [current adoption verification](../verification/buy-contract-adoption.md).
 

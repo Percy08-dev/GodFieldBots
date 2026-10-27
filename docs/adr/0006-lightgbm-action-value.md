@@ -10,8 +10,10 @@
   the Phase 4 verification record.
 - Implementation: native CPU adapter, encoders, guarded trainer and checkpoint
   inference implemented; final checks/reviews in
-  [Phase 4 verification](../verification/lightgbm-phase4.md). Real-data learning
-  remains gated by the unresolved Simulator pending-buy contract.
+  [Phase 4 verification](../verification/lightgbm-phase4.md). That initial unit's
+  real-data gate was unmet; the subsequent corrected-contract pilot in
+  [ADR0007 verification](../verification/buy-contract-adoption.md) passes provisional
+  feasibility. Real-data fitting remains unexecuted.
 - Compatibility amendment: [ADR0007](0007-staged-buy-contract-adoption.md)
   supersedes the inference schema-1 identity policy for the corrected Buy rules;
   the original design and verification below remain historical evidence.

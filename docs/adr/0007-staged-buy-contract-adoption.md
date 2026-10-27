@@ -7,7 +7,8 @@
   normative hashes, actor predicate, preserved ownership and schema-2 compatibility
   policy verified; no blocking or open design findings. Independent final
   correctness and architecture-conformance reviews are READY, with no blockers.
-- Implementation: complete and verified; fresh evaluation/pilot pending. See
+- Implementation: complete and verified; fresh evaluation 12/12 natural and pilot
+  192/192 natural, recomputed provisional feasibility passed. No real-data fit. See
   [adoption verification](../verification/buy-contract-adoption.md).
 - Supersedes: ADR0005's old Simulator pin/spec snapshots and ADR0006's inference
   artifact schema-1 compatibility only; their remaining decisions are retained.
