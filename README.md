@@ -1,10 +1,13 @@
 # GodFieldBots
 
-公開された本人の観測・可視イベント・typed Action metadataから行動を選ぶPython Botです。
+公開された本人の観測・可視イベント・typed Action metadata・許可された本人向けActionOptionsから行動を選ぶPython Botです。
 Phase 0〜3のRandom／heuristic、候補生成、TestServer対戦、本人別journal、固定評価を実装しています。
-LightGBM／PPOのモデルと学習は後続Phaseです。依存のCPUスモーク成功とBotの学習成立は別に判定します。
+Phase 4のCPU LightGBM、特徴変換、checkpoint推論、学習CLIも実装しています。
+実対戦データでの学習はclean pilot未成立のため停止中です。PPOは後続Phaseです。
+合成データでの数値検証とBotの学習成立は別に判定します。
 現在の検証結果・Gate・制約は [ActionOptions検証記録](docs/verification/action-options.md)、
-過去の基盤検証は [初期記録](docs/verification/phase0-3.md) に記録します。
+[LightGBM検証記録](docs/verification/lightgbm-phase4.md)、過去の基盤検証は
+[初期記録](docs/verification/phase0-3.md) に記録します。
 
 Python **3.14（GIL有効）** とuvを使用します。ゲームルールと最終合法性は外部の
 `../GodFieldSimurator`が所有します。Simulatorをビルド・変更する機能は含みません。
@@ -24,12 +27,13 @@ Simulator契約はrevision `44a26e3a16b808e826deb332fa72acfc5037d3ef`、HTTP `/v
 
 - [experiments](configs/experiments): 設定の選択、seed、split、予算、保存先、接続。
 - [actions](configs/actions): enumerate／beam、固定scorer、長さ・候補数・展開数の上限。
-- [models](configs/models): Random／heuristicのIDと版。
+- [models](configs/models): Random／heuristic／LightGBMのID、構造、encoderと版。
+- [training](configs/training): LightGBMの学習率・round数、データ参照、予算と乱数seed。
 - [test-server.toml](configs/test-server.toml): Simulatorの実効ライフサイクル設定。
 
 参照・設定内のパスは、そのファイルからの相対パスです。テーブルは項目単位で結合し、配列は置換します。
 参照preset→実験設定→明示CLI上書きの順に解決し、未知のキー・不正値・未実装モデルを実行前に拒否します。
-学習設定は対応adapterを実装するまで拒否します。
+LightGBMの`lightgbm_mc`以外の学習方式は拒否します。
 候補生成は既定で`use_action_options = true`です。同じrevisionの本人向けActionOptionsを取得し、
 通常使用・防御・取引・基本行動を目的別に絞ります。取得・検証に失敗した場合の自動fallbackはありません。
 観測のみの比較は`--set actions.use_action_options=false`で明示し、別の実験条件として記録します。
@@ -50,6 +54,31 @@ smokeは1つのGameSeedと方策seedで先後を交換した2試合、最大180�
 単体バイナリや外部URLでは省略でき、宣言した契約revisionと未検証のbuild由来を区別して記録します。
 外部URLでは `server.external_url`、明示的な固定seed実験設定、期待fingerprintが必要です。
 外部サーバーを停止することはありません。
+
+## LightGBM
+
+各候補の内容を採点する`Q(o,a)`を、実際に受理された行動の自然終了returnで回帰します。
+未実行候補には教師を作りません。`lightgbm-observation.toml`は現在観測、
+`lightgbm-history.toml`は本人の可視履歴の集約を加える設定です。
+学習・推論は同じ版付きencoderを使い、カードの参照IDの大小を特徴にしません。
+
+```console
+uv sync --extra data --extra lightgbm
+uv run --extra data --extra lightgbm gf-bots validate --config configs/experiments/lightgbm.toml
+uv run --extra data --extra lightgbm gf-bots train --config configs/experiments/lightgbm.toml
+```
+
+最後のコマンドは初期presetではエラーになります。完全なtrain／validation run、
+64試合×3方策seedのclean pilot、事前に固定したaccepted-decision目標を設定する必要があります。
+現在のpilotは[Simulatorの購入待ちmetadata問題](docs/issues/0003-buy-choice-control-metadata.md)を
+含むため、成功した試合だけを抜き出して学習することはできません。`resume`は未対応として拒否します。
+
+学習runは各seedにつき元の時間予算を持ち、データ収集の記録済みコスト、変換、fit、保存、
+子プロセス回収を計上します。native fitとモデル読込は専用子プロセスで実行します。
+checkpointの推論JSONには特徴・候補生成・catalog・報酬などの互換情報を保存し、
+学習元のseedや接続情報は別の`training.json`に残します。
+正式な対戦には完了した`training.json`と`checkpoint/`を含むrun bundleが必要です。
+合成データのモデルは`purpose=toy`となり、通常の対戦コマンドは起動前に拒否します。
 
 ## 保存・データ変換
 

@@ -5,6 +5,7 @@ import hashlib
 import json
 import math
 import os
+import time
 import uuid
 from dataclasses import asdict
 from pathlib import Path
@@ -167,9 +168,28 @@ def _acknowledgement(response: Any, command: Json) -> None:
         raise ContractError("acknowledgement outcome/status mismatch")
 
 
-def read_journal(path: Path) -> list[Json]:
+def _projection_deadline(deadline: float) -> None:
+    if time.monotonic() >= deadline:
+        raise TimeoutError("journal projection deadline")
+
+
+def _projection_hash(path: Path, deadline: float) -> str:
+    hasher = hashlib.sha256()
+    with path.open("rb") as source:
+        while chunk := source.read(1024 * 1024):
+            _projection_deadline(deadline)
+            hasher.update(chunk)
+    _projection_deadline(deadline)
+    return hasher.hexdigest()
+
+
+def read_journal(path: Path, *, deadline: float = float("inf")) -> list[Json]:
     from gf_common.domain import integer
-    records = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+    records = []
+    with path.open(encoding="utf-8") as source:
+        for line in source:
+            _projection_deadline(deadline)
+            records.append(json.loads(line))
     if not records or records[0].get("kind") != "header":
         raise ContractError("missing journal header")
     header = records[0]
@@ -195,6 +215,7 @@ def read_journal(path: Path) -> list[Json]:
     last_revision = 0
     lifecycle_ack: Json | None = None
     for record in records[1:]:
+        _projection_deadline(deadline)
         if ended:
             raise ContractError("records after journal end")
         kind = record.get("kind")
@@ -383,15 +404,8 @@ def _source_report(source: Path, manifest: Json) -> tuple[Json, list[str]]:
     return diagnostic, reasons
 
 
-def export_parquet(sources: list[Path], destination: Path) -> Json:
-    """Derived schema 2: exact participant rows plus mandatory management sidecar.
-
-    Declared splits are validated across equal-seed/fork lineages, never silently
-    reassigned. Known natural outcomes survive in sidecar even when health makes
-    a participant ineligible for learning/evaluation.
-    """
-    import pyarrow as pa
-    import pyarrow.parquet as pq
+def project_journals(sources: list[Path], *, deadline: float = float("inf")) -> tuple[list[Json], Json]:
+    """Shared original-source validation/projection for export and training."""
     if not sources:
         raise ContractError("at least one linked participant journal required")
     rows = []
@@ -400,7 +414,8 @@ def export_parquet(sources: list[Path], destination: Path) -> Json:
     identities: set[tuple[str, str, int]] = set()
     lineage_entries = []
     for source in sorted(sources, key=lambda p: str(p.resolve())):
-        records = read_journal(source)
+        _projection_deadline(deadline)
+        records = read_journal(source, deadline=deadline)
         header = records[0]
         identity = (header["run_id"], header["game_id"], header["viewer"])
         if identity in identities:
@@ -409,7 +424,7 @@ def export_parquet(sources: list[Path], destination: Path) -> Json:
         manifest, episode, group_health, lineage = _manifest_source(source, records)
         lineage_entries.append(lineage)
         manifest_path = source.parent.parent / "manifest.json"
-        manifest_hash = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+        manifest_hash = _projection_hash(manifest_path, deadline)
         prior = manifest_metadata.get(header["run_id"])
         if prior is not None and prior["sha256"] != manifest_hash:
             raise ContractError("run identity refers to different manifests")
@@ -464,12 +479,13 @@ def export_parquet(sources: list[Path], destination: Path) -> Json:
         except (OSError, ValueError, TypeError, KeyError):
             reasons.append("replay_mismatch_or_missing")
         eligible = not reasons
-        source_metadata.append({"path": str(source.resolve()), "sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+        source_metadata.append({"path": str(source.resolve()), "sha256": _projection_hash(source, deadline),
                                 "manifest_sha256": manifest_hash, "header": header, "lineage": lineage,
                                 "decision_count": len(decisions), "end": end, "episode_result": episode,
                                 "group_health": group_health, "replay_sha256": replay_hash, "report": report_diagnostic,
                                 "eligible": eligible, "ineligible_reasons": sorted(set(reasons))})
         for record in decisions:
+            _projection_deadline(deadline)
             index = record["decision"]
             rows.append({"run_id": header["run_id"], "game_id": header["game_id"],
                          "episode_id": header["episode_id"], "viewer": header["viewer"], "decision": index,
@@ -487,6 +503,7 @@ def export_parquet(sources: list[Path], destination: Path) -> Json:
             parents[item] = find(parents[item])
         return parents[item]
     for entry in lineage_entries:
+        _projection_deadline(deadline)
         keys = ["seed:" + entry["seed"]]
         if entry["ancestry"] is not None:
             keys.append("ancestry:" + entry["ancestry"])
@@ -499,16 +516,25 @@ def export_parquet(sources: list[Path], destination: Path) -> Json:
     for entries in lineage_groups.values():
         if len({e["split"] for e in entries}) != 1:
             raise ContractError("equal-seed/common-ancestry sources have conflicting declared splits")
-    schema = pa.schema([*[(name, pa.string()) for name in ("run_id", "game_id", "episode_id")],
-                        ("viewer", pa.int64()), ("decision", pa.int64()), ("split", pa.string()), ("eligible", pa.bool_()),
-                        *[(name, pa.string()) for name in ("input_json", "candidate_set_json", "selection_json", "command_json", "acknowledgement_json", "transition_json")]])
-    table = pa.Table.from_pylist(rows, schema=schema)
     metadata = {"policy_input_version": POLICY_INPUT_VERSION, "derived_schema_version": 4, "journal_schema_version": JOURNAL_SCHEMA, "end_projection_version": END_PROJECTION_VERSION,
                 "feature_version": FEATURE_VERSION, "reward_version": REWARD_VERSION, "catalog": CATALOG_META,
                 "sources": source_metadata, "manifests": manifest_metadata,
                 "lineage_groups": [entries for _, entries in sorted(lineage_groups.items())],
                 "source_set_sha256": digest(source_metadata), "rows": len(rows),
                 "eligible_rows": sum(bool(row["eligible"]) for row in rows)}
+    _projection_deadline(deadline)
+    return rows, metadata
+
+
+def export_parquet(sources: list[Path], destination: Path) -> Json:
+    """Write exact validated participant projection and diagnostic sidecar."""
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+    rows, metadata = project_journals(sources)
+    schema = pa.schema([*[(name, pa.string()) for name in ("run_id", "game_id", "episode_id")],
+                        ("viewer", pa.int64()), ("decision", pa.int64()), ("split", pa.string()), ("eligible", pa.bool_()),
+                        *[(name, pa.string()) for name in ("input_json", "candidate_set_json", "selection_json", "command_json", "acknowledgement_json", "transition_json")]])
+    table = pa.Table.from_pylist(rows, schema=schema)
     # Management provenance is only in the sidecar, never feature-bearing rows
     # or Parquet schema metadata accessible to a feature loader.
     table = table.replace_schema_metadata({b"godfieldbots": canonical({"policy_input_version": POLICY_INPUT_VERSION, "derived_schema_version": 4, "end_projection_version": END_PROJECTION_VERSION, "feature_version": FEATURE_VERSION, "reward_version": REWARD_VERSION}).encode()})

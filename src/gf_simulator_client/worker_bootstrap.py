@@ -17,7 +17,14 @@ import importlib
 from dataclasses import asdict
 
 from gf_common.actions import PublicCandidateGenerator
-from gf_common.domain import ActionConfig, ContractError, DecisionInput, closed, integer
+from gf_common.domain import (
+    ActionConfig,
+    ContractError,
+    DecisionInput,
+    closed,
+    integer,
+    validated_policy_options,
+)
 from gf_common.validation import validate_worker_input
 from gf_simulator_client.framing import read_frame, write_frame
 
@@ -27,14 +34,17 @@ def main() -> None:
     source = sys.stdin.buffer
     try:
         initial = read_frame(source)
-        closed(initial, {"factory", "model_id", "sampling_seed", "actions"})
+        closed(initial, {"factory", "model_id", "sampling_seed", "actions"}, {"policy_options"})
         descriptor = closed(initial["factory"], {"module", "name"})
         integer(initial["sampling_seed"])
         # All imports and policy operations redirect Python stdout away from the
         # framed protocol. stderr is DEVNULL at launch and cannot block a pipe.
         with contextlib.redirect_stdout(sys.stderr):
             factory = getattr(importlib.import_module(descriptor["module"]), descriptor["name"])
-            policy = factory(initial["model_id"])
+            options = initial.get("policy_options")
+            if options is not None:
+                options = validated_policy_options(options)
+            policy = factory(initial["model_id"]) if options is None else factory(initial["model_id"], options)
             policy.reset(initial["sampling_seed"])
             settings = initial["actions"]
             for key in ("targets", "exchange_allocations"):

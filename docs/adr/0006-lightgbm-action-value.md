@@ -5,8 +5,13 @@
 - Decision owner: root
 - Review: `bot_architecture_reviewer`, design READY, 2026-10-27. Model-native
   parameter boundary and pilot-inclusive split lineage revisions resolved both
-  findings; no blocking/open decisions. Final independent reviews remain required.
-- Implementation: authorized; not started
+  findings; no blocking/open decisions. Final independent correctness and
+  architecture-conformance reviews are READY; evidence and dispositions are in
+  the Phase 4 verification record.
+- Implementation: native CPU adapter, encoders, guarded trainer and checkpoint
+  inference implemented; final checks/reviews in
+  [Phase 4 verification](../verification/lightgbm-phase4.md). Real-data learning
+  remains gated by the unresolved Simulator pending-buy contract.
 
 ## Context and requirements
 
@@ -223,3 +228,61 @@ successful synthetic child lifecycle marked toy; baseline lazy imports/wheel.
 Run relevant ordinary/optional-extra checks and independent correctness plus
 architecture-conformance reviews. No real Simulator learning or new feasibility
 pilot is attempted while the pending-buy contract remains unresolved.
+
+## Required implementation clarifications from conformance review
+
+Current-fit code provenance is distinct from collection provenance. CLI measures
+the current Git/installed-package identity plus fit-module fingerprints within
+the preparation budget and injects this parent-only control metadata. Direct toy
+components explicitly record unknown. Exact request/numeric-input digests are
+recorded by the parent and checked in the child; these and fit-code metadata do
+not become inference features or extra native training parameters.
+
+Parent artifact inspection is metadata/hash/config-only. Actual native import,
+load and feature-signature validation runs in bounded owned children before a
+formal Simulator listener starts. An initialization-only use of the existing
+clean worker READY handshake is sufficient; no inference decision or new process
+framework is needed. The training child self-validates its saved unready staging
+model before exit; the trainer parent does not reload native code.
+
+Keep staging unready through child/log cleanup and health validation. Compute
+the prospective ready-manifest digest without publishing it, then persist the
+successful training completion linked to that digest before publishing readiness
+as the last promotion. Keep existing post-write budget checks and independent
+invalidation attempts; do not claim a transactional hard wall guarantee.
+
+Operational artifact inspection/load is distinct from **formal qualification**.
+Before using a trained checkpoint, CLI parent verifies the linked completed
+training control record, readiness/hash binding and absence of failure/health/
+invalidation evidence. Either a durable unready artifact or failed training
+record blocks formal evaluation, even if the other invalidation write failed.
+Only the safe pinned inference path/digest reaches the policy worker. Explicit
+low-level toy loads are not formal-qualified comparison models.
+
+Initial formal qualification requires the model run bundle (training completion
+record beside its checkpoint); moving that bundle is supported without reopening
+source datasets. A portable control-free inference export is Phase 9 work.
+Impact: copying only a ready-looking checkpoint is insufficient evidence for
+formal use. Revisit the bundle requirement when that export/deployment is built,
+not by adding a global receipt/revocation framework now.
+
+Persisted elapsed/charged values must state their pre-final-write snapshot scope;
+the returned completion values include final persistence and correction time.
+Historical collection timestamps retain their own recorded scope and unknown
+details are not invented. Test delayed final writes and independent partial
+invalidation so the cost and qualification claims remain honest under accepted
+OS/filesystem debt.
+
+Source-provenance hashing is preparation work. Complete it under the original
+ingestion deadline before freezing the shared preparation charge; recheck that
+deadline before the first fit. Each later model seed retains its independent
+per-run budget including the fully measured shared preparation, rather than
+inheriting the first seed's elapsed fit time.
+
+Participant cleanup has one shared owned task. Reject new operations immediately,
+but join that task through repeated cancellation and concurrent/later close calls
+without resetting its first deadline. Reap the process and reclaim its I/O thread
+and streams before returning or rethrowing the original operation error. Preserve
+the first caller cancellation even if cleanup subsequently fails, while recording
+that cleanup failure. This implements ADR0004 ownership for native preflight; it
+does not introduce a new supervisor framework or hard real-time guarantee.

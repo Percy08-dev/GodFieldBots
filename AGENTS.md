@@ -162,9 +162,11 @@ permitted by the applicable contract and version-pinned.
 
 Python is 3.14 with the GIL enabled and the project uses uv. The Phase 0–3
 baseline foundation uses httpx/NumPy, pytest, ruff and mypy. PyArrow, LightGBM
-and CPU Torch are optional extras; ML model/training adapters remain future
-work. Do not infer training quality or a passed learning gate from dependency
-smokes or baseline tests. Adding dependencies follows the architecture gate.
+and CPU Torch are optional extras. Phase 4 implements native CPU LightGBM
+inference and guarded fresh training; the real-data learning gate remains unmet.
+PPO adapters remain future work. Do not infer training quality or a passed
+learning gate from synthetic fits, dependency smokes or baseline tests.
+Adding dependencies follows the architecture gate.
 Use the actual project's checks and the phase evidence in docs/verification/.
 
 For configuration-only changes, validate TOML, Codex configuration loading,

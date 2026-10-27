@@ -19,12 +19,13 @@ from gf_common.domain import (
     digest,
     integer,
 )
-
-
-@dataclass(frozen=True)
-class ModelConfig:
-    model_id: str = "random"
-    version: str = "1"
+from gf_models.lightgbm.config import (
+    ModelConfig,
+    TrainingConfig,
+    model_config,
+    training_config,
+    validate_capacity,
+)
 
 
 @dataclass(frozen=True)
@@ -77,6 +78,7 @@ class ExperimentConfig:
     model: ModelConfig = field(default_factory=ModelConfig)
     opponent: ModelConfig = field(default_factory=ModelConfig)
     evaluation: EvaluationConfig = field(default_factory=EvaluationConfig)
+    training: TrainingConfig = field(default_factory=TrainingConfig)
 
 
 @dataclass(frozen=True)
@@ -95,34 +97,40 @@ def _merge(base: Json, override: Json) -> Json:
 
 
 _TABLES: dict[str, type[Any]] = {"run": RunConfig, "server": ServerConfig, "actions": ActionConfig,
-                               "model": ModelConfig, "opponent": ModelConfig, "evaluation": EvaluationConfig}
-_PATHS = {("run", "output_dir"), ("server", "binary"), ("server", "config"), ("server", "source_dir")}
+                               "model": ModelConfig, "opponent": ModelConfig, "evaluation": EvaluationConfig, "training": TrainingConfig}
+_PATHS = {("run", "output_dir"), ("server", "binary"), ("server", "config"), ("server", "source_dir"), ("model", "checkpoint"), ("opponent", "checkpoint"), ("training", "pilot_run")}
 
 
 def _validate_table(name: str, values: Json) -> None:
-    defaults = asdict(_TABLES[name]())
-    closed(values, set(), set(defaults))
-    for key, value in values.items():
-        default = defaults[key]
-        if default is None:
-            if value is not None and not isinstance(value, str):
-                raise ContractError(f"{name}.{key}: expected string")
-        elif type(default) is bool:
-            if type(value) is not bool:
-                raise ContractError(f"{name}.{key}: expected bool")
-        elif isinstance(default, tuple):
-            if not isinstance(value, (tuple, list)) or not value:
-                raise ContractError(f"{name}.{key}: nonempty array required")
-            for item in value:
-                if type(item) is not type(default[0]):
+    def check(values: Json, defaults: Json) -> None:
+        closed(values, set(), set(defaults))
+        for key, value in values.items():
+            default = defaults[key]
+            if isinstance(default, dict):
+                check(value, default)
+            elif default is None:
+                if value is not None:
+                    if name == "training" and key == "accepted_decision_target":
+                        integer(value, 1)
+                    elif not isinstance(value, str) or not value:
+                        raise ContractError(f"{name}.{key}: expected nonempty string")
+            elif type(default) is bool:
+                if type(value) is not bool:
+                    raise ContractError(f"{name}.{key}: expected bool")
+            elif isinstance(default, tuple):
+                if not isinstance(value, (tuple, list)) or not value and key not in ("train_runs", "validation_runs"):
+                    raise ContractError(f"{name}.{key}: array required")
+                item_type = type(default[0]) if default else str
+                if any(type(item) is not item_type for item in value):
                     raise ContractError(f"{name}.{key}: invalid array element")
-        elif type(default) is int and not key.endswith("seconds"):
-            integer(value, 0)
-        elif isinstance(default, (int, float)):
-            if type(value) not in (int, float) or not math.isfinite(value) or value <= 0:
-                raise ContractError(f"{name}.{key}: positive finite number required")
-        elif type(value) is not str or not value:
-            raise ContractError(f"{name}.{key}: nonempty string required")
+            elif type(default) is int and not key.endswith("seconds"):
+                integer(value, 0)
+            elif isinstance(default, (int, float)):
+                if type(value) not in (int, float) or not math.isfinite(value) or value < 0 or value == 0 and key != "max_overshoot":
+                    raise ContractError(f"{name}.{key}: positive finite number required")
+            elif type(value) is not str or not value:
+                raise ContractError(f"{name}.{key}: nonempty string required")
+    check(values, asdict(_TABLES[name]()))
 
 
 def load_config(path: str | Path, overrides: Json | None = None) -> LoadedConfig:
@@ -139,25 +147,29 @@ def load_config(path: str | Path, overrides: Json | None = None) -> LoadedConfig
         closed(data, {"schema_version", "kind"}, set(_TABLES) | {"references", "training"})
         if type(data["schema_version"]) is not int or data["schema_version"] != 1:
             raise ContractError("unsupported config schema_version")
-        if data["kind"] not in ("experiment", "actions", "model") or expected_kind is not None and data["kind"] != expected_kind:
+        if data["kind"] not in ("experiment", "actions", "model", "training") or expected_kind is not None and data["kind"] != expected_kind:
             raise ContractError("unsupported/mismatched preset kind")
-        if "training" in data:
-            raise ContractError("training adapter not implemented")
-        allowed = set(_TABLES) if data["kind"] == "experiment" else {data["kind"]}
+        allowed = set(_TABLES) if data["kind"] == "experiment" else {data["kind"]} | ({"training"} if data["kind"] == "model" else set())
         if set(data) - allowed - {"schema_version", "kind", "references"}:
             raise ContractError("preset contains unrelated tables")
         refs = data.get("references", {})
         closed(refs, set(), {"actions", "model", "opponent", "training"})
         if data["kind"] != "experiment" and refs:
             raise ContractError("only experiments may reference presets")
-        if "training" in refs:
-            raise ContractError("training adapter not implemented")
         merged: Json = {}
-        for key, ref in refs.items():
+        for key in ("actions", "training", "model", "opponent"):
+            if key not in refs:
+                continue
+            ref = refs[key]
             if not isinstance(ref, str) or not ref:
                 raise ContractError("reference path must be a string")
-            inherited = read(source.parent / ref, "model" if key == "opponent" else key)
+            try:
+                inherited = read(source.parent / ref, "model" if key == "opponent" else key)
+            except OSError as exc:
+                raise ContractError("referenced configuration unavailable") from exc
             merged[key] = inherited["model" if key == "opponent" else key]
+            if key == "model" and "training" in inherited:
+                merged["training"] = _merge(merged.get("training", {}), inherited["training"])
         for name in _TABLES:
             if name in data:
                 _validate_table(name, data[name])
@@ -165,6 +177,10 @@ def load_config(path: str | Path, overrides: Json | None = None) -> LoadedConfig
                 for table_name, key in _PATHS:
                     if name == table_name and key in table and table[key] is not None:
                         table[key] = str((source.parent / table[key]).resolve())
+                if name == "training":
+                    for key in ("train_runs", "validation_runs"):
+                        if key in table:
+                            table[key] = [str((source.parent / item).resolve()) for item in table[key]]
                 merged[name] = _merge(merged.get(name, {}), table)
         inputs.append({"path": str(source), "sha256": hashlib.sha256(raw_bytes).hexdigest(), "kind": data["kind"]})
         stack.remove(source)
@@ -183,6 +199,10 @@ def load_config(path: str | Path, overrides: Json | None = None) -> LoadedConfig
             for table, key in _PATHS:
                 if name == table and key in values and values[key] is not None:
                     values[key] = str(Path(values[key]).resolve())
+            if name == "training":
+                for key in ("train_runs", "validation_runs"):
+                    if key in values:
+                        values[key] = [str(Path(item).resolve()) for item in values[key]]
         data = _merge(data, overrides)
     effective = _merge(base, data)
     for name in _TABLES:
@@ -204,9 +224,12 @@ def load_config(path: str | Path, overrides: Json | None = None) -> LoadedConfig
         integer(seed)
     if run["admission_seconds"] > run["execution_seconds"] or run["execution_seconds"] + run["finalization_seconds"] > run["wall_seconds"]:
         raise ContractError("run deadlines inconsistent")
-    for name in ("model", "opponent"):
-        if effective[name]["model_id"] not in ("random", "heuristic") or effective[name]["version"] != "1":
-            raise ContractError("unsupported model/version")
+    models = {name: model_config(effective[name]) for name in ("model", "opponent")}
+    training = training_config(effective["training"])
+    if ("training" in data or "training" in data.get("references", {})) and models["model"].model_id != "lightgbm":
+        raise ContractError("training/model mismatch")
+    for model in models.values():
+        validate_capacity(model, effective["actions"]["max_sequence_length"])
     actions = effective["actions"]
     if actions["scorer"] != "public_heuristic_v1":
         raise ContractError("unsupported search scorer")
@@ -239,8 +262,14 @@ def load_config(path: str | Path, overrides: Json | None = None) -> LoadedConfig
             raise ContractError("expected fingerprint/seed mismatch")
     for key in ("bootstrap_samples",):
         integer(effective["evaluation"][key], 1)
-    converted = {}
+    converted: dict[str, Any] = {}
     for name, cls in _TABLES.items():
+        if name in models:
+            converted[name] = models[name]
+            continue
+        if name == "training":
+            converted[name] = training
+            continue
         values = effective[name]
         defaults = asdict(cls())
         values = {k: tuple(v) if isinstance(defaults[k], tuple) else v for k, v in values.items()}

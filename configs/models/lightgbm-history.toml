@@ -1,0 +1,18 @@
+schema_version = 1
+kind = "model"
+
+[model]
+model_id = "lightgbm"
+version = "1"
+
+[model.encoder]
+history = "public_aggregate"
+max_elements = 3
+hash_buckets = 32
+history_window = 128
+
+[model.network]
+num_leaves = 31
+
+[model.initialization]
+recipe = "seed-derived-v1"

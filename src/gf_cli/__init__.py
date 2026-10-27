@@ -67,6 +67,28 @@ def _code_provenance(deadline: float = float("inf")) -> Json:
     return {"revision": None, "dirty": None, "installed_build_revision": None}
 
 
+def _fit_code_provenance(deadline: float) -> Json:
+    """Current fit identity, measured only in the parent's preparation budget."""
+    import importlib.metadata
+    import importlib.util
+    provenance = _code_provenance(deadline)
+    try:
+        provenance["package_version"] = importlib.metadata.version("godfieldbots")
+    except importlib.metadata.PackageNotFoundError:
+        provenance["package_version"] = None
+    # The fingerprint names its exact scope; it does not claim a wheel build
+    # revision or equate a dirty Git HEAD with uncommitted fit code bytes.
+    from gf_models.lightgbm import config, encoder, model
+    from gf_training import lightgbm_run
+    provenance["fit_module_sha256"] = {module.__name__: _file_hash(module.__file__, deadline) if module.__file__ is not None else None
+                                        for module in (config, encoder, model, lightgbm_run)}
+    worker_spec = importlib.util.find_spec("gf_training.lightgbm_worker")
+    worker_file = worker_spec.origin if worker_spec is not None else None
+    provenance["fit_module_sha256"]["gf_training.lightgbm_worker"] = _file_hash(worker_file, deadline) if worker_file is not None else None
+    _check_budget(deadline)
+    return provenance
+
+
 def _file_hash(path: str | Path, deadline: float = float("inf")) -> str:
     _check_budget(deadline)
     value = hashlib.sha256()
@@ -151,10 +173,13 @@ async def _join_owned_groups(tasks: list[asyncio.Task[Any]], wall_deadline: floa
 async def run_experiment(loaded: LoadedConfig, command: str) -> tuple[Path, Json]:
     config = loaded.config
     started = time.monotonic()
+    from gf_cli.bindings import bindings, native_preflight
     wall_deadline = started + min(config.run.wall_seconds, config.run.execution_seconds + config.run.finalization_seconds)
     work_deadline = wall_deadline - config.run.report_reserve_seconds
     replay_deadline = work_deadline - config.server.cleanup_reserve_seconds
     preflight_deadline = min(started + config.run.execution_seconds, replay_deadline)
+    registry, labels = bindings(config.model, config.opponent, config.actions, deadline=preflight_deadline)
+    await native_preflight(registry, config.actions, deadline=preflight_deadline, worker_seconds=config.server.worker_seconds)
     run_id = str(uuid.uuid4())
     directory = Path(config.run.output_dir) / (config.run.name + "-" + run_id[:12])
     directory.mkdir(parents=True, exist_ok=False)
@@ -168,6 +193,7 @@ async def run_experiment(loaded: LoadedConfig, command: str) -> tuple[Path, Json
     episodes: list[Any] = []
     manifest: Json = {
         "schema_version": 3, "run_id": run_id, "command": command, "status": "running",
+        "policy_bindings": {label: asdict(binding) for label, binding in registry.items()},
         "effective_config": loaded.effective, "config_sha256": loaded.sha256, "config_inputs": loaded.inputs,
         "code": None, "simulator": {"revision": None, "dirty": None, "verification": "unverified", "spec_sha256": None},
         "simulator_contract_revision": SIMULATOR_REVISION,
@@ -205,7 +231,7 @@ async def run_experiment(loaded: LoadedConfig, command: str) -> tuple[Path, Json
         manifest["code"] = _code_provenance(preflight_deadline)
         manifest["server_config_sha256"] = _file_hash(config.server.config, preflight_deadline)
         planned = schedule(config.run.seeds, config.run.sampling_seeds, config.run.pairs_per_seed,
-                           config.model.model_id, config.opponent.model_id, deadline=preflight_deadline)
+                           labels[0], labels[1], deadline=preflight_deadline)
         for group in planned:
             _check_budget(preflight_deadline)
             manifest["schedule"].append(asdict(group))
@@ -213,6 +239,7 @@ async def run_experiment(loaded: LoadedConfig, command: str) -> tuple[Path, Json
         atomic_json(directory / "manifest.json", manifest)
         _check_budget(preflight_deadline)
         settings = EnvironmentSettings(
+            policy_bindings=registry,
             binary=config.server.binary, server_config=config.server.config, output_dir=directory, run_id=run_id,
             actions=config.actions, fixed_seed_experiment=config.server.fixed_seed_experiment,
             expected_fingerprint=config.server.expected_fingerprint, external_url=config.server.external_url,
@@ -321,9 +348,11 @@ async def run_experiment(loaded: LoadedConfig, command: str) -> tuple[Path, Json
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="gf-bots", description="Public-information GodField baselines")
     subcommands = parser.add_subparsers(dest="command", required=True)
-    for command in ("smoke", "collect", "evaluate", "benchmark", "validate"):
+    for command in ("smoke", "collect", "evaluate", "benchmark", "validate", "train"):
         child = subcommands.add_parser(command)
         child.add_argument("--config", required=True, type=Path)
+        if command == "train":
+            child.add_argument("--mode", choices=("fresh", "resume"), default="fresh")
         child.add_argument("--set", action="append", default=[], metavar="TABLE.FIELD=TOML_VALUE")
     export = subcommands.add_parser("export")
     export.add_argument("journals", nargs="+", type=Path)
@@ -338,15 +367,24 @@ def main(argv: list[str] | None = None) -> int:
         overrides: Json = {}
         for assignment in args.set:
             name, separator, raw_value = assignment.partition("=")
-            if not separator or name.count(".") != 1:
+            if not separator or "." not in name:
                 raise ValueError("--set expects TABLE.FIELD=TOML_VALUE")
-            table, field = name.split(".")
-            overrides.setdefault(table, {})[field] = tomllib.loads("value=" + raw_value)["value"]
+            parts = name.split(".")
+            current = overrides
+            for part in parts[:-1]:
+                current = current.setdefault(part, {})
+            current[parts[-1]] = tomllib.loads("value=" + raw_value)["value"]
+        if args.command == "train" and args.mode != "fresh":
+            raise ValueError("resume is unsupported; no work performed")
         loaded = load_config(args.config, overrides)
         if args.command == "validate":
             server_effective(loaded.config.server.config, len(loaded.config.run.sampling_seeds) * loaded.config.run.pairs_per_seed * 2)
             print(canonical({"valid": True, "config_sha256": loaded.sha256, "effective_config": loaded.effective,
                              "inputs": loaded.inputs}))
+            return 0
+        if args.command == "train":
+            from gf_training.lightgbm_run import train_experiments
+            print(canonical(asyncio.run(train_experiments(loaded, code_provenance_provider=_fit_code_provenance))))
             return 0
         directory, summary = asyncio.run(run_experiment(loaded, args.command))
         print(canonical({"run_dir": str(directory), **{key: summary[key] for key in ("planned_games", "natural_denominator", "wins", "draws", "losses", "comparison_valid", "failures", "wall_seconds")}}))

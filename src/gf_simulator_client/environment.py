@@ -5,7 +5,7 @@ import asyncio
 import time
 import uuid
 from collections.abc import Callable
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -21,6 +21,7 @@ from gf_common.domain import (
     Json,
     Policy,
     PolicyDecision,
+    RuntimePolicyBinding,
     UnsupportedContract,
     canonical,
     digest,
@@ -72,6 +73,7 @@ class EnvironmentSettings:
     wall_deadline: float = float("inf")
     work_deadline: float = float("inf")
     replay_deadline: float = float("inf")
+    policy_bindings: dict[str, RuntimePolicyBinding] = field(default_factory=dict)
 
 
 def _failure(exc: BaseException) -> str:
@@ -143,9 +145,12 @@ class SimulatorEnvironment:
                     except OSError as exc:
                         result.health["save_failure"] = str(exc)
                         raise
-                    workers[viewer] = ParticipantWorker(self.policy_factory, spec.policies[viewer - 1],
+                    label = spec.policies[viewer - 1]
+                    binding = self.settings.policy_bindings.get(label, RuntimePolicyBinding(label))
+                    worker_options = {"policy_options": binding.policy_options} if binding.policy_options is not None else {}
+                    workers[viewer] = ParticipantWorker(self.policy_factory, binding.model_id,
                                                         spec.sampling_seeds[viewer - 1], self.settings.actions,
-                                                        self.settings.worker_seconds)
+                                                        self.settings.worker_seconds, **worker_options)
                 histories: dict[int, list[Json]] = {1: [], 2: []}
                 cursors: dict[int, str | None] = {1: None, 2: None}
                 obs = await client.observe(game, 1)

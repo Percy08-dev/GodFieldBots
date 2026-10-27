@@ -120,6 +120,22 @@ class Policy(Protocol):
     def select(self, decision_input: DecisionInput, candidates: CandidateSet) -> PolicyDecision: ...
 
 
+def validated_policy_options(value: Any) -> Json:
+    import re
+    options = closed(value, {"checkpoint", "expected_manifest_digest"}, {"allow_toy"})
+    if not isinstance(options["checkpoint"], str) or not options["checkpoint"] or not isinstance(options["expected_manifest_digest"], str) or re.fullmatch(r"[0-9a-f]{64}", options["expected_manifest_digest"]) is None:
+        raise ContractError("invalid safe checkpoint binding")
+    if "allow_toy" in options and type(options["allow_toy"]) is not bool:
+        raise ContractError("invalid direct toy permission")
+    return clone(options)
+
+
+@dataclass(frozen=True)
+class RuntimePolicyBinding:
+    model_id: str
+    policy_options: Json | None = None
+
+
 @dataclass(frozen=True)
 class EpisodeSpec:
     episode_id: str

@@ -75,3 +75,14 @@ def malformed_frame_factory(model_id):
     os.write(1, b"badframe")
     time.sleep(10)
     return SlowPolicy()
+
+
+class ResistantReadyPolicy(AuditPolicy):
+    def reset(self, sampling_seed):
+        import signal
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        super().reset(sampling_seed)
+
+
+def resistant_ready_factory(model_id):
+    return ResistantReadyPolicy()

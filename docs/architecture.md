@@ -25,14 +25,14 @@ The old observation-only evaluation had 4/12 rejections. With authorized atomic
 hints the fixed 12-game evaluation is clean. The first frozen 192-game pilot
 recorded 182 natural games, 9 unsupported buy-control states and one omitted
 dynamic-weapon singleton. The latter is fixed in generator v3; the whole failed
-pilot is retained and the learning gate remains unfulfilled. Phases 4–9 are not
+pilot is retained and the learning gate remains unfulfilled. Phases 5–9 are not
 implemented. See the [current verification](verification/action-options.md).
-Phase 4 is approved in [ADR0006](adr/0006-lightgbm-action-value.md): native
+Phase 4 implements [ADR0006](adr/0006-lightgbm-action-value.md): native
 CPU LightGBM action scoring, versioned public encoders, checkpoint inference and
-gated training. Its independent design review is READY; implementation and final
-reviews remain. The
-current failed feasibility pilot cannot authorize a real-data fit; explicitly
-synthetic component verification is permitted by the implementation plan.
+gated fresh training. Independent final reviews and verification are recorded in
+[Phase 4 verification](verification/lightgbm-phase4.md). The current failed
+feasibility pilot cannot authorize a real-data fit; explicitly synthetic component
+verification is permitted by the implementation plan.
 The [rejection diagnosis](issues/0001-public-observation-legality-investigation.md)
 now explains the four cases as a protected-discard rule absent from the public
 normative text and attribute-incompatible defenses with insufficient permitted
@@ -83,11 +83,11 @@ Wire DTOs may resolve representation details; no engine dependency is allowed.
 
 | Package | Responsibility | Dependencies |
 | --- | --- | --- |
-| `gf_common` | JSON-safe domain types, protocols, public action space, lazy search | stdlib, NumPy |
+| `gf_common` | JSON-safe domain types, protocols, public action space, lazy search, pure scheduling | stdlib, NumPy |
 | `gf_simulator_client` | validated HTTP, attestation, subprocess/game ownership, worker transport | common, httpx |
-| `gf_training` | journals, compatible derived data and split provenance | common, optional PyArrow |
+| `gf_training` | journals/projection, split and feasibility checks, owned LightGBM training | common, model adapter, optional PyArrow |
 | `gf_evaluation` | paired scheduling, aggregation and costs | common |
-| `gf_models` | participant-local Random/heuristic; later model adapters | common, lazy extras |
+| `gf_models` | participant-local Random/heuristic/LightGBM, pure encoder and native artifact | common, lazy extras |
 | `gf_cli` | strict config, composition, commands, manifest | application packages |
 
 The existing `godfieldbots` entry point becomes a compatibility wrapper.
@@ -109,8 +109,9 @@ file. Merge recursively by field: common training/actions, model and explicit
 training differences, experiment overrides, explicitly supplied known CLI fields.
 Arrays replace wholesale. Persist effective config, canonical config SHA-256,
 input file hashes and resolved paths. Version defaults in the effective config.
-Workers receive policy ID/sampling seed and action settings only, never full
-experiment/server config, raw GameSeed or diagnostic metadata.
+Workers receive policy ID/sampling seed and action settings plus an optional safe
+checkpoint path/digest binding, never full experiment/server config, raw GameSeed
+or diagnostic metadata.
 
 All limits are configurable: initial beam width 64, 512 candidates, 20,000
 expansion attempts, sequence length 3; concurrency 2; training sampling seeds 3;
@@ -314,11 +315,67 @@ p50/p95, throughput, wall time, memory/artifact size (null when unmeasured).
 Final test size is fixed from validation only: pilot 64 pairs, half-width .05,
 bounds 256–2048; never select from test outcomes.
 
-CLI: `smoke`, `collect`, `evaluate`, `benchmark`, config validation and journal
-export by Phase 3. `train` arrives with Phase 4. Learning feasibility is separate:
+CLI: `smoke`, `collect`, `evaluate`, `benchmark`, config validation, journal
+export and Phase 4 `train`. Learning feasibility is separate:
 fixed-policy pilot 64 games × 3 sampling seeds, all natural and within budget.
 Failure leaves the gate unfulfilled and stops dependent learning experiments;
 never retain only successful episodes or manufacture bootstrap labels.
+
+## LightGBM training and inference
+
+`gf_models.lightgbm` owns stdlib-only typed model settings, NumPy feature encoding,
+native CPU fit/predict and artifact schema 1. The encoder `participant-action-v1`
+supports current observation and bounded public-event aggregates. Own visible
+definitions, ordered hand/learned references, missingness and same-revision atomic
+hints are encoded; candidate position, numeric instance IDs and management
+metadata are excluded. Each candidate is independently scored. Oversized
+sequences fail validation instead of being silently truncated.
+
+`gf_training.q_data` shares the journal exporter's validated schema-4 projection.
+It accepts whole finalized healthy natural runs, creates one final-return target
+only for each positively acknowledged selected action, and validates train,
+validation and pilot seed/ancestry unions together. Feasibility recomputes the
+pilot's fixed 64-game × three-policy-seed schedule and original budget; a sidecar
+eligibility flag alone cannot authorize fit. Decision target/overshoot and all
+source rows are checked before the native process starts. The failed current
+pilot remains ineligible; no production fit or model-quality claim is made.
+
+CLI selects model/training presets with the existing merge rules. It composes
+safe runtime bindings; exact inference-manifest hashes distinguish checkpoints
+of the same model, including swapped seats. Parent preflight validates only
+metadata, hashes and the linked completed training run. Native loading occurs
+in an owned clean participant interpreter before any Simulator listener starts.
+Workers recheck the pinned artifact and use the shared encoder. Baseline help,
+config loading and imports require no ML library.
+
+Each fresh training seed has its own original configured budget. Recorded source
+collection time is deduplicated and charged with current ingestion, encoding,
+provenance hashing, fit, saving and cleanup. Shared feasibility validation is
+identified separately. Current-fit Git/package/module provenance is distinct
+from source-run provenance. Request and numeric-input digests are checked by the
+native child. The child receives numeric arrays and closed model parameters;
+source control metadata stays in the parent training record. Native model RNG
+parameters in LightGBM text are allowed; Simulator GameSeed and source paths are
+not native parameters or features.
+
+The native fit subprocess self-validates an unready staging model. Parent drains
+bounded logs and reaps it before persisting completed `training.json`, then
+publishes checkpoint readiness last. Failure, cancellation, cleanup issues and
+detected overruns independently invalidate run and checkpoint. Formal inference
+requires both the ready/hash-compatible checkpoint and its healthy completed
+training record; either durable failure blocks use. Persisted cost fields are
+explicit pre-write snapshots; returned completion cost includes final writes and
+corrections. Concurrent/repeated worker close and cancellation join the same
+owned cleanup task without resetting its first deadline, preserving the original
+operation error until process, thread and streams have been reclaimed.
+
+Artifacts contain native `model.txt` and closed inference JSON, without pickles.
+Model, encoder, runtime, catalog, input/reward/projection and candidate-generation
+identities must match. `purpose=toy` permits explicit synthetic component tests
+only; formal commands reject it before startup. Only fresh training is supported;
+resume is rejected before work. Existing OS/filesystem blocking and dual-write
+failure debt remains explicit; portable inference export and broader native
+runtime compatibility are deferred to Phase 9. No new dependency is introduced.
 
 ## Verification and acceptance
 
@@ -335,4 +392,5 @@ compatibility per implemented extra. Record exact commands and PASS/FAIL/NOT RUN
 in `docs/verification/`, with phase gates and measured limitations.
 Independent correctness and architecture conformance reviews precede acceptance.
 Root owns docs/project presets/acceptance; one implementer owns Python/tests;
-other agents are read-only. No agent edits the simulator or commits this work.
+other agents are read-only. No agent edits the simulator. Root owns the user's
+authorized local commits; publishing remains separately authorized work.
