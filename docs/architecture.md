@@ -27,6 +27,12 @@ recorded 182 natural games, 9 unsupported buy-control states and one omitted
 dynamic-weapon singleton. The latter is fixed in generator v3; the whole failed
 pilot is retained and the learning gate remains unfulfilled. Phases 4–9 are not
 implemented. See the [current verification](verification/action-options.md).
+Phase 4 is approved in [ADR0006](adr/0006-lightgbm-action-value.md): native
+CPU LightGBM action scoring, versioned public encoders, checkpoint inference and
+gated training. Its independent design review is READY; implementation and final
+reviews remain. The
+current failed feasibility pilot cannot authorize a real-data fit; explicitly
+synthetic component verification is permitted by the implementation plan.
 The [rejection diagnosis](issues/0001-public-observation-legality-investigation.md)
 now explains the four cases as a protected-discard rule absent from the public
 normative text and attribute-incompatible defenses with insufficient permitted
