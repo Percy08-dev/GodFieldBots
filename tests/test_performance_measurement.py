@@ -318,6 +318,11 @@ def test_paired_plan_has_warmup_alternation_and_budget_matrix(tmp_path: Path) ->
         'standard', 'memory2048-chunk16', 'memory2048-chunk64',
         'memory8192-chunk16'}
     assert decoded['aliases']['memory8192-chunk64']['cell'] == 'standard'
+    assert len(plan) == 17
+    assert len([row for row in plan if row['trial'] < 0]) == 2
+    for cell in ('memory2048-chunk16', 'memory2048-chunk64', 'memory8192-chunk16'):
+        assert [(row['trial'], row['variant']) for row in plan if row['cell'] == cell] == [
+            (0, 'new'), (1, 'new'), (2, 'new')]
     assert not (tmp_path / 'planned').exists()
     assert all('VIRTUAL_ENV' in row['command'] for row in plan)
     assert 'torch' not in observer.__dict__

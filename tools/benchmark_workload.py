@@ -8,8 +8,9 @@ children. Example (inspect plan first; add --execute to run)::
     --kind preparation --output /tmp/gfb-pairs --encoder history
 
 The preparation plan includes the full old/new standard comparison and all new
-2/8GiB x 16/64MiB cells with cache512MiB. Every cell has a separately reported
-first-startup/warmup then three alternating trials. Fixed/replay use generation
+2/8GiB x 16/64MiB cells with cache512MiB. Standard old/new has separately reported
+first-startup/warmup then three alternating pairs. Additional budget cells have
+three fresh-process measured trials using the already-warm corpus. Fixed/replay use generation
 123 and the first eight validation17 schedule groups. They are fixed diagnostics,
 not population percentiles. Use --kind overhead for a small sampling on/off test.
 All runs inherit the same interpreter, thread settings and warm OS cache; no
@@ -433,7 +434,7 @@ def paired(args: argparse.Namespace) -> None:
                if args.kind == 'preparation' else {})
     plan: list[dict[str, Any]] = []
     for cell, variants, memory, chunk in cells:
-        for trial in (-1, 0, 1, 2):
+        for trial in ((-1, 0, 1, 2) if cell == 'standard' else (0, 1, 2)):
             order = variants if trial % 2 == 0 else tuple(reversed(variants))
             for variant in order:
                 label = f'{cell}-{"warmup" if trial < 0 else trial}-{variant}'
