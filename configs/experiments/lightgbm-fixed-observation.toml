@@ -10,12 +10,12 @@ opponent = "../models/heuristic.toml"
 [run]
 name = "lightgbm-fixed-observation"
 split = "train"
-output_dir = "../../runs/ppo-comparison/lightgbm-observation"
+output_dir = "../../runs/ppo-comparison-v2/lightgbm-observation"
 sampling_seeds = [17, 29, 43]
 concurrency = 2
 
 [server]
-simulator_revision = "860d8b92db4ce82012e040510f221b52241f28aa"
+simulator_revision = "ffcffa0966dbf6d7ce1d982f4ee6444e291d42d6"
 source_dir = "../../../GodFieldSimurator"
 binary = "../../../GodFieldSimurator/target/debug/gf-test-server"
 config = "../test-server.toml"

@@ -25,6 +25,9 @@
 | [0007](0007-staged-buy-contract-adoption.md) | Accepted | 購入応答・承諾の新契約とモデルのSimulator版固定 |
 | [0008](0008-mlp-ppo-generations-and-fixed-data.md) | Accepted | CUDA MLP PPO・世代来歴・境界再開・固定データ比較 |
 
+追加: [0009](0009-catalog-v2-simulator-adoption.md) — Accepted:
+Magical Stick新契約・catalog v2・遅延認証応答の失敗ラッチと新規実験。
+
 ## 記録テンプレート
 
 ```markdown

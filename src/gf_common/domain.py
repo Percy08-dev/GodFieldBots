@@ -7,24 +7,25 @@ from dataclasses import asdict, dataclass, field
 from typing import Any, Protocol
 
 Json = dict[str, Any]
-SIMULATOR_REVISION = "860d8b92db4ce82012e040510f221b52241f28aa"
+SIMULATOR_REVISION = "ffcffa0966dbf6d7ce1d982f4ee6444e291d42d6"
 RULE_SET = "true-match-1v1-v1"
 POLICY_INPUT_VERSION = "player-atomic-options-v1"
 REVIEWED_SPEC_HASHES = {
     "docs/spec/00-specification-overview.md": "a2ef3bbf2d8a1e88300d94f75bccfd1956a9b0ea18c14dce2dc0c1c41845a03d",
-    "docs/spec/03-game-engine.md": "4e6a3ff1eaea998cffbdb29383f2713bbd4efa16876d59ad0e481ca0c72feee9",
+    "docs/spec/01-server-spec.md": "0833200db8682a42f2d13b9759457c014f1e460fea7fcf321aa75f447ffecee8",
+    "docs/spec/03-game-engine.md": "2756b6c9524c97600568e823a71ad028298be8d9446e66043ead5bb1f77ce205",
     "docs/spec/05-observation.md": "8d8326c1eed4a8d2f81c822f1ed6c6b2782dfec309f1efbcc250d3c4f727cda9",
-    "docs/spec/06-persistence-history.md": "85bbf2461d9445c143dfce304967e36cfb8705580620e01b622134136ae06fdd",
-    "docs/spec/07-external-interfaces-adapters.md": "057577a3a3678cdc76a427bf578bd50295433fc0f096e50be3352a1f6e38062b",
+    "docs/spec/06-persistence-history.md": "21135b53299cfcf4da5bf0ddbaf00379e0cba117310518b5cd5adda95b28c2ea",
+    "docs/spec/07-external-interfaces-adapters.md": "342a8d59cc33494c9fbc91e565c7f710578cbf8a0fa59ee373fa0cea533d2d62",
     "docs/spec/08-test-requirements.md": "2d3f41349ff796e27590a6dd70b469fb2d547134ff5d659aba770fb02cb9a731",
-    "docs/spec/09-gameplay-rules.md": "7d3721fd5b4cd86c6c39b995e3378784542e34fd1be6c4a08707555c8fb66e33",
+    "docs/spec/09-gameplay-rules.md": "156c73425aab90c362a35b6393bc0e673dcac9de1e0979e8ae83ed5a0d370948",
     "docs/spec/10-cli-client.md": "31a0ad7fcc310d987d54bef1e6805aff3fdb31cb28e18b563f715206eb06588b",
 }
 
 END_PROJECTION_VERSION = "simulator-closure-v1"
-CATALOG_HASH = "4bb3ac87e4567798767f7c74a9f9280208adf931277c6afc7deeb865ef4d0673"
+CATALOG_HASH = "481ddfb0c068a1d2aaaf2dbcb6a5b4bd04396dfcc5c995e14e47b71222b6a51d"
 CATALOG_META: Json = {
-    "catalog_schema_version": 1, "catalog_version": "public-ja-v1",
+    "catalog_schema_version": 1, "catalog_version": "public-ja-v2",
     "rule_set_version": RULE_SET, "locale": "ja", "content_sha256": CATALOG_HASH,
     "definition_count": 296,
 }

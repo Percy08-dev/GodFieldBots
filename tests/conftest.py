@@ -34,7 +34,7 @@ def public_options(obs, definitions):
 
 @pytest.fixture
 def definitions():
-    return catalog(fixture("catalog_public.json"))
+    return catalog(fixture("catalog_public_v2.json"))
 
 
 @pytest.fixture

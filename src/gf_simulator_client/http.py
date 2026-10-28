@@ -116,6 +116,8 @@ class AttestedClient:
                 raise TimeoutError("attestation deadline")
             async with asyncio.timeout(min(self.request_seconds, max(0.0, self.deadline - time.monotonic()))):
                 response = await self.http.get("/debug/v1/test-server/info")
+            if self.poisoned:
+                raise AttestationError("connection was poisoned during attestation")
             directives = [s.strip().lower() for s in response.headers.get("cache-control", "").split(",")]
             if response.status_code != 200 or "no-store" not in directives:
                 raise AttestationError("info requires HTTP 200 and no-store")
@@ -181,7 +183,7 @@ class AttestedClient:
         info = await self._request("GET", "/v1/info")
         if info.get("api_version") != "v1" or info.get("rule_set_version") != RULE_SET or info.get("card_catalog") != CATALOG_META:
             raise UnsupportedContract("server/catalog version mismatch")
-        return catalog(await self._request("GET", "/v1/card-catalogs/public-ja-v1"))
+        return catalog(await self._request("GET", f"/v1/card-catalogs/{CATALOG_META['catalog_version']}"))
 
     async def create(self) -> Json:
         await self.attest()

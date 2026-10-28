@@ -2,6 +2,17 @@
 
 ## Status and scope
 
+[ADR0009](adr/0009-catalog-v2-simulator-adoption.md) adopts the new Simulator
+Magical Stick payment/zero-attack contract and catalog v2. Independent design
+is READY; implementation verification and fresh experiments are in progress.
+Current evidence is [catalog-v2 adoption](verification/catalog-v2-adoption.md).
+The earlier blocked experiment below is historical and remains wholly ineligible.
+Existing v3 singleton candidate forms, encoder signatures and JSON schemas
+remain unchanged; revised revision/catalog identities reject old formal sources
+and checkpoints. The frozen old reader retains historical pilot verification.
+Catalog retrieval uses the pinned version; sticky connection failure is checked
+again after a probe response before publishing cached readiness.
+
 The user's 2026-10-28 CUDA MLP PPO/generation/fixed-data plan is accepted in
 [ADR0008](adr/0008-mlp-ppo-generations-and-fixed-data.md), with independent
 design READY. It extends the baseline below with an owned numeric learning
@@ -84,10 +95,10 @@ cancellation case: every exceptional path drains owned tasks, including child
 TimeoutError. Nominal cleanup expiry is recorded once as unsuccessful; joining
 continues without new work or resetting deadlines under the existing OS/I/O debt.
 
-Simulator pin: `860d8b92db4ce82012e040510f221b52241f28aa`; HTTP `/v1`,
+Simulator pin: `ffcffa0966dbf6d7ce1d982f4ee6444e291d42d6`; HTTP `/v1`,
 `true-match-1v1-v1`, Observation `"1"`, Action metadata `1`, TestServer info `1`.
-Catalog: `public-ja-v1`, schema `1`, locale `ja`, 296 definitions,
-SHA-256 `4bb3ac87e4567798767f7c74a9f9280208adf931277c6afc7deeb865ef4d0673`.
+Catalog: `public-ja-v2`, schema `1`, locale `ja`, 296 definitions,
+SHA-256 `481ddfb0c068a1d2aaaf2dbcb6a5b4bd04396dfcc5c995e14e47b71222b6a51d`.
 Record actual code revisions, dirty state, and binary hash, without claiming a
 prebuilt binary was produced from the current source. Simulator owns final
 legality and transitions; this task must never modify it or copy its engine.

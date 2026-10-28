@@ -174,10 +174,15 @@ source/decision-budget gate; fixed-data mode instead requires all three complete
 PPO parents and prescribed final-policy validation sources. Do not infer training quality or a passed
 learning gate from synthetic fits, dependency smokes or baseline tests.
 The real two-update/resume smoke passes; the first formal seed-17 parent failed
-after 24 updates on an unresolved zero-MP dynamic-weapon target contract
+after 24 updates on the then-unresolved zero-MP dynamic-weapon target contract
 (`docs/issues/0004-zero-mp-dynamic-weapon-target-contract.md`). Preserve that
 whole parent as ineligible; later seeds/dataset/real fits have not run. Do not
 derive a legality rule from its rejection or shorten budgets to claim acceptance.
+Simulator revision ffcffa0966dbf6d7ce1d982f4ee6444e291d42d6 now specifies that
+contract and corrected MP payment with catalog v2. ADR0009 governs adoption;
+current new-runtime/pilot/PPO/fitting evidence is in
+`docs/verification/catalog-v2-adoption.md`. Old evidence remains historical;
+new full experiments use fresh `runs/ppo-comparison-v2` directories.
 Adding dependencies follows the architecture gate.
 Use the actual project's checks and the phase evidence in docs/verification/.
 

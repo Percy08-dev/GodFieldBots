@@ -1,0 +1,212 @@
+{
+  "schema_version": 1,
+  "purpose": "fixed-public-contract-component-only-not-training",
+  "source_episode": "runs/ppo-comparison/train-seed17/collections/batch-000024/b000024-p3-seat0",
+  "source_simulator_revision": "860d8b92db4ce82012e040510f221b52241f28aa",
+  "source_catalog_version": "public-ja-v1",
+  "source_participant_sha256": {
+    "1": "29866444a7c5c6209d7d96f26461532def0073e5812f4fe7acf52ba239d91592",
+    "2": "8bf56a163d1d5dd7fe800d9c414b742e62e82738396381f805014e58fc9b58c9"
+  },
+  "game_seed": "ffe41bd1-f234-5e4f-b5fd-4d6e7dcf3954",
+  "positive_mp_prefix_length": 1,
+  "zero_mp_prefix_length": 15,
+  "prefix": [
+    {
+      "player_id": 1,
+      "expected_revision": 0,
+      "action": {
+        "instance_ids": [
+          8,
+          3
+        ],
+        "type": "discard"
+      }
+    },
+    {
+      "player_id": 2,
+      "expected_revision": 1,
+      "action": {
+        "ordered_elements": [
+          {
+            "instance_id": 15,
+            "source": "hand_artifact"
+          }
+        ],
+        "target": 1,
+        "type": "play_sequence"
+      }
+    },
+    {
+      "player_id": 1,
+      "expected_revision": 2,
+      "action": {
+        "ordered_defenses": [
+          {
+            "instance_id": 6,
+            "source": "hand_artifact"
+          }
+        ],
+        "type": "respond_sequence"
+      }
+    },
+    {
+      "player_id": 1,
+      "expected_revision": 3,
+      "action": {
+        "instance_ids": [
+          9,
+          7,
+          1
+        ],
+        "type": "discard"
+      }
+    },
+    {
+      "player_id": 2,
+      "expected_revision": 4,
+      "action": {
+        "ordered_elements": [
+          {
+            "instance_id": 17,
+            "source": "hand_artifact"
+          }
+        ],
+        "target": 1,
+        "type": "play_sequence"
+      }
+    },
+    {
+      "player_id": 1,
+      "expected_revision": 5,
+      "action": {
+        "ordered_defenses": [],
+        "type": "respond"
+      }
+    },
+    {
+      "player_id": 1,
+      "expected_revision": 6,
+      "action": {
+        "ordered_elements": [
+          {
+            "instance_id": 20,
+            "source": "hand_artifact"
+          },
+          {
+            "instance_id": 4,
+            "source": "hand_artifact"
+          }
+        ],
+        "target": 2,
+        "type": "play_sequence"
+      }
+    },
+    {
+      "player_id": 2,
+      "expected_revision": 7,
+      "action": {
+        "ordered_defenses": [
+          {
+            "instance_id": 11,
+            "source": "hand_artifact"
+          },
+          {
+            "instance_id": 16,
+            "source": "hand_artifact"
+          }
+        ],
+        "type": "respond_sequence"
+      }
+    },
+    {
+      "player_id": 2,
+      "expected_revision": 8,
+      "action": {
+        "artifact": 25,
+        "hp": 64,
+        "money": 0,
+        "mp": 0,
+        "type": "exchange"
+      }
+    },
+    {
+      "player_id": 1,
+      "expected_revision": 9,
+      "action": {
+        "instance_ids": [
+          5,
+          22,
+          23
+        ],
+        "type": "discard"
+      }
+    },
+    {
+      "player_id": 2,
+      "expected_revision": 10,
+      "action": {
+        "ordered_elements": [
+          {
+            "instance_id": 24,
+            "source": "hand_artifact"
+          },
+          {
+            "instance_id": 26,
+            "source": "hand_artifact"
+          }
+        ],
+        "target": 1,
+        "type": "play_sequence"
+      }
+    },
+    {
+      "player_id": 1,
+      "expected_revision": 11,
+      "action": {
+        "instance_ids": [
+          2
+        ],
+        "type": "discard"
+      }
+    },
+    {
+      "player_id": 2,
+      "expected_revision": 12,
+      "action": {
+        "artifact": 21,
+        "target": 1,
+        "type": "buy"
+      }
+    },
+    {
+      "player_id": 1,
+      "expected_revision": 13,
+      "action": {
+        "ordered_defenses": [],
+        "type": "respond"
+      }
+    },
+    {
+      "player_id": 1,
+      "expected_revision": 14,
+      "action": {
+        "type": "pray"
+      }
+    }
+  ],
+  "original_rejected_action": {
+    "player_id": 2,
+    "expected_revision": 15,
+    "action": {
+      "ordered_elements": [
+        {
+          "instance_id": 13,
+          "source": "hand_artifact"
+        }
+      ],
+      "target": 2,
+      "type": "play_sequence"
+    }
+  }
+}

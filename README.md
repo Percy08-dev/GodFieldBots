@@ -7,8 +7,8 @@ Phase 4のCPU LightGBM、特徴変換、checkpoint推論、学習CLIも実装し
 CUDA MLP PPO・世代管理・境界再開・固定データ比較も実装しています。
 設計は[ADR0008](docs/adr/0008-mlp-ppo-generations-and-fixed-data.md)、実装・実験の受入状況は
 [PPO検証記録](docs/verification/mlp-ppo.md)を参照してください。
-実対戦2更新・停止再開の完全一致は確認済みです。正式3 seed比較は
-[MP 0マジカルステッキの対象契約](docs/issues/0004-zero-mp-dynamic-weapon-target-contract.md)が未確定のため停止しています。
+実対戦2更新・停止再開の完全一致は確認済みです。対象契約はSimulatorで明確化され、新契約での検証・正式比較を進めています。
+[移行記録](docs/verification/catalog-v2-adoption.md)を参照してください。
 合成データでの数値検証とBotの学習成立は別に判定します。
 現在の検証結果・Gate・制約は [ActionOptions検証記録](docs/verification/action-options.md)、
 [LightGBM検証記録](docs/verification/lightgbm-phase4.md)、過去の基盤検証は
@@ -24,8 +24,8 @@ uv run gf-bots smoke --config configs/experiments/smoke.toml
 ```
 
 既定の配置では、事前ビルドされた `../GodFieldSimurator/target/debug/gf-test-server` を使います。
-Simulator契約はrevision `860d8b92db4ce82012e040510f221b52241f28aa`、HTTP `/v1`、
-`true-match-1v1-v1`、Observation `"1"`、Action metadata `1`、catalog `public-ja-v1` に固定します。
+Simulator契約はrevision `ffcffa0966dbf6d7ce1d982f4ee6444e291d42d6`、HTTP `/v1`、
+`true-match-1v1-v1`、Observation `"1"`、Action metadata `1`、catalog `public-ja-v2` に固定します。
 実行にはlocalhostのlistenerを起動できる環境が必要です。
 
 ## 設定と実行
@@ -117,10 +117,10 @@ run全体が失敗した場合は、完了済みbatchを含めoffline学習に�
 validationは各64試合で、既存32 seedのうち前半16ペアをRandom、後半16ペアをheuristicへ割り当てます。
 
 ```console
-env -u VIRTUAL_ENV uv run --no-sync gf-bots validate-policy --config configs/experiments/ppo.toml --parent-run runs/ppo/seed17 --output runs/ppo-comparison/validation17
-env -u VIRTUAL_ENV uv run --no-sync gf-bots dataset build --ppo-runs runs/ppo/seed17 runs/ppo/seed29 runs/ppo/seed43 --validation-runs runs/ppo-comparison/validation17 runs/ppo-comparison/validation29 runs/ppo-comparison/validation43 --output runs/ppo-comparison/dataset.json
-env -u VIRTUAL_ENV uv run --no-sync gf-bots dataset inspect runs/ppo-comparison/dataset.json
-env -u VIRTUAL_ENV uv run --no-sync gf-bots dataset index runs/ppo-comparison/dataset.json --output runs/ppo-comparison/index.parquet
+env -u VIRTUAL_ENV uv run --no-sync gf-bots validate-policy --config configs/experiments/ppo.toml --parent-run runs/ppo-comparison-v2/train-seed17 --output runs/ppo-comparison-v2/validation17
+env -u VIRTUAL_ENV uv run --no-sync gf-bots dataset build --ppo-runs runs/ppo-comparison-v2/train-seed17 runs/ppo-comparison-v2/train-seed29 runs/ppo-comparison-v2/train-seed43 --validation-runs runs/ppo-comparison-v2/validation17 runs/ppo-comparison-v2/validation29 runs/ppo-comparison-v2/validation43 --output runs/ppo-comparison-v2/dataset.json
+env -u VIRTUAL_ENV uv run --no-sync gf-bots dataset inspect runs/ppo-comparison-v2/dataset.json
+env -u VIRTUAL_ENV uv run --no-sync gf-bots dataset index runs/ppo-comparison-v2/dataset.json --output runs/ppo-comparison-v2/index.parquet
 env -u VIRTUAL_ENV uv run --no-sync gf-bots train --config configs/experiments/lightgbm-fixed-observation.toml
 env -u VIRTUAL_ENV uv run --no-sync gf-bots train --config configs/experiments/lightgbm-fixed-history.toml
 ```

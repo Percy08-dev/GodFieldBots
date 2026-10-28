@@ -1,5 +1,11 @@
 # Zero-MP dynamic weapon singleton target contract
 
+Update 2026-10-28: Simulator `ffcffa0966dbf6d7ce1d982f4ee6444e291d42d6`
+spec09 section13.1.1 resolves the missing singleton semantics and also changes
+full MP payment. Bots adoption is tracked in ADR0009 and
+[the adoption record](../verification/catalog-v2-adoption.md). Original evidence
+and the failed parent below remain unchanged and ineligible.
+
 - Status: Blocks the formal three-parent PPO/fixed-data LightGBM experiment.
 - Date: 2026-10-28
 - Owner of clarification: separate Simulator task, not a Bots repository change.

@@ -27,10 +27,12 @@ def singleton(target):
 
 
 @pytest.mark.parametrize("strategy", ["enumerate", "beam"])
-def test_captured_mp10_weapon_has_exact_two_standalone_actions(definitions, strategy):
+@pytest.mark.parametrize("mp", [0, 10])
+def test_public_contract_weapon_has_exact_two_standalone_actions(definitions, strategy, mp):
     value = captured_input(definitions)
+    value.observation["own"]["mp"] = mp
     assert value.observation["own"]["hand"] == [{"instance_id": 10, "definition_id": "magical-stick"}]
-    assert value.observation["own"]["mp"] == 10
+    assert value.observation["own"]["mp"] == mp
     assert value.catalog["magical-stick"]["ability"] == "atkBy2xMP"
     assert "attack" not in value.catalog["magical-stick"]
     config = ActionConfig(strategy=strategy)

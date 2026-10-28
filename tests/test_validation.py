@@ -66,7 +66,7 @@ def test_dream_perceived_id_is_preserved(make_input, definitions):
 
 
 def test_catalog_hash_and_integer_types():
-    value = fixture("catalog_public.json")
+    value = fixture("catalog_public_v2.json")
     assert len(catalog(value)) == 296
     for field, item in (("attack", 2**31), ("price", -1), ("attack", True)):
         mutated = copy.deepcopy(value)

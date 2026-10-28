@@ -94,9 +94,9 @@ class PublicScript:
         if path == "/debug/v1/test-server/info":
             return httpx.Response(200, json=self.info, headers={"cache-control": "no-store"})
         if path == "/v1/info":
-            return httpx.Response(200, json=fixture("info_public.json"))
-        if path == "/v1/card-catalogs/public-ja-v1":
-            return httpx.Response(200, json=fixture("catalog_public.json"))
+            return httpx.Response(200, json=fixture("info_public_v2.json"))
+        if path == "/v1/card-catalogs/public-ja-v2":
+            return httpx.Response(200, json=fixture("catalog_public_v2.json"))
         if path == "/v1/games" and request.method == "POST":
             self.game_id = f"{self.instance * 1000 + len(self.created_games) + 1:026d}"
             self.created_games.append(self.game_id)
@@ -127,7 +127,7 @@ class PublicScript:
         if "/action-options/" in path:
             actor = int(path.rsplit("/", 1)[1])
             assert actor == self.actors[min(self.revision, len(self.actors) - 1)]
-            options = public_options(self.observation(actor), catalog(fixture("catalog_public.json")))
+            options = public_options(self.observation(actor), catalog(fixture("catalog_public_v2.json")))
             options.pop("viewer_player_id")
             return httpx.Response(200, json=options)
         if "/events/" in path:

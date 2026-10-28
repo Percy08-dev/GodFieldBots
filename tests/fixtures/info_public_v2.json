@@ -1,0 +1,16 @@
+{
+  "api_version": "v1",
+  "card_catalog": {
+    "catalog_schema_version": 1,
+    "catalog_version": "public-ja-v2",
+    "content_sha256": "481ddfb0c068a1d2aaaf2dbcb6a5b4bd04396dfcc5c995e14e47b71222b6a51d",
+    "definition_count": 296,
+    "locale": "ja",
+    "rule_set_version": "true-match-1v1-v1"
+  },
+  "name": "gf-simulator",
+  "random_algorithm": "xoshiro256pp",
+  "random_algorithm_version": "1",
+  "rule_set_version": "true-match-1v1-v1",
+  "version": "0.1.0"
+}
