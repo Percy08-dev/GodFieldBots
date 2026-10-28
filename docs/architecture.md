@@ -7,8 +7,12 @@ The user's 2026-10-28 CUDA MLP PPO/generation/fixed-data plan is accepted in
 design READY. It extends the baseline below with an owned numeric learning
 child, CPU participant inference, whole-run offline eligibility and original-
 deadline batch-boundary pause/resume. Independent design, correctness and final
-implementation conformance reviews are READY. Component verification has passed;
-real experiments are the next acceptance gate. Current
+implementation conformance reviews are READY. Component verification has passed.
+The real two-update/explicit-resume smoke passes with exact continuation.
+The formal comparison is blocked after a failed seed-17 parent by the
+[zero-MP dynamic-weapon target contract](issues/0004-zero-mp-dynamic-weapon-target-contract.md).
+That entire parent remains ineligible; later seeds/dataset/real LightGBM fits
+are not run. Current
 evidence is in [MLP PPO verification](verification/mlp-ppo.md). Historical
 Phase 4 and pilot results below retain their original scope and identities.
 

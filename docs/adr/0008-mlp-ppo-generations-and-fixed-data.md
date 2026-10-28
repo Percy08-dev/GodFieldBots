@@ -9,6 +9,10 @@
   architecture conformance READY, including the bounded provenance delta.
 - Implementation: complete; component checks passed, real experiment acceptance
   tracked separately in `docs/verification/mlp-ppo.md`.
+- Experiment: real two-update/resume smoke PASS with exact continuation; the
+  formal seed-17 parent failed after 24 updates. Three-parent/fixed-data/real-fit
+  acceptance is blocked by [the zero-MP target contract](../issues/0004-zero-mp-dynamic-weapon-target-contract.md).
+  Root accepts advisor recommendation C; no generator workaround is approved.
 
 ## Requirements and scope
 

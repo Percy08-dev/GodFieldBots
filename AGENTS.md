@@ -164,7 +164,7 @@ Python is 3.14 with the GIL enabled and the project uses uv. The Phase 0–3
 baseline foundation uses httpx/NumPy, pytest, ruff and mypy. PyArrow, LightGBM
 and mutually exclusive CPU/CUDA Torch builds are optional extras. Phase 4 implements native CPU LightGBM
 inference and guarded fresh training. The corrected-contract 192-game baseline
-pilot passes provisional feasibility; real-data fitting has not run and still
+pilot passes provisional feasibility; real-data LightGBM fitting has not run and still
 requires the explicit validated source/split/decision-budget conditions.
 ADR0008 implements the MLP PPO, generation/pause-resume and fixed-data comparison
 subset; current final acceptance/experiment evidence is in
@@ -173,6 +173,11 @@ future work. Legacy inclusive-generation LightGBM retains its explicit pilot/
 source/decision-budget gate; fixed-data mode instead requires all three complete
 PPO parents and prescribed final-policy validation sources. Do not infer training quality or a passed
 learning gate from synthetic fits, dependency smokes or baseline tests.
+The real two-update/resume smoke passes; the first formal seed-17 parent failed
+after 24 updates on an unresolved zero-MP dynamic-weapon target contract
+(`docs/issues/0004-zero-mp-dynamic-weapon-target-contract.md`). Preserve that
+whole parent as ineligible; later seeds/dataset/real fits have not run. Do not
+derive a legality rule from its rejection or shorten budgets to claim acceptance.
 Adding dependencies follows the architecture gate.
 Use the actual project's checks and the phase evidence in docs/verification/.
 

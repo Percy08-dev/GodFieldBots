@@ -10,6 +10,11 @@
 - Contract amendment: [ADR0007](0007-staged-buy-contract-adoption.md) supersedes
   this record's original Simulator pin/spec snapshots for corrected Buy control.
   The authorization, input/storage formats and candidate rules remain in force.
+- Follow-up 2026-10-28: the formal PPO attempt exposed an unverified zero-MP
+  dynamic-weapon target case beyond the v3 amendment's MP-10 evidence. See
+  [the separate contract clarification](../issues/0004-zero-mp-dynamic-weapon-target-contract.md).
+  V3, its historical pilot and the wholly failed PPO parent remain unchanged;
+  no new legality rule is inferred from the rejection.
 
 ## Context and authority
 

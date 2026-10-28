@@ -2,8 +2,10 @@
 
 Date: 2026-10-28. Requirements and accepted design:
 [ADR0008](../adr/0008-mlp-ppo-generations-and-fixed-data.md).
-Implementation and independent code reviews are complete. Real learning
-acceptance is in progress. No trained-policy quality or final-test claim is made.
+Implementation, independent code reviews and the real two-update/resume smoke
+are complete. The formal comparison is blocked by an unresolved zero-MP dynamic
+weapon target contract; see [the separate Simulator task](../issues/0004-zero-mp-dynamic-weapon-target-contract.md).
+No trained-policy quality or final-test claim is made.
 
 ## Implemented code verification
 
@@ -13,7 +15,7 @@ PPO experiment has yet been accepted by these code reviews.
 
 | Check | Result |
 | --- | --- |
-| Root full ordinary suite | PASS: 472 passed, four opt-in skipped, 122.39s |
+| Root final full ordinary suite | PASS: 479 passed, four opt-in skipped, 127.31s |
 | Final private provenance/lineage correction | PASS: 22 focused tests; final ancestor-Git guard four tests, 0.13s |
 | Ruff / mypy | PASS, 47 source files |
 | Existing real TestServer integration | PASS: four tests, 2.65s |
@@ -36,9 +38,9 @@ maximum pre-update CPU/device error and exact checkpoint continuation. This is
 one component workload, not an end-to-end speedup or learned-policy result.
 Final wheel SHA-256:
 `7057693fe30574a413683852d9099e3a9d272b40da3d01b4517fd3eff1999d3a`,
-121,979 bytes. Every one of 47 Python source files matches the wheel. The full
-ordinary suite preceded the final private provenance correction; focused
-lineage/provenance checks cover that correction. Installed baseline, CPU and
+121,979 bytes. Every one of 47 Python source files matches the wheel. The final
+479-test ordinary suite includes the provenance and CLI metadata corrections;
+the earlier 472-test snapshot also passed. Installed baseline, CPU and
 cu132 environments use absolute `/tmp/gfb-20261028-*` targets and `python -I`
 from `/tmp`. Provenance now hashes exactly seven owned packages/47 files;
 installed wheels/source archives cannot inherit an ancestor repository's Git
@@ -142,6 +144,23 @@ list contains neither Torch distribution. No restoration has been performed;
 the user has been asked for separate authorization because AGENTS.md excludes
 Simulator modification from this Bots task.
 
+Final read-only inventory still shows the verifier package absent, CPU Torch
+present, certifi 2022.12.7 and idna 3.4. The separately proposed repair is now
+concrete and dry-run checked: undo exactly the 11 added Torch-related packages,
+then restore the Simulator lock **with its dev extra** while preserving known
+pre-existing NumPy 2.5.4 through `--inexact`. Plain default sync would drop that
+manual NumPy and omit the original dev tools. No actual repair was performed.
+
+```console
+env -u VIRTUAL_ENV UV_CACHE_DIR=/tmp/gfb-uv-cache uv pip uninstall --python /home/percy/develop/GodFieldSimurator/.venv/bin/python filelock fsspec jinja2 markupsafe mpmath networkx pillow setuptools sympy torch torchvision
+env -u VIRTUAL_ENV UV_CACHE_DIR=/tmp/gfb-uv-cache UV_PROJECT_ENVIRONMENT=/home/percy/develop/GodFieldSimurator/.venv uv sync --project /home/percy/develop/GodFieldSimurator --locked --extra dev --inexact
+```
+
+Only these commands' `--dry-run` variants were executed: the uninstall plans
+exactly 11 removals; restoration plans two version replacements and 16 installs,
+including the verifier, pytest/respx/quickjs tools and their lock dependencies.
+Unknown pre-incident manual environment details cannot be proven from the lock.
+
 ## Preregistered experiment conditions
 
 After implementation acceptance and a successful real two-update smoke, run
@@ -198,6 +217,10 @@ Batch-0 MLP policy-select p50/p95 was 5.618/126.353ms, covering both learner and
 same-generation snapshot participants; the report explicitly separates mixed
 global metrics and per-policy metrics. These are engineering measurements,
 not a policy-quality or general GPU-speed claim.
+Final smoke inference weights occupy 681,538 bytes and inference JSON 19,483
+bytes. Whole-run throughput is 746 all-policy decisions / 70.535s = 10.576/s,
+including collection, encoding, updates and saving; it is not native-only
+prediction throughput. Full run artifacts and memory scopes are given above.
 
 Assessment: `runs/assessments/ppo-smoke-20261028.json`, SHA-256
 `1de55f66ade2f6a61433bb9d5dacdd78f5e4cb7f46073a3c2f6225282eb1ad2d`.
@@ -219,3 +242,41 @@ parent RNG controls were already correct and were independently compared.
 Historical smoke manifests are retained unchanged. Baseline/schema-3 text is
 unchanged; 25 focused CLI tests pass, including three pre-startup provenance
 cases. No numerical, opponent-selection or scheduling behavior changed.
+
+## Formal experiment attempt: blocked
+
+The prescribed seed-17 parent ran at clean code
+`9faeac5d14b279b3ea4be5c57dc0c8b958b5ad37` with unchanged default budgets.
+Its generation-2 weights exactly matched the engineering smoke, confirming the
+metadata-only correction did not change that trajectory/update sequence.
+It committed 24 updates and 3,800 learner actions, then batch 24 had 15 natural
+games and one heuristic `invalid_target` rejection: perceived Magical Stick,
+MP 0, self target. Total: 399 natural of 400 attempted games, elapsed 761.961s.
+
+The entire parent is failed/quarantined, including all 24 healthy earlier
+batches. Root checked the actual retained source: early-batch ingestion,
+generic export projection, formal checkpoint qualification and failed-run
+resume each reject it. Generation/update 25 and failed-batch numeric input do
+not exist. No CPU fallback, repaired probability, substituted game or offline
+reuse was performed. Seeds 29/43, 192-game final validation, fixed dataset and
+six real LightGBM fits are NOT RUN because the three-parent gate is unmet.
+
+The advisor and architecture investigator agree that current public normative
+sources do not establish the legal MP-0 singleton target shape. Root accepts
+recommendation C: [separate Simulator clarification](../issues/0004-zero-mp-dynamic-weapon-target-contract.md),
+then a reviewed version-pinned Bots change and wholly fresh formal parents.
+No production legality rule is inferred from rejection details or typed syntax.
+No Simulator source or contract is modified by this Bots task.
+
+Actual failure assessment:
+`runs/assessments/ppo-seed17-failure-20261028.json`, SHA-256
+`83d40a2e8ed2bd6d63608d37d4e670b7d79c3d54ee04300af4b69c8a5d312e98`;
+failed parent `run.json` SHA-256
+`d34c28e02a93ca5cc89ab861d891be25bdeb34a3d8ba60335a74dc1faa3cd6b9`.
+
+Independent failure-handling evidence review is READY. It verified all 24
+immutable commits/counters (184 Adam steps), the missing generation/update/input
+for the failed batch, source rejection without acknowledgement/terminal label,
+and default offline/formal/resume-admission rejection. It did not run additional
+PPO or a legality probe. This validates failure handling, not the blocked
+three-parent comparison.

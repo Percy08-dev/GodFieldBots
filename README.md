@@ -7,6 +7,8 @@ Phase 4のCPU LightGBM、特徴変換、checkpoint推論、学習CLIも実装し
 CUDA MLP PPO・世代管理・境界再開・固定データ比較も実装しています。
 設計は[ADR0008](docs/adr/0008-mlp-ppo-generations-and-fixed-data.md)、実装・実験の受入状況は
 [PPO検証記録](docs/verification/mlp-ppo.md)を参照してください。
+実対戦2更新・停止再開の完全一致は確認済みです。正式3 seed比較は
+[MP 0マジカルステッキの対象契約](docs/issues/0004-zero-mp-dynamic-weapon-target-contract.md)が未確定のため停止しています。
 合成データでの数値検証とBotの学習成立は別に判定します。
 現在の検証結果・Gate・制約は [ActionOptions検証記録](docs/verification/action-options.md)、
 [LightGBM検証記録](docs/verification/lightgbm-phase4.md)、過去の基盤検証は
