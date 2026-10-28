@@ -129,6 +129,23 @@ validation収集は29／43についても、それぞれ対応する学習seed�
 全世代の学習側train軌跡を成績で選別せず採用し、教師は受理済み行動と本人視点の自然終了returnです。
 PPOのvalue／advantageをLightGBMの教師にしません。
 datasetの作成・利用時は元journal・Replay・親runを再検証します。
+
+前処理は試合単位で検証・変換・解放し、メモリと一時領域の予算を管理します。
+標準設定はメモリ8GiB・処理単位64MiBです。固定83,783行で検証した
+2GiB・16MiBの設定もあります。これらは前処理の管理上限であり、OSのhard quotaや
+LightGBM native fitのメモリ上限ではありません。
+
+```sh
+env -u VIRTUAL_ENV uv run --no-sync gf-bots dataset inspect runs/ppo-comparison-v2/dataset.json --preprocessing-config configs/preprocessing/low-memory.toml
+env -u VIRTUAL_ENV uv run --no-sync gf-bots train --config configs/experiments/lightgbm-fixed-history.toml --set preprocessing.memory_budget_mib=2048 --set preprocessing.chunk_target_mib=16
+```
+
+実験presetからは `[references] preprocessing="../preprocessing/low-memory.toml"`
+で参照できます。`dataset index --output`は出力と`.json` sidecarの両方が未作成の
+パスを要求します。再生成時は新しい出力先を指定してください。
+設定・互換性は[ADR0010](docs/adr/0010-budgeted-preparation-and-encoding.md)、
+時間・CPU・メモリ・ストレージの比較は[検証記録](docs/verification/budgeted-preparation.md)
+を参照してください。
 固定データ方式では検証・特徴変換・fit・保存・回収を各fitの2時間へ含め、共有データ生成費を別途報告します。
 従来の生成費込み方式と記録schemaで区別し、PPOと総費用が同条件だったとは扱いません。
 最終test評価はこの段階では実行しません。

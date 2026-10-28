@@ -88,6 +88,44 @@ def test_bounded_logs_and_jsonl_records(tmp_path: Path) -> None:
         json.loads(line)
 
 
+def test_samples_combined_owned_output_without_following_external_links(tmp_path: Path) -> None:
+    protected = tmp_path / 'protected-source'
+    protected.mkdir()
+    source = protected / 'untouched.bin'
+    with source.open('wb') as stream:
+        stream.truncate(64 * 1024 * 1024)
+    original = source.stat()
+    code = f"""
+import os,time
+from pathlib import Path
+scratch=Path(os.environ['GFB_BENCHMARK_SCRATCH'])
+artifacts=scratch.parent/'artifacts'
+artifacts.mkdir()
+(artifacts/'model.bin').write_bytes(b'm'*(512*1024))
+temporary=scratch/'numeric.bin'
+temporary.write_bytes(b'n'*(1024*1024))
+(scratch.parent/'external-link').symlink_to({str(protected)!r},target_is_directory=True)
+time.sleep(1.2)
+temporary.unlink()
+"""
+    completed, result = run_monitor(tmp_path, code)
+    assert completed.returncode == 0, completed.stderr
+    peaks = result['peaks']
+    assert peaks['scratch_logical_bytes'] >= 1024 * 1024
+    assert peaks['output_logical_bytes'] >= peaks['scratch_logical_bytes'] + 512 * 1024
+    assert peaks['output_allocated_bytes'] >= peaks['scratch_allocated_bytes']
+    assert peaks['output_logical_bytes'] < original.st_size  # The external tree was not traversed.
+    assert result['scratch_residual']['logical_bytes'] == 0
+    assert (tmp_path / 'measurement/artifacts/model.bin').stat().st_size == 512 * 1024
+    assert source.stat().st_size == original.st_size
+    assert source.stat().st_mtime_ns == original.st_mtime_ns
+    rows = [json.loads(line) for line in (tmp_path / 'measurement/timeline.jsonl').read_text().splitlines()]
+    storage_rows = [row for row in rows if 'output' in row]
+    assert len(storage_rows) >= 2
+    assert all(row['output']['logical_bytes'] >= row['scratch']['logical_bytes'] for row in storage_rows)
+    assert 'scratch is a subset' in result['storage_scope']
+
+
 def test_deadline_cleans_escaped_descendant(tmp_path: Path) -> None:
     code = """
 import subprocess,sys,time

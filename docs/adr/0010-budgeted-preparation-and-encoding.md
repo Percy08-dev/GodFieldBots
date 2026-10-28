@@ -244,6 +244,22 @@ k-way merge under the scratch limit. Do not reproject source data for sorting.
 
 ## Rust feasibility experiment and decision
 
+Measured feasibility amendment (2026-10-29, independent architecture READY):
+apply an attainable end-to-end benefit screen before building a prototype.
+For target fraction f and local acceleration k, a1.5x whole-operation gain
+requires f*(1-1/k)>=1/3. A candidate that fails even with k=infinity is rejected
+without a build; the25%/30s trigger alone does not override this bound.
+The fresh full-corpus iterative-accounting timing measured64.675/249.987s
+(f=.258712), so even free accounting permits only1.349x. Decode plus feature
+encoding was74.771s, permitting only about1.427x with other work unchanged.
+These bounded candidates therefore do not qualify. Keep Python; native
+build/prototype is NOT RUN, with no native-validation or universal Rust-speed
+claim. Evidence: `runs/assessments/native-feasibility-accounting.json`.
+A fused native representation/validator/accounting rewrite could change other
+costs, but exceeds this bounded experiment and requires a separate proposal.
+The following prototype gates still apply if a future measured candidate passes
+this screen; a GIL-held Python-object walk must never claim detached parallelism.
+
 After removing repeated work, profile again. If decoding/validation/feature
 extraction still accounts for at least25% of preparation and at least30seconds
 on the full frozen corpus, perform a bounded

@@ -1,0 +1,8 @@
+schema_version = 1
+kind = "preprocessing"
+
+# Measured on the frozen 83,783-row corpus; native fit memory is separate.
+[preprocessing]
+memory_budget_mib = 2048
+cache_budget_mib = 512
+chunk_target_mib = 16

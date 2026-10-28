@@ -7,7 +7,7 @@ Run with the project interpreter, never ``uv --active``::
     .venv/bin/python tools/benchmark_workload.py --help
 
 The output and scratch directories must not exist. They are never deleted by
-this tool. Only its own scratch tree is scanned, never immutable source trees.
+this tool. Only its owned output and scratch trees are scanned, never source trees.
 Use a fresh monitor process for every trial (subreaper ownership is process-wide).
 """
 from __future__ import annotations
@@ -33,13 +33,15 @@ PAGE = os.sysconf('SC_PAGE_SIZE')
 COUNTERS = ('user_seconds', 'system_seconds', 'minor_faults', 'major_faults',
             'rchar', 'wchar', 'read_bytes', 'write_bytes', 'cancelled_write_bytes')
 LIMITATIONS = [
-    '100ms samples can miss short processes and memory peaks; PSS/scratch sampled at 1s.',
+    '100ms samples can miss short processes and memory peaks; PSS/scratch/output sampled at 1s.',
     'Summed simultaneous RSS can count shared pages more than once; PSS may be unavailable.',
     'Final wait4 CPU/fault totals include waited descendants once; samples are not added.',
     'Process storage I/O is OS accounting, not physical device traffic; WSL host I/O is unseen.',
     'Memory, scratch and deadline observations are soft limits, not OS resource quotas.',
     'Exit rusage has no byte I/O counters; short/exiting process I/O can be missed.',
     'Observer process and optional device sampler are excluded from workload accounting.',
+    'Output storage includes scratch, logs and child artifacts; never add output and scratch totals.',
+    'Older measurements without output peak fields have unavailable output peaks; they are not zero.',
 ]
 
 
@@ -195,7 +197,8 @@ def observe(command: list[str], output: Path, *, seconds: float = 7200,
     exited: list[dict[str, Any]] = []
     sampled: dict[tuple[int, int], dict[str, int | float]] = {}
     peaks: dict[str, int | None] = dict.fromkeys(('rss_bytes', 'pss_bytes', 'swap_bytes',
-                                               'scratch_logical_bytes', 'scratch_allocated_bytes'))
+                                               'scratch_logical_bytes', 'scratch_allocated_bytes',
+                                               'output_logical_bytes', 'output_allocated_bytes'))
     errors: set[str] = set()
     cancelled: str | None = None
     child: subprocess.Popen[bytes] | None = None
@@ -310,6 +313,10 @@ def observe(command: list[str], output: Path, *, seconds: float = 7200,
                     row['scratch'] = disk
                     values.update(scratch_logical_bytes=disk['logical_bytes'],
                                   scratch_allocated_bytes=disk['allocated_bytes'])
+                    output_disk = directory_bytes(output)
+                    row['output'] = output_disk
+                    values.update(output_logical_bytes=output_disk['logical_bytes'],
+                                  output_allocated_bytes=output_disk['allocated_bytes'])
                     if device_gpu:
                         row['gpu'] = gpu_sample()
                     next_slow = now + 1
@@ -390,6 +397,8 @@ def observe(command: list[str], output: Path, *, seconds: float = 7200,
               'per_process_exit_limitation': 'waited-descendant exit usage is aggregated by its parent; '
                                              'only sampled self counters can separate those processes',
               'scratch_residual': directory_bytes(scratch), 'logs': log_result,
+              'storage_scope': 'output includes scratch, observer logs/timeline and child artifacts; '
+                               'scratch is a subset, not an additional total',
               'final_output_bytes_before_measurement_write': directory_bytes(output),
               'timeline': timeline_result, 'metric_unavailable_reasons': sorted(errors),
               'sampling_unavailable_reason': None if sampling else 'optional sampling disabled',
