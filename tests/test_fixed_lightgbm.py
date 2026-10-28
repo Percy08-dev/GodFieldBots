@@ -48,15 +48,26 @@ def test_each_fixed_fit_charges_current_validation_transform_but_generation_once
     training = TrainingConfig(cost_mode='fixed_data', dataset_manifest=str(tmp_path / 'dataset.json'), seeds=(17, 29, 43))
     config = replace(loaded.config, training=training, run=replace(loaded.config.run, output_dir=str(tmp_path)))
     loaded = LoadedConfig(config, asdict(config), digest(asdict(config)), ())
-    (tmp_path / 'dataset.json').write_text('synthetic source hash only')
     sample = Sample(make_input(), {'type': 'pray'}, 1., ('run', 'game', 1, 0))
     manifest = {'content_sha256': 'a' * 64, 'shared_generation_cost_key': 'b' * 64,
-                'shared_generation_seconds': 10000., 'action_config_hash': digest(asdict(config.actions))}
+                'shared_generation_seconds': 10000., 'action_config_hash': digest(asdict(config.actions)),
+                'train_decisions': 1, 'validation_decisions': 1}
+    (tmp_path / 'dataset.json').write_text(canonical(manifest))
     validations = []
-    def inspect(*args, **kwargs):
+    def prepare(path, encoder, *, preprocessing, deadline, wall_deadline):
+        from gf_training.journal import AcceptedDecision
+        from gf_training.preparation import PreparationSession
+        from gf_training.preparation_numeric import PreparedInputs
         validations.append(True)
-        return manifest, (sample,), (sample,)
-    monkeypatch.setattr(data, 'inspect_dataset', inspect)
+        assert wall_deadline - deadline == max(training.cleanup_seconds, preprocessing.cleanup_seconds)
+        session = PreparationSession(preprocessing, deadline=deadline, wall_deadline=wall_deadline)
+        session.read_json(path)
+        owner = PreparedInputs(session, manifest, encoder)
+        for split in ('train', 'validation'):
+            owner.accept(AcceptedDecision(sample.value, sample.action, sample.target, sample.identity, split), None)
+        owner.seal(manifest)
+        return owner
+    monkeypatch.setattr(data, 'prepare_fixed_inputs', prepare)
     calls = []
     async def fit(*args, **kwargs):
         calls.append(kwargs)

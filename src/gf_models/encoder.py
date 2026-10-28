@@ -254,9 +254,17 @@ class PreparedDecision:
         return np.stack([self.encode(action) for action in actions])
 
 
-def encode(value: DecisionInput, action: Json, config: EncoderConfig) -> Array:
-    # Keep the chosen-action path lean: offline samples need only one action.
-    value = validate_worker_input(value)
+def _encode_validated(value: DecisionInput, action: Json, config: EncoderConfig) -> Array:
+    """Trusted internal sink for an owned, already-validated participant snapshot.
+
+    Offline journal validation owns the snapshot through this synchronous call.
+    This skips only input rebuilding; config/action/reference checks stay shared.
+    """
     validated = encoder_config(asdict(config))
     result = np.asarray(list(_features(value, action, validated).values()), dtype=np.float64)
     return PreparedDecision._checked(result, len(_feature_names(validated)))
+
+
+def encode(value: DecisionInput, action: Json, config: EncoderConfig) -> Array:
+    # Keep the chosen-action path lean: offline samples need only one action.
+    return _encode_validated(validate_worker_input(value), action, config)

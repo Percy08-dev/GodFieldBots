@@ -32,6 +32,7 @@ from gf_models.lightgbm.model import (
 )
 from gf_training.gates import feasibility
 from gf_training.journal import atomic_json
+from gf_training.preparation_numeric import PreparedInputs
 from gf_training.q_data import (
     check_deadline,
     labeled_samples,
@@ -94,11 +95,11 @@ async def _stop(process: asyncio.subprocess.Process, drainers: list[asyncio.Task
         health["cleanup_overrun_seconds"] = time.monotonic() - started - seconds
 
 
-async def _run_numeric(directory: Path, x: Array, y: Array, validation_x: Array, validation_y: Array, *,
+async def _run_numeric(directory: Path, x: Array | None, y: Array | None, validation_x: Array | None, validation_y: Array | None, *,
                       model: ModelConfig, actions: ActionConfig, training: TrainingConfig, seed: int,
                       purpose: str = "toy", charged_seconds: float = 0, provenance_data: Json | None = None,
                       command: tuple[str, ...] | None = None, fit_code_provenance: Json | None = None,
-                      fit_code_measurement_seconds: float = 0) -> Json:
+                      fit_code_measurement_seconds: float = 0, prepared_inputs: PreparedInputs | None = None) -> Json:
     """Low-level synthetic component runner; real CLI uses verified source proof."""
     training_config(asdict(training))
     model_config(asdict(model))
@@ -110,12 +111,24 @@ async def _run_numeric(directory: Path, x: Array, y: Array, validation_x: Array,
         raise ContractError("invalid charged collection/ingestion cost")
     started = time.monotonic()
     deadline = started + training.wall_seconds - charged_seconds
-    check_deadline(deadline - training.cleanup_seconds)
-    width = len(feature_names(model.encoder))
-    x, validation_x = numeric_matrix(x, width), numeric_matrix(validation_x, width)
-    for features, labels in ((x, y), (validation_x, validation_y)):
-        if labels.shape != (len(features),) or not np.isfinite(labels).all():
+    cleanup_seconds = training.cleanup_seconds
+    if prepared_inputs is not None:
+        deadline = min(deadline, prepared_inputs.session.wall_deadline)
+        cleanup_seconds = max(cleanup_seconds, prepared_inputs.session.config.cleanup_seconds)
+        if prepared_inputs.config != model.encoder or any(value is not None for value in (x, y, validation_x, validation_y)):
+            raise ContractError("prepared numeric ownership/config mismatch")
+        sample_count = prepared_inputs.shapes['x'][0]
+        validation_sample_count = prepared_inputs.shapes['validation_x'][0]
+    else:
+        width = len(feature_names(model.encoder))
+        x, validation_x = numeric_matrix(x, width), numeric_matrix(validation_x, width)
+        if y is None or validation_y is None:
             raise ContractError("invalid fit labels")
+        for features, labels in ((x, y), (validation_x, validation_y)):
+            if labels.shape != (len(features),) or not np.isfinite(labels).all():
+                raise ContractError("invalid fit labels")
+        sample_count, validation_sample_count = len(y), len(validation_y)
+    check_deadline(deadline - cleanup_seconds)
     directory.mkdir(parents=True, exist_ok=False)
     manifest: Json = {"schema_version": 2 if training.cost_mode == "fixed_data" else 1, "cost_mode": training.cost_mode, "algorithm": "lightgbm_mc", "status": "running", "purpose": purpose,
                       "seed": seed, "charged_prior_seconds": charged_seconds, "wall_seconds": training.wall_seconds,
@@ -123,7 +136,7 @@ async def _run_numeric(directory: Path, x: Array, y: Array, validation_x: Array,
                           "verification": "unknown", "revision": None, "dirty": None, "installed_build_revision": None},
                       "fit_code_measurement_seconds": fit_code_measurement_seconds,
                       "source_provenance": provenance_data, "health": {}, "model": asdict(model), "training": asdict(training),
-                      "action_config_hash": digest(asdict(actions)), "sample_count": len(y), "validation_sample_count": len(validation_y),
+                      "action_config_hash": digest(asdict(actions)), "sample_count": sample_count, "validation_sample_count": validation_sample_count,
                       "label_recipe": "behavior-selected-natural-return-gamma1-v1", "checkpoint": None}
     process = None
     drainers: list[asyncio.Task[None]] = []
@@ -131,8 +144,12 @@ async def _run_numeric(directory: Path, x: Array, y: Array, validation_x: Array,
     ready_inference: Json | None = None
     try:
         atomic_json(directory / "training.json", manifest)
-        check_deadline(deadline - training.cleanup_seconds)
-        np.savez(directory / "arrays.npz", x=x, y=y, validation_x=validation_x, validation_y=validation_y)
+        check_deadline(deadline - cleanup_seconds)
+        if prepared_inputs is None:
+            assert x is not None and y is not None and validation_x is not None and validation_y is not None
+            np.savez(directory / "arrays.npz", x=x, y=y, validation_x=validation_x, validation_y=validation_y)
+        else:
+            prepared_inputs.write_numeric(directory / "arrays.npz")
         request: Json = {"model": {**asdict(model), "checkpoint": None}, "params": native_parameters(model, training, seed),
                    "rounds": training.num_boost_round, "early_stopping": training.early_stopping_rounds,
                    "purpose": purpose, "action_config_hash": digest(asdict(actions))}
@@ -141,7 +158,7 @@ async def _run_numeric(directory: Path, x: Array, y: Array, validation_x: Array,
                                     "arrays_sha256": _sha256(directory / "arrays.npz", deadline)}
         atomic_json(directory / "input-hashes.json", manifest["input_hashes"])
         atomic_json(directory / "training.json", manifest)
-        check_deadline(deadline - training.cleanup_seconds)
+        check_deadline(deadline - cleanup_seconds)
         environment = {"PATH": os.defpath, "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8", "OMP_NUM_THREADS": "1", "OPENBLAS_NUM_THREADS": "1"}
         creation = asyncio.create_task(asyncio.create_subprocess_exec(
             *(command or (sys.executable, "-E", "-m", "gf_training.lightgbm_worker", str(directory.resolve()))),
@@ -158,11 +175,11 @@ async def _run_numeric(directory: Path, x: Array, y: Array, validation_x: Array,
                     asyncio.create_task(_drain(process.stderr, directory / "stderr.log", training.max_log_bytes, manifest["health"]))]
         if launch_cancel is not None:
             raise launch_cancel
-        async with asyncio.timeout_at(deadline - training.cleanup_seconds):
+        async with asyncio.timeout_at(deadline - cleanup_seconds):
             while process.returncode is None:
                 if manifest["health"].get("log_limit_exceeded"):
                     raise RuntimeError("native log limit exceeded")
-                await asyncio.sleep(min(.01, max(0, deadline - training.cleanup_seconds - time.monotonic())))
+                await asyncio.sleep(min(.01, max(0, deadline - cleanup_seconds - time.monotonic())))
             await asyncio.gather(*drainers)
         if process.returncode != 0 or manifest["health"].get("log_limit_exceeded"):
             raise RuntimeError("native fit failed")
@@ -186,7 +203,7 @@ async def _run_numeric(directory: Path, x: Array, y: Array, validation_x: Array,
         manifest.update(status="interrupted" if isinstance(exc, asyncio.CancelledError) else "failed", failure=type(exc).__name__, message=str(exc))
     finally:
         if process is not None:
-            cleanup = asyncio.create_task(_stop(process, drainers, min(training.cleanup_seconds, max(0, deadline - time.monotonic())), manifest["health"]))
+            cleanup = asyncio.create_task(_stop(process, drainers, min(cleanup_seconds, max(0, deadline - time.monotonic())), manifest["health"]))
             while not cleanup.done():
                 try:
                     await asyncio.shield(cleanup)
@@ -198,6 +215,18 @@ async def _run_numeric(directory: Path, x: Array, y: Array, validation_x: Array,
             except BaseException as exc:  # noqa: BLE001 - owned child must always be reaped
                 manifest["health"]["cleanup_failure"] = str(exc)
                 original_error = original_error or exc
+    x = y = validation_x = validation_y = None
+    if prepared_inputs is not None:
+        try:
+            if original_error is None and not any(manifest["health"].get(key) for key in
+                                                  ("emergency_kill", "cleanup_failure", "cleanup_overrun_seconds", "drain_failure", "log_limit_exceeded")):
+                prepared_inputs.finalize()
+            else:
+                prepared_inputs.abort()
+        except BaseException as exc:  # noqa: BLE001 - finalizer failure forbids publication
+            original_error = original_error or exc
+            manifest["health"]["preparation_cleanup_failure"] = str(exc)
+            manifest.update(status="failed", failure=type(exc).__name__, quarantine=True)
     def measured() -> None:
         manifest["elapsed_seconds"] = time.monotonic() - started
         manifest["charged_total_seconds"] = charged_seconds + manifest["elapsed_seconds"]
@@ -352,7 +381,7 @@ async def train_experiments(loaded: LoadedConfig, mode: str = "fresh", *,
 
 
 async def train_fixed_data(loaded: LoadedConfig, *, code_provenance_provider: Callable[[float], Json] | None = None) -> Json:
-    from gf_training.fixed_data import inspect_dataset
+    from gf_training.fixed_data import prepare_fixed_inputs
     config = loaded.config
     training, model = config.training, config.model
     if not isinstance(training, TrainingConfig) or not isinstance(model, ModelConfig) or model.model_id != "lightgbm" or model.checkpoint is not None or training.cost_mode != "fixed_data" or training.dataset_manifest is None:
@@ -363,35 +392,33 @@ async def train_fixed_data(loaded: LoadedConfig, *, code_provenance_provider: Ca
     shared_generation = None
     for seed in training.seeds:
         started = time.monotonic()
-        deadline = started + training.wall_seconds - training.cleanup_seconds
-        dataset, train, validation = inspect_dataset(Path(training.dataset_manifest), deadline=deadline)
-        if dataset["action_config_hash"] != digest(asdict(config.actions)):
-            raise ContractError("fixed dataset/search conditions mismatch")
-        def features(samples: Any, deadline: float = deadline) -> Array:
-            vectors = []
-            for sample in samples:
-                check_deadline(deadline)
-                vectors.append(encode(sample.value, sample.action, model.encoder))
-            return np.stack(vectors)
-        x, validation_x = features(train), features(validation)
-        y = np.asarray([sample.target for sample in train], dtype=np.float64)
-        validation_y = np.asarray([sample.target for sample in validation], dtype=np.float64)
-        fit_code = code_provenance_provider(deadline) if code_provenance_provider is not None else None
-        check_deadline(deadline)
-        prep_seconds = time.monotonic() - started
-        source = {"real_gate_passed": True, "fixed_dataset_content_sha256": dataset["content_sha256"],
-                  "dataset_manifest_sha256": _sha256(Path(training.dataset_manifest), deadline),
-                  "shared_generation_seconds": dataset["shared_generation_seconds"],
-                  "shared_generation_cost_key": dataset["shared_generation_cost_key"],
-                  "shared_generation_cost_scope": "deduplicated whole PPO parents and final validation, reported separately, excluded from this fit budget",
-                  "comparison_claim": "fixed selected source set; no equal-total-cost PPO comparison"}
-        prep_seconds = time.monotonic() - started
-        path = Path(config.run.output_dir) / f"{config.run.name}-fixed-training-{seed}-{uuid.uuid4().hex[:12]}"
-        result = await _run_numeric(path, x, y, validation_x, validation_y, model=model, actions=config.actions,
-                                    training=training, seed=seed, purpose="trained", charged_seconds=prep_seconds,
-                                    provenance_data=source, fit_code_provenance=fit_code)
-        results.append({"directory": str(path), "seed": seed, "status": result["status"]})
-        shared_generation = dataset["shared_generation_seconds"]
+        wall_deadline = started + training.wall_seconds
+        cleanup_seconds = max(training.cleanup_seconds, config.preprocessing.cleanup_seconds)
+        deadline = wall_deadline - cleanup_seconds
+        with prepare_fixed_inputs(Path(training.dataset_manifest), model.encoder, preprocessing=config.preprocessing,
+                                  deadline=deadline, wall_deadline=wall_deadline) as prepared:
+            dataset = prepared.dataset
+            if dataset["action_config_hash"] != digest(asdict(config.actions)):
+                raise ContractError("fixed dataset/search conditions mismatch")
+            code_started = time.monotonic()
+            fit_code = code_provenance_provider(prepared.session.deadline) if code_provenance_provider is not None else None
+            check_deadline(prepared.session.deadline)
+            code_seconds = time.monotonic() - code_started
+            source = {"real_gate_passed": True, "fixed_dataset_content_sha256": dataset["content_sha256"],
+                      "dataset_manifest_sha256": prepared.session.hash_file(Path(training.dataset_manifest)),
+                      "shared_generation_seconds": dataset["shared_generation_seconds"],
+                      "shared_generation_cost_key": dataset["shared_generation_cost_key"],
+                      "shared_generation_cost_scope": "deduplicated whole PPO parents and final validation, reported separately, excluded from this fit budget",
+                      "comparison_claim": "fixed selected source set; no equal-total-cost PPO comparison",
+                      "preprocessing": prepared.diagnostics}
+            prep_seconds = time.monotonic() - started
+            path = Path(config.run.output_dir) / f"{config.run.name}-fixed-training-{seed}-{uuid.uuid4().hex[:12]}"
+            result = await _run_numeric(path, None, None, None, None, model=model, actions=config.actions,
+                                        training=training, seed=seed, purpose="trained", charged_seconds=prep_seconds,
+                                        provenance_data=source, fit_code_provenance=fit_code,
+                                        fit_code_measurement_seconds=code_seconds, prepared_inputs=prepared)
+            results.append({"directory": str(path), "seed": seed, "status": result["status"]})
+            shared_generation = dataset["shared_generation_seconds"]
     return {"training_runs": results, "shared_generation_seconds": shared_generation,
             "shared_generation_cost_key": dataset["shared_generation_cost_key"],
             "generation_cost_accounting": "reported once across all fits, excluded from per-fit original 7200s"}

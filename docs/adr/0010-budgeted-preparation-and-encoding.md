@@ -225,6 +225,17 @@ content and numeric-input hashes must match; no historical artifact relabeling.
 Index row/content identity must match; Parquet layout-byte hashes may differ
 across chunk layouts and are not authority. Same settings must regenerate a
 deterministic index. No persistent cross-fit cache in Unit A.
+Index publication now requires a fresh output and sidecar path, rejecting either
+existing target before source work. This explicitly tightens the old overwrite
+behavior: rebuild to a new path to preserve the previous index under any failure.
+There is no overwrite option in this unit. Track newly published paths through
+the post-write deadline check and remove only invocation-owned outputs on error;
+never remove a pre-existing artifact. This avoids pretending that two filesystem
+renames atomically replace a Parquet/sidecar pair.
+The compatibility amendment has independent architecture design READY. Commit
+must be no-clobber too, not only an initial existence check: a concurrent writer
+creating a target while scanning must not be overwritten or later deleted.
+Record the identity of each newly owned publication for failure cleanup.
 Preserve two distinct sort orders: resolved source paths then participant
 decision order for canonical source proofs/numeric sample order, and
 (run_id,game_id,viewer,decision) for index rows. The index uses a charged compact

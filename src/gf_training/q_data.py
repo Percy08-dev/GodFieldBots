@@ -35,15 +35,20 @@ def check_deadline(deadline: float) -> None:
         raise TimeoutError("training ingestion deadline")
 
 
-def load_run(directory: Path, expected_split: str | None = None, *, deadline: float = float("inf"), online_context: Any = None) -> RunBundle:
+def load_run(directory: Path, expected_split: str | None = None, *, deadline: float = float("inf"), online_context: Any = None, session: Any = None) -> RunBundle:
     check_deadline(deadline)
     directory = directory.resolve()
-    manifest = json.loads((directory / "manifest.json").read_text())
+    manifest = session.read_json(directory / "manifest.json") if session is not None else json.loads((directory / "manifest.json").read_text())
     if manifest.get("schema_version") not in (3, 4) or type(manifest.get("schema_version")) is not int or manifest.get("status") != "complete":
         raise ContractError("training requires a finalized complete healthy run")
     if manifest["schema_version"] == 4:
         from gf_training.lineage import validate_collection_parent
-        validate_collection_parent(manifest, directory, online_context=online_context, deadline=deadline)
+        if session is not None:
+            if online_context is not None:
+                raise ContractError("offline preparation cannot reuse online authorization")
+            session.validate_collection(manifest, directory)
+        else:
+            validate_collection_parent(manifest, directory, online_context=online_context, deadline=deadline)
     split = manifest.get("split")
     if split not in ("train", "validation") or expected_split is not None and split != expected_split:
         raise ContractError("source split is not permitted for this training role")
@@ -75,10 +80,16 @@ def load_run(directory: Path, expected_split: str | None = None, *, deadline: fl
     actual = set(directory.glob("*/player-*.jsonl"))
     if actual != set(journals):
         raise ContractError("missing/extra original participant journals")
-    report = json.loads((directory / "report.json").read_text())
+    if session is not None:
+        session.inventory(directory, "*/player-*.jsonl")
+        session.inventory(directory, "*/replay-player-*.json")
+    report = session.read_json(directory / "report.json") if session is not None else json.loads((directory / "report.json").read_text())
     if report.get("planned_games") != len(ids) or report.get("natural_denominator") != len(ids):
         raise ContractError("source report schedule count mismatch")
-    return RunBundle(directory, manifest, tuple(journals), float(elapsed))
+    paths = tuple(journals)
+    if session is not None:
+        session.retain((directory, paths))  # Owned Path slots/backing strings and tuple capacity.
+    return RunBundle(directory, manifest, paths, float(elapsed))
 
 
 def validate_bundles(bundles: list[RunBundle], *, deadline: float = float("inf"), online_context: Any = None) -> tuple[list[Json], Json]:
@@ -116,15 +127,21 @@ def labeled_samples(rows: list[Json], metadata: Json, split: str, *, deadline: f
     return tuple(result)
 
 
-def provenance(bundle: RunBundle, *, deadline: float = float("inf")) -> Json:
+def provenance(bundle: RunBundle, *, deadline: float = float("inf"), session: Any = None) -> Json:
     check_deadline(deadline)
+    if session is not None:
+        checksum = session.hash_file(bundle.directory / "manifest.json")
+    else:
+        checksum = None
     manifest_hash = hashlib.sha256()
-    with (bundle.directory / "manifest.json").open("rb") as source:
-        while chunk := source.read(1024 * 1024):
-            check_deadline(deadline)
-            manifest_hash.update(chunk)
+    if checksum is None:
+        with (bundle.directory / "manifest.json").open("rb") as source:
+            while chunk := source.read(1024 * 1024):
+                check_deadline(deadline)
+                manifest_hash.update(chunk)
+        checksum = manifest_hash.hexdigest()
     result = {"directory": str(bundle.directory), "run_id": bundle.manifest["run_id"],
-              "manifest_sha256": manifest_hash.hexdigest(),
+              "manifest_sha256": checksum,
               "collection_seconds": bundle.collection_seconds, "split": bundle.manifest["split"],
               "config_sha256": digest(bundle.manifest["effective_config"]), "semantic_config": canonical(bundle.manifest["effective_config"]["actions"])}
     check_deadline(deadline)

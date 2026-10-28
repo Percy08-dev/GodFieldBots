@@ -7,7 +7,8 @@ import math
 import os
 import time
 import uuid
-from dataclasses import asdict
+from collections.abc import Callable, Iterator
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
@@ -183,13 +184,15 @@ def _projection_hash(path: Path, deadline: float) -> str:
     return hasher.hexdigest()
 
 
-def read_journal(path: Path, *, deadline: float = float("inf")) -> list[Json]:
+def read_journal(path: Path, *, deadline: float = float("inf"), records: list[Json] | None = None,
+                 typed_decisions: dict[int, DecisionInput] | None = None) -> list[Json]:
     from gf_common.domain import integer
-    records = []
-    with path.open(encoding="utf-8") as source:
-        for line in source:
-            _projection_deadline(deadline)
-            records.append(json.loads(line))
+    if records is None:
+        records = []
+        with path.open(encoding="utf-8") as source:
+            for line in source:
+                _projection_deadline(deadline)
+                records.append(json.loads(line))
     if not records or records[0].get("kind") != "header":
         raise ContractError("missing journal header")
     header = records[0]
@@ -257,6 +260,8 @@ def read_journal(path: Path, *, deadline: float = float("inf")) -> list[Json]:
                 raise ContractError("participant revision moved backwards")
             if command["expected_revision"] != value.observation["state_revision"] or command["action"] != candidates["actions"][selection["index"]]:
                 raise ContractError("command/input/candidate mismatch")
+            if typed_decisions is not None:
+                typed_decisions[index] = value
             decisions[index] = record
             pending = index
         elif kind == "acknowledgement":
@@ -324,10 +329,10 @@ def read_journal(path: Path, *, deadline: float = float("inf")) -> list[Json]:
     return records
 
 
-def _manifest_source(source: Path, records: list[Json], *, online_context: Any = None, parent_cache: Any = None, locks: Any = None, deadline: float = float("inf")) -> tuple[Json, Json, Json, Json]:
+def _manifest_source(source: Path, records: list[Json], *, online_context: Any = None, parent_cache: Any = None, locks: Any = None, deadline: float = float("inf"), session: Any = None) -> tuple[Json, Json, Json, Json]:
     manifest_path = source.parent.parent / "manifest.json"
     try:
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest = session.read_json(manifest_path) if session is not None else json.loads(manifest_path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
         raise ContractError("journal requires its finalized linked run manifest") from exc
     header = records[0]
@@ -335,7 +340,12 @@ def _manifest_source(source: Path, records: list[Json], *, online_context: Any =
         raise ContractError("run manifest must be finalized schema 3")
     if manifest["schema_version"] == 4:
         from gf_training.lineage import validate_collection_parent
-        validate_collection_parent(manifest, source.parent.parent, online_context=online_context, parent_cache=parent_cache, locks=locks, deadline=deadline)
+        if session is not None:
+            if online_context is not None:
+                raise ContractError("offline preparation cannot reuse online authorization")
+            session.validate_collection(manifest, source.parent.parent)
+        else:
+            validate_collection_parent(manifest, source.parent.parent, online_context=online_context, parent_cache=parent_cache, locks=locks, deadline=deadline)
     if manifest.get("run_id") != header["run_id"] or manifest.get("journal_schema_version") != JOURNAL_SCHEMA or manifest.get("feature_version") != FEATURE_VERSION or manifest.get("reward_policy_version") != REWARD_VERSION or manifest.get("end_projection_version") != END_PROJECTION_VERSION or canonical(manifest.get("catalog")) != canonical(CATALOG_META):
         raise ContractError("journal/manifest identity or semantic versions mismatch")
     from gf_common.domain import SIMULATOR_REVISION
@@ -378,18 +388,22 @@ def _manifest_source(source: Path, records: list[Json], *, online_context: Any =
 
 
 
-def _source_report(source: Path, manifest: Json) -> tuple[Json, list[str]]:
+def _source_report(source: Path, manifest: Json, *, session: Any = None) -> tuple[Json, list[str]]:
     """A complete manifest alone cannot override a durably invalidated report."""
     path = source.parent.parent / "report.json"
     diagnostic: Json = {"path": str(path.resolve()), "expected_sha256": manifest.get("report_sha256"),
                         "sha256": None, "comparison_valid": None}
     reasons = []
     try:
-        encoded = path.read_bytes()
-        diagnostic["sha256"] = hashlib.sha256(encoded).hexdigest()
+        if session is not None:
+            report = session.read_json(path)
+            diagnostic["sha256"] = session.hash_file(path)
+        else:
+            encoded = path.read_bytes()
+            diagnostic["sha256"] = hashlib.sha256(encoded).hexdigest()
+            report = json.loads(encoded)
         if not isinstance(manifest.get("report_sha256"), str) or diagnostic["sha256"] != manifest["report_sha256"]:
             reasons.append("report_hash_mismatch")
-        report = json.loads(encoded)
         if not isinstance(report, dict) or type(report.get("schema_version")) is not int or report["schema_version"] != 1:
             raise ContractError("invalid linked report schema")
         for field in ("failures", "health_failures", "group_health_failures"):
@@ -409,7 +423,57 @@ def _source_report(source: Path, manifest: Json) -> tuple[Json, list[str]]:
     return diagnostic, reasons
 
 
-def _project_journals(sources: list[Path], *, deadline: float = float("inf"), online_context: Any = None, parent_cache: Any = None, locks: Any = None) -> tuple[list[Json], Json]:
+@dataclass(frozen=True)
+class AcceptedDecision:
+    value: DecisionInput
+    action: Json
+    target: float
+    identity: tuple[str, str, int, int]
+    split: str
+
+
+def _projection_sources(sources: list[Path], *, deadline: float, session: Any,
+                        capture_typed: bool) -> Iterator[tuple[Path, list[Json], dict[int, DecisionInput], Any]]:
+    ordered = sorted(sources, key=lambda path: str(path.resolve()))
+    if session is None:
+        for source in ordered:
+            yield source, read_journal(source, deadline=deadline), {}, None
+        return
+    groups: dict[Path, list[Path]] = {}
+    for source in ordered:
+        groups.setdefault(source.parent.resolve(), []).append(source.resolve())
+    for directory, journals in groups.items():
+        # Offline source admission is always a complete two-view episode.
+        if {path.name for path in journals} != {"player-1.jsonl", "player-2.jsonl"}:
+            raise ContractError("preparation requires both participant journals per episode")
+        paths = tuple(journals) + tuple(directory / f"replay-player-{viewer}.json" for viewer in (1, 2))
+        with session.episode(paths) as payload:
+            validated = []
+            for source in journals:
+                records = payload[source]
+                typed: dict[int, DecisionInput] = {}
+                if capture_typed:
+                    manifest = session.read_json(source.parent.parent / "manifest.json")
+                    specs = [spec for group in manifest.get("schedule", []) for spec in group.get("episodes", [])
+                             if spec.get("episode_id") == records[0].get("episode_id")]
+                    selected = len(specs) == 1 and specs[0].get("learner_viewer", records[0].get("viewer")) == records[0].get("viewer")
+                else:
+                    selected = False
+                read_journal(source, deadline=deadline, records=records, typed_decisions=typed if selected else None)
+                session.diagnostics["journal_validations"] += 1
+                validated.append((source, records, typed, payload))
+            session.settle_episode((payload, validated))
+            yield from validated
+            for _, records, typed, _ in validated:
+                records.clear()
+                typed.clear()
+            validated.clear()
+
+
+def _project_journals(sources: list[Path], *, deadline: float = float("inf"), online_context: Any = None,
+                      parent_cache: Any = None, locks: Any = None, session: Any = None,
+                      decision_sink: Callable[[AcceptedDecision], None] | None = None,
+                      materialize: bool = True) -> tuple[list[Json], Json]:
     """Shared original-source validation/projection for export and training."""
     if not sources:
         raise ContractError("at least one linked participant journal required")
@@ -417,19 +481,17 @@ def _project_journals(sources: list[Path], *, deadline: float = float("inf"), on
     source_metadata = []
     manifest_metadata: dict[str, Json] = {}
     identities: set[tuple[str, str, int]] = set()
-    lineage_entries = []
-    for source in sorted(sources, key=lambda p: str(p.resolve())):
+    for source, records, typed, payload in _projection_sources(sources, deadline=deadline, session=session,
+                                                              capture_typed=decision_sink is not None):
         _projection_deadline(deadline)
-        records = read_journal(source, deadline=deadline)
         header = records[0]
         identity = (header["run_id"], header["game_id"], header["viewer"])
         if identity in identities:
             raise ContractError("duplicate source participant identity")
         identities.add(identity)
-        manifest, episode, group_health, lineage = _manifest_source(source, records, online_context=online_context, parent_cache=parent_cache, locks=locks, deadline=deadline)
-        lineage_entries.append(lineage)
+        manifest, episode, group_health, lineage = _manifest_source(source, records, online_context=online_context, parent_cache=parent_cache, locks=locks, deadline=deadline, session=session)
         manifest_path = source.parent.parent / "manifest.json"
-        manifest_hash = _projection_hash(manifest_path, deadline)
+        manifest_hash = session.hash_file(manifest_path) if session is not None else _projection_hash(manifest_path, deadline)
         prior = manifest_metadata.get(header["run_id"])
         if prior is not None and prior["sha256"] != manifest_hash:
             raise ContractError("run identity refers to different manifests")
@@ -450,7 +512,7 @@ def _project_journals(sources: list[Path], *, deadline: float = float("inf"), on
             if any(record["selection"]["policy_version"] != expected_policy for record in decisions):
                 raise ContractError("PPO learner selection differs from frozen inference identity")
         end = next((r for r in records if r["kind"] == "end"), None)
-        report_diagnostic, reasons = _source_report(source, manifest)
+        report_diagnostic, reasons = _source_report(source, manifest, session=session)
         manifest_metadata[header["run_id"]]["report"] = report_diagnostic
         if manifest["status"] != "complete":
             reasons.append("run_not_complete")
@@ -467,8 +529,11 @@ def _project_journals(sources: list[Path], *, deadline: float = float("inf"), on
         replay_path = source.parent / f"replay-player-{header['viewer']}.json"
         replay_hash = None
         try:
-            replay_bytes = replay_path.read_bytes()
-            replay = json.loads(replay_bytes)
+            if payload is not None:
+                replay = payload[replay_path.resolve()]
+            else:
+                replay_bytes = replay_path.read_bytes()
+                replay = json.loads(replay_bytes)
             if replay.get("game_id") != header["game_id"]:
                 raise ContractError("replay game identity mismatch")
             accepted = [r["command"]["action"] for r in decisions if r["decision"] in acknowledgements]
@@ -476,26 +541,34 @@ def _project_journals(sources: list[Path], *, deadline: float = float("inf"), on
             closure = replay_closure(replay, header["game_id"], header["viewer"])
             if episode.get("simulator_abort_reason") is not None:
                 other_viewer = 3 - header["viewer"]
-                other_replay = json.loads((source.parent / f"replay-player-{other_viewer}.json").read_bytes())
+                other_replay = payload[(source.parent / f"replay-player-{other_viewer}.json").resolve()] if payload is not None else json.loads((source.parent / f"replay-player-{other_viewer}.json").read_bytes())
                 other_closure = replay_closure(other_replay, header["game_id"], other_viewer)
                 if closure != other_closure or closure is None or closure["type"] != "aborted" or closure["reason"] != episode["simulator_abort_reason"] or projected_abort_kind(closure["reason"]) != episode["end_kind"]:
                     raise ContractError("replay/manifest abort projection mismatch")
             elif closure is not None and closure["type"] == "aborted" and episode.get("replay_reconciled"):
                 raise ContractError("reconciled abort is missing diagnostic cause")
-            replay_hash = hashlib.sha256(replay_bytes).hexdigest()
+            replay_hash = session.hash_file(replay_path) if session is not None else hashlib.sha256(replay_bytes).hexdigest()
             if not episode.get("replay_reconciled"):
                 reasons.append("owner_replay_not_reconciled")
         except (OSError, ValueError, TypeError, KeyError):
             reasons.append("replay_mismatch_or_missing")
         eligible = not reasons
-        source_metadata.append({"path": str(source.resolve()), "sha256": _projection_hash(source, deadline),
+        source_metadata.append({"path": str(source.resolve()), "sha256": session.hash_file(source) if session is not None else _projection_hash(source, deadline),
                                 "manifest_sha256": manifest_hash, "header": header, "lineage": lineage,
                                 "decision_count": len(decisions), "end": end, "episode_result": episode,
                                 "group_health": group_health, "replay_sha256": replay_hash, "report": report_diagnostic,
                                 "eligible": eligible, "ineligible_reasons": sorted(set(reasons))})
+        if session is not None:
+            session.retain(source_metadata[-1])
         for record in decisions:
             _projection_deadline(deadline)
             index = record["decision"]
+            if decision_sink is not None and index in typed and eligible and index in acknowledgements:
+                assert end is not None
+                decision_sink(AcceptedDecision(typed[index], record["command"]["action"],
+                                              float(end["terminal_reward"]), (*identity, index), lineage["split"]))
+            if not materialize:
+                continue
             rows.append({"run_id": header["run_id"], "game_id": header["game_id"],
                          "episode_id": header["episode_id"], "viewer": header["viewer"], "decision": index,
                          "split": lineage["split"], "eligible": eligible,
@@ -503,6 +576,19 @@ def _project_journals(sources: list[Path], *, deadline: float = float("inf"), on
                          "selection_json": canonical(record["selection"]), "command_json": canonical(record["command"]),
                          "acknowledgement_json": canonical(acknowledgements[index]) if index in acknowledgements else None,
                          "transition_json": canonical(transitions[index]) if index in transitions else None})
+    return rows, projection_metadata(source_metadata, manifest_metadata, deadline=deadline)
+
+
+def projection_metadata(source_metadata: list[Json], manifest_metadata: dict[str, Json], *,
+                        deadline: float = float("inf")) -> Json:
+    """One global identity/split/proof recipe for streaming and legacy adapters."""
+    from gf_training.preparation import canonical_digest as source_digest
+    source_metadata = sorted(source_metadata, key=lambda source: source["path"])
+    identities = [(source["header"]["run_id"], source["header"]["game_id"], source["header"]["viewer"])
+                  for source in source_metadata]
+    if len(set(identities)) != len(identities):
+        raise ContractError("duplicate source participant identity")
+    lineage_entries = [source["lineage"] for source in source_metadata]
     # Union all equal seeds and common fork ancestries across source runs before
     # checking declared splits. Repeated views and repeated runs stay together.
     parents: dict[str, str] = {}
@@ -529,10 +615,11 @@ def _project_journals(sources: list[Path], *, deadline: float = float("inf"), on
                 "feature_version": FEATURE_VERSION, "reward_version": REWARD_VERSION, "catalog": CATALOG_META,
                 "sources": source_metadata, "manifests": manifest_metadata,
                 "lineage_groups": [entries for _, entries in sorted(lineage_groups.items())],
-                "source_set_sha256": digest(source_metadata), "rows": len(rows),
-                "eligible_rows": sum(bool(row["eligible"]) for row in rows)}
+                "source_set_sha256": source_digest(source_metadata, deadline=deadline),
+                "rows": sum(source["decision_count"] for source in source_metadata),
+                "eligible_rows": sum(source["decision_count"] for source in source_metadata if source["eligible"])}
     _projection_deadline(deadline)
-    return rows, metadata
+    return metadata
 
 
 def project_journals(sources: list[Path], *, deadline: float = float("inf"), online_context: Any = None) -> tuple[list[Json], Json]:

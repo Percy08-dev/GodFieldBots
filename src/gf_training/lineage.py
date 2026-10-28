@@ -25,7 +25,9 @@ from gf_models.mlp.arrays import sha256
 from gf_training.journal import atomic_json
 
 
-def read_json(path: Path) -> Json:
+def read_json(path: Path, *, session: Any = None) -> Json:
+    if session is not None:
+        return session.read_json(path)
     value = json.loads(path.read_text())
     if not isinstance(value, dict):
         raise ContractError('object record required')
@@ -74,16 +76,19 @@ def checkpoint_path(directory: Path, generation: int) -> Path:
     return directory / 'artifacts' / f'{generation:06}'
 
 
-def artifact_hashes(path: Path, deadline: float = float("inf")) -> Json:
-    return {name: sha256(path / name, deadline) for name in ('inference.json', 'weights.npz', 'weights.json', 'resume.json', 'resume.npz')}
+def artifact_hashes(path: Path, deadline: float = float("inf"), *, session: Any = None) -> Json:
+    return {name: session.hash_file(path / name) if session is not None else sha256(path / name, deadline)
+            for name in ('inference.json', 'weights.npz', 'weights.json', 'resume.json', 'resume.npz')}
 
 
-def validate_chain(directory: Path, *, require_complete: bool = True, require_artifacts: bool = False, deadline: float = float("inf")) -> tuple[Json, list[Json]]:
+def validate_chain(directory: Path, *, require_complete: bool = True, require_artifacts: bool = False, deadline: float = float("inf"), session: Any = None) -> tuple[Json, list[Json]]:
     def _hash(path: Path) -> str:
-        return sha256(path, deadline)
+        return session.hash_file(path) if session is not None else sha256(path, deadline)
+    def _read(path: Path) -> Json:
+        return read_json(path, session=session)
     if time.monotonic() >= deadline:
         raise TimeoutError("generation validation deadline")
-    state = read_json(directory / 'run.json')
+    state = _read(directory / 'run.json')
     if state.get('schema_version') != 1 or state.get('algorithm') != 'ppo' or state.get('status') not in ('running', 'paused', 'complete') or require_complete and state.get('status') != 'complete':
         raise ContractError('healthy completed PPO parent required')
     if any(state.get(key) for key in ('failure', 'quarantine', 'cleanup_failure', 'budget_overrun_seconds')):
@@ -106,7 +111,7 @@ def validate_chain(directory: Path, *, require_complete: bool = True, require_ar
             health = invocation.get('child_health', {})
             if health.get('exit_code') != 0 or set(health) - {'exit_code', 'stderr_bytes'}:
                 raise ContractError('parent learner invocation unhealthy')
-    latest = read_json(directory / 'latest.json')
+    latest = _read(directory / 'latest.json')
     closed(latest, {'generation', 'sha256'})
     count = integer(state.get('updates'), 0, 1000)
     if latest['generation'] != count or latest['sha256'] != _hash(generation_path(directory, count)):
@@ -118,7 +123,7 @@ def validate_chain(directory: Path, *, require_complete: bool = True, require_ar
         raise ContractError('missing/extra immutable generation record')
     if {path.name for path in (directory / 'updates').glob('*.json')} != {f'{number:06}.json' for number in range(1, count + 1)}:
         raise ContractError('missing/extra update commit')
-    registry = read_json(directory / 'artifact-registry.json')
+    registry = _read(directory / 'artifact-registry.json')
     records = []
     previous = None
     cumulative = 0
@@ -126,7 +131,7 @@ def validate_chain(directory: Path, *, require_complete: bool = True, require_ar
     for number in range(count + 1):
         if time.monotonic() >= deadline:
             raise TimeoutError("generation validation deadline")
-        record = read_json(generation_path(directory, number))
+        record = _read(generation_path(directory, number))
         closed(record, {'schema_version', 'run_id', 'generation', 'parent_sha256', 'inference_sha256', 'weights_sha256',
                         'artifact_hashes', 'accepted_decisions', 'optimizer_steps', 'update_sha256', 'parent_controls'})
         if record['schema_version'] != 1 or record['run_id'] != state['run_id'] or record['generation'] != number or record['parent_sha256'] != previous:
@@ -135,7 +140,7 @@ def validate_chain(directory: Path, *, require_complete: bool = True, require_ar
         # Public inference manifests are never deleted.
         if _hash(path / 'inference.json') != record['inference_sha256']:
             raise ContractError('generation inference hash mismatch')
-        inference = read_json(path / 'inference.json')
+        inference = _read(path / 'inference.json')
         if inference['weights']['sha256'] != record['weights_sha256']:
             raise ContractError('generation weights identity mismatch')
         retained = number == 0 or number % 10 == 0 or number == count
@@ -143,16 +148,16 @@ def validate_chain(directory: Path, *, require_complete: bool = True, require_ar
         if receipt is None or receipt.get('inference_sha256') != record['inference_sha256']:
             raise ContractError('missing artifact registry identity')
         if retained or require_artifacts:
-            if artifact_hashes(path, deadline) != record['artifact_hashes'] or receipt.get('status') != 'retained':
+            if artifact_hashes(path, deadline, session=session) != record['artifact_hashes'] or receipt.get('status') != 'retained':
                 raise ContractError('retained generation artifacts mismatch')
         elif receipt.get('status') == 'deleted':
             if receipt.get('deletion_intent') is not True or any((path / name).exists() for name in ('weights.npz', 'resume.npz', 'resume.json', 'resume.json.tmp')):
                 raise ContractError('artifact deletion receipt mismatch')
-        elif receipt.get('status') != 'retained' or artifact_hashes(path, deadline) != record['artifact_hashes']:
+        elif receipt.get('status') != 'retained' or artifact_hashes(path, deadline, session=session) != record['artifact_hashes']:
             raise ContractError('unrecognized generation artifact state')
         if number:
             update_path = directory / 'updates' / f'{number:06}.json'
-            update = read_json(update_path)
+            update = _read(update_path)
             if record['update_sha256'] != _hash(update_path) or update.get('run_id') != state['run_id'] or update.get('generation') != number or update.get('parent_sha256') != previous or update.get('status') != 'complete':
                 raise ContractError('broken immutable update linkage')
             source = directory / update['collection']
@@ -256,7 +261,7 @@ def validate_collection_linkage(manifest: Json) -> None:
 
 
 def validate_collection_parent(manifest: Json, collection_directory: Path, *, online_context: Any = None,
-                               parent_cache: dict[str, Any] | None = None, locks: ExitStack | None = None, deadline: float = float("inf")) -> None:
+                               parent_cache: dict[str, Any] | None = None, locks: ExitStack | None = None, deadline: float = float("inf"), session: Any = None) -> None:
     """Default is offline. Only a live coordinator token admits its current batch."""
     import numpy as np
 
@@ -269,13 +274,13 @@ def validate_collection_parent(manifest: Json, collection_directory: Path, *, on
     parent = Path(link['parent_run_path']).resolve()
     if parent_cache is None or locks is None:
         with ExitStack() as owned:
-            validate_collection_parent(manifest, collection_directory, online_context=online_context, parent_cache={}, locks=owned, deadline=deadline)
+            validate_collection_parent(manifest, collection_directory, online_context=online_context, parent_cache={}, locks=owned, deadline=deadline, session=session)
         return
     key = str(parent)
     if key not in parent_cache:
         if parent not in _OWNED_LOCKS:
             locks.enter_context(run_lock(parent))
-        parent_cache[key] = validate_chain(parent, require_complete=online_context is None, deadline=deadline)
+        parent_cache[key] = validate_chain(parent, require_complete=online_context is None, deadline=deadline, session=session)
     state, records = parent_cache[key]
     integration = state['identity']['integration']
     if manifest.get('binary_sha256') != integration['binary_sha256'] or manifest.get('server_config_sha256') != integration['server_config_sha256'] or manifest.get('simulator', {}).get('revision') != integration['source_revision'] or manifest.get('simulator', {}).get('spec_sha256') != integration['source_spec_sha256']:
@@ -309,8 +314,8 @@ def validate_collection_parent(manifest: Json, collection_directory: Path, *, on
         if online_context is None:
             if generation >= state['updates']:
                 raise ContractError('offline batch has no committed update')
-            update = read_json(parent / 'updates' / f'{generation + 1:06}.json')
-            if (parent / update['collection']).resolve() != collection_directory.resolve() or update['batch_id'] != link['batch_id'] or sha256(collection_directory / 'manifest.json') != update['collection_manifest_sha256']:
+            update = read_json(parent / 'updates' / f'{generation + 1:06}.json', session=session)
+            if (parent / update['collection']).resolve() != collection_directory.resolve() or update['batch_id'] != link['batch_id'] or (session.hash_file(collection_directory / 'manifest.json') if session is not None else sha256(collection_directory / 'manifest.json')) != update['collection_manifest_sha256']:
                 raise ContractError('offline batch differs from immutable update source')
     else:
         if online_context is not None or generation != state['updates']:

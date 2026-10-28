@@ -81,12 +81,24 @@ def _fit_code_provenance(deadline: float) -> Json:
         provenance["package_version"] = None
     # The fingerprint names its exact scope; it does not claim a wheel build
     # revision or equate a dirty Git HEAD with uncommitted fit code bytes.
+    from gf_common import preprocessing, validation
     from gf_models import config as common_config
     from gf_models import encoder as common_encoder
     from gf_models.lightgbm import config, encoder, model
-    from gf_training import lightgbm_run
+    from gf_training import (
+        fixed_data,
+        journal,
+        lightgbm_run,
+        lineage,
+        preparation,
+        preparation_index,
+        preparation_numeric,
+        q_data,
+    )
     provenance["fit_module_sha256"] = {module.__name__: _file_hash(module.__file__, deadline) if module.__file__ is not None else None
-                                        for module in (config, encoder, common_config, common_encoder, model, lightgbm_run)}
+                                        for module in (config, encoder, common_config, common_encoder, model, lightgbm_run,
+                                                       preprocessing, validation, fixed_data, journal, lineage, preparation,
+                                                       preparation_index, preparation_numeric, q_data)}
     worker_spec = importlib.util.find_spec("gf_training.lightgbm_worker")
     worker_file = worker_spec.origin if worker_spec is not None else None
     provenance["fit_module_sha256"]["gf_training.lightgbm_worker"] = _file_hash(worker_file, deadline) if worker_file is not None else None
@@ -366,6 +378,7 @@ async def collect_ppo(loaded: LoadedConfig, plan: CollectionPlan) -> FinalizedCo
 
 
 def main(argv: list[str] | None = None) -> int:
+    command_started = time.monotonic()
     parser = argparse.ArgumentParser(prog="gf-bots", description="Public-information GodField baselines")
     subcommands = parser.add_subparsers(dest="command", required=True)
     for command in ("smoke", "collect", "evaluate", "benchmark", "validate", "train", "validate-policy"):
@@ -392,17 +405,30 @@ def main(argv: list[str] | None = None) -> int:
     inspect.add_argument("manifest", type=Path)
     index = dataset_commands.add_parser("index")
     index.add_argument("manifest", type=Path)
-    index.add_argument("--output", required=True, type=Path)
+    index.add_argument("--output", required=True, type=Path,
+                       help="fresh Parquet path; output and .json sidecar must not exist")
+    for dataset_parser in (build, inspect, index):
+        dataset_parser.add_argument("--preprocessing-config", type=Path)
     args = parser.parse_args(argv)
     try:
         if args.command == "dataset":
-            from gf_training.fixed_data import build_dataset, index_dataset, inspect_dataset
+            from gf_common.preprocessing import load_preprocessing_config
+            from gf_training.fixed_data import (
+                build_dataset,
+                index_dataset,
+                inspect_dataset_summary,
+            )
+            preprocessing = load_preprocessing_config(args.preprocessing_config)
+            deadline = command_started + preprocessing.wall_seconds
             if args.dataset_command == "build":
-                result = build_dataset(tuple(args.ppo_runs), tuple(args.validation_runs), args.output)
+                result = build_dataset(tuple(args.ppo_runs), tuple(args.validation_runs), args.output,
+                                       deadline=deadline, preprocessing=preprocessing)
             elif args.dataset_command == "index":
-                result = index_dataset(args.manifest, args.output)
+                result = index_dataset(args.manifest, args.output, deadline=deadline,
+                                       preprocessing=preprocessing)
             else:
-                result = inspect_dataset(args.manifest)[0]
+                result = inspect_dataset_summary(args.manifest, deadline=deadline,
+                                                 preprocessing=preprocessing)
             print(canonical(result))
             return 0
         if args.command == "export":

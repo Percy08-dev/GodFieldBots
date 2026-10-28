@@ -188,3 +188,17 @@ def test_distinct_catalog_entries_are_never_conflated_by_definition_id(make_inpu
     prepared = encoder.PreparedDecision(value, EncoderConfig())
     np.testing.assert_array_equal(prepared.encode_many(actions),
                                   np.stack([encoder.encode(value, action, EncoderConfig()) for action in actions]))
+
+
+def test_owned_validated_sink_preserves_public_checks(make_input, monkeypatch):
+    value = encoder.validate_worker_input(make_input())
+    config = EncoderConfig(hash_buckets=2)
+    expected = encoder.encode(value, {"type": "pray"}, config)
+    def forbidden(value):
+        pytest.fail('trusted sink must not rebuild its owned validated input')
+    monkeypatch.setattr(encoder, 'validate_worker_input', forbidden)
+    np.testing.assert_array_equal(encoder._encode_validated(value, {"type": "pray"}, config), expected)
+    with pytest.raises(ContractError):
+        encoder._encode_validated(value, {"type": "pray"}, replace(config, hash_buckets=2.0))
+    with pytest.raises(ContractError, match='foreign'):
+        encoder._encode_validated(value, {"type": "discard", "instance_ids": [999]}, config)
