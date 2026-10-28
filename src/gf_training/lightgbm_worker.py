@@ -18,7 +18,7 @@ def main() -> None:
     import numpy as np
 
     from gf_common.domain import closed
-    from gf_models.lightgbm.config import model_config
+    from gf_models.lightgbm.config import ModelConfig, model_config
     from gf_models.lightgbm.encoder import feature_names
     from gf_models.lightgbm.model import fit_numeric, load_artifact, save_artifact
 
@@ -37,6 +37,8 @@ def main() -> None:
     request = json.loads((source / "request.json").read_text())
     closed(request, {"model", "params", "rounds", "early_stopping", "purpose", "action_config_hash"})
     model = model_config(request["model"])
+    if not isinstance(model, ModelConfig) or model.model_id != "lightgbm":
+        raise ValueError("LightGBM child requires LightGBM recipe")
     if model.checkpoint is not None:
         raise ValueError("fit child cannot load a checkpoint")
     with np.load(source / "arrays.npz", allow_pickle=False) as arrays:

@@ -18,7 +18,7 @@ from gf_common.domain import (
     canonical,
     digest,
 )
-from gf_common.schedule import schedule
+from gf_common.schedule import schedule, serialize_schedule
 from gf_evaluation.evaluation import report
 from gf_training.journal import FEATURE_VERSION, JOURNAL_SCHEMA, REWARD_VERSION, ParticipantJournal
 from tests.conftest import fixture
@@ -26,11 +26,11 @@ from tests.test_journal import final_state, journal_decision
 
 
 def synthetic_run(directory: Path, make_input, *, split="train", seeds=("00000000-0000-0000-0000-000000000001",),
-                  sampling=(17,), outcomes=None, decisions=True, ancestry=None):
+                  sampling=(17,), outcomes=None, decisions=True, ancestry=None, planned=None, both_viewers=False):
     directory.mkdir()
     effective = asdict(ExperimentConfig(server=ServerConfig(fixed_seed_experiment=True)))
     effective["run"].update(split=split, seeds=list(seeds), sampling_seeds=list(sampling), pairs_per_seed=1)
-    planned = schedule(tuple(seeds), tuple(sampling), 1, "random", "random")
+    planned = planned or schedule(tuple(seeds), tuple(sampling), 1, "random", "random")
     run_id = str(uuid.uuid4())
     episodes = []
     for group in planned:
@@ -38,16 +38,26 @@ def synthetic_run(directory: Path, make_input, *, split="train", seeds=("0000000
             path = directory / spec.episode_id
             path.mkdir()
             game = uuid.uuid4().hex[:26].upper()
-            outcome = outcomes if outcomes is not None else "draw"
+            outcome = outcomes(spec) if callable(outcomes) else outcomes if outcomes is not None else "draw"
             for viewer in (1, 2):
-                journal = ParticipantJournal(path, spec.episode_id, viewer, "random", run_id=run_id, game_id=game,
+                journal = ParticipantJournal(path, spec.episode_id, viewer, spec.policies[viewer - 1], run_id=run_id, game_id=game,
                                              action_config_hash=digest(effective["actions"]))
                 value = make_input()
+                if viewer == 2 and both_viewers:
+                    from gf_common.domain import DecisionInput
+                    from gf_common.validation import validate_worker_input
+                    raw = value.to_dict()
+                    obs = raw['observation']
+                    obs.update(viewer_player_id=2, current_player=2, active_player=2, state_revision=1)
+                    obs['own']['player_id'] = 2
+                    obs['opponent']['player_id'] = 1
+                    raw['action_options'].update(viewer_player_id=2, state_revision=1)
+                    value = validate_worker_input(DecisionInput(obs, tuple(raw['events']), raw['history_end'], tuple(raw['typed_metadata']), raw['catalog'], raw['action_options']))
                 actions = []
-                if viewer == 1 and decisions:
+                if (viewer == 1 or both_viewers) and decisions:
                     journal_decision(journal, value)
                     actions = [json.loads(journal.path.read_text().splitlines()[1])["command"]["action"]]
-                if viewer == 1:
+                if viewer == 1 or both_viewers:
                     final = final_state(value, outcome)
                 else:
                     final = fixture("observation_p2_public.json")
@@ -59,7 +69,7 @@ def synthetic_run(directory: Path, make_input, *, split="train", seeds=("0000000
                 (path / f"replay-player-{viewer}.json").write_text(canonical(replay))
             episodes.append(EpisodeResult(spec.episode_id, spec.pair_id, group.seed, spec.policies, game_id=game,
                                           outcome=outcome, end_kind="natural", replay_reconciled=True, first_player=1))
-    schedule_data = [asdict(group) for group in planned]
+    schedule_data = serialize_schedule(planned, 3)
     if ancestry is not None:
         for group in schedule_data:
             group["ancestry"] = ancestry

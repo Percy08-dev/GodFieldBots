@@ -36,6 +36,10 @@ class HeuristicPolicy(RandomPolicy):
 
 
 def make_policy(model_id: str, options: Json | None = None) -> Policy:
+    if model_id == "mlp":
+        from gf_models.mlp.policy import MLPPolicy
+        options = validated_policy_options(options)
+        return MLPPolicy(options["checkpoint"], options["expected_manifest_digest"])
     if model_id == "lightgbm":
         from gf_models.lightgbm.policy import LightGBMPolicy
         options = validated_policy_options(options)

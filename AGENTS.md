@@ -162,11 +162,16 @@ permitted by the applicable contract and version-pinned.
 
 Python is 3.14 with the GIL enabled and the project uses uv. The Phase 0–3
 baseline foundation uses httpx/NumPy, pytest, ruff and mypy. PyArrow, LightGBM
-and CPU Torch are optional extras. Phase 4 implements native CPU LightGBM
+and mutually exclusive CPU/CUDA Torch builds are optional extras. Phase 4 implements native CPU LightGBM
 inference and guarded fresh training. The corrected-contract 192-game baseline
 pilot passes provisional feasibility; real-data fitting has not run and still
 requires the explicit validated source/split/decision-budget conditions.
-PPO adapters remain future work. Do not infer training quality or a passed
+ADR0008 implements the MLP PPO, generation/pause-resume and fixed-data comparison
+subset; current final acceptance/experiment evidence is in
+`docs/verification/mlp-ppo.md`. GRU/Transformer and final-test evaluation remain
+future work. Legacy inclusive-generation LightGBM retains its explicit pilot/
+source/decision-budget gate; fixed-data mode instead requires all three complete
+PPO parents and prescribed final-policy validation sources. Do not infer training quality or a passed
 learning gate from synthetic fits, dependency smokes or baseline tests.
 Adding dependencies follows the architecture gate.
 Use the actual project's checks and the phase evidence in docs/verification/.

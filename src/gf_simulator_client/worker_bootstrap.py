@@ -14,6 +14,7 @@ os.environ.update({"PATH": os.defpath, "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8",
 
 import contextlib
 import importlib
+import time
 from dataclasses import asdict
 
 from gf_common.actions import PublicCandidateGenerator
@@ -59,10 +60,12 @@ def main() -> None:
                                           generator.config.use_action_options)
             with contextlib.redirect_stdout(sys.stderr):
                 candidates = generator.generate(value)
+                inference_started = time.perf_counter()
                 selection = policy.select(value, candidates)
+                inference_elapsed_ms = (time.perf_counter() - inference_started) * 1000
             if type(selection.index) is not int or not 0 <= selection.index < len(candidates.actions):
                 raise ContractError("invalid selected candidate index")
-            write_frame(output, {"candidates": candidates.to_dict(), "decision": asdict(selection)})
+            write_frame(output, {"candidates": candidates.to_dict(), "decision": asdict(selection), "inference_elapsed_ms": inference_elapsed_ms})
     except EOFError:
         return
     except BaseException as exc:  # noqa: BLE001 - process boundary reports framed failure

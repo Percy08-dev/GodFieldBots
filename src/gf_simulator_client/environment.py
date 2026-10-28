@@ -188,6 +188,10 @@ class SimulatorEnvironment:
                     result.candidate_counts.append(len(candidates.actions))
                     result.search_latency_ms.append(candidates.latency_ms)
                     result.search_attempts.append(candidates.attempts)
+                    inference_ms = getattr(workers[actor], "inference_elapsed_ms", None)
+                    if inference_ms is not None:
+                        result.inference_latency_ms.append(inference_ms)
+                        result.inference_latency_by_policy.setdefault(result.policies[actor - 1], []).append(inference_ms)
                     acknowledgement = await client.act(game, actor, payload)
                     # Keep known outcome even if subsequent recording fails.
                     if acknowledgement["status"] == "terminal":

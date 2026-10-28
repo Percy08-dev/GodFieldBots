@@ -1,0 +1,16 @@
+schema_version = 1
+kind = "training"
+
+[training]
+algorithm = "lightgbm_mc"
+cost_mode = "fixed_data"
+dataset_manifest = "../../runs/ppo-comparison/dataset.json"
+learning_rate = 0.05
+num_boost_round = 500
+early_stopping_rounds = 50
+min_data_in_leaf = 20
+num_threads = 1
+seeds = [17, 29, 43]
+wall_seconds = 7200
+cleanup_seconds = 2
+max_log_bytes = 1048576

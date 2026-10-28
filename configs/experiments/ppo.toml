@@ -1,0 +1,42 @@
+# Three learning seeds are run sequentially with --set 'training.seeds=[17|29|43]'.
+# Train GameSeeds are generated in the versioned PPO train namespace.
+# No final test evaluation is authorized by this preset.
+schema_version = 1
+kind = "experiment"
+
+[references]
+actions = "../actions/beam.toml"
+model = "../models/mlp.toml"
+opponent = "../models/heuristic.toml"
+training = "../training/ppo.toml"
+
+[run]
+name = "mlp-ppo"
+split = "train"
+output_dir = "../../runs/ppo"
+sampling_seeds = [17]
+pairs_per_seed = 1
+concurrency = 2
+wall_seconds = 7200
+admission_seconds = 5400
+execution_seconds = 7140
+finalization_seconds = 60
+report_reserve_seconds = 1
+max_decisions = 20000
+
+[server]
+simulator_revision = "860d8b92db4ce82012e040510f221b52241f28aa"
+source_dir = "../../../GodFieldSimurator"
+binary = "../../../GodFieldSimurator/target/debug/gf-test-server"
+config = "../test-server.toml"
+fixed_seed_experiment = true
+startup_seconds = 15
+request_seconds = 10
+worker_seconds = 10
+shutdown_seconds = 30
+cleanup_reserve_seconds = 2
+transport_retries = 2
+
+[evaluation]
+bootstrap_samples = 200
+bootstrap_seed = 0

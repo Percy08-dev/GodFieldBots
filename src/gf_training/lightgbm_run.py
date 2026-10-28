@@ -117,7 +117,7 @@ async def _run_numeric(directory: Path, x: Array, y: Array, validation_x: Array,
         if labels.shape != (len(features),) or not np.isfinite(labels).all():
             raise ContractError("invalid fit labels")
     directory.mkdir(parents=True, exist_ok=False)
-    manifest: Json = {"schema_version": 1, "algorithm": "lightgbm_mc", "status": "running", "purpose": purpose,
+    manifest: Json = {"schema_version": 2 if training.cost_mode == "fixed_data" else 1, "cost_mode": training.cost_mode, "algorithm": "lightgbm_mc", "status": "running", "purpose": purpose,
                       "seed": seed, "charged_prior_seconds": charged_seconds, "wall_seconds": training.wall_seconds,
                       "fit_code_provenance": fit_code_provenance if fit_code_provenance is not None else {
                           "verification": "unknown", "revision": None, "dirty": None, "installed_build_revision": None},
@@ -272,6 +272,10 @@ async def train_experiments(loaded: LoadedConfig, mode: str = "fresh", *,
     if config.model.model_id != "lightgbm" or config.model.checkpoint is not None:
         raise ContractError("fresh lightgbm model configuration required")
     training = config.training
+    if not isinstance(training, TrainingConfig) or not isinstance(config.model, ModelConfig):
+        raise ContractError("LightGBM training requires closed LightGBM recipe")
+    if training.cost_mode == "fixed_data":
+        return await train_fixed_data(loaded, code_provenance_provider=code_provenance_provider)
     if training.pilot_run is None:
         raise ContractError("clean original pilot evidence required before fitting")
     gate_started = time.monotonic()
@@ -285,6 +289,8 @@ async def train_experiments(loaded: LoadedConfig, mode: str = "fresh", *,
         raise ContractError("duplicate training source reference")
     train = [load_run(Path(path), "train", deadline=ingestion_deadline) for path in training.train_runs]
     validation = [load_run(Path(path), "validation", deadline=ingestion_deadline) for path in training.validation_runs]
+    if any(bundle.manifest["schema_version"] != 3 for bundle in (*train, *validation)):
+        raise ContractError("inclusive-generation LightGBM accepts only legacy schema-3 sources; PPO sources require fixed_data whole-parent validation")
     collection = {bundle.directory: bundle for bundle in (*train, *validation)}
     all_bundles = {**collection, pilot.directory: pilot}
     rows, evidence = validate_bundles(list(all_bundles.values()), deadline=ingestion_deadline)
@@ -343,3 +349,49 @@ async def train_experiments(loaded: LoadedConfig, mode: str = "fresh", *,
                                    fit_code_provenance=fit_code, fit_code_measurement_seconds=code_seconds)
         results.append({"directory": str(path), "status": result["status"], "seed": seed})
     return {"training_runs": results, "shared_feasibility_seconds": gate_seconds}
+
+
+async def train_fixed_data(loaded: LoadedConfig, *, code_provenance_provider: Callable[[float], Json] | None = None) -> Json:
+    from gf_training.fixed_data import inspect_dataset
+    config = loaded.config
+    training, model = config.training, config.model
+    if not isinstance(training, TrainingConfig) or not isinstance(model, ModelConfig) or model.model_id != "lightgbm" or model.checkpoint is not None or training.cost_mode != "fixed_data" or training.dataset_manifest is None:
+        raise ContractError("fixed-data LightGBM requires an explicit frozen dataset manifest")
+    if training.train_runs or training.validation_runs or training.pilot_run is not None or training.accepted_decision_target is not None:
+        raise ContractError("fixed-data mode cannot mix inclusive-generation source controls")
+    results = []
+    shared_generation = None
+    for seed in training.seeds:
+        started = time.monotonic()
+        deadline = started + training.wall_seconds - training.cleanup_seconds
+        dataset, train, validation = inspect_dataset(Path(training.dataset_manifest), deadline=deadline)
+        if dataset["action_config_hash"] != digest(asdict(config.actions)):
+            raise ContractError("fixed dataset/search conditions mismatch")
+        def features(samples: Any, deadline: float = deadline) -> Array:
+            vectors = []
+            for sample in samples:
+                check_deadline(deadline)
+                vectors.append(encode(sample.value, sample.action, model.encoder))
+            return np.stack(vectors)
+        x, validation_x = features(train), features(validation)
+        y = np.asarray([sample.target for sample in train], dtype=np.float64)
+        validation_y = np.asarray([sample.target for sample in validation], dtype=np.float64)
+        fit_code = code_provenance_provider(deadline) if code_provenance_provider is not None else None
+        check_deadline(deadline)
+        prep_seconds = time.monotonic() - started
+        source = {"real_gate_passed": True, "fixed_dataset_content_sha256": dataset["content_sha256"],
+                  "dataset_manifest_sha256": _sha256(Path(training.dataset_manifest), deadline),
+                  "shared_generation_seconds": dataset["shared_generation_seconds"],
+                  "shared_generation_cost_key": dataset["shared_generation_cost_key"],
+                  "shared_generation_cost_scope": "deduplicated whole PPO parents and final validation, reported separately, excluded from this fit budget",
+                  "comparison_claim": "fixed selected source set; no equal-total-cost PPO comparison"}
+        prep_seconds = time.monotonic() - started
+        path = Path(config.run.output_dir) / f"{config.run.name}-fixed-training-{seed}-{uuid.uuid4().hex[:12]}"
+        result = await _run_numeric(path, x, y, validation_x, validation_y, model=model, actions=config.actions,
+                                    training=training, seed=seed, purpose="trained", charged_seconds=prep_seconds,
+                                    provenance_data=source, fit_code_provenance=fit_code)
+        results.append({"directory": str(path), "seed": seed, "status": result["status"]})
+        shared_generation = dataset["shared_generation_seconds"]
+    return {"training_runs": results, "shared_generation_seconds": shared_generation,
+            "shared_generation_cost_key": dataset["shared_generation_cost_key"],
+            "generation_cost_accounting": "reported once across all fits, excluded from per-fit original 7200s"}

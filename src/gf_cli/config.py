@@ -19,8 +19,10 @@ from gf_common.domain import (
     digest,
     integer,
 )
-from gf_models.lightgbm.config import (
+from gf_models.config import (
+    MLPModelConfig,
     ModelConfig,
+    PPOTrainingConfig,
     TrainingConfig,
     model_config,
     training_config,
@@ -75,10 +77,10 @@ class ExperimentConfig:
     run: RunConfig = field(default_factory=RunConfig)
     server: ServerConfig = field(default_factory=ServerConfig)
     actions: ActionConfig = field(default_factory=ActionConfig)
-    model: ModelConfig = field(default_factory=ModelConfig)
-    opponent: ModelConfig = field(default_factory=ModelConfig)
+    model: ModelConfig | MLPModelConfig = field(default_factory=ModelConfig)
+    opponent: ModelConfig | MLPModelConfig = field(default_factory=ModelConfig)
     evaluation: EvaluationConfig = field(default_factory=EvaluationConfig)
-    training: TrainingConfig = field(default_factory=TrainingConfig)
+    training: TrainingConfig | PPOTrainingConfig = field(default_factory=TrainingConfig)
 
 
 @dataclass(frozen=True)
@@ -98,7 +100,7 @@ def _merge(base: Json, override: Json) -> Json:
 
 _TABLES: dict[str, type[Any]] = {"run": RunConfig, "server": ServerConfig, "actions": ActionConfig,
                                "model": ModelConfig, "opponent": ModelConfig, "evaluation": EvaluationConfig, "training": TrainingConfig}
-_PATHS = {("run", "output_dir"), ("server", "binary"), ("server", "config"), ("server", "source_dir"), ("model", "checkpoint"), ("opponent", "checkpoint"), ("training", "pilot_run")}
+_PATHS = {("run", "output_dir"), ("server", "binary"), ("server", "config"), ("server", "source_dir"), ("model", "checkpoint"), ("opponent", "checkpoint"), ("training", "pilot_run"), ("training", "dataset_manifest")}
 
 
 def _validate_table(name: str, values: Json) -> None:
@@ -130,7 +132,15 @@ def _validate_table(name: str, values: Json) -> None:
                     raise ContractError(f"{name}.{key}: positive finite number required")
             elif type(value) is not str or not value:
                 raise ContractError(f"{name}.{key}: nonempty string required")
-    check(values, asdict(_TABLES[name]()))
+    cls = MLPModelConfig if name in ("model", "opponent") and values.get("model_id") == "mlp" else PPOTrainingConfig if name == "training" and values.get("algorithm") == "ppo" else _TABLES[name]
+    # Partial model presets can specify MLP structural keys before dispatch.
+    defaults = asdict(cls())
+    if name in ("model", "opponent") and "model_id" not in values:
+        defaults["inference"] = asdict(MLPModelConfig().inference)
+        defaults["network"].update(asdict(MLPModelConfig().network))
+    if name == "training" and "algorithm" not in values:
+        defaults.update(asdict(PPOTrainingConfig()))
+    check(values, defaults)
 
 
 def load_config(path: str | Path, overrides: Json | None = None) -> LoadedConfig:
@@ -190,7 +200,7 @@ def load_config(path: str | Path, overrides: Json | None = None) -> LoadedConfig
     data = read(source, "experiment")
     base = asdict(ExperimentConfig())
     for table, key in _PATHS:
-        if base[table][key] is not None:
+        if key in base[table] and base[table][key] is not None:
             base[table][key] = str((source.parent / base[table][key]).resolve())
     if overrides:
         closed(overrides, set(), set(_TABLES))
@@ -204,6 +214,11 @@ def load_config(path: str | Path, overrides: Json | None = None) -> LoadedConfig
                     if key in values:
                         values[key] = [str(Path(item).resolve()) for item in values[key]]
         data = _merge(data, overrides)
+    for name in ("model", "opponent"):
+        if data.get(name, {}).get("model_id") == "mlp":
+            base[name] = asdict(MLPModelConfig())
+    if data.get("training", {}).get("algorithm") == "ppo":
+        base["training"] = asdict(PPOTrainingConfig())
     effective = _merge(base, data)
     for name in _TABLES:
         _validate_table(name, effective[name])
@@ -226,8 +241,10 @@ def load_config(path: str | Path, overrides: Json | None = None) -> LoadedConfig
         raise ContractError("run deadlines inconsistent")
     models = {name: model_config(effective[name]) for name in ("model", "opponent")}
     training = training_config(effective["training"])
-    if ("training" in data or "training" in data.get("references", {})) and models["model"].model_id != "lightgbm":
+    if ("training" in data or "training" in data.get("references", {})) and models["model"].model_id not in ("lightgbm", "mlp"):
         raise ContractError("training/model mismatch")
+    if (isinstance(training, PPOTrainingConfig)) != (models["model"].model_id == "mlp") and "training" in data:
+        raise ContractError("training algorithm/model mismatch")
     for model in models.values():
         validate_capacity(model, effective["actions"]["max_sequence_length"])
     actions = effective["actions"]

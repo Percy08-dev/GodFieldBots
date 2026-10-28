@@ -7,6 +7,7 @@ import math
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from gf_common.domain import ContractError, DecisionInput, Json, canonical, digest
 from gf_common.validation import validate_worker_input
@@ -34,12 +35,15 @@ def check_deadline(deadline: float) -> None:
         raise TimeoutError("training ingestion deadline")
 
 
-def load_run(directory: Path, expected_split: str | None = None, *, deadline: float = float("inf")) -> RunBundle:
+def load_run(directory: Path, expected_split: str | None = None, *, deadline: float = float("inf"), online_context: Any = None) -> RunBundle:
     check_deadline(deadline)
     directory = directory.resolve()
     manifest = json.loads((directory / "manifest.json").read_text())
-    if manifest.get("schema_version") != 3 or type(manifest.get("schema_version")) is not int or manifest.get("status") != "complete":
+    if manifest.get("schema_version") not in (3, 4) or type(manifest.get("schema_version")) is not int or manifest.get("status") != "complete":
         raise ContractError("training requires a finalized complete healthy run")
+    if manifest["schema_version"] == 4:
+        from gf_training.lineage import validate_collection_parent
+        validate_collection_parent(manifest, directory, online_context=online_context, deadline=deadline)
     split = manifest.get("split")
     if split not in ("train", "validation") or expected_split is not None and split != expected_split:
         raise ContractError("source split is not permitted for this training role")
@@ -77,11 +81,11 @@ def load_run(directory: Path, expected_split: str | None = None, *, deadline: fl
     return RunBundle(directory, manifest, tuple(journals), float(elapsed))
 
 
-def validate_bundles(bundles: list[RunBundle], *, deadline: float = float("inf")) -> tuple[list[Json], Json]:
+def validate_bundles(bundles: list[RunBundle], *, deadline: float = float("inf"), online_context: Any = None) -> tuple[list[Json], Json]:
     check_deadline(deadline)
     if len({bundle.manifest["run_id"] for bundle in bundles}) != len(bundles):
         raise ContractError("duplicate source run identity")
-    rows, metadata = project_journals([path for bundle in bundles for path in bundle.journals], deadline=deadline)
+    rows, metadata = project_journals([path for bundle in bundles for path in bundle.journals], deadline=deadline, online_context=online_context)
     check_deadline(deadline)
     if not all(source["eligible"] for source in metadata["sources"]):
         raise ContractError("source bundle failed journal/report/replay/health verification")
@@ -92,10 +96,11 @@ def validate_bundles(bundles: list[RunBundle], *, deadline: float = float("inf")
 
 def labeled_samples(rows: list[Json], metadata: Json, split: str, *, deadline: float = float("inf")) -> tuple[Sample, ...]:
     returns = {(source["header"]["run_id"], source["header"]["game_id"], source["header"]["viewer"]): source["end"]["terminal_reward"] for source in metadata["sources"]}
+    authorized = {(source["header"]["run_id"], source["header"]["game_id"], source["header"]["viewer"]) for source in metadata["sources"] if source["lineage"].get("learner_viewer", source["header"]["viewer"]) == source["header"]["viewer"]}
     result = []
     for row in rows:
         check_deadline(deadline)
-        if row["split"] != split:
+        if row["split"] != split or (row["run_id"], row["game_id"], row["viewer"]) not in authorized:
             continue
         if row["acknowledgement_json"] is None or not row["eligible"]:
             raise ContractError("unexecuted/ineligible decision has no training label")

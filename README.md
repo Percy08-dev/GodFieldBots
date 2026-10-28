@@ -3,7 +3,10 @@
 公開された本人の観測・可視イベント・typed Action metadata・許可された本人向けActionOptionsから行動を選ぶPython Botです。
 Phase 0〜3のRandom／heuristic、候補生成、TestServer対戦、本人別journal、固定評価を実装しています。
 Phase 4のCPU LightGBM、特徴変換、checkpoint推論、学習CLIも実装しています。
-実対戦学習に必要なclean pilotの判定は[購入契約更新・再検証記録](docs/verification/buy-contract-adoption.md)を参照してください。PPOは後続Phaseです。
+実対戦学習に必要なclean pilotの判定は[購入契約更新・再検証記録](docs/verification/buy-contract-adoption.md)を参照してください。
+CUDA MLP PPO・世代管理・境界再開・固定データ比較も実装しています。
+設計は[ADR0008](docs/adr/0008-mlp-ppo-generations-and-fixed-data.md)、実装・実験の受入状況は
+[PPO検証記録](docs/verification/mlp-ppo.md)を参照してください。
 合成データでの数値検証とBotの学習成立は別に判定します。
 現在の検証結果・Gate・制約は [ActionOptions検証記録](docs/verification/action-options.md)、
 [LightGBM検証記録](docs/verification/lightgbm-phase4.md)、過去の基盤検証は
@@ -27,13 +30,13 @@ Simulator契約はrevision `860d8b92db4ce82012e040510f221b52241f28aa`、HTTP `/v
 
 - [experiments](configs/experiments): 設定の選択、seed、split、予算、保存先、接続。
 - [actions](configs/actions): enumerate／beam、固定scorer、長さ・候補数・展開数の上限。
-- [models](configs/models): Random／heuristic／LightGBMのID、構造、encoderと版。
-- [training](configs/training): LightGBMの学習率・round数、データ参照、予算と乱数seed。
+- [models](configs/models): Random／heuristic／LightGBM／MLPのID、構造、encoderと版。
+- [training](configs/training): 学習方式、実行device、データ参照、予算と乱数seed。
 - [test-server.toml](configs/test-server.toml): Simulatorの実効ライフサイクル設定。
 
 参照・設定内のパスは、そのファイルからの相対パスです。テーブルは項目単位で結合し、配列は置換します。
 参照preset→実験設定→明示CLI上書きの順に解決し、未知のキー・不正値・未実装モデルを実行前に拒否します。
-LightGBMの`lightgbm_mc`以外の学習方式は拒否します。
+学習方式はモデルと対応した`lightgbm_mc`または`ppo`を選びます。
 候補生成は既定で`use_action_options = true`です。同じrevisionの本人向けActionOptionsを取得し、
 通常使用・防御・取引・基本行動を目的別に絞ります。取得・検証に失敗した場合の自動fallbackはありません。
 観測のみの比較は`--set actions.use_action_options=false`で明示し、別の実験条件として記録します。
@@ -73,7 +76,7 @@ uv run --extra data --extra lightgbm gf-bots train --config configs/experiments/
 当初のpilotは[Simulatorの購入待ちmetadata問題](docs/issues/0003-buy-choice-control-metadata.md)を
 含むため不適格です。成功した試合だけを抜き出して学習することはできません。
 修正の取り込みと新しいpilotは[再検証記録](docs/verification/buy-contract-adoption.md)に残します。
-`resume`は未対応として拒否します。
+LightGBMの`resume`は未対応として拒否します。
 
 学習runは各seedにつき元の時間予算を持ち、データ収集の記録済みコスト、変換、fit、保存、
 子プロセス回収を計上します。native fitとモデル読込は専用子プロセスで実行します。
@@ -82,6 +85,51 @@ checkpointの推論JSONはschema 2で、Simulator revision・特徴・候補生�
 正式な対戦には完了した`training.json`と`checkpoint/`を含むrun bundleが必要です。
 合成データのモデルは`purpose=toy`となり、通常の対戦コマンドは起動前に拒否します。
 schema 1の旧モデルや異なるSimulator版のモデルは自動移行せず拒否します。
+
+## MLP PPO・世代管理
+
+Torchは用途別extraです。`torch`はCPU版、`torch-cuda`はCUDA 13.2版で、同時指定は拒否します。
+通常のCLIとbaselineはTorchを必要としません。GPU学習でも対戦中の推論はCPUで行います。
+
+```console
+env -u VIRTUAL_ENV uv sync --extra torch-cuda --extra data --extra lightgbm
+env -u VIRTUAL_ENV uv run --no-sync gf-bots train --config configs/experiments/ppo.toml --mode fresh --run-dir runs/ppo/seed17 --pause-after-update 2
+env -u VIRTUAL_ENV uv run --no-sync gf-bots train --config configs/experiments/ppo.toml --mode resume --run-dir runs/ppo/seed17
+```
+
+CPU実行は`uv sync --extra torch`と[ppo-cpu.toml](configs/experiments/ppo-cpu.toml)で明示します。
+CUDAが利用できない場合は収集前に失敗します。OOM時のCPU切替やbatch変更はありません。
+actor／criticは128幅2層のMLPで、学習・評価ともcategorical samplingを使います。
+criticは候補一覧から独立した本人の公開特徴だけを使います。
+1 batchは16試合で、Random 4・heuristic 4・凍結snapshot 8です。
+学習席を明示し、両視点を保存して学習側の受理行動だけを更新に使います。
+
+`--pause-after-update`は累積更新数による明示停止です。正常なbatch境界で`paused`になったrunのみ再開できます。
+元の実時間期限は停止中も進みます。期限切れ、コード・実行環境・CPU／CUDA設定の変更、二重所有を拒否します。
+世代0・10世代ごと・最新の重みと再開状態を保持し、全世代のhash・来歴を残します。
+run全体が失敗した場合は、完了済みbatchを含めoffline学習に使えません。
+
+## 固定データでのLightGBM比較
+
+事前指定したPPO seed 17／29／43を順番に正常終了させてから、最終方策のvalidationを収集します。
+validationは各64試合で、既存32 seedのうち前半16ペアをRandom、後半16ペアをheuristicへ割り当てます。
+
+```console
+env -u VIRTUAL_ENV uv run --no-sync gf-bots validate-policy --config configs/experiments/ppo.toml --parent-run runs/ppo/seed17 --output runs/ppo-comparison/validation17
+env -u VIRTUAL_ENV uv run --no-sync gf-bots dataset build --ppo-runs runs/ppo/seed17 runs/ppo/seed29 runs/ppo/seed43 --validation-runs runs/ppo-comparison/validation17 runs/ppo-comparison/validation29 runs/ppo-comparison/validation43 --output runs/ppo-comparison/dataset.json
+env -u VIRTUAL_ENV uv run --no-sync gf-bots dataset inspect runs/ppo-comparison/dataset.json
+env -u VIRTUAL_ENV uv run --no-sync gf-bots dataset index runs/ppo-comparison/dataset.json --output runs/ppo-comparison/index.parquet
+env -u VIRTUAL_ENV uv run --no-sync gf-bots train --config configs/experiments/lightgbm-fixed-observation.toml
+env -u VIRTUAL_ENV uv run --no-sync gf-bots train --config configs/experiments/lightgbm-fixed-history.toml
+```
+
+validation収集は29／43についても、それぞれ対応する学習seedの設定で実行します。
+全世代の学習側train軌跡を成績で選別せず採用し、教師は受理済み行動と本人視点の自然終了returnです。
+PPOのvalue／advantageをLightGBMの教師にしません。
+datasetの作成・利用時は元journal・Replay・親runを再検証します。
+固定データ方式では検証・特徴変換・fit・保存・回収を各fitの2時間へ含め、共有データ生成費を別途報告します。
+従来の生成費込み方式と記録schemaで区別し、PPOと総費用が同条件だったとは扱いません。
+最終test評価はこの段階では実行しません。
 
 ## 保存・データ変換
 
@@ -154,8 +202,9 @@ uv build
 実バイナリintegrationは通常テストから分離し、実行条件は検証記録に記載します。
 [追加テストとカバレッジの記録](docs/verification/coverage-followup.md)には、異常系・並行実行・
 独立した候補集合の期待値・CLI入口の検証と、計測範囲の制約を記載します。
-`data`、`lightgbm`、`torch`は用途別extrasで、baselineの起動時にMLライブラリを読み込みません。
-Linux／WindowsのTorchはCPU用indexを選びます。GPUは未検証です。
+`data`、`lightgbm`、`torch`、`torch-cuda`は用途別extrasで、baselineの起動時にMLライブラリを読み込みません。
+`torch`はCPU用、`torch-cuda`はcu132用の明示indexを選びます。
+GPUの部品検証と実対戦学習の検証状況は[PPO記録](docs/verification/mlp-ppo.md)で分けて報告します。
 
 設計と開発Agentの規則は [architecture](docs/architecture.md)、[ADR](docs/adr/README.md)、
 [AGENTS.md](AGENTS.md) にあります。Agent設定は `.codex/`、設定読込確認は

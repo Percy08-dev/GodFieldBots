@@ -185,7 +185,7 @@ def test_delayed_source_provenance_exhausts_original_deadline_before_any_fit(tmp
         "pilot_run": str(tmp_path / "pilot"), "train_runs": [str(tmp_path / "train")],
         "validation_runs": [str(tmp_path / "validation")], "accepted_decision_target": 1,
         "wall_seconds": .1, "cleanup_seconds": .01}, "run": {"output_dir": str(tmp_path / "output")}})
-    bundles = {name: RunBundle(tmp_path / name, {"run_id": name}, (), 0) for name in ("pilot", "train", "validation")}
+    bundles = {name: RunBundle(tmp_path / name, {"run_id": name, "schema_version": 3}, (), 0) for name in ("pilot", "train", "validation")}
     config_hash = digest(asdict(loaded.config.actions))
     # Explicit scheduling/budget unit fixture; no real gate or native fit is run.
     monkeypatch.setattr(owner, "feasibility", lambda *a, **k: (bundles["pilot"], {"action_config_hash": config_hash}))

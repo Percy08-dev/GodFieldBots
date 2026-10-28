@@ -6,8 +6,9 @@ The user's 2026-10-28 CUDA MLP PPO/generation/fixed-data plan is accepted in
 [ADR0008](adr/0008-mlp-ppo-generations-and-fixed-data.md), with independent
 design READY. It extends the baseline below with an owned numeric learning
 child, CPU participant inference, whole-run offline eligibility and original-
-deadline batch-boundary pause/resume. Stage A dependency conformance is READY;
-full implementation/final reviews and experiments are in progress. Current
+deadline batch-boundary pause/resume. Independent design, correctness and final
+implementation conformance reviews are READY. Component verification has passed;
+real experiments are the next acceptance gate. Current
 evidence is in [MLP PPO verification](verification/mlp-ppo.md). Historical
 Phase 4 and pilot results below retain their original scope and identities.
 
@@ -35,8 +36,10 @@ hints the fixed 12-game evaluation is clean. The first frozen 192-game pilot
 recorded 182 natural games, 9 unsupported buy-control states and one omitted
 dynamic-weapon singleton. The latter is fixed in generator v3; the whole failed
 pilot is retained and remains ineligible. The corrected-contract pilot described
-below now passes provisional feasibility. Phases 5–9 are not
-implemented. See the [current verification](verification/action-options.md).
+below now passes provisional feasibility. The original Phases 5–9 were outside
+that acceptance; ADR0008 now implements the MLP PPO/generation/fixed-data subset.
+Recurrent models and final-test evaluation remain future work. See the
+[current verification](verification/action-options.md).
 Phase 4 implements [ADR0006](adr/0006-lightgbm-action-value.md): native
 CPU LightGBM action scoring, versioned public encoders, checkpoint inference and
 gated fresh training. Independent final reviews and verification are recorded in
@@ -106,9 +109,9 @@ Wire DTOs may resolve representation details; no engine dependency is allowed.
 | --- | --- | --- |
 | `gf_common` | JSON-safe domain types, protocols, public action space, lazy search, pure scheduling | stdlib, NumPy |
 | `gf_simulator_client` | validated HTTP, attestation, subprocess/game ownership, worker transport | common, httpx |
-| `gf_training` | journals/projection, split and feasibility checks, owned LightGBM training | common, model adapter, optional PyArrow |
+| `gf_training` | journals/projection, split/feasibility, owned numeric training, generation lineage and frozen datasets | common, model adapters, optional PyArrow |
 | `gf_evaluation` | paired scheduling, aggregation and costs | common |
-| `gf_models` | participant-local Random/heuristic/LightGBM, pure encoder and native artifact | common, lazy extras |
+| `gf_models` | participant-local Random/heuristic/LightGBM/MLP, common encoder/config and native artifacts | common, lazy extras |
 | `gf_cli` | strict config, composition, commands, manifest | application packages |
 
 The existing `godfieldbots` entry point becomes a compatibility wrapper.
@@ -355,8 +358,10 @@ never retain only successful episodes or manufacture bootstrap labels.
 
 ## LightGBM training and inference
 
-`gf_models.lightgbm` owns stdlib-only typed model settings, NumPy feature encoding,
-native CPU fit/predict and inference artifact schema 2. The encoder `participant-action-v1`
+`gf_models.config` and `gf_models.encoder` own model-neutral closed settings and
+the pure participant/candidate encoder; legacy LightGBM paths re-export them.
+`gf_models.lightgbm` owns its model-specific settings, native CPU fit/predict and
+inference artifact schema 2. The encoder `participant-action-v1`
 supports current observation and bounded public-event aggregates. Own visible
 definitions, ordered hand/learned references, missingness and same-revision atomic
 hints are encoded; candidate position, numeric instance IDs and management
@@ -404,13 +409,95 @@ operation error until process, thread and streams have been reclaimed.
 Artifacts contain native `model.txt` and closed inference JSON, without pickles.
 Schema 2 requires simulator_contract_revision equal to the supported pin; old
 schema-1 artifacts and wrong/missing identities are explicitly unsupported before
-native loading, including toy loads. Training completion stays schema 1.
+native loading, including toy loads. Inclusive-generation training completion
+stays schema 1; fixed-data training uses schema 2 as described below.
 Model, encoder, runtime, catalog, input/reward/projection and candidate-generation
 identities must match. `purpose=toy` permits explicit synthetic component tests
-only; formal commands reject it before startup. Only fresh training is supported;
-resume is rejected before work. Existing OS/filesystem blocking and dual-write
+only; formal commands reject it before startup. LightGBM training is fresh only;
+its resume is rejected before work. Existing OS/filesystem blocking and dual-write
 failure debt remains explicit; portable inference export and broader native
-runtime compatibility are deferred to Phase 9. No new dependency is introduced.
+runtime compatibility are deferred to Phase 9. LightGBM adds no runtime dependency.
+
+## MLP PPO, generations and fixed datasets
+
+[ADR0008](adr/0008-mlp-ppo-generations-and-fixed-data.md) pins the complete v1
+recipe. `gf_models.mlp` owns CPU categorical inference and public inference
+artifacts. Actor uses the common public-aggregate encoder with CPU signed log1p
+and FP32 conversion; critic excludes candidate features by explicit name prefix.
+Both have two 128-wide ReLU layers with CPU orthogonal initialization. Config
+dispatch rejects cross-model settings before I/O. Inference device is CPU;
+learning device is explicitly `cuda:0` or the separate CPU preset.
+
+`gf_training.ppo` owns GAE/rollout projection; `ppo_numeric` owns deterministic
+IEEE FP32 Torch/Adam update math. A single clean `ppo_worker` child owns numerical state and GPU for each
+invocation. The coordinator never imports Torch. Numeric IPC carries closed
+requests and hashed typed NumPy shards bounded to 64 MiB. Whole-batch frozen
+CPU/saved/device parity precedes any Adam mutation. Logical minibatches have
+128 decisions and accumulate padded microbatches of at most 4096 candidate
+slots, clipping/stepping once per logical minibatch. CUDA synchronization
+precedes finite metric checks, CPU-array persistence and acknowledgement.
+Unavailable devices, mismatch, OOM or asynchronous errors fail without fallback.
+
+`gf_training.collection` defines the injected `CollectionPlan` and
+`FinalizedCollection` values. CLI composes the existing environment, journals,
+Replay checks and finalizer; training has no CLI/HTTP dependency. Each admitted
+batch fixes eight train-namespace seed pairs, swapping learner seats explicitly:
+two Random, two heuristic and four uniformly selected periodic snapshot pairs.
+CPU inference processes retain only participant-visible inputs. Learner role
+never comes from comparing policy IDs; generation-zero self-play is unambiguous.
+New collection manifest schema 4 links parent/run/batch/generation and learner
+seats. Schema 3 has an explicit legacy serializer without learner metadata and
+retains the existing 192-game pilot proof. Journal/derived schema 4 is unchanged.
+
+`gf_training.lineage` owns run flock, immutable generation/update records,
+separate latest/state and deletion receipts. Generation zero, every tenth and
+latest inference/resume arrays remain; all inference manifests and generation
+hashes remain even after nonperiodic array deletion. Checkpoints use closed
+JSON and preallocation-validated typed NumPy arrays, never pickle. Resume
+includes Adam, CPU/CUDA/shuffle and schedule/opponent RNG, counters and pool.
+The lifetime lock protects validation, commit and retention. General formal
+MLP bindings require a complete healthy parent's final generation; owned PPO
+collection constructs separate safe bindings to committed current/pool policies.
+
+`ppo_run` applies original absolute 7200/5400/7140-second wall/admission/execution
+deadlines, 1000 updates, 10 GiB soft storage and 1 GiB admission reservation.
+Already-admitted queued groups use execution cutoff. Any batch/update/save/
+cleanup failure invalidates the whole parent. At pre-batch limits, at least one
+update and healthy drained work permit completion. Explicit absolute
+`--pause-after-update` stops only at a committed boundary, after child reap.
+Only paused runs resume, with unchanged recorded code bytes/runtime/config/
+device/hardware identities and original deadlines; clock rollback and concurrent
+ownership are rejected. Parent identity freezes actual Simulator binary and
+server-TOML bytes plus configured source/spec snapshots. Each collection is
+checked against that identity, including final-policy validation. The CUDA
+learner records supported driver API version; this is not an exact NVIDIA
+driver-build identity. Cross-build determinism remains unverified.
+Capacity is a measured soft limit; existing OS/filesystem debt still applies.
+
+`fixed_data` revalidates all original journal/Replay/report/parent/chain evidence,
+requires ordered complete parents at seeds 17/29/43, selects every learner train
+action and only the final-policy learner validation view, and freezes source
+hashes/counts/generation ranges/splits/costs in a dataset manifest. Final-policy
+validation uses the existing 32 seed pairs, half Random and half heuristic,
+64 games per parent. Failed parents invalidate every earlier batch for offline
+use. Shared projection and source ingestion default to complete-parent
+qualification; only an exact live-lock `OnlinePPOContext` authorizes the running
+coordinator's current frozen batch. Legacy inclusive LightGBM accepts schema 3
+sources only. `dataset build`, `inspect` and regenerable Parquet `index` use the manifest
+as authority; indexes/eligibility flags never authorize fit independently.
+LightGBM labels are accepted actions and natural final returns, never PPO values.
+
+Fixed-data LightGBM records schema 2 and includes original-source revalidation,
+encoding, fit, save and cleanup within each 7200s fit budget. Shared generation
+cost has one dataset identity and is reported separately from fit charges; it
+is deduplicated across recipes/seeds. Legacy inclusive-generation schema 1 and
+its pilot/decision-budget requirements remain. No equal-total-cost PPO claim
+or final-test result follows from this comparison.
+
+Inference timing is measured around policy.select inside the worker after search,
+then sent as diagnostic metadata and reported separately from whole-worker
+journal selection timing. It never enters PolicyDecision, features or journal
+schema. CPU/GPU memory and elapsed metrics state their measured scope.
 
 ## Verification and acceptance
 

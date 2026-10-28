@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import os
 import queue
 import re
@@ -48,6 +49,7 @@ class ParticipantWorker:
                         "actions": asdict(actions)}
         if policy_options is not None:
             self.initial["policy_options"] = policy_options
+        self.inference_elapsed_ms: float | None = None
         self.initialized = False
         self.timeout = timeout
         self.closed = False
@@ -107,6 +109,10 @@ class ParticipantWorker:
     async def select(self, value: DecisionInput) -> tuple[CandidateSet, PolicyDecision]:
         received = await self._exchange(value)
         try:
+            metric = received.get("inference_elapsed_ms")
+            if metric is not None and (type(metric) not in (int, float) or not math.isfinite(metric) or metric < 0):
+                raise ContractError("invalid inference timing")
+            self.inference_elapsed_ms = metric
             raw = received["candidates"]
             candidates = CandidateSet(tuple(raw.pop("actions")), **raw)
             decision = PolicyDecision(**received["decision"])

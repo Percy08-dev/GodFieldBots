@@ -33,3 +33,18 @@ def schedule(seeds: tuple[str, ...], sampling_seeds: tuple[int, ...], pairs_per_
                     episodes.append(EpisodeSpec(pair_id + f"-seat{swap}", policies, sampling, pair_id))
         groups.append(EpisodeGroup(seed, tuple(episodes)))
     return tuple(groups)
+
+
+def serialize_schedule(groups: tuple[EpisodeGroup, ...], schema: int) -> list[dict[str, object]]:
+    """Explicit historical serialization; schema 3 never gains new seat semantics."""
+    from dataclasses import asdict
+
+    from gf_common.domain import ContractError, clone
+    if schema not in (3, 4):
+        raise ContractError("unsupported schedule schema")
+    result = [asdict(group) for group in groups]
+    if schema == 3:
+        for group in result:
+            for spec in group["episodes"]:
+                spec.pop("learner_viewer")
+    return clone(result)

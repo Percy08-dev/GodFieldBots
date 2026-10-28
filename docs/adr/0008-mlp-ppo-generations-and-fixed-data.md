@@ -5,8 +5,10 @@
 - Decision owner: root
 - Review: `bot_architecture_reviewer` design READY and Stage A dependency
   conformance READY, 2026-10-28; numerical recipe, role/qualification and pause
-  clarifications below resolve all design findings. Final conformance pending.
-- Implementation: pending; acceptance and experiment evidence tracked separately
+  clarifications below resolve all design findings. Final correctness and
+  architecture conformance READY, including the bounded provenance delta.
+- Implementation: complete; component checks passed, real experiment acceptance
+  tracked separately in `docs/verification/mlp-ppo.md`.
 
 ## Requirements and scope
 
@@ -241,3 +243,38 @@ the current count. It is an invocation control, excluded from immutable training
 config identity, so resume may choose a later boundary. The learner child must
 be drained/reaped successfully before publishing paused/complete state or
 releasing the run lock. Cleanup failure makes the parent failed instead.
+
+## Measurement interface clarification
+
+Measure participant inference around `policy.select` after candidate generation
+inside the clean worker. Send a finite nonnegative `inference_elapsed_ms` as
+diagnostic response metadata, store it on the participant worker, copy it to
+EpisodeResult diagnostics and aggregate report p50/p95. It is never part of
+PolicyDecision, DecisionInput, journal schema 4 or learning feature arrays.
+Existing `selection_elapsed_ms` measures the whole worker call and retains that
+meaning. Use explicit scope labels for CPU RSS (coordinator/learner/participant)
+and end-to-end batch time. Metrics unavailable on a platform remain null rather
+than being inferred from unrelated search timings. No new dependency is needed.
+
+Accepted memory debt: fixed-data validation currently materializes projected
+rows/selected samples. The actual host has 31 GiB RAM; the measured historical
+pilot has 47.6 MB of journals versus an estimated 1.062 GB of equivalent actor
+arrays, so the 10 GiB per-parent owned-storage cap is substantially dominated
+by numeric data. A streaming framework is not justified by this evidence.
+Measure coordinator/learner RSS during the real smoke and dataset ingestion;
+revisit before full fitting if pressure approaches available RAM, swapping
+begins, or actual source ratios depart materially from this measurement. The
+smallest follow-up is per-collection validation with lightweight global split/
+ancestry metadata and streamed selected samples, preserving cross-source unions.
+Architecture reviewer accepted this bounded debt on 2026-10-28.
+
+Final identity clarification (independent design READY): freeze binary/server
+TOML bytes and source/spec snapshots in parent identity and bind every collection
+to them. Record installed relevant CUDA distribution versions parent-only and
+query `cuda_driver_api_version` only in an initialized CUDA learner using
+`cuDriverGetVersion`; CPU never loads/queries libcuda. Query failure prevents
+collection. That API reports supported CUDA major/minor, not the exact NVIDIA
+driver build, so cross-build determinism remains unverified. No runtime registry
+or new dependency is introduced. Default projection/export is offline and
+requires a completed parent; an exact live-lock `OnlinePPOContext` is the only
+authorization for current-batch online ingestion.

@@ -1,0 +1,21 @@
+schema_version = 1
+kind = "model"
+
+[model]
+model_id = "mlp"
+version = "1"
+
+[model.encoder]
+history = "public_aggregate"
+max_elements = 3
+hash_buckets = 32
+history_window = 128
+
+[model.network]
+hidden_sizes = [128, 128]
+
+[model.initialization]
+recipe = "orthogonal-v1"
+
+[model.inference]
+device = "cpu"

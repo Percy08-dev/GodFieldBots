@@ -148,6 +148,7 @@ class EpisodeSpec:
     policies: tuple[str, str]
     sampling_seeds: tuple[int, int]
     pair_id: str
+    learner_viewer: int | None = None
 
 
 @dataclass(frozen=True)
@@ -175,6 +176,8 @@ class EpisodeResult:
     elapsed_seconds: float = 0.0
     candidate_counts: list[int] = field(default_factory=list)
     search_latency_ms: list[float] = field(default_factory=list)
+    inference_latency_ms: list[float] = field(default_factory=list)
+    inference_latency_by_policy: dict[str, list[float]] = field(default_factory=dict)
     search_attempts: list[int] = field(default_factory=list)
 
 

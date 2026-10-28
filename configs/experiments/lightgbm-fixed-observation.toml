@@ -1,0 +1,22 @@
+schema_version = 1
+kind = "experiment"
+
+[references]
+actions = "../actions/beam.toml"
+training = "../training/lightgbm-fixed-data.toml"
+model = "../models/lightgbm-observation.toml"
+opponent = "../models/heuristic.toml"
+
+[run]
+name = "lightgbm-fixed-observation"
+split = "train"
+output_dir = "../../runs/ppo-comparison/lightgbm-observation"
+sampling_seeds = [17, 29, 43]
+concurrency = 2
+
+[server]
+simulator_revision = "860d8b92db4ce82012e040510f221b52241f28aa"
+source_dir = "../../../GodFieldSimurator"
+binary = "../../../GodFieldSimurator/target/debug/gf-test-server"
+config = "../test-server.toml"
+fixed_seed_experiment = true

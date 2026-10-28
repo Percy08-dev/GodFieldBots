@@ -2,8 +2,57 @@
 
 Date: 2026-10-28. Requirements and accepted design:
 [ADR0008](../adr/0008-mlp-ppo-generations-and-fixed-data.md).
-Full implementation, final independent review, and real learning acceptance are
-in progress. No trained-policy quality or final-test claim is made.
+Implementation and independent code reviews are complete. Real learning
+acceptance is in progress. No trained-policy quality or final-test claim is made.
+
+## Implemented code verification
+
+The complete implementation has independent correctness and architecture
+conformance READY, including the bounded final provenance correction. No actual
+PPO experiment has yet been accepted by these code reviews.
+
+| Check | Result |
+| --- | --- |
+| Root full ordinary suite | PASS: 472 passed, four opt-in skipped, 122.39s |
+| Final private provenance/lineage correction | PASS: 22 focused tests; final ancestor-Git guard four tests, 0.13s |
+| Ruff / mypy | PASS, 47 source files |
+| Existing real TestServer integration | PASS: four tests, 2.65s |
+| Whole-parent offline, final binding and cleanup/deadline guards | PASS in independent focused probes/regressions |
+| Both learner seats and nonzero natural returns | PASS, including generation-zero same-policy identity and actual-opponent index counts |
+| Installed baseline wheel | PASS: help/config imports without optional ML/data dependencies |
+| Installed CPU/cu132 wheel, CPU inference | PASS: 420 candidates, NPZ exact load and clean isolated worker; no CUDA initialization |
+| Owned CUDA child | PASS: minimal environment, generation-zero save, driver API 13030, clean exit; parent never imported Torch |
+| Installed CUDA wheel numerical update/restore | PASS: 140 synthetic decisions, full pre-step parity, exact resumed next update |
+
+The ordinary suite command was
+`env -u VIRTUAL_ENV .venv/bin/python -m pytest -q`; opt-in integration used
+`GFB_RUN_INTEGRATION=1` and approved listener access. Static checks used
+`.venv/bin/python -m ruff check .` and `.venv/bin/python -m mypy src`.
+
+The installed-wheel synthetic numerical benchmark measured CPU 1.29135s and
+CUDA 1.14565s for the same 140-decision update, including full parity and four
+epochs, excluding initialization/checkpoint save. It retained the 1.01328e-6
+maximum pre-update CPU/device error and exact checkpoint continuation. This is
+one component workload, not an end-to-end speedup or learned-policy result.
+Final wheel SHA-256:
+`27e3fee58decc1c84208aed99c36ef1f0b9d6fa3cc3f1e02330c8b5b756affcf`,
+121,835 bytes. Every one of 47 Python source files matches the wheel. The full
+ordinary suite preceded the final private provenance correction; focused
+lineage/provenance checks cover that correction. Installed baseline, CPU and
+cu132 environments use absolute `/tmp/gfb-20261028-*` targets and `python -I`
+from `/tmp`. Provenance now hashes exactly seven owned packages/47 files;
+installed wheels/source archives cannot inherit an ancestor repository's Git
+identity. The original installed-wheel probe reproduced 5,840 hashed files,
+including unrelated Torch files, before this correction.
+
+Blocking findings resolved during independent review: preallocation NPZ header
+validation; failed/running-parent data escaping through generic offline paths;
+spoofed final-policy validation binding; external fixed-seed validation; adverse
+child health being published complete; controllable work after execution expiry;
+same-path Simulator binary/config drift. Numeric metrics now weight decisions
+across uneven microbatches. Default offline projection requires whole-parent
+success; online PPO needs a live ownership token bound to exact current batch.
+No unresolved blocking code finding is deliberately accepted.
 
 ## Stage A: optional CPU/CUDA dependencies
 
@@ -49,6 +98,25 @@ torchvision 0.29.1+cpu, NumPy 2.5.4. Both extras together are rejected.
 Interim Stage-A wheel SHA-256:
 `c58043c545a21806609ffb7af8f90d2403f6ce755fe8b4fac82858a12a3ceb5a`.
 The final implementation requires another installed-wheel check.
+
+Stage C interim component evidence (not real-data learning acceptance): root
+tested 140 synthetic numerical decisions with 1/2/7/64/512 candidate counts and
+690 public-aggregate features. Full frozen CPU/CUDA comparison passed with
+maximum absolute error `1.0132789611816406e-6` at atol=rtol=1e-5; the first
+four-epoch update made eight Adam steps. NPZ restore followed by a second
+update was bit-identical to continuous CUDA weights. Peak allocated/reserved:
+92,488,192/109,051,904 bytes. Disposable verification script:
+`/tmp/gfb-ppo-numeric-smoke.py`. This preceded the final RNG-seeding and loader
+hardening; the final numeric/hardware checks remain required.
+
+Common encoder migration was independently compared with source revision
+`8ed132a` on 100 actual corrected-pilot decisions, every stored candidate, and
+both encoder recipes: names/order/signatures and every float64 value matched
+exactly. Signatures remain `b6045e464c1488807c76fc5a298008e692bca603e922b7d604e0e023b2c2de14`
+(observation) and `befca464acc87b893d1b5fadf47db3bbebbd93dfa206545a216f9fa312d3dedf`
+(public history). The existing 192-game pilot was recomputed after the schedule
+serializer change and retained source-set hash
+`5ff2af59443bb258c17203791568785e67adf876294835071a6769c680b4bb04`.
 
 ## Environment incident
 

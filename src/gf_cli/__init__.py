@@ -9,7 +9,7 @@ import subprocess
 import sys
 import time
 import uuid
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Any
 
@@ -23,11 +23,14 @@ from gf_common.domain import (
     GroupResult,
     Json,
     canonical,
+    digest,
 )
+from gf_common.schedule import serialize_schedule
 from gf_evaluation.evaluation import report, schedule
 from gf_models.baselines import make_policy
 from gf_simulator_client.environment import EnvironmentSettings, SimulatorEnvironment
 from gf_simulator_client.process import server_effective
+from gf_training.collection import CollectionPlan, FinalizedCollection
 from gf_training.journal import (
     FEATURE_VERSION,
     JOURNAL_SCHEMA,
@@ -78,10 +81,12 @@ def _fit_code_provenance(deadline: float) -> Json:
         provenance["package_version"] = None
     # The fingerprint names its exact scope; it does not claim a wheel build
     # revision or equate a dirty Git HEAD with uncommitted fit code bytes.
+    from gf_models import config as common_config
+    from gf_models import encoder as common_encoder
     from gf_models.lightgbm import config, encoder, model
     from gf_training import lightgbm_run
     provenance["fit_module_sha256"] = {module.__name__: _file_hash(module.__file__, deadline) if module.__file__ is not None else None
-                                        for module in (config, encoder, model, lightgbm_run)}
+                                        for module in (config, encoder, common_config, common_encoder, model, lightgbm_run)}
     worker_spec = importlib.util.find_spec("gf_training.lightgbm_worker")
     worker_file = worker_spec.origin if worker_spec is not None else None
     provenance["fit_module_sha256"]["gf_training.lightgbm_worker"] = _file_hash(worker_file, deadline) if worker_file is not None else None
@@ -170,21 +175,25 @@ async def _join_owned_groups(tasks: list[asyncio.Task[Any]], wall_deadline: floa
             detect_threshold = False
 
 
-async def run_experiment(loaded: LoadedConfig, command: str) -> tuple[Path, Json]:
+async def run_experiment(loaded: LoadedConfig, command: str, *, collection: CollectionPlan | None = None) -> tuple[Path, Json]:
     config = loaded.config
-    started = time.monotonic()
+    started = collection.started_monotonic if collection is not None and collection.started_monotonic is not None else time.monotonic()
     from gf_cli.bindings import bindings, native_preflight
-    wall_deadline = started + min(config.run.wall_seconds, config.run.execution_seconds + config.run.finalization_seconds)
+    wall_deadline = collection.wall_deadline if collection is not None else started + min(config.run.wall_seconds, config.run.execution_seconds + config.run.finalization_seconds)
     work_deadline = wall_deadline - config.run.report_reserve_seconds
     replay_deadline = work_deadline - config.server.cleanup_reserve_seconds
-    preflight_deadline = min(started + config.run.execution_seconds, replay_deadline)
-    registry, labels = bindings(config.model, config.opponent, config.actions, deadline=preflight_deadline)
+    execution_deadline = collection.execution_deadline if collection is not None else started + config.run.execution_seconds
+    preflight_deadline = min(execution_deadline, replay_deadline)
+    if collection is None:
+        registry, labels = bindings(config.model, config.opponent, config.actions, deadline=preflight_deadline)
+    else:
+        registry, labels = collection.bindings, ("owned", "owned")
     await native_preflight(registry, config.actions, deadline=preflight_deadline, worker_seconds=config.server.worker_seconds)
     run_id = str(uuid.uuid4())
-    directory = Path(config.run.output_dir) / (config.run.name + "-" + run_id[:12])
+    directory = collection.output if collection is not None else Path(config.run.output_dir) / (config.run.name + "-" + run_id[:12])
     directory.mkdir(parents=True, exist_ok=False)
     count = len(config.run.sampling_seeds) * config.run.pairs_per_seed * 2
-    planned_games = count * len(config.run.seeds)
+    planned_games = sum(len(group.episodes) for group in collection.groups) if collection is not None else count * len(config.run.seeds)
     planned: tuple[Any, ...] = ()
     groups: list[Any] = []
     scheduled_tasks: list[asyncio.Task[Any]] = []
@@ -192,7 +201,7 @@ async def run_experiment(loaded: LoadedConfig, command: str) -> tuple[Path, Json
     group_failure: BaseException | None = None
     episodes: list[Any] = []
     manifest: Json = {
-        "schema_version": 3, "run_id": run_id, "command": command, "status": "running",
+        "schema_version": 4 if collection is not None else 3, "run_id": run_id, "command": command, "status": "running",
         "policy_bindings": {label: asdict(binding) for label, binding in registry.items()},
         "effective_config": loaded.effective, "config_sha256": loaded.sha256, "config_inputs": loaded.inputs,
         "code": None, "simulator": {"revision": None, "dirty": None, "verification": "unverified", "spec_sha256": None},
@@ -210,13 +219,15 @@ async def run_experiment(loaded: LoadedConfig, command: str) -> tuple[Path, Json
         "reproducibility_limits": ["prebuilt binary build revision unverified", "seed alone does not guarantee future model training determinism",
                                    "synchronous local filesystem operations cannot provide a hard realtime wall guarantee"],
     }
+    if collection is not None:
+        manifest.update(collection_kind=collection.kind, ppo=collection.linkage)
     summary: Json
     failure_reason: str | None = None
     try:
         _check_budget(preflight_deadline)
         atomic_json(directory / "manifest.json", manifest)
         _check_budget(preflight_deadline)
-        manifest["effective_server_config"] = server_effective(config.server.config, count if config.server.external_url is None else None)
+        manifest["effective_server_config"] = server_effective(config.server.config, max(len(group.episodes) for group in collection.groups) if collection is not None else count if config.server.external_url is None else None)
         _check_budget(preflight_deadline)
         if config.server.external_url is None:
             manifest["binary_sha256"] = _file_hash(config.server.binary, preflight_deadline)
@@ -230,11 +241,9 @@ async def run_experiment(loaded: LoadedConfig, command: str) -> tuple[Path, Json
             manifest["simulator"] = simulator
         manifest["code"] = _code_provenance(preflight_deadline)
         manifest["server_config_sha256"] = _file_hash(config.server.config, preflight_deadline)
-        planned = schedule(config.run.seeds, config.run.sampling_seeds, config.run.pairs_per_seed,
+        planned = collection.groups if collection is not None else schedule(config.run.seeds, config.run.sampling_seeds, config.run.pairs_per_seed,
                            labels[0], labels[1], deadline=preflight_deadline)
-        for group in planned:
-            _check_budget(preflight_deadline)
-            manifest["schedule"].append(asdict(group))
+        manifest["schedule"] = serialize_schedule(planned, manifest["schema_version"])
         _check_budget(preflight_deadline)
         atomic_json(directory / "manifest.json", manifest)
         _check_budget(preflight_deadline)
@@ -246,7 +255,7 @@ async def run_experiment(loaded: LoadedConfig, command: str) -> tuple[Path, Json
             startup_seconds=config.server.startup_seconds, request_seconds=config.server.request_seconds,
             worker_seconds=config.server.worker_seconds, shutdown_seconds=config.server.shutdown_seconds,
             transport_retries=config.server.transport_retries, max_decisions=config.run.max_decisions,
-            admission_deadline=started + config.run.admission_seconds, execution_deadline=started + config.run.execution_seconds,
+            admission_deadline=execution_deadline if collection is not None else started + config.run.admission_seconds, execution_deadline=execution_deadline,
             wall_deadline=wall_deadline, work_deadline=work_deadline, replay_deadline=replay_deadline,
         )
         environment = SimulatorEnvironment(settings, make_policy, ParticipantJournal)
@@ -345,20 +354,53 @@ async def run_experiment(loaded: LoadedConfig, command: str) -> tuple[Path, Json
     return directory, summary
 
 
+async def collect_ppo(loaded: LoadedConfig, plan: CollectionPlan) -> FinalizedCollection:
+    directory, summary = await run_experiment(loaded, "collect", collection=plan)
+    if summary.get("comparison_valid") is not True:
+        raise RuntimeError("PPO batch collection did not complete naturally and healthily")
+    return FinalizedCollection(directory, summary)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="gf-bots", description="Public-information GodField baselines")
     subcommands = parser.add_subparsers(dest="command", required=True)
-    for command in ("smoke", "collect", "evaluate", "benchmark", "validate", "train"):
+    for command in ("smoke", "collect", "evaluate", "benchmark", "validate", "train", "validate-policy"):
         child = subcommands.add_parser(command)
         child.add_argument("--config", required=True, type=Path)
         if command == "train":
             child.add_argument("--mode", choices=("fresh", "resume"), default="fresh")
+            child.add_argument("--run-dir", type=Path)
+            child.add_argument("--pause-after-update", type=int)
+        if command == "validate-policy":
+            child.add_argument("--parent-run", required=True, type=Path)
+            child.add_argument("--output", required=True, type=Path)
         child.add_argument("--set", action="append", default=[], metavar="TABLE.FIELD=TOML_VALUE")
     export = subcommands.add_parser("export")
     export.add_argument("journals", nargs="+", type=Path)
     export.add_argument("--output", required=True, type=Path)
+    dataset = subcommands.add_parser("dataset")
+    dataset_commands = dataset.add_subparsers(dest="dataset_command", required=True)
+    build = dataset_commands.add_parser("build")
+    build.add_argument("--ppo-runs", nargs=3, required=True, type=Path)
+    build.add_argument("--validation-runs", nargs=3, required=True, type=Path)
+    build.add_argument("--output", required=True, type=Path)
+    inspect = dataset_commands.add_parser("inspect")
+    inspect.add_argument("manifest", type=Path)
+    index = dataset_commands.add_parser("index")
+    index.add_argument("manifest", type=Path)
+    index.add_argument("--output", required=True, type=Path)
     args = parser.parse_args(argv)
     try:
+        if args.command == "dataset":
+            from gf_training.fixed_data import build_dataset, index_dataset, inspect_dataset
+            if args.dataset_command == "build":
+                result = build_dataset(tuple(args.ppo_runs), tuple(args.validation_runs), args.output)
+            elif args.dataset_command == "index":
+                result = index_dataset(args.manifest, args.output)
+            else:
+                result = inspect_dataset(args.manifest)[0]
+            print(canonical(result))
+            return 0
         if args.command == "export":
             from gf_training.journal import export_parquet
             print(canonical(export_parquet(args.journals, args.output)))
@@ -374,17 +416,36 @@ def main(argv: list[str] | None = None) -> int:
             for part in parts[:-1]:
                 current = current.setdefault(part, {})
             current[parts[-1]] = tomllib.loads("value=" + raw_value)["value"]
-        if args.command == "train" and args.mode != "fresh":
-            raise ValueError("resume is unsupported; no work performed")
+        if args.command == "train" and args.mode != "fresh" and args.run_dir is None:
+            raise ValueError("resume is unsupported without --run-dir; no work performed")
         loaded = load_config(args.config, overrides)
         if args.command == "validate":
             server_effective(loaded.config.server.config, len(loaded.config.run.sampling_seeds) * loaded.config.run.pairs_per_seed * 2)
             print(canonical({"valid": True, "config_sha256": loaded.sha256, "effective_config": loaded.effective,
                              "inputs": loaded.inputs}))
             return 0
+        if args.command == "validate-policy":
+            from gf_training.fixed_data import validate_policy
+            config = replace(loaded.config, run=replace(loaded.config.run, split="validation"))
+            validation_loaded = LoadedConfig(config, asdict(config), digest(asdict(config)), loaded.inputs)
+            async def collect_validation(plan: CollectionPlan) -> FinalizedCollection:
+                return await collect_ppo(validation_loaded, plan)
+            print(canonical(asyncio.run(validate_policy(validation_loaded, args.parent_run, args.output, collect_validation))))
+            return 0
         if args.command == "train":
-            from gf_training.lightgbm_run import train_experiments
-            print(canonical(asyncio.run(train_experiments(loaded, code_provenance_provider=_fit_code_provenance))))
+            if loaded.config.model.model_id == "mlp":
+                from gf_training.ppo_run import train_ppo
+                if args.run_dir is None:
+                    raise ValueError("PPO train requires --run-dir")
+                async def collect_batch(plan: CollectionPlan) -> FinalizedCollection:
+                    return await collect_ppo(loaded, plan)
+                result = asyncio.run(train_ppo(loaded, collect_batch, args.run_dir, mode=args.mode, pause_after_update=args.pause_after_update))
+            else:
+                from gf_training.lightgbm_run import train_experiments
+                if args.run_dir is not None or args.pause_after_update is not None:
+                    raise ValueError("LightGBM has no PPO run/pause controls")
+                result = asyncio.run(train_experiments(loaded, mode=args.mode, code_provenance_provider=_fit_code_provenance))
+            print(canonical(result))
             return 0
         directory, summary = asyncio.run(run_experiment(loaded, args.command))
         print(canonical({"run_dir": str(directory), **{key: summary[key] for key in ("planned_games", "natural_denominator", "wins", "draws", "losses", "comparison_valid", "failures", "wall_seconds")}}))

@@ -324,15 +324,18 @@ def read_journal(path: Path, *, deadline: float = float("inf")) -> list[Json]:
     return records
 
 
-def _manifest_source(source: Path, records: list[Json]) -> tuple[Json, Json, Json, Json]:
+def _manifest_source(source: Path, records: list[Json], *, online_context: Any = None, parent_cache: Any = None, locks: Any = None, deadline: float = float("inf")) -> tuple[Json, Json, Json, Json]:
     manifest_path = source.parent.parent / "manifest.json"
     try:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
         raise ContractError("journal requires its finalized linked run manifest") from exc
     header = records[0]
-    if manifest.get("schema_version") != 3 or type(manifest.get("schema_version")) is not int or manifest.get("status") not in ("complete", "incomplete", "interrupted"):
+    if manifest.get("schema_version") not in (3, 4) or type(manifest.get("schema_version")) is not int or manifest.get("status") not in ("complete", "incomplete", "interrupted"):
         raise ContractError("run manifest must be finalized schema 3")
+    if manifest["schema_version"] == 4:
+        from gf_training.lineage import validate_collection_parent
+        validate_collection_parent(manifest, source.parent.parent, online_context=online_context, parent_cache=parent_cache, locks=locks, deadline=deadline)
     if manifest.get("run_id") != header["run_id"] or manifest.get("journal_schema_version") != JOURNAL_SCHEMA or manifest.get("feature_version") != FEATURE_VERSION or manifest.get("reward_policy_version") != REWARD_VERSION or manifest.get("end_projection_version") != END_PROJECTION_VERSION or canonical(manifest.get("catalog")) != canonical(CATALOG_META):
         raise ContractError("journal/manifest identity or semantic versions mismatch")
     from gf_common.domain import SIMULATOR_REVISION
@@ -368,6 +371,8 @@ def _manifest_source(source: Path, records: list[Json]) -> tuple[Json, Json, Jso
     group_health = linked_group_health[0] if len(linked_group_health) == 1 else {"failure": "missing group health"}
     lineage = {"run_id": header["run_id"], "game_id": header["game_id"], "episode_id": header["episode_id"],
                "seed": group["seed"], "pair_id": spec["pair_id"], "ancestry": group.get("ancestry"), "split": split}
+    if manifest["schema_version"] == 4:
+        lineage["learner_viewer"] = spec["learner_viewer"]
     return manifest, episode, group_health, lineage
 
 
@@ -404,7 +409,7 @@ def _source_report(source: Path, manifest: Json) -> tuple[Json, list[str]]:
     return diagnostic, reasons
 
 
-def project_journals(sources: list[Path], *, deadline: float = float("inf")) -> tuple[list[Json], Json]:
+def _project_journals(sources: list[Path], *, deadline: float = float("inf"), online_context: Any = None, parent_cache: Any = None, locks: Any = None) -> tuple[list[Json], Json]:
     """Shared original-source validation/projection for export and training."""
     if not sources:
         raise ContractError("at least one linked participant journal required")
@@ -421,7 +426,7 @@ def project_journals(sources: list[Path], *, deadline: float = float("inf")) -> 
         if identity in identities:
             raise ContractError("duplicate source participant identity")
         identities.add(identity)
-        manifest, episode, group_health, lineage = _manifest_source(source, records)
+        manifest, episode, group_health, lineage = _manifest_source(source, records, online_context=online_context, parent_cache=parent_cache, locks=locks, deadline=deadline)
         lineage_entries.append(lineage)
         manifest_path = source.parent.parent / "manifest.json"
         manifest_hash = _projection_hash(manifest_path, deadline)
@@ -440,6 +445,10 @@ def project_journals(sources: list[Path], *, deadline: float = float("inf")) -> 
         acknowledgements = {r["decision"]: r for r in records if r["kind"] == "acknowledgement"}
         transitions = {r["decision"]: r for r in records if r["kind"] == "transition"}
         decisions = [r for r in records if r["kind"] == "decision"]
+        if manifest["schema_version"] == 4 and header["viewer"] == lineage["learner_viewer"]:
+            expected_policy = "mlp-ppo-v1-" + header["policy"].removeprefix("mlp-")
+            if any(record["selection"]["policy_version"] != expected_policy for record in decisions):
+                raise ContractError("PPO learner selection differs from frozen inference identity")
         end = next((r for r in records if r["kind"] == "end"), None)
         report_diagnostic, reasons = _source_report(source, manifest)
         manifest_metadata[header["run_id"]]["report"] = report_diagnostic
@@ -524,6 +533,12 @@ def project_journals(sources: list[Path], *, deadline: float = float("inf")) -> 
                 "eligible_rows": sum(bool(row["eligible"]) for row in rows)}
     _projection_deadline(deadline)
     return rows, metadata
+
+
+def project_journals(sources: list[Path], *, deadline: float = float("inf"), online_context: Any = None) -> tuple[list[Json], Json]:
+    from contextlib import ExitStack
+    with ExitStack() as locks:
+        return _project_journals(sources, deadline=deadline, online_context=online_context, parent_cache={}, locks=locks)
 
 
 def export_parquet(sources: list[Path], destination: Path) -> Json:

@@ -72,7 +72,7 @@ def report(episodes: list[EpisodeResult], planned: tuple[EpisodeGroup, ...], *, 
     for group in planned:
         for schedule_position, spec in enumerate(group.episodes):
             _check_deadline(deadline)
-            specs[spec.episode_id] = (group.seed, spec, schedule_position % 2)
+            specs[spec.episode_id] = (group.seed, spec, spec.learner_viewer - 1 if spec.learner_viewer is not None else schedule_position % 2)
     by_id = {episode.episode_id: episode for episode in episodes}
     pairs: dict[str, list[str]] = {}
     for episode_id, (_, spec, _) in specs.items():
@@ -86,6 +86,7 @@ def report(episodes: list[EpisodeResult], planned: tuple[EpisodeGroup, ...], *, 
     wdl = {"wins": 0, "draws": 0, "losses": 0}
     first_positions = {"first": {"natural": 0, "score_sum": 0.0}, "second": {"natural": 0, "score_sum": 0.0}}
     seats = {"1": {"natural": 0, "score_sum": 0.0}, "2": {"natural": 0, "score_sum": 0.0}}
+    opponents: dict[str, dict[str, int]] = {}
     end_counts: dict[str, int] = {}
     failures: dict[str, int] = {}
     health_failures: dict[str, int] = {}
@@ -101,7 +102,10 @@ def report(episodes: list[EpisodeResult], planned: tuple[EpisodeGroup, ...], *, 
             _, _, swapped = specs[episode.episode_id]
             seat = 1 if swapped == 0 else 2
             score = _score(episode, seat)
-            wdl["draws" if score == 0.5 else "wins" if score == 1 else "losses"] += 1
+            key = "draws" if score == 0.5 else "wins" if score == 1 else "losses"
+            wdl[key] += 1
+            opposing_label = specs[episode.episode_id][1].policies[2 - seat]
+            opponents.setdefault(opposing_label, {"wins": 0, "draws": 0, "losses": 0})[key] += 1
             seats[str(seat)]["natural"] += 1
             seats[str(seat)]["score_sum"] += score
             if episode.first_player in (1, 2):
@@ -115,12 +119,17 @@ def report(episodes: list[EpisodeResult], planned: tuple[EpisodeGroup, ...], *, 
             clusters.setdefault(seed, []).append(_score(by_id[identity], 1 if swapped == 0 else 2))
     candidate_counts = []
     latencies = []
+    inference_latencies = []
+    inference_by_policy: dict[str, list[float]] = {}
     attempts = []
     episode_records = []
     for episode in episodes:
         _check_deadline(deadline)
         candidate_counts.extend(episode.candidate_counts)
         latencies.extend(episode.search_latency_ms)
+        inference_latencies.extend(episode.inference_latency_ms)
+        for policy, policy_latencies in episode.inference_latency_by_policy.items():
+            inference_by_policy.setdefault(policy, []).extend(policy_latencies)
         attempts.extend(episode.search_attempts)
         episode_records.append(asdict(episode))
     _check_deadline(deadline)
@@ -138,13 +147,17 @@ def report(episodes: list[EpisodeResult], planned: tuple[EpisodeGroup, ...], *, 
             "paired_score": _mean([s for v in clusters.values() for s in v], deadline) if comparison_valid else None,
             "seed_cluster_ci95": clustered_interval(clusters, bootstrap_samples, bootstrap_seed, deadline=deadline) if comparison_valid else None,
             "independent_seed_clusters": len(clusters), "seat_breakdown": seats, "first_player_breakdown": first_positions,
-            "opponent_breakdown": {specs[next(iter(specs))][1].policies[1] if specs else "none": wdl},
+            "opponent_breakdown": opponents,
             "decisions": decisions, "wall_seconds": wall_seconds,
             "decisions_per_second": decisions / wall_seconds if wall_seconds else None,
             "candidate_count_mean": _mean(candidate_counts, deadline) if candidate_counts else None,
             "search_attempts_mean": _mean(attempts, deadline) if attempts else None,
             "search_latency_ms_p50": _quantile(latencies, 0.5, deadline) if latencies else None,
             "search_latency_ms_p95": _quantile(latencies, 0.95, deadline) if latencies else None,
+            "inference_latency_ms_p50": _quantile(inference_latencies, .5, deadline) if inference_latencies else None,
+            "inference_latency_ms_p95": _quantile(inference_latencies, .95, deadline) if inference_latencies else None,
+            "inference_latency_scope": "policy.select only after candidate generation; global mixes all acting policies",
+            "inference_by_policy": {policy: {"count": len(values), "p50_ms": _quantile(values, .5, deadline), "p95_ms": _quantile(values, .95, deadline)} for policy, values in inference_by_policy.items()},
             "peak_memory_bytes": None, "artifact_bytes": None,
             "episodes": episode_records}
     _check_deadline(deadline)

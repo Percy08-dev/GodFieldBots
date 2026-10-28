@@ -9,16 +9,27 @@ from dataclasses import asdict
 from pathlib import Path
 
 from gf_common.domain import ActionConfig, ContractError, Json, RuntimePolicyBinding, digest
-from gf_models.lightgbm.config import ModelConfig
+from gf_models.config import MLPModelConfig, ModelConfig
 
 
-def bindings(model: ModelConfig, opponent: ModelConfig, actions: ActionConfig, *, deadline: float = float("inf")) -> tuple[dict[str, RuntimePolicyBinding], tuple[str, str]]:
+def bindings(model: ModelConfig | MLPModelConfig, opponent: ModelConfig | MLPModelConfig, actions: ActionConfig, *, deadline: float = float("inf")) -> tuple[dict[str, RuntimePolicyBinding], tuple[str, str]]:
     registry: dict[str, RuntimePolicyBinding] = {}
     labels = []
     for config in (model, opponent):
         if config.model_id in ("random", "heuristic"):
             label = config.model_id
             binding = RuntimePolicyBinding(label)
+        elif isinstance(config, MLPModelConfig):
+            if config.checkpoint is None:
+                raise ContractError("formal MLP inference requires a completed parent checkpoint")
+            from gf_models.mlp.arrays import sha256
+            from gf_models.mlp.model import inspect_artifact as inspect_mlp
+            from gf_training.lineage import qualify_mlp
+            sha = sha256(Path(config.checkpoint) / "inference.json")
+            inspect_mlp(Path(config.checkpoint), expected_digest=sha, action_config_hash=digest(asdict(actions)), model=config, deadline=deadline)
+            qualify_mlp(Path(config.checkpoint), sha)
+            label = "mlp-" + sha
+            binding = RuntimePolicyBinding("mlp", {"checkpoint": config.checkpoint, "expected_manifest_digest": sha})
         else:
             if config.checkpoint is None:
                 raise ContractError("formal inference requires a ready trained checkpoint")
@@ -40,8 +51,14 @@ def qualify_training_bundle(checkpoint: Path, expected_digest: str) -> Json:
     """Parent-only formal qualification; no training controls enter a worker."""
     try:
         record = json.loads((checkpoint.parent / "training.json").read_text())
-        if type(record.get("schema_version")) is not int or record["schema_version"] != 1 or record.get("status") != "complete" or record.get("purpose") != "trained":
+        if type(record.get("schema_version")) is not int or record["schema_version"] not in (1, 2) or record.get("status") != "complete" or record.get("purpose") != "trained":
             raise ContractError("checkpoint requires a completed trained run bundle")
+        if record['schema_version'] == 2:
+            source = record.get('source_provenance', {})
+            if record.get('cost_mode') != 'fixed_data' or not isinstance(source, dict) or any(not isinstance(source.get(key), str) or len(source[key]) != 64 for key in ('fixed_dataset_content_sha256', 'shared_generation_cost_key')):
+                raise ContractError('schema-2 completion requires fixed-data cost provenance')
+        elif record.get('cost_mode', 'inclusive_generation') != 'inclusive_generation':
+            raise ContractError('schema-1 completion requires inclusive-generation cost mode')
         if record.get("checkpoint") != checkpoint.name or checkpoint.name != "checkpoint" or record.get("inference_manifest_sha256") != expected_digest:
             raise ContractError("training/checkpoint identity mismatch")
         if any(record.get(key) for key in ("failure", "message", "quarantine", "invalidation_failures", "correction_save_failures")):
@@ -70,7 +87,7 @@ async def native_preflight(registry: dict[str, RuntimePolicyBinding], actions: A
     from gf_models.baselines import make_policy
     from gf_simulator_client.workers import ParticipantWorker
     for binding in registry.values():
-        if binding.model_id != "lightgbm":
+        if binding.model_id not in ("lightgbm", "mlp"):
             continue
         remaining = deadline - time.monotonic()
         if remaining <= 0:
