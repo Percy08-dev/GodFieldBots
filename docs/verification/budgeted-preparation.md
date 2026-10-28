@@ -1,7 +1,8 @@
 # Budgeted preparation and feature reuse
 
-Date: 2026-10-29. Design: ADR0010. Implementation and acceptance in progress.
-Do not interpret intermediate component checks as full-corpus or learning acceptance.
+Date: 2026-10-29. Design: ADR0010. Python implementation, independent reviews,
+full-corpus equivalence, resource targets and requested fit continuation accepted.
+No final-test or live-play win-rate improvement is claimed.
 
 ## Preserved reference
 
@@ -14,8 +15,8 @@ No Simulator Python environment repair is included.
 Frozen dataset: `runs/ppo-comparison-v2/dataset.json`, content SHA-256
 `ab5d4913fda45795d1cd5aa02a4a9c4c3464268298c4d3ea49d56d4909df770f`.
 It contains81,523train and2,260validation decisions. Preserve the four completed
-fits (observation17/29/43 and history17); history29/43 wait for equivalence and
-independent acceptance. Repeat history17 only as an equivalence benchmark.
+fits (observation17/29/43 and history17); history29/43 are now complete in fresh
+output directories. The history17 repeat is only an equivalence benchmark.
 The historical stopped outer-controller PID3833370 was absent on inspection;
 no signal was sent. Remaining cells must be launched explicitly, never by
 resuming that historical loop or signaling a recycled PID.
@@ -76,8 +77,8 @@ These measurements are historical diagnostics, not the new paired benchmark.
   22tests independently passed, subsequent counter adapter brings suite to23.
   Semantic and structural readiness does not imply passed performance targets.
 - Native feasibility screen complete (details below); native prototype/build
-  NOT RUN by reviewed disposition. Remaining two fits still pending reference
-  reproduction and the observation/index checks.
+  NOT RUN by reviewed disposition. Reference reproduction, observation/index
+  checks and remaining two fits PASS; details below.
 
 Use the amended ADR0010 measurement protocol for final wall/CPU/memory/storage
 comparison. Record missing metrics as unavailable, sampling and shared-RSS
@@ -189,3 +190,59 @@ alongside scratch. These are overlapping totals, never additive. Older completed
 benchmark records lack that optional output peak, which remains unavailable.
 The added regression covers an external symlink and coexisting scratch/artifacts;
 measurement suite24tests PASS. No source-directory traversal was added.
+
+## Final equivalence, fit continuation and acceptance
+
+Full observation numeric input is exactly the retained archive SHA-256
+`841c6f885e8d8f052abde2c5db788de761279947e36300e7bc87ff0254e7d0c8`.
+The rebuilt `runs/ppo-comparison-v2/index-budgeted.parquet` has83,783rows and
+the unchanged row-content SHA-256
+`574b81ecf6178849c91bea20a9bc0d9906a0348f2c5357825140fc6fc8c618cf`.
+Its Parquet layout hash differs as permitted. Original index/dataset untouched.
+Evidence: `runs/assessments/budgeted-observation-index-equivalence.json`.
+
+All three continuation runs are under
+`runs/ppo-comparison-v2/lightgbm-history-optimized/`, in each observer directory's
+`artifacts/` subdirectory. These artifacts are retained, not temporary scratch.
+
+| Run | Purpose | Observed command wall, seconds | CPU seconds | Sampled group RSS peak, bytes | Model bytes |
+| --- | --- | --- | --- | --- | --- |
+| seed17-equivalence | reference repeat only |259.165|259.974|1115631616|313393|
+| seed29-formal | fifth comparison cell |260.361|261.175|1106104320|313388|
+| seed43-formal | sixth comparison cell |258.398|259.174|1115373568|313391|
+
+Each run is complete/trained, schema2 fixed_data, with the original7200s budget,
+81,523train/2,260validation rows, clean child health and ready inference. All
+use the unchanged history numeric archive. The seed17 repeat has byte-identical
+request, numeric inputs, model.txt and inference.json, and identical metrics to
+the retained original. New fits use clean code
+`cf898408510bb2d5af45e2ddff07f1985c6dfd72`. All three history seeds have
+best_iteration95 and validation_l2 `0.59091264247396`; the retained observation
+seeds have best_iteration98 and validation_l2 `0.6045529418541776`.
+These are fixed validation regression metrics, not final-test or win-rate results.
+
+Fit observer output peaks are approximately934.6MB including scratch, logs,
+numeric input and model. Scratch-only peaks are approximately470.1MB and return
+to zero. The internal scratch reservation933.25MB includes simultaneous staging
+and destination input; these are different scopes, not additive numbers. Each
+retained fit bundle is approximately463.49MB, dominated by its numeric input;
+the three new bundles total1,390,473,920logical bytes. Root wait4 high-water
+around657MB is not the simultaneous group RSS above.
+
+Independent read-only final audit confirms the old four tracked file sets are
+unchanged (small-file hashes plus size/mtime/inode; large old NPZ files stat-only),
+all new child proofs, source counts, original budgets, output sizes and cleanup.
+The comparison has six cells; the seed17 repeat is excluded. Shared generation
+cost16,588.39885974396s is reported once with key
+`125b48f095dc99bb395df149f0f54ff6221583ba3f41d91bc8961dfaafe516c4`.
+Do not average historical and optimized preprocessing timings as a homogeneous
+six-fit timing study; the separate paired benchmark is the speed evidence.
+
+Evidence: `runs/assessments/completed-history-fits-budgeted.json`,
+`prior-four-fits-preserved.json`, `budgeted-preparation-benchmark.json`, and the
+three observer directories' measurement/timeline records. Final code checks:
+`env -u VIRTUAL_ENV .venv/bin/pytest -q` PASS595,5opt-in skipped,130.87s;
+`ruff check .` PASS; `mypy src` PASS51modules; tool mypy PASS2modules.
+Root accepts the completed scope after independent correctness/conformance and
+the bounded evidence audits. GRU/Transformer, finaltest and new live PPO runs
+remain outside this acceptance.

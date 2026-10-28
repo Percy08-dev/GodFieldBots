@@ -76,10 +76,12 @@ replacement. Record actual generation/fit costs and scopes separately.
   Build and index each revalidated original sources before publication; the
   2026-10-29 inventory check additionally matched415/415collection manifest hashes
   but did not repeat journal validation. Shared generation cost16588.399seconds.
-- Four real fixed-data fits complete: observation17/29/43 each bestiteration98,
+- Six real fixed-data fits complete: observation17/29/43 each bestiteration98,
   validation L2 `0.6045529418541776`; history17 bestiteration95,
-  validation L2 `0.59091264247396`. No final-test or win-rate inference follows.
-  History29/43 have not run: the user requested performance diagnosis first.
-  They resume only after the [budgeted-preparation acceptance](budgeted-preparation.md).
+  validation L2 `0.59091264247396`. Following performance diagnosis and
+  [budgeted-preparation acceptance](budgeted-preparation.md), history29/43 also
+  complete with the same bestiteration95/validation L2. A separate seed17 repeat
+  exactly reproduces inputs, model and inference bytes and is not a seventh cell.
+  The original four fits are preserved. No final-test or win-rate inference follows.
 - Simulator Python-environment repair remains separately pending; this task
   does not authorize mutating it.

@@ -3,16 +3,17 @@
 ## Status and scope
 
 [ADR0010](adr/0010-budgeted-preparation-and-encoding.md) specifies budgeted
-offline preparation and per-decision feature reuse. Implementation is in progress;
-the amended acceptance requires paired wall/CPU/memory/storage measurements,
-exact output equivalence and independent reviews before the two remaining fits.
-The completed four fits and frozen dataset remain unchanged. See the
+offline preparation and per-decision feature reuse. Implementation, independent
+reviews, paired wall/CPU/memory/storage measurements and exact output equivalence
+are accepted. The two remaining fits are complete; the prior four fits and frozen
+dataset remain unchanged. The measured native feasibility screen retains Python.
+See the
 [performance verification record](verification/budgeted-preparation.md).
 
 [ADR0009](adr/0009-catalog-v2-simulator-adoption.md) adopts the new Simulator
 Magical Stick payment/zero-attack contract and catalog v2. Independent design
 is READY; implementation verification and fresh experiments have advanced through
-three completed PPO parents, final validation, frozen data and four of six fits.
+three completed PPO parents, final validation, frozen data and all six fits.
 Current evidence is [catalog-v2 adoption](verification/catalog-v2-adoption.md).
 The earlier blocked experiment below is historical and remains wholly ineligible.
 Existing v3 singleton candidate forms, encoder signatures and JSON schemas

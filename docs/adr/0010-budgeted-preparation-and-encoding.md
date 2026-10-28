@@ -1,13 +1,15 @@
 # 0010: Budgeted source preparation and reusable public features
 
-- Status: Proposed
+- Status: Accepted
 - Owner: root
 - Date: 2026-10-28
 - Plan finalized: 2026-10-29
 - Design review: independent architecture reviewer READY after concrete admission
   and pre-promotion-finalization clarifications. This is a plan, not an
   implementation or native-production acceptance.
-- Implementation: authorized 2026-10-29; staged Python implementation in progress.
+- Implementation: Python unit, independent reviews, measured performance gates,
+  exact equivalence and requested fit continuation accepted 2026-10-29.
+  Native build is not adopted under the measured feasibility screen below.
   The historical stopped controller PID is no longer present; never resume or
   signal a recycled PID. Remaining fits require explicit fresh launches.
 - Evidence: `runs/assessments/performance-bottlenecks.json` (SHA-256
