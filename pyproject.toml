@@ -7,12 +7,16 @@ authors = [
     { name = "Percy", email = "s.suzuki23@keio.jp" }
 ]
 requires-python = ">=3.14,<3.15"
-dependencies = ["httpx>=0.28,<1", "numpy>=2.3,<3"]
+dependencies = [
+    "httpx>=0.28,<1",
+    "numpy==2.5.4",
+]
 
 [project.optional-dependencies]
 data = ["pyarrow>=22,<30"]
 lightgbm = ["lightgbm>=4.6,<5"]
-torch = ["torch>=2.9,<3"]
+torch = ["torch==2.14.1", "torchvision==0.29.1"]
+torch-cuda = ["torch==2.14.1", "torchvision==0.29.1"]
 
 [dependency-groups]
 dev = ["pytest>=8.4,<10", "ruff>=0.14,<1", "mypy>=1.18,<2"]
@@ -28,8 +32,23 @@ build-backend = "uv_build"
 [tool.uv.build-backend]
 module-name = ["godfieldbots", "gf_common", "gf_simulator_client", "gf_training", "gf_evaluation", "gf_models", "gf_cli"]
 
+[tool.uv]
+conflicts = [[{ extra = "torch" }, { extra = "torch-cuda" }]]
+
 [tool.uv.sources]
-torch = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux' or sys_platform == 'win32'" }]
+torch = [
+    { index = "pytorch-cpu", extra = "torch" },
+    { index = "pytorch-cu132", extra = "torch-cuda" },
+]
+torchvision = [
+    { index = "pytorch-cpu", extra = "torch" },
+    { index = "pytorch-cu132", extra = "torch-cuda" },
+]
+
+[[tool.uv.index]]
+name = "pytorch-cu132"
+url = "https://download.pytorch.org/whl/cu132"
+explicit = true
 
 [[tool.uv.index]]
 name = "pytorch-cpu"

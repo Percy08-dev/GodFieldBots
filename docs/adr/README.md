@@ -23,6 +23,7 @@
 | [0005](0005-authorized-atomic-action-options.md) | Accepted | 同revision・本人向けActionOptionsをatomic hintsとして使用 |
 | [0006](0006-lightgbm-action-value.md) | Accepted | 公開特徴のLightGBM行動価値・checkpoint・Gate付き学習 |
 | [0007](0007-staged-buy-contract-adoption.md) | Accepted | 購入応答・承諾の新契約とモデルのSimulator版固定 |
+| [0008](0008-mlp-ppo-generations-and-fixed-data.md) | Accepted | CUDA MLP PPO・世代来歴・境界再開・固定データ比較（実装中） |
 
 ## 記録テンプレート
 

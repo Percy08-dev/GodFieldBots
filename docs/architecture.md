@@ -2,6 +2,15 @@
 
 ## Status and scope
 
+The user's 2026-10-28 CUDA MLP PPO/generation/fixed-data plan is accepted in
+[ADR0008](adr/0008-mlp-ppo-generations-and-fixed-data.md), with independent
+design READY. It extends the baseline below with an owned numeric learning
+child, CPU participant inference, whole-run offline eligibility and original-
+deadline batch-boundary pause/resume. Stage A dependency conformance is READY;
+full implementation/final reviews and experiments are in progress. Current
+evidence is in [MLP PPO verification](verification/mlp-ppo.md). Historical
+Phase 4 and pilot results below retain their original scope and identities.
+
 The user's updated Simulator contract authorizes acting-player ActionOptions
 atomic hints. [ADR0005](adr/0005-authorized-atomic-action-options.md) is accepted
 after independent design review and supersedes the earlier blanket prohibition.
@@ -106,7 +115,10 @@ The existing `godfieldbots` entry point becomes a compatibility wrapper.
 Common never imports upper layers. Models never handle HTTP or management
 configuration. CLI constructs concrete policies/environments for evaluation.
 Runtime is CPython 3.14, GIL enabled, uv; baseline dependencies httpx/NumPy.
-Extras are `data` (PyArrow), `lightgbm`, `torch`; dev is pytest/ruff/mypy.
+Extras are `data` (PyArrow), `lightgbm`, mutually exclusive `torch` (CPU) and
+`torch-cuda` (cu132); dev is pytest/ruff/mypy. NumPy is pinned to 2.5.4, Torch to
+2.14.1 and torchvision to 0.29.1. PyTorch indexes are explicit; baseline
+dependencies continue to resolve from PyPI.
 Optional libraries must not load for baseline or CLI help.
 
 ## Config and compatibility
