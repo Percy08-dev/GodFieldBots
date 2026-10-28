@@ -35,8 +35,8 @@ epochs, excluding initialization/checkpoint save. It retained the 1.01328e-6
 maximum pre-update CPU/device error and exact checkpoint continuation. This is
 one component workload, not an end-to-end speedup or learned-policy result.
 Final wheel SHA-256:
-`27e3fee58decc1c84208aed99c36ef1f0b9d6fa3cc3f1e02330c8b5b756affcf`,
-121,835 bytes. Every one of 47 Python source files matches the wheel. The full
+`7057693fe30574a413683852d9099e3a9d272b40da3d01b4517fd3eff1999d3a`,
+121,979 bytes. Every one of 47 Python source files matches the wheel. The full
 ordinary suite preceded the final private provenance correction; focused
 lineage/provenance checks cover that correction. Installed baseline, CPU and
 cu132 environments use absolute `/tmp/gfb-20261028-*` targets and `python -I`
@@ -161,3 +161,61 @@ each at fitting seeds 17,29,43. Dataset generation cost is deduplicated and
 reported separately; each fit's own validation/encoding/fit/save/cleanup has a
 7200s budget. This is not an equal-total-cost PPO comparison. Model strength
 and speed are measured results, not implementation acceptance criteria.
+
+Formal source directories, fixed before collection, are
+`runs/ppo-comparison/train-seed17`, `train-seed29`, `train-seed43`, in that order.
+Final validation directories will be `runs/ppo-comparison/validation17`,
+`validation29`, `validation43`. Frozen dataset destination is
+`runs/ppo-comparison/dataset.json`. The engineering smoke below is excluded
+from that dataset and its shared generation charge.
+
+## Real two-update and pause/resume acceptance
+
+Code revision `a3b7030e081699a0547fdadf69455d64b62b2531`, clean worktree.
+Both runs completed all 32 games naturally and healthily, with 379 accepted
+learner actions each. All four collection bundles were revalidated against
+original journals/Replay/report and immutable source proofs after completion.
+
+| Run | Result | Elapsed snapshot | Coordinator peak RSS | Owned files |
+| --- | --- | --- | --- | --- |
+| `runs/ppo-smoke/continuous-20261028` | two updates, complete | 70.535s | 144,973,824 bytes | 61,864,026 bytes |
+| `runs/ppo-smoke/resume-20261028` | pause after update 1, resume to 2, complete | 73.601s including pause gap | 125,857,792 bytes | 61,864,084 bytes |
+
+Final weights, every Adam array, CPU/CUDA RNG, shuffle state and parent
+schedule/opponent RNG are exactly equal across continuous and resumed runs.
+Final weight NPZ SHA-256:
+`a5fd49ca62e0a3f0fdb7a69e12ffd0cd245af4ed0be9148f21f205f66c3aed61`.
+Generation 1 arrays were intentionally deleted after successor commit while
+its inference manifest/hash/record remained. Generation 0 and latest remain.
+
+For continuous execution, batch 0 collected in 30.595s, with 224 learner
+actions; native update/save response took 1.358s, including 0.0169s save.
+Batch 1 collected in 26.614s, with 155 learner actions; update/save took .327s.
+The real first batch's maximum CPU/saved/device difference was 5.96046e-7.
+GPU allocated/reserved peak was 92,392,448/109,051,904 bytes; learner process
+peak RSS was 2,204,463,104 bytes. Coordinator and learner memory scopes differ.
+Batch-0 MLP policy-select p50/p95 was 5.618/126.353ms, covering both learner and
+same-generation snapshot participants; the report explicitly separates mixed
+global metrics and per-policy metrics. These are engineering measurements,
+not a policy-quality or general GPU-speed claim.
+
+Assessment: `runs/assessments/ppo-smoke-20261028.json`, SHA-256
+`1de55f66ade2f6a61433bb9d5dacdd78f5e4cb7f46073a3c2f6225282eb1ad2d`.
+The smoke ran the CLI with `training.max_updates=2`; the second path used
+`--pause-after-update 1`, then `--mode resume` with identical config. Original
+deadlines were retained. Child exit codes were zero with no cleanup warnings.
+Formal three-seed experiments retain the normal 1000-update/7200s preset.
+
+Independent post-smoke correctness/evidence review is READY: both complete
+chains and all four original source proofs pass, including all 224 first-batch
+frozen CPU forwards (max error 5.96e-7). Each run has 746 accepted actions across
+both views, 379 learner actions and 16 Adam steps. Twelve weight arrays and 38
+optimizer/RNG arrays match exactly across continuous/resumed execution.
+
+After this smoke, a metadata-only correction gives schema-4 batch/validation
+manifests their actual distinct sampling-recipe descriptions instead of the
+legacy baseline wording. The stored numeric streams, complete schedules and
+parent RNG controls were already correct and were independently compared.
+Historical smoke manifests are retained unchanged. Baseline/schema-3 text is
+unchanged; 25 focused CLI tests pass, including three pre-startup provenance
+cases. No numerical, opponent-selection or scheduling behavior changed.

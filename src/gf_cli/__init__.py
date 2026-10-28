@@ -220,7 +220,11 @@ async def run_experiment(loaded: LoadedConfig, command: str, *, collection: Coll
                                    "synchronous local filesystem operations cannot provide a hard realtime wall guarantee"],
     }
     if collection is not None:
-        manifest.update(collection_kind=collection.kind, ppo=collection.linkage)
+        manifest.update(collection_kind=collection.kind, ppo=collection.linkage,
+                        sampling_seed_derivation={
+                            "ppo_batch": "sha256(canonical JSON: recipe=ppo-policy-stream-v1, seed=learning_seed, batch=batch_index, pair=pair_index, role=learner|opponent) first 16 hex digits as uint64; role stream follows seat swaps; no GameSeed",
+                            "ppo_validation": "sha256(canonical JSON: recipe=ppo-final-validation-stream-v1, learning_seed=learning_seed, pair=pair_index, role=learner|opponent) first 16 hex digits as uint64; role stream follows seat swaps; no GameSeed",
+                        }[collection.kind])
     summary: Json
     failure_reason: str | None = None
     try:
