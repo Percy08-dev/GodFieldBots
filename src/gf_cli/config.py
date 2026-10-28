@@ -19,6 +19,7 @@ from gf_common.domain import (
     digest,
     integer,
 )
+from gf_common.preprocessing import PreparationConfig, preparation_config
 from gf_models.config import (
     MLPModelConfig,
     ModelConfig,
@@ -81,6 +82,7 @@ class ExperimentConfig:
     opponent: ModelConfig | MLPModelConfig = field(default_factory=ModelConfig)
     evaluation: EvaluationConfig = field(default_factory=EvaluationConfig)
     training: TrainingConfig | PPOTrainingConfig = field(default_factory=TrainingConfig)
+    preprocessing: PreparationConfig = field(default_factory=PreparationConfig)
 
 
 @dataclass(frozen=True)
@@ -99,7 +101,7 @@ def _merge(base: Json, override: Json) -> Json:
 
 
 _TABLES: dict[str, type[Any]] = {"run": RunConfig, "server": ServerConfig, "actions": ActionConfig,
-                               "model": ModelConfig, "opponent": ModelConfig, "evaluation": EvaluationConfig, "training": TrainingConfig}
+                               "model": ModelConfig, "opponent": ModelConfig, "evaluation": EvaluationConfig, "training": TrainingConfig, "preprocessing": PreparationConfig}
 _PATHS = {("run", "output_dir"), ("server", "binary"), ("server", "config"), ("server", "source_dir"), ("model", "checkpoint"), ("opponent", "checkpoint"), ("training", "pilot_run"), ("training", "dataset_manifest")}
 
 
@@ -157,17 +159,19 @@ def load_config(path: str | Path, overrides: Json | None = None) -> LoadedConfig
         closed(data, {"schema_version", "kind"}, set(_TABLES) | {"references", "training"})
         if type(data["schema_version"]) is not int or data["schema_version"] != 1:
             raise ContractError("unsupported config schema_version")
-        if data["kind"] not in ("experiment", "actions", "model", "training") or expected_kind is not None and data["kind"] != expected_kind:
+        if data["kind"] not in ("experiment", "actions", "model", "training", "preprocessing") or expected_kind is not None and data["kind"] != expected_kind:
             raise ContractError("unsupported/mismatched preset kind")
+        if data["kind"] == "preprocessing" and "preprocessing" not in data:
+            raise ContractError("preprocessing preset requires its settings table")
         allowed = set(_TABLES) if data["kind"] == "experiment" else {data["kind"]} | ({"training"} if data["kind"] == "model" else set())
         if set(data) - allowed - {"schema_version", "kind", "references"}:
             raise ContractError("preset contains unrelated tables")
         refs = data.get("references", {})
-        closed(refs, set(), {"actions", "model", "opponent", "training"})
+        closed(refs, set(), {"actions", "model", "opponent", "training", "preprocessing"})
         if data["kind"] != "experiment" and refs:
             raise ContractError("only experiments may reference presets")
         merged: Json = {}
-        for key in ("actions", "training", "model", "opponent"):
+        for key in ("actions", "training", "model", "opponent", "preprocessing"):
             if key not in refs:
                 continue
             ref = refs[key]
@@ -241,6 +245,7 @@ def load_config(path: str | Path, overrides: Json | None = None) -> LoadedConfig
         raise ContractError("run deadlines inconsistent")
     models = {name: model_config(effective[name]) for name in ("model", "opponent")}
     training = training_config(effective["training"])
+    preprocessing = preparation_config(effective["preprocessing"])
     if ("training" in data or "training" in data.get("references", {})) and models["model"].model_id not in ("lightgbm", "mlp"):
         raise ContractError("training/model mismatch")
     if (isinstance(training, PPOTrainingConfig)) != (models["model"].model_id == "mlp") and "training" in data:
@@ -286,6 +291,9 @@ def load_config(path: str | Path, overrides: Json | None = None) -> LoadedConfig
             continue
         if name == "training":
             converted[name] = training
+            continue
+        if name == "preprocessing":
+            converted[name] = preprocessing
             continue
         values = effective[name]
         defaults = asdict(cls())

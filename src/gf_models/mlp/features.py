@@ -6,7 +6,7 @@ import numpy.typing as npt
 
 from gf_common.domain import ContractError, DecisionInput, Json
 from gf_models.config import EncoderConfig
-from gf_models.encoder import encode, feature_names
+from gf_models.encoder import PreparedDecision, feature_names
 
 FloatArray = npt.NDArray[np.float32]
 
@@ -26,7 +26,8 @@ def signed_log(value: npt.NDArray[np.float64]) -> FloatArray:
 def encode_decision(value: DecisionInput, actions: tuple[Json, ...], config: EncoderConfig) -> tuple[FloatArray, FloatArray]:
     if not actions:
         raise ContractError("MLP requires candidates")
-    actor = signed_log(np.stack([encode(value, action, config) for action in actions]))
+    prepared = PreparedDecision(value, config)
+    actor = signed_log(prepared.encode_many(actions))
     # Explicit feature-name selection; no aggregation over the candidate list.
-    state = signed_log(encode(value, {"type": "pray"}, config))[list(critic_indices(config))]
+    state = signed_log(prepared.encode({"type": "pray"}))[list(critic_indices(config))]
     return actor, state

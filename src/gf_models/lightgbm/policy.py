@@ -7,8 +7,9 @@ from pathlib import Path
 import numpy as np
 
 from gf_common.domain import CandidateSet, ContractError, DecisionInput, PolicyDecision
+from gf_models.encoder import PreparedDecision
 from gf_models.lightgbm.config import encoder_config
-from gf_models.lightgbm.encoder import Array, encode
+from gf_models.lightgbm.encoder import Array
 from gf_models.lightgbm.model import load_artifact
 
 
@@ -26,7 +27,7 @@ class LightGBMPolicy:
             raise ContractError("candidate/checkpoint semantics mismatch")
         if not candidates.actions:
             raise ContractError("cannot score empty candidates")
-        features = np.stack([encode(value, action, self.encoder) for action in candidates.actions])
+        features = PreparedDecision(value, self.encoder).encode_many(candidates.actions)
         scores = np.asarray(self.booster.predict(features, num_threads=1), dtype=np.float64)
         if scores.shape != (len(candidates.actions),) or not np.isfinite(scores).all():
             raise ContractError("native scores must be finite and exact-length")

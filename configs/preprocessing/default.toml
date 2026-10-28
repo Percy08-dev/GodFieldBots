@@ -1,0 +1,15 @@
+schema_version = 1
+kind = "preprocessing"
+
+[preprocessing]
+memory_budget_mib = 8192
+cache_budget_mib = 512
+chunk_target_mib = 64
+max_source_file_mib = 64
+max_record_mib = 8
+max_in_flight = 1
+workers = 1
+backend = "python"
+scratch_budget_mib = 8192
+wall_seconds = 7200
+cleanup_seconds = 5

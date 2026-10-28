@@ -67,6 +67,19 @@ replacement. Record actual generation/fit costs and scopes separately.
   `19dd40e2a4343e38d1aabbe863df8b1ea06e0e29b9efa534a8a8175cf771aa4a`.
   All these runs used clean code`f59b0e1`; they are execution evidence, not
   policy-quality claims or sources for the later frozen comparison dataset.
-- Formal three parents/finalvalidation/frozen dataset/realfits: NOT RUN yet.
+- Formal three parents: complete at code `1df8849`, seeds17/29/43 with
+  123/144/145updates,24,439/27,985/29,099learner decisions and
+  5438.883/5429.276/5424.430seconds respectively. All6592games finished naturally.
+  Finalvalidation:192natural games total. Fixed dataset81,523train/2,260validation
+  decisions, content SHA-256
+  `ab5d4913fda45795d1cd5aa02a4a9c4c3464268298c4d3ea49d56d4909df770f`.
+  Build and index each revalidated original sources before publication; the
+  2026-10-29 inventory check additionally matched415/415collection manifest hashes
+  but did not repeat journal validation. Shared generation cost16588.399seconds.
+- Four real fixed-data fits complete: observation17/29/43 each bestiteration98,
+  validation L2 `0.6045529418541776`; history17 bestiteration95,
+  validation L2 `0.59091264247396`. No final-test or win-rate inference follows.
+  History29/43 have not run: the user requested performance diagnosis first.
+  They resume only after the [budgeted-preparation acceptance](budgeted-preparation.md).
 - Simulator Python-environment repair remains separately pending; this task
   does not authorize mutating it.

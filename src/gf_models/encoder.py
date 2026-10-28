@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import asdict
+from functools import lru_cache
 from typing import Any
 
 import numpy as np
@@ -25,7 +26,8 @@ def _bucket(value: str, size: int) -> int:
     return int.from_bytes(hashlib.sha256(value.encode()).digest()[:8], "big") % size
 
 
-def _references(value: DecisionInput, action: Json, config: EncoderConfig) -> list[tuple[str, Json, Any]]:
+def _references(value: DecisionInput, action: Json, config: EncoderConfig,
+                hand: dict[int, str] | None = None) -> list[tuple[str, Json, Any]]:
     tag = action.get("type")
     schemas = {
         "pray": ({"type"}, set()), "play_sequence": ({"type", "ordered_elements"}, {"target"}),
@@ -58,7 +60,8 @@ def _references(value: DecisionInput, action: Json, config: EncoderConfig) -> li
         entries = []
     if not isinstance(entries, list) or len(entries) > config.max_elements:
         raise ContractError("candidate exceeds encoder capacity")
-    hand = {card["instance_id"]: card["definition_id"] for card in value.observation["own"]["hand"]}
+    if hand is None:
+        hand = {card["instance_id"]: card["definition_id"] for card in value.observation["own"]["hand"]}
     learned = value.observation["own"]["learned_miracles"]
     resolved = []
     key: Any
@@ -84,7 +87,9 @@ def _references(value: DecisionInput, action: Json, config: EncoderConfig) -> li
     return resolved
 
 
-def _features(value: DecisionInput | None, action: Json, config: EncoderConfig) -> dict[str, float]:
+def _features(value: DecisionInput | None, action: Json, config: EncoderConfig, *,
+              common: bool = True, hand: dict[int, str] | None = None,
+              definitions: dict[int | None, tuple[tuple[str, float], ...]] | None = None) -> dict[str, float]:
     obs = value.observation if value is not None else {}
     own = obs.get("own", {})
     opponent = obs.get("opponent", {})
@@ -106,6 +111,13 @@ def _features(value: DecisionInput | None, action: Json, config: EncoderConfig) 
         for index, count in enumerate(buckets):
             put(f"{name}.{index}", count)
     def definition(name: str, card: Json) -> None:
+        # Snapshot dictionaries stay alive for this context. Identity avoids
+        # conflating distinct catalog entries with equal definition_id fields.
+        cache_key = id(card) if card else None
+        if definitions is not None and cache_key in definitions:
+            output.update((name + suffix, number) for suffix, number in definitions[cache_key])
+            return
+        start = len(output)
         category(name + ".kind", card.get("kind"), KINDS)
         category(name + ".attribute", card.get("attribute"), ATTRIBUTES)
         for key in NUMERIC:
@@ -114,48 +126,52 @@ def _features(value: DecisionInput | None, action: Json, config: EncoderConfig) 
         put(name + ".additional_attack.missing", "additional_attack" not in card)
         hashed(name + ".definition", [card["definition_id"]] if card else [])
         hashed(name + ".ability", [card["ability"]] if "ability" in card else [])
-    for name, participant in (("own", own), ("opponent", opponent)):
-        for key in ("hp", "mp", "money"):
-            optional(name + "." + key, participant, key)
-        put(name + ".ascended", participant.get("ascended", False))
-        status = participant.get("status", {})
-        put(name + ".status.missing", "status" not in participant)
-        for key in ("fog", "flash", "dream", "dark_cloud"):
-            put(name + "." + key, status.get(key, False))
-        category(name + ".disease", status.get("disease"), ("cold", "fever", "hell", "heaven"))
-        put(name + ".guardian.missing", "guardian" not in participant)
-        hashed(name + ".guardian", [participant["guardian"]] if participant.get("guardian") is not None else [])
-        put(name + ".learned_count", len(participant.get("learned_miracles", [])))
-    for key in ("turn", "turns_until_end_of_world", "end_times"):
-        put(key, obs.get(key, 0))
-    for key in ("current_player", "active_player", "first_player"):
-        put(key + ".own", obs.get(key) == viewer)
-        put(key + ".opponent", obs.get(key) == 3 - viewer)
-        put(key + ".missing", obs.get(key) is None)
-    category("choice", obs.get("required_choice"), ("turn_action", "defense", "buy_accept_reject"))
-    for name, entries in (("hand", own.get("hand", [])), ("learned", own.get("learned_miracles", []))):
-        cards = [value.catalog[c["definition_id"] if isinstance(c, dict) else c] for c in entries] if value is not None else []
-        put(name + ".count", len(cards))
-        for kind in KINDS:
-            put(name + ".kind." + kind, sum(card["kind"] == kind for card in cards))
-        for key in NUMERIC:
-            put(name + "." + key, sum(card.get(key, 0) for card in cards))
-            put(name + "." + key + ".missing", sum(key not in card for card in cards))
-        hashed(name + ".definitions", [card["definition_id"] for card in cards])
-        hashed(name + ".abilities", [card["ability"] for card in cards if "ability" in card])
+        if definitions is not None:
+            definitions[cache_key] = tuple((key[len(name):], number)
+                                           for key, number in list(output.items())[start:])
     options = value.action_options["action_options"] if value is not None and value.action_options is not None else None
-    put("hints.missing", options is None)
-    for key in ("can_pray", "can_discard", "can_sacrifice", "can_allow"):
-        put("hints." + key, options[key] if options is not None else 0)
-    for key in ("usable_hand_elements", "usable_learned_miracles", "exchange_artifacts", "sell_artifacts", "buy_artifacts", "valid_targets"):
-        put("hints." + key + ".count", len(options[key]) if options is not None else 0)
+    if common:
+        for name, participant in (("own", own), ("opponent", opponent)):
+            for key in ("hp", "mp", "money"):
+                optional(name + "." + key, participant, key)
+            put(name + ".ascended", participant.get("ascended", False))
+            status = participant.get("status", {})
+            put(name + ".status.missing", "status" not in participant)
+            for key in ("fog", "flash", "dream", "dark_cloud"):
+                put(name + "." + key, status.get(key, False))
+            category(name + ".disease", status.get("disease"), ("cold", "fever", "hell", "heaven"))
+            put(name + ".guardian.missing", "guardian" not in participant)
+            hashed(name + ".guardian", [participant["guardian"]] if participant.get("guardian") is not None else [])
+            put(name + ".learned_count", len(participant.get("learned_miracles", [])))
+        for key in ("turn", "turns_until_end_of_world", "end_times"):
+            put(key, obs.get(key, 0))
+        for key in ("current_player", "active_player", "first_player"):
+            put(key + ".own", obs.get(key) == viewer)
+            put(key + ".opponent", obs.get(key) == 3 - viewer)
+            put(key + ".missing", obs.get(key) is None)
+        category("choice", obs.get("required_choice"), ("turn_action", "defense", "buy_accept_reject"))
+        for name, entries in (("hand", own.get("hand", [])), ("learned", own.get("learned_miracles", []))):
+            cards = [value.catalog[c["definition_id"] if isinstance(c, dict) else c] for c in entries] if value is not None else []
+            put(name + ".count", len(cards))
+            for kind in KINDS:
+                put(name + ".kind." + kind, sum(card["kind"] == kind for card in cards))
+            for key in NUMERIC:
+                put(name + "." + key, sum(card.get(key, 0) for card in cards))
+                put(name + "." + key + ".missing", sum(key not in card for card in cards))
+            hashed(name + ".definitions", [card["definition_id"] for card in cards])
+            hashed(name + ".abilities", [card["ability"] for card in cards if "ability" in card])
+        put("hints.missing", options is None)
+        for key in ("can_pray", "can_discard", "can_sacrifice", "can_allow"):
+            put("hints." + key, options[key] if options is not None else 0)
+        for key in ("usable_hand_elements", "usable_learned_miracles", "exchange_artifacts", "sell_artifacts", "buy_artifacts", "valid_targets"):
+            put("hints." + key + ".count", len(options[key]) if options is not None else 0)
     category("action", action["type"], ACTIONS)
     put("target.own", action.get("target") == viewer)
     put("target.opponent", action.get("target") == 3 - viewer)
     put("target.unspecified", action.get("target") is None)
     for key in ("hp", "mp", "money", "accept"):
         optional("action." + key, action, key)
-    refs = _references(value, action, config) if value is not None else []
+    refs = _references(value, action, config, hand) if value is not None else []
     put("action.elements", len(refs))
     for position in range(config.max_elements):
         source, card, reference = refs[position] if position < len(refs) else (None, {}, None)
@@ -165,7 +181,7 @@ def _features(value: DecisionInput | None, action: Json, config: EncoderConfig) 
         put(name + ".learned", source == "learned_miracle")
         definition(name, card)
         put(name + ".usable", options is not None and source is not None and reference in options["usable_hand_elements" if source == "hand_artifact" else "usable_learned_miracles"])
-    if config.history == "public_aggregate":
+    if common and config.history == "public_aggregate":
         all_events = value.events if value is not None else ()
         events = all_events[-config.history_window:]
         put("history.window_truncated", len(all_events) > config.history_window)
@@ -181,19 +197,66 @@ def _features(value: DecisionInput | None, action: Json, config: EncoderConfig) 
     return output
 
 
-def feature_names(config: EncoderConfig) -> tuple[str, ...]:
-    encoder_config(asdict(config))
+@lru_cache(maxsize=32)
+def _feature_names(config: EncoderConfig) -> tuple[str, ...]:
     return tuple(_features(None, {"type": "pray"}, config))
+
+
+def feature_names(config: EncoderConfig) -> tuple[str, ...]:
+    # Validate before the cache: bool/int and float/int keys compare equal.
+    validated = encoder_config(asdict(config))
+    return _feature_names(validated)
 
 
 def signature(config: EncoderConfig) -> str:
     return digest({"version": ENCODER_VERSION, "config": asdict(config), "features": feature_names(config)})
 
 
+class PreparedDecision:
+    """One isolated participant snapshot; returned numeric arrays belong to callers.
+
+    Validation rebuilds and clones every nested input value. The context is local
+    to this decision and never stored in a participant/global input cache.
+    """
+
+    def __init__(self, value: DecisionInput, config: EncoderConfig) -> None:
+        self._value = validate_worker_input(value)
+        self._config = encoder_config(asdict(config))
+        names = _feature_names(self._config)
+        self._hand = {card["instance_id"]: card["definition_id"]
+                      for card in self._value.observation["own"]["hand"]}
+        self._definitions: dict[int | None, tuple[tuple[str, float], ...]] = {}
+        base = _features(self._value, {"type": "pray"}, self._config,
+                         hand=self._hand, definitions=self._definitions)
+        self._base = self._checked(np.asarray(list(base.values()), dtype=np.float64), len(names))
+        self._base.flags.writeable = False
+        self._action_start = names.index("action.pray")
+        self._action_end = next((i for i, name in enumerate(names)
+                                 if name.startswith("history.")), len(names))
+
+    @staticmethod
+    def _checked(result: Array, length: int) -> Array:
+        if result.shape != (length,) or not np.isfinite(result).all():
+            raise ContractError("nonfinite/invalid encoder vector")
+        return result
+
+    def encode(self, action: Json) -> Array:
+        candidate = _features(self._value, action, self._config, common=False,
+                              hand=self._hand, definitions=self._definitions)
+        encoded = self._checked(np.asarray(list(candidate.values()), dtype=np.float64),
+                                self._action_end - self._action_start)
+        result = self._base.copy()
+        result[self._action_start:self._action_end] = encoded
+        return result
+
+    def encode_many(self, actions: tuple[Json, ...]) -> Array:
+        """Encode candidates in supplied order without revalidating the snapshot."""
+        return np.stack([self.encode(action) for action in actions])
+
+
 def encode(value: DecisionInput, action: Json, config: EncoderConfig) -> Array:
+    # Keep the chosen-action path lean: offline samples need only one action.
     value = validate_worker_input(value)
-    encoder_config(asdict(config))
-    result = np.asarray(list(_features(value, action, config).values()), dtype=np.float64)
-    if result.shape != (len(feature_names(config)),) or not np.isfinite(result).all():
-        raise ContractError("nonfinite/invalid encoder vector")
-    return result
+    validated = encoder_config(asdict(config))
+    result = np.asarray(list(_features(value, action, validated).values()), dtype=np.float64)
+    return PreparedDecision._checked(result, len(_feature_names(validated)))
