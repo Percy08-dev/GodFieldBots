@@ -51,6 +51,22 @@ replacement. Record actual generation/fit costs and scopes separately.
   cu132 CPUinference/420candidates/exactNPZ/isolatedworker PASS with CUDA not
   initialized. Oldcheckpoint and oldpilot currentqualification reject;
   archived oldreader historicalqualification still passes.
-- Freshpilot/PPO/realfits: NOT RUN yet.
+- Fresh fixed evaluation: PASS12/12natural,5.813s,
+  `runs/catalog-v2-validation/baseline-validation-e90d21e1-546`.
+- Fresh pilot: PASS192/192natural,76.000s,
+  `runs/catalog-v2-pilot/baseline-feasibility-pilot-e12ee84f-fa1`.
+  All original-source feasibility checks pass; source-set
+  `9bbec99851c55813f77778ac1f0addcbbfaee93a9fb4391c555583b33be94393`.
+  Assessment `runs/assessments/catalog-v2-pilot.json`, SHA-256
+  `826689887229459d7a7f128ff73a71a6cf43a721934327d0347ca4a4e8f3ac55`.
+- New CUDA smoke: both continuous and explicit pause/resume complete32natural
+  games/two updates/379learneractions. All originalcollection proofs revalidated;
+  weights/Adam/CPU/CUDA/shuffle/parentRNG exactlyequal. Elapsed71.114s continuous,
+  73.897s resumed including pause. Assessment
+  `runs/assessments/catalog-v2-ppo-smoke.json`, SHA-256
+  `19dd40e2a4343e38d1aabbe863df8b1ea06e0e29b9efa534a8a8175cf771aa4a`.
+  All these runs used clean code`f59b0e1`; they are execution evidence, not
+  policy-quality claims or sources for the later frozen comparison dataset.
+- Formal three parents/finalvalidation/frozen dataset/realfits: NOT RUN yet.
 - Simulator Python-environment repair remains separately pending; this task
   does not authorize mutating it.

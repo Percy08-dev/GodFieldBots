@@ -6,7 +6,8 @@ full MP payment. Bots adoption is tracked in ADR0009 and
 [the adoption record](../verification/catalog-v2-adoption.md). Original evidence
 and the failed parent below remain unchanged and ineligible.
 
-- Status: Blocks the formal three-parent PPO/fixed-data LightGBM experiment.
+- Status: Historical blocker resolved by ADR0009 adoption; old failed parent
+  remains ineligible. New-contract experiments have separate evidence.
 - Date: 2026-10-28
 - Owner of clarification: separate Simulator task, not a Bots repository change.
 - Decision: root accepts advisor recommendation C. Independent architecture
