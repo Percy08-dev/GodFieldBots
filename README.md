@@ -149,9 +149,17 @@ JSONはファイル／文書単位の見積予約（入力の32倍＋64KiB、jou
 2GiB・16MiBの設定もあります。これらは前処理の管理上限であり、OSのhard quotaや
 LightGBM native fitのメモリ上限ではありません。
 
+`preprocessing.workers`と`preprocessing.max_in_flight`は1・2・4・8を選べます。
+並列数を増やす場合は両方を設定します。既定値は1です。並列になるのは各試合の
+journal／Replay読込・デコードで、後段の検証・特徴変換・解放は順番に処理します。
+同じ2GiB予算での実測は1／2／4／8 workerで49.21／36.85／32.32／31.18秒、
+RSSは406／469／580／749MiBでした。設定の判断には
+[内訳・資源使用量・比較条件](docs/verification/wall-attribution-and-worker-scaling.md)を参照してください。
+
 ```sh
 env -u VIRTUAL_ENV uv run --no-sync gf-bots dataset inspect runs/ppo-comparison-v2/dataset.json --preprocessing-config configs/preprocessing/native-low-memory.toml
 env -u VIRTUAL_ENV uv run --no-sync gf-bots train --config configs/experiments/lightgbm-fixed-history.toml --set preprocessing.memory_budget_mib=2048 --set preprocessing.chunk_target_mib=16
+env -u VIRTUAL_ENV uv run --no-sync gf-bots train --config configs/experiments/lightgbm-fixed-history.toml --set preprocessing.workers=4 --set preprocessing.max_in_flight=4
 ```
 
 実験presetからは `[references] preprocessing="../preprocessing/native-low-memory.toml"`

@@ -1,7 +1,10 @@
 //! Counters for the actual NativeSession FFI boundary, not process-wide claims.
 use crate::error::{Error, Result};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
+use std::{
+    cell::Cell,
+    sync::atomic::{AtomicU64, Ordering},
+};
 
 /// Elapsed phases may nest or overlap across workers; they are never CPU time.
 #[derive(Clone, Copy)]
@@ -88,8 +91,169 @@ impl Drop for DecodeTimer<'_> {
     }
 }
 
+/// Exclusive sequential coordinator phases. Decoder worker timers are separate.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(usize)]
+pub enum CoordinatorPhase {
+    CollectionSetup,
+    DecodeWaitMerge,
+    JournalValidation,
+    SourceMetadata,
+    ProofLedger,
+    EpisodeFactsBuffers,
+    FeaturesSpooling,
+    TemporaryRelease,
+    CollectionProof,
+    GlobalChecks,
+    Other,
+}
+impl CoordinatorPhase {
+    const ALL: [Self; 11] = [
+        Self::CollectionSetup,
+        Self::DecodeWaitMerge,
+        Self::JournalValidation,
+        Self::SourceMetadata,
+        Self::ProofLedger,
+        Self::EpisodeFactsBuffers,
+        Self::FeaturesSpooling,
+        Self::TemporaryRelease,
+        Self::CollectionProof,
+        Self::GlobalChecks,
+        Self::Other,
+    ];
+    fn name(self) -> &'static str {
+        match self {
+            Self::CollectionSetup => "collection_setup_index_inventory",
+            Self::DecodeWaitMerge => "decode_window_wait_and_source_merge",
+            Self::JournalValidation => "journal_validation",
+            Self::SourceMetadata => "source_metadata_linkage_canonical_checks",
+            Self::ProofLedger => "proof_ledger_serialization",
+            Self::EpisodeFactsBuffers => "episode_facts_layout_buffers",
+            Self::FeaturesSpooling => "features_and_numeric_spooling",
+            Self::TemporaryRelease => "episode_and_collection_temporary_release",
+            Self::CollectionProof => "collection_source_proof_check",
+            Self::GlobalChecks => "global_identity_split_source_manifest_checks",
+            Self::Other => "other",
+        }
+    }
+}
+#[derive(Clone, Copy)]
+struct WallState {
+    current: CoordinatorPhase,
+    since: Instant,
+    ns: [u64; 11],
+}
+/// Single-coordinator stopwatch; Cell borrows never span any application hook.
+/// The final Drop charges all remaining elapsed time, including error unwinding.
+pub struct ScanWall<'a> {
+    telemetry: &'a Telemetry,
+    started: Instant,
+    state: Cell<WallState>,
+    success: Cell<bool>,
+}
+pub struct WallScope<'a, 'b> {
+    wall: &'a ScanWall<'b>,
+    previous: CoordinatorPhase,
+}
+impl ScanWall<'_> {
+    pub fn set(&self, phase: CoordinatorPhase) {
+        let now = Instant::now();
+        let mut state = self.state.get();
+        state.ns[state.current as usize] += now.duration_since(state.since).as_nanos() as u64;
+        state.since = now;
+        state.current = phase;
+        self.state.set(state);
+    }
+    pub fn scope(&self, phase: CoordinatorPhase) -> WallScope<'_, '_> {
+        let previous = self.state.get().current;
+        self.set(phase);
+        WallScope {
+            wall: self,
+            previous,
+        }
+    }
+    pub fn success(&self) {
+        self.success.set(true);
+    }
+}
+impl Drop for WallScope<'_, '_> {
+    fn drop(&mut self) {
+        self.wall.set(self.previous);
+    }
+}
+impl Drop for ScanWall<'_> {
+    fn drop(&mut self) {
+        let now = Instant::now();
+        let mut state = self.state.get();
+        state.ns[state.current as usize] += now.duration_since(state.since).as_nanos() as u64;
+        for (counter, ns) in self.telemetry.coordinator_ns.iter().zip(state.ns) {
+            counter.fetch_add(ns, Ordering::Relaxed);
+        }
+        self.telemetry.coordinator_parent_ns.fetch_add(
+            now.duration_since(self.started).as_nanos() as u64,
+            Ordering::Relaxed,
+        );
+        self.telemetry
+            .coordinator_calls
+            .fetch_add(1, Ordering::Relaxed);
+        if !self.success.get() {
+            self.telemetry
+                .coordinator_failed
+                .fetch_add(1, Ordering::Relaxed);
+        }
+    }
+}
+#[derive(Default)]
+struct WorkerSlot {
+    jobs: AtomicU64,
+    failed: AtomicU64,
+    ns: AtomicU64,
+}
+pub struct DecodeJob<'a> {
+    telemetry: &'a Telemetry,
+    slot: usize,
+    started: Instant,
+    success: bool,
+}
+impl DecodeJob<'_> {
+    pub fn success(&mut self) {
+        self.success = true;
+    }
+}
+impl Drop for DecodeJob<'_> {
+    fn drop(&mut self) {
+        let slot = &self.telemetry.slots[self.slot];
+        slot.jobs.fetch_add(1, Ordering::Relaxed);
+        slot.ns
+            .fetch_add(self.started.elapsed().as_nanos() as u64, Ordering::Relaxed);
+        if !self.success {
+            slot.failed.fetch_add(1, Ordering::Relaxed);
+        }
+        self.telemetry.active_decode.fetch_sub(1, Ordering::Relaxed);
+    }
+}
 #[derive(Default)]
 pub struct Telemetry {
+    coordinator_ns: [AtomicU64; 11],
+    coordinator_parent_ns: AtomicU64,
+    coordinator_calls: AtomicU64,
+    coordinator_failed: AtomicU64,
+    configured_workers: AtomicU64,
+    configured_in_flight: AtomicU64,
+    windows: AtomicU64,
+    window_episodes: AtomicU64,
+    threads_started: AtomicU64,
+    effective_slots_peak: AtomicU64,
+    active_decode: AtomicU64,
+    active_decode_peak: AtomicU64,
+    slots: [WorkerSlot; 8],
+    #[cfg(test)]
+    decode_start_barrier: std::sync::Mutex<
+        Option<(
+            std::sync::Arc<std::sync::Barrier>,
+            std::sync::Arc<std::sync::Barrier>,
+        )>,
+    >,
     decode_kinds: [DecodeCounters; 3],
     data_calls: AtomicU64,
     batches: AtomicU64,
@@ -126,6 +290,106 @@ impl Drop for Timer<'_> {
     }
 }
 impl Telemetry {
+    pub fn scan_wall(&self) -> ScanWall<'_> {
+        let started = Instant::now();
+        ScanWall {
+            telemetry: self,
+            started,
+            state: Cell::new(WallState {
+                current: CoordinatorPhase::Other,
+                since: started,
+                ns: [0; 11],
+            }),
+            success: Cell::new(false),
+        }
+    }
+    pub fn configure_workers(&self, workers: usize, in_flight: usize) {
+        self.configured_workers
+            .store(workers as u64, Ordering::Relaxed);
+        self.configured_in_flight
+            .store(in_flight as u64, Ordering::Relaxed);
+    }
+    pub fn decode_window(&self, workers: usize, episodes: usize) {
+        self.windows.fetch_add(1, Ordering::Relaxed);
+        self.window_episodes
+            .fetch_add(episodes as u64, Ordering::Relaxed);
+        self.effective_slots_peak
+            .fetch_max(workers.min(episodes) as u64, Ordering::Relaxed);
+    }
+    pub fn thread_started(&self) {
+        self.threads_started.fetch_add(1, Ordering::Relaxed);
+    }
+    pub fn decode_job(&self, slot: usize) -> DecodeJob<'_> {
+        let job = DecodeJob {
+            telemetry: self,
+            slot,
+            started: Instant::now(),
+            success: false,
+        };
+        let active = self.active_decode.fetch_add(1, Ordering::Relaxed) + 1;
+        self.active_decode_peak.fetch_max(active, Ordering::Relaxed);
+        #[cfg(test)]
+        {
+            let barrier = self.decode_start_barrier.lock().unwrap().clone();
+            if let Some((entered, release)) = barrier {
+                entered.wait();
+                release.wait();
+            }
+        }
+        job
+    }
+    #[cfg(test)]
+    pub(crate) fn test_decode_barriers(
+        &self,
+        count: usize,
+    ) -> (
+        std::sync::Arc<std::sync::Barrier>,
+        std::sync::Arc<std::sync::Barrier>,
+    ) {
+        let barriers = (
+            std::sync::Arc::new(std::sync::Barrier::new(count)),
+            std::sync::Arc::new(std::sync::Barrier::new(count)),
+        );
+        *self.decode_start_barrier.lock().unwrap() = Some(barriers.clone());
+        barriers
+    }
+    fn coordinator_json(&self) -> String {
+        let parent = self.coordinator_parent_ns.load(Ordering::Relaxed);
+        let partitions: serde_json::Map<String, serde_json::Value> = CoordinatorPhase::ALL
+            .iter()
+            .map(|phase| {
+                (
+                    phase.name().to_owned(),
+                    serde_json::json!(self.coordinator_ns[*phase as usize].load(Ordering::Relaxed)),
+                )
+            })
+            .collect();
+        let sum: u64 = self
+            .coordinator_ns
+            .iter()
+            .map(|c| c.load(Ordering::Relaxed))
+            .sum();
+        serde_json::json!({"scope": "exclusive sequential scan coordinator wall; worker diagnostics are nested and excluded from this sum", "parent_nanoseconds": parent,
+            "partition_nanoseconds": partitions, "partition_sum_nanoseconds": sum,
+            "residual_nanoseconds": i128::from(parent) - i128::from(sum),
+            "parent_seconds": parent as f64 / 1e9,
+            "calls": self.coordinator_calls.load(Ordering::Relaxed),
+            "failed_calls": self.coordinator_failed.load(Ordering::Relaxed)}).to_string()
+    }
+    fn parallel_json(&self) -> String {
+        let value = |c: &AtomicU64| c.load(Ordering::Relaxed);
+        let slots: Vec<_> = self.slots.iter().enumerate().map(|(index, slot)| serde_json::json!({
+            "logical_slot": index, "jobs": value(&slot.jobs), "failed_jobs": value(&slot.failed),
+            "elapsed_nanoseconds": value(&slot.ns), "elapsed_seconds": value(&slot.ns) as f64 / 1e9,
+        })).collect();
+        serde_json::json!({"scope": "decoder jobs only; logical slots reused across recreated window threads; elapsed is not CPU time; active peak is overlap, not CPU utilization",
+            "configured_workers": value(&self.configured_workers), "configured_max_in_flight": value(&self.configured_in_flight),
+            "windows": value(&self.windows), "scheduled_episodes": value(&self.window_episodes),
+            "spawned_threads": value(&self.threads_started), "effective_slots_peak": value(&self.effective_slots_peak),
+            "active_jobs": value(&self.active_decode), "active_decode_peak": value(&self.active_decode_peak),
+            "logical_slots": slots}).to_string()
+    }
+
     pub fn decode_timer(&self, kind: DecodeKind, bytes: usize) -> DecodeTimer<'_> {
         DecodeTimer {
             counters: &self.decode_kinds[kind as usize],
@@ -291,10 +555,57 @@ impl Telemetry {
             .collect::<Vec<_>>()
             .join(",");
         format!(
-            "{},\"source_kind_decode\":{{{}}},\"json_memory_policy\":\"{}\"}}",
+            "{},\"source_kind_decode\":{{{}}},\"json_memory_policy\":\"{}\",\"coordinator_scan_wall\":{},\"decode_parallelism\":{}}}",
             &output[..output.len() - 1],
             kinds,
-            crate::json::MEMORY_POLICY
+            crate::json::MEMORY_POLICY,
+            self.coordinator_json(),
+            self.parallel_json()
         )
+    }
+}
+
+#[cfg(test)]
+mod wall_tests {
+    use super::*;
+
+    #[test]
+    fn nested_wall_scopes_restore_after_errors_and_reconcile_exactly() {
+        let telemetry = Telemetry::default();
+        {
+            let wall = telemetry.scan_wall();
+            wall.set(CoordinatorPhase::CollectionSetup);
+            let result: Result<()> = (|| {
+                let _outer = wall.scope(CoordinatorPhase::SourceMetadata);
+                {
+                    let _inner = wall.scope(CoordinatorPhase::ProofLedger);
+                    assert_eq!(wall.state.get().current, CoordinatorPhase::ProofLedger);
+                }
+                assert_eq!(wall.state.get().current, CoordinatorPhase::SourceMetadata);
+                Err(Error::contract("injected nested failure"))
+            })();
+            assert!(result.is_err());
+            assert_eq!(wall.state.get().current, CoordinatorPhase::CollectionSetup);
+        }
+        let value: serde_json::Value = serde_json::from_str(&telemetry.coordinator_json()).unwrap();
+        let total = value["parent_nanoseconds"].as_u64().unwrap();
+        let sum: u64 = value["partition_nanoseconds"]
+            .as_object()
+            .unwrap()
+            .values()
+            .map(|v| v.as_u64().unwrap())
+            .sum();
+        assert_eq!(total, sum);
+        assert_eq!(value["partition_sum_nanoseconds"], sum);
+        assert_eq!(value["residual_nanoseconds"], 0);
+        assert_eq!(value["failed_calls"], 1);
+        {
+            let wall = telemetry.scan_wall();
+            wall.success();
+        }
+        let value: serde_json::Value = serde_json::from_str(&telemetry.coordinator_json()).unwrap();
+        assert_eq!(value["calls"], 2);
+        assert_eq!(value["failed_calls"], 1);
+        assert_eq!(value["residual_nanoseconds"], 0);
     }
 }

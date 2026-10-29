@@ -2,6 +2,19 @@
 
 ## Status and scope
 
+[ADR0015](adr/0015-complete-wall-attribution-and-worker-scaling.md) adds reconciled
+exclusive coordinator/Python wall ledgers and decoder-worker observations, with
+closed1/2/4/8 support. Design/correctness/conformance reviews and runtime acceptance
+are complete. Three-rotation whole-workload medians49.21/36.85/32.32/31.18s use
+unchanged2GiB/16MiB budgets and identical outputs. Presets remain1/1; four workers
+balance time/resources and eight is fastest in this corpus. Exclusive scan and
+Python construction ledgers reconcile exactly; temporary release accounts for
+about6s of single-worker scan time. Legacy summed worker times remain nested
+diagnostics, not a wall partition. Logical slots/active job overlap are distinct
+from persistent threads/CPU utilization. Fork/window/join, ordered serial feature
+processing, shared quotas and publication ownership remain unchanged. Evidence:
+[wall attribution and scaling](verification/wall-attribution-and-worker-scaling.md).
+
 [ADR0014](adr/0014-bulk-numeric-io-and-episode-lookups.md) adopts bounded bulk
 f64/i64 I/O and per-collection episode indexes. Design and code-conformance review
 are accepted; whole769Python tests, both frozen recipes/index and saved PPO

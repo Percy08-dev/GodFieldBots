@@ -8,6 +8,8 @@ import shutil
 import tempfile
 import time
 import zipfile
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any, BinaryIO, Self
@@ -21,6 +23,46 @@ from gf_training.native_authorization import NativePreparation
 from gf_training.native_learning import fixed_consumer_layout, fixed_targets
 
 MIB = 1024 * 1024
+
+
+class _PreparationWall:
+    """Fixed exclusive construction ledger; native worker timings remain nested."""
+    phases = ('owner_session_setup', 'next_batch_wait', 'proof_and_initialization',
+              'array_reward_validation_labels', 'bounded_npy_write', 'batch_release', 'seal', 'other')
+
+    def __init__(self, clock: Callable[[], int] | None = None) -> None:
+        self._clock = clock or time.perf_counter_ns
+        self._started = self._since = self._clock()
+        self._current = 'other'
+        self._ns = dict.fromkeys(self.phases, 0)
+        self._result: Json | None = None
+
+    def _switch(self, name: str) -> None:
+        now = self._clock()
+        self._ns[self._current] += now - self._since
+        self._since, self._current = now, name
+
+    @contextmanager
+    def phase(self, name: str) -> Iterator[None]:
+        previous = self._current
+        self._switch(name)
+        try:
+            yield
+        finally:
+            self._switch(previous)
+
+    def finish(self, *, success: bool) -> Json:
+        if self._result is None:
+            self._switch('other')
+            total = self._since - self._started
+            summed = sum(self._ns.values())
+            self._result = {'scope': 'NativePreparedInputs construction entry to ledger close; excludes archive, final source checks and cleanup',
+                            'child_timing_scope': 'next_batch_wait includes FFI execution/handoff and proof-envelope decoding; native and worker counters are nested',
+                            'parent_nanoseconds': total, 'parent_seconds': total / 1e9,
+                            'partition_nanoseconds': dict(self._ns),
+                            'partition_sum_nanoseconds': summed,
+                            'residual_nanoseconds': total - summed, 'success': success}
+        return self._result
 
 
 def _deadlines(settings: PreparationConfig, deadline: float, wall_deadline: float | None) -> tuple[float, float]:
@@ -63,22 +105,37 @@ class NativePreparedInputs:
 
     def __init__(self, path: Path, config: EncoderConfig, settings: PreparationConfig,
                  *, deadline: float, wall_deadline: float | None = None) -> None:
-        self.config = encoder_config(asdict(config))
-        self.session = _owner({'kind': 'offline', 'operation': 'prepare',
-                               'dataset_path': str(path.resolve()), 'encoder': asdict(config)},
-                              settings, deadline, wall_deadline)
-        self._setup(settings)
+        self._wall = _PreparationWall()
+        with self._wall.phase('owner_session_setup'):
+            self.config = encoder_config(asdict(config))
+            self.session = _owner({'kind': 'offline', 'operation': 'prepare',
+                                   'dataset_path': str(path.resolve()), 'encoder': asdict(config)},
+                                  settings, deadline, wall_deadline)
+            self._setup(settings)
         try:
-            while (batch := self.session.next_batch(0, fixed_consumer_layout(config))) is not None:
-                proof = self.session.proof()
-                if not self.shapes:
-                    self.dataset = proof['dataset_manifest']
-                    self._initialize(batch.features.shape[1])
-                labels = fixed_targets(batch, global_ready=proof['structural_valid'])
-                self._consume(batch, labels)
-                del labels, batch
-            self._seal()
+            while True:
+                with self._wall.phase('next_batch_wait'):
+                    batch = self.session.next_batch(0, fixed_consumer_layout(config))
+                if batch is None:
+                    break
+                with self._wall.phase('proof_and_initialization'):
+                    proof = self.session.proof()
+                    if not self.shapes:
+                        self.dataset = proof['dataset_manifest']
+                        self._initialize(batch.features.shape[1])
+                with self._wall.phase('array_reward_validation_labels'):
+                    labels = fixed_targets(batch, global_ready=proof['structural_valid'])
+                with self._wall.phase('bounded_npy_write'):
+                    self._consume(batch, labels)
+                with self._wall.phase('batch_release'):
+                    del labels, batch
+            with self._wall.phase('seal'):
+                self._seal()
+                capture = getattr(self.session, 'data_stage_snapshot', None)
+                self.diagnostics['native_data_stage_snapshot'] = capture() if callable(capture) else None
+            self.diagnostics['native_prepared_inputs_wall'] = self._wall.finish(success=True)
         except BaseException as error:
+            self.diagnostics['native_prepared_inputs_wall'] = self._wall.finish(success=False)
             try:
                 self.abort()
             except BaseException as cleanup_error:  # noqa: BLE001 - preserve original initialization failure
@@ -105,27 +162,42 @@ class NativePreparedInputs:
     async def create_async(cls, path: Path, config: EncoderConfig, settings: PreparationConfig,
                            *, deadline: float, wall_deadline: float | None = None) -> Self:
         self = cls.__new__(cls)
-        self.config = encoder_config(asdict(config))
-        work, wall = _deadlines(settings, deadline, wall_deadline)
-        self.session = await NativePreparation.create_async(
-            {'kind': 'offline', 'operation': 'prepare', 'dataset_path': str(path.resolve()),
-             'encoder': asdict(config)}, settings, deadline=work, wall_deadline=wall)
-        self._setup(settings)
+        self._wall = _PreparationWall()
+        with self._wall.phase('owner_session_setup'):
+            self.config = encoder_config(asdict(config))
+            work, wall = _deadlines(settings, deadline, wall_deadline)
+            self.session = await NativePreparation.create_async(
+                {'kind': 'offline', 'operation': 'prepare', 'dataset_path': str(path.resolve()),
+                 'encoder': asdict(config)}, settings, deadline=work, wall_deadline=wall)
+            self._setup(settings)
         try:
-            while (batch := await self.session.anext_batch(0, fixed_consumer_layout(config))) is not None:
-                proof = self.session.proof()
-                if not self.shapes:
-                    self.dataset = proof['dataset_manifest']
-                    size = self._set_shapes(batch.features.shape[1])
-                    self._lease = await self.session.areserve_staging(2 * self._window + 65536,
-                                                                     2 * size + 32768)
-                    self._open_writers()
-                labels = fixed_targets(batch, global_ready=proof['structural_valid'])
-                await self._aconsume(batch, labels)
-                del labels, batch
-            self._seal()
-            await asyncio.sleep(0)
+            while True:
+                with self._wall.phase('next_batch_wait'):
+                    batch = await self.session.anext_batch(0, fixed_consumer_layout(config))
+                if batch is None:
+                    break
+                with self._wall.phase('proof_and_initialization'):
+                    proof = self.session.proof()
+                    if not self.shapes:
+                        self.dataset = proof['dataset_manifest']
+                        size = self._set_shapes(batch.features.shape[1])
+                        self._lease = await self.session.areserve_staging(2 * self._window + 65536,
+                                                                         2 * size + 32768)
+                        self._open_writers()
+                with self._wall.phase('array_reward_validation_labels'):
+                    labels = fixed_targets(batch, global_ready=proof['structural_valid'])
+                with self._wall.phase('bounded_npy_write'):
+                    await self._aconsume(batch, labels)
+                with self._wall.phase('batch_release'):
+                    del labels, batch
+            with self._wall.phase('seal'):
+                self._seal()
+                capture = getattr(self.session, 'adata_stage_snapshot', None)
+                self.diagnostics['native_data_stage_snapshot'] = await capture() if callable(capture) else None
+                await asyncio.sleep(0)
+            self.diagnostics['native_prepared_inputs_wall'] = self._wall.finish(success=True)
         except BaseException as error:
+            self.diagnostics['native_prepared_inputs_wall'] = self._wall.finish(success=False)
             try:
                 await self.aabort()
             except BaseException as cleanup_error:  # noqa: BLE001 - preserve original initialization failure

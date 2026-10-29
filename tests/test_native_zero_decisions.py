@@ -76,7 +76,13 @@ def test_fixed_writer_checks_empty_episode_but_writes_only_decisions(tmp_path, m
             NativePreparedInputs(tmp_path / 'unused.json', config, settings, deadline=float('inf'))
     else:
         with NativePreparedInputs(tmp_path / 'unused.json', config, settings, deadline=float('inf')) as prepared:
+            wall = prepared.diagnostics['native_prepared_inputs_wall']
+            assert wall['success'] is True
+            assert wall['parent_nanoseconds'] == sum(wall['partition_nanoseconds'].values())
+            assert wall['residual_nanoseconds'] == 0
+            construction_parent = wall['parent_nanoseconds']
             prepared.write_numeric(tmp_path / 'numeric.npz')
+        assert prepared.diagnostics['native_prepared_inputs_wall']['parent_nanoseconds'] == construction_parent
         with np.load(tmp_path / 'numeric.npz', allow_pickle=False) as result:
             np.testing.assert_array_equal(result['x'], np.ones((1, width)))
             np.testing.assert_array_equal(result['validation_x'], np.ones((1, width)))

@@ -72,7 +72,7 @@ def test_referenced_preprocessing_preset_requires_table(tmp_path):
 
 
 def test_native_shared_budget_and_explicit_worker_counts():
-    for workers in (1, 2, 4):
+    for workers in (1, 2, 4, 8):
         config = preparation_config({'backend': 'rust', 'workers': workers,
                                      'max_in_flight': workers, 'memory_budget_mib': 2048})
         assert config.memory_budget_mib == 2048

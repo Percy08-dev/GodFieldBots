@@ -135,11 +135,17 @@ def test_async_large_episode_writes_are_bounded_and_npz_bytes_stay_identical(tmp
         ticking = asyncio.create_task(heartbeat())
         async with await Guarded.create_async(tmp_path / 'unused', config, settings,
                                                deadline=time.monotonic() + 10) as prepared:
+            wall = prepared.diagnostics['native_prepared_inputs_wall']
+            assert wall['success'] is True
+            assert wall['parent_nanoseconds'] == sum(wall['partition_nanoseconds'].values())
+            assert wall['residual_nanoseconds'] == 0
+            construction_parent = wall['parent_nanoseconds']
             prepared.write_numeric(tmp_path / 'sync.npz')
             await prepared.awrite_numeric(tmp_path / 'async.npz')
             assert len(ticks) >= 4
         await ticking
         assert prepared._directory is None and prepared._closed
+        assert prepared.diagnostics['native_prepared_inputs_wall']['parent_nanoseconds'] == construction_parent
         assert owners[0].closed and owners[0].lease.released
     asyncio.run(run())
     assert len(writes) > 4

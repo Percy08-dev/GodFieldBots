@@ -54,6 +54,9 @@ impl<'a> EpisodeReader<'a> {
     }
     pub fn next(&mut self, sources: &mut Sources) -> Result<Option<(&'a Path, EpisodeData)>> {
         self.control.check()?;
+        sources
+            .telemetry()
+            .configure_workers(self.workers, self.in_flight);
         if self.ready_position == self.ready.len() {
             if self.position == self.paths.len() {
                 return Ok(None);
@@ -90,13 +93,16 @@ fn decode(
     max_file: usize,
     max_record: usize,
     telemetry: &Arc<crate::telemetry::Telemetry>,
+    slot: usize,
 ) -> Result<Completed> {
     control.check()?;
+    let mut job = telemetry.decode_job(slot);
     let mut sources = Sources::with_telemetry(budget.clone(), max_file, max_record, telemetry);
     let records1 = sources.journal(&path.join("player-1.jsonl"), control)?;
     let records2 = sources.journal(&path.join("player-2.jsonl"), control)?;
     let replay1 = sources.json(&path.join("replay-player-1.json"), true, control)?;
     let replay2 = sources.json(&path.join("replay-player-2.json"), true, control)?;
+    job.success();
     Ok((
         EpisodeData {
             records1,
@@ -116,6 +122,7 @@ fn window(
     max_record: usize,
     telemetry: &Arc<crate::telemetry::Telemetry>,
 ) -> Result<BudgetVec<Option<Completed>>> {
+    telemetry.decode_window(workers, paths.len());
     let mut ready = BudgetVec::with_capacity(budget, paths.len())?;
     for _ in paths {
         ready.push(None)?;
@@ -123,7 +130,7 @@ fn window(
     if workers == 1 {
         for (index, path) in paths.iter().enumerate() {
             ready[index] = Some(decode(
-                path, budget, control, max_file, max_record, telemetry,
+                path, budget, control, max_file, max_record, telemetry, 0,
             )?);
         }
         return Ok(ready);
@@ -170,6 +177,7 @@ fn window(
                                     max_file,
                                     max_record,
                                     &worker_telemetry,
+                                    worker,
                                 )?;
                                 results.push((index, result))?;
                             }
@@ -190,6 +198,7 @@ fn window(
                 });
             match spawned {
                 Ok(handle) => {
+                    telemetry.thread_started();
                     stacks.push(stack)?;
                     handles.push(handle)?;
                 }
@@ -227,4 +236,144 @@ fn window(
         Ok(())
     })?;
     Ok(ready)
+}
+
+#[cfg(test)]
+mod worker_observation_tests {
+    use super::*;
+    use crate::{budget::monotonic, telemetry::Telemetry};
+    use std::fs;
+
+    struct Fixture {
+        root: PathBuf,
+        paths: Vec<PathBuf>,
+    }
+    impl Fixture {
+        fn new(count: usize) -> Self {
+            let root = std::env::temp_dir().join(format!(
+                "gf-wall-workers-{}-{}",
+                std::process::id(),
+                monotonic().to_bits()
+            ));
+            let mut paths = Vec::new();
+            for i in 0..count {
+                let path = root.join(format!("e{i}"));
+                fs::create_dir_all(&path).unwrap();
+                for name in [
+                    "player-1.jsonl",
+                    "player-2.jsonl",
+                    "replay-player-1.json",
+                    "replay-player-2.json",
+                ] {
+                    fs::write(path.join(name), b"{}\n").unwrap();
+                }
+                paths.push(path);
+            }
+            Self { root, paths }
+        }
+    }
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            fs::remove_dir_all(&self.root).unwrap();
+        }
+    }
+    fn counters(t: &Telemetry) -> serde_json::Value {
+        serde_json::from_str(&t.json(0, 0, 0)).unwrap()
+    }
+
+    #[test]
+    fn real_decode_overlap_is_observed_and_cancelled_jobs_are_joined() {
+        for (workers, cancelled) in [2, 4, 8]
+            .into_iter()
+            .flat_map(|workers| [false, true].map(|cancelled| (workers, cancelled)))
+        {
+            let fixture = Fixture::new(workers);
+            let budget = Budget::new(128 * 1024 * 1024);
+            let control = Control::new(monotonic() + 30.).unwrap();
+            let telemetry = Arc::new(Telemetry::default());
+            let (entered, release) = telemetry.test_decode_barriers(workers + 1);
+            let mut sources =
+                Sources::with_telemetry(budget.clone(), 1024 * 1024, 1024 * 1024, &telemetry);
+            std::thread::scope(|scope| {
+                let job = scope.spawn(|| {
+                    let mut reader = EpisodeReader::new(
+                        &fixture.paths,
+                        workers,
+                        workers,
+                        &budget,
+                        &control,
+                        1024 * 1024,
+                        1024 * 1024,
+                    );
+                    let mut count = 0;
+                    while let Some((path, _data)) = reader.next(&mut sources)? {
+                        assert_eq!(path, fixture.paths[count]);
+                        count += 1;
+                    }
+                    Ok::<_, Error>(count)
+                });
+                entered.wait();
+                let observed_active =
+                    counters(&telemetry)["decode_parallelism"]["active_jobs"].clone();
+                if cancelled {
+                    control.cancel();
+                }
+                release.wait();
+                let result = job.join().unwrap();
+                assert_eq!(observed_active, workers);
+                if cancelled {
+                    assert!(matches!(result, Err(Error::Cancelled)));
+                } else {
+                    assert_eq!(result.unwrap(), workers);
+                }
+            });
+            let metrics = counters(&telemetry);
+            let parallel = &metrics["decode_parallelism"];
+            assert_eq!(parallel["active_decode_peak"], workers);
+            assert_eq!(parallel["active_jobs"], 0);
+            assert_eq!(parallel["spawned_threads"], workers);
+            for slot in 0..workers {
+                assert_eq!(parallel["logical_slots"][slot]["jobs"], 1);
+                assert_eq!(
+                    parallel["logical_slots"][slot]["failed_jobs"],
+                    if cancelled { 1 } else { 0 }
+                );
+            }
+            drop(sources);
+            assert_eq!(budget.used(), 0);
+        }
+    }
+
+    #[test]
+    fn configured_eight_with_one_in_flight_observes_only_one_effective_slot() {
+        let fixture = Fixture::new(2);
+        let budget = Budget::new(128 * 1024 * 1024);
+        let control = Control::new(monotonic() + 30.).unwrap();
+        let telemetry = Arc::new(Telemetry::default());
+        let mut sources =
+            Sources::with_telemetry(budget.clone(), 1024 * 1024, 1024 * 1024, &telemetry);
+        let mut reader = EpisodeReader::new(
+            &fixture.paths,
+            8,
+            1,
+            &budget,
+            &control,
+            1024 * 1024,
+            1024 * 1024,
+        );
+        while reader.next(&mut sources).unwrap().is_some() {}
+        let metrics = counters(&telemetry);
+        let parallel = &metrics["decode_parallelism"];
+        assert_eq!(parallel["configured_workers"], 8);
+        assert_eq!(parallel["configured_max_in_flight"], 1);
+        assert_eq!(parallel["windows"], 2);
+        assert_eq!(parallel["scheduled_episodes"], 2);
+        assert_eq!(parallel["spawned_threads"], 2);
+        assert_eq!(parallel["effective_slots_peak"], 1);
+        assert_eq!(parallel["active_decode_peak"], 1);
+        assert_eq!(parallel["logical_slots"][0]["jobs"], 2);
+        drop(reader);
+        drop(sources);
+        assert_eq!(budget.used(), 0);
+    }
 }

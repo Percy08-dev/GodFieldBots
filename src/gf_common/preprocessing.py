@@ -40,8 +40,8 @@ def preparation_config(value: Json) -> PreparationConfig:
         raise ContractError("unsupported preprocessing backend")
     if values["backend"] == "python" and (values["workers"] != 1 or values["max_in_flight"] != 1):
         raise ContractError("Python reference preparation is serial")
-    if values["backend"] == "rust" and values["workers"] not in (1, 2, 4):
-        raise ContractError("native preprocessing supports 1, 2 or 4 workers")
+    if values["backend"] == "rust" and values["workers"] not in (1, 2, 4, 8):
+        raise ContractError("native preprocessing supports 1, 2, 4 or 8 workers")
     if (values["cache_budget_mib"] > values["memory_budget_mib"]
             or values["chunk_target_mib"] > values["memory_budget_mib"]
             or values["max_record_mib"] > values["max_source_file_mib"]

@@ -66,11 +66,11 @@ impl Settings {
             .require("cache_budget_mib")?
             .integer(0, (usize::MAX / 1048576) as i128)? as usize
             * 1048576;
-        let workers = value.require("workers")?.integer(1, 4)? as usize;
+        let workers = value.require("workers")?.integer(1, 8)? as usize;
         let in_flight = value
             .require("max_in_flight")?
             .integer(1, usize::MAX as i128)? as usize;
-        if ![1, 2, 4].contains(&workers)
+        if ![1, 2, 4, 8].contains(&workers)
             || string(value, "backend")? != "rust"
             || cache > memory
             || chunk > memory
@@ -179,6 +179,7 @@ impl Session {
         wall_deadline: f64,
         telemetry: Arc<crate::telemetry::Telemetry>,
     ) -> Result<Self> {
+        telemetry.configure_workers(settings.workers, settings.in_flight);
         let cleanup_control = control.at_deadline(wall_deadline)?;
         // Bounded runtime/path/hash metadata and fixed native stack work are
         // reserved up front; variable buffers have their own capacity leases.

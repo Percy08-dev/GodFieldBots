@@ -45,7 +45,7 @@ impl Drop for Fixture {
 
 #[test]
 fn real_workers_preserve_order_and_share_capacity() {
-    for workers in [1, 2, 4] {
+    for workers in [1, 2, 4, 8] {
         let fixture = Fixture::new();
         let budget = Budget::new(128 * 1024 * 1024);
         let control = Control::new(monotonic() + 10.).unwrap();

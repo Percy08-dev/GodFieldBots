@@ -318,19 +318,40 @@ class NativePreparation:
                 self._closed = True
                 self._locks.close()
 
+    def data_stage_snapshot(self) -> Json:
+        """Read child diagnostics without finalizing sources or changing ownership."""
+        self.check()
+        result: Json = json.loads(_invoke(self._executor().call, self._session.telemetry))
+        result['snapshot_stage'] = 'data_stage_complete_before_archive_and_finalization'
+        result['managed_peak_bytes'] = _invoke(self._executor().call, self._session.peak_bytes)
+        return result
+
+    async def adata_stage_snapshot(self) -> Json:
+        self.check()
+        result: Json = json.loads(await self._acall(self._session.telemetry))
+        result['snapshot_stage'] = 'data_stage_complete_before_archive_and_finalization'
+        result['managed_peak_bytes'] = await self._acall(self._session.peak_bytes)
+        return result
+
     def _metrics(self, status: str) -> None:
         self.diagnostics.update(cleanup=status, elapsed_seconds=time.monotonic() - self.started)
         if self._session is not None:
             self.diagnostics['managed_peak_bytes'] = _invoke(self._executor().call, self._session.peak_bytes)
             if callable(getattr(self._session, 'telemetry', None)):
-                self.diagnostics.update(json.loads(_invoke(self._executor().call, self._session.telemetry)))
+                snapshot = json.loads(_invoke(self._executor().call, self._session.telemetry))
+                snapshot['snapshot_stage'] = 'after_finalization_or_abort'
+                self.diagnostics.update(snapshot)
+                self.diagnostics['native_final_snapshot'] = snapshot
 
     async def _ametrics(self, status: str) -> None:
         self.diagnostics.update(cleanup=status, elapsed_seconds=time.monotonic() - self.started)
         if self._session is not None:
             self.diagnostics['managed_peak_bytes'] = await self._acall(self._session.peak_bytes)
             if callable(getattr(self._session, 'telemetry', None)):
-                self.diagnostics.update(json.loads(await self._acall(self._session.telemetry)))
+                snapshot = json.loads(await self._acall(self._session.telemetry))
+                snapshot['snapshot_stage'] = 'after_finalization_or_abort'
+                self.diagnostics.update(snapshot)
+                self.diagnostics['native_final_snapshot'] = snapshot
 
     def finalize(self) -> Json:
         self._check_owned()

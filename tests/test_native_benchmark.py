@@ -27,7 +27,7 @@ def fake_preflight(source: Path, kind: str, **kwargs: Any) -> dict[str, Any]:
     return proof
 
 
-@pytest.mark.parametrize('workers', [1, 2, 4])
+@pytest.mark.parametrize('workers', [1, 2, 4, 8])
 def test_native_plan_is_only_matching_budget_and_alternating_pairs(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], workers: int,
 ) -> None:
@@ -177,10 +177,13 @@ def test_preparation_passes_backend_settings_to_owner_and_preserves_output_gates
     calls: dict[str, Any] = {}
     diagnostics = {'sample_identity_sha256': 'samples', 'ffi_data_calls': 7,
                    'payload_copy_stats': {'feature_payload_bytes': 0}, 'read_bytes': 123}
+    def finalize():
+        calls.update(finalized=True)
+        diagnostics['ffi_data_calls'] = 99
     dataset = {'content_sha256': workload.FROZEN, 'train_decisions': 81523, 'validation_decisions': 2260}
     owner = SimpleNamespace(dataset=dataset, diagnostics=diagnostics,
         write_numeric=lambda path: path.write_bytes(b'numeric'),
-        finalize=lambda: calls.update(finalized=True), abort=lambda: calls.update(aborted=True))
+        finalize=finalize, abort=lambda: calls.update(aborted=True))
     def prepare(path: Path, encoder: Any, **kwargs: Any) -> Any:
         calls.update(kwargs)
         return owner
@@ -199,9 +202,11 @@ def test_preparation_passes_backend_settings_to_owner_and_preserves_output_gates
     settings: dict[str, Any] = {'memory_budget_mib': 2048, 'chunk_target_mib': 16, 'cache_budget_mib': 512}
     if variant == 'rust':
         settings.update(backend='rust', workers=4, max_in_flight=4)
-        assert result['native_transfer_metrics']['ffi_data_calls']['value'] == 7
+        assert result['native_transfer_metrics']['ffi_data_calls']['value'] == 99
     assert calls['preprocessing'] == settings
     assert calls['finalized'] is True
+    assert result['data_stage_preparation_diagnostics']['ffi_data_calls'] == 7
+    assert result['nested_preparation_diagnostics']['ffi_data_calls'] == 99
     assert result['accepted_actions'] == 83783
     assert result['sample_identity_sha256'] == 'samples'
     assert result['numeric_archive_sha256'] == hashlib.sha256(b'numeric').hexdigest()

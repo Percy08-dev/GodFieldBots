@@ -68,6 +68,17 @@ fn current_native_settings_reject_removed_depth_key() {
     });
     let valid = serde_json::to_vec(&settings).unwrap();
     assert!(gf_native::session::Settings::decode(&valid, &control).is_ok());
+    settings["workers"] = serde_json::json!(8);
+    assert!(
+        gf_native::session::Settings::decode(&serde_json::to_vec(&settings).unwrap(), &control)
+            .is_ok()
+    );
+    settings["workers"] = serde_json::json!(9);
+    assert!(
+        gf_native::session::Settings::decode(&serde_json::to_vec(&settings).unwrap(), &control)
+            .is_err()
+    );
+    settings["workers"] = serde_json::json!(1);
     settings["native_json_depth"] = serde_json::json!(990);
     let old = serde_json::to_vec(&settings).unwrap();
     assert!(

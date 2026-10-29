@@ -267,8 +267,10 @@ def preparation(args: argparse.Namespace) -> dict[str, Any]:
     diagnostics: dict[str, Any]
     identities: str | None
     if args.variant == 'old':
+        tick = time.monotonic()
         from gf_models.encoder import encode
         from gf_training.fixed_data import inspect_dataset
+        phases['preparation_dispatch_imports'] = time.monotonic() - tick
         tick = time.monotonic()
         dataset, train, validation = inspect_dataset(args.dataset, deadline=deadline)
         phases['read_hash_validation'] = time.monotonic() - tick
@@ -291,8 +293,10 @@ def preparation(args: argparse.Namespace) -> dict[str, Any]:
                        'read_bytes': None, 'read_bytes_unavailable': 'legacy reader does not count bytes'}
         owner = None
     else:
+        tick = time.monotonic()
         from gf_common.preprocessing import PreparationConfig
         from gf_training.fixed_data import prepare_fixed_inputs
+        phases['preparation_dispatch_imports'] = time.monotonic() - tick
         tick = time.monotonic()
         owner = prepare_fixed_inputs(args.dataset, config,
                                      preprocessing=PreparationConfig(**preparation_settings(args)),
@@ -301,6 +305,7 @@ def preparation(args: argparse.Namespace) -> dict[str, Any]:
         phases['read_hash_validation_encoding'] = time.monotonic() - tick
         diagnostics = owner.diagnostics
         identities = diagnostics.get('sample_identity_sha256')
+    data_stage_diagnostics = dict(diagnostics)
     try:
         if (dataset['content_sha256'] != FROZEN or dataset['train_decisions'] != 81523
                 or dataset['validation_decisions'] != 2260):
@@ -341,6 +346,8 @@ def preparation(args: argparse.Namespace) -> dict[str, Any]:
             **source_read_metrics(diagnostics, elapsed),
             'native_transfer_metrics': native_transfer_metrics(diagnostics) if args.variant == 'rust' else None,
             'nested_preparation_diagnostics': diagnostics,
+            'data_stage_preparation_diagnostics': data_stage_diagnostics,
+            'diagnostic_snapshot_scope': 'data_stage_preparation_diagnostics captured before archive/finalize; nested_preparation_diagnostics includes later finalization counters',
             'config': {'memory_mib': args.memory_mib, 'chunk_mib': args.chunk_mib,
                        'cache_mib': 512,
                        **({'backend': 'rust', 'workers': args.workers,
@@ -485,8 +492,8 @@ def paired(args: argparse.Namespace) -> None:
         raise ValueError('native comparison requires preparation')
     reference = args.reference or (NATIVE_REFERENCE if native else Path('/tmp/gfb-performance-reference'))
     native_paths = getattr(args, 'native_pythonpath', [])
-    if native and (args.workers not in (1, 2, 4) or args.max_in_flight != args.workers):
-        raise ValueError('native paired trials require workers/max-in-flight 1/1, 2/2 or 4/4')
+    if native and (args.workers not in (1, 2, 4, 8) or args.max_in_flight != args.workers):
+        raise ValueError('native paired trials require workers/max-in-flight 1/1, 2/2, 4/4 or 8/8')
     # Both probes run before inventory parsing, output creation, or any trial.
     preflight = ({'python': preflight_source(reference / 'src', args.kind),
                   'rust': preflight_source(ROOT / 'src', args.kind, native=True, native_paths=native_paths)}
@@ -627,7 +634,7 @@ def argument_parser() -> argparse.ArgumentParser:
     prep.add_argument('--memory-mib', type=int, default=8192)
     prep.add_argument('--chunk-mib', type=int, default=64)
     prep.add_argument('--seconds', type=float, default=7200)
-    prep.add_argument('--workers', type=int, choices=(1, 2, 4), default=1)
+    prep.add_argument('--workers', type=int, choices=(1, 2, 4, 8), default=1)
     prep.add_argument('--max-in-flight', type=int)
     prep.add_argument('--source', type=Path)
     prep.add_argument('--native-sha256', help=argparse.SUPPRESS)
@@ -643,7 +650,7 @@ def argument_parser() -> argparse.ArgumentParser:
     pairs.add_argument('--comparison', choices=('legacy', 'native'), default='legacy')
     pairs.add_argument('--reference', type=Path)
     pairs.add_argument('--native-pythonpath', type=Path, action='append', default=[])
-    pairs.add_argument('--workers', type=int, choices=(1, 2, 4), default=1)
+    pairs.add_argument('--workers', type=int, choices=(1, 2, 4, 8), default=1)
     pairs.add_argument('--max-in-flight', type=int)
     pairs.add_argument('--dataset', type=Path, default=ROOT / 'runs/ppo-comparison-v2/dataset.json')
     pairs.add_argument('--root', type=Path, default=ROOT / 'runs/ppo-comparison-v2')
