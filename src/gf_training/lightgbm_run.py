@@ -10,6 +10,7 @@ import sys
 import time
 import uuid
 from collections.abc import Callable
+from contextlib import AsyncExitStack
 from dataclasses import asdict
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -32,6 +33,7 @@ from gf_models.lightgbm.model import (
 )
 from gf_training.gates import feasibility
 from gf_training.journal import atomic_json
+from gf_training.native_preparation import NativePreparedInputs
 from gf_training.preparation_numeric import PreparedInputs
 from gf_training.q_data import (
     check_deadline,
@@ -99,7 +101,7 @@ async def _run_numeric(directory: Path, x: Array | None, y: Array | None, valida
                       model: ModelConfig, actions: ActionConfig, training: TrainingConfig, seed: int,
                       purpose: str = "toy", charged_seconds: float = 0, provenance_data: Json | None = None,
                       command: tuple[str, ...] | None = None, fit_code_provenance: Json | None = None,
-                      fit_code_measurement_seconds: float = 0, prepared_inputs: PreparedInputs | None = None) -> Json:
+                      fit_code_measurement_seconds: float = 0, prepared_inputs: PreparedInputs | NativePreparedInputs | None = None) -> Json:
     """Low-level synthetic component runner; real CLI uses verified source proof."""
     training_config(asdict(training))
     model_config(asdict(model))
@@ -148,6 +150,8 @@ async def _run_numeric(directory: Path, x: Array | None, y: Array | None, valida
         if prepared_inputs is None:
             assert x is not None and y is not None and validation_x is not None and validation_y is not None
             np.savez(directory / "arrays.npz", x=x, y=y, validation_x=validation_x, validation_y=validation_y)
+        elif isinstance(prepared_inputs, NativePreparedInputs):
+            await prepared_inputs.awrite_numeric(directory / "arrays.npz")
         else:
             prepared_inputs.write_numeric(directory / "arrays.npz")
         request: Json = {"model": {**asdict(model), "checkpoint": None}, "params": native_parameters(model, training, seed),
@@ -220,13 +224,25 @@ async def _run_numeric(directory: Path, x: Array | None, y: Array | None, valida
         try:
             if original_error is None and not any(manifest["health"].get(key) for key in
                                                   ("emergency_kill", "cleanup_failure", "cleanup_overrun_seconds", "drain_failure", "log_limit_exceeded")):
-                prepared_inputs.finalize()
+                if isinstance(prepared_inputs, NativePreparedInputs):
+                    await prepared_inputs.afinalize()
+                    await asyncio.sleep(0)  # Cancellation queued with completion forbids Ready.
+                else:
+                    prepared_inputs.finalize()
             else:
-                prepared_inputs.abort()
+                if isinstance(prepared_inputs, NativePreparedInputs):
+                    await prepared_inputs.aabort()
+                else:
+                    prepared_inputs.abort()
         except BaseException as exc:  # noqa: BLE001 - finalizer failure forbids publication
             original_error = original_error or exc
             manifest["health"]["preparation_cleanup_failure"] = str(exc)
-            manifest.update(status="failed", failure=type(exc).__name__, quarantine=True)
+            if isinstance(prepared_inputs, NativePreparedInputs):
+                interrupted = isinstance(original_error, asyncio.CancelledError)
+                manifest.update(status="interrupted" if interrupted else "failed",
+                                failure=type(original_error).__name__, quarantine=True)
+            else:
+                manifest.update(status="failed", failure=type(exc).__name__, quarantine=True)
     def measured() -> None:
         manifest["elapsed_seconds"] = time.monotonic() - started
         manifest["charged_total_seconds"] = charged_seconds + manifest["elapsed_seconds"]
@@ -305,6 +321,8 @@ async def train_experiments(loaded: LoadedConfig, mode: str = "fresh", *,
         raise ContractError("LightGBM training requires closed LightGBM recipe")
     if training.cost_mode == "fixed_data":
         return await train_fixed_data(loaded, code_provenance_provider=code_provenance_provider)
+    if config.preprocessing.backend != 'python':
+        raise ContractError('legacy inclusive-generation training requires explicit Python preparation')
     if training.pilot_run is None:
         raise ContractError("clean original pilot evidence required before fitting")
     gate_started = time.monotonic()
@@ -395,8 +413,20 @@ async def train_fixed_data(loaded: LoadedConfig, *, code_provenance_provider: Ca
         wall_deadline = started + training.wall_seconds
         cleanup_seconds = max(training.cleanup_seconds, config.preprocessing.cleanup_seconds)
         deadline = wall_deadline - cleanup_seconds
-        with prepare_fixed_inputs(Path(training.dataset_manifest), model.encoder, preprocessing=config.preprocessing,
-                                  deadline=deadline, wall_deadline=wall_deadline) as prepared:
+        async with AsyncExitStack() as scope:
+            prepared: PreparedInputs | NativePreparedInputs
+            if config.preprocessing.backend == 'rust':
+                native_prepared = await NativePreparedInputs.create_async(Path(training.dataset_manifest), model.encoder,
+                                                                         config.preprocessing, deadline=deadline,
+                                                                         wall_deadline=wall_deadline)
+                prepared = await scope.enter_async_context(native_prepared)
+            else:
+                python_prepared = prepare_fixed_inputs(Path(training.dataset_manifest), model.encoder,
+                                                       preprocessing=config.preprocessing,
+                                                       deadline=deadline, wall_deadline=wall_deadline)
+                if not isinstance(python_prepared, PreparedInputs):
+                    raise ContractError('explicit Python fixed-data preparation required')
+                prepared = scope.enter_context(python_prepared)
             dataset = prepared.dataset
             if dataset["action_config_hash"] != digest(asdict(config.actions)):
                 raise ContractError("fixed dataset/search conditions mismatch")
@@ -404,8 +434,12 @@ async def train_fixed_data(loaded: LoadedConfig, *, code_provenance_provider: Ca
             fit_code = code_provenance_provider(prepared.session.deadline) if code_provenance_provider is not None else None
             check_deadline(prepared.session.deadline)
             code_seconds = time.monotonic() - code_started
+            if isinstance(prepared, NativePreparedInputs):
+                manifest_hash = await prepared.session.ahash_file(Path(training.dataset_manifest))
+            else:
+                manifest_hash = prepared.session.hash_file(Path(training.dataset_manifest))
             source = {"real_gate_passed": True, "fixed_dataset_content_sha256": dataset["content_sha256"],
-                      "dataset_manifest_sha256": prepared.session.hash_file(Path(training.dataset_manifest)),
+                      "dataset_manifest_sha256": manifest_hash,
                       "shared_generation_seconds": dataset["shared_generation_seconds"],
                       "shared_generation_cost_key": dataset["shared_generation_cost_key"],
                       "shared_generation_cost_scope": "deduplicated whole PPO parents and final validation, reported separately, excluded from this fit budget",

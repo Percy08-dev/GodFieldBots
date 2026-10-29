@@ -17,6 +17,7 @@ data = ["pyarrow>=22,<30"]
 lightgbm = ["lightgbm>=4.6,<5"]
 torch = ["torch==2.14.1", "torchvision==0.29.1"]
 torch-cuda = ["torch==2.14.1", "torchvision==0.29.1"]
+native = ["godfieldbots-native==0.1.0"]
 
 [dependency-groups]
 dev = ["pytest>=8.4,<10", "ruff>=0.14,<1", "mypy>=1.18,<2"]
@@ -36,6 +37,7 @@ module-name = ["godfieldbots", "gf_common", "gf_simulator_client", "gf_training"
 conflicts = [[{ extra = "torch" }, { extra = "torch-cuda" }]]
 
 [tool.uv.sources]
+godfieldbots-native = { workspace = true }
 torch = [
     { index = "pytorch-cpu", extra = "torch" },
     { index = "pytorch-cu132", extra = "torch-cuda" },
@@ -54,6 +56,9 @@ explicit = true
 name = "pytorch-cpu"
 url = "https://download.pytorch.org/whl/cpu"
 explicit = true
+
+[tool.uv.workspace]
+members = ["native"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

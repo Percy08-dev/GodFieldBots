@@ -1,0 +1,11 @@
+schema_version = 1
+kind = "preprocessing"
+
+[preprocessing]
+backend = "rust"
+memory_budget_mib = 2048
+cache_budget_mib = 512
+chunk_target_mib = 16
+workers = 1
+max_in_flight = 1
+native_json_depth = 990

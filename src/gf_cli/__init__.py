@@ -70,7 +70,7 @@ def _code_provenance(deadline: float = float("inf")) -> Json:
     return {"revision": None, "dirty": None, "installed_build_revision": None}
 
 
-def _fit_code_provenance(deadline: float) -> Json:
+def _fit_code_provenance(deadline: float, *, preprocessing_backend: str = "python") -> Json:
     """Current fit identity, measured only in the parent's preparation budget."""
     import importlib.metadata
     import importlib.util
@@ -102,6 +102,17 @@ def _fit_code_provenance(deadline: float) -> Json:
     worker_spec = importlib.util.find_spec("gf_training.lightgbm_worker")
     worker_file = worker_spec.origin if worker_spec is not None else None
     provenance["fit_module_sha256"]["gf_training.lightgbm_worker"] = _file_hash(worker_file, deadline) if worker_file is not None else None
+    if preprocessing_backend == "rust":
+        from gf_training.native_backend import binary_identity
+        provenance["native_preprocessing"] = binary_identity()
+        for name in ("native_backend", "native_authorization", "native_execution", "native_learning",
+                     "native_preparation", "native_index", "native_ppo"):
+            spec = importlib.util.find_spec("gf_training." + name)
+            if spec is None or spec.origin is None:
+                raise ValueError("native preprocessing implementation is incomplete")
+            provenance["fit_module_sha256"]["gf_training." + name] = _file_hash(spec.origin, deadline)
+    elif preprocessing_backend != "python":
+        raise ValueError("unknown preprocessing backend")
     _check_budget(deadline)
     return provenance
 
@@ -409,28 +420,32 @@ def main(argv: list[str] | None = None) -> int:
                        help="fresh Parquet path; output and .json sidecar must not exist")
     for dataset_parser in (build, inspect, index):
         dataset_parser.add_argument("--preprocessing-config", type=Path)
+        dataset_parser.add_argument("--address-space-limit-mib", type=int,
+                                    help="optional process virtual-address limit, not an RSS quota")
     args = parser.parse_args(argv)
     try:
         if args.command == "dataset":
+            from gf_cli.resource_limits import dataset_address_limit
             from gf_common.preprocessing import load_preprocessing_config
-            from gf_training.fixed_data import (
-                build_dataset,
-                index_dataset,
-                inspect_dataset_summary,
-            )
             preprocessing = load_preprocessing_config(args.preprocessing_config)
-            deadline = command_started + preprocessing.wall_seconds
-            if args.dataset_command == "build":
-                result = build_dataset(tuple(args.ppo_runs), tuple(args.validation_runs), args.output,
-                                       deadline=deadline, preprocessing=preprocessing)
-            elif args.dataset_command == "index":
-                result = index_dataset(args.manifest, args.output, deadline=deadline,
-                                       preprocessing=preprocessing)
-            else:
-                result = inspect_dataset_summary(args.manifest, deadline=deadline,
-                                                 preprocessing=preprocessing)
-            print(canonical(result))
-            return 0
+            with dataset_address_limit(args.address_space_limit_mib):
+                from gf_training.fixed_data import (
+                    build_dataset,
+                    index_dataset,
+                    inspect_dataset_summary,
+                )
+                deadline = command_started + preprocessing.wall_seconds
+                if args.dataset_command == "build":
+                    result = build_dataset(tuple(args.ppo_runs), tuple(args.validation_runs), args.output,
+                                           deadline=deadline, preprocessing=preprocessing)
+                elif args.dataset_command == "index":
+                    result = index_dataset(args.manifest, args.output, deadline=deadline,
+                                           preprocessing=preprocessing)
+                else:
+                    result = inspect_dataset_summary(args.manifest, deadline=deadline,
+                                                     preprocessing=preprocessing)
+                print(canonical(result))
+                return 0
         if args.command == "export":
             from gf_training.journal import export_parquet
             print(canonical(export_parquet(args.journals, args.output)))
@@ -474,13 +489,15 @@ def main(argv: list[str] | None = None) -> int:
                 from gf_training.lightgbm_run import train_experiments
                 if args.run_dir is not None or args.pause_after_update is not None:
                     raise ValueError("LightGBM has no PPO run/pause controls")
-                result = asyncio.run(train_experiments(loaded, mode=args.mode, code_provenance_provider=_fit_code_provenance))
+                def fit_identity(deadline: float) -> Json:
+                    return _fit_code_provenance(deadline, preprocessing_backend=loaded.config.preprocessing.backend)
+                result = asyncio.run(train_experiments(loaded, mode=args.mode, code_provenance_provider=fit_identity))
             print(canonical(result))
             return 0
         directory, summary = asyncio.run(run_experiment(loaded, args.command))
         print(canonical({"run_dir": str(directory), **{key: summary[key] for key in ("planned_games", "natural_denominator", "wins", "draws", "losses", "comparison_valid", "failures", "wall_seconds")}}))
         return 0 if summary["comparison_valid"] else 1
-    except (OSError, ValueError, RuntimeError, ImportError) as exc:
+    except (OSError, ValueError, RuntimeError, ImportError, MemoryError) as exc:
         print(json.dumps({"error": type(exc).__name__, "message": str(exc)}, ensure_ascii=False), file=sys.stderr)
         return 2
     except KeyboardInterrupt:

@@ -2,6 +2,13 @@
 
 ## Status and scope
 
+[ADR0011](adr/0011-native-preprocessing.md) specifies the user-approved migration
+of offline preprocessing and PPO post-collection ingestion to a common Rust core.
+The scoped production design has independent architecture READY; dependency and
+base-owner compatibility checks precede implementation. This work is in progress,
+not native implementation/performance acceptance. Python remains the learning
+authority. Live participant worker migration remains a separate completion unit.
+
 [ADR0010](adr/0010-budgeted-preparation-and-encoding.md) specifies budgeted
 offline preparation and per-decision feature reuse. Implementation, independent
 reviews, paired wall/CPU/memory/storage measurements and exact output equivalence
@@ -137,6 +144,7 @@ Wire DTOs may resolve representation details; no engine dependency is allowed.
 | `gf_evaluation` | paired scheduling, aggregation and costs | common |
 | `gf_models` | participant-local Random/heuristic/LightGBM/MLP, common encoder/config and native artifacts | common, lazy extras |
 | `gf_cli` | strict config, composition, commands, manifest | application packages |
+| `gf_native` (optional Rust extension) | bounded offline parsing/structural validation, fixed feature kernels, typed staging/index columns and capacity leases | Rust crates, PyO3, rust-numpy; no upper Python package or learning dependency |
 
 The existing `godfieldbots` entry point becomes a compatibility wrapper.
 Common never imports upper layers. Models never handle HTTP or management
@@ -147,6 +155,26 @@ Extras are `data` (PyArrow), `lightgbm`, mutually exclusive `torch` (CPU) and
 2.14.1 and torchvision to 0.29.1. PyTorch indexes are explicit; baseline
 dependencies continue to resolve from PyPI.
 Optional libraries must not load for baseline or CLI help.
+
+The separate `godfieldbots-native` uv workspace member uses Maturin1.15.0,
+PyO3 0.30.1, rust-numpy0.30.0 and ndarray0.17.2, pinned in its build configuration
+and Cargo.lock. The root package retains uv_build and exposes an optional native
+extra. Runtime loading is lazy and identifies the actual loaded extension binary,
+ABI, build/lock/source digests and fixed recipe. Rust failures never dispatch to
+the Python reference backend. Native production rollout is pending ADR0011 gates.
+
+For ADR0011's offline and post-collection paths, Python owns source locks,
+authorization, experiment decisions, learning semantics and publication. Rust
+returns readonly NumPy-backed buffers plus compact structural evidence through
+one data call per chunk. The actual array base owns storage and budget leases
+through surviving views. A separate precreated cancellation handle and one
+owned FFI executor cover long lifecycle/data operations; cancellation joins work
+before releasing locks. Recursive persistent state retires on a prestarted,
+budgeted safe-stack Rust thread. Offline owners finalize after fit-child reap;
+online batch owners finalize before optimizer dispatch and parent commit. Learning
+rewards/GAE/normalization remain Python-owned. Rust supplies ordered index columns
+and hashes; Python invokes existing native Arrow/Parquet I/O on typed buffers.
+Live participant workers and their information boundary are unchanged.
 
 ## Config and compatibility
 

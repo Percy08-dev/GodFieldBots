@@ -91,6 +91,8 @@ class PreparationSession:
     def __init__(self, config: PreparationConfig | None = None, *, deadline: float = float('inf'),
                  wall_deadline: float | None = None) -> None:
         self.config = preparation_config(asdict(config or PreparationConfig()))
+        if self.config.backend != 'python':
+            raise ContractError('Rust preparation requires the explicit native dispatch path')
         self.started = time.monotonic()
         self.wall_deadline = (wall_deadline if wall_deadline is not None else
                               min(deadline, self.started + self.config.wall_seconds))

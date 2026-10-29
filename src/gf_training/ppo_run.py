@@ -38,6 +38,7 @@ from gf_training.lineage import (
     run_lock,
     validate_chain,
 )
+from gf_training.native_ppo import preprocessing_identity, stage_rollout
 from gf_training.ppo import ingest_collection, write_rollout
 
 Collector = Callable[[CollectionPlan], Awaitable[FinalizedCollection]]
@@ -260,12 +261,17 @@ async def train_ppo(loaded: Any, collector: Collector, directory: Path, *, mode:
         raise ContractError('unsupported PPO mode')
     if mode == 'fresh' and pause_after_update is not None and (type(pause_after_update) is not int or not 0 < pause_after_update <= training.max_updates):
         raise ContractError('invalid absolute pause target')
+    preprocessing = (preprocessing_identity(config.preprocessing, deadline=operation_started + config.run.execution_seconds)
+                     if mode == 'fresh' else None)
     directory = directory.resolve()
     with run_lock(directory, create=mode == 'fresh') as ownership:
         identity_deadline = operation_started + config.run.execution_seconds if mode == 'fresh' else operation_started + read_json(directory / 'run.json')['execution_deadline_unix'] - operation_unix
+        if preprocessing is None:
+            preprocessing = preprocessing_identity(config.preprocessing, deadline=identity_deadline)
         identity = source_identity(identity_deadline)
         identity["integration"] = integration_identity(config, identity_deadline)
         identity["configuration_inputs_sha256"] = digest(loaded.inputs)
+        identity["preprocessing"] = preprocessing
         invocation_started = operation_started
         now = operation_unix
         if mode == 'fresh':
@@ -357,13 +363,24 @@ async def train_ppo(loaded: Any, collector: Collector, directory: Path, *, mode:
                 if collection_manifest.get('schedule') != serialize_schedule(groups, 4) or collection_manifest.get('policy_bindings') != {key: asdict(value) for key, value in registry.items()}:
                     raise ContractError('collection callback changed frozen schedule/policies')
                 collection_seconds = time.monotonic() - collection_started
-                decisions, proof = ingest_collection(collection.directory, model, linkage, deadline=execution, online_context=OnlinePPOContext(directory, state["run_id"], batch_id, generation, ownership.token))
                 numeric = directory / 'numeric' / batch_id
-                write_rollout(numeric, decisions, deadline=execution)
+                online_context = OnlinePPOContext(directory, state["run_id"], batch_id, generation, ownership.token)
+                if config.preprocessing.backend == 'rust':
+                    decision_count, proof = await stage_rollout(collection.directory, numeric, model, linkage,
+                                                         config.preprocessing, deadline=execution,
+                                                         online_context=online_context,
+                                                         expected_identity=preprocessing, wall_deadline=wall)
+                else:
+                    decisions, proof = ingest_collection(collection.directory, model, linkage, deadline=execution,
+                                                         online_context=online_context)
+                    write_rollout(numeric, decisions, deadline=execution)
+                    decision_count = len(decisions)
+                    del decisions
                 numeric_hash = sha256(numeric / 'rollout.json', execution)
                 if owned_bytes(directory, execution) > training.max_owned_bytes or time.monotonic() >= execution:
                     raise RuntimeError('PPO collection/encoding exceeded execution/storage limits')
                 next_generation = generation + 1
+                await asyncio.sleep(0)  # Serve pending cancellation before optimizer side effects.
                 update_started = time.monotonic()
                 metrics = await child.request({'command': 'update', 'batch': str(numeric), 'batch_hash': numeric_hash,
                                                'output': str(checkpoint_path(directory, next_generation)), 'action_hash': digest(asdict(config.actions))}, execution)
@@ -371,7 +388,7 @@ async def train_ppo(loaded: Any, collector: Collector, directory: Path, *, mode:
                 update_seconds = time.monotonic() - update_started
                 if time.monotonic() >= execution or owned_bytes(directory, execution) > training.max_owned_bytes:
                     raise RuntimeError('PPO update/save execution/storage overrun')
-                state['accepted_decisions'] += len(decisions)
+                state['accepted_decisions'] += decision_count
                 state['optimizer_steps'] = metrics['optimizer_steps']
                 state['collection_seconds'] += collection_seconds
                 state['update_seconds'] += update_seconds
@@ -381,7 +398,7 @@ async def train_ppo(loaded: Any, collector: Collector, directory: Path, *, mode:
                           'parent_sha256': state['generation_sha256'], 'batch_id': batch_id,
                           'collection': str(collection.directory.relative_to(directory)), 'collection_manifest_sha256': proof['manifest_sha256'],
                           'numeric': str(numeric.relative_to(directory)), 'numeric_sha256': numeric_hash,
-                          'accepted_decisions': len(decisions), 'source_proof': proof, 'metrics': metrics,
+                          'accepted_decisions': decision_count, 'source_proof': proof, 'metrics': metrics,
                           'planned_games': 16, 'actual_games': proof['games'], 'health': {},
                           'policy_bindings': {key: asdict(value) for key, value in registry.items()},
                           'learner_seats': linkage['learner_seats'], 'collection_seconds': collection_seconds, 'update_seconds': update_seconds}

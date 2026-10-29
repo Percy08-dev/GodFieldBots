@@ -10,7 +10,7 @@ from collections.abc import Callable
 from contextlib import closing
 from dataclasses import asdict
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
@@ -39,6 +39,10 @@ from gf_training.q_data import (
 )
 
 SELECTION = 'all-explicit-learner-accepted-natural-returns-v1'
+
+if TYPE_CHECKING:
+    from gf_training.native_authorization import NativePreparation
+    from gf_training.native_preparation import NativePreparedInputs
 
 
 def _scan_sources(ppo_runs: tuple[Path, ...], validation_runs: tuple[Path, ...], *,
@@ -167,7 +171,7 @@ def _validate_sources(ppo_runs: tuple[Path, ...], validation_runs: tuple[Path, .
     return manifest, tuple(train), tuple(validation)
 
 
-def _publish_owned(session: PreparationSession, outputs: tuple[tuple[Path, Path], ...]) -> None:
+def _publish_owned(session: PreparationSession | NativePreparation, outputs: tuple[tuple[Path, Path], ...]) -> None:
     """Fresh-path publication stays owned through every post-write check."""
     published: list[tuple[Path, tuple[int, int]]] = []
     try:
@@ -197,6 +201,9 @@ def _publish_owned(session: PreparationSession, outputs: tuple[tuple[Path, Path]
 
 def build_dataset(ppo_runs: tuple[Path, ...], validation_runs: tuple[Path, ...], output: Path, *,
                   deadline: float = float('inf'), preprocessing: PreparationConfig | None = None) -> Json:
+    if preprocessing is not None and preprocessing.backend == 'rust':
+        from gf_training.native_preparation import build
+        return build(ppo_runs, validation_runs, output, preprocessing, deadline=deadline)
     if output.exists(follow_symlinks=False):
         raise ContractError('frozen dataset output already exists')
     temporary = output.with_name(output.name + '.' + uuid.uuid4().hex + '.tmp')
@@ -218,6 +225,9 @@ def build_dataset(ppo_runs: tuple[Path, ...], validation_runs: tuple[Path, ...],
 
 def inspect_dataset_summary(path: Path, *, deadline: float = float('inf'),
                             preprocessing: PreparationConfig | None = None) -> Json:
+    if preprocessing is not None and preprocessing.backend == 'rust':
+        from gf_training.native_preparation import inspect
+        return inspect(path, preprocessing, deadline=deadline)
     with PreparationSession(preprocessing, deadline=deadline) as session:
         actual = _validated_dataset(path, session)
     return actual
@@ -226,6 +236,8 @@ def inspect_dataset_summary(path: Path, *, deadline: float = float('inf'),
 def inspect_dataset(path: Path, *, deadline: float = float('inf'),
                     preprocessing: PreparationConfig | None = None) -> tuple[Json, tuple[Sample, ...], tuple[Sample, ...]]:
     """Compatibility adapter; production summary/index/fit paths do not retain samples."""
+    if preprocessing is not None and preprocessing.backend != 'python':
+        raise ContractError('materializing compatibility inspection requires explicit Python preparation')
     train: list[Sample] = []
     validation: list[Sample] = []
     with PreparationSession(preprocessing, deadline=deadline) as session:
@@ -238,7 +250,10 @@ def inspect_dataset(path: Path, *, deadline: float = float('inf'),
 
 
 def prepare_fixed_inputs(path: Path, encoder: EncoderConfig, *, preprocessing: PreparationConfig | None = None,
-                         deadline: float = float('inf'), wall_deadline: float | None = None) -> PreparedInputs:
+                         deadline: float = float('inf'), wall_deadline: float | None = None) -> PreparedInputs | NativePreparedInputs:
+    if preprocessing is not None and preprocessing.backend == 'rust':
+        from gf_training.native_preparation import NativePreparedInputs
+        return NativePreparedInputs(path, encoder, preprocessing, deadline=deadline, wall_deadline=wall_deadline)
     session = PreparationSession(preprocessing, deadline=deadline, wall_deadline=wall_deadline)
     return prepare_inputs(path, encoder, session, _validated_dataset)
 
@@ -279,6 +294,9 @@ def index_dataset(path: Path, output: Path, *, deadline: float = float('inf'),
 
     Original sources are scanned once; a bounded spill ledger sorts index rows.
     """
+    if preprocessing is not None and preprocessing.backend == 'rust':
+        from gf_training.native_index import index_dataset as native_index
+        return native_index(path, output, preprocessing, deadline=deadline)
     import pyarrow as pa
     import pyarrow.parquet as pq
 

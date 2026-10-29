@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -91,7 +92,7 @@ def ingest_collection(directory: Path, model: MLPModelConfig, linkage: Json, *, 
                     'decisions': len(result), 'games': len(manifest['episodes'])}
 
 
-def write_rollout(directory: Path, decisions: list[RolloutDecision], *, deadline: float = float("inf")) -> Json:
+def write_rollout(directory: Path, decisions: Sequence[RolloutDecision], *, deadline: float = float("inf")) -> Json:
     directory.mkdir(parents=True, exist_ok=False)
     shards: list[Json] = []
     current: list[RolloutDecision] = []

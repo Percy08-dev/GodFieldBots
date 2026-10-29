@@ -336,6 +336,8 @@ def _manifest_source(source: Path, records: list[Json], *, online_context: Any =
     except (OSError, ValueError) as exc:
         raise ContractError("journal requires its finalized linked run manifest") from exc
     header = records[0]
+    if header['episode_id'] != source.parent.name:
+        raise ContractError('journal/directory episode identity mismatch')
     if manifest.get("schema_version") not in (3, 4) or type(manifest.get("schema_version")) is not int or manifest.get("status") not in ("complete", "incomplete", "interrupted"):
         raise ContractError("run manifest must be finalized schema 3")
     if manifest["schema_version"] == 4:

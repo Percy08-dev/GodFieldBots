@@ -12,7 +12,12 @@ from gf_common.preprocessing import (
 
 
 @pytest.mark.parametrize("values", [
-    {"workers": 2}, {"max_in_flight": 2}, {"backend": "rust"},
+    {"workers": 2}, {"max_in_flight": 2}, {"backend": "unknown"},
+    {"backend": "rust", "workers": 3},
+    {"backend": "rust", "native_json_depth": True},
+    {"backend": "rust", "native_json_depth": 991},
+    {"backend": "rust", "native_json_depth": 0},
+    {"native_json_depth": 16},
     {"memory_budget_mib": True}, {"cache_budget_mib": -1},
     {"chunk_target_mib": 0}, {"chunk_target_mib": 8193},
     {"cache_budget_mib": 8193}, {"max_record_mib": 65},
@@ -64,3 +69,13 @@ def test_referenced_preprocessing_preset_requires_table(tmp_path):
                           '[references]\npreprocessing="prepare.toml"\n')
     with pytest.raises(ContractError, match="settings table"):
         load_config(experiment)
+
+
+def test_native_shared_budget_and_explicit_worker_counts():
+    for workers in (1, 2, 4):
+        config = preparation_config({'backend': 'rust', 'workers': workers,
+                                     'max_in_flight': workers, 'memory_budget_mib': 2048})
+        assert config.memory_budget_mib == 2048
+        assert config.workers == workers and config.max_in_flight == workers
+    assert PreparationConfig().backend == 'python'  # Switch target presets only after acceptance.
+    assert preparation_config({'backend': 'rust', 'native_json_depth': 16}).native_json_depth == 16

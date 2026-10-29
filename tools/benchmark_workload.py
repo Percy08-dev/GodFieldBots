@@ -1,4 +1,4 @@
-"""Frozen-input workloads and sequential paired driver for ADR0010.
+"""Frozen-input workloads and sequential paired driver for ADR0010/ADR0011.
 
 No fits, PPO updates, live collection, or source mutations are performed.
 The driver and observer are stdlib-only; numerical imports happen in workload
@@ -6,6 +6,15 @@ children. Example (inspect plan first; add --execute to run)::
 
   env -u VIRTUAL_ENV .venv/bin/python tools/benchmark_workload.py paired \
     --kind preparation --output /tmp/gfb-pairs --encoder history
+
+ADR0011 native comparison (one matching 2GiB/16MiB cell, no budget matrix)::
+
+  env -u VIRTUAL_ENV .venv/bin/python tools/benchmark_workload.py paired \
+    --kind preparation --comparison native --output /tmp/gfb-native-pairs
+
+The native package may be installed in this interpreter, or supplied with
+--native-pythonpath. The declared Python source always precedes those paths;
+every imported gf_common/gf_models/gf_training module must originate there.
 
 The preparation plan includes the full old/new standard comparison and all new
 2/8GiB x 16/64MiB cells with cache512MiB. Standard old/new has separately reported
@@ -35,6 +44,7 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 FROZEN = 'ab5d4913fda45795d1cd5aa02a4a9c4c3464268298c4d3ea49d56d4909df770f'
+NATIVE_REFERENCE = Path('/tmp/gfb-native-reference-42ce5e6')
 
 
 def file_hash(path: Path) -> str:
@@ -45,11 +55,12 @@ def file_hash(path: Path) -> str:
     return hasher.hexdigest()
 
 
-def source_modules(kind: str) -> tuple[str, ...]:
+def source_modules(kind: str, *, native: bool = False) -> tuple[str, ...]:
     common = ('gf_common', 'gf_common.domain', 'gf_models', 'gf_models.config', 'gf_models.encoder')
     if kind == 'preparation':
-        return (*common, 'gf_training', 'gf_training.fixed_data', 'gf_training.q_data',
-                'gf_training.journal', 'gf_training.lineage')
+        modules = (*common, 'gf_training', 'gf_training.fixed_data', 'gf_training.q_data',
+                   'gf_training.journal', 'gf_training.lineage')
+        return (*modules, 'gf_training.native_backend', 'gf_training.native_preparation') if native else modules
     return (*common, 'gf_models.mlp', 'gf_models.mlp.policy', 'gf_models.mlp.features',
             'gf_models.mlp.model', 'gf_models.mlp.arrays')
 
@@ -73,10 +84,30 @@ def source_probe(source: Path, modules: tuple[str, ...]) -> dict[str, Any]:
     return result
 
 
-def preflight_source(source: Path, kind: str) -> dict[str, Any]:
+def native_identity() -> dict[str, Any]:
+    """Use the backend's actual loaded-binary proof, never Git as a substitute."""
+    from gf_training.native_backend import binary_identity
+
+    return dict(binary_identity())
+
+
+def source_environment(source: Path, native_paths: list[Path] | None = None,
+                       *, native: bool = False) -> dict[str, str]:
+    paths = [str(source.resolve())]
+    if native:
+        paths.extend(str(path.resolve()) for path in native_paths or [])
+        paths.extend(part for part in os.environ.get('PYTHONPATH', '').split(os.pathsep) if part)
+    environment = dict(os.environ, PYTHONPATH=os.pathsep.join(dict.fromkeys(paths)),
+                       PYTHONDONTWRITEBYTECODE='1')
+    environment.pop('VIRTUAL_ENV', None)
+    return environment
+
+
+def preflight_source(source: Path, kind: str, *, native: bool = False,
+                     native_paths: list[Path] | None = None) -> dict[str, Any]:
     """Fail before expensive work if a reference can fall back to installed code."""
     source = source.resolve()
-    modules = source_modules(kind)
+    modules = source_modules(kind, native=native)
     expected = {}
     for name in modules:
         path = source / Path(*name.split('.'))
@@ -84,23 +115,34 @@ def preflight_source(source: Path, kind: str) -> dict[str, Any]:
         if not path.is_file() or not path.resolve().is_relative_to(source):
             raise ValueError(f'missing/incomplete source tree: {path}')
         expected[name] = {'path': str(path.resolve()), 'sha256': file_hash(path)}
-    environment = dict(os.environ, PYTHONPATH=str(source), PYTHONDONTWRITEBYTECODE='1')
-    environment.pop('VIRTUAL_ENV', None)
+    environment = source_environment(source, native_paths, native=native)
+    command = [sys.executable, str(Path(__file__).resolve()), '_source-probe',
+               '--source', str(source), '--kind', kind]
+    if native:
+        command.append('--native')
     completed = subprocess.run(
-        [sys.executable, str(Path(__file__).resolve()), '_source-probe',
-         '--source', str(source), '--kind', kind],
+        command,
         env=environment, check=False, text=True, capture_output=True, timeout=20,
     )
     if completed.returncode:
         raise ValueError(f'source preflight failed: {source}: {completed.stderr[-8192:]}')
     try:
-        actual = json.loads(completed.stdout)
-    except (ValueError, TypeError) as error:
+        decoded = json.loads(completed.stdout)
+        actual = decoded['source_imports'] if native else decoded
+        if not isinstance(actual, dict):
+            raise TypeError('source import proof must be an object')
+    except (ValueError, TypeError, KeyError) as error:
         raise ValueError(f'source preflight returned malformed proof: {source}') from error
-    for name, proof in expected.items():
-        if actual.get(name) != proof:
-            raise ValueError(f'shadowed/changed source import: {name}: {actual.get(name)} != {proof}')
-    return {'source': str(source), 'expected': expected, 'actual_imports': actual}
+    for name, expected_proof in expected.items():
+        if actual.get(name) != expected_proof:
+            raise ValueError(f'shadowed/changed source import: {name}: {actual.get(name)} != {expected_proof}')
+    proof: dict[str, Any] = {'source': str(source), 'expected': expected, 'actual_imports': actual}
+    if native:
+        identity = decoded.get('native_identity')
+        if not isinstance(identity, dict) or not identity.get('extension_sha256') or not identity.get('build'):
+            raise ValueError('native source preflight returned no loaded binary/build identity')
+        proof['native_identity'] = identity
+    return proof
 
 
 def array_proof(arrays: dict[str, Any]) -> dict[str, Any]:
@@ -193,6 +235,23 @@ def source_read_metrics(diagnostics: dict[str, Any], elapsed: float) -> dict[str
                 'excludes final mutable-control rehashes; distinct from static unique inventory and kernel rchar'}
 
 
+def native_transfer_metrics(diagnostics: dict[str, Any]) -> dict[str, Any]:
+    """Only report owner counters; absence is unavailable, never an inferred zero."""
+    return {key: {'value': diagnostics.get(key),
+                  'unavailable_reason': None if diagnostics.get(key) is not None else
+                  f'preparation owner does not expose {key}'}
+            for key in ('ffi_data_calls', 'payload_copy_stats')}
+
+
+def preparation_settings(args: argparse.Namespace) -> dict[str, Any]:
+    """Keep the optimized reference compatible with its older config signature."""
+    settings: dict[str, Any] = {'memory_budget_mib': args.memory_mib, 'chunk_target_mib': args.chunk_mib,
+                              'cache_budget_mib': 512}
+    if args.variant == 'rust':
+        settings.update(backend='rust', workers=args.workers, max_in_flight=args.max_in_flight)
+    return settings
+
+
 def preparation(args: argparse.Namespace) -> dict[str, Any]:
     entered = time.monotonic()
     import numpy as np
@@ -236,9 +295,7 @@ def preparation(args: argparse.Namespace) -> dict[str, Any]:
         from gf_training.fixed_data import prepare_fixed_inputs
         tick = time.monotonic()
         owner = prepare_fixed_inputs(args.dataset, config,
-                                     preprocessing=PreparationConfig(memory_budget_mib=args.memory_mib,
-                                                                     chunk_target_mib=args.chunk_mib,
-                                                                     cache_budget_mib=512),
+                                     preprocessing=PreparationConfig(**preparation_settings(args)),
                                      deadline=deadline, wall_deadline=deadline)
         dataset = owner.dataset
         phases['read_hash_validation_encoding'] = time.monotonic() - tick
@@ -282,9 +339,13 @@ def preparation(args: argparse.Namespace) -> dict[str, Any]:
                             'primary timings use observer total command wall',
             'unattributed_wall_seconds': max(0., elapsed - sum(phases.values())),
             **source_read_metrics(diagnostics, elapsed),
+            'native_transfer_metrics': native_transfer_metrics(diagnostics) if args.variant == 'rust' else None,
             'nested_preparation_diagnostics': diagnostics,
             'config': {'memory_mib': args.memory_mib, 'chunk_mib': args.chunk_mib,
-                       'cache_mib': 512} if args.variant == 'new' else None,
+                       'cache_mib': 512,
+                       **({'backend': 'rust', 'workers': args.workers,
+                           'max_in_flight': args.max_in_flight} if args.variant == 'rust' else {})}
+                      if args.variant != 'old' else None,
             'unavailable_phases': ['native_fit: not applicable; no fit is run',
                                    'read/hash vs validation: interleaved within scanner']}
 
@@ -419,23 +480,35 @@ def paired(args: argparse.Namespace) -> None:
         raise ValueError('seconds must be finite and positive')
     if args.output.exists():
         raise ValueError('paired output directory must not already exist')
+    native = getattr(args, 'comparison', 'legacy') == 'native'
+    if native and args.kind != 'preparation':
+        raise ValueError('native comparison requires preparation')
+    reference = args.reference or (NATIVE_REFERENCE if native else Path('/tmp/gfb-performance-reference'))
+    native_paths = getattr(args, 'native_pythonpath', [])
+    if native and (args.workers not in (1, 2, 4) or args.max_in_flight != args.workers):
+        raise ValueError('native paired trials require workers/max-in-flight 1/1, 2/2 or 4/4')
     # Both probes run before inventory parsing, output creation, or any trial.
-    preflight = ({'old': preflight_source(args.reference / 'src', args.kind),
+    preflight = ({'python': preflight_source(reference / 'src', args.kind),
+                  'rust': preflight_source(ROOT / 'src', args.kind, native=True, native_paths=native_paths)}
+                 if native else
+                 {'old': preflight_source(reference / 'src', args.kind),
                   'new': preflight_source(ROOT / 'src', args.kind)}
                  if args.kind != 'overhead' else {})
-    standard = ('old', 'new') if args.kind != 'overhead' else ('off', 'on')
-    cells: list[tuple[str, tuple[str, ...], int, int]] = [('standard', standard, 8192, 64)]
-    if args.kind == 'preparation':
+    standard = ('python', 'rust') if native else (
+        ('old', 'new') if args.kind != 'overhead' else ('off', 'on'))
+    cells: list[tuple[str, tuple[str, ...], int, int]] = [
+        ('standard', standard, 2048 if native else 8192, 16 if native else 64)]
+    if args.kind == 'preparation' and not native:
         cells.extend((f'memory{memory}-chunk{chunk}', ('new',), memory, chunk)
                      for memory in (2048, 8192) for chunk in (16, 64)
                      if (memory, chunk) != (8192, 64))
     aliases = ({'memory8192-chunk64': {'cell': 'standard', 'variant': 'new',
                                       'reason': 'identical settings; reuse the same three measured trials'}}
-               if args.kind == 'preparation' else {})
+               if args.kind == 'preparation' and not native else {})
     plan: list[dict[str, Any]] = []
     for cell, variants, memory, chunk in cells:
         for trial in ((-1, 0, 1, 2) if cell == 'standard' else (0, 1, 2)):
-            order = variants if trial % 2 == 0 else tuple(reversed(variants))
+            order = variants if trial % 2 == 0 or (native and trial < 0) else tuple(reversed(variants))
             for variant in order:
                 label = f'{cell}-{"warmup" if trial < 0 else trial}-{variant}'
                 directory = args.output / label
@@ -443,13 +516,21 @@ def paired(args: argparse.Namespace) -> None:
                            '--seconds', str(args.seconds)]
                 if variant == 'off':
                     command.append('--no-sampling')
-                source = args.reference / 'src' if variant == 'old' else ROOT / 'src'
-                command += ['--', 'env', '-u', 'VIRTUAL_ENV', f'PYTHONPATH={source}',
+                source = reference / 'src' if variant in ('old', 'python') else ROOT / 'src'
+                environment = source_environment(source, native_paths, native=variant == 'rust')
+                command += ['--', 'env', '-u', 'VIRTUAL_ENV',
+                            f'PYTHONPATH={environment["PYTHONPATH"]}', 'PYTHONDONTWRITEBYTECODE=1',
                             sys.executable, str(helper)]
                 if args.kind == 'preparation':
                     command += ['preparation', '--variant', variant, '--dataset', str(args.dataset),
                                 '--encoder', args.encoder, '--memory-mib', str(memory),
                                 '--chunk-mib', str(chunk), '--seconds', str(args.seconds)]
+                    if native:
+                        command += ['--source', str(source)]
+                    if variant == 'rust':
+                        command += ['--workers', str(args.workers),
+                                    '--max-in-flight', str(args.max_in_flight),
+                                    '--native-sha256', preflight['rust']['native_identity']['extension_sha256']]
                 elif args.kind in ('fixed', 'replay'):
                     command += ['policy', '--mode', args.kind, '--root', str(args.root),
                                 '--calls', str(args.calls), '--replay-limit', str(args.replay_limit)]
@@ -488,6 +569,9 @@ def paired(args: argparse.Namespace) -> None:
             item['failure'] = 'workload/monitor failure; never a partial success'
         else:
             item['workload'] = json.loads((directory / 'workload.json').read_text())
+            if (native and item['variant'] == 'rust'
+                    and item['workload'].get('native_identity') != preflight['rust']['native_identity']):
+                item['failure'] = 'native loaded binary identity changed after preflight'
             if args.kind == 'preparation':
                 item['primary_accepted_actions_per_second'] = (
                     item['workload']['accepted_actions'] / measurement['wall_seconds'])
@@ -533,17 +617,20 @@ def paired(args: argparse.Namespace) -> None:
     print('\n'.join(lines))
 
 
-def main() -> None:
-    started = time.monotonic()
+def argument_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest='command', required=True)
     prep = sub.add_parser('preparation')
-    prep.add_argument('--variant', choices=('old', 'new'), required=True)
+    prep.add_argument('--variant', choices=('old', 'new', 'python', 'rust'), required=True)
     prep.add_argument('--dataset', type=Path, default=ROOT / 'runs/ppo-comparison-v2/dataset.json')
     prep.add_argument('--encoder', choices=('observation', 'history'), default='history')
     prep.add_argument('--memory-mib', type=int, default=8192)
     prep.add_argument('--chunk-mib', type=int, default=64)
     prep.add_argument('--seconds', type=float, default=7200)
+    prep.add_argument('--workers', type=int, choices=(1, 2, 4), default=1)
+    prep.add_argument('--max-in-flight', type=int)
+    prep.add_argument('--source', type=Path)
+    prep.add_argument('--native-sha256', help=argparse.SUPPRESS)
     policy = sub.add_parser('policy')
     policy.add_argument('--mode', choices=('fixed', 'replay'), default='fixed')
     policy.add_argument('--root', type=Path, default=ROOT / 'runs/ppo-comparison-v2')
@@ -553,7 +640,11 @@ def main() -> None:
     pairs = sub.add_parser('paired')
     pairs.add_argument('--kind', choices=('preparation', 'fixed', 'replay', 'overhead'), required=True)
     pairs.add_argument('--output', type=Path, required=True)
-    pairs.add_argument('--reference', type=Path, default=Path('/tmp/gfb-performance-reference'))
+    pairs.add_argument('--comparison', choices=('legacy', 'native'), default='legacy')
+    pairs.add_argument('--reference', type=Path)
+    pairs.add_argument('--native-pythonpath', type=Path, action='append', default=[])
+    pairs.add_argument('--workers', type=int, choices=(1, 2, 4), default=1)
+    pairs.add_argument('--max-in-flight', type=int)
     pairs.add_argument('--dataset', type=Path, default=ROOT / 'runs/ppo-comparison-v2/dataset.json')
     pairs.add_argument('--root', type=Path, default=ROOT / 'runs/ppo-comparison-v2')
     pairs.add_argument('--encoder', choices=('observation', 'history'), default='history')
@@ -564,10 +655,36 @@ def main() -> None:
     probe = sub.add_parser('_source-probe', help=argparse.SUPPRESS)
     probe.add_argument('--source', type=Path, required=True)
     probe.add_argument('--kind', choices=('preparation', 'fixed', 'replay'), required=True)
-    args = parser.parse_args()
+    probe.add_argument('--native', action='store_true')
+    return parser
+
+
+def workload_source_proof(args: argparse.Namespace) -> dict[str, Any]:
+    """Verify actual imports before the workload opens any frozen data."""
+    native = args.variant == 'rust'
+    source = args.source or (NATIVE_REFERENCE / 'src' if args.variant == 'python' else ROOT / 'src')
+    actual = source_probe(source, source_modules('preparation', native=native))
+    result = {'source': str(source.resolve()), 'actual_imports': actual}
+    if native:
+        identity = native_identity()
+        if args.native_sha256 is not None and identity['extension_sha256'] != args.native_sha256:
+            raise ValueError('native loaded binary changed after preflight')
+        result['native_identity'] = identity
+    return result
+
+
+def main() -> None:
+    started = time.monotonic()
+    args = argument_parser().parse_args()
     args.command_started = started
+    if hasattr(args, 'max_in_flight'):
+        args.max_in_flight = args.workers if args.max_in_flight is None else args.max_in_flight
+        if args.max_in_flight < 1:
+            raise ValueError('max-in-flight must be positive')
     if args.command == '_source-probe':
-        print(json.dumps(source_probe(args.source, source_modules(args.kind))))
+        proof = source_probe(args.source, source_modules(args.kind, native=args.native))
+        print(json.dumps({'source_imports': proof, 'native_identity': native_identity()}
+                         if args.native else proof))
         return
     if hasattr(args, 'seconds') and (not math.isfinite(args.seconds) or args.seconds <= 0):
         raise ValueError('seconds must be finite and positive')
@@ -576,6 +693,12 @@ def main() -> None:
         return
     if getattr(args, 'calls', 1) < 1 or getattr(args, 'replay_limit', 0) < 0:
         raise ValueError('positive calls and nonnegative replay limit required')
+    declared_source = None
+    if args.command == 'preparation':
+        if args.variant != 'rust' and (args.workers != 1 or args.max_in_flight != 1):
+            raise ValueError('Python preparation is serial')
+        if args.variant in ('python', 'rust') or args.source is not None:
+            declared_source = workload_source_proof(args)
     launch_seconds = time.monotonic() - started
     result = preparation(args) if args.command == 'preparation' else (
         policy_workload(args) if args.command == 'policy' else overhead())
@@ -599,6 +722,12 @@ def main() -> None:
                   source_helper_sha256=file_hash(Path(__file__)),
                   thread_environment={key: os.environ.get(key) for key in
                                       ('OMP_NUM_THREADS', 'MKL_NUM_THREADS', 'OPENBLAS_NUM_THREADS')})
+    if declared_source is not None:
+        # Recheck source origin after all workload imports, too.
+        declared_source['actual_imports'] = source_probe(Path(declared_source['source']), ())
+        result['declared_source'] = declared_source
+        if 'native_identity' in declared_source:
+            result['native_identity'] = declared_source['native_identity']
     encoded = json.dumps(result, separators=(',', ':'))
     destination = os.environ.get('GFB_BENCHMARK_RESULT')
     if destination:

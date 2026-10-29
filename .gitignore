@@ -12,3 +12,7 @@ wheels/
 .mypy_cache/
 .ruff_cache/
 runs/
+
+# Native build outputs (source and lockfiles remain tracked)
+native/target/
+*.so

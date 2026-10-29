@@ -12,6 +12,12 @@ conflicts = [[
     { package = "godfieldbots", extra = "torch-cuda" },
 ]]
 
+[manifest]
+members = [
+    "godfieldbots",
+    "godfieldbots-native",
+]
+
 [[package]]
 name = "anyio"
 version = "4.15.1"
@@ -150,6 +156,9 @@ data = [
 lightgbm = [
     { name = "lightgbm" },
 ]
+native = [
+    { name = "godfieldbots-native" },
+]
 torch = [
     { name = "torch", version = "2.14.1", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform == 'darwin' and extra == 'extra-12-godfieldbots-torch') or (extra == 'extra-12-godfieldbots-torch' and extra == 'extra-12-godfieldbots-torch-cuda')" },
     { name = "torch", version = "2.14.1+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform != 'darwin' and extra == 'extra-12-godfieldbots-torch') or (extra == 'extra-12-godfieldbots-torch' and extra == 'extra-12-godfieldbots-torch-cuda')" },
@@ -170,6 +179,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "godfieldbots-native", marker = "extra == 'native'", editable = "native" },
     { name = "httpx", specifier = ">=0.28,<1" },
     { name = "lightgbm", marker = "extra == 'lightgbm'", specifier = ">=4.6,<5" },
     { name = "numpy", specifier = "==2.5.4" },
@@ -179,7 +189,7 @@ requires-dist = [
     { name = "torchvision", marker = "extra == 'torch'", specifier = "==0.29.1", index = "https://download.pytorch.org/whl/cpu", conflict = { package = "godfieldbots", extra = "torch" } },
     { name = "torchvision", marker = "extra == 'torch-cuda'", specifier = "==0.29.1", index = "https://download.pytorch.org/whl/cu132", conflict = { package = "godfieldbots", extra = "torch-cuda" } },
 ]
-provides-extras = ["data", "lightgbm", "torch", "torch-cuda"]
+provides-extras = ["data", "lightgbm", "torch", "torch-cuda", "native"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -187,6 +197,17 @@ dev = [
     { name = "pytest", specifier = ">=8.4,<10" },
     { name = "ruff", specifier = ">=0.14,<1" },
 ]
+
+[[package]]
+name = "godfieldbots-native"
+version = "0.1.0"
+source = { editable = "native" }
+dependencies = [
+    { name = "numpy" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "numpy", specifier = "==2.5.4" }]
 
 [[package]]
 name = "h11"

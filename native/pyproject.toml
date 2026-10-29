@@ -1,0 +1,15 @@
+[build-system]
+requires = ["maturin==1.15.0"]
+build-backend = "maturin"
+
+[project]
+name = "godfieldbots-native"
+version = "0.1.0"
+description = "Native verified preprocessing for GodFieldBots"
+requires-python = ">=3.14,<3.15"
+dependencies = ["numpy==2.5.4"]
+
+[tool.maturin]
+bindings = "pyo3"
+module-name = "gf_native"
+features = ["pyo3/extension-module"]
