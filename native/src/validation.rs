@@ -41,9 +41,9 @@ fn indexed<'a>(
     Ok(keys)
 }
 fn sort_keys(keys: &mut [Key<'_>], control: Option<&Control>) -> Result<()> {
-    sort_controlled(keys, control, Ord::cmp)
+    sort_unstable_by_controlled(keys, control, Ord::cmp)
 }
-pub(crate) fn sort_controlled<T>(
+pub(crate) fn sort_unstable_by_controlled<T>(
     keys: &mut [T],
     control: Option<&Control>,
     compare: impl Fn(&T, &T) -> std::cmp::Ordering,
@@ -64,14 +64,9 @@ fn duplicated(keys: &[Key<'_>], control: Option<&Control>) -> Result<bool> {
 /// Catalog mapping keys are the perceived references. Their inner definition IDs
 /// need not agree: the historical validator intentionally accepts that shape.
 pub fn catalog_entry<'a>(catalog: &'a Value, reference: &Value) -> Result<&'a Value> {
-    let Value::String(reference) = reference else {
-        return fail("string reference required");
-    };
     catalog
         .object()?
-        .iter()
-        .find(|(key, _)| key.as_bytes() == reference.as_bytes())
-        .map(|(_, value)| value)
+        .get(reference.string()?)
         .ok_or_else(|| Error::contract("unknown own-visible definition"))
 }
 

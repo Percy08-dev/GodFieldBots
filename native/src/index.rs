@@ -88,31 +88,22 @@ impl IndexInfo {
             .and_then(|n| decisions.checked_mul(32).and_then(|v| n.checked_add(v)))
             .ok_or_else(|| Error::resource("index capacity overflow"))
     }
-    fn row(&self, decision: usize, budget: &Arc<Budget>) -> Result<Value> {
-        let text = |i: usize| json::text(self.strings[i].as_str(), budget);
-        json::object(
-            [
-                ("run_id", text(0)?),
-                ("parent_run_id", text(1)?),
-                ("batch_id", text(2)?),
-                (
-                    "generation",
-                    json::integer(self.generation as i128, budget)?,
-                ),
-                ("split", text(3)?),
-                (
-                    "learner_viewer",
-                    json::integer(self.viewer as i128, budget)?,
-                ),
-                ("opponent", text(4)?),
-                ("source_manifest_sha256", text(5)?),
-                ("game_id", text(6)?),
-                ("decision", json::integer(decision as i128, budget)?),
-                ("return", json::float(self.reward)?),
-                ("dataset_content_sha256", text(7)?),
-            ],
-            budget,
-        )
+    fn row(&self, decision: usize) -> Result<Value> {
+        let text = |i: usize| json::text(self.strings[i].as_str());
+        Ok(json::object([
+            ("run_id", text(0)),
+            ("parent_run_id", text(1)),
+            ("batch_id", text(2)),
+            ("generation", json::integer(self.generation as i128)),
+            ("split", text(3)),
+            ("learner_viewer", json::integer(self.viewer as i128)),
+            ("opponent", text(4)),
+            ("source_manifest_sha256", text(5)),
+            ("game_id", text(6)),
+            ("decision", json::integer(decision as i128)),
+            ("return", json::float(self.reward)?),
+            ("dataset_content_sha256", text(7)),
+        ]))
     }
 }
 pub fn content_digest(
@@ -134,7 +125,7 @@ pub fn content_digest(
             if count > 0 {
                 hash.update(b",");
             }
-            let row = info.row(decision, budget)?;
+            let row = info.row(decision)?;
             let encoded = json::canonical(&row, budget, control)?;
             hash.update(&*encoded);
             count += 1;

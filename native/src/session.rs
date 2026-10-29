@@ -24,7 +24,6 @@ pub struct Settings {
     pub scratch: usize,
     pub workers: usize,
     pub in_flight: usize,
-    pub json_depth: usize,
 }
 impl Settings {
     pub fn decode(encoded: &[u8], control: &Control) -> Result<Self> {
@@ -50,7 +49,7 @@ impl Settings {
                 "wall_seconds",
                 "cleanup_seconds",
             ],
-            &["native_json_depth"],
+            &[],
         )?;
         let mib = |key| -> Result<usize> {
             let n = value
@@ -84,10 +83,6 @@ impl Settings {
         if !wall.is_finite() || !cleanup.is_finite() || cleanup <= 0. || wall <= cleanup {
             return Err(Error::contract("invalid native preparation time limits"));
         }
-        let json_depth = match value.get("native_json_depth") {
-            Some(value) => value.integer(1, 990)? as usize,
-            None => 990,
-        };
         Ok(Self {
             memory,
             file,
@@ -96,7 +91,6 @@ impl Settings {
             scratch,
             workers,
             in_flight,
-            json_depth,
         })
     }
 }
@@ -149,7 +143,6 @@ impl Session {
                 scratch: 1024 * 1024,
                 workers: 1,
                 in_flight: 1,
-                json_depth: 990,
             },
             sources: Sources::new(budget.clone(), 1024 * 1024, 1024 * 1024),
             parents: BudgetVec::new(budget),
@@ -186,7 +179,6 @@ impl Session {
         wall_deadline: f64,
         telemetry: Arc<crate::telemetry::Telemetry>,
     ) -> Result<Self> {
-        let control = control.with_json_depth(settings.json_depth)?;
         let cleanup_control = control.at_deadline(wall_deadline)?;
         // Bounded runtime/path/hash metadata and fixed native stack work are
         // reserved up front; variable buffers have their own capacity leases.
@@ -317,7 +309,7 @@ impl Session {
                     return Err(Error::contract("duplicate source run identity"));
                 }
             }
-            crate::budget::sort_by(
+            crate::budget::sort_unstable_by(
                 &mut collections,
                 |left, right| {
                     left.directory
@@ -376,13 +368,13 @@ impl Session {
             let m = &collection.manifest.root;
             let parent = &self.parents[collection.parent];
             let quoted_path = json::canonical(
-                &json::text(path_text(&parent.directory)?, &self.budget)?,
+                &json::text(path_text(&parent.directory)?),
                 &self.budget,
                 &self.control,
             )?
             .len();
             let quoted_directory = json::canonical(
-                &json::text(path_text(&collection.directory)?, &self.budget)?,
+                &json::text(path_text(&collection.directory)?),
                 &self.budget,
                 &self.control,
             )?
@@ -435,94 +427,67 @@ impl Session {
         let authorization_bound = self.authorization_bound()?;
         let mut parents = Vec::new();
         for parent in self.parents.iter() {
-            parents.push(parent.summary(&self.budget, &self.control)?);
+            parents.push(parent.summary(&self.control)?);
         }
         let mut collections = Vec::new();
         for collection in self.collections.iter() {
             let m = &collection.manifest.root;
             let link = m.require("ppo")?;
-            collections.push(json::object(
-                [
-                    (
-                        "directory",
-                        json::text(path_text(&collection.directory)?, &self.budget)?,
-                    ),
-                    (
-                        "split",
-                        json::copy(m.require("split")?, &self.budget, &self.control)?,
-                    ),
-                    (
-                        "collection_kind",
-                        json::copy(m.require("collection_kind")?, &self.budget, &self.control)?,
-                    ),
-                    (
-                        "collection_generation",
-                        json::copy(
-                            link.require("collection_generation")?,
-                            &self.budget,
-                            &self.control,
-                        )?,
-                    ),
-                    (
-                        "batch_id",
-                        json::copy(link.require("batch_id")?, &self.budget, &self.control)?,
-                    ),
-                    (
-                        "parent_run_id",
-                        json::copy(link.require("parent_run_id")?, &self.budget, &self.control)?,
-                    ),
-                    (
-                        "parent_index",
-                        json::integer(collection.parent as i128, &self.budget)?,
-                    ),
-                    (
-                        "recorded_schedule_sha256",
-                        json::text(
-                            &controls::digest(m.require("schedule")?, &self.budget, &self.control)?,
-                            &self.budget,
-                        )?,
-                    ),
-                    (
-                        "recorded_bindings_sha256",
-                        json::text(
-                            &controls::digest(
-                                m.require("policy_bindings")?,
-                                &self.budget,
-                                &self.control,
-                            )?,
-                            &self.budget,
-                        )?,
-                    ),
-                ],
-                &self.budget,
-            )?);
-        }
-        let summary = json::object(
-            [
-                ("parents", Value::Array(parents)),
-                ("collections", Value::Array(collections)),
+            collections.push(json::object([
+                ("directory", json::text(path_text(&collection.directory)?)),
+                ("split", json::copy(m.require("split")?, &self.control)?),
                 (
-                    "authorization_wire_bound_bytes",
-                    json::integer(authorization_bound as i128, &self.budget)?,
+                    "collection_kind",
+                    json::copy(m.require("collection_kind")?, &self.control)?,
                 ),
                 (
-                    "control_fingerprint",
-                    json::text(&self.fingerprint, &self.budget)?,
+                    "collection_generation",
+                    json::copy(link.require("collection_generation")?, &self.control)?,
                 ),
                 (
-                    "scope",
-                    json::text(
-                        if self.online {
-                            "online-current-batch"
-                        } else {
-                            "offline-complete-parents"
-                        },
+                    "batch_id",
+                    json::copy(link.require("batch_id")?, &self.control)?,
+                ),
+                (
+                    "parent_run_id",
+                    json::copy(link.require("parent_run_id")?, &self.control)?,
+                ),
+                ("parent_index", json::integer(collection.parent as i128)),
+                (
+                    "recorded_schedule_sha256",
+                    json::text(&controls::digest(
+                        m.require("schedule")?,
                         &self.budget,
-                    )?,
+                        &self.control,
+                    )?),
                 ),
-            ],
-            &self.budget,
-        )?;
+                (
+                    "recorded_bindings_sha256",
+                    json::text(&controls::digest(
+                        m.require("policy_bindings")?,
+                        &self.budget,
+                        &self.control,
+                    )?),
+                ),
+            ]));
+        }
+        let summary = json::object([
+            ("parents", Value::Array(parents)),
+            ("collections", Value::Array(collections)),
+            (
+                "authorization_wire_bound_bytes",
+                json::integer(authorization_bound as i128),
+            ),
+            ("control_fingerprint", json::text(&self.fingerprint)),
+            (
+                "scope",
+                json::text(if self.online {
+                    "online-current-batch"
+                } else {
+                    "offline-complete-parents"
+                }),
+            ),
+        ]);
         Ok((
             json::canonical(&summary, &self.budget, &self.control)?,
             authorization_bound,
@@ -681,76 +646,57 @@ pub fn dataset_manifest(
     for (index, parent) in session.parents.iter().enumerate() {
         control.check()?;
         let state = &parent.state.root;
-        parent_paths.push(json::text(path_text(&parent.directory)?, budget)?);
-        parent_ids.push(json::copy(state.require("run_id")?, budget, control)?);
+        parent_paths.push(json::text(path_text(&parent.directory)?));
+        parent_ids.push(json::copy(state.require("run_id")?, control)?);
         let generation_cost = state.require("elapsed_seconds")?.number()?;
         let mut generations = Vec::new();
         for (number, record) in parent.generations.iter().enumerate() {
             let r = &record.root;
-            generations.push(json::object(
-                [
-                    ("generation", json::integer(number as i128, budget)?),
-                    (
-                        "record_sha256",
-                        json::text(
-                            session.sources.digest(
-                                &controls::generation_path(&parent.directory, number),
-                                control,
-                            )?,
-                            budget,
-                        )?,
-                    ),
-                    (
-                        "inference_sha256",
-                        json::copy(r.require("inference_sha256")?, budget, control)?,
-                    ),
-                    (
-                        "weights_sha256",
-                        json::copy(r.require("weights_sha256")?, budget, control)?,
-                    ),
-                ],
-                budget,
-            )?);
+            generations.push(json::object([
+                ("generation", json::integer(number as i128)),
+                (
+                    "record_sha256",
+                    json::text(session.sources.digest(
+                        &controls::generation_path(&parent.directory, number),
+                        control,
+                    )?),
+                ),
+                (
+                    "inference_sha256",
+                    json::copy(r.require("inference_sha256")?, control)?,
+                ),
+                (
+                    "weights_sha256",
+                    json::copy(r.require("weights_sha256")?, control)?,
+                ),
+            ]));
         }
-        parents.push(json::object(
-            [
-                (
-                    "directory",
-                    json::text(path_text(&parent.directory)?, budget)?,
+        parents.push(json::object([
+            ("directory", json::text(path_text(&parent.directory)?)),
+            ("run_id", json::copy(state.require("run_id")?, control)?),
+            (
+                "run_sha256",
+                json::text(
+                    session
+                        .sources
+                        .digest(&parent.directory.join("run.json"), control)?,
                 ),
-                (
-                    "run_id",
-                    json::copy(state.require("run_id")?, budget, control)?,
-                ),
-                (
-                    "run_sha256",
-                    json::text(
-                        session
-                            .sources
-                            .digest(&parent.directory.join("run.json"), control)?,
-                        budget,
-                    )?,
-                ),
-                ("seed", json::copy(state.require("seed")?, budget, control)?),
-                ("generations", Value::Array(generations)),
-                (
-                    "accepted_decisions",
-                    json::copy(state.require("accepted_decisions")?, budget, control)?,
-                ),
-                (
-                    "generation_cost_seconds",
-                    json::copy(state.require("elapsed_seconds")?, budget, control)?,
-                ),
-                (
-                    "artifact_registry_sha256",
-                    json::text(
-                        &controls::digest(&parent.registry.root, budget, control)?,
-                        budget,
-                    )?,
-                ),
-            ],
-            budget,
-        )?);
+            ),
+            ("seed", json::copy(state.require("seed")?, control)?),
+            ("generations", Value::Array(generations)),
+            (
+                "accepted_decisions",
+                json::copy(state.require("accepted_decisions")?, control)?,
+            ),
+            (
+                "generation_cost_seconds",
+                json::copy(state.require("elapsed_seconds")?, control)?,
+            ),
+            (
+                "artifact_registry_sha256",
+                json::text(&controls::digest(&parent.registry.root, budget, control)?),
+            ),
+        ]));
         let mut ordered = BudgetVec::new(budget);
         for collection in session.collections.iter().filter(|c| c.parent == index) {
             ordered.push(collection)?;
@@ -766,109 +712,89 @@ pub fn dataset_manifest(
                     .unwrap_or(0),
             )
         };
-        crate::budget::sort_by(&mut ordered, |a, b| key(a).cmp(&key(b)), control)?;
+        // Each committed generation has one batch and each parent one final
+        // validation, so (kind, generation) is unique for eligible sources.
+        crate::budget::sort_unstable_by(&mut ordered, |a, b| key(a).cmp(&key(b)), control)?;
         for collection in ordered.iter() {
             control.check()?;
             let m = &collection.manifest.root;
             if string(m, "split")? == "validation" {
-                validation_paths.push(json::text(path_text(&collection.directory)?, budget)?);
-                validation_ids.push(json::copy(m.require("run_id")?, budget, control)?);
+                validation_paths.push(json::text(path_text(&collection.directory)?));
+                validation_ids.push(json::copy(m.require("run_id")?, control)?);
                 cost += generation_cost + m.require("elapsed_seconds")?.number()?;
             }
             let actions = m.require("effective_config")?.require("actions")?;
             let encoded = json::canonical(actions, budget, control)?;
-            collections.push(json::object(
-                [
-                    (
-                        "directory",
-                        json::text(path_text(&collection.directory)?, budget)?,
+            collections.push(json::object([
+                ("directory", json::text(path_text(&collection.directory)?)),
+                ("run_id", json::copy(m.require("run_id")?, control)?),
+                (
+                    "manifest_sha256",
+                    json::text(
+                        session
+                            .sources
+                            .digest(&collection.directory.join("manifest.json"), control)?,
                     ),
-                    ("run_id", json::copy(m.require("run_id")?, budget, control)?),
-                    (
-                        "manifest_sha256",
-                        json::text(
-                            session
-                                .sources
-                                .digest(&collection.directory.join("manifest.json"), control)?,
-                            budget,
-                        )?,
+                ),
+                (
+                    "collection_seconds",
+                    json::float(m.require("elapsed_seconds")?.number()?)?,
+                ),
+                ("split", json::copy(m.require("split")?, control)?),
+                (
+                    "config_sha256",
+                    json::text(&controls::digest(
+                        m.require("effective_config")?,
+                        budget,
+                        control,
+                    )?),
+                ),
+                (
+                    "semantic_config",
+                    json::text(
+                        std::str::from_utf8(&encoded)
+                            .map_err(|_| Error::contract("non-UTF8 semantic config"))?,
                     ),
-                    (
-                        "collection_seconds",
-                        json::float(m.require("elapsed_seconds")?.number()?)?,
-                    ),
-                    ("split", json::copy(m.require("split")?, budget, control)?),
-                    (
-                        "config_sha256",
-                        json::text(
-                            &controls::digest(m.require("effective_config")?, budget, control)?,
-                            budget,
-                        )?,
-                    ),
-                    (
-                        "semantic_config",
-                        json::text(
-                            std::str::from_utf8(&encoded)
-                                .map_err(|_| Error::contract("non-UTF8 semantic config"))?,
-                            budget,
-                        )?,
-                    ),
-                ],
-                budget,
-            )?);
+                ),
+            ]));
         }
     }
-    let key = json::object(
-        [
-            ("parent_run_ids", Value::Array(parent_ids)),
-            ("validation_run_ids", Value::Array(validation_ids)),
-        ],
-        budget,
-    )?;
+    let key = json::object([
+        ("parent_run_ids", Value::Array(parent_ids)),
+        ("validation_run_ids", Value::Array(validation_ids)),
+    ]);
     let cost_key = controls::digest(&key, budget, control)?;
-    let namespaces = json::object(
-        [
-            ("train", json::text("ppo-train-v1", budget)?),
-            ("validation", json::text("fixed-existing-32", budget)?),
-            ("test", json::text("reserved-not-run", budget)?),
-        ],
-        budget,
-    )?;
-    let mut manifest = json::object(
-        [
-            ("schema_version", json::integer(1, budget)?),
-            (
-                "selection",
-                json::text("all-explicit-learner-accepted-natural-returns-v1", budget)?,
-            ),
-            ("ppo_runs", Value::Array(parent_paths)),
-            ("validation_runs", Value::Array(validation_paths)),
-            ("parents", Value::Array(parents)),
-            ("collections", Value::Array(collections)),
-            ("source_set_sha256", json::text(source_hash, budget)?),
-            ("train_decisions", json::integer(counts[0] as i128, budget)?),
-            (
-                "validation_decisions",
-                json::integer(counts[1] as i128, budget)?,
-            ),
-            ("validation_games", json::integer(192, budget)?),
-            ("shared_generation_seconds", json::float(cost)?),
-            ("shared_generation_cost_key", json::text(&cost_key, budget)?),
-            ("action_config_hash", json::text(action_hash, budget)?),
-            (
-                "label_recipe",
-                json::text("behavior-selected-natural-return-gamma1-v1", budget)?,
-            ),
-            ("split_namespaces", namespaces),
-        ],
-        budget,
-    )?;
+    let namespaces = json::object([
+        ("train", json::text("ppo-train-v1")),
+        ("validation", json::text("fixed-existing-32")),
+        ("test", json::text("reserved-not-run")),
+    ]);
+    let mut manifest = json::object([
+        ("schema_version", json::integer(1)),
+        (
+            "selection",
+            json::text("all-explicit-learner-accepted-natural-returns-v1"),
+        ),
+        ("ppo_runs", Value::Array(parent_paths)),
+        ("validation_runs", Value::Array(validation_paths)),
+        ("parents", Value::Array(parents)),
+        ("collections", Value::Array(collections)),
+        ("source_set_sha256", json::text(source_hash)),
+        ("train_decisions", json::integer(counts[0] as i128)),
+        ("validation_decisions", json::integer(counts[1] as i128)),
+        ("validation_games", json::integer(192)),
+        ("shared_generation_seconds", json::float(cost)?),
+        ("shared_generation_cost_key", json::text(&cost_key)),
+        ("action_config_hash", json::text(action_hash)),
+        (
+            "label_recipe",
+            json::text("behavior-selected-natural-return-gamma1-v1"),
+        ),
+        ("split_namespaces", namespaces),
+    ]);
     let content_hash = controls::digest(&manifest, budget, control)?;
     if let Value::Object(entries) = &mut manifest {
-        entries.insert(
-            "content_sha256".to_owned(),
-            json::text(&content_hash, budget)?,
-        );
+        entries.insert("content_sha256".to_owned(), json::text(&content_hash));
     }
     Ok(manifest)
 }

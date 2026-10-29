@@ -75,6 +75,22 @@ def test_native_distinct_catalog_entries_and_legacy_nullable_target(make_input):
     assert not np.array_equal(actual[0], actual[1])
 
 
+def test_native_catalog_lookup_uses_perceived_keys_for_hand_and_learned(make_input):
+    value = make_input(("bronze-club", "god-sword"), learned=("absorption",))
+    value.catalog["god-sword"]["definition_id"] = "bronze-club"
+    value.catalog["absorption"]["definition_id"] = "bronze-club"
+    # Deliberately reverse insertion order; only mapping keys identify a card.
+    value = replace(value, catalog=dict(reversed(tuple(value.catalog.items()))))
+    actions = (
+        {"type": "play_sequence", "ordered_elements": [
+            {"source": "hand_artifact", "instance_id": 2},
+            {"source": "learned_miracle", "definition_id": "absorption"}], "target": 2},
+    )
+    config = EncoderConfig(history="public_aggregate")
+    np.testing.assert_array_equal(native_encode(value, actions, config),
+                                  encoder.PreparedDecision(value, config).encode_many(actions))
+
+
 @pytest.mark.parametrize("field,invalid", [("max_elements", True), ("max_elements", 2.0),
                                             ("hash_buckets", 2.0), ("history_window", 0),
                                             ("history", "unsupported")])

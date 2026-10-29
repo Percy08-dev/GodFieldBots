@@ -178,7 +178,9 @@ impl ProofLedger {
         for record in &self.records[start..end] {
             ordered.push(record)?;
         }
-        crate::budget::sort_by(
+        // Participant source paths are unique in an eligible collection;
+        // duplicate source identities are rejected before proof publication.
+        crate::budget::sort_unstable_by(
             &mut ordered,
             |a, b| a.path.as_bytes().cmp(b.path.as_bytes()),
             control,
@@ -268,13 +270,13 @@ impl IdentityLedger {
         control: &Control,
     ) -> Result<()> {
         let values = [
-            json::text(if split == 0 { "train" } else { "validation" }, budget)?,
-            json::copy(header.require("run_id")?, budget, control)?,
-            json::copy(header.require("game_id")?, budget, control)?,
-            json::copy(header.require("viewer")?, budget, control)?,
-            json::copy(decision.require("decision")?, budget, control)?,
+            json::text(if split == 0 { "train" } else { "validation" }),
+            json::copy(header.require("run_id")?, control)?,
+            json::copy(header.require("game_id")?, control)?,
+            json::copy(header.require("viewer")?, control)?,
+            json::copy(decision.require("decision")?, control)?,
         ];
-        let encoded = json::canonical(&json::array(values, budget)?, budget, control)?;
+        let encoded = json::canonical(&json::array(values), budget, control)?;
         self.leases.reserve(1)?;
         let lease = scratch.reserve(encoded.len() + 1)?;
         let writer = &mut self.writers.as_mut().ok_or(Error::Closed)?[split];
@@ -346,7 +348,7 @@ pub fn scan(session: &mut Session) -> Result<Stage> {
             let directory = collection.directory.join(string(episode, "episode_id")?);
             episodes.push(directory)?;
         }
-        crate::budget::sort_by(
+        crate::budget::sort_unstable_by(
             &mut episodes,
             |a, b| {
                 a.as_os_str()
@@ -739,10 +741,15 @@ pub fn scan(session: &mut Session) -> Result<Stage> {
         }
     }
     if session.online {
-        crate::budget::sort_by(&mut stage.episodes, |a, b| a.order.cmp(&b.order), control)?;
+        // One staged learner episode per unique manifest position.
+        crate::budget::sort_unstable_by(
+            &mut stage.episodes,
+            |a, b| a.order.cmp(&b.order),
+            control,
+        )?;
     }
     if session.operation == "index" {
-        crate::budget::sort_by(
+        crate::budget::sort_unstable_by(
             &mut stage.episodes,
             |a, b| {
                 a.run
@@ -804,62 +811,46 @@ pub fn scan(session: &mut Session) -> Result<Stage> {
     let index_digest = if session.operation == "index" {
         let (digest, scratch) = crate::index::content_digest(&stage.episodes, budget, control)?;
         stage._index_output = Some(stage.scratch.reserve(scratch)?);
-        json::text(&digest, budget)?
+        json::text(&digest)
     } else {
         Value::Null
     };
-    stage.proof = json::object(
-        [
-            ("structural_valid", Value::Bool(true)),
-            ("learning_valid", Value::Bool(false)),
-            ("source_set_sha256", json::text(&source_hash, budget)?),
-            ("train_decisions", json::integer(counts[0] as i128, budget)?),
-            (
-                "validation_decisions",
-                json::integer(counts[1] as i128, budget)?,
+    stage.proof = json::object([
+        ("structural_valid", Value::Bool(true)),
+        ("learning_valid", Value::Bool(false)),
+        ("source_set_sha256", json::text(&source_hash)),
+        ("train_decisions", json::integer(counts[0] as i128)),
+        ("validation_decisions", json::integer(counts[1] as i128)),
+        ("games", json::integer(stage.episodes.len() as i128)),
+        ("sources", json::integer(source_count as i128)),
+        (
+            "action_config_hash",
+            json::text(
+                action_hash
+                    .as_ref()
+                    .ok_or_else(|| Error::contract("no source action conditions"))?
+                    .as_str(),
             ),
-            (
-                "games",
-                json::integer(stage.episodes.len() as i128, budget)?,
-            ),
-            ("sources", json::integer(source_count as i128, budget)?),
-            (
-                "action_config_hash",
-                json::text(
-                    action_hash
-                        .as_ref()
-                        .ok_or_else(|| Error::contract("no source action conditions"))?
-                        .as_str(),
-                    budget,
-                )?,
-            ),
-            ("dataset_manifest", frozen),
-            (
-                "manifest_sha256",
-                if session.online {
-                    json::text(
-                        session.sources.digest(
-                            &session.collections[0].directory.join("manifest.json"),
-                            control,
-                        )?,
-                        budget,
-                    )?
-                } else {
-                    Value::Null
-                },
-            ),
-            (
-                "sample_identity_sha256",
-                json::text(&identity_hash, budget)?,
-            ),
-            ("index_row_content_sha256", index_digest),
-            (
-                "index_io_reservation",
-                json::text("arrow-index-io-reservation-v1", budget)?,
-            ),
-        ],
-        budget,
-    )?;
+        ),
+        ("dataset_manifest", frozen),
+        (
+            "manifest_sha256",
+            if session.online {
+                json::text(session.sources.digest(
+                    &session.collections[0].directory.join("manifest.json"),
+                    control,
+                )?)
+            } else {
+                Value::Null
+            },
+        ),
+        ("sample_identity_sha256", json::text(&identity_hash)),
+        ("index_row_content_sha256", index_digest),
+        (
+            "index_io_reservation",
+            json::text("arrow-index-io-reservation-v1"),
+        ),
+    ]);
     Ok(stage)
 }
 fn optional_number(value: &Value) -> Result<f64> {
@@ -929,7 +920,7 @@ fn check_global(
     budget: &Arc<Budget>,
     control: &Control,
 ) -> Result<()> {
-    crate::budget::sort_by(
+    crate::budget::sort_unstable_by(
         identities,
         |a, b| {
             a.run
@@ -961,7 +952,8 @@ fn check_global(
             keys.push((1, ancestry.as_bytes(), index))?;
         }
     }
-    crate::budget::sort_by(&mut keys, |a, b| a.0.cmp(&b.0).then(a.1.cmp(b.1)), control)?;
+    // Equal lineage keys join the same DSU component; their order is immaterial.
+    crate::budget::sort_unstable_by(&mut keys, |a, b| a.0.cmp(&b.0).then(a.1.cmp(b.1)), control)?;
     fn root(parents: &mut [usize], mut i: usize) -> usize {
         while parents[i] != i {
             parents[i] = parents[parents[i]];
@@ -1183,22 +1175,16 @@ impl Stage {
             batch.winner.push(episode.winner)?;
             batch.learner_viewer.push(episode.viewer)?;
             batch.split.push(episode.split)?;
-            metadata.push(json::object(
-                [
-                    ("run_id", json::text(episode.run.as_str(), budget)?),
-                    ("game_id", json::text(episode.game.as_str(), budget)?),
-                ],
-                budget,
-            )?);
+            metadata.push(json::object([
+                ("run_id", json::text(episode.run.as_str())),
+                ("game_id", json::text(episode.game.as_str())),
+            ]));
         }
-        let metadata = json::object(
-            [
-                ("episodes", Value::Array(metadata)),
-                ("structural_valid", Value::Bool(true)),
-                ("learning_valid", Value::Bool(false)),
-            ],
-            budget,
-        )?;
+        let metadata = json::object([
+            ("episodes", Value::Array(metadata)),
+            ("structural_valid", Value::Bool(true)),
+            ("learning_valid", Value::Bool(false)),
+        ]);
         batch.metadata = json::canonical(&metadata, budget, control)?;
         control.check()?;
         self.cursor = end;

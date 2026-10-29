@@ -2,6 +2,15 @@
 
 ## Status and scope
 
+[ADR0013](adr/0013-standard-json-limits-and-sort-contracts.md) further simplifies
+JSON parsing and records sort tie contracts. Design and independent code reviews
+are accepted; whole769Python tests, both frozen recipes/index and saved PPO
+ingestion PASS. Paired median50.26->46.72s, about7.05% reduction. Standard Serde recursion
+replaces the custom990-depth and global4300-digit passes/setting. Only the actual
+reserved-number-member guard remains. Catalog lookup now borrows Serde's map
+directly. Current evidence is in
+[JSON and sort verification](verification/json-simplification-and-sorts.md).
+
 [ADR0012](adr/0012-serde-json-and-coarse-resource-admission.md) records the
 user-authorized production Serde migration and generic-code cleanup. Its design
 and final independent correctness/conformance reviews are accepted. Full tests,
@@ -194,7 +203,7 @@ rewards/GAE/normalization remain Python-owned. Rust supplies ordered index colum
 and hashes; Python invokes existing native Arrow/Parquet I/O on typed buffers.
 Live participant workers and their information boundary are unchanged.
 
-The Serde JSON parser contract is `serde-json-v1`; document admission is
+The current Serde JSON parser contract is `serde-json-v2`; document admission is
 `json-document-32x-plus64kib-v1`: estimated32*raw bytes+64KiB before parsing, with
 one Arc reservation shared by a journal file's records and retained by source
 documents. Ordinary JSON allocations and clones are not individually tracked;
@@ -202,15 +211,25 @@ these are soft admission estimates, not RSS quotas. Numeric/NumPy owner capacity
 leases still track retained buffers. Coarse metadata-copy counters exclude Serde
 heap allocation/copy; OS RSS/PSS is measured separately.
 
-Serde owns JSON grammar/string/number parsing. A narrow depth/reserved-key guard
-precedes deserialization, including escaped `$serde_json::private::Number` member
-keys; identical value strings are allowed. Exact root0 value-depth and digit
-limits follow parsing. Scalar Unicode/standard JSON is required; bare NaN/Infinity
+Serde owns JSON grammar/string/number parsing and its default recursion limit.
+A narrowly named reserved-member guard rejects escaped
+`$serde_json::private::Number` member keys; identical value strings are allowed.
+There is no custom depth counter or global postparse depth/digit traversal.
+The old native_json_depth field is no longer a current setting; historical
+effective_config remains data. Integer range checks remain at actual domain
+fields. Scalar Unicode/standard JSON is required; bare NaN/Infinity
 and lone surrogates fail early. Python canonical number spelling and metadata
 numeric equality remain small compatibility helpers so genuine historical source
 hashes and feature bytes stay stable. Cancellation is checked at bounded scans,
 file/record and operation boundaries; a parse/sort may finish before cancellation
 is observed, and no late result may publish. Safe deep-state retirement remains.
+
+Native sort wrappers name their unstable behavior explicitly. Valid sort keys
+are unique, duplicates reject before publication, or tied payloads are
+interchangeable membership/lineage values; no current native call requires
+stability. Python retains its standard stable sort/sorted. Candidate/journal
+sequences are not reordered by these helper sorts. Any future meaningful tie
+requires a caller-specific stable sort or explicit tie key.
 
 ## Config and compatibility
 

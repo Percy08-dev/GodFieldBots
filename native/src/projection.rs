@@ -16,9 +16,9 @@ pub const SIMULATOR_REVISION: &str = "ffcffa0966dbf6d7ce1d982f4ee6444e291d42d6";
 const REVIEWED_SPECS_DIGEST: &str =
     "17dc86ba14c8fac378e352acd5c7c55429e910b37482954f74ca3673f8b1767d";
 
-fn optional(value: &Value, key: &str, budget: &Arc<Budget>, control: &Control) -> Result<Value> {
+fn optional(value: &Value, key: &str, control: &Control) -> Result<Value> {
     match value.get(key) {
-        Some(v) => json::copy(v, budget, control),
+        Some(v) => json::copy(v, control),
         None => Ok(Value::Null),
     }
 }
@@ -316,111 +316,78 @@ pub fn source_metadata(
         .phase_timer(crate::telemetry::Phase::ProofStaging);
     let report = &collection.report.root;
     let report_path = collection.directory.join("report.json");
-    let report_diagnostic = json::object(
-        [
-            ("path", json::text(path_text(&report_path)?, budget)?),
-            (
-                "expected_sha256",
-                json::copy(m.require("report_sha256")?, budget, control)?,
-            ),
-            (
-                "sha256",
-                json::text(sources.digest(&report_path, control)?, budget)?,
-            ),
-            (
-                "comparison_valid",
-                json::copy(report.require("comparison_valid")?, budget, control)?,
-            ),
-            (
-                "failures",
-                json::copy(report.require("failures")?, budget, control)?,
-            ),
-            (
-                "health_failures",
-                json::copy(report.require("health_failures")?, budget, control)?,
-            ),
-            (
-                "group_health_failures",
-                json::copy(report.require("group_health_failures")?, budget, control)?,
-            ),
-        ],
-        budget,
-    )?;
-    let lineage = json::object(
-        [
-            (
-                "run_id",
-                json::copy(header.require("run_id")?, budget, control)?,
-            ),
-            (
-                "game_id",
-                json::copy(header.require("game_id")?, budget, control)?,
-            ),
-            (
-                "episode_id",
-                json::copy(header.require("episode_id")?, budget, control)?,
-            ),
-            (
-                "seed",
-                json::copy(links.group.require("seed")?, budget, control)?,
-            ),
-            (
-                "pair_id",
-                json::copy(links.spec.require("pair_id")?, budget, control)?,
-            ),
-            (
-                "ancestry",
-                optional(links.group, "ancestry", budget, control)?,
-            ),
-            ("split", json::copy(m.require("split")?, budget, control)?),
-            (
-                "learner_viewer",
-                json::copy(links.spec.require("learner_viewer")?, budget, control)?,
-            ),
-        ],
-        budget,
-    )?;
+    let report_diagnostic = json::object([
+        ("path", json::text(path_text(&report_path)?)),
+        (
+            "expected_sha256",
+            json::copy(m.require("report_sha256")?, control)?,
+        ),
+        ("sha256", json::text(sources.digest(&report_path, control)?)),
+        (
+            "comparison_valid",
+            json::copy(report.require("comparison_valid")?, control)?,
+        ),
+        (
+            "failures",
+            json::copy(report.require("failures")?, control)?,
+        ),
+        (
+            "health_failures",
+            json::copy(report.require("health_failures")?, control)?,
+        ),
+        (
+            "group_health_failures",
+            json::copy(report.require("group_health_failures")?, control)?,
+        ),
+    ]);
+    let lineage = json::object([
+        ("run_id", json::copy(header.require("run_id")?, control)?),
+        ("game_id", json::copy(header.require("game_id")?, control)?),
+        (
+            "episode_id",
+            json::copy(header.require("episode_id")?, control)?,
+        ),
+        ("seed", json::copy(links.group.require("seed")?, control)?),
+        (
+            "pair_id",
+            json::copy(links.spec.require("pair_id")?, control)?,
+        ),
+        ("ancestry", optional(links.group, "ancestry", control)?),
+        ("split", json::copy(m.require("split")?, control)?),
+        (
+            "learner_viewer",
+            json::copy(links.spec.require("learner_viewer")?, control)?,
+        ),
+    ]);
     let replay_path = source
         .parent()
         .ok_or_else(|| Error::contract("source parent missing"))?
         .join(format!("replay-player-{viewer}.json"));
-    json::object(
-        [
-            (
-                "path",
-                json::text(path_text(&std::fs::canonicalize(source)?)?, budget)?,
-            ),
-            (
-                "sha256",
-                json::text(sources.digest(source, control)?, budget)?,
-            ),
-            (
-                "manifest_sha256",
-                json::text(
-                    sources.digest(&collection.directory.join("manifest.json"), control)?,
-                    budget,
-                )?,
-            ),
-            ("header", json::copy(header, budget, control)?),
-            ("lineage", lineage),
-            (
-                "decision_count",
-                json::integer(journal.decisions.len() as i128, budget)?,
-            ),
-            ("end", json::copy(end, budget, control)?),
-            (
-                "episode_result",
-                json::copy(links.episode, budget, control)?,
-            ),
-            ("group_health", json::copy(links.health, budget, control)?),
-            (
-                "replay_sha256",
-                json::text(sources.digest(&replay_path, control)?, budget)?,
-            ),
-            ("report", report_diagnostic),
-            ("eligible", Value::Bool(true)),
-            ("ineligible_reasons", Value::Array(Vec::new())),
-        ],
-        budget,
-    )
+    Ok(json::object([
+        (
+            "path",
+            json::text(path_text(&std::fs::canonicalize(source)?)?),
+        ),
+        ("sha256", json::text(sources.digest(source, control)?)),
+        (
+            "manifest_sha256",
+            json::text(sources.digest(&collection.directory.join("manifest.json"), control)?),
+        ),
+        ("header", json::copy(header, control)?),
+        ("lineage", lineage),
+        (
+            "decision_count",
+            json::integer(journal.decisions.len() as i128),
+        ),
+        ("end", json::copy(end, control)?),
+        ("episode_result", json::copy(links.episode, control)?),
+        ("group_health", json::copy(links.health, control)?),
+        (
+            "replay_sha256",
+            json::text(sources.digest(&replay_path, control)?),
+        ),
+        ("report", report_diagnostic),
+        ("eligible", Value::Bool(true)),
+        ("ineligible_reasons", Value::Array(Vec::new())),
+    ]))
 }

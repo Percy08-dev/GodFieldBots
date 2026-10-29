@@ -78,7 +78,13 @@ def test_native_shared_budget_and_explicit_worker_counts():
         assert config.memory_budget_mib == 2048
         assert config.workers == workers and config.max_in_flight == workers
     assert PreparationConfig().backend == 'python'  # Unspecified/reference settings remain Python.
-    assert preparation_config({'backend': 'rust', 'native_json_depth': 16}).native_json_depth == 16
+    assert 'native_json_depth' not in asdict(PreparationConfig())
+
+
+@pytest.mark.parametrize('backend', ['python', 'rust'])
+def test_removed_native_depth_setting_is_unknown(backend):
+    with pytest.raises(ContractError, match='invalid fields'):
+        preparation_config({'backend': backend, 'native_json_depth': 990})
 
 
 @pytest.mark.parametrize('name', ['ppo', 'ppo-cpu', 'lightgbm-fixed-observation', 'lightgbm-fixed-history'])

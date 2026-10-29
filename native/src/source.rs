@@ -369,7 +369,7 @@ fn inventory_paths(
             }
         }
     }
-    crate::budget::sort_by(
+    crate::budget::sort_unstable_by(
         &mut paths,
         |a, b| {
             a.path

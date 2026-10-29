@@ -1042,7 +1042,7 @@ mod lifecycle_tests {
             .spawn(move || {
                 let budget = Budget::new(64 * 1024 * 1024);
                 let retirement = retirement::Retirement::start(&budget, retire_core).unwrap();
-                let core = session::Session::test_core(&budget, 990, fail_close);
+                let core = session::Session::test_core(&budget, 127, fail_close);
                 let native = NativeSession {
                     control: core.control.clone(),
                     wall_deadline: budget::monotonic() + 60.,

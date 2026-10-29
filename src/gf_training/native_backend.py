@@ -29,7 +29,7 @@ def load_native() -> ModuleType:
     information = dict(native.build_info())
     if information.get('abi') != 'cp314-gil' or information.get('recipe_identity') != 'native-preprocessing-v1':
         raise ContractError('incompatible native preprocessing ABI/recipe')
-    if (information.get('parser_contract') != 'serde-json-v1'
+    if (information.get('parser_contract') != 'serde-json-v2'
             or information.get('json_memory_policy') != 'json-document-32x-plus64kib-v1'):
         raise ContractError('incompatible native JSON parser/resource contract')
     return native

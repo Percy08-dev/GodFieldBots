@@ -1,8 +1,8 @@
 //! Pure participant/action float64 recipe. No learning transforms or simulator rules.
 use crate::budget::{Budget, BudgetVec, Control, Lease};
 use crate::error::{Error, Result};
-use crate::json::Value;
 use crate::json::ValueExt;
+use crate::json::{Map, Value};
 use crate::validation::{ATTRIBUTES, KINDS, NUMERIC};
 use sha2::{Digest, Sha256};
 use std::fmt::Write;
@@ -395,7 +395,7 @@ fn bytes(value: &Value) -> Result<&[u8]> {
     }
 }
 struct Lookup<'a> {
-    catalog: Vec<(&'a [u8], &'a Value)>,
+    catalog: &'a Map<String, Value>,
     hand: Vec<(i128, &'a Value)>,
     learned: Vec<&'a [u8]>,
     usable_hand: Vec<i128>,
@@ -403,37 +403,33 @@ struct Lookup<'a> {
 }
 impl<'a> Lookup<'a> {
     fn new(input: &'a Value, control: Option<&Control>) -> Result<Self> {
-        let Value::Object(entries) = input.require("catalog")? else {
-            return Err(Error::contract("catalog object required"));
-        };
-        let mut catalog = Vec::with_capacity(entries.len());
-        for (key, card) in entries.iter() {
-            poll(control)?;
-            catalog.push((key.as_bytes(), card));
-        }
-        crate::validation::sort_controlled(&mut catalog, control, |a, b| a.0.cmp(b.0))?;
+        let catalog = input.require("catalog")?.object()?;
         let own = input.require("observation")?.require("own")?;
         let entries = own.require("hand")?.array()?;
         let mut hand = Vec::with_capacity(entries.len());
         for card in entries {
             poll(control)?;
-            let reference = bytes(card.require("definition_id")?)?;
-            let index = catalog
-                .binary_search_by(|entry| entry.0.cmp(reference))
-                .map_err(|_| Error::contract("unknown own-visible definition"))?;
+            // The map key is the perceived reference; the inner definition_id
+            // may differ under the participant's current perception.
+            let reference = card.require("definition_id")?.string()?;
+            let definition = catalog
+                .get(reference)
+                .ok_or_else(|| Error::contract("unknown own-visible definition"))?;
             hand.push((
                 card.require("instance_id")?.integer(0, u64::MAX as i128)?,
-                catalog[index].1,
+                definition,
             ));
         }
-        crate::validation::sort_controlled(&mut hand, control, |a, b| a.0.cmp(&b.0))?;
+        // Validated hand references are unique. Remaining vectors are membership
+        // indexes, whose equal keys carry no distinct payload or source order.
+        crate::validation::sort_unstable_by_controlled(&mut hand, control, |a, b| a.0.cmp(&b.0))?;
         let entries = own.require("learned_miracles")?.array()?;
         let mut learned = Vec::with_capacity(entries.len());
         for reference in entries {
             poll(control)?;
             learned.push(bytes(reference)?);
         }
-        crate::validation::sort_controlled(&mut learned, control, Ord::cmp)?;
+        crate::validation::sort_unstable_by_controlled(&mut learned, control, Ord::cmp)?;
         let options = input
             .get("action_options")
             .filter(|v| !v.is_null())
@@ -444,14 +440,14 @@ impl<'a> Lookup<'a> {
             poll(control)?;
             usable_hand.push(reference.integer(0, u64::MAX as i128)?);
         }
-        crate::validation::sort_controlled(&mut usable_hand, control, Ord::cmp)?;
+        crate::validation::sort_unstable_by_controlled(&mut usable_hand, control, Ord::cmp)?;
         let entries = array(field(options, "usable_learned_miracles"))?;
         let mut usable_learned = Vec::with_capacity(entries.len());
         for reference in entries {
             poll(control)?;
             usable_learned.push(bytes(reference)?);
         }
-        crate::validation::sort_controlled(&mut usable_learned, control, Ord::cmp)?;
+        crate::validation::sort_unstable_by_controlled(&mut usable_learned, control, Ord::cmp)?;
         Ok(Self {
             catalog,
             hand,
@@ -461,12 +457,9 @@ impl<'a> Lookup<'a> {
         })
     }
     fn card(&self, reference: &Value) -> Result<&'a Value> {
-        let reference = bytes(reference)?;
-        let index = self
-            .catalog
-            .binary_search_by(|entry| entry.0.cmp(reference))
-            .map_err(|_| Error::contract("unknown own-visible definition"))?;
-        Ok(self.catalog[index].1)
+        self.catalog
+            .get(reference.string()?)
+            .ok_or_else(|| Error::contract("unknown own-visible definition"))
     }
 }
 

@@ -162,12 +162,15 @@ standalone datasetの`--address-space-limit-mib`は任意の`RLIMIT_AS`設定で
 RSSではなく仮想アドレス空間を制限し、学習・CUDA子プロセスには適用しません。
 `dataset index --output`は出力と`.json` sidecarの両方が未作成の
 パスを要求します。再生成時は新しい出力先を指定してください。
-設定・互換性は[ADR0012](docs/adr/0012-serde-json-and-coarse-resource-admission.md)、
-時間・CPU・メモリ・ストレージの比較と自作部分の整理は[Serde移行記録](docs/verification/serde-json-adoption.md)
+設定・互換性は[ADR0013](docs/adr/0013-standard-json-limits-and-sort-contracts.md)、
+直近の整理・ソート契約は[JSON簡略化記録](docs/verification/json-simplification-and-sorts.md)、
+Serde導入時の時間・CPU・メモリ・ストレージ比較は[移行記録](docs/verification/serde-json-adoption.md)
 を参照してください。
 新旧のnativeバイナリが混在する場合は事前検証で拒否します。更新後はnative packageを
 再ビルドしてください。標準JSONとUnicode scalarを受け付け、非標準の`NaN`／`Infinity`や
 単独surrogateなどの扱いの変更は移行記録に明記しています。バイナリ変更後の通常resumeは拒否します。
+JSONの再帰制限はSerde標準に従います。旧`native_json_depth`設定とJSON全体の4300桁制限は廃止し、
+数値を使う項目の型・範囲は引き続き検証します。メモリ・ファイル・レコードの予算設定は維持します。
 固定データ方式では検証・特徴変換・fit・保存・回収を各fitの2時間へ含め、共有データ生成費を別途報告します。
 従来の生成費込み方式と記録schemaで区別し、PPOと総費用が同条件だったとは扱いません。
 最終test評価はこの段階では実行しません。

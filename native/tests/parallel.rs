@@ -104,44 +104,39 @@ fn source_depth_bound_parse_canonical_and_drop_on_actual_worker_stacks() {
         .name("depth-executor".to_owned())
         .stack_size(8 * 1024 * 1024)
         .spawn(|| {
-            for maximum in [8, 990] {
-                for depth in [maximum - 1, maximum, maximum + 1] {
-                    let fixture = Fixture::new();
-                    let encoded = format!("{}0{}", "[".repeat(depth), "]".repeat(depth));
-                    fs::write(fixture.paths[0].join("replay-player-1.json"), &encoded).unwrap();
-                    let budget = Budget::new(128 * 1024 * 1024);
-                    let control = Control::new(monotonic() + 10.)
-                        .unwrap()
-                        .with_json_depth(maximum)
-                        .unwrap();
-                    let mut sources = Sources::new(budget.clone(), 2 * 1024 * 1024, 1024 * 1024);
-                    let mut reader = EpisodeReader::new(
-                        &fixture.paths[..2],
-                        2,
-                        2,
-                        &budget,
-                        &control,
-                        2 * 1024 * 1024,
-                        1024 * 1024,
-                    );
-                    if depth <= maximum {
-                        let (_, data) = reader.next(&mut sources).unwrap().unwrap();
-                        let canonical =
-                            gf_native::json::canonical(&data.replay1.root, &budget, &control)
-                                .unwrap();
-                        assert_eq!(&*canonical, encoded.as_bytes());
-                        drop(canonical);
-                        drop(data);
-                    } else {
-                        assert!(matches!(
-                            reader.next(&mut sources),
-                            Err(gf_native::error::Error::ResourceLimit(_))
-                        ));
-                    }
-                    drop(reader);
-                    drop(sources);
-                    assert_eq!(budget.used(), 0);
+            for depth in [126, 127, 128, 990] {
+                let fixture = Fixture::new();
+                let encoded = format!("{}0{}", "[".repeat(depth), "]".repeat(depth));
+                fs::write(fixture.paths[0].join("replay-player-1.json"), &encoded).unwrap();
+                let budget = Budget::new(128 * 1024 * 1024);
+                let control = Control::new(monotonic() + 10.).unwrap();
+                let mut sources = Sources::new(budget.clone(), 2 * 1024 * 1024, 1024 * 1024);
+                let mut reader = EpisodeReader::new(
+                    &fixture.paths[..2],
+                    2,
+                    2,
+                    &budget,
+                    &control,
+                    2 * 1024 * 1024,
+                    1024 * 1024,
+                );
+                if depth < 128 {
+                    let (_, data) = reader.next(&mut sources).unwrap().unwrap();
+                    let canonical =
+                        gf_native::json::canonical(&data.replay1.root, &budget, &control)
+                            .unwrap();
+                    assert_eq!(&*canonical, encoded.as_bytes());
+                    drop(canonical);
+                    drop(data);
+                } else {
+                    assert!(matches!(
+                        reader.next(&mut sources),
+                        Err(gf_native::error::Error::Contract(message)) if message.contains("recursion limit exceeded")
+                    ));
                 }
+                drop(reader);
+                drop(sources);
+                assert_eq!(budget.used(), 0);
             }
         })
         .unwrap()

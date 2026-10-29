@@ -19,7 +19,6 @@ class PreparationConfig:
     max_in_flight: int = 1
     workers: int = 1
     backend: str = "python"
-    native_json_depth: int = 990
     scratch_budget_mib: int = 8192
     wall_seconds: float = 7200
     cleanup_seconds: float = 5
@@ -43,9 +42,6 @@ def preparation_config(value: Json) -> PreparationConfig:
         raise ContractError("Python reference preparation is serial")
     if values["backend"] == "rust" and values["workers"] not in (1, 2, 4):
         raise ContractError("native preprocessing supports 1, 2 or 4 workers")
-    integer(values['native_json_depth'], 1, 990)
-    if values['backend'] == 'python' and values['native_json_depth'] != 990:
-        raise ContractError('native_json_depth is a native-only resource limit')
     if (values["cache_budget_mib"] > values["memory_budget_mib"]
             or values["chunk_target_mib"] > values["memory_budget_mib"]
             or values["max_record_mib"] > values["max_source_file_mib"]

@@ -2,6 +2,9 @@
 
 - Status: Accepted on2026-10-30; user authorized production replacement and an audit of
   unnecessary custom machinery on2026-10-30.
+- Superseded for JSON depth/global digit policy and generic helper/sort cleanup
+  by [ADR0013](0013-standard-json-limits-and-sort-contracts.md); initial adoption
+  measurements and retained ownership/domain boundaries remain historical evidence.
 - Owner: root; preimplementation architecture and final independent correctness/
   conformance reviews READY. Runtime/installed-wheel/corpus gates PASS; see
   [adoption verification](../verification/serde-json-adoption.md).

@@ -350,27 +350,21 @@ impl Parent {
             registry,
         })
     }
-    pub fn summary(&self, budget: &Arc<Budget>, control: &Control) -> Result<Value> {
+    pub fn summary(&self, control: &Control) -> Result<Value> {
         let mut generations = Vec::new();
         for record in self.generations.iter() {
             let r = &record.root;
-            generations.push(json::object(
-                [
-                    (
-                        "generation",
-                        json::copy(r.require("generation")?, budget, control)?,
-                    ),
-                    (
-                        "inference_sha256",
-                        json::copy(r.require("inference_sha256")?, budget, control)?,
-                    ),
-                    (
-                        "parent_controls",
-                        json::copy(r.require("parent_controls")?, budget, control)?,
-                    ),
-                ],
-                budget,
-            )?);
+            generations.push(json::object([
+                ("generation", json::copy(r.require("generation")?, control)?),
+                (
+                    "inference_sha256",
+                    json::copy(r.require("inference_sha256")?, control)?,
+                ),
+                (
+                    "parent_controls",
+                    json::copy(r.require("parent_controls")?, control)?,
+                ),
+            ]));
         }
         let mut fields = Map::new();
         for key in [
@@ -382,28 +376,24 @@ impl Parent {
             "elapsed_seconds",
         ] {
             let value = match self.state.root.get(key) {
-                Some(v) => json::copy(v, budget, control)?,
+                Some(v) => json::copy(v, control)?,
                 None => Value::Null,
             };
             fields.insert(key.to_owned(), value);
         }
         let state = Value::Object(fields);
-        json::object(
-            [
-                (
-                    "directory",
-                    json::text(
-                        self.directory
-                            .to_str()
-                            .ok_or_else(|| Error::contract("non-UTF8 parent path"))?,
-                        budget,
-                    )?,
+        Ok(json::object([
+            (
+                "directory",
+                json::text(
+                    self.directory
+                        .to_str()
+                        .ok_or_else(|| Error::contract("non-UTF8 parent path"))?,
                 ),
-                ("state", state),
-                ("generations", Value::Array(generations)),
-            ],
-            budget,
-        )
+            ),
+            ("state", state),
+            ("generations", Value::Array(generations)),
+        ]))
     }
 }
 pub fn generation_path(directory: &Path, number: usize) -> PathBuf {

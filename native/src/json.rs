@@ -9,7 +9,7 @@ use std::{
     io::{self, Write},
     sync::Arc,
 };
-pub const PARSER_CONTRACT: &str = "serde-json-v1";
+pub const PARSER_CONTRACT: &str = "serde-json-v2";
 pub const MEMORY_POLICY: &str = "json-document-32x-plus64kib-v1";
 
 pub trait ValueExt {
@@ -167,10 +167,9 @@ pub fn admit(bytes: usize, budget: &Arc<Budget>) -> Result<Arc<JsonAdmission>> {
     Ok(Arc::new(admission))
 }
 const RESERVED: &[u8] = b"$serde_json::private::Number";
-/// Only resource nesting and a reserved serde member key; serde owns all grammar.
-fn preflight(bytes: &[u8], control: &Control) -> Result<()> {
+/// Reject the member name serde uses internally for arbitrary-precision numbers.
+fn reject_reserved_number_members(bytes: &[u8], control: &Control) -> Result<()> {
     let mut index = 0usize;
-    let mut nesting = 0usize;
     let mut next_poll = 0usize;
     while index < bytes.len() {
         if index >= next_poll {
@@ -223,44 +222,7 @@ fn preflight(bytes: &[u8], control: &Control) -> Result<()> {
                     }
                 }
             }
-            b'[' | b'{' => {
-                nesting = nesting
-                    .checked_add(1)
-                    .ok_or_else(|| Error::resource("JSON nesting overflow"))?;
-                if nesting > control.json_depth() + 1 {
-                    return Err(Error::resource("source exceeds native_json_depth"));
-                }
-                index += 1;
-            }
-            b']' | b'}' => {
-                nesting = nesting.saturating_sub(1);
-                index += 1;
-            }
             _ => index += 1,
-        }
-    }
-    control.check()
-}
-fn validate_depth_and_numbers(root: &Value, control: &Control) -> Result<()> {
-    let mut pending = vec![(root, 0usize)];
-    let mut nodes = 0usize;
-    while let Some((value, depth)) = pending.pop() {
-        nodes += 1;
-        if nodes % 256 == 0 {
-            control.check()?;
-        }
-        if depth > control.json_depth() {
-            return Err(Error::resource("source exceeds native_json_depth"));
-        }
-        match value {
-            Value::Array(values) => pending.extend(values.iter().map(|v| (v, depth + 1))),
-            Value::Object(values) => pending.extend(values.values().map(|v| (v, depth + 1))),
-            Value::Number(n)
-                if integer_token(n) && int_text(n).trim_start_matches('-').len() > 4300 =>
-            {
-                return Err(Error::contract("integer conversion digit limit"));
-            }
-            _ => {}
         }
     }
     control.check()
@@ -275,45 +237,39 @@ pub fn parse_admitted(
     control: &Control,
 ) -> Result<Document> {
     control.check()?;
-    preflight(bytes, control)?;
+    reject_reserved_number_members(bytes, control)?;
     let mut decoder = serde_json::Deserializer::from_slice(bytes);
-    decoder.disable_recursion_limit();
     let root = Value::deserialize(&mut decoder).map_err(|e| Error::contract(e.to_string()))?;
     decoder.end().map_err(|e| Error::contract(e.to_string()))?;
-    validate_depth_and_numbers(&root, control)?;
+    control.check()?;
     Ok(Document {
         root,
         _admission: admission.clone(),
     })
 }
-pub fn text(value: &str, _: &Arc<Budget>) -> Result<Value> {
-    Ok(Value::String(value.to_owned()))
+pub fn text(value: &str) -> Value {
+    Value::String(value.to_owned())
 }
-pub fn integer(value: i128, _: &Arc<Budget>) -> Result<Value> {
-    Ok(Value::Number(
-        Number::from_i128(value).expect("i128 number"),
-    ))
+pub fn integer(value: i128) -> Value {
+    Value::Number(Number::from_i128(value).expect("i128 number"))
 }
 pub fn float(value: f64) -> Result<Value> {
     Number::from_f64(value)
         .map(Value::Number)
         .ok_or_else(|| Error::contract("nonfinite canonical float"))
 }
-pub fn object(
-    entries: impl IntoIterator<Item = (&'static str, Value)>,
-    _: &Arc<Budget>,
-) -> Result<Value> {
-    Ok(Value::Object(
+pub fn object(entries: impl IntoIterator<Item = (&'static str, Value)>) -> Value {
+    Value::Object(
         entries
             .into_iter()
             .map(|(k, v)| (k.to_owned(), v))
             .collect(),
-    ))
+    )
 }
-pub fn array(entries: impl IntoIterator<Item = Value>, _: &Arc<Budget>) -> Result<Value> {
-    Ok(Value::Array(entries.into_iter().collect()))
+pub fn array(entries: impl IntoIterator<Item = Value>) -> Value {
+    Value::Array(entries.into_iter().collect())
 }
-pub fn copy(value: &Value, _: &Arc<Budget>, control: &Control) -> Result<Value> {
+pub fn copy(value: &Value, control: &Control) -> Result<Value> {
     control.check()?;
     let result = value.clone();
     control.check()?;

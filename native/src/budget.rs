@@ -220,7 +220,6 @@ impl<T> DerefMut for BudgetVec<T> {
 pub struct Control {
     cancelled: Arc<AtomicBool>,
     deadline: f64,
-    json_depth: usize,
 }
 impl Control {
     pub fn new(deadline: f64) -> Result<Self> {
@@ -232,7 +231,6 @@ impl Control {
         Ok(Self {
             cancelled: Arc::new(AtomicBool::new(false)),
             deadline,
-            json_depth: 990,
         })
     }
     pub fn cancel(&self) {
@@ -247,23 +245,7 @@ impl Control {
         Ok(Self {
             cancelled: self.cancelled.clone(),
             deadline,
-            json_depth: self.json_depth,
         })
-    }
-    pub fn with_json_depth(&self, depth: usize) -> Result<Self> {
-        if !(1..=990).contains(&depth) {
-            return Err(Error::contract(
-                "native_json_depth must be an integer in 1..990",
-            ));
-        }
-        Ok(Self {
-            cancelled: self.cancelled.clone(),
-            deadline: self.deadline,
-            json_depth: depth,
-        })
-    }
-    pub fn json_depth(&self) -> usize {
-        self.json_depth
     }
     pub fn check(&self) -> Result<()> {
         if self.cancelled.load(Ordering::Acquire) {
@@ -287,8 +269,9 @@ pub fn monotonic() -> f64 {
     value.tv_sec as f64 + value.tv_nsec as f64 / 1e9
 }
 
-/// Standard in-place sorting with the declared boundary cancellation policy.
-pub fn sort_by<T>(
+/// Unstable in-place sorting with boundary cancellation. Callers must ensure
+/// equal keys are interchangeable, unique, or rejected before publication.
+pub fn sort_unstable_by<T>(
     values: &mut [T],
     compare: impl Fn(&T, &T) -> std::cmp::Ordering,
     control: &Control,
