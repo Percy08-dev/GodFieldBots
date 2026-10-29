@@ -91,7 +91,7 @@ residual0ns. Displayed decimals may round independently.
 
 | Native scan category | Seconds |
 | --- | ---: |
-| Decode-window wait and source merge, including worker read/hash/parse |25.972227|
+| Episode read/hash/decode execution, window joins and source merge |25.972227|
 | Features and numeric spooling |7.926398|
 | Episode/collection temporary release |6.020197|
 | Journal validation |3.314427|
@@ -109,9 +109,28 @@ Serde JSON trees at the original episode/collection boundaries. The timer does
 not extend their lifetime or add a retention cache. This is ordinary Rust object
 destruction/deallocation, distinct from Python GC, NumPy view release and the
 configured memory reservation mechanism. A separate parse worker diagnostic is
-20.587s; it is nested inside decode wait and is not added to the table. Legacy
+20.587s across the data-stage snapshot, including metadata JSON outside the
+episode-reader interval; it is not a strict sub-partition of25.972s and must not
+be added to or subtracted from that interval to infer an exact remaining cost. Legacy
 six-phase counters still include nested/repeated worker work and are explicitly
 named auxiliary aggregated worker elapsed times, not CPU or a wall partition.
+
+The25.972s is elapsed time around EpisodeReader::next, not OS iowait or a measured
+blocked-I/O duration. With one worker, decoding runs inline on the calling thread;
+with multiple workers the caller starts/joins a window and merges the source
+evidence. File reads, hashing, parsing, allocation, scheduling and result handling
+all contribute. Read/hash counters themselves also include CPU and metadata work.
+
+Worker inputs and parsed documents/source maps are independently owned. Shared
+objects include atomic memory-budget/cancellation/telemetry state and the process
+allocator. The decoder error Mutex is used for error reporting, not around normal
+parsing. Independence therefore does not imply an absence of shared-resource costs.
+All window threads join before serial validation/features/release, and worker-
+allocated documents are later freed by the coordinator. Existing overlap peaks
+do not quantify allocator/atomic contention, per-thread CPU or barrier imbalance.
+Those and the division of the6.020s release interval into JSON trees, journal
+containers and collection cleanup remain explicit next investigation targets;
+no allocator or scheduling cause is established by the current measurements.
 
 The enclosing Python construction ledger also sums exactly to47,437,247,148ns,
 with residual0ns:
