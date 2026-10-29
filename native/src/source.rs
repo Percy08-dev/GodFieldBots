@@ -162,41 +162,94 @@ impl Sources {
     }
     pub fn json(&mut self, path: &Path, replay: bool, control: &Control) -> Result<Document> {
         let bytes = self.read(path, control)?;
+        #[cfg(feature = "decode-profile")]
+        let profile_path = fs::canonicalize(path).ok();
         let _timer = self.telemetry.phase_timer(Phase::SourceDecode);
-        if replay {
+        #[cfg(feature = "decode-profile")]
+        let mut profile = self.telemetry.decode_profile.begin(
+            if replay {
+                crate::decode_profile::Kind::Replay
+            } else {
+                crate::decode_profile::Kind::Json
+            },
+            profile_path.as_deref(),
+            bytes.len(),
+        );
+        let result = if replay {
             parse_replay(&bytes, &self.budget, control)
         } else {
             json::parse(&bytes, &self.budget, control)
+        };
+        #[cfg(feature = "decode-profile")]
+        if result.is_ok() {
+            profile.success();
         }
+        result
     }
     pub fn journal(&mut self, path: &Path, control: &Control) -> Result<BudgetVec<Document>> {
         let bytes = self.read(path, control)?;
+        #[cfg(feature = "decode-profile")]
+        let profile_path = fs::canonicalize(path).ok();
         // Journal records share one file-level clock pair, never one per row/byte.
         let _timer = self.telemetry.phase_timer(Phase::SourceDecode);
-        std::str::from_utf8(&bytes).map_err(|_| Error::contract("invalid UTF-8 journal"))?;
+        #[cfg(feature = "decode-profile")]
+        let mut profile = self.telemetry.decode_profile.begin(
+            crate::decode_profile::Kind::Journal,
+            profile_path.as_deref(),
+            bytes.len(),
+        );
+        {
+            #[cfg(feature = "decode-profile")]
+            let _encoding = crate::decode_profile::enter(crate::decode_profile::Category::Encoding);
+            std::str::from_utf8(&bytes).map_err(|_| Error::contract("invalid UTF-8 journal"))?;
+        }
         let mut records = BudgetVec::new(&self.budget);
         let mut start = 0;
         while start < bytes.len() {
             control.check()?;
-            let mut end = start;
-            while end < bytes.len() && bytes[end] != b'\r' && bytes[end] != b'\n' {
-                end += 1;
+            let end = {
+                #[cfg(feature = "decode-profile")]
+                let _framing =
+                    crate::decode_profile::enter(crate::decode_profile::Category::Framing);
+                let mut end = start;
+                while end < bytes.len() && bytes[end] != b'\r' && bytes[end] != b'\n' {
+                    end += 1;
+                }
+                if end - start > self.max_record {
+                    return Err(Error::resource("journal exceeds max_record_mib"));
+                }
+                end
+            };
+            {
+                #[cfg(feature = "decode-profile")]
+                let _container =
+                    crate::decode_profile::enter(crate::decode_profile::Category::Containers);
+                records.reserve(1)?;
             }
-            if end - start > self.max_record {
-                return Err(Error::resource("journal exceeds max_record_mib"));
+            let record = json::parse(&bytes[start..end], &self.budget, control)?;
+            {
+                #[cfg(feature = "decode-profile")]
+                let _container =
+                    crate::decode_profile::enter(crate::decode_profile::Category::Containers);
+                records.push(record)?;
             }
-            records.reserve(1)?;
-            records.push(json::parse(&bytes[start..end], &self.budget, control)?)?;
-            start = end;
-            if bytes.get(start) == Some(&b'\r') {
-                start += 1;
-                if bytes.get(start) == Some(&b'\n') {
+            {
+                #[cfg(feature = "decode-profile")]
+                let _framing =
+                    crate::decode_profile::enter(crate::decode_profile::Category::Framing);
+                start = end;
+                if bytes.get(start) == Some(&b'\r') {
+                    start += 1;
+                    if bytes.get(start) == Some(&b'\n') {
+                        start += 1;
+                    }
+                } else if bytes.get(start) == Some(&b'\n') {
                     start += 1;
                 }
-            } else if bytes.get(start) == Some(&b'\n') {
-                start += 1;
             }
         }
+        #[cfg(feature = "decode-profile")]
+        profile.success();
         Ok(records)
     }
     pub fn verify(&self, control: &Control) -> Result<()> {
@@ -374,9 +427,13 @@ fn inventory_paths(
 }
 
 fn parse_replay(bytes: &[u8], budget: &Arc<Budget>, control: &Control) -> Result<Document> {
+    #[cfg(feature = "decode-profile")]
+    let encoding = crate::decode_profile::enter(crate::decode_profile::Category::Encoding);
     // Match json.loads(bytes) encoding detection. Journals/control files instead
     // pass through strict UTF-8 text decoding and deliberately reject a BOM.
     if let Some(bytes) = bytes.strip_prefix(&[0xef, 0xbb, 0xbf]) {
+        #[cfg(feature = "decode-profile")]
+        drop(encoding);
         return json::parse_surrogatepass(bytes, budget, control);
     }
     let (unit, little, skip) = if bytes.starts_with(&[0xff, 0xfe, 0, 0]) {
@@ -396,6 +453,8 @@ fn parse_replay(bytes: &[u8], budget: &Arc<Budget>, control: &Control) -> Result
     } else if bytes.len() >= 2 && bytes[1] == 0 {
         (2, true, 0)
     } else {
+        #[cfg(feature = "decode-profile")]
+        drop(encoding);
         return json::parse_surrogatepass(bytes, budget, control);
     };
     if (bytes.len() - skip) % unit != 0 {
@@ -442,5 +501,7 @@ fn parse_replay(bytes: &[u8], budget: &Arc<Budget>, control: &Control) -> Result
             return Err(Error::contract("invalid Unicode codepoint"));
         }
     }
+    #[cfg(feature = "decode-profile")]
+    drop(encoding);
     json::parse_surrogatepass(&decoded, budget, control)
 }

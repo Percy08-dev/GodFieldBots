@@ -271,9 +271,13 @@ pub fn copy(value: &Value, budget: &Arc<Budget>, control: &Control) -> Result<Va
 }
 
 pub fn parse(bytes: &[u8], budget: &Arc<Budget>, control: &Control) -> Result<Document> {
+    #[cfg(feature = "decode-profile")]
+    let encoding = crate::decode_profile::enter(crate::decode_profile::Category::Encoding);
     control.check()?;
     std::str::from_utf8(bytes).map_err(|_| Error::contract("invalid UTF-8 JSON"))?;
     control.check()?;
+    #[cfg(feature = "decode-profile")]
+    drop(encoding);
     parse_decoded(bytes, budget, control)
 }
 pub fn parse_surrogatepass(
@@ -281,6 +285,8 @@ pub fn parse_surrogatepass(
     budget: &Arc<Budget>,
     control: &Control,
 ) -> Result<Document> {
+    #[cfg(feature = "decode-profile")]
+    let encoding = crate::decode_profile::enter(crate::decode_profile::Category::Encoding);
     let mut index = 0;
     let mut next_poll = 0usize;
     while index < bytes.len() {
@@ -313,6 +319,8 @@ pub fn parse_surrogatepass(
         }
         index += count;
     }
+    #[cfg(feature = "decode-profile")]
+    drop(encoding);
     parse_decoded(bytes, budget, control)
 }
 fn parse_decoded(bytes: &[u8], budget: &Arc<Budget>, control: &Control) -> Result<Document> {
@@ -365,6 +373,8 @@ impl Parser<'_> {
         }
     }
     fn value(&mut self, depth: usize) -> Result<Value> {
+        #[cfg(feature = "decode-profile")]
+        crate::decode_profile::count(crate::decode_profile::Count::Nodes, 1);
         self.control.check()?;
         if depth > self.control.json_depth() {
             return Err(Error::resource("source exceeds native_json_depth"));
@@ -382,16 +392,35 @@ impl Parser<'_> {
             }
             Some(b'"') => Ok(Value::String(self.string()?)),
             Some(b'[') => {
+                #[cfg(feature = "decode-profile")]
+                crate::decode_profile::count(crate::decode_profile::Count::Containers, 1);
                 self.pos += 1;
                 self.space()?;
-                let mut items = BudgetVec::new(self.budget);
+                let mut items = {
+                    #[cfg(feature = "decode-profile")]
+                    let _container =
+                        crate::decode_profile::enter(crate::decode_profile::Category::Containers);
+                    BudgetVec::new(self.budget)
+                };
                 if self.token(b"]") {
                     return Ok(Value::Array(items));
                 }
                 loop {
-                    items.reserve(1)?;
+                    {
+                        #[cfg(feature = "decode-profile")]
+                        let _container = crate::decode_profile::enter(
+                            crate::decode_profile::Category::Containers,
+                        );
+                        items.reserve(1)?;
+                    }
                     let value = self.value(depth + 1)?;
-                    items.push(value)?;
+                    {
+                        #[cfg(feature = "decode-profile")]
+                        let _container = crate::decode_profile::enter(
+                            crate::decode_profile::Category::Containers,
+                        );
+                        items.push(value)?;
+                    }
                     self.space()?;
                     if self.token(b"]") {
                         break;
@@ -403,6 +432,8 @@ impl Parser<'_> {
                 Ok(Value::Array(items))
             }
             Some(b'{') => {
+                #[cfg(feature = "decode-profile")]
+                crate::decode_profile::count(crate::decode_profile::Count::Containers, 1);
                 self.pos += 1;
                 self.space()?;
                 let mut items: BudgetVec<(Text, Value)> = BudgetVec::new(self.budget);
@@ -421,13 +452,27 @@ impl Parser<'_> {
                     let found =
                         lookup.find(key_hash, |index| items[index].0 == key, self.control)?;
                     if found.is_none() {
-                        items.reserve(1)?;
+                        {
+                            #[cfg(feature = "decode-profile")]
+                            let _container = crate::decode_profile::enter(
+                                crate::decode_profile::Category::Containers,
+                            );
+                            items.reserve(1)?;
+                        }
                     }
                     let value = self.value(depth + 1)?;
                     if let Some(index) = found {
+                        #[cfg(feature = "decode-profile")]
+                        let _container = crate::decode_profile::enter(
+                            crate::decode_profile::Category::Containers,
+                        );
                         items[index].1 = value;
                     } else {
                         lookup.insert(key_hash, items.len(), self.control)?;
+                        #[cfg(feature = "decode-profile")]
+                        let _container = crate::decode_profile::enter(
+                            crate::decode_profile::Category::Containers,
+                        );
                         items.push((key, value))?;
                     }
                     self.space()?;
@@ -463,6 +508,10 @@ impl Parser<'_> {
         Ok(value)
     }
     fn string(&mut self) -> Result<Text> {
+        #[cfg(feature = "decode-profile")]
+        let _string = crate::decode_profile::enter(crate::decode_profile::Category::Strings);
+        #[cfg(feature = "decode-profile")]
+        crate::decode_profile::count(crate::decode_profile::Count::Strings, 1);
         if !self.token(b"\"") {
             return Err(Error::contract("JSON string required"));
         }
@@ -518,6 +567,10 @@ impl Parser<'_> {
         }
     }
     fn number(&mut self) -> Result<Value> {
+        #[cfg(feature = "decode-profile")]
+        let _number = crate::decode_profile::enter(crate::decode_profile::Category::Numbers);
+        #[cfg(feature = "decode-profile")]
+        crate::decode_profile::count(crate::decode_profile::Count::Numbers, 1);
         let start = self.pos;
         self.token(b"-");
         if !self.token(b"0") {

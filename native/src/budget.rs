@@ -43,6 +43,10 @@ impl Budget {
         )
     }
     pub fn reserve(self: &Arc<Self>, bytes: usize) -> Result<Lease> {
+        #[cfg(feature = "decode-profile")]
+        let _profile = crate::decode_profile::enter(crate::decode_profile::Category::Budget);
+        #[cfg(feature = "decode-profile")]
+        crate::decode_profile::count(crate::decode_profile::Count::Reservations, 1);
         let old = self
             .used
             .try_update(Ordering::AcqRel, Ordering::Acquire, |used| {
@@ -68,6 +72,8 @@ impl Lease {
     }
     /// Adjust a logical reservation without briefly dropping existing admission.
     pub fn resize(&mut self, bytes: usize) -> Result<()> {
+        #[cfg(feature = "decode-profile")]
+        let _profile = crate::decode_profile::enter(crate::decode_profile::Category::Budget);
         if bytes > self.bytes {
             let mut additional = self.budget.reserve(bytes - self.bytes)?;
             self.bytes = bytes;
@@ -83,6 +89,8 @@ impl Lease {
 }
 impl Drop for Lease {
     fn drop(&mut self) {
+        #[cfg(feature = "decode-profile")]
+        let _profile = crate::decode_profile::enter(crate::decode_profile::Category::Budget);
         self.budget.used.fetch_sub(self.bytes, Ordering::AcqRel);
     }
 }
@@ -125,6 +133,10 @@ impl<T> BudgetVec<T> {
             .ok_or_else(|| Error::resource("capacity overflow"))?;
         // Reserve the complete replacement while the old buffer remains charged.
         let lease = self.lease.budget.reserve(bytes)?;
+        #[cfg(feature = "decode-profile")]
+        let _allocation = crate::decode_profile::enter(crate::decode_profile::Category::Allocation);
+        #[cfg(feature = "decode-profile")]
+        crate::decode_profile::count(crate::decode_profile::Count::Allocations, 1);
         let mut replacement = Vec::new();
         replacement
             .try_reserve_exact(capacity)
@@ -133,6 +145,11 @@ impl<T> BudgetVec<T> {
             return Err(Error::resource("unexpected allocator capacity"));
         }
         if !self.value.is_empty() {
+            #[cfg(feature = "decode-profile")]
+            crate::decode_profile::count(
+                crate::decode_profile::Count::CopyBytes,
+                self.value.len() * size_of::<T>(),
+            );
             self.lease
                 .budget
                 .reallocations
@@ -157,6 +174,13 @@ impl<T> BudgetVec<T> {
         T: Clone,
     {
         self.reserve(values.len())?;
+        #[cfg(feature = "decode-profile")]
+        let _copy = crate::decode_profile::enter(crate::decode_profile::Category::Allocation);
+        #[cfg(feature = "decode-profile")]
+        crate::decode_profile::count(
+            crate::decode_profile::Count::CopyBytes,
+            values.len() * size_of::<T>(),
+        );
         self.value.extend_from_slice(values);
         self.lease
             .budget
@@ -236,6 +260,10 @@ impl Control {
         self.json_depth
     }
     pub fn check(&self) -> Result<()> {
+        #[cfg(feature = "decode-profile")]
+        let _profile = crate::decode_profile::enter(crate::decode_profile::Category::Checks);
+        #[cfg(feature = "decode-profile")]
+        crate::decode_profile::count(crate::decode_profile::Count::Checks, 1);
         if self.cancelled.load(Ordering::Acquire) {
             return Err(Error::Cancelled);
         }

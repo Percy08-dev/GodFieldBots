@@ -1,6 +1,8 @@
 pub mod budget;
 pub mod control_memory;
 pub mod controls;
+#[cfg(feature = "decode-profile")]
+pub mod decode_profile;
 pub mod error;
 pub mod feature;
 pub mod index;
@@ -999,6 +1001,24 @@ fn build_info() -> Vec<(&'static str, &'static str)> {
         ("rustc", env!("GFB_NATIVE_RUSTC")),
         ("target", env!("GFB_NATIVE_TARGET")),
         ("profile", env!("GFB_NATIVE_PROFILE")),
+        (
+            "cargo_features",
+            if cfg!(feature = "decode-profile") {
+                "decode-profile"
+            } else {
+                "default"
+            },
+        ),
+        ("decode_profile_capture", {
+            #[cfg(feature = "decode-profile")]
+            {
+                crate::decode_profile::capture_identity()
+            }
+            #[cfg(not(feature = "decode-profile"))]
+            {
+                "not_compiled"
+            }
+        }),
         ("rustflags", env!("GFB_NATIVE_RUSTFLAGS")),
         ("cargo_lock_sha256", env!("GFB_NATIVE_CARGO_LOCK_SHA256")),
         ("native_source_sha256", env!("GFB_NATIVE_SOURCE_SHA256")),

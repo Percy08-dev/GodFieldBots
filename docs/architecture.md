@@ -165,7 +165,8 @@ PyO3 0.30.1, rust-numpy0.30.0 and ndarray0.17.2, pinned in its build configurati
 and Cargo.lock. The root package retains uv_build and exposes an optional native
 extra. Runtime loading is lazy and identifies the actual loaded extension binary,
 ABI, build/lock/source digests and fixed recipe. Rust failures never dispatch to
-the Python reference backend. Native production rollout is pending ADR0011 gates.
+the Python reference backend. ADR0011's target production presets are enabled;
+optional diagnostic builds remain isolated from the production extension.
 
 For ADR0011's offline and post-collection paths, Python owns source locks,
 authorization, experiment decisions, learning semantics and publication. Rust

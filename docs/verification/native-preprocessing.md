@@ -113,12 +113,14 @@ mean input was skipped. OS I/O counters do not expose WSL host physical traffic.
 RSS/PSS/scratch are sampled, so short peaks may be missed; storage output includes
 scratch and should not be added to it. The observer is excluded from workload CPU.
 
-Example native trial worker phases, seconds: read/hash2.935, JSON/DTO decode62.972,
+Example native trial worker phases, seconds: read/hash2.935, JSON/owned-tree decode62.972,
 journal input validation2.951, Replay validation0.081, feature encoding6.715,
 proof/staging4.371. These are instrumented worker phase totals, not a complete
 additive partition of command wall; global controls/finalization/teardown also cost
 time. `next_batch_inclusive` and `global_scan_and_encode` overlap these phases and
-must not be added. JSON/DTO decoding is now the largest measured phase.
+must not be added. JSON decoding and owned-tree construction are now the largest
+measured phase. The [decoder breakdown](native-decode-profile.md) describes finer
+diagnostic measurement; semantic DTO checks have their own validation timers.
 
 Boundary evidence:56returned batches,57data calls including one explicit EOF;
 784pointer-verified shared numerical exports (929,982,696exposed bytes),0numeric

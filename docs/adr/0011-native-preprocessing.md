@@ -235,7 +235,7 @@ independent reviews. Never weaken validation to meet performance targets.
 ## Accepted consequences and follow-up conditions
 
 The complete history preparation is2.682x faster with lower measured RSS; the
-remaining largest instrumented phase is JSON/DTO decoding. NumPy numerical
+remaining largest instrumented phase is JSON decoding and owned-tree construction. NumPy numerical
 exports have pointer-verified zero copies at the FFI boundary, while Rust internal
 buffer growth/extensions and compatible NPZ staging still copy data. Raw native
 spools increase sampled maximum scratch from0.87GiB to1.73GiB and kernel-accounted

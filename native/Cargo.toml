@@ -8,6 +8,10 @@ rust-version = "1.99"
 name = "gf_native"
 crate-type = ["cdylib", "rlib"]
 
+[features]
+default = []
+decode-profile = []
+
 [dependencies]
 pyo3 = { version = "=0.30.1", features = ["extension-module"] }
 numpy = "=0.30.0"

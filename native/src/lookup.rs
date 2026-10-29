@@ -36,6 +36,8 @@ impl Index {
         matches: impl Fn(usize) -> bool,
         control: &Control,
     ) -> Result<Option<usize>> {
+        #[cfg(feature = "decode-profile")]
+        let _profile = crate::decode_profile::enter(crate::decode_profile::Category::Keys);
         if self.slots.is_empty() {
             return Ok(None);
         }
@@ -54,6 +56,8 @@ impl Index {
         Err(Error::contract("native lookup index is full"))
     }
     pub fn insert(&mut self, hash: u64, index: usize, control: &Control) -> Result<()> {
+        #[cfg(feature = "decode-profile")]
+        let _profile = crate::decode_profile::enter(crate::decode_profile::Category::Keys);
         if self.length + 1 > self.slots.len() / 2 {
             let count = self
                 .slots
@@ -96,6 +100,8 @@ fn insert_slot(slots: &mut [Slot], slot: Slot, control: &Control) -> Result<()> 
     }
 }
 pub fn hash(bytes: &[u8], control: &Control) -> Result<u64> {
+    #[cfg(feature = "decode-profile")]
+    let _profile = crate::decode_profile::enter(crate::decode_profile::Category::Keys);
     let mut hasher = DefaultHasher::new();
     for block in bytes.chunks(4096) {
         control.check()?;

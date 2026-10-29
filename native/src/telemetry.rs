@@ -42,6 +42,8 @@ struct PhaseCounters {
 
 #[derive(Default)]
 pub struct Telemetry {
+    #[cfg(feature = "decode-profile")]
+    pub(crate) decode_profile: crate::decode_profile::DecodeCounters,
     data_calls: AtomicU64,
     batches: AtomicU64,
     eof: AtomicU64,
@@ -181,7 +183,7 @@ impl Telemetry {
             })
             .collect::<Vec<_>>()
             .join(",");
-        format!(
+        let output = format!(
             concat!(
                 "{{\"scope\":\"NativeSession boundary; numeric pointer probes and explicit control-byte copies\",",
                 "\"snapshot\":\"before this telemetry response copy\",\"ffi_data_calls\":{},\"ffi_batches_returned\":{},\"ffi_eof_returns\":{},\"ffi_control_calls\":{},",
@@ -216,6 +218,18 @@ impl Telemetry {
             reallocations,
             reallocated_bytes,
             extend_copy_bytes
-        )
+        );
+        #[cfg(feature = "decode-profile")]
+        {
+            format!(
+                "{},\"decode_profile\":{}}}",
+                &output[..output.len() - 1],
+                self.decode_profile.json()
+            )
+        }
+        #[cfg(not(feature = "decode-profile"))]
+        {
+            output
+        }
     }
 }
