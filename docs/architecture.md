@@ -2,6 +2,17 @@
 
 ## Status and scope
 
+[ADR0014](adr/0014-bulk-numeric-io-and-episode-lookups.md) adopts bounded bulk
+f64/i64 I/O and per-collection episode indexes. Design and code-conformance review
+are accepted; whole769Python tests, both frozen recipes/index and saved PPO
+ingestion PASS. Whole-preparation median46.43->46.05s is less than1% difference;
+current16/64-game collections do not show a substantial overall speed gain.
+A small private helper uses safe
+bytemuck views on little-endian hosts and a portable bounded fallback; destination
+buffers remain initialized and leased. Local borrowed indexes replace repeated
+manifest/schedule/health/ordinal scans, with original order and health gates
+preserved. Evidence: [bulk I/O verification](verification/bulk-numeric-io-and-episode-lookups.md).
+
 [ADR0013](adr/0013-standard-json-limits-and-sort-contracts.md) further simplifies
 JSON parsing and records sort tie contracts. Design and independent code reviews
 are accepted; whole769Python tests, both frozen recipes/index and saved PPO
@@ -184,7 +195,8 @@ Optional libraries must not load for baseline or CLI help.
 The separate `godfieldbots-native` uv workspace member uses Maturin1.15.0,
 PyO3 0.30.1, rust-numpy0.30.0 and ndarray0.17.2, pinned in its build configuration
 and Cargo.lock. ADR0012 adds serde1.0.229/serde_json1.0.151 with arbitrary-precision
-numbers. The root package retains uv_build and exposes an optional native
+numbers; ADR0014 adds bytemuck1.25.2 for safe typed numerical byte views. The root
+package retains uv_build and exposes an optional native
 extra. Runtime loading is lazy and identifies the actual loaded extension binary,
 ABI, build/lock/source digests, parser/resource contracts and fixed recipe. Rust failures never dispatch to
 the Python reference backend. ADR0011's target production presets are enabled;

@@ -7,6 +7,7 @@ pub mod feature;
 pub mod index;
 pub mod journal;
 pub mod json;
+mod numeric_io;
 pub mod parallel;
 pub mod pipeline;
 pub mod projection;
@@ -25,7 +26,7 @@ use numpy::{PyArray2, PyArrayMethods};
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 use pyo3::types::{PyAny, PyInt, PyList, PyTuple};
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{Seek, SeekFrom};
 use std::sync::{Arc, Mutex};
 
 #[pyclass(frozen)]
@@ -582,14 +583,7 @@ impl NativeSession {
                     file.seek(SeekFrom::Start(offset as u64))?;
                     let _buffer = s.budget.reserve(32768)?;
                     let mut file = std::io::BufReader::with_capacity(32768, file);
-                    for index in 0..count {
-                        if index % 4096 == 0 {
-                            s.control.check()?;
-                        }
-                        let mut bytes = [0; 8];
-                        file.read_exact(&mut bytes)?;
-                        values.push(f64::from_le_bytes(bytes))?;
-                    }
+                    numeric_io::read_f64(&mut file, &mut values, count, &s.control)?;
                     self.stats.stage_read(count * 8);
                     let (values, lease) = values.into_parts();
                     let data = Array2::from_shape_vec((rows, columns), values)

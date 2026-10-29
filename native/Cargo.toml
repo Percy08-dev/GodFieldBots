@@ -17,6 +17,7 @@ ryu = "=1.0.23"
 libc = "=0.2.191"
 serde = "=1.0.229"
 serde_json = { version = "=1.0.151", features = ["arbitrary_precision", "float_roundtrip"] }
+bytemuck = "=1.25.2"
 
 [build-dependencies]
 sha2 = "=0.10.9"

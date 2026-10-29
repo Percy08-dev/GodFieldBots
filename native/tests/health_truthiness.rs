@@ -94,7 +94,9 @@ fn collection_links_reject_overflow_group_and_process_health_evidence() {
                     r#"{{"episodes":[{{"episode_id":"e","pair_id":"p","policies":["a","b"],"seed":1}}],"schedule":[{{"seed":1,"episodes":[{{"episode_id":"e","pair_id":"p","policies":["a","b"]}}]}}],"groups":[{{"episode_ids":["e"],{evidence}}}]}}"#
                 );
                 let document = json::parse(raw.as_bytes(), &budget, &control).unwrap();
-                let result = projection::links(&document.root, "e");
+                let index =
+                    projection::EpisodeIndex::new(&document.root, &budget, &control).unwrap();
+                let result = index.links("e", &control);
                 if rejected {
                     let expected = if process {
                         "episode or group process health failure"

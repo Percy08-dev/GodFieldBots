@@ -182,6 +182,18 @@ impl<T> BudgetVec<T> {
         self.value.push(value);
         Ok(())
     }
+    /// Admit growth before safely initializing elements for typed bulk reads.
+    pub fn resize(&mut self, length: usize, value: T) -> Result<()>
+    where
+        T: Clone,
+    {
+        self.reserve(length.saturating_sub(self.value.len()))?;
+        self.value.resize(length, value);
+        Ok(())
+    }
+    pub fn truncate(&mut self, length: usize) {
+        self.value.truncate(length);
+    }
     pub fn extend_from_slice(&mut self, values: &[T]) -> Result<()>
     where
         T: Clone,

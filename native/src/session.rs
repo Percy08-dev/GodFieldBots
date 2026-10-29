@@ -949,17 +949,13 @@ fn open_collection(
     }
     let schedule = m.require("schedule")?.array()?;
     let episodes = m.require("episodes")?.array()?;
-    let mut seen = BudgetVec::with_capacity(budget, episodes.len())?;
+    let episode_index = crate::projection::EpisodeIndex::new(m, budget, control)?;
     for episode in episodes {
         control.check()?;
         let id = string(episode, "episode_id")?;
         if id.is_empty() || Path::new(id).file_name().and_then(|v| v.to_str()) != Some(id) {
             return Err(Error::contract("unsafe episode source path"));
         }
-        if seen.contains(&id) {
-            return Err(Error::contract("complete original schedule required"));
-        }
-        seen.push(id)?;
         if string(episode, "end_kind")? != "natural"
             || episode.require("outcome")?.is_null()
             || controls::field_truthy(episode, "failure")
@@ -974,31 +970,15 @@ fn open_collection(
                 "all original episodes must be healthy natural outcomes",
             ));
         }
-        let mut matches = 0;
-        for group in schedule {
-            for spec in group.require("episodes")?.array()? {
-                control.check()?;
-                if string(spec, "episode_id")? == id {
-                    matches += 1;
-                    let viewer = spec.require("learner_viewer")?.integer(1, 2)?;
-                    equal(
-                        link.require("learner_seats")?.require(id)?,
-                        spec.require("learner_viewer")?,
-                        "PPO schedule/learner linkage mismatch",
-                    )?;
-                    let _ = viewer;
-                }
-            }
-        }
-        if matches != 1 {
-            return Err(Error::contract("complete original schedule required"));
-        }
+        let indexed = episode_index.links(id, control)?;
+        indexed.spec.require("learner_viewer")?.integer(1, 2)?;
+        equal(
+            link.require("learner_seats")?.require(id)?,
+            indexed.spec.require("learner_viewer")?,
+            "PPO schedule/learner linkage mismatch",
+        )?;
     }
-    let mut scheduled_count = 0usize;
-    for group in schedule {
-        control.check()?;
-        scheduled_count += group.require("episodes")?.array()?.len();
-    }
+    let scheduled_count = episode_index.scheduled_count();
     if episodes.is_empty()
         || scheduled_count != episodes.len()
         || link.require("learner_seats")?.object()?.len() != episodes.len()

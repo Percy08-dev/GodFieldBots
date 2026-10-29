@@ -6,11 +6,13 @@ use crate::{
     feature::PreparedDecision,
     journal::{self, string},
     json::{self, Value},
+    numeric_io::{read_f64, read_i64, write_f64, write_i64},
     projection,
     session::Session,
 };
 use sha2::{Digest, Sha256};
 use std::{
+    collections::HashSet,
     fs::{self, File, OpenOptions},
     io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
@@ -343,6 +345,7 @@ pub fn scan(session: &mut Session) -> Result<Stage> {
         control.check()?;
         projection::validate_manifest(collection, budget, control, &session.sources)?;
         let m = &collection.manifest.root;
+        let episode_index = projection::EpisodeIndex::new(m, budget, control)?;
         let mut episodes = BudgetVec::new(budget);
         for episode in m.require("episodes")?.array()? {
             let directory = collection.directory.join(string(episode, "episode_id")?);
@@ -359,7 +362,7 @@ pub fn scan(session: &mut Session) -> Result<Stage> {
             },
             control,
         )?;
-        verify_journal_inventory(&collection.directory, &episodes, control)?;
+        verify_journal_inventory(&collection.directory, &episodes, budget, control)?;
         let collection_start = proof_ledger.records.len();
         let mut reader = crate::parallel::EpisodeReader::new(
             &episodes,
@@ -376,7 +379,7 @@ pub fn scan(session: &mut Session) -> Result<Stage> {
                 .file_name()
                 .and_then(|v| v.to_str())
                 .ok_or_else(|| Error::contract("invalid episode path"))?;
-            let links = projection::links(m, id)?;
+            let links = episode_index.links(id, control)?;
             let crate::parallel::EpisodeData {
                 records1,
                 records2,
@@ -677,15 +680,7 @@ pub fn scan(session: &mut Session) -> Result<Stage> {
                     + string(journal.header, "game_id")?.len()
                     + 256,
             )?;
-            let order = m
-                .require("episodes")?
-                .array()?
-                .iter()
-                .position(|e| {
-                    e.get("episode_id")
-                        .is_some_and(|v| v.string().is_ok_and(|s| s == id))
-                })
-                .ok_or_else(|| Error::contract("missing manifest episode"))?;
+            let order = links.ordinal;
             let index = if session.operation == "index" {
                 Some(crate::index::IndexInfo::new(
                     collection,
@@ -860,29 +855,28 @@ fn optional_number(value: &Value) -> Result<f64> {
         value.number()
     }
 }
-fn write_f64(file: &mut impl Write, values: &[f64], control: &Control) -> Result<()> {
-    for (i, value) in values.iter().enumerate() {
-        if i % 4096 == 0 {
-            control.check()?;
-        }
-        file.write_all(&value.to_le_bytes())?;
-    }
-    Ok(())
-}
-fn write_i64(file: &mut impl Write, values: &[i64], control: &Control) -> Result<()> {
-    for (i, value) in values.iter().enumerate() {
-        if i % 4096 == 0 {
-            control.check()?;
-        }
-        file.write_all(&value.to_le_bytes())?;
-    }
-    Ok(())
-}
 fn verify_journal_inventory(
     directory: &Path,
     episodes: &[PathBuf],
+    budget: &Arc<Budget>,
     control: &Control,
 ) -> Result<()> {
+    let estimate = episodes
+        .len()
+        .checked_mul(128)
+        .and_then(|n| n.checked_add(1024))
+        .ok_or_else(|| Error::resource("episode inventory index capacity overflow"))?;
+    let _index_lease = budget.reserve(estimate)?;
+    let mut expected = HashSet::new();
+    expected
+        .try_reserve(episodes.len())
+        .map_err(|_| Error::resource("episode inventory index allocation failed"))?;
+    for path in episodes {
+        control.check()?;
+        if !expected.insert(path.as_path()) {
+            return Err(Error::contract("duplicate episode source directory"));
+        }
+    }
     let mut count = 0usize;
     for entry in fs::read_dir(directory)? {
         control.check()?;
@@ -897,7 +891,7 @@ fn verify_journal_inventory(
             let name = name.to_string_lossy();
             if name.starts_with("player-") && name.ends_with(".jsonl") {
                 if !["player-1.jsonl", "player-2.jsonl"].contains(&name.as_ref())
-                    || !episodes.iter().any(|path| path == &entry.path())
+                    || !expected.contains(entry.path().as_path())
                 {
                     return Err(Error::contract(
                         "missing/extra original participant journals",
@@ -1062,8 +1056,12 @@ impl Stage {
             total = total
                 .checked_add(episode.export_bytes)
                 .ok_or_else(|| Error::resource("batch size overflow"))?;
-            decisions += episode.decisions;
-            candidates += episode.candidates;
+            decisions = decisions
+                .checked_add(episode.decisions)
+                .ok_or_else(|| Error::resource("batch decision count overflow"))?;
+            candidates = candidates
+                .checked_add(episode.candidates)
+                .ok_or_else(|| Error::resource("batch candidate count overflow"))?;
             end += 1;
         }
         let count = end - start;
@@ -1100,8 +1098,18 @@ impl Stage {
             None
         };
         let mut batch = Batch {
-            features: BudgetVec::with_capacity(budget, candidates * width)?,
-            state_features: BudgetVec::with_capacity(budget, decisions * width)?,
+            features: BudgetVec::with_capacity(
+                budget,
+                candidates
+                    .checked_mul(width)
+                    .ok_or_else(|| Error::resource("candidate array size overflow"))?,
+            )?,
+            state_features: BudgetVec::with_capacity(
+                budget,
+                decisions
+                    .checked_mul(width)
+                    .ok_or_else(|| Error::resource("state array size overflow"))?,
+            )?,
             episode_offsets: BudgetVec::with_capacity(budget, count + 1)?,
             candidate_offsets: BudgetVec::with_capacity(budget, decisions + 1)?,
             selected: BudgetVec::with_capacity(budget, decisions)?,
@@ -1131,45 +1139,70 @@ impl Stage {
             control.check()?;
             let _read_buffer = budget.reserve(32768)?;
             let mut file = BufReader::with_capacity(32768, File::open(&episode.path)?);
-            for i in 0..episode.candidates * width {
-                if i % 4096 == 0 {
-                    control.check()?;
-                }
-                batch.features.push(read_f64(&mut file)?)?;
-            }
-            for i in 0..episode.decisions * width {
-                if i % 4096 == 0 {
-                    control.check()?;
-                }
-                batch.state_features.push(read_f64(&mut file)?)?;
-            }
-            for index in 0..=episode.decisions {
-                let offset = read_i64(&mut file)?;
-                if index > 0 {
-                    batch.candidate_offsets.push(candidate_offset + offset)?;
-                }
-            }
-            for _ in 0..episode.decisions {
-                batch.selected.push(read_i64(&mut file)?)?;
-            }
-            for _ in 0..episode.decisions {
-                batch.old_logprob.push(read_f64(&mut file)?)?;
-            }
-            for _ in 0..episode.decisions {
-                batch.old_value.push(read_f64(&mut file)?)?;
-            }
-            for _ in 0..episode.decisions {
-                batch.old_logprob_present.push(read_i64(&mut file)?)?;
-            }
-            for _ in 0..episode.decisions {
-                batch.old_value_present.push(read_i64(&mut file)?)?;
-            }
-            for _ in 0..episode.decisions {
-                batch.candidate_counts.push(read_i64(&mut file)?)?;
-            }
+            let candidate_values = episode
+                .candidates
+                .checked_mul(width)
+                .ok_or_else(|| Error::resource("candidate array size overflow"))?;
+            let state_values = episode
+                .decisions
+                .checked_mul(width)
+                .ok_or_else(|| Error::resource("state array size overflow"))?;
+            read_f64(&mut file, &mut batch.features, candidate_values, control)?;
+            read_f64(&mut file, &mut batch.state_features, state_values, control)?;
+            // The first offset is a per-episode header; it is not exported.
+            let mut first_offset = [0u8; 8];
+            file.read_exact(&mut first_offset)?;
+            let offset_start = batch.candidate_offsets.len();
+            read_i64(
+                &mut file,
+                &mut batch.candidate_offsets,
+                episode.decisions,
+                control,
+            )?;
+            shift_offsets(
+                &mut batch.candidate_offsets[offset_start..],
+                candidate_offset,
+                control,
+            )?;
+            read_i64(&mut file, &mut batch.selected, episode.decisions, control)?;
+            read_f64(
+                &mut file,
+                &mut batch.old_logprob,
+                episode.decisions,
+                control,
+            )?;
+            read_f64(&mut file, &mut batch.old_value, episode.decisions, control)?;
+            read_i64(
+                &mut file,
+                &mut batch.old_logprob_present,
+                episode.decisions,
+                control,
+            )?;
+            read_i64(
+                &mut file,
+                &mut batch.old_value_present,
+                episode.decisions,
+                control,
+            )?;
+            read_i64(
+                &mut file,
+                &mut batch.candidate_counts,
+                episode.decisions,
+                control,
+            )?;
             telemetry.stage_read(episode.bytes);
-            decision_offset += episode.decisions as i64;
-            candidate_offset += episode.candidates as i64;
+            decision_offset = decision_offset
+                .checked_add(
+                    i64::try_from(episode.decisions)
+                        .map_err(|_| Error::resource("decision offset overflow"))?,
+                )
+                .ok_or_else(|| Error::resource("decision offset overflow"))?;
+            candidate_offset = candidate_offset
+                .checked_add(
+                    i64::try_from(episode.candidates)
+                        .map_err(|_| Error::resource("candidate offset overflow"))?,
+                )
+                .ok_or_else(|| Error::resource("candidate offset overflow"))?;
             batch.episode_offsets.push(decision_offset)?;
             batch.terminal_rewards.extend_from_slice(&episode.rewards)?;
             batch.winner.push(episode.winner)?;
@@ -1191,13 +1224,202 @@ impl Stage {
         Ok(Some(batch))
     }
 }
-fn read_f64(file: &mut impl Read) -> Result<f64> {
-    let mut b = [0; 8];
-    file.read_exact(&mut b)?;
-    Ok(f64::from_le_bytes(b))
+fn shift_offsets(values: &mut [i64], base: i64, control: &Control) -> Result<()> {
+    for chunk in values.chunks_mut(4096) {
+        control.check()?;
+        for value in chunk {
+            *value = value
+                .checked_add(base)
+                .ok_or_else(|| Error::resource("candidate offset overflow"))?;
+        }
+    }
+    control.check()
 }
-fn read_i64(file: &mut impl Read) -> Result<i64> {
-    let mut b = [0; 8];
-    file.read_exact(&mut b)?;
-    Ok(i64::from_le_bytes(b))
+
+#[cfg(test)]
+mod bulk_stage_tests {
+    use super::*;
+    use crate::budget::monotonic;
+
+    fn numeric_bytes(control: &Control) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        write_f64(&mut bytes, &[1., -0., 3., 4., 5., 6.], control).unwrap();
+        write_f64(&mut bytes, &[7., 8., 9., 10.], control).unwrap();
+        write_i64(&mut bytes, &[0, 1, 3], control).unwrap();
+        write_i64(&mut bytes, &[0, 1], control).unwrap();
+        write_f64(&mut bytes, &[-0.1, -0.2], control).unwrap();
+        write_f64(&mut bytes, &[0.5, 0.6], control).unwrap();
+        for _ in 0..2 {
+            write_i64(&mut bytes, &[1, 1], control).unwrap();
+        }
+        write_i64(&mut bytes, &[1, 2], control).unwrap();
+        assert_eq!(bytes.len(), 8 * ((3 + 2) * 2 + 7 * 2 + 1));
+        bytes
+    }
+    fn stage(budget: &Arc<Budget>, bytes: &[u8], copies: usize) -> Stage {
+        let directory = temporary().unwrap();
+        let scratch = Budget::new(1024 * 1024);
+        let mut episodes = BudgetVec::new(budget);
+        for order in 0..copies {
+            let path = directory.join(format!("episode-{order}.bin"));
+            fs::write(&path, bytes).unwrap();
+            episodes
+                .push(Episode {
+                    path,
+                    run: "r".to_owned(),
+                    game: format!("g{order}"),
+                    viewer: 1,
+                    split: 0,
+                    winner: 1,
+                    rewards: [1., -1.],
+                    decisions: 2,
+                    candidates: 3,
+                    bytes: 200,
+                    export_bytes: 200,
+                    order,
+                    index: None,
+                    _scratch: scratch.reserve(bytes.len()).unwrap(),
+                    _metadata: budget.reserve(256).unwrap(),
+                })
+                .unwrap();
+        }
+        Stage {
+            directory,
+            episodes,
+            proof: Value::Null,
+            cursor: 0,
+            scratch,
+            closed: false,
+            _index_output: None,
+        }
+    }
+    fn layout() -> ConsumerLayout {
+        ConsumerLayout {
+            decision: 0,
+            candidate: 0,
+            episode: 0,
+            base: 0,
+        }
+    }
+
+    #[test]
+    fn stage_bulk_roundtrip_and_partial_read_keep_cursor_atomic() {
+        let budget = Budget::new(2 * 1024 * 1024);
+        let control = Control::new(monotonic() + 30.).unwrap();
+        let bytes = numeric_bytes(&control);
+        let mut stage = stage(&budget, &bytes[..bytes.len() - 1], 1);
+        let before = budget.used();
+        let stats = crate::telemetry::Telemetry::default();
+        assert!(matches!(
+            stage.next(&budget, &control, 2, 4096, layout(), false, &stats),
+            Err(Error::Io(_))
+        ));
+        assert_eq!(stage.cursor, 0);
+        assert_eq!(budget.used(), before);
+        fs::write(&stage.episodes[0].path, &bytes).unwrap();
+        let batch = stage
+            .next(&budget, &control, 2, 4096, layout(), false, &stats)
+            .unwrap()
+            .unwrap();
+        assert_eq!(stage.cursor, 1);
+        assert_eq!(&*batch.candidate_offsets, &[0, 1, 3]);
+        assert_eq!(&*batch.episode_offsets, &[0, 2]);
+        assert_eq!(&*batch.selected, &[0, 1]);
+        assert_eq!(&*batch.candidate_counts, &[1, 2]);
+        assert_eq!(batch.features[1].to_bits(), (-0.0f64).to_bits());
+        assert_eq!(&*batch.state_features, &[7., 8., 9., 10.]);
+        drop(batch);
+        stage.close().unwrap();
+    }
+
+    #[test]
+    fn multiple_episode_offsets_and_overflow_preserve_cursor() {
+        let budget = Budget::new(2 * 1024 * 1024);
+        let control = Control::new(monotonic() + 30.).unwrap();
+        let bytes = numeric_bytes(&control);
+        let stats = crate::telemetry::Telemetry::default();
+        let mut stage = stage(&budget, &bytes, 2);
+        let before = budget.used();
+        let mut invalid = bytes.clone();
+        // Six candidate and four state values precede the three offset values.
+        invalid[12 * 8..13 * 8].copy_from_slice(&i64::MAX.to_le_bytes());
+        fs::write(&stage.episodes[1].path, &invalid).unwrap();
+        assert!(matches!(
+            stage.next(&budget, &control, 2, 4096, layout(), false, &stats),
+            Err(Error::ResourceLimit(_))
+        ));
+        assert_eq!(stage.cursor, 0);
+        assert_eq!(budget.used(), before);
+        fs::write(&stage.episodes[1].path, &bytes).unwrap();
+        let batch = stage
+            .next(&budget, &control, 2, 4096, layout(), false, &stats)
+            .unwrap()
+            .unwrap();
+        assert_eq!(&*batch.candidate_offsets, &[0, 1, 3, 4, 6]);
+        assert_eq!(&*batch.episode_offsets, &[0, 2, 4]);
+        assert_eq!(stage.cursor, 2);
+    }
+
+    #[test]
+    fn empty_episode_keeps_only_the_original_offset_header() {
+        let budget = Budget::new(2 * 1024 * 1024);
+        let control = Control::new(monotonic() + 30.).unwrap();
+        let mut stage = stage(&budget, &0i64.to_le_bytes(), 1);
+        stage.episodes[0].decisions = 0;
+        stage.episodes[0].candidates = 0;
+        stage.episodes[0].bytes = 8;
+        let stats = crate::telemetry::Telemetry::default();
+        let batch = stage
+            .next(&budget, &control, 2, 4096, layout(), false, &stats)
+            .unwrap()
+            .unwrap();
+        assert!(batch.features.is_empty() && batch.selected.is_empty());
+        assert_eq!(&*batch.candidate_offsets, &[0]);
+        assert_eq!(&*batch.episode_offsets, &[0, 0]);
+    }
+
+    #[test]
+    fn offset_adjustment_checks_overflow_and_cancellation() {
+        let control = Control::new(monotonic() + 30.).unwrap();
+        let mut values = [0, 2, 5];
+        shift_offsets(&mut values, 7, &control).unwrap();
+        assert_eq!(values, [7, 9, 12]);
+        assert!(matches!(
+            shift_offsets(&mut [i64::MAX], 1, &control),
+            Err(Error::ResourceLimit(_))
+        ));
+        control.cancel();
+        assert_eq!(
+            shift_offsets(&mut values, 1, &control),
+            Err(Error::Cancelled)
+        );
+    }
+
+    #[test]
+    fn inventory_hash_membership_rejects_extra_missing_and_duplicate_paths() {
+        let budget = Budget::new(2 * 1024 * 1024);
+        let control = Control::new(monotonic() + 30.).unwrap();
+        let root = temporary().unwrap();
+        let expected = root.join("e");
+        fs::create_dir(&expected).unwrap();
+        fs::write(expected.join("player-1.jsonl"), b"{}").unwrap();
+        assert!(verify_journal_inventory(&root, &[expected.clone()], &budget, &control).is_err());
+        fs::write(expected.join("player-2.jsonl"), b"{}").unwrap();
+        verify_journal_inventory(&root, &[expected.clone()], &budget, &control).unwrap();
+        assert!(
+            verify_journal_inventory(
+                &root,
+                &[expected.clone(), expected.clone()],
+                &budget,
+                &control
+            )
+            .is_err()
+        );
+        let extra = root.join("extra");
+        fs::create_dir(&extra).unwrap();
+        fs::write(extra.join("player-1.jsonl"), b"{}").unwrap();
+        assert!(verify_journal_inventory(&root, &[expected], &budget, &control).is_err());
+        fs::remove_dir_all(root).unwrap();
+        assert_eq!(budget.used(), 0);
+    }
 }

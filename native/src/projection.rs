@@ -1,7 +1,7 @@
 //! Source linkage and exact legacy source-proof serialization, without policy I/O.
 use crate::json::ValueExt;
 use crate::{
-    budget::{Budget, BudgetVec, Control},
+    budget::{Budget, BudgetVec, Control, Lease},
     controls,
     error::{Error, Result},
     journal::{self, Journal, equal, string},
@@ -10,7 +10,7 @@ use crate::{
     source::Sources,
     validation,
 };
-use std::{path::Path, sync::Arc};
+use std::{collections::HashMap, path::Path, sync::Arc};
 
 pub const SIMULATOR_REVISION: &str = "ffcffa0966dbf6d7ce1d982f4ee6444e291d42d6";
 const REVIEWED_SPECS_DIGEST: &str =
@@ -93,88 +93,170 @@ pub fn validate_manifest(
 }
 
 pub struct EpisodeLinks<'a> {
+    pub ordinal: usize,
     pub episode: &'a Value,
     pub group: &'a Value,
     pub spec: &'a Value,
     pub health: &'a Value,
 }
-pub fn links<'a>(manifest: &'a Value, id: &str) -> Result<EpisodeLinks<'a>> {
-    let mut episode = None;
-    for item in manifest.require("episodes")?.array()? {
-        if string(item, "episode_id")? == id {
-            if episode.replace(item).is_some() {
+/// Local borrowed indexes: never stored self-referentially in Collection.
+/// Hash iteration order is never used for output or episode consumption.
+pub struct EpisodeIndex<'a> {
+    episodes: HashMap<&'a str, (usize, &'a Value)>,
+    schedule: HashMap<&'a str, (&'a Value, &'a Value)>,
+    health: HashMap<&'a str, &'a Value>,
+    _lease: Lease,
+}
+impl<'a> EpisodeIndex<'a> {
+    pub fn new(manifest: &'a Value, budget: &Arc<Budget>, control: &Control) -> Result<Self> {
+        control.check()?;
+        let episodes = manifest.require("episodes")?.array()?;
+        let schedule = manifest.require("schedule")?.array()?;
+        let groups = manifest.require("groups")?.array()?;
+        let mut scheduled = 0usize;
+        let mut memberships = 0usize;
+        for group in schedule {
+            control.check()?;
+            scheduled = scheduled
+                .checked_add(group.require("episodes")?.array()?.len())
+                .ok_or_else(|| Error::resource("episode index capacity overflow"))?;
+        }
+        for group in groups {
+            control.check()?;
+            memberships = memberships
+                .checked_add(group.require("episode_ids")?.array()?.len())
+                .ok_or_else(|| Error::resource("episode index capacity overflow"))?;
+        }
+        let bytes = episodes
+            .len()
+            .checked_add(scheduled)
+            .and_then(|n| n.checked_add(memberships))
+            .and_then(|n| n.checked_mul(160))
+            .and_then(|n| n.checked_add(1024))
+            .ok_or_else(|| Error::resource("episode index capacity overflow"))?;
+        let lease = budget.reserve(bytes)?;
+        let mut result = Self {
+            episodes: HashMap::new(),
+            schedule: HashMap::new(),
+            health: HashMap::new(),
+            _lease: lease,
+        };
+        result
+            .episodes
+            .try_reserve(episodes.len())
+            .map_err(|_| Error::resource("episode index allocation failed"))?;
+        result
+            .schedule
+            .try_reserve(scheduled)
+            .map_err(|_| Error::resource("episode index allocation failed"))?;
+        result
+            .health
+            .try_reserve(memberships)
+            .map_err(|_| Error::resource("episode index allocation failed"))?;
+        for (ordinal, episode) in episodes.iter().enumerate() {
+            control.check()?;
+            let id = string(episode, "episode_id")?;
+            if result.episodes.insert(id, (ordinal, episode)).is_some() {
                 return Err(Error::contract("duplicate manifest episode"));
             }
         }
-    }
-    let episode =
-        episode.ok_or_else(|| Error::contract("journal episode missing from manifest"))?;
-    let mut found = None;
-    for group in manifest.require("schedule")?.array()? {
-        for spec in group.require("episodes")?.array()? {
-            if string(spec, "episode_id")? == id {
-                if found.replace((group, spec)).is_some() {
+        for group in schedule {
+            control.check()?;
+            for spec in group.require("episodes")?.array()? {
+                control.check()?;
+                if result
+                    .schedule
+                    .insert(string(spec, "episode_id")?, (group, spec))
+                    .is_some()
+                {
                     return Err(Error::contract("duplicate scheduled identity"));
                 }
             }
         }
+        for group in groups {
+            control.check()?;
+            for id in group.require("episode_ids")?.array()? {
+                control.check()?;
+                // Preserve the old any(string().is_ok_and(...)) membership:
+                // nonstrings are ignored and repeats within one group count once.
+                if let Some(id) = id.as_str() {
+                    // The prior lookup only queried actual manifest episodes;
+                    // unrelated health memberships cannot introduce conflicts.
+                    if !result.episodes.contains_key(id) {
+                        continue;
+                    }
+                    if let Some(previous) = result.health.insert(id, group) {
+                        if !std::ptr::eq(previous, group) {
+                            return Err(Error::contract("duplicate group health"));
+                        }
+                    }
+                }
+            }
+        }
+        control.check()?;
+        Ok(result)
     }
-    let (group, spec) = found.ok_or_else(|| Error::contract("missing scheduled identity"))?;
-    for (left, right) in [("pair_id", "pair_id"), ("policies", "policies")] {
+    pub fn scheduled_count(&self) -> usize {
+        self.schedule.len()
+    }
+    pub fn links(&self, id: &str, control: &Control) -> Result<EpisodeLinks<'a>> {
+        control.check()?;
+        let &(ordinal, episode) = self
+            .episodes
+            .get(id)
+            .ok_or_else(|| Error::contract("journal episode missing from manifest"))?;
+        let &(group, spec) = self
+            .schedule
+            .get(id)
+            .ok_or_else(|| Error::contract("missing scheduled identity"))?;
+        let &health = self
+            .health
+            .get(id)
+            .ok_or_else(|| Error::contract("missing group health"))?;
+        for (left, right) in [("pair_id", "pair_id"), ("policies", "policies")] {
+            equal(
+                episode.require(left)?,
+                spec.require(right)?,
+                "source schedule/result mismatch",
+            )?;
+        }
         equal(
-            episode.require(left)?,
-            spec.require(right)?,
+            episode.require("seed")?,
+            group.require("seed")?,
             "source schedule/result mismatch",
         )?;
-    }
-    equal(
-        episode.require("seed")?,
-        group.require("seed")?,
-        "source schedule/result mismatch",
-    )?;
-    let mut health = None;
-    for candidate in manifest.require("groups")?.array()? {
-        if candidate
-            .require("episode_ids")?
-            .array()?
-            .iter()
-            .any(|v| v.string().is_ok_and(|s| s == id))
-        {
-            if health.replace(candidate).is_some() {
-                return Err(Error::contract("duplicate group health"));
+        for key in [
+            "failure",
+            "client_close_failure",
+            "budget_overrun_seconds",
+            "finalization_cancelled",
+            "cleanup_failure",
+        ] {
+            if controls::field_truthy(health, key) {
+                return Err(Error::contract("episode or group health failure"));
             }
         }
-    }
-    let health = health.ok_or_else(|| Error::contract("missing group health"))?;
-    for key in [
-        "failure",
-        "client_close_failure",
-        "budget_overrun_seconds",
-        "finalization_cancelled",
-        "cleanup_failure",
-    ] {
-        if controls::field_truthy(health, key) {
-            return Err(Error::contract("episode or group health failure"));
-        }
-    }
-    if let Some(process) = health.get("process").filter(|v| !v.is_null()) {
-        if !controls::numeric_field(process, "exit_code", 0)
-            || string(process, "shutdown")? != "stdin_eof"
-        {
-            return Err(Error::contract("episode or group process health failure"));
-        }
-        for key in ["log_error", "reap_failure", "budget_overrun_seconds"] {
-            if controls::field_truthy(process, key) {
+        if let Some(process) = health.get("process").filter(|v| !v.is_null()) {
+            if !controls::numeric_field(process, "exit_code", 0)
+                || string(process, "shutdown")? != "stdin_eof"
+            {
                 return Err(Error::contract("episode or group process health failure"));
             }
+            for key in ["log_error", "reap_failure", "budget_overrun_seconds"] {
+                if controls::field_truthy(process, key) {
+                    return Err(Error::contract("episode or group process health failure"));
+                }
+            }
         }
+        control.check()?;
+        Ok(EpisodeLinks {
+            ordinal,
+            episode,
+            group,
+            spec,
+            health,
+        })
     }
-    Ok(EpisodeLinks {
-        episode,
-        group,
-        spec,
-        health,
-    })
 }
 
 pub fn source_metadata(
@@ -390,4 +472,231 @@ pub fn source_metadata(
         ("eligible", Value::Bool(true)),
         ("ineligible_reasons", Value::Array(Vec::new())),
     ]))
+}
+
+#[cfg(test)]
+mod episode_index_tests {
+    use super::*;
+    use crate::budget::monotonic;
+    use serde_json::json;
+
+    fn manifest(count: usize) -> Value {
+        let episodes: Vec<_> = (0..count)
+            .map(|i| {
+                json!({
+                    "episode_id": format!("e{i}"), "pair_id": format!("p{i}"),
+                    "policies": ["a", "b"], "seed": i,
+                })
+            })
+            .collect();
+        let schedule: Vec<_> = (0..count)
+            .rev()
+            .map(|i| {
+                json!({
+                    "seed": i, "episodes": [{"episode_id": format!("e{i}"),
+                        "pair_id": format!("p{i}"), "policies": ["a", "b"]}],
+                })
+            })
+            .collect();
+        let groups: Vec<_> = (0..count)
+            .rev()
+            .map(|i| {
+                json!({
+                    "episode_ids": [format!("e{i}")],
+                    "process": {"exit_code": 0, "shutdown": "stdin_eof"},
+                })
+            })
+            .collect();
+        json!({"episodes": episodes, "schedule": schedule, "groups": groups})
+    }
+    fn control() -> Control {
+        Control::new(monotonic() + 30.).unwrap()
+    }
+
+    #[test]
+    fn indexed_links_preserve_original_ordinal_with_permuted_schedule_and_health() {
+        let mut m = manifest(8);
+        m["episodes"].as_array_mut().unwrap().reverse();
+        let budget = Budget::new(1024 * 1024);
+        let control = control();
+        let index = EpisodeIndex::new(&m, &budget, &control).unwrap();
+        for i in 0..8 {
+            let links = index.links(&format!("e{i}"), &control).unwrap();
+            assert_eq!(links.ordinal, 7 - i);
+            assert!(std::ptr::eq(links.episode, &m["episodes"][7 - i]));
+            assert_eq!(links.spec["episode_id"], format!("e{i}"));
+            assert_eq!(links.group["seed"], i);
+        }
+    }
+
+    #[test]
+    fn missing_and_duplicate_sources_and_schedule_conflicts_fail_closed() {
+        let budget = Budget::new(1024 * 1024);
+        let control = control();
+        for (field, expected) in [
+            ("episodes", "duplicate manifest episode"),
+            ("schedule", "duplicate scheduled identity"),
+            ("groups", "duplicate group health"),
+        ] {
+            let mut m = manifest(2);
+            let duplicate = m[field][0].clone();
+            m[field].as_array_mut().unwrap().push(duplicate);
+            assert!(matches!(EpisodeIndex::new(&m, &budget, &control),
+                            Err(Error::Contract(message)) if message == expected));
+        }
+        for (field, expected) in [
+            ("episodes", "journal episode missing from manifest"),
+            ("schedule", "missing scheduled identity"),
+            ("groups", "missing group health"),
+        ] {
+            let mut m = manifest(1);
+            m[field].as_array_mut().unwrap().clear();
+            let index = EpisodeIndex::new(&m, &budget, &control).unwrap();
+            assert!(matches!(index.links("e0", &control),
+                            Err(Error::Contract(message)) if message == expected));
+        }
+        for field in ["pair_id", "policies"] {
+            let mut m = manifest(1);
+            m["schedule"][0]["episodes"][0][field] = json!("different");
+            let index = EpisodeIndex::new(&m, &budget, &control).unwrap();
+            assert!(matches!(index.links("e0", &control),
+                            Err(Error::Contract(message)) if message == "source schedule/result mismatch"));
+        }
+        let mut m = manifest(1);
+        m["schedule"][0]["seed"] = json!(999);
+        let index = EpisodeIndex::new(&m, &budget, &control).unwrap();
+        assert!(matches!(index.links("e0", &control),
+                        Err(Error::Contract(message)) if message == "source schedule/result mismatch"));
+    }
+
+    #[test]
+    fn health_membership_preserves_same_record_repeats_and_ignored_nonstrings() {
+        let mut m = manifest(1);
+        m["groups"][0]["episode_ids"] = json!(["e0", null, 1, {}, "e0"]);
+        let budget = Budget::new(1024 * 1024);
+        let control = control();
+        let index = EpisodeIndex::new(&m, &budget, &control).unwrap();
+        assert!(index.links("e0", &control).is_ok());
+        drop(index);
+        for _ in 0..2 {
+            m["groups"]
+                .as_array_mut()
+                .unwrap()
+                .push(json!({"episode_ids": ["foreign"]}));
+        }
+        let index = EpisodeIndex::new(&m, &budget, &control).unwrap();
+        assert_eq!(index.health.len(), 1);
+        assert!(index.links("e0", &control).is_ok());
+        drop(index);
+        m["groups"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"episode_ids": ["e0"]}));
+        assert!(matches!(EpisodeIndex::new(&m, &budget, &control),
+                        Err(Error::Contract(message)) if message == "duplicate group health"));
+    }
+
+    #[test]
+    fn index_capacity_is_linear_reserved_once_and_queries_reuse_it() {
+        for count in [1, 32, 256, 1024] {
+            let m = manifest(count);
+            let budget = Budget::new(2 * 1024 * 1024);
+            let control = control();
+            let index = EpisodeIndex::new(&m, &budget, &control).unwrap();
+            // Deterministic structural scaling: three E-entry hash tables,
+            // one linear reservation, then queries through those retained maps.
+            assert_eq!(
+                (
+                    index.episodes.len(),
+                    index.schedule.len(),
+                    index.health.len()
+                ),
+                (count, count, count)
+            );
+            let admitted = 1024 + 160 * 3 * count;
+            assert_eq!(budget.used(), admitted);
+            for i in (0..count).rev() {
+                assert_eq!(index.links(&format!("e{i}"), &control).unwrap().ordinal, i);
+            }
+            assert_eq!(budget.used(), admitted);
+            drop(index);
+            assert_eq!(budget.used(), 0);
+        }
+        let m = manifest(1);
+        let budget = Budget::new(1023);
+        let control = control();
+        assert!(matches!(
+            EpisodeIndex::new(&m, &budget, &control),
+            Err(Error::ResourceLimit(_))
+        ));
+        assert_eq!(budget.used(), 0);
+        control.cancel();
+        assert!(matches!(
+            EpisodeIndex::new(&m, &budget, &control),
+            Err(Error::Cancelled)
+        ));
+    }
+
+    #[test]
+    #[ignore = "bounded release microbenchmark; run explicitly without concurrent work"]
+    fn benchmark_repeated_scans_vs_episode_index() {
+        use std::{hint::black_box, time::Instant};
+        let m = manifest(1024);
+        let ids: Vec<_> = (0..1024).map(|i| format!("e{i}")).collect();
+        let budget = Budget::new(2 * 1024 * 1024);
+        let control = control();
+        let start = Instant::now();
+        for _ in 0..3 {
+            for id in &ids {
+                let episodes = m["episodes"].as_array().unwrap();
+                let episode = episodes
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, e)| e["episode_id"].as_str() == Some(id))
+                    .last()
+                    .unwrap();
+                let scheduled = m["schedule"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .flat_map(|group| {
+                        group["episodes"]
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .map(move |spec| (group, spec))
+                    })
+                    .filter(|(_, s)| s["episode_id"].as_str() == Some(id))
+                    .last()
+                    .unwrap();
+                let health = m["groups"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .filter(|g| {
+                        g["episode_ids"]
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .any(|v| v.as_str() == Some(id))
+                    })
+                    .last()
+                    .unwrap();
+                black_box((episode, scheduled, health));
+            }
+        }
+        let scan_seconds = start.elapsed().as_secs_f64();
+        let start = Instant::now();
+        let index = EpisodeIndex::new(&m, &budget, &control).unwrap();
+        for _ in 0..3 {
+            for id in &ids {
+                black_box(index.links(id, &control).unwrap());
+            }
+        }
+        println!(
+            "episode_lookup episodes=1024 repetitions=3 scan_seconds={} indexed_build_and_queries_seconds={}",
+            scan_seconds,
+            start.elapsed().as_secs_f64()
+        );
+    }
 }
