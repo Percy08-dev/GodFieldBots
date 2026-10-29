@@ -2,9 +2,21 @@
 
 ## Status and scope
 
+[ADR0012](adr/0012-serde-json-and-coarse-resource-admission.md) records the
+user-authorized production Serde migration and generic-code cleanup. Its design
+and final independent correctness/conformance reviews are accepted. Full tests,
+both frozen feature recipes/index and saved PPO ingestion pass; three paired
+preparations improve median94.25s to50.81s (1.855x), with RSS376.1->404.6MiB.
+JSON uses Serde Value/Map/Number and coarse document/file estimates;
+numeric export leases, source/learning boundaries and cleanup ownership remain.
+The custom parser/AST, open-address source index, heapsort copies and fine decoder
+profiler are removed from the new source. Current acceptance evidence is tracked
+in [Serde adoption verification](verification/serde-json-adoption.md).
+
 [ADR0011](adr/0011-native-preprocessing.md) specifies the user-approved migration
 of offline preprocessing and PPO post-collection ingestion to a common Rust core.
-The implementation and independent correctness/conformance reviews are accepted.
+Its initial implementation and correctness/conformance reviews were accepted;
+ADR0012 supersedes its JSON allocation/parser and fine-polling decisions.
 Full-corpus/index equivalence, installed wheels,751Python/31Rust tests, three
 paired preparations (2.682x), an exact reference fit and real CUDA pause/resume
 checks pass. Python remains the learning authority. Target PPO/fixed-LightGBM
@@ -148,7 +160,7 @@ Wire DTOs may resolve representation details; no engine dependency is allowed.
 | `gf_evaluation` | paired scheduling, aggregation and costs | common |
 | `gf_models` | participant-local Random/heuristic/LightGBM/MLP, common encoder/config and native artifacts | common, lazy extras |
 | `gf_cli` | strict config, composition, commands, manifest | application packages |
-| `gf_native` (optional Rust extension) | bounded offline parsing/structural validation, fixed feature kernels, typed staging/index columns and capacity leases | Rust crates, PyO3, rust-numpy; no upper Python package or learning dependency |
+| `gf_native` (optional Rust extension) | Serde offline parsing/structural validation, fixed feature kernels, typed staging/index columns and numeric capacity/document-admission leases | Rust crates, Serde, PyO3, rust-numpy; no upper Python package or learning dependency |
 
 The existing `godfieldbots` entry point becomes a compatibility wrapper.
 Common never imports upper layers. Models never handle HTTP or management
@@ -162,9 +174,10 @@ Optional libraries must not load for baseline or CLI help.
 
 The separate `godfieldbots-native` uv workspace member uses Maturin1.15.0,
 PyO3 0.30.1, rust-numpy0.30.0 and ndarray0.17.2, pinned in its build configuration
-and Cargo.lock. The root package retains uv_build and exposes an optional native
+and Cargo.lock. ADR0012 adds serde1.0.229/serde_json1.0.151 with arbitrary-precision
+numbers. The root package retains uv_build and exposes an optional native
 extra. Runtime loading is lazy and identifies the actual loaded extension binary,
-ABI, build/lock/source digests and fixed recipe. Rust failures never dispatch to
+ABI, build/lock/source digests, parser/resource contracts and fixed recipe. Rust failures never dispatch to
 the Python reference backend. ADR0011's target production presets are enabled;
 optional diagnostic builds remain isolated from the production extension.
 
@@ -180,6 +193,24 @@ online batch owners finalize before optimizer dispatch and parent commit. Learni
 rewards/GAE/normalization remain Python-owned. Rust supplies ordered index columns
 and hashes; Python invokes existing native Arrow/Parquet I/O on typed buffers.
 Live participant workers and their information boundary are unchanged.
+
+The Serde JSON parser contract is `serde-json-v1`; document admission is
+`json-document-32x-plus64kib-v1`: estimated32*raw bytes+64KiB before parsing, with
+one Arc reservation shared by a journal file's records and retained by source
+documents. Ordinary JSON allocations and clones are not individually tracked;
+these are soft admission estimates, not RSS quotas. Numeric/NumPy owner capacity
+leases still track retained buffers. Coarse metadata-copy counters exclude Serde
+heap allocation/copy; OS RSS/PSS is measured separately.
+
+Serde owns JSON grammar/string/number parsing. A narrow depth/reserved-key guard
+precedes deserialization, including escaped `$serde_json::private::Number` member
+keys; identical value strings are allowed. Exact root0 value-depth and digit
+limits follow parsing. Scalar Unicode/standard JSON is required; bare NaN/Infinity
+and lone surrogates fail early. Python canonical number spelling and metadata
+numeric equality remain small compatibility helpers so genuine historical source
+hashes and feature bytes stay stable. Cancellation is checked at bounded scans,
+file/record and operation boundaries; a parse/sort may finish before cancellation
+is observed, and no late result may publish. Safe deep-state retirement remains.
 
 ## Config and compatibility
 

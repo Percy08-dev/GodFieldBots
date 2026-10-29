@@ -1,9 +1,10 @@
 //! Arrow-compatible column buffers. Recorded returns stay raw until Python checks.
+use crate::json::ValueExt;
 use crate::{
     budget::{Budget, BudgetVec, Control},
     error::{Error, Result},
     journal::string,
-    json::{self, Text, Value},
+    json::{self, Value},
     pipeline::Episode,
     projection::EpisodeLinks,
     session::Collection,
@@ -13,10 +14,11 @@ use sha2::{Digest, Sha256};
 use std::sync::Arc;
 
 pub struct IndexInfo {
-    strings: [Text; 8],
+    strings: [String; 8],
     generation: i64,
     viewer: i64,
     reward: f64,
+    _metadata: crate::budget::Lease,
 }
 impl IndexInfo {
     pub fn new(
@@ -32,27 +34,36 @@ impl IndexInfo {
         let m = &collection.manifest.root;
         let link = m.require("ppo")?;
         let viewer = header.require("viewer")?.integer(1, 2)? as i64;
-        let policies = links.spec.require("policies")?.as_array()?;
+        let policies = links.spec.require("policies")?.array()?;
         let values = [
             string(m, "run_id")?,
             string(link, "parent_run_id")?,
             string(link, "batch_id")?,
             string(m, "split")?,
-            policies[(2 - viewer) as usize].as_str()?,
+            policies[(2 - viewer) as usize].string()?,
             sources.digest(&collection.directory.join("manifest.json"), control)?,
             string(header, "game_id")?,
             string(dataset, "content_sha256")?,
         ];
+        let metadata_bytes = values
+            .iter()
+            .try_fold(8 * size_of::<String>(), |total, text| {
+                total
+                    .checked_add(text.len())
+                    .ok_or_else(|| Error::resource("index metadata size overflow"))
+            })?;
+        let metadata = budget.reserve(metadata_bytes)?;
         Ok(Self {
+            _metadata: metadata,
             strings: [
-                Text::from_str(values[0], budget)?,
-                Text::from_str(values[1], budget)?,
-                Text::from_str(values[2], budget)?,
-                Text::from_str(values[3], budget)?,
-                Text::from_str(values[4], budget)?,
-                Text::from_str(values[5], budget)?,
-                Text::from_str(values[6], budget)?,
-                Text::from_str(values[7], budget)?,
+                (values[0]).to_owned(),
+                (values[1]).to_owned(),
+                (values[2]).to_owned(),
+                (values[3]).to_owned(),
+                (values[4]).to_owned(),
+                (values[5]).to_owned(),
+                (values[6]).to_owned(),
+                (values[7]).to_owned(),
             ],
             generation: link.require("collection_generation")?.integer(0, 1000)? as i64,
             viewer,
@@ -61,7 +72,7 @@ impl IndexInfo {
     }
     pub fn utf8_bytes(&self, decisions: usize) -> Result<usize> {
         let sum = self.strings.iter().try_fold(0usize, |n, s| {
-            n.checked_add(s.bytes().len())
+            n.checked_add(s.as_bytes().len())
                 .ok_or_else(|| Error::resource("index UTF8 capacity overflow"))
         })?;
         sum.checked_mul(decisions)
@@ -78,7 +89,7 @@ impl IndexInfo {
             .ok_or_else(|| Error::resource("index capacity overflow"))
     }
     fn row(&self, decision: usize, budget: &Arc<Budget>) -> Result<Value> {
-        let text = |i: usize| json::text(self.strings[i].as_str()?, budget);
+        let text = |i: usize| json::text(self.strings[i].as_str(), budget);
         json::object(
             [
                 ("run_id", text(0)?),
@@ -97,7 +108,7 @@ impl IndexInfo {
                 ("source_manifest_sha256", text(5)?),
                 ("game_id", text(6)?),
                 ("decision", json::integer(decision as i128, budget)?),
-                ("return", Value::Float(self.reward)),
+                ("return", json::float(self.reward)?),
                 ("dataset_content_sha256", text(7)?),
             ],
             budget,
@@ -169,7 +180,7 @@ impl Columns {
                     .as_ref()
                     .ok_or_else(|| Error::contract("index metadata missing"))?;
                 bytes = info.strings[column]
-                    .bytes()
+                    .as_bytes()
                     .len()
                     .checked_mul(episode.decisions)
                     .and_then(|n| bytes.checked_add(n))
@@ -190,7 +201,7 @@ impl Columns {
                     .ok_or_else(|| Error::contract("index metadata missing"))?;
                 for _ in 0..episode.decisions {
                     control.check()?;
-                    data.extend_from_slice(info.strings[column].bytes())?;
+                    data.extend_from_slice(info.strings[column].as_bytes())?;
                     offsets.push(data.len() as i32)?;
                 }
             }

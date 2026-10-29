@@ -11,8 +11,8 @@ use std::{
 };
 
 pub struct EpisodeData {
-    pub records1: BudgetVec<Document>,
-    pub records2: BudgetVec<Document>,
+    pub records1: Vec<Document>,
+    pub records2: Vec<Document>,
     pub replay1: Document,
     pub replay2: Document,
 }

@@ -87,6 +87,8 @@ class NativePreparedInputs:
 
     def _setup(self, settings: PreparationConfig) -> None:
         self.diagnostics = self.session.diagnostics
+        self.diagnostics['accounting_policy'] = 'numeric-capacity-and-coarse-json-document-admission-v2'
+        self.diagnostics['json_heap_scope'] = '32*raw_input_bytes+64KiB document/file estimates; not exact serde heap or RSS'
         self._directory: Path | None = None
         self._lease: Any = None
         self._outputs: dict[str, BinaryIO] = {}

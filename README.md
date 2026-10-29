@@ -132,6 +132,7 @@ datasetの作成・利用時は元journal・Replay・親runを再検証します
 
 PPOと固定データLightGBMのpresetは共通のRust前処理を使います。
 Rustがjournal・Replay・来歴・特徴変換を処理し、Pythonが報酬・教師・GAE・学習を担当します。
+JSONの解析・値の保持には`serde_json`を使い、キー索引やソートも標準実装へ統一しています。
 `native` extraは独立したMaturin packageです。ソースからの導入にはRust toolchainが必要です。
 baselineには追加依存は不要です。
 
@@ -142,6 +143,8 @@ env -u VIRTUAL_ENV uv sync --extra native --extra data --extra lightgbm --extra 
 前処理は予算内の試合群を繰り返し検証・変換・解放し、メモリと一時領域を管理します。
 処理単位あたりの数値データ受け渡しは1回のFFI呼び出しで、NumPyがRustの配列を共有します。
 生存中のviewも予算に計上します。Rust内部のコピーやファイル書き出しは別に残ります。
+JSONはファイル／文書単位の見積予約（入力の32倍＋64KiB、journalの各行で共有）、
+数値配列は所有バッファの容量で管理します。予約量と実際のRSSは別の指標です。
 標準設定はメモリ8GiB・処理単位64MiBです。固定83,783行で検証した
 2GiB・16MiBの設定もあります。これらは前処理の管理上限であり、OSのhard quotaや
 LightGBM native fitのメモリ上限ではありません。
@@ -159,9 +162,12 @@ standalone datasetの`--address-space-limit-mib`は任意の`RLIMIT_AS`設定で
 RSSではなく仮想アドレス空間を制限し、学習・CUDA子プロセスには適用しません。
 `dataset index --output`は出力と`.json` sidecarの両方が未作成の
 パスを要求します。再生成時は新しい出力先を指定してください。
-設定・互換性は[ADR0011](docs/adr/0011-native-preprocessing.md)、
-時間・CPU・メモリ・ストレージ・コピー回数の比較は[Rust前処理の検証記録](docs/verification/native-preprocessing.md)
+設定・互換性は[ADR0012](docs/adr/0012-serde-json-and-coarse-resource-admission.md)、
+時間・CPU・メモリ・ストレージの比較と自作部分の整理は[Serde移行記録](docs/verification/serde-json-adoption.md)
 を参照してください。
+新旧のnativeバイナリが混在する場合は事前検証で拒否します。更新後はnative packageを
+再ビルドしてください。標準JSONとUnicode scalarを受け付け、非標準の`NaN`／`Infinity`や
+単独surrogateなどの扱いの変更は移行記録に明記しています。バイナリ変更後の通常resumeは拒否します。
 固定データ方式では検証・特徴変換・fit・保存・回収を各fitの2時間へ含め、共有データ生成費を別途報告します。
 従来の生成費込み方式と記録schemaで区別し、PPOと総費用が同条件だったとは扱いません。
 最終test評価はこの段階では実行しません。

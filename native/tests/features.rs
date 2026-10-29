@@ -1,4 +1,5 @@
 use gf_native::feature::{FeatureConfig, feature_names_controlled};
+use gf_native::json::ValueExt;
 use sha2::{Digest, Sha256};
 
 #[test]

@@ -4,6 +4,7 @@ use crate::error::{Error, Result};
 use crate::json::{self, Document};
 use crate::telemetry::{Phase, Telemetry};
 use sha2::{Digest, Sha256};
+use std::collections::HashMap;
 use std::fs::{self, File, Metadata};
 use std::io::Read;
 use std::os::unix::fs::MetadataExt;
@@ -62,7 +63,7 @@ pub struct Sources {
     max_file: usize,
     max_record: usize,
     inventories: BudgetVec<Inventory>,
-    lookup: crate::lookup::Index,
+    lookup: HashMap<PathBuf, usize>,
     telemetry: Arc<Telemetry>,
 }
 
@@ -84,7 +85,7 @@ impl Sources {
         Self {
             entries: BudgetVec::new(&budget),
             inventories: BudgetVec::new(&budget),
-            lookup: crate::lookup::Index::new(&budget),
+            lookup: HashMap::new(),
             budget,
             max_file,
             max_record,
@@ -137,11 +138,7 @@ impl Sources {
             return Err(Error::contract("source changed during bounded read"));
         }
         let digest = format!("{:x}", hasher.finalize());
-        let path_hash = crate::lookup::hash(path.as_os_str().as_encoded_bytes(), control)?;
-        if let Some(index) =
-            self.lookup
-                .find(path_hash, |index| self.entries[index].path == path, control)?
-        {
+        if let Some(index) = self.lookup.get(&path).copied() {
             let prior = &self.entries[index];
             if prior.identity != before || prior.digest != digest {
                 return Err(Error::contract("source changed during preparation"));
@@ -149,7 +146,7 @@ impl Sources {
         } else {
             // Path and digest buffers are charged before creating retained copies.
             let lease = self.budget.reserve(path.as_os_str().len() + 64 + 256)?;
-            self.lookup.insert(path_hash, self.entries.len(), control)?;
+            self.lookup.insert(path.clone(), self.entries.len());
             self.entries.push(Evidence {
                 path,
                 identity: before,
@@ -162,94 +159,62 @@ impl Sources {
     }
     pub fn json(&mut self, path: &Path, replay: bool, control: &Control) -> Result<Document> {
         let bytes = self.read(path, control)?;
-        #[cfg(feature = "decode-profile")]
-        let profile_path = fs::canonicalize(path).ok();
         let _timer = self.telemetry.phase_timer(Phase::SourceDecode);
-        #[cfg(feature = "decode-profile")]
-        let mut profile = self.telemetry.decode_profile.begin(
+        let mut kind = self.telemetry.decode_timer(
             if replay {
-                crate::decode_profile::Kind::Replay
+                crate::telemetry::DecodeKind::Replay
             } else {
-                crate::decode_profile::Kind::Json
+                crate::telemetry::DecodeKind::Json
             },
-            profile_path.as_deref(),
             bytes.len(),
         );
+        let admission = json::admit(bytes.len(), &self.budget)?;
         let result = if replay {
-            parse_replay(&bytes, &self.budget, control)
+            parse_replay(&bytes, &admission, control)
         } else {
-            json::parse(&bytes, &self.budget, control)
+            json::parse_admitted(&bytes, &admission, control)
         };
-        #[cfg(feature = "decode-profile")]
         if result.is_ok() {
-            profile.success();
+            kind.success();
         }
         result
     }
-    pub fn journal(&mut self, path: &Path, control: &Control) -> Result<BudgetVec<Document>> {
+    pub fn journal(&mut self, path: &Path, control: &Control) -> Result<Vec<Document>> {
         let bytes = self.read(path, control)?;
-        #[cfg(feature = "decode-profile")]
-        let profile_path = fs::canonicalize(path).ok();
-        // Journal records share one file-level clock pair, never one per row/byte.
         let _timer = self.telemetry.phase_timer(Phase::SourceDecode);
-        #[cfg(feature = "decode-profile")]
-        let mut profile = self.telemetry.decode_profile.begin(
-            crate::decode_profile::Kind::Journal,
-            profile_path.as_deref(),
-            bytes.len(),
-        );
-        {
-            #[cfg(feature = "decode-profile")]
-            let _encoding = crate::decode_profile::enter(crate::decode_profile::Category::Encoding);
-            std::str::from_utf8(&bytes).map_err(|_| Error::contract("invalid UTF-8 journal"))?;
-        }
-        let mut records = BudgetVec::new(&self.budget);
+        let mut kind = self
+            .telemetry
+            .decode_timer(crate::telemetry::DecodeKind::Journal, bytes.len());
+        let admission = json::admit(bytes.len(), &self.budget)?;
+        std::str::from_utf8(&bytes).map_err(|_| Error::contract("invalid UTF-8 journal"))?;
+        let mut records = Vec::new();
         let mut start = 0;
         while start < bytes.len() {
             control.check()?;
-            let end = {
-                #[cfg(feature = "decode-profile")]
-                let _framing =
-                    crate::decode_profile::enter(crate::decode_profile::Category::Framing);
-                let mut end = start;
-                while end < bytes.len() && bytes[end] != b'\r' && bytes[end] != b'\n' {
-                    end += 1;
-                }
-                if end - start > self.max_record {
-                    return Err(Error::resource("journal exceeds max_record_mib"));
-                }
-                end
-            };
-            {
-                #[cfg(feature = "decode-profile")]
-                let _container =
-                    crate::decode_profile::enter(crate::decode_profile::Category::Containers);
-                records.reserve(1)?;
+            let mut end = start;
+            while end < bytes.len() && bytes[end] != b'\r' && bytes[end] != b'\n' {
+                end += 1;
             }
-            let record = json::parse(&bytes[start..end], &self.budget, control)?;
-            {
-                #[cfg(feature = "decode-profile")]
-                let _container =
-                    crate::decode_profile::enter(crate::decode_profile::Category::Containers);
-                records.push(record)?;
+            if end - start > self.max_record {
+                return Err(Error::resource("journal exceeds max_record_mib"));
             }
-            {
-                #[cfg(feature = "decode-profile")]
-                let _framing =
-                    crate::decode_profile::enter(crate::decode_profile::Category::Framing);
-                start = end;
-                if bytes.get(start) == Some(&b'\r') {
-                    start += 1;
-                    if bytes.get(start) == Some(&b'\n') {
-                        start += 1;
-                    }
-                } else if bytes.get(start) == Some(&b'\n') {
+            records.push(json::parse_admitted(
+                &bytes[start..end],
+                &admission,
+                control,
+            )?);
+            start = end;
+            if bytes.get(start) == Some(&b'\r') {
+                start += 1;
+                if bytes.get(start) == Some(&b'\n') {
                     start += 1;
                 }
+            } else if bytes.get(start) == Some(&b'\n') {
+                start += 1;
             }
         }
-        #[cfg(feature = "decode-profile")]
-        profile.success();
+        control.check()?;
+        kind.success();
         Ok(records)
     }
     pub fn verify(&self, control: &Control) -> Result<()> {
@@ -315,22 +280,18 @@ impl Sources {
         })
     }
     pub fn digest(&self, path: &Path, control: &Control) -> Result<&str> {
+        control.check()?;
         let path = fs::canonicalize(path)?;
-        let hash = crate::lookup::hash(path.as_os_str().as_encoded_bytes(), control)?;
         self.lookup
-            .find(hash, |index| self.entries[index].path == path, control)?
-            .map(|index| self.entries[index].digest.as_str())
+            .get(&path)
+            .map(|index| self.entries[*index].digest.as_str())
             .ok_or_else(|| Error::contract("source was not read"))
     }
     pub fn checked_digest(&self, path: &Path, control: &Control) -> Result<Option<&str>> {
         control.check()?;
         let path = fs::canonicalize(path)?;
-        let hash = crate::lookup::hash(path.as_os_str().as_encoded_bytes(), control)?;
-        if let Some(index) =
-            self.lookup
-                .find(hash, |index| self.entries[index].path == path, control)?
-        {
-            let entry = &self.entries[index];
+        if let Some(index) = self.lookup.get(&path) {
+            let entry = &self.entries[*index];
             if Identity::of(&fs::metadata(&path)?) != entry.identity {
                 return Err(Error::contract(
                     "source identity changed during preparation",
@@ -344,12 +305,7 @@ impl Sources {
         let (entries, _capacity) = other.entries.into_parts();
         for entry in entries {
             control.check()?;
-            let hash = crate::lookup::hash(entry.path.as_os_str().as_encoded_bytes(), control)?;
-            if let Some(index) = self.lookup.find(
-                hash,
-                |index| self.entries[index].path == entry.path,
-                control,
-            )? {
+            if let Some(index) = self.lookup.get(&entry.path).copied() {
                 let previous = &self.entries[index];
                 if previous.identity != entry.identity || previous.digest != entry.digest {
                     return Err(Error::contract(
@@ -358,7 +314,7 @@ impl Sources {
                 }
             } else {
                 self.entries.reserve(1)?;
-                self.lookup.insert(hash, self.entries.len(), control)?;
+                self.lookup.insert(entry.path.clone(), self.entries.len());
                 self.entries.push(entry)?;
             }
         }
@@ -426,15 +382,14 @@ fn inventory_paths(
     Ok(paths)
 }
 
-fn parse_replay(bytes: &[u8], budget: &Arc<Budget>, control: &Control) -> Result<Document> {
-    #[cfg(feature = "decode-profile")]
-    let encoding = crate::decode_profile::enter(crate::decode_profile::Category::Encoding);
-    // Match json.loads(bytes) encoding detection. Journals/control files instead
-    // pass through strict UTF-8 text decoding and deliberately reject a BOM.
+fn parse_replay(
+    bytes: &[u8],
+    admission: &Arc<crate::budget::JsonAdmission>,
+    control: &Control,
+) -> Result<Document> {
+    control.check()?;
     if let Some(bytes) = bytes.strip_prefix(&[0xef, 0xbb, 0xbf]) {
-        #[cfg(feature = "decode-profile")]
-        drop(encoding);
-        return json::parse_surrogatepass(bytes, budget, control);
+        return json::parse_admitted(bytes, admission, control);
     }
     let (unit, little, skip) = if bytes.starts_with(&[0xff, 0xfe, 0, 0]) {
         (4, true, 4)
@@ -444,64 +399,50 @@ fn parse_replay(bytes: &[u8], budget: &Arc<Budget>, control: &Control) -> Result
         (2, true, 2)
     } else if bytes.starts_with(&[0xfe, 0xff]) {
         (2, false, 2)
-    } else if bytes.len() >= 4 && bytes[0] == 0 && bytes[1] == 0 && bytes[2] == 0 {
+    } else if bytes.len() >= 4 && bytes[..3] == [0, 0, 0] {
         (4, false, 0)
-    } else if bytes.len() >= 4 && bytes[1] == 0 && bytes[2] == 0 && bytes[3] == 0 {
+    } else if bytes.len() >= 4 && bytes[1..4] == [0, 0, 0] {
         (4, true, 0)
     } else if bytes.len() >= 2 && bytes[0] == 0 {
         (2, false, 0)
     } else if bytes.len() >= 2 && bytes[1] == 0 {
         (2, true, 0)
     } else {
-        #[cfg(feature = "decode-profile")]
-        drop(encoding);
-        return json::parse_surrogatepass(bytes, budget, control);
+        return json::parse_admitted(bytes, admission, control);
     };
     if (bytes.len() - skip) % unit != 0 {
         return Err(Error::contract("truncated Unicode source"));
     }
-    let mut decoded = BudgetVec::new(budget);
-    let mut position = skip;
-    while position < bytes.len() {
-        control.check()?;
-        let mut point = 0u32;
-        if little {
-            for i in 0..unit {
-                point |= (bytes[position + i] as u32) << (8 * i);
-            }
-        } else {
-            for i in 0..unit {
-                point = (point << 8) | bytes[position + i] as u32;
-            }
-        }
-        position += unit;
-        if unit == 2 && (0xd800..=0xdbff).contains(&point) {
-            if position + 2 <= bytes.len() {
-                let low = if little {
-                    u16::from_le_bytes([bytes[position], bytes[position + 1]])
+    let decoded = if unit == 2 {
+        let units = bytes[skip..]
+            .chunks_exact(2)
+            .map(|b| {
+                if little {
+                    u16::from_le_bytes([b[0], b[1]])
                 } else {
-                    u16::from_be_bytes([bytes[position], bytes[position + 1]])
-                } as u32;
-                if (0xdc00..=0xdfff).contains(&low) {
-                    position += 2;
-                    point = 0x10000 + (point - 0xd800) * 1024 + low - 0xdc00;
+                    u16::from_be_bytes([b[0], b[1]])
                 }
+            })
+            .collect::<Vec<_>>();
+        String::from_utf16(&units).map_err(|e| Error::contract(e.to_string()))?
+    } else {
+        let mut text = String::new();
+        for (index, b) in bytes[skip..].chunks_exact(4).enumerate() {
+            if index % 4096 == 0 {
+                control.check()?;
             }
+            let value = if little {
+                u32::from_le_bytes(b.try_into().expect("four bytes"))
+            } else {
+                u32::from_be_bytes(b.try_into().expect("four bytes"))
+            };
+            text.push(
+                char::from_u32(value)
+                    .ok_or_else(|| Error::contract("invalid Unicode codepoint"))?,
+            );
         }
-        if let Some(character) = char::from_u32(point) {
-            let mut encoded = [0; 4];
-            decoded.extend_from_slice(character.encode_utf8(&mut encoded).as_bytes())?;
-        } else if (0xd800..=0xdfff).contains(&point) {
-            decoded.extend_from_slice(&[
-                (0xe0 | (point >> 12)) as u8,
-                (0x80 | ((point >> 6) & 63)) as u8,
-                (0x80 | (point & 63)) as u8,
-            ])?;
-        } else {
-            return Err(Error::contract("invalid Unicode codepoint"));
-        }
-    }
-    #[cfg(feature = "decode-profile")]
-    drop(encoding);
-    json::parse_surrogatepass(&decoded, budget, control)
+        text
+    };
+    control.check()?;
+    json::parse_admitted(decoded.as_bytes(), admission, control)
 }

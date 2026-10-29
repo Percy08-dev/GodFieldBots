@@ -1,4 +1,5 @@
 //! Structural parent chains. Python authorizes schedules and lifetime ownership.
+use crate::json::{Map, ValueExt};
 use crate::{
     budget::{Budget, BudgetVec, Control},
     error::{Error, Result},
@@ -33,38 +34,21 @@ fn same_hash(
     expected: &Value,
     control: &Control,
 ) -> Result<()> {
-    if hash(sources, path, control)? != expected.as_str()? {
+    if hash(sources, path, control)? != expected.string()? {
         return Err(Error::contract("parent artifact/source hash mismatch"));
     }
     Ok(())
 }
 pub fn truthy(value: &Value) -> bool {
-    match value {
-        Value::Null => false,
-        Value::Bool(v) => *v,
-        Value::Int(v) => v.bytes() != b"0",
-        Value::Float(v) => *v != 0.,
-        Value::String(v) => !v.bytes().is_empty(),
-        Value::Array(v) => !v.is_empty(),
-        Value::Object(v) => !v.is_empty(),
-    }
+    crate::json::truthy(value)
 }
 pub fn field_truthy(value: &Value, key: &str) -> bool {
     value.get(key).is_some_and(truthy)
 }
 fn numeric_equal(value: &Value, number: i128) -> bool {
-    match value {
-        Value::Int(v) => v.as_str().ok().and_then(|s| s.parse::<i128>().ok()) == Some(number),
-        Value::Bool(v) => (*v as i128) == number,
-        Value::Float(v) => {
-            v.is_finite()
-                && v.fract() == 0.0
-                && *v >= i128::MIN as f64
-                && *v < i128::MAX as f64
-                && (*v as i128) == number
-        }
-        _ => false,
-    }
+    value.eq_python(&Value::Number(
+        crate::json::Number::from_i128(number).expect("i128 number"),
+    ))
 }
 pub fn numeric_field(value: &Value, key: &str, number: i128) -> bool {
     value.get(key).is_some_and(|v| numeric_equal(v, number))
@@ -172,7 +156,7 @@ impl Parent {
                 ));
             }
             if let Some(invocations) = s.get("invocations") {
-                for invocation in invocations.as_array()? {
+                for invocation in invocations.array()? {
                     control.check()?;
                     let health = invocation.require("child_health")?;
                     health.closed(&["exit_code"], &["stderr_bytes"])?;
@@ -283,7 +267,7 @@ impl Parent {
                     same_hash(sources, &path.join(name), hashes.require(name)?, control)?;
                 }
             } else if status == "deleted" {
-                if receipt.require("deletion_intent")?.as_bool()? != true
+                if receipt.require("deletion_intent")?.boolean()? != true
                     || [
                         "weights.npz",
                         "resume.npz",
@@ -367,7 +351,7 @@ impl Parent {
         })
     }
     pub fn summary(&self, budget: &Arc<Budget>, control: &Control) -> Result<Value> {
-        let mut generations = BudgetVec::new(budget);
+        let mut generations = Vec::new();
         for record in self.generations.iter() {
             let r = &record.root;
             generations.push(json::object(
@@ -386,9 +370,9 @@ impl Parent {
                     ),
                 ],
                 budget,
-            )?)?;
+            )?);
         }
-        let mut fields = BudgetVec::new(budget);
+        let mut fields = Map::new();
         for key in [
             "run_id",
             "seed",
@@ -401,7 +385,7 @@ impl Parent {
                 Some(v) => json::copy(v, budget, control)?,
                 None => Value::Null,
             };
-            fields.push((json::Text::from_str(key, budget)?, value))?;
+            fields.insert(key.to_owned(), value);
         }
         let state = Value::Object(fields);
         json::object(

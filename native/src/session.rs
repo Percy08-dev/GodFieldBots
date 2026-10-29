@@ -1,4 +1,5 @@
 //! Native lifecycle and compact authorization handshake. Learning never lives here.
+use crate::json::ValueExt;
 use crate::{
     budget::{Budget, BudgetVec, Control, Lease},
     controls::{self, Parent},
@@ -164,9 +165,7 @@ impl Session {
             authorized: false,
             closed: false,
             operation: "summary".to_owned(),
-            dataset: Some(Document {
-                root: document.root,
-            }),
+            dataset: Some(document),
             _overhead: budget.reserve(65536).unwrap(),
             stage: if fail_close {
                 Some(crate::pipeline::Stage::test_failed_close(budget))
@@ -212,7 +211,7 @@ impl Session {
         )?;
         let operation = p
             .get("operation")
-            .map(Value::as_str)
+            .map(Value::string)
             .transpose()?
             .unwrap_or(if online { "ppo" } else { "prepare" });
         if !["summary", "index", "prepare", "ppo"].contains(&operation)
@@ -224,7 +223,7 @@ impl Session {
         let mut sources =
             Sources::with_telemetry(budget.clone(), settings.file, settings.record, &telemetry);
         let dataset = if let Some(path) = p.get("dataset_path").filter(|v| !v.is_null()) {
-            Some(sources.json(Path::new(path.as_str()?), false, &control)?)
+            Some(sources.json(Path::new(path.string()?), false, &control)?)
         } else {
             None
         };
@@ -239,8 +238,8 @@ impl Session {
                 &control,
             )?)?;
         } else {
-            let runs = roots.require("ppo_runs")?.as_array()?;
-            let validations = roots.require("validation_runs")?.as_array()?;
+            let runs = roots.require("ppo_runs")?.array()?;
+            let validations = roots.require("validation_runs")?.array()?;
             if runs.len() != 3 || validations.len() != 3 {
                 return Err(Error::contract(
                     "fixed dataset requires three ordered parents",
@@ -248,7 +247,7 @@ impl Session {
             }
             for (index, path) in runs.iter().enumerate() {
                 let parent = Parent::open(
-                    Path::new(path.as_str()?),
+                    Path::new(path.string()?),
                     true,
                     &mut sources,
                     &budget,
@@ -281,7 +280,7 @@ impl Session {
                 &control,
             )?)?;
         } else {
-            let validations = roots.require("validation_runs")?.as_array()?;
+            let validations = roots.require("validation_runs")?.array()?;
             for (index, parent) in parents.iter().enumerate() {
                 for update in parent.updates.iter() {
                     let u = &update.root;
@@ -297,7 +296,7 @@ impl Session {
                     )?)?;
                 }
                 collections.push(open_collection(
-                    Path::new(validations[index].as_str()?),
+                    Path::new(validations[index].string()?),
                     index,
                     None,
                     parent,
@@ -398,7 +397,7 @@ impl Session {
                     .root
                     .require("parent_controls")?
                     .require("snapshot_pool")?
-                    .as_array()?
+                    .array()?
                     .len();
                 parent.generations.len().min(
                     pool.checked_add(1)
@@ -434,11 +433,11 @@ impl Session {
     pub fn summary(&self) -> Result<(BudgetVec<u8>, usize)> {
         self.check()?;
         let authorization_bound = self.authorization_bound()?;
-        let mut parents = BudgetVec::new(&self.budget);
+        let mut parents = Vec::new();
         for parent in self.parents.iter() {
-            parents.push(parent.summary(&self.budget, &self.control)?)?;
+            parents.push(parent.summary(&self.budget, &self.control)?);
         }
-        let mut collections = BudgetVec::new(&self.budget);
+        let mut collections = Vec::new();
         for collection in self.collections.iter() {
             let m = &collection.manifest.root;
             let link = m.require("ppo")?;
@@ -496,7 +495,7 @@ impl Session {
                     ),
                 ],
                 &self.budget,
-            )?)?;
+            )?);
         }
         let summary = json::object(
             [
@@ -543,7 +542,7 @@ impl Session {
         if string(a, "control_fingerprint")? != self.fingerprint {
             return Err(Error::contract("stale native authorization controls"));
         }
-        let expected = a.require("collections")?.as_array()?;
+        let expected = a.require("collections")?.array()?;
         if expected.len() != self.collections.len() {
             return Err(Error::contract(
                 "incomplete collection schedule authorization",
@@ -672,20 +671,20 @@ pub fn dataset_manifest(
 ) -> Result<Value> {
     let budget = &session.budget;
     let control = &session.control;
-    let mut parents = BudgetVec::new(budget);
-    let mut parent_paths = BudgetVec::new(budget);
-    let mut validation_paths = BudgetVec::new(budget);
-    let mut parent_ids = BudgetVec::new(budget);
-    let mut validation_ids = BudgetVec::new(budget);
-    let mut collections = BudgetVec::new(budget);
+    let mut parents = Vec::new();
+    let mut parent_paths = Vec::new();
+    let mut validation_paths = Vec::new();
+    let mut parent_ids = Vec::new();
+    let mut validation_ids = Vec::new();
+    let mut collections = Vec::new();
     let mut cost = 0.;
     for (index, parent) in session.parents.iter().enumerate() {
         control.check()?;
         let state = &parent.state.root;
-        parent_paths.push(json::text(path_text(&parent.directory)?, budget)?)?;
-        parent_ids.push(json::copy(state.require("run_id")?, budget, control)?)?;
+        parent_paths.push(json::text(path_text(&parent.directory)?, budget)?);
+        parent_ids.push(json::copy(state.require("run_id")?, budget, control)?);
         let generation_cost = state.require("elapsed_seconds")?.number()?;
-        let mut generations = BudgetVec::new(budget);
+        let mut generations = Vec::new();
         for (number, record) in parent.generations.iter().enumerate() {
             let r = &record.root;
             generations.push(json::object(
@@ -711,7 +710,7 @@ pub fn dataset_manifest(
                     ),
                 ],
                 budget,
-            )?)?;
+            )?);
         }
         parents.push(json::object(
             [
@@ -751,7 +750,7 @@ pub fn dataset_manifest(
                 ),
             ],
             budget,
-        )?)?;
+        )?);
         let mut ordered = BudgetVec::new(budget);
         for collection in session.collections.iter().filter(|c| c.parent == index) {
             ordered.push(collection)?;
@@ -772,8 +771,8 @@ pub fn dataset_manifest(
             control.check()?;
             let m = &collection.manifest.root;
             if string(m, "split")? == "validation" {
-                validation_paths.push(json::text(path_text(&collection.directory)?, budget)?)?;
-                validation_ids.push(json::copy(m.require("run_id")?, budget, control)?)?;
+                validation_paths.push(json::text(path_text(&collection.directory)?, budget)?);
+                validation_ids.push(json::copy(m.require("run_id")?, budget, control)?);
                 cost += generation_cost + m.require("elapsed_seconds")?.number()?;
             }
             let actions = m.require("effective_config")?.require("actions")?;
@@ -796,7 +795,7 @@ pub fn dataset_manifest(
                     ),
                     (
                         "collection_seconds",
-                        Value::Float(m.require("elapsed_seconds")?.number()?),
+                        json::float(m.require("elapsed_seconds")?.number()?)?,
                     ),
                     ("split", json::copy(m.require("split")?, budget, control)?),
                     (
@@ -816,7 +815,7 @@ pub fn dataset_manifest(
                     ),
                 ],
                 budget,
-            )?)?;
+            )?);
         }
     }
     let key = json::object(
@@ -853,7 +852,7 @@ pub fn dataset_manifest(
                 json::integer(counts[1] as i128, budget)?,
             ),
             ("validation_games", json::integer(192, budget)?),
-            ("shared_generation_seconds", Value::Float(cost)),
+            ("shared_generation_seconds", json::float(cost)?),
             ("shared_generation_cost_key", json::text(&cost_key, budget)?),
             ("action_config_hash", json::text(action_hash, budget)?),
             (
@@ -866,10 +865,10 @@ pub fn dataset_manifest(
     )?;
     let content_hash = controls::digest(&manifest, budget, control)?;
     if let Value::Object(entries) = &mut manifest {
-        entries.push((
-            json::Text::from_str("content_sha256", budget)?,
+        entries.insert(
+            "content_sha256".to_owned(),
             json::text(&content_hash, budget)?,
-        ))?;
+        );
     }
     Ok(manifest)
 }
@@ -924,7 +923,7 @@ fn open_collection(
         &[],
     )?;
     for key in ["parent_run_id", "parent_run_path", "batch_id"] {
-        link.require(key)?.as_str()?;
+        link.require(key)?.string()?;
     }
     let generation = link.require("collection_generation")?.integer(0, 1000)? as usize;
     if generation >= parent.generations.len()
@@ -1022,8 +1021,8 @@ fn open_collection(
             "source collection exceeded/misses original budget",
         ));
     }
-    let schedule = m.require("schedule")?.as_array()?;
-    let episodes = m.require("episodes")?.as_array()?;
+    let schedule = m.require("schedule")?.array()?;
+    let episodes = m.require("episodes")?.array()?;
     let mut seen = BudgetVec::with_capacity(budget, episodes.len())?;
     for episode in episodes {
         control.check()?;
@@ -1040,7 +1039,7 @@ fn open_collection(
             || controls::field_truthy(episode, "failure")
             || episode
                 .require("health")?
-                .as_object()?
+                .object()?
                 .iter()
                 .any(|(_, v)| controls::truthy(v))
             || !matches!(episode.get("replay_reconciled"), Some(Value::Bool(true)))
@@ -1051,7 +1050,7 @@ fn open_collection(
         }
         let mut matches = 0;
         for group in schedule {
-            for spec in group.require("episodes")?.as_array()? {
+            for spec in group.require("episodes")?.array()? {
                 control.check()?;
                 if string(spec, "episode_id")? == id {
                     matches += 1;
@@ -1072,11 +1071,11 @@ fn open_collection(
     let mut scheduled_count = 0usize;
     for group in schedule {
         control.check()?;
-        scheduled_count += group.require("episodes")?.as_array()?.len();
+        scheduled_count += group.require("episodes")?.array()?.len();
     }
     if episodes.is_empty()
         || scheduled_count != episodes.len()
-        || link.require("learner_seats")?.as_object()?.len() != episodes.len()
+        || link.require("learner_seats")?.object()?.len() != episodes.len()
         || kind == "ppo_batch" && (episodes.len() != 16 || schedule.len() != 8)
     {
         return Err(Error::contract("complete original schedule required"));

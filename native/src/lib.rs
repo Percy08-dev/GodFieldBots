@@ -1,14 +1,12 @@
+use crate::json::ValueExt;
 pub mod budget;
 pub mod control_memory;
 pub mod controls;
-#[cfg(feature = "decode-profile")]
-pub mod decode_profile;
 pub mod error;
 pub mod feature;
 pub mod index;
 pub mod journal;
 pub mod json;
-pub mod lookup;
 pub mod parallel;
 pub mod pipeline;
 pub mod projection;
@@ -775,7 +773,12 @@ impl NativeSession {
     fn telemetry<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
         self.stats.control(0, 0);
         let (reallocations, reallocated, extended) = self.budget.copy_counters();
-        let encoded = self.stats.json(reallocations, reallocated, extended);
+        let base = self.stats.json(reallocations, reallocated, extended);
+        let encoded = format!(
+            "{},\"json_estimated_peak_bytes\":{}}}",
+            &base[..base.len() - 1],
+            self.budget.json_estimated_peak()
+        );
         let output = PyBytes::new(py, encoded.as_bytes());
         self.stats.output_copy(encoded.len());
         output
@@ -962,7 +965,7 @@ fn encode_features<'py>(
             let config = json::parse(config, &budget, &control)?;
             validation::validate_worker_input_controlled(&input.root, None, &control)?;
             let config = feature::FeatureConfig::from_value(&config.root)?;
-            let actions = actions.root.as_array()?;
+            let actions = actions.root.array()?;
             let width = config.width();
             let length = width
                 .checked_mul(actions.len())
@@ -1001,24 +1004,8 @@ fn build_info() -> Vec<(&'static str, &'static str)> {
         ("rustc", env!("GFB_NATIVE_RUSTC")),
         ("target", env!("GFB_NATIVE_TARGET")),
         ("profile", env!("GFB_NATIVE_PROFILE")),
-        (
-            "cargo_features",
-            if cfg!(feature = "decode-profile") {
-                "decode-profile"
-            } else {
-                "default"
-            },
-        ),
-        ("decode_profile_capture", {
-            #[cfg(feature = "decode-profile")]
-            {
-                crate::decode_profile::capture_identity()
-            }
-            #[cfg(not(feature = "decode-profile"))]
-            {
-                "not_compiled"
-            }
-        }),
+        ("parser_contract", json::PARSER_CONTRACT),
+        ("json_memory_policy", json::MEMORY_POLICY),
         ("rustflags", env!("GFB_NATIVE_RUSTFLAGS")),
         ("cargo_lock_sha256", env!("GFB_NATIVE_CARGO_LOCK_SHA256")),
         ("native_source_sha256", env!("GFB_NATIVE_SOURCE_SHA256")),

@@ -39,11 +39,58 @@ struct PhaseCounters {
     ns: AtomicU64,
     calls: AtomicU64,
 }
+#[derive(Clone, Copy)]
+#[repr(usize)]
+pub enum DecodeKind {
+    Journal,
+    Replay,
+    Json,
+}
+impl DecodeKind {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Journal => "journal",
+            Self::Replay => "replay",
+            Self::Json => "json",
+        }
+    }
+}
+#[derive(Default)]
+struct DecodeCounters {
+    files: AtomicU64,
+    bytes: AtomicU64,
+    ns: AtomicU64,
+    failed: AtomicU64,
+}
+pub struct DecodeTimer<'a> {
+    counters: &'a DecodeCounters,
+    started: Instant,
+    bytes: usize,
+    success: bool,
+}
+impl DecodeTimer<'_> {
+    pub fn success(&mut self) {
+        self.success = true;
+    }
+}
+impl Drop for DecodeTimer<'_> {
+    fn drop(&mut self) {
+        self.counters.files.fetch_add(1, Ordering::Relaxed);
+        self.counters
+            .bytes
+            .fetch_add(self.bytes as u64, Ordering::Relaxed);
+        self.counters
+            .ns
+            .fetch_add(self.started.elapsed().as_nanos() as u64, Ordering::Relaxed);
+        if !self.success {
+            self.counters.failed.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+}
 
 #[derive(Default)]
 pub struct Telemetry {
-    #[cfg(feature = "decode-profile")]
-    pub(crate) decode_profile: crate::decode_profile::DecodeCounters,
+    decode_kinds: [DecodeCounters; 3],
     data_calls: AtomicU64,
     batches: AtomicU64,
     eof: AtomicU64,
@@ -79,6 +126,14 @@ impl Drop for Timer<'_> {
     }
 }
 impl Telemetry {
+    pub fn decode_timer(&self, kind: DecodeKind, bytes: usize) -> DecodeTimer<'_> {
+        DecodeTimer {
+            counters: &self.decode_kinds[kind as usize],
+            started: Instant::now(),
+            bytes,
+            success: false,
+        }
+    }
     /// One start/stop pair per file or coarse operation, including failed attempts.
     /// A live guard is not included in snapshots until it is dropped.
     pub fn phase_timer(&self, phase: Phase) -> Timer<'_> {
@@ -186,6 +241,7 @@ impl Telemetry {
         let output = format!(
             concat!(
                 "{{\"scope\":\"NativeSession boundary; numeric pointer probes and explicit control-byte copies\",",
+                "\"accounting_policy\":\"numeric-capacity-and-coarse-json-document-admission-v2\",\"json_heap_scope\":\"32*raw_input_bytes+64KiB document/file estimates; not exact serde heap or RSS\",\"copy_counter_scope\":\"explicit BudgetVec growth/slice copies only; serde heap, clone, String/Vec/Map allocations and copies are untracked\",",
                 "\"snapshot\":\"before this telemetry response copy\",\"ffi_data_calls\":{},\"ffi_batches_returned\":{},\"ffi_eof_returns\":{},\"ffi_control_calls\":{},",
                 "\"stage_io_scope\":\"owned numeric/proof/identity logical staging; excludes Python serialization and OS/cache accounting\",\"stage_read_bytes\":{},\"stage_write_bytes\":{},\"scratch_peak_bytes\":{},",
                 "\"phase_seconds\":{{\"constructor_native\":{},\"next_batch_inclusive\":{},\"global_scan_and_encode\":{},\"finalize_or_abort\":{}}},",
@@ -219,17 +275,26 @@ impl Telemetry {
             reallocated_bytes,
             extend_copy_bytes
         );
-        #[cfg(feature = "decode-profile")]
-        {
-            format!(
-                "{},\"decode_profile\":{}}}",
-                &output[..output.len() - 1],
-                self.decode_profile.json()
-            )
-        }
-        #[cfg(not(feature = "decode-profile"))]
-        {
-            output
-        }
+        let kinds = [DecodeKind::Journal, DecodeKind::Replay, DecodeKind::Json]
+            .iter()
+            .map(|kind| {
+                let c = &self.decode_kinds[*kind as usize];
+                format!(
+                    "\"{}\":{{\"files\":{},\"input_bytes\":{},\"wall_seconds\":{},\"failed\":{}}}",
+                    kind.name(),
+                    value(&c.files),
+                    value(&c.bytes),
+                    value(&c.ns) as f64 / 1e9,
+                    value(&c.failed)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(",");
+        format!(
+            "{},\"source_kind_decode\":{{{}}},\"json_memory_policy\":\"{}\"}}",
+            &output[..output.len() - 1],
+            kinds,
+            crate::json::MEMORY_POLICY
+        )
     }
 }

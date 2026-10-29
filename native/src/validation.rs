@@ -2,9 +2,10 @@
 //!
 //! This module borrows the owned JSON document. It never rebuilds a participant
 //! snapshot or consults another participant, engine state, or rejection details.
-use crate::budget::{BudgetVec, Control};
+use crate::budget::Control;
 use crate::error::{Error, Result};
 use crate::json::Value;
+use crate::json::ValueExt;
 
 fn poll(control: Option<&Control>) -> Result<()> {
     if let Some(control) = control {
@@ -19,7 +20,7 @@ enum Key<'a> {
 }
 fn key(value: &Value) -> Result<Key<'_>> {
     match value {
-        Value::String(text) => Ok(Key::Text(text.bytes())),
+        Value::String(text) => Ok(Key::Text(text.as_bytes())),
         _ => Ok(Key::Number(value.integer(0, u64::MAX as i128)?)),
     }
 }
@@ -27,14 +28,14 @@ fn indexed<'a>(
     array: &'a Value,
     control: Option<&Control>,
     extract: impl Fn(&'a Value) -> Result<Key<'a>>,
-) -> Result<BudgetVec<Key<'a>>> {
+) -> Result<Vec<Key<'a>>> {
     let Value::Array(entries) = array else {
         return fail("array required");
     };
-    let mut keys = BudgetVec::with_capacity(entries.budget(), entries.len())?;
+    let mut keys = Vec::with_capacity(entries.len());
     for entry in entries.iter() {
         poll(control)?;
-        keys.push(extract(entry)?)?;
+        keys.push(extract(entry)?);
     }
     sort_keys(&mut keys, control)?;
     Ok(keys)
@@ -47,44 +48,9 @@ pub(crate) fn sort_controlled<T>(
     control: Option<&Control>,
     compare: impl Fn(&T, &T) -> std::cmp::Ordering,
 ) -> Result<()> {
-    // In-place heapsort permits a fallible deadline/cancellation poll inside the
-    // sorting work, while std comparators cannot return a cancellation error.
-    fn down<T>(
-        keys: &mut [T],
-        mut root: usize,
-        end: usize,
-        control: Option<&Control>,
-        compare: &impl Fn(&T, &T) -> std::cmp::Ordering,
-    ) -> Result<()> {
-        loop {
-            poll(control)?;
-            let Some(mut child) = root
-                .checked_mul(2)
-                .and_then(|n| n.checked_add(1))
-                .filter(|n| *n < end)
-            else {
-                break;
-            };
-            if child + 1 < end && compare(&keys[child], &keys[child + 1]).is_lt() {
-                child += 1;
-            }
-            if !compare(&keys[root], &keys[child]).is_lt() {
-                break;
-            }
-            keys.swap(root, child);
-            root = child;
-        }
-        Ok(())
-    }
-    for root in (0..keys.len() / 2).rev() {
-        down(keys, root, keys.len(), control, &compare)?;
-    }
-    for end in (1..keys.len()).rev() {
-        poll(control)?;
-        keys.swap(0, end);
-        down(keys, 0, end, control, &compare)?;
-    }
-    Ok(())
+    poll(control)?;
+    keys.sort_unstable_by(compare);
+    poll(control)
 }
 fn duplicated(keys: &[Key<'_>], control: Option<&Control>) -> Result<bool> {
     for pair in keys.windows(2) {
@@ -102,9 +68,9 @@ pub fn catalog_entry<'a>(catalog: &'a Value, reference: &Value) -> Result<&'a Va
         return fail("string reference required");
     };
     catalog
-        .as_object()?
+        .object()?
         .iter()
-        .find(|(key, _)| key.bytes() == reference.bytes())
+        .find(|(key, _)| key.as_bytes() == reference.as_bytes())
         .map(|(_, value)| value)
         .ok_or_else(|| Error::contract("unknown own-visible definition"))
 }
@@ -137,14 +103,14 @@ fn fail<T>(message: &str) -> Result<T> {
     Err(Error::contract(message))
 }
 fn is(value: &Value, expected: &str) -> bool {
-    value.as_str().is_ok_and(|v| v == expected)
+    value.string().is_ok_and(|v| v == expected)
 }
 fn member(value: &Value, expected: &[&str]) -> bool {
-    value.as_str().is_ok_and(|v| expected.contains(&v))
+    value.string().is_ok_and(|v| expected.contains(&v))
 }
 pub fn text_value(value: &Value) -> Result<()> {
     match value {
-        Value::String(text) if !text.bytes().is_empty() => Ok(()),
+        Value::String(text) if !text.as_bytes().is_empty() => Ok(()),
         _ => fail("expected nonempty string"),
     }
 }
@@ -168,7 +134,7 @@ fn status(value: &Value) -> Result<()> {
         return fail("unknown disease");
     }
     for key in ["fog", "flash", "dream", "dark_cloud"] {
-        value.require(key)?.as_bool()?;
+        value.require(key)?.boolean()?;
     }
     Ok(())
 }
@@ -176,7 +142,7 @@ fn status(value: &Value) -> Result<()> {
 // Exact generated typed metadata, checked structurally instead of allocating a
 // second JSON tree. In particular integer constants are not booleans or floats.
 fn string_list(value: &Value, expected: &[&str]) -> Result<()> {
-    let values = value.as_array()?;
+    let values = value.array()?;
     if values.len() != expected.len() {
         return fail("typed metadata mismatch");
     }
@@ -218,7 +184,7 @@ fn player_schema(value: &Value) -> Result<()> {
     if !is(value.require("type")?, "integer") {
         return fail("typed metadata mismatch");
     }
-    let entries = value.require("enum")?.as_array()?;
+    let entries = value.require("enum")?.array()?;
     if entries.len() != 2 {
         return fail("typed metadata mismatch");
     }
@@ -231,7 +197,7 @@ fn player_schema(value: &Value) -> Result<()> {
 }
 fn element_schema(value: &Value) -> Result<()> {
     value.closed(&["one_of"], &[])?;
-    let entries = value.require("one_of")?.as_array()?;
+    let entries = value.require("one_of")?.array()?;
     if entries.len() != 2 {
         return fail("typed metadata mismatch");
     }
@@ -245,7 +211,7 @@ fn element_schema(value: &Value) -> Result<()> {
             ],
             &[],
         )?;
-        if !is(entry.require("type")?, "object") || entry.require("additional_fields")?.as_bool()? {
+        if !is(entry.require("type")?, "object") || entry.require("additional_fields")?.boolean()? {
             return fail("typed metadata mismatch");
         }
         entry.require("optional_fields")?.closed(&[], &[])?;
@@ -269,7 +235,7 @@ fn element_schema(value: &Value) -> Result<()> {
 }
 fn array_schema(value: &Value, typed: bool) -> Result<()> {
     value.closed(&["type", "items", "ordered"], &[])?;
-    if !is(value.require("type")?, "array") || !value.require("ordered")?.as_bool()? {
+    if !is(value.require("type")?, "array") || !value.require("ordered")?.boolean()? {
         return fail("typed metadata mismatch");
     }
     if typed {
@@ -297,7 +263,7 @@ fn descriptors(value: &Value, choice: Option<&str>, can_act: bool) -> Result<boo
             _ => &[],
         }
     };
-    let entries = value.as_array()?;
+    let entries = value.array()?;
     if entries.len() != tags.len() {
         return fail("typed metadata mismatch");
     }
@@ -311,7 +277,7 @@ fn descriptors(value: &Value, choice: Option<&str>, can_act: bool) -> Result<boo
             ],
             &[],
         )?;
-        if !is(entry.require("type")?, tag) || entry.require("additional_fields")?.as_bool()? {
+        if !is(entry.require("type")?, tag) || entry.require("additional_fields")?.boolean()? {
             return fail("typed metadata mismatch");
         }
         let required = entry.require("required_fields")?;
@@ -320,7 +286,7 @@ fn descriptors(value: &Value, choice: Option<&str>, can_act: bool) -> Result<boo
             optional.closed(&["target"], &[])?;
             let target = optional.require("target")?;
             target.closed(&["one_of"], &[])?;
-            let alternatives = target.require("one_of")?.as_array()?;
+            let alternatives = target.require("one_of")?.array()?;
             if alternatives.len() != 2 {
                 return fail("typed metadata mismatch");
             }
@@ -439,8 +405,8 @@ fn observation_impl(value: &Value, viewer: Option<i128>, control: Option<&Contro
     for key in ["turn", "turns_until_end_of_world"] {
         value.require(key)?.integer(0, U32)?;
     }
-    value.require("end_times")?.as_bool()?;
-    let phase = value.require("phase")?.as_str()?;
+    value.require("end_times")?.boolean()?;
+    let phase = value.require("phase")?.string()?;
     if ![
         "awaiting_action",
         "awaiting_response",
@@ -491,7 +457,7 @@ fn observation_impl(value: &Value, viewer: Option<i128>, control: Option<&Contro
         return fail("participant mismatch");
     }
     for participant in [own, opponent] {
-        participant.require("ascended")?.as_bool()?;
+        participant.require("ascended")?.boolean()?;
         for key in ["hp", "mp", "money"] {
             if let Some(item) = participant.get(key) {
                 item.integer(
@@ -508,12 +474,12 @@ fn observation_impl(value: &Value, viewer: Option<i128>, control: Option<&Contro
                 text_value(item)?;
             }
         }
-        for item in participant.require("learned_miracles")?.as_array()? {
+        for item in participant.require("learned_miracles")?.array()? {
             poll(control)?;
             text_value(item)?;
         }
     }
-    let hand = own.require("hand")?.as_array()?;
+    let hand = own.require("hand")?.array()?;
     for artifact in hand {
         poll(control)?;
         artifact.closed(&["instance_id", "definition_id"], &[])?;
@@ -537,10 +503,10 @@ fn observation_impl(value: &Value, viewer: Option<i128>, control: Option<&Contro
     }
     let actionable = descriptors(
         value.require("typed_action_schema")?,
-        choice.as_str().ok(),
+        choice.as_str(),
         can_act,
     )?;
-    if value.require("actionable")?.as_bool()? != actionable {
+    if value.require("actionable")?.boolean()? != actionable {
         return fail("typed metadata mismatch");
     }
     Ok(())
@@ -591,7 +557,7 @@ pub fn validate_definition(value: &Value) -> Result<()> {
         }
     }
     if let Some(item) = value.get("additional_attack") {
-        item.as_bool()?;
+        item.boolean()?;
     }
     for key in ["ability", "effect_text"] {
         if let Some(item) = value.get(key) {
@@ -601,7 +567,7 @@ pub fn validate_definition(value: &Value) -> Result<()> {
     for key in ["curse", "guardian"] {
         if let Some(item) = value.get(key) {
             item.closed(&["id", "name", "description"], &[])?;
-            for (_, field) in item.as_object()? {
+            for (_, field) in item.object()? {
                 text_value(field)?;
             }
         }
@@ -621,7 +587,7 @@ fn actor_action_options_impl(
 ) -> Result<()> {
     poll(control)?;
     // Caller already validated Observation; this does not duplicate its walk.
-    if !obs.require("actionable")?.as_bool()?
+    if !obs.require("actionable")?.boolean()?
         || obs.require("current_player")? != obs.require("viewer_player_id")?
     {
         return fail("ActionOptions require current actionable actor");
@@ -678,7 +644,7 @@ fn actor_action_options_impl(
         "valid_targets",
     ] {
         let entries = body.require(field)?;
-        for entry in entries.as_array()? {
+        for entry in entries.array()? {
             poll(control)?;
             if field == "usable_learned_miracles" {
                 text_value(entry)?;
@@ -707,7 +673,7 @@ fn actor_action_options_impl(
         }
     }
     for key in ["can_pray", "can_discard", "can_sacrifice", "can_allow"] {
-        body.require(key)?.as_bool()?;
+        body.require(key)?.boolean()?;
     }
     Ok(())
 }
@@ -762,45 +728,40 @@ fn validate_worker_input_impl(
     let metadata = value.require("typed_metadata")?;
     let expected = obs.require("typed_action_schema")?;
     let empty_iterable = match metadata {
-        Value::String(text) => text.bytes().is_empty(),
+        Value::String(text) => text.as_bytes().is_empty(),
         Value::Object(entries) => entries.is_empty(),
         _ => false,
     };
-    if metadata != expected
-        && !(journal_coercion && expected.as_array()?.is_empty() && empty_iterable)
+    if metadata != expected && !(journal_coercion && expected.array()?.is_empty() && empty_iterable)
     {
         return fail("worker payload boundary mismatch");
     }
-    let catalog = value.require("catalog")?.as_object()?;
+    let catalog = value.require("catalog")?.object()?;
     let own = obs.require("own")?;
-    let hand = own.require("hand")?.as_array()?;
-    let learned = own.require("learned_miracles")?.as_array()?;
-    let Value::Object(catalog_values) = value.require("catalog")? else {
-        unreachable!()
-    };
-    let mut visible = BudgetVec::with_capacity(
-        catalog_values.budget(),
+    let hand = own.require("hand")?.array()?;
+    let learned = own.require("learned_miracles")?.array()?;
+    let mut visible = Vec::with_capacity(
         hand.len()
             .checked_add(learned.len())
             .ok_or_else(|| Error::resource("visibility capacity overflow"))?,
-    )?;
+    );
     for card in hand {
         poll(control)?;
-        visible.push(key(card.require("definition_id")?)?)?;
+        visible.push(key(card.require("definition_id")?)?);
     }
     for entry in learned {
         poll(control)?;
-        visible.push(key(entry)?)?;
+        visible.push(key(entry)?);
     }
     sort_keys(&mut visible, control)?;
-    let mut catalog_keys = BudgetVec::with_capacity(catalog_values.budget(), catalog.len())?;
+    let mut catalog_keys = Vec::with_capacity(catalog.len());
     for (reference, definition) in catalog {
         poll(control)?;
-        let reference = Key::Text(reference.bytes());
+        let reference = Key::Text(reference.as_bytes());
         if visible.binary_search(&reference).is_err() {
             return fail("worker payload boundary mismatch");
         }
-        catalog_keys.push(reference)?;
+        catalog_keys.push(reference);
         validate_definition(definition)?;
     }
     sort_keys(&mut catalog_keys, control)?;
@@ -825,7 +786,7 @@ fn validate_worker_input_impl(
 pub fn worker_events(value: &Value) -> Result<&[Value]> {
     match value {
         Value::Array(entries) => Ok(entries),
-        Value::String(text) if text.bytes().is_empty() => Ok(&[]),
+        Value::String(text) if text.as_bytes().is_empty() => Ok(&[]),
         Value::Object(entries) if entries.is_empty() => Ok(&[]),
         _ => fail("event array required"),
     }
@@ -838,9 +799,9 @@ pub fn validate_events_controlled(value: &Value, control: &Control) -> Result<()
     validate_events_impl(value, Some(control))
 }
 fn validate_events_impl(value: &Value, control: Option<&Control>) -> Result<()> {
-    for event in value.as_array()? {
+    for event in value.array()? {
         poll(control)?;
-        let tag = event.require("type")?.as_str()?;
+        let tag = event.require("type")?.string()?;
         let fields: &[&str] = match tag {
             "turn_started" => &["type", "turn", "active_player"],
             "action_accepted" | "sun_amulet_activated" | "player_ascended" | "player_defeated" => {
@@ -871,8 +832,8 @@ fn validate_events_impl(value: &Value, control: Option<&Control>) -> Result<()> 
                 _ => &[],
             },
         )?;
-        for (key, item) in event.as_object()? {
-            match key.as_str()? {
+        for (key, item) in event.object()? {
+            match key.as_str() {
                 "player" | "attacker" | "target" | "active_player" | "buyer" | "seller"
                 | "from" | "to" => {
                     player(item)?;
@@ -885,7 +846,7 @@ fn validate_events_impl(value: &Value, control: Option<&Control>) -> Result<()> 
                     item.integer(I32_MIN, I32_MAX)?;
                 }
                 "active" => {
-                    item.as_bool()?;
+                    item.boolean()?;
                 }
                 "result" => result(item)?,
                 _ => {
@@ -912,7 +873,7 @@ pub fn replay_closure<'a>(
     if value.is_null() {
         return Ok(None);
     }
-    match value.require("type")?.as_str()? {
+    match value.require("type")?.string()? {
         "terminal" => {
             value.closed(&["type", "result"], &[])?;
             result(value.require("result")?)?;
@@ -942,46 +903,35 @@ pub fn replay_closure<'a>(
 }
 
 fn equals_player(value: &Value, expected: i128) -> bool {
-    match value {
-        Value::Bool(value) => i128::from(*value) == expected,
-        Value::Int(_) => value.integer(1, 2) == Ok(expected),
-        Value::Float(value) => *value == expected as f64,
-        _ => false,
-    }
+    value.eq_python(&Value::Number(
+        crate::json::Number::from_i128(expected).expect("i128 number"),
+    ))
 }
 fn truthy(value: &Value) -> bool {
-    match value {
-        Value::Null => false,
-        Value::Bool(value) => *value,
-        Value::Int(text) => text.bytes() != b"0",
-        Value::Float(value) => *value != 0.,
-        Value::String(text) => !text.bytes().is_empty(),
-        Value::Array(values) => !values.is_empty(),
-        Value::Object(values) => !values.is_empty(),
-    }
+    crate::json::truthy(value)
 }
 fn replay_action_equal(left: &Value, right: &Value) -> Result<bool> {
-    left.as_object()?;
-    right.as_object()?;
+    left.object()?;
+    right.object()?;
     if left.get("type").is_some_and(|v| is(v, "play_sequence"))
         && right.get("type").is_some_and(|v| is(v, "play_sequence"))
     {
         // Replay emits null for the optional omitted target. No owned copies.
-        let a = left.as_object()?;
-        let b = right.as_object()?;
+        let a = left.object()?;
+        let b = right.object()?;
         for (key, value) in a {
             if key == "target" {
                 continue;
             }
             if !right
-                .get(key.as_str()?)
+                .get(key.as_str())
                 .is_some_and(|other| value.eq_python(other))
             {
                 return Ok(false);
             }
         }
         for (key, _) in b {
-            if key != "target" && left.get(key.as_str()?).is_none() {
+            if key != "target" && left.get(key.as_str()).is_none() {
                 return Ok(false);
             }
         }
@@ -1029,11 +979,11 @@ fn reconcile_replay_impl(
     let mut index = 0;
     if let Some(turns) = replay.get("turns") {
         for turn in worker_events(turns)? {
-            turn.as_object()?;
+            turn.object()?;
             poll(control)?;
             if let Some(decisions) = turn.get("decisions") {
                 for decision in worker_events(decisions)? {
-                    decision.as_object()?;
+                    decision.object()?;
                     poll(control)?;
                     if decision
                         .get("actor")
@@ -1044,7 +994,7 @@ fn reconcile_replay_impl(
                     if let Some(visible) =
                         decision.get("visible_action").filter(|value| truthy(value))
                     {
-                        visible.as_object()?;
+                        visible.object()?;
                         if visible.get("type").is_some_and(|v| is(v, "action")) {
                             let action = visible.require("action")?;
                             if index >= accepted.len()

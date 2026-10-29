@@ -1,3 +1,4 @@
+use gf_native::json::ValueExt;
 use gf_native::{
     budget::{Budget, Control, monotonic},
     json,
@@ -19,7 +20,7 @@ fn boundary_counters_report_observed_calls_sharing_and_copy_failures() {
     telemetry.stage_write(200);
     telemetry.scratch_peak(300);
     let encoded = telemetry.json(2, 40, 80);
-    let budget = Budget::new(65536);
+    let budget = Budget::new(1024 * 1024);
     let control = Control::new(monotonic() + 10.).unwrap();
     let parsed = json::parse(encoded.as_bytes(), &budget, &control).unwrap();
     assert_eq!(

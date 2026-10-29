@@ -1,6 +1,9 @@
 # 0011: Shared Rust preprocessing with Python-owned learning
 
 - Status: Accepted on 2026-10-30; user authorized implementation on 2026-10-29.
+- Superseded for JSON parsing/allocation and fine cancellation by
+  [ADR0012](0012-serde-json-and-coarse-resource-admission.md); initial evidence
+  and the retained learning/ownership boundaries remain historical sources.
 - Owner: root. Resolved boundary design independently reviewed READY for planning.
 - Production design gate: independent architecture READY for scoped units;
   dependency pins and disposable owner/compatibility checks must pass first.

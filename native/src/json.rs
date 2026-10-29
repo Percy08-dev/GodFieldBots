@@ -1,115 +1,81 @@
-//! Budget-aware JSON values. No uncharged serde/Python object graph is created.
-use crate::budget::{Budget, BudgetVec, Control};
-use crate::error::{Error, Result};
-use std::sync::Arc;
+//! Standard serde JSON with checked domain access and narrow Python hash formatting.
+use crate::{
+    budget::{Budget, BudgetVec, Control, JsonAdmission},
+    error::{Error, Result},
+};
+use serde::{Deserialize, Serialize};
+pub use serde_json::{Map, Number, Value};
+use std::{
+    io::{self, Write},
+    sync::Arc,
+};
+pub const PARSER_CONTRACT: &str = "serde-json-v1";
+pub const MEMORY_POLICY: &str = "json-document-32x-plus64kib-v1";
 
-#[derive(Debug)]
-pub struct Text(BudgetVec<u8>);
-impl Text {
-    pub fn new(budget: &Arc<Budget>) -> Self {
-        Self(BudgetVec::new(budget))
-    }
-    pub fn from_str(value: &str, budget: &Arc<Budget>) -> Result<Self> {
-        let mut result = Self::new(budget);
-        result.0.extend_from_slice(value.as_bytes())?;
-        Ok(result)
-    }
-    pub fn as_str(&self) -> Result<&str> {
-        std::str::from_utf8(&self.0)
-            .map_err(|_| Error::contract("unpaired Unicode surrogate cannot be UTF-8 encoded"))
-    }
-    pub fn bytes(&self) -> &[u8] {
-        &self.0
-    }
-    fn push(&mut self, byte: u8) -> Result<()> {
-        self.0.push(byte)
-    }
-    fn codepoint(&mut self, codepoint: u32) -> Result<()> {
-        if let Some(value) = char::from_u32(codepoint) {
-            let mut encoded = [0; 4];
-            self.0
-                .extend_from_slice(value.encode_utf8(&mut encoded).as_bytes())
-        } else {
-            // Preserve lone surrogates through parsing, like json.loads. UTF-8
-            // publication/hashing fails later, like canonical(value).encode().
-            self.0.extend_from_slice(&[
-                (0xe0 | (codepoint >> 12)) as u8,
-                (0x80 | ((codepoint >> 6) & 63)) as u8,
-                (0x80 | (codepoint & 63)) as u8,
-            ])
-        }
-    }
+pub trait ValueExt {
+    fn require(&self, key: &str) -> Result<&Value>;
+    fn string(&self) -> Result<&str>;
+    fn array(&self) -> Result<&[Value]>;
+    fn object(&self) -> Result<&Map<String, Value>>;
+    fn boolean(&self) -> Result<bool>;
+    fn integer(&self, low: i128, high: i128) -> Result<i128>;
+    fn number(&self) -> Result<f64>;
+    fn closed(&self, required: &[&str], optional: &[&str]) -> Result<()>;
+    fn eq_python(&self, other: &Self) -> bool;
 }
-impl PartialEq for Text {
-    fn eq(&self, other: &Self) -> bool {
-        self.bytes() == other.bytes()
-    }
+pub fn integer_token(number: &Number) -> bool {
+    !number
+        .as_str()
+        .bytes()
+        .any(|c| matches!(c, b'.' | b'e' | b'E'))
 }
-impl PartialEq<str> for Text {
-    fn eq(&self, other: &str) -> bool {
-        self.bytes() == other.as_bytes()
-    }
+fn float_value(number: &Number) -> Option<f64> {
+    number.as_str().parse::<f64>().ok()
 }
-
-#[derive(Debug)]
-pub enum Value {
-    Null,
-    Bool(bool),
-    Int(Text),
-    Float(f64),
-    String(Text),
-    Array(BudgetVec<Value>),
-    Object(BudgetVec<(Text, Value)>),
+fn int_text(number: &Number) -> &str {
+    let text = number.as_str();
+    if text == "-0" { "0" } else { text }
 }
-impl Value {
-    pub fn get(&self, key: &str) -> Option<&Value> {
-        if let Self::Object(values) = self {
-            values.iter().find(|(k, _)| k == key).map(|(_, v)| v)
-        } else {
-            None
-        }
-    }
-    pub fn require(&self, key: &str) -> Result<&Value> {
+fn int_float_equal(integer: &Number, float: f64) -> bool {
+    float.is_finite()
+        && float.fract() == 0.0
+        && int_text(integer)
+            == if float == 0.0 {
+                "0".to_owned()
+            } else {
+                format!("{float:.0}")
+            }
+}
+impl ValueExt for Value {
+    fn require(&self, key: &str) -> Result<&Value> {
         self.get(key)
             .ok_or_else(|| Error::contract(format!("missing field {key}")))
     }
-    pub fn as_str(&self) -> Result<&str> {
-        if let Self::String(v) = self {
-            v.as_str()
-        } else {
-            Err(Error::contract("string required"))
-        }
+    fn string(&self) -> Result<&str> {
+        self.as_str()
+            .ok_or_else(|| Error::contract("string required"))
     }
-    pub fn as_array(&self) -> Result<&[Value]> {
-        if let Self::Array(v) = self {
-            Ok(v)
-        } else {
-            Err(Error::contract("array required"))
-        }
+    fn array(&self) -> Result<&[Value]> {
+        self.as_array()
+            .map(Vec::as_slice)
+            .ok_or_else(|| Error::contract("array required"))
     }
-    pub fn as_object(&self) -> Result<&[(Text, Value)]> {
-        if let Self::Object(v) = self {
-            Ok(v)
-        } else {
-            Err(Error::contract("object required"))
-        }
+    fn object(&self) -> Result<&Map<String, Value>> {
+        self.as_object()
+            .ok_or_else(|| Error::contract("object required"))
     }
-    pub fn as_bool(&self) -> Result<bool> {
-        if let Self::Bool(v) = self {
-            Ok(*v)
-        } else {
-            Err(Error::contract("boolean required"))
-        }
+    fn boolean(&self) -> Result<bool> {
+        self.as_bool()
+            .ok_or_else(|| Error::contract("boolean required"))
     }
-    pub fn is_null(&self) -> bool {
-        matches!(self, Self::Null)
-    }
-    pub fn integer(&self, low: i128, high: i128) -> Result<i128> {
-        let Self::Int(value) = self else {
+    fn integer(&self, low: i128, high: i128) -> Result<i128> {
+        let Self::Number(number) = self else {
             return Err(Error::contract("integer required"));
         };
-        let value = value
-            .as_str()?
+        if !integer_token(number) {
+            return Err(Error::contract("integer required"));
+        }
+        let value = int_text(number)
             .parse::<i128>()
             .map_err(|_| Error::contract("integer outside range"))?;
         if value < low || value > high {
@@ -117,684 +83,358 @@ impl Value {
         }
         Ok(value)
     }
-    pub fn number(&self) -> Result<f64> {
-        match self {
-            Self::Int(v) => v
-                .as_str()?
-                .parse()
-                .map_err(|_| Error::contract("number outside range")),
-            Self::Float(v) => Ok(*v),
-            _ => Err(Error::contract("number required")),
-        }
+    fn number(&self) -> Result<f64> {
+        self.as_number()
+            .and_then(float_value)
+            .ok_or_else(|| Error::contract("number required/outside range"))
     }
-    pub fn closed(&self, required: &[&str], optional: &[&str]) -> Result<()> {
-        let entries = self.as_object()?;
-        if required.iter().any(|key| self.get(key).is_none())
-            || entries.iter().any(|(key, _)| {
+    fn closed(&self, required: &[&str], optional: &[&str]) -> Result<()> {
+        let values = self.object()?;
+        if required.iter().any(|key| !values.contains_key(*key))
+            || values.keys().any(|key| {
                 !required
                     .iter()
                     .chain(optional)
-                    .any(|expected| key == *expected)
+                    .any(|expected| key == expected)
             })
         {
             return Err(Error::contract("invalid closed object fields"));
         }
         Ok(())
     }
-    /// Equality used by existing Python dict/list evidence comparisons. Type
-    /// validation remains explicit at integer/boolean/canonical boundaries.
-    pub fn eq_python(&self, other: &Self) -> bool {
+    fn eq_python(&self, other: &Self) -> bool {
         match (self, other) {
-            (Self::Bool(a), Self::Int(b)) | (Self::Int(b), Self::Bool(a)) => {
-                b.bytes() == if *a { b"1" } else { b"0" }
-            }
-            (Self::Bool(a), Self::Float(b)) | (Self::Float(b), Self::Bool(a)) => {
-                (*a as u8 as f64) == *b
-            }
-            (Self::Int(a), Self::Float(b)) | (Self::Float(b), Self::Int(a)) => {
-                int_float_equal(a, *b)
+            (Self::Number(a), Self::Number(b)) => match (integer_token(a), integer_token(b)) {
+                (true, true) => int_text(a) == int_text(b),
+                (true, false) => float_value(b).is_some_and(|f| int_float_equal(a, f)),
+                (false, true) => float_value(a).is_some_and(|f| int_float_equal(b, f)),
+                (false, false) => float_value(a)
+                    .zip(float_value(b))
+                    .is_some_and(|(a, b)| a == b),
+            },
+            (Self::Bool(a), Self::Number(b)) | (Self::Number(b), Self::Bool(a)) => {
+                if integer_token(b) {
+                    int_text(b) == if *a { "1" } else { "0" }
+                } else {
+                    float_value(b) == Some(*a as u8 as f64)
+                }
             }
             (Self::Array(a), Self::Array(b)) => {
-                a.len() == b.len() && a.iter().zip(b.iter()).all(|(a, b)| a.eq_container_child(b))
+                a.len() == b.len() && a.iter().zip(b).all(|(a, b)| a.eq_python(b))
             }
             (Self::Object(a), Self::Object(b)) => {
                 a.len() == b.len()
                     && a.iter()
-                        .all(|(k, v)| b.iter().any(|(bk, bv)| k == bk && v.eq_container_child(bv)))
+                        .all(|(key, value)| b.get(key).is_some_and(|other| value.eq_python(other)))
             }
             _ => self == other,
         }
     }
-    fn eq_container_child(&self, other: &Self) -> bool {
-        // CPython json.loads shares its NaN token object. Only container child
-        // comparisons short-circuit that identity; scalar NaN equality is false.
-        if let (Self::Float(a), Self::Float(b)) = (self, other) {
-            if a.is_nan() && b.is_nan() {
-                return true;
+}
+pub fn truthy(value: &Value) -> bool {
+    match value {
+        Value::Null => false,
+        Value::Bool(v) => *v,
+        Value::Number(v) => {
+            if integer_token(v) {
+                int_text(v) != "0"
+            } else {
+                // Standard JSON exponents can overflow f64. Python's parsed
+                // infinity is truthy; conversion failure must never clear health.
+                float_value(v).is_none_or(|f| f != 0.)
             }
         }
-        self.eq_python(other)
-    }
-}
-fn int_float_equal(integer: &Text, float: f64) -> bool {
-    if !float.is_finite() || float.fract() != 0.0 {
-        return false;
-    }
-    if float == 0.0 {
-        return integer.bytes() == b"0";
-    }
-    let bits = float.abs().to_bits();
-    let mut mantissa = (bits & ((1u64 << 52) - 1)) | (1u64 << 52);
-    let exponent = ((bits >> 52) & 0x7ff) as i32 - 1023 - 52;
-    let mut decimal = [0u8; 310];
-    let mut count = 0;
-    if exponent < 0 {
-        mantissa >>= -exponent;
-    }
-    while mantissa > 0 {
-        decimal[count] = (mantissa % 10) as u8;
-        count += 1;
-        mantissa /= 10;
-    }
-    for _ in 0..exponent.max(0) {
-        let mut carry = 0;
-        for digit in &mut decimal[..count] {
-            let doubled = *digit * 2 + carry;
-            *digit = doubled % 10;
-            carry = doubled / 10;
-        }
-        if carry != 0 {
-            decimal[count] = carry;
-            count += 1;
-        }
-    }
-    let text = integer.bytes();
-    let negative = float.is_sign_negative();
-    if text.len() != count + negative as usize || negative && text[0] != b'-' {
-        return false;
-    }
-    text[negative as usize..]
-        .iter()
-        .rev()
-        .zip(decimal[..count].iter())
-        .all(|(byte, digit)| *byte == b'0' + digit)
-}
-impl PartialEq for Value {
-    fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (Self::Null, Self::Null) => true,
-            (Self::Bool(a), Self::Bool(b)) => a == b,
-            (Self::Int(a), Self::Int(b)) | (Self::String(a), Self::String(b)) => a == b,
-            (Self::Float(a), Self::Float(b)) => a == b,
-            (Self::Array(a), Self::Array(b)) => **a == **b,
-            (Self::Object(a), Self::Object(b)) => {
-                a.len() == b.len()
-                    && a.iter()
-                        .all(|(k, v)| b.iter().any(|(bk, bv)| k == bk && v == bv))
-            }
-            _ => false,
-        }
+        Value::String(v) => !v.is_empty(),
+        Value::Array(v) => !v.is_empty(),
+        Value::Object(v) => !v.is_empty(),
     }
 }
 
 pub struct Document {
     pub root: Value,
+    _admission: Arc<JsonAdmission>,
 }
-
-pub fn text(value: &str, budget: &Arc<Budget>) -> Result<Value> {
-    Ok(Value::String(Text::from_str(value, budget)?))
+pub fn admit(bytes: usize, budget: &Arc<Budget>) -> Result<Arc<JsonAdmission>> {
+    let raw = bytes;
+    let bytes = bytes
+        .checked_mul(32)
+        .and_then(|n| n.checked_add(65536))
+        .ok_or_else(|| Error::resource("JSON document estimate overflow"))?;
+    let admission=budget.reserve_json(bytes).map_err(|error|match error{
+        Error::ResourceLimit(_)=>Error::resource(format!("JSON document estimate exceeds memory budget: raw_bytes={raw}, estimated_bytes={bytes}, used_bytes={}, limit_bytes={}",budget.used(),budget.limit())),
+        other=>other,
+    })?;
+    Ok(Arc::new(admission))
 }
-pub fn integer(value: i128, budget: &Arc<Budget>) -> Result<Value> {
-    Ok(Value::Int(Text::from_str(&value.to_string(), budget)?))
-}
-pub fn object(
-    entries: impl IntoIterator<Item = (&'static str, Value)>,
-    budget: &Arc<Budget>,
-) -> Result<Value> {
-    let mut values = BudgetVec::new(budget);
-    for (key, value) in entries {
-        values.push((Text::from_str(key, budget)?, value))?;
-    }
-    Ok(Value::Object(values))
-}
-pub fn array(entries: impl IntoIterator<Item = Value>, budget: &Arc<Budget>) -> Result<Value> {
-    let mut values = BudgetVec::new(budget);
-    for value in entries {
-        values.push(value)?;
-    }
-    Ok(Value::Array(values))
-}
-pub fn copy(value: &Value, budget: &Arc<Budget>, control: &Control) -> Result<Value> {
-    // Used only for compact control/proof fields, never full journal input trees.
-    let encoded = canonical(value, budget, control)?;
-    Ok(parse(&encoded, budget, control)?.root)
-}
-
-pub fn parse(bytes: &[u8], budget: &Arc<Budget>, control: &Control) -> Result<Document> {
-    #[cfg(feature = "decode-profile")]
-    let encoding = crate::decode_profile::enter(crate::decode_profile::Category::Encoding);
-    control.check()?;
-    std::str::from_utf8(bytes).map_err(|_| Error::contract("invalid UTF-8 JSON"))?;
-    control.check()?;
-    #[cfg(feature = "decode-profile")]
-    drop(encoding);
-    parse_decoded(bytes, budget, control)
-}
-pub fn parse_surrogatepass(
-    bytes: &[u8],
-    budget: &Arc<Budget>,
-    control: &Control,
-) -> Result<Document> {
-    #[cfg(feature = "decode-profile")]
-    let encoding = crate::decode_profile::enter(crate::decode_profile::Category::Encoding);
-    let mut index = 0;
+const RESERVED: &[u8] = b"$serde_json::private::Number";
+/// Only resource nesting and a reserved serde member key; serde owns all grammar.
+fn preflight(bytes: &[u8], control: &Control) -> Result<()> {
+    let mut index = 0usize;
+    let mut nesting = 0usize;
     let mut next_poll = 0usize;
     while index < bytes.len() {
         if index >= next_poll {
             control.check()?;
             next_poll = index.saturating_add(4096);
         }
-        let first = bytes[index];
-        let (count, mut point, minimum) = match first {
-            0..=127 => {
+        match bytes[index] {
+            b'"' => {
+                let start = index;
                 index += 1;
-                continue;
-            }
-            0xc2..=0xdf => (2, (first & 31) as u32, 0x80),
-            0xe0..=0xef => (3, (first & 15) as u32, 0x800),
-            0xf0..=0xf4 => (4, (first & 7) as u32, 0x10000),
-            _ => return Err(Error::contract("invalid UTF-8 JSON")),
-        };
-        if index + count > bytes.len() {
-            return Err(Error::contract("truncated UTF-8 JSON"));
-        }
-        for byte in &bytes[index + 1..index + count] {
-            if byte & 0xc0 != 0x80 {
-                return Err(Error::contract("invalid UTF-8 JSON"));
-            }
-            point = (point << 6) | (byte & 63) as u32;
-        }
-        if point < minimum || point > 0x10ffff {
-            return Err(Error::contract("invalid UTF-8 JSON"));
-        }
-        index += count;
-    }
-    #[cfg(feature = "decode-profile")]
-    drop(encoding);
-    parse_decoded(bytes, budget, control)
-}
-fn parse_decoded(bytes: &[u8], budget: &Arc<Budget>, control: &Control) -> Result<Document> {
-    let mut parser = Parser {
-        bytes,
-        pos: 0,
-        budget,
-        control,
-        next_poll: 4096,
-    };
-    let root = parser.value(0)?;
-    parser.space()?;
-    if parser.pos != bytes.len() {
-        return Err(Error::contract("trailing JSON data"));
-    }
-    control.check()?;
-    Ok(Document { root })
-}
-
-struct Parser<'a> {
-    bytes: &'a [u8],
-    pos: usize,
-    budget: &'a Arc<Budget>,
-    control: &'a Control,
-    next_poll: usize,
-}
-impl Parser<'_> {
-    fn poll(&mut self) -> Result<()> {
-        if self.pos >= self.next_poll {
-            self.control.check()?;
-            self.next_poll = self.pos.saturating_add(4096);
-        }
-        Ok(())
-    }
-    fn space(&mut self) -> Result<()> {
-        while self.pos < self.bytes.len()
-            && matches!(self.bytes[self.pos], b' ' | b'\n' | b'\r' | b'\t')
-        {
-            self.poll()?;
-            self.pos += 1;
-        }
-        Ok(())
-    }
-    fn token(&mut self, token: &[u8]) -> bool {
-        if self.bytes[self.pos..].starts_with(token) {
-            self.pos += token.len();
-            true
-        } else {
-            false
-        }
-    }
-    fn value(&mut self, depth: usize) -> Result<Value> {
-        #[cfg(feature = "decode-profile")]
-        crate::decode_profile::count(crate::decode_profile::Count::Nodes, 1);
-        self.control.check()?;
-        if depth > self.control.json_depth() {
-            return Err(Error::resource("source exceeds native_json_depth"));
-        }
-        self.space()?;
-        match self.bytes.get(self.pos).copied() {
-            Some(b'n') if self.token(b"null") => Ok(Value::Null),
-            Some(b't') if self.token(b"true") => Ok(Value::Bool(true)),
-            Some(b'f') if self.token(b"false") => Ok(Value::Bool(false)),
-            Some(b'N') if self.token(b"NaN") => Ok(Value::Float(f64::NAN)),
-            Some(b'I') if self.token(b"Infinity") => Ok(Value::Float(f64::INFINITY)),
-            Some(b'-') if self.bytes[self.pos..].starts_with(b"-Infinity") => {
-                self.pos += 9;
-                Ok(Value::Float(f64::NEG_INFINITY))
-            }
-            Some(b'"') => Ok(Value::String(self.string()?)),
-            Some(b'[') => {
-                #[cfg(feature = "decode-profile")]
-                crate::decode_profile::count(crate::decode_profile::Count::Containers, 1);
-                self.pos += 1;
-                self.space()?;
-                let mut items = {
-                    #[cfg(feature = "decode-profile")]
-                    let _container =
-                        crate::decode_profile::enter(crate::decode_profile::Category::Containers);
-                    BudgetVec::new(self.budget)
-                };
-                if self.token(b"]") {
-                    return Ok(Value::Array(items));
-                }
-                loop {
-                    {
-                        #[cfg(feature = "decode-profile")]
-                        let _container = crate::decode_profile::enter(
-                            crate::decode_profile::Category::Containers,
-                        );
-                        items.reserve(1)?;
+                let mut escaped = false;
+                while index < bytes.len() {
+                    if index >= next_poll {
+                        control.check()?;
+                        next_poll = index.saturating_add(4096);
                     }
-                    let value = self.value(depth + 1)?;
-                    {
-                        #[cfg(feature = "decode-profile")]
-                        let _container = crate::decode_profile::enter(
-                            crate::decode_profile::Category::Containers,
-                        );
-                        items.push(value)?;
-                    }
-                    self.space()?;
-                    if self.token(b"]") {
-                        break;
-                    }
-                    if !self.token(b",") {
-                        return Err(Error::contract("JSON array separator required"));
-                    }
-                }
-                Ok(Value::Array(items))
-            }
-            Some(b'{') => {
-                #[cfg(feature = "decode-profile")]
-                crate::decode_profile::count(crate::decode_profile::Count::Containers, 1);
-                self.pos += 1;
-                self.space()?;
-                let mut items: BudgetVec<(Text, Value)> = BudgetVec::new(self.budget);
-                let mut lookup = crate::lookup::Index::new(self.budget);
-                if self.token(b"}") {
-                    return Ok(Value::Object(items));
-                }
-                loop {
-                    self.space()?;
-                    let key = self.string()?;
-                    self.space()?;
-                    if !self.token(b":") {
-                        return Err(Error::contract("JSON object colon required"));
-                    }
-                    let key_hash = crate::lookup::hash(key.bytes(), self.control)?;
-                    let found =
-                        lookup.find(key_hash, |index| items[index].0 == key, self.control)?;
-                    if found.is_none() {
-                        {
-                            #[cfg(feature = "decode-profile")]
-                            let _container = crate::decode_profile::enter(
-                                crate::decode_profile::Category::Containers,
-                            );
-                            items.reserve(1)?;
+                    match bytes[index] {
+                        b'\\' => {
+                            escaped = true;
+                            index = index.saturating_add(2);
                         }
+                        b'"' => break,
+                        _ => index += 1,
                     }
-                    let value = self.value(depth + 1)?;
-                    if let Some(index) = found {
-                        #[cfg(feature = "decode-profile")]
-                        let _container = crate::decode_profile::enter(
-                            crate::decode_profile::Category::Containers,
-                        );
-                        items[index].1 = value;
+                }
+                if index >= bytes.len() {
+                    break;
+                }
+                let end = index;
+                index += 1;
+                let mut after = index;
+                while matches!(bytes.get(after), Some(b' ' | b'\r' | b'\n' | b'\t')) {
+                    after += 1;
+                    if after >= next_poll {
+                        control.check()?;
+                        next_poll = after.saturating_add(4096);
+                    }
+                }
+                if bytes.get(after) == Some(&b':') {
+                    let reserved = if escaped {
+                        serde_json::from_slice::<String>(&bytes[start..=end])
+                            .map_err(|e| Error::contract(e.to_string()))?
+                            .as_bytes()
+                            == RESERVED
                     } else {
-                        lookup.insert(key_hash, items.len(), self.control)?;
-                        #[cfg(feature = "decode-profile")]
-                        let _container = crate::decode_profile::enter(
-                            crate::decode_profile::Category::Containers,
-                        );
-                        items.push((key, value))?;
-                    }
-                    self.space()?;
-                    if self.token(b"}") {
-                        break;
-                    }
-                    if !self.token(b",") {
-                        return Err(Error::contract("JSON object separator required"));
+                        &bytes[start + 1..end] == RESERVED
+                    };
+                    if reserved {
+                        return Err(Error::contract("reserved serde numeric member key"));
                     }
                 }
-                Ok(Value::Object(items))
             }
-            Some(b'-' | b'0'..=b'9') => self.number(),
-            _ => Err(Error::contract("invalid JSON value")),
-        }
-    }
-    fn hex(&mut self) -> Result<u32> {
-        let mut value = 0;
-        for _ in 0..4 {
-            let digit = *self
-                .bytes
-                .get(self.pos)
-                .ok_or_else(|| Error::contract("short Unicode escape"))?;
-            self.pos += 1;
-            value = value * 16
-                + match digit {
-                    b'0'..=b'9' => (digit - b'0') as u32,
-                    b'a'..=b'f' => (digit - b'a' + 10) as u32,
-                    b'A'..=b'F' => (digit - b'A' + 10) as u32,
-                    _ => return Err(Error::contract("invalid Unicode escape")),
-                };
-        }
-        Ok(value)
-    }
-    fn string(&mut self) -> Result<Text> {
-        #[cfg(feature = "decode-profile")]
-        let _string = crate::decode_profile::enter(crate::decode_profile::Category::Strings);
-        #[cfg(feature = "decode-profile")]
-        crate::decode_profile::count(crate::decode_profile::Count::Strings, 1);
-        if !self.token(b"\"") {
-            return Err(Error::contract("JSON string required"));
-        }
-        let mut value = Text::new(self.budget);
-        loop {
-            self.poll()?;
-            let byte = *self
-                .bytes
-                .get(self.pos)
-                .ok_or_else(|| Error::contract("unterminated JSON string"))?;
-            self.pos += 1;
-            match byte {
-                b'"' => return Ok(value),
-                b'\\' => {
-                    let escape = *self
-                        .bytes
-                        .get(self.pos)
-                        .ok_or_else(|| Error::contract("unterminated JSON escape"))?;
-                    self.pos += 1;
-                    match escape {
-                        b'"' | b'\\' | b'/' => value.push(escape)?,
-                        b'b' => value.push(8)?,
-                        b'f' => value.push(12)?,
-                        b'n' => value.push(10)?,
-                        b'r' => value.push(13)?,
-                        b't' => value.push(9)?,
-                        b'u' => {
-                            let first = self.hex()?;
-                            if (0xd800..=0xdbff).contains(&first)
-                                && self.bytes[self.pos..].starts_with(b"\\u")
-                            {
-                                let saved = self.pos;
-                                self.pos += 2;
-                                let second = self.hex()?;
-                                if (0xdc00..=0xdfff).contains(&second) {
-                                    value.codepoint(
-                                        0x10000 + (first - 0xd800) * 1024 + second - 0xdc00,
-                                    )?;
-                                } else {
-                                    self.pos = saved;
-                                    value.codepoint(first)?;
-                                }
-                            } else {
-                                value.codepoint(first)?;
-                            }
-                        }
-                        _ => return Err(Error::contract("invalid JSON escape")),
-                    }
+            b'[' | b'{' => {
+                nesting = nesting
+                    .checked_add(1)
+                    .ok_or_else(|| Error::resource("JSON nesting overflow"))?;
+                if nesting > control.json_depth() + 1 {
+                    return Err(Error::resource("source exceeds native_json_depth"));
                 }
-                0..=31 => return Err(Error::contract("unescaped JSON control character")),
-                _ => value.push(byte)?,
+                index += 1;
             }
+            b']' | b'}' => {
+                nesting = nesting.saturating_sub(1);
+                index += 1;
+            }
+            _ => index += 1,
         }
     }
-    fn number(&mut self) -> Result<Value> {
-        #[cfg(feature = "decode-profile")]
-        let _number = crate::decode_profile::enter(crate::decode_profile::Category::Numbers);
-        #[cfg(feature = "decode-profile")]
-        crate::decode_profile::count(crate::decode_profile::Count::Numbers, 1);
-        let start = self.pos;
-        self.token(b"-");
-        if !self.token(b"0") {
-            if !matches!(self.bytes.get(self.pos), Some(b'1'..=b'9')) {
-                return Err(Error::contract("invalid JSON number"));
-            }
-            while matches!(self.bytes.get(self.pos), Some(b'0'..=b'9')) {
-                self.poll()?;
-                self.pos += 1;
-            }
-        }
-        let mut float = false;
-        if self.token(b".") {
-            float = true;
-            let begin = self.pos;
-            while matches!(self.bytes.get(self.pos), Some(b'0'..=b'9')) {
-                self.poll()?;
-                self.pos += 1;
-            }
-            if begin == self.pos {
-                return Err(Error::contract("missing fractional digits"));
-            }
-        }
-        if self.token(b"e") || self.token(b"E") {
-            float = true;
-            if !self.token(b"+") {
-                self.token(b"-");
-            }
-            let begin = self.pos;
-            while matches!(self.bytes.get(self.pos), Some(b'0'..=b'9')) {
-                self.poll()?;
-                self.pos += 1;
-            }
-            if begin == self.pos {
-                return Err(Error::contract("missing exponent digits"));
-            }
-        }
-        let number = std::str::from_utf8(&self.bytes[start..self.pos]).expect("ASCII number");
-        if float {
-            return Ok(Value::Float(
-                number
-                    .parse()
-                    .map_err(|_| Error::contract("invalid JSON float"))?,
-            ));
-        }
-        if number.trim_start_matches('-').len() > 4300 {
-            return Err(Error::contract("integer conversion digit limit"));
-        }
-        Ok(Value::Int(Text::from_str(
-            if number == "-0" { "0" } else { number },
-            self.budget,
-        )?))
-    }
+    control.check()
 }
-
-pub fn canonical(value: &Value, budget: &Arc<Budget>, control: &Control) -> Result<BudgetVec<u8>> {
-    let mut output = BudgetVec::new(budget);
-    write_canonical(value, &mut output, control)?;
-    control.check()?;
-    Ok(output)
-}
-fn quoted(value: &Text, output: &mut BudgetVec<u8>, control: &Control) -> Result<()> {
-    value.as_str()?;
-    output.push(b'"')?;
-    for (index, byte) in value.bytes().iter().enumerate() {
-        if index % 4096 == 0 {
+fn validate_depth_and_numbers(root: &Value, control: &Control) -> Result<()> {
+    let mut pending = vec![(root, 0usize)];
+    let mut nodes = 0usize;
+    while let Some((value, depth)) = pending.pop() {
+        nodes += 1;
+        if nodes % 256 == 0 {
             control.check()?;
         }
-        match byte {
-            b'"' | b'\\' => {
-                output.push(b'\\')?;
-                output.push(*byte)?;
+        if depth > control.json_depth() {
+            return Err(Error::resource("source exceeds native_json_depth"));
+        }
+        match value {
+            Value::Array(values) => pending.extend(values.iter().map(|v| (v, depth + 1))),
+            Value::Object(values) => pending.extend(values.values().map(|v| (v, depth + 1))),
+            Value::Number(n)
+                if integer_token(n) && int_text(n).trim_start_matches('-').len() > 4300 =>
+            {
+                return Err(Error::contract("integer conversion digit limit"));
             }
-            8 => output.extend_from_slice(b"\\b")?,
-            9 => output.extend_from_slice(b"\\t")?,
-            10 => output.extend_from_slice(b"\\n")?,
-            12 => output.extend_from_slice(b"\\f")?,
-            13 => output.extend_from_slice(b"\\r")?,
-            0..=31 => {
-                output.extend_from_slice(b"\\u00")?;
-                output.push(b"0123456789abcdef"[(*byte / 16) as usize])?;
-                output.push(b"0123456789abcdef"[(*byte % 16) as usize])?;
-            }
-            _ => output.push(*byte)?,
+            _ => {}
         }
     }
-    output.push(b'"')
+    control.check()
 }
-fn write_canonical(value: &Value, out: &mut BudgetVec<u8>, control: &Control) -> Result<()> {
+pub fn parse(bytes: &[u8], budget: &Arc<Budget>, control: &Control) -> Result<Document> {
+    let admission = admit(bytes.len(), budget)?;
+    parse_admitted(bytes, &admission, control)
+}
+pub fn parse_admitted(
+    bytes: &[u8],
+    admission: &Arc<JsonAdmission>,
+    control: &Control,
+) -> Result<Document> {
     control.check()?;
-    match value {
-        Value::Null => out.extend_from_slice(b"null"),
-        Value::Bool(v) => out.extend_from_slice(if *v { b"true" } else { b"false" }),
-        Value::Int(v) => out.extend_from_slice(v.bytes()),
-        Value::Float(v) => write_float(*v, out),
-        Value::String(v) => quoted(v, out, control),
-        Value::Array(values) => {
-            out.push(b'[')?;
-            for (i, value) in values.iter().enumerate() {
-                if i > 0 {
-                    out.push(b',')?;
-                }
-                write_canonical(value, out, control)?;
-            }
-            out.push(b']')
-        }
-        Value::Object(values) => {
-            let mut sorted = BudgetVec::with_capacity(out.budget(), values.len())?;
-            for item in values.iter() {
-                sorted.push(item)?;
-            }
-            crate::budget::sort_by(&mut sorted, |a, b| a.0.bytes().cmp(b.0.bytes()), control)?;
-            out.push(b'{')?;
-            for (i, (key, value)) in sorted.iter().enumerate() {
-                if i > 0 {
-                    out.push(b',')?;
-                }
-                quoted(key, out, control)?;
-                out.push(b':')?;
-                write_canonical(value, out, control)?;
-            }
-            out.push(b'}')
-        }
-    }
+    preflight(bytes, control)?;
+    let mut decoder = serde_json::Deserializer::from_slice(bytes);
+    decoder.disable_recursion_limit();
+    let root = Value::deserialize(&mut decoder).map_err(|e| Error::contract(e.to_string()))?;
+    decoder.end().map_err(|e| Error::contract(e.to_string()))?;
+    validate_depth_and_numbers(&root, control)?;
+    Ok(Document {
+        root,
+        _admission: admission.clone(),
+    })
 }
-fn write_float(value: f64, out: &mut BudgetVec<u8>) -> Result<()> {
+pub fn text(value: &str, _: &Arc<Budget>) -> Result<Value> {
+    Ok(Value::String(value.to_owned()))
+}
+pub fn integer(value: i128, _: &Arc<Budget>) -> Result<Value> {
+    Ok(Value::Number(
+        Number::from_i128(value).expect("i128 number"),
+    ))
+}
+pub fn float(value: f64) -> Result<Value> {
+    Number::from_f64(value)
+        .map(Value::Number)
+        .ok_or_else(|| Error::contract("nonfinite canonical float"))
+}
+pub fn object(
+    entries: impl IntoIterator<Item = (&'static str, Value)>,
+    _: &Arc<Budget>,
+) -> Result<Value> {
+    Ok(Value::Object(
+        entries
+            .into_iter()
+            .map(|(k, v)| (k.to_owned(), v))
+            .collect(),
+    ))
+}
+pub fn array(entries: impl IntoIterator<Item = Value>, _: &Arc<Budget>) -> Result<Value> {
+    Ok(Value::Array(entries.into_iter().collect()))
+}
+pub fn copy(value: &Value, _: &Arc<Budget>, control: &Control) -> Result<Value> {
+    control.check()?;
+    let result = value.clone();
+    control.check()?;
+    Ok(result)
+}
+
+fn python_float(value: f64) -> io::Result<String> {
     if !value.is_finite() {
-        return Err(Error::contract("nonfinite canonical float"));
+        return Err(io::Error::other("nonfinite canonical float"));
     }
     let mut buffer = ryu::Buffer::new();
     let printed = buffer.format_finite(value);
-    let (negative, printed) = if let Some(v) = printed.strip_prefix('-') {
-        (true, v)
+    let (negative, printed) = if let Some(s) = printed.strip_prefix('-') {
+        (true, s)
     } else {
         (false, printed)
     };
-    if negative {
-        out.push(b'-')?;
+    let (mantissa, exponent) = printed
+        .split_once('e')
+        .map(|(m, e)| (m, e.parse::<i32>().expect("ryu exponent")))
+        .unwrap_or((printed, 0));
+    let mut digits = mantissa.replace('.', "");
+    let mut decimal = mantissa.find('.').unwrap_or(mantissa.len()) as i32 + exponent;
+    while digits.len() > 1 && digits.starts_with('0') {
+        digits.remove(0);
+        decimal -= 1;
     }
-    let (mantissa, exponent) = if let Some((a, b)) = printed.split_once('e') {
-        (a, b.parse::<i32>().expect("ryu exponent"))
+    while digits.len() > 1 && digits.ends_with('0') {
+        digits.pop();
+    }
+    let scientific = decimal - 1;
+    let mut output = if negative {
+        "-".to_owned()
     } else {
-        (printed, 0)
+        String::new()
     };
-    let mut digits = [0u8; 32];
-    let mut count = 0;
-    let mut dot = None;
-    for byte in mantissa.bytes() {
-        if byte == b'.' {
-            dot = Some(count);
-        } else {
-            digits[count] = byte;
-            count += 1;
+    if value != 0. && !(-4..16).contains(&scientific) {
+        output.push(digits.as_bytes()[0] as char);
+        if digits.len() > 1 {
+            output.push('.');
+            output.push_str(&digits[1..]);
         }
-    }
-    let decimal = dot.unwrap_or(count) as i32 + exponent;
-    let mut first = 0;
-    while first + 1 < count && digits[first] == b'0' {
-        first += 1;
-    }
-    let scientific = decimal - first as i32 - 1;
-    let mut last = count;
-    while last > first + 1 && digits[last - 1] == b'0' {
-        last -= 1;
-    }
-    if !(-4..16).contains(&scientific) && value != 0.0 {
-        out.push(digits[first])?;
-        if last > first + 1 {
-            out.push(b'.')?;
-            out.extend_from_slice(&digits[first + 1..last])?;
-        }
-        out.push(b'e')?;
-        out.push(if scientific < 0 { b'-' } else { b'+' })?;
-        let exponent = scientific.unsigned_abs();
-        if exponent < 10 {
-            out.push(b'0')?;
-        }
-        let text = exponent.to_string();
-        out.extend_from_slice(text.as_bytes())
+        output.push_str(&format!(
+            "e{}{:02}",
+            if scientific < 0 { '-' } else { '+' },
+            scientific.unsigned_abs()
+        ));
+    } else if decimal <= 0 {
+        output.push_str("0.");
+        output.extend(std::iter::repeat_n('0', (-decimal) as usize));
+        output.push_str(&digits);
     } else {
-        let left = decimal - first as i32;
-        if left <= 0 {
-            out.extend_from_slice(b"0.")?;
-            for _ in 0..-left {
-                out.push(b'0')?;
-            }
-            out.extend_from_slice(&digits[first..last])?;
+        let left = decimal as usize;
+        if left >= digits.len() {
+            output.push_str(&digits);
+            output.extend(std::iter::repeat_n('0', left - digits.len()));
+            output.push_str(".0");
         } else {
-            for i in 0..left as usize {
-                out.push(if first + i < last {
-                    digits[first + i]
-                } else {
-                    b'0'
-                })?;
-            }
-            out.push(b'.')?;
-            if first + (left as usize) < last {
-                out.extend_from_slice(&digits[first + left as usize..last])?;
+            output.push_str(&digits[..left]);
+            output.push('.');
+            output.push_str(&digits[left..]);
+        }
+    }
+    Ok(output)
+}
+struct PythonFormatter;
+impl serde_json::ser::Formatter for PythonFormatter {
+    fn write_number_str<W: Write + ?Sized>(
+        &mut self,
+        writer: &mut W,
+        value: &str,
+    ) -> io::Result<()> {
+        if value.bytes().any(|c| matches!(c, b'.' | b'e' | b'E')) {
+            writer.write_all(python_float(value.parse().map_err(io::Error::other)?)?.as_bytes())
+        } else {
+            writer.write_all(if value == "-0" {
+                b"0"
             } else {
-                out.push(b'0')?;
+                value.as_bytes()
+            })
+        }
+    }
+    fn write_f64<W: Write + ?Sized>(&mut self, writer: &mut W, value: f64) -> io::Result<()> {
+        writer.write_all(python_float(value)?.as_bytes())
+    }
+}
+struct Output<'a> {
+    bytes: &'a mut BudgetVec<u8>,
+    error: Option<Error>,
+}
+impl Write for Output<'_> {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        match self.bytes.extend_from_slice(bytes) {
+            Ok(()) => Ok(bytes.len()),
+            Err(error) => {
+                self.error = Some(error);
+                Err(io::Error::other("canonical output admission failed"))
             }
         }
+    }
+    fn flush(&mut self) -> io::Result<()> {
         Ok(())
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::budget::monotonic;
-    #[test]
-    fn duplicate_last_wins_and_canonical_floats() {
-        let budget = Budget::new(1024 * 1024);
-        let control = Control::new(monotonic() + 10.).unwrap();
-        let parsed = parse(
-            br#"{"a":1,"a":2,"x":[-0,1e-5,1e16,0.0001,1.0,-0.0]}"#,
-            &budget,
-            &control,
-        )
-        .unwrap();
-        let result = canonical(&parsed.root, &budget, &control).unwrap();
-        assert_eq!(&*result, br#"{"a":2,"x":[0,1e-05,1e+16,0.0001,1.0,-0.0]}"#);
-        drop(result);
-        drop(parsed);
-        assert_eq!(budget.used(), 0);
+pub fn canonical(value: &Value, budget: &Arc<Budget>, control: &Control) -> Result<BudgetVec<u8>> {
+    control.check()?;
+    let mut bytes = BudgetVec::new(budget);
+    let mut output = Output {
+        bytes: &mut bytes,
+        error: None,
+    };
+    let result = value.serialize(&mut serde_json::Serializer::with_formatter(
+        &mut output,
+        PythonFormatter,
+    ));
+    if let Err(error) = result {
+        return Err(output
+            .error
+            .take()
+            .unwrap_or_else(|| Error::contract(error.to_string())));
     }
+    control.check()?;
+    Ok(bytes)
 }

@@ -1,4 +1,5 @@
 //! Source linkage and exact legacy source-proof serialization, without policy I/O.
+use crate::json::ValueExt;
 use crate::{
     budget::{Budget, BudgetVec, Control},
     controls,
@@ -68,14 +69,14 @@ pub fn validate_manifest(
         return Err(Error::contract("source report not successful"));
     }
     for key in ["failures", "health_failures", "group_health_failures"] {
-        if !report.require(key)?.as_object()?.is_empty() {
+        if !report.require(key)?.object()?.is_empty() {
             return Err(Error::contract("source report not successful"));
         }
     }
     if controls::field_truthy(report, "budget_overrun_seconds")
         || report
             .get("report_status")
-            .is_some_and(|v| v.as_str().is_ok_and(|s| s == "minimal"))
+            .is_some_and(|v| v.string().is_ok_and(|s| s == "minimal"))
     {
         return Err(Error::contract("source report not successful"));
     }
@@ -99,7 +100,7 @@ pub struct EpisodeLinks<'a> {
 }
 pub fn links<'a>(manifest: &'a Value, id: &str) -> Result<EpisodeLinks<'a>> {
     let mut episode = None;
-    for item in manifest.require("episodes")?.as_array()? {
+    for item in manifest.require("episodes")?.array()? {
         if string(item, "episode_id")? == id {
             if episode.replace(item).is_some() {
                 return Err(Error::contract("duplicate manifest episode"));
@@ -109,8 +110,8 @@ pub fn links<'a>(manifest: &'a Value, id: &str) -> Result<EpisodeLinks<'a>> {
     let episode =
         episode.ok_or_else(|| Error::contract("journal episode missing from manifest"))?;
     let mut found = None;
-    for group in manifest.require("schedule")?.as_array()? {
-        for spec in group.require("episodes")?.as_array()? {
+    for group in manifest.require("schedule")?.array()? {
+        for spec in group.require("episodes")?.array()? {
             if string(spec, "episode_id")? == id {
                 if found.replace((group, spec)).is_some() {
                     return Err(Error::contract("duplicate scheduled identity"));
@@ -132,12 +133,12 @@ pub fn links<'a>(manifest: &'a Value, id: &str) -> Result<EpisodeLinks<'a>> {
         "source schedule/result mismatch",
     )?;
     let mut health = None;
-    for candidate in manifest.require("groups")?.as_array()? {
+    for candidate in manifest.require("groups")?.array()? {
         if candidate
             .require("episode_ids")?
-            .as_array()?
+            .array()?
             .iter()
-            .any(|v| v.as_str().is_ok_and(|s| s == id))
+            .any(|v| v.string().is_ok_and(|s| s == id))
         {
             if health.replace(candidate).is_some() {
                 return Err(Error::contract("duplicate group health"));
@@ -221,15 +222,15 @@ pub fn source_metadata(
     )?;
     equal(
         header.require("policy")?,
-        &links.episode.require("policies")?.as_array()?[(viewer - 1) as usize],
+        &links.episode.require("policies")?.array()?[(viewer - 1) as usize],
         "source game/model linkage mismatch",
     )?;
     let configured_mode = m
         .require("effective_config")?
         .require("actions")?
         .require("use_action_options")?
-        .as_bool()?;
-    if header.require("use_action_options")?.as_bool()? != configured_mode {
+        .boolean()?;
+    if header.require("use_action_options")?.boolean()? != configured_mode {
         return Err(Error::contract("source ActionOptions mode mismatch"));
     }
     if controls::digest(
@@ -262,7 +263,7 @@ pub fn source_metadata(
         .ok_or_else(|| Error::contract("missing natural journal end"))?;
     if string(end, "end_kind")? != "natural"
         || journal.accepted.len() != journal.decisions.len()
-        || !end.require("pending_decisions")?.as_array()?.is_empty()
+        || !end.require("pending_decisions")?.array()?.is_empty()
     {
         return Err(Error::contract(
             "ineligible interrupted or pending source journal",
@@ -305,7 +306,7 @@ pub fn source_metadata(
     let closure = validation::replay_closure(replay, string(header, "game_id")?, viewer)?;
     if closure.is_some_and(|c| {
         c.get("type")
-            .is_some_and(|v| v.as_str().is_ok_and(|s| s == "aborted"))
+            .is_some_and(|v| v.string().is_ok_and(|s| s == "aborted"))
     }) {
         return Err(Error::contract("natural source has aborted replay closure"));
     }
@@ -418,7 +419,7 @@ pub fn source_metadata(
             ),
             ("report", report_diagnostic),
             ("eligible", Value::Bool(true)),
-            ("ineligible_reasons", Value::Array(BudgetVec::new(budget))),
+            ("ineligible_reasons", Value::Array(Vec::new())),
         ],
         budget,
     )

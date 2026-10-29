@@ -1,10 +1,11 @@
 //! Complete-episode numeric spooling and all-or-nothing structural validation.
+use crate::json::ValueExt;
 use crate::{
     budget::{Budget, BudgetVec, Control, Lease},
     error::{Error, Result},
     feature::PreparedDecision,
     journal::{self, string},
-    json::{self, Text, Value},
+    json::{self, Value},
     projection,
     session::Session,
 };
@@ -22,8 +23,8 @@ use std::{
 static NEXT_SCRATCH: AtomicU64 = AtomicU64::new(0);
 pub struct Episode {
     pub path: PathBuf,
-    pub run: Text,
-    pub game: Text,
+    pub run: String,
+    pub game: String,
     pub viewer: i64,
     pub split: i64,
     pub winner: i64,
@@ -100,21 +101,24 @@ fn temporary() -> Result<PathBuf> {
 }
 
 struct Identity {
-    run: Text,
-    game: Text,
+    run: String,
+    game: String,
     viewer: i128,
+    _metadata: Lease,
 }
 struct Lineage {
-    seed: Text,
-    ancestry: Option<Text>,
+    seed: String,
+    ancestry: Option<String>,
     split: i64,
+    _metadata: Lease,
 }
 
 struct ProofRecord {
-    path: Text,
+    path: String,
     offset: u64,
     length: usize,
     _scratch: Lease,
+    _metadata: Lease,
 }
 struct ProofLedger {
     path: PathBuf,
@@ -151,7 +155,11 @@ impl ProofLedger {
     fn append(&mut self, path: &Path, encoded: &[u8], scratch: &Arc<Budget>) -> Result<()> {
         self.records.reserve(1)?;
         let record = ProofRecord {
-            path: Text::from_str(crate::session::path_text(path)?, self.records.budget())?,
+            _metadata: self
+                .records
+                .budget()
+                .reserve(crate::session::path_text(path)?.len() + size_of::<String>())?,
+            path: (crate::session::path_text(path)?).to_owned(),
             offset: self.offset,
             length: encoded.len(),
             _scratch: scratch.reserve(encoded.len())?,
@@ -172,7 +180,7 @@ impl ProofLedger {
         }
         crate::budget::sort_by(
             &mut ordered,
-            |a, b| a.path.bytes().cmp(b.path.bytes()),
+            |a, b| a.path.as_bytes().cmp(b.path.as_bytes()),
             control,
         )?;
         let mut file = File::open(&self.path)?;
@@ -328,13 +336,13 @@ pub fn scan(session: &mut Session) -> Result<Stage> {
     let mut identities = BudgetVec::new(budget);
     let mut lineages = BudgetVec::new(budget);
     let mut counts = [0usize; 2];
-    let mut action_hash = None::<Text>;
+    let mut action_hash = None::<String>;
     for collection in session.collections.iter() {
         control.check()?;
         projection::validate_manifest(collection, budget, control, &session.sources)?;
         let m = &collection.manifest.root;
         let mut episodes = BudgetVec::new(budget);
-        for episode in m.require("episodes")?.as_array()? {
+        for episode in m.require("episodes")?.array()? {
             let directory = collection.directory.join(string(episode, "episode_id")?);
             episodes.push(directory)?;
         }
@@ -419,17 +427,31 @@ pub fn scan(session: &mut Session) -> Result<Stage> {
                 proof_ledger.append(&std::fs::canonicalize(&source)?, &encoded, &stage.scratch)?;
                 source_count += 1;
                 identities.push(Identity {
-                    run: Text::from_str(string(journal.header, "run_id")?, budget)?,
-                    game: Text::from_str(string(journal.header, "game_id")?, budget)?,
+                    _metadata: budget.reserve(
+                        string(journal.header, "run_id")?.len()
+                            + string(journal.header, "game_id")?.len()
+                            + 2 * size_of::<String>(),
+                    )?,
+                    run: (string(journal.header, "run_id")?).to_owned(),
+                    game: (string(journal.header, "game_id")?).to_owned(),
                     viewer: viewer as i128,
                 })?;
                 let lineage = metadata.require("lineage")?;
                 lineages.push(Lineage {
-                    seed: Text::from_str(string(lineage, "seed")?, budget)?,
+                    _metadata: budget.reserve(
+                        string(lineage, "seed")?.len()
+                            + if lineage.require("ancestry")?.is_null() {
+                                0
+                            } else {
+                                string(lineage, "ancestry")?.len()
+                            }
+                            + 2 * size_of::<String>(),
+                    )?,
+                    seed: (string(lineage, "seed")?).to_owned(),
                     ancestry: if lineage.require("ancestry")?.is_null() {
                         None
                     } else {
-                        Some(Text::from_str(string(lineage, "ancestry")?, budget)?)
+                        Some((string(lineage, "ancestry")?).to_owned())
                     },
                     split: if string(lineage, "split")? == "train" {
                         0
@@ -440,14 +462,14 @@ pub fn scan(session: &mut Session) -> Result<Stage> {
                 let current = string(journal.header, "action_config_hash")?;
                 if action_hash
                     .as_ref()
-                    .is_some_and(|prior| prior.bytes() != current.as_bytes())
+                    .is_some_and(|prior| prior.as_bytes() != current.as_bytes())
                 {
                     return Err(Error::contract(
                         "frozen sources must share identical action conditions",
                     ));
                 }
                 if action_hash.is_none() {
-                    action_hash = Some(Text::from_str(current, budget)?);
+                    action_hash = Some((current).to_owned());
                 }
             }
             let learner = links.spec.require("learner_viewer")?.integer(1, 2)? as usize;
@@ -467,7 +489,7 @@ pub fn scan(session: &mut Session) -> Result<Stage> {
                 return Err(Error::contract("participant terminal facts disagree"));
             }
             let outcome = outcomes[0].require("outcome")?;
-            let winner = if outcome.as_str().is_ok_and(|s| s == "draw") {
+            let winner = if outcome.string().is_ok_and(|s| s == "draw") {
                 0
             } else {
                 outcome.require("win")?.require("winner")?.integer(1, 2)? as i64
@@ -493,7 +515,7 @@ pub fn scan(session: &mut Session) -> Result<Stage> {
                     decision
                         .require("candidates")?
                         .require("actions")?
-                        .as_array()?
+                        .array()?
                         .len()
                 } else {
                     1
@@ -581,7 +603,7 @@ pub fn scan(session: &mut Session) -> Result<Stage> {
                     for action in decision
                         .require("candidates")?
                         .require("actions")?
-                        .as_array()?
+                        .array()?
                     {
                         {
                             let _timer = session
@@ -626,7 +648,7 @@ pub fn scan(session: &mut Session) -> Result<Stage> {
                     decision
                         .require("candidates")?
                         .require("actions")?
-                        .as_array()?
+                        .array()?
                         .len() as i64,
                 )?;
             }
@@ -647,14 +669,19 @@ pub fn scan(session: &mut Session) -> Result<Stage> {
             }
             session.telemetry.stage_write(bytes);
             drop(file);
-            let metadata_lease = budget.reserve(path.as_os_str().len() + 256)?;
+            let metadata_lease = budget.reserve(
+                path.as_os_str().len()
+                    + string(journal.header, "run_id")?.len()
+                    + string(journal.header, "game_id")?.len()
+                    + 256,
+            )?;
             let order = m
                 .require("episodes")?
-                .as_array()?
+                .array()?
                 .iter()
                 .position(|e| {
                     e.get("episode_id")
-                        .is_some_and(|v| v.as_str().is_ok_and(|s| s == id))
+                        .is_some_and(|v| v.string().is_ok_and(|s| s == id))
                 })
                 .ok_or_else(|| Error::contract("missing manifest episode"))?;
             let index = if session.operation == "index" {
@@ -684,8 +711,8 @@ pub fn scan(session: &mut Session) -> Result<Stage> {
             };
             stage.episodes.push(Episode {
                 path,
-                run: Text::from_str(string(journal.header, "run_id")?, budget)?,
-                game: Text::from_str(string(journal.header, "game_id")?, budget)?,
+                run: (string(journal.header, "run_id")?).to_owned(),
+                game: (string(journal.header, "game_id")?).to_owned(),
                 viewer: learner as i64,
                 split,
                 winner,
@@ -719,9 +746,9 @@ pub fn scan(session: &mut Session) -> Result<Stage> {
             &mut stage.episodes,
             |a, b| {
                 a.run
-                    .bytes()
-                    .cmp(b.run.bytes())
-                    .then(a.game.bytes().cmp(b.game.bytes()))
+                    .as_bytes()
+                    .cmp(b.run.as_bytes())
+                    .then(a.game.as_bytes().cmp(b.game.as_bytes()))
                     .then(a.viewer.cmp(&b.viewer))
             },
             control,
@@ -764,7 +791,7 @@ pub fn scan(session: &mut Session) -> Result<Stage> {
             action_hash
                 .as_ref()
                 .ok_or_else(|| Error::contract("no action conditions"))?
-                .as_str()?,
+                .as_str(),
         )?
     };
     if let Some(dataset) = &session.dataset {
@@ -802,7 +829,7 @@ pub fn scan(session: &mut Session) -> Result<Stage> {
                     action_hash
                         .as_ref()
                         .ok_or_else(|| Error::contract("no source action conditions"))?
-                        .as_str()?,
+                        .as_str(),
                     budget,
                 )?,
             ),
@@ -906,9 +933,9 @@ fn check_global(
         identities,
         |a, b| {
             a.run
-                .bytes()
-                .cmp(b.run.bytes())
-                .then(a.game.bytes().cmp(b.game.bytes()))
+                .as_bytes()
+                .cmp(b.run.as_bytes())
+                .then(a.game.as_bytes().cmp(b.game.as_bytes()))
                 .then(a.viewer.cmp(&b.viewer))
         },
         control,
@@ -929,9 +956,9 @@ fn check_global(
     let mut keys = BudgetVec::with_capacity(budget, lineages.len() * 2)?;
     for (index, lineage) in lineages.iter().enumerate() {
         control.check()?;
-        keys.push((0u8, lineage.seed.bytes(), index))?;
+        keys.push((0u8, lineage.seed.as_bytes(), index))?;
         if let Some(ancestry) = &lineage.ancestry {
-            keys.push((1, ancestry.bytes(), index))?;
+            keys.push((1, ancestry.as_bytes(), index))?;
         }
     }
     crate::budget::sort_by(&mut keys, |a, b| a.0.cmp(&b.0).then(a.1.cmp(b.1)), control)?;
@@ -1107,7 +1134,7 @@ impl Stage {
         batch.candidate_offsets.push(0)?;
         let mut decision_offset = 0i64;
         let mut candidate_offset = 0i64;
-        let mut metadata = BudgetVec::new(budget);
+        let mut metadata = Vec::new();
         for episode in &self.episodes[start..end] {
             control.check()?;
             let _read_buffer = budget.reserve(32768)?;
@@ -1158,11 +1185,11 @@ impl Stage {
             batch.split.push(episode.split)?;
             metadata.push(json::object(
                 [
-                    ("run_id", json::text(episode.run.as_str()?, budget)?),
-                    ("game_id", json::text(episode.game.as_str()?, budget)?),
+                    ("run_id", json::text(episode.run.as_str(), budget)?),
+                    ("game_id", json::text(episode.game.as_str(), budget)?),
                 ],
                 budget,
-            )?)?;
+            )?);
         }
         let metadata = json::object(
             [

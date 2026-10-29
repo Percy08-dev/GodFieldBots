@@ -1,5 +1,9 @@
 # Native preprocessing verification
 
+Historical initial custom-parser implementation evidence. The production Serde
+migration supersedes its JSON resource/parser implementation; current measurements
+and audit are in [Serde adoption](serde-json-adoption.md), governed by ADR0012.
+
 Design: [ADR0011](../adr/0011-native-preprocessing.md). Implementation at
 `01665840720064050ffc54d2855a67dce4ec8c82`; final acceptance on 2026-10-30.
 Independent correctness and implementation-conformance reviews are READY.

@@ -1,4 +1,5 @@
 use gf_native::budget::{Budget, Control, monotonic};
+use gf_native::json::ValueExt;
 use gf_native::json::parse;
 use gf_native::validation::{observation, replay_closure, validate_definition, validate_events};
 
@@ -76,7 +77,7 @@ fn event_definition_and_closure_boundaries() {
 }
 
 #[test]
-fn controlled_validation_releases_scratch_on_budget_and_cancel_failure() {
+fn document_admission_covers_standard_validation_scratch_and_cancellation() {
     use gf_native::error::Error;
     use gf_native::validation::observation_controlled;
     let budget = Budget::new(1024 * 1024);
@@ -89,10 +90,9 @@ fn controlled_validation_releases_scratch_on_budget_and_cancel_failure() {
     .unwrap();
     let original = budget.used();
     let pressure = budget.reserve(budget.limit() - original).unwrap();
-    assert!(matches!(
-        observation_controlled(&value.root, None, &control),
-        Err(Error::ResourceLimit(_))
-    ));
+    // JSON/validation scratch is covered by the document estimate, rather
+    // than a second per-node allocator admission after parsing.
+    observation_controlled(&value.root, None, &control).unwrap();
     drop(pressure);
     assert_eq!(budget.used(), original);
     observation_controlled(&value.root, None, &control).unwrap();
@@ -134,8 +134,7 @@ fn long_event_walk_observes_concurrent_cancellation() {
 
 #[test]
 fn worker_and_journal_iterable_coercions_remain_distinct() {
-    use gf_native::budget::BudgetVec;
-    use gf_native::json::{Text, Value, canonical};
+    use gf_native::json::{Value, canonical};
     use gf_native::validation::{
         validate_journal_input_controlled, validate_worker_input_controlled,
     };
@@ -151,17 +150,17 @@ fn worker_and_journal_iterable_coercions_remain_distinct() {
         unreachable!()
     };
     for (key, value) in fields.iter_mut() {
-        match key.as_str().unwrap() {
+        match key.as_str() {
             "actionable" => *value = Value::Bool(false),
-            "phase" => *value = Value::String(Text::from_str("terminal", &budget).unwrap()),
-            "typed_action_schema" => *value = Value::Array(BudgetVec::new(&budget)),
+            "phase" => *value = Value::String("terminal".to_owned()),
+            "typed_action_schema" => *value = Value::Array(Vec::new()),
             "own" => {
                 let Value::Object(fields) = value else {
                     unreachable!()
                 };
                 for (key, value) in fields.iter_mut() {
                     if key == "hand" {
-                        *value = Value::Array(BudgetVec::new(&budget));
+                        *value = Value::Array(Vec::new());
                     }
                 }
             }

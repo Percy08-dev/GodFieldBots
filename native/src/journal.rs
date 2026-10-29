@@ -1,6 +1,7 @@
 //! Structural journal ledger; reward perspective stays in Python's learning layer.
 use crate::budget::{Budget, BudgetVec, Control};
 use crate::error::{Error, Result};
+use crate::json::ValueExt;
 use crate::json::{Document, Value};
 use crate::validation;
 use std::sync::Arc;
@@ -14,7 +15,7 @@ pub const SCORER_VERSION: &str = "public-content-v1";
 pub const CATALOG_HASH: &str = "481ddfb0c068a1d2aaaf2dbcb6a5b4bd04396dfcc5c995e14e47b71222b6a51d";
 
 pub fn string<'a>(value: &'a Value, key: &str) -> Result<&'a str> {
-    value.require(key)?.as_str()
+    value.require(key)?.string()
 }
 pub fn int(value: &Value, key: &str) -> Result<i128> {
     value.require(key)?.integer(0, u64::MAX as i128)
@@ -32,7 +33,7 @@ fn expect_text(value: &Value, key: &str, expected: &str) -> Result<()> {
     Ok(())
 }
 fn nonempty(value: &Value) -> Result<()> {
-    if value.as_str()?.is_empty() {
+    if value.string()?.is_empty() {
         return Err(Error::contract("nonempty string required"));
     }
     Ok(())
@@ -116,7 +117,7 @@ pub fn validate<'a>(
         expect_text(header, key, expected)?;
     }
     catalog_meta(header.require("catalog")?)?;
-    let mode = header.require("use_action_options")?.as_bool()?;
+    let mode = header.require("use_action_options")?.boolean()?;
     let viewer = header.require("viewer")?.integer(1, 2)?;
     for key in [
         "episode_id",
@@ -212,7 +213,7 @@ pub fn validate<'a>(
                 selection.closed(&["index", "policy_version", "logprob", "value"], &[])?;
                 let selected = usize::try_from(int(selection, "index")?)
                     .map_err(|_| Error::contract("selected index overflow"))?;
-                let actions = candidates.require("actions")?.as_array()?;
+                let actions = candidates.require("actions")?.array()?;
                 if selected >= actions.len() {
                     return Err(Error::contract("invalid stored candidate selection"));
                 }
@@ -269,7 +270,7 @@ pub fn validate<'a>(
                 if Some(index) != last_accepted || terminal_transition.is_some() {
                     return Err(Error::contract("transition lacks last accepted action"));
                 }
-                if record.require("terminal")?.as_bool()? {
+                if record.require("terminal")?.boolean()? {
                     record.require("reward")?.integer(-1, 1)?;
                     if !record.require("next_decision")?.is_null() {
                         return Err(Error::contract("terminal transition has next decision"));
@@ -309,7 +310,7 @@ pub fn validate<'a>(
                 {
                     return Err(Error::contract("invalid journal end/order"));
                 }
-                let pending_values = record.require("pending_decisions")?.as_array()?;
+                let pending_values = record.require("pending_decisions")?.array()?;
                 if let Some(index) = pending {
                     if pending_values.len() != 1
                         || pending_values[0].integer(0, u64::MAX as i128)? != index as i128
@@ -320,7 +321,7 @@ pub fn validate<'a>(
                     return Err(Error::contract("pending request ledger mismatch"));
                 }
                 let reason = record.require("simulator_abort_reason")?;
-                if !reason.is_null() && kind != abort_kind(reason.as_str()?)? {
+                if !reason.is_null() && kind != abort_kind(reason.string()?)? {
                     return Err(Error::contract(
                         "simulator abort cause/projected kind mismatch",
                     ));
@@ -329,7 +330,7 @@ pub fn validate<'a>(
                     let expected = if string(ack, "status")? == "terminal" {
                         "natural"
                     } else if !reason.is_null() {
-                        abort_kind(reason.as_str()?)?
+                        abort_kind(reason.string()?)?
                     } else {
                         "aborted"
                     };

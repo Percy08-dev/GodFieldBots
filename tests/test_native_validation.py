@@ -88,12 +88,14 @@ def test_native_atomic_presence_mode(make_input, mode, present):
     assert check(value.to_dict(), mode) == (mode is None or mode == present)
 
 
-def test_native_unused_text_surrogates_preserve_legacy_acceptance(make_input):
+def test_serde_contract_rejects_unused_surrogates_without_changing_python_reader(make_input):
     raw = make_input().to_dict()
     raw["catalog"]["bronze-club"]["display_name"] = "\ud800"
     raw["catalog"]["bronze-club"]["effect_text"] = "\udc00"
     raw["events"] = [{"type": "status_changed", "player": 1, "status": "\ud800", "active": False}]
-    assert check(raw)
+    reference_validate(raw)
+    with pytest.raises(ValueError):
+        native.validate_input(packed(raw), None, BUDGET, time.monotonic() + 10)
 
 
 def test_native_duplicate_json_keys_keep_last_value(make_input):

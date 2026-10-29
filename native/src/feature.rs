@@ -2,6 +2,7 @@
 use crate::budget::{Budget, BudgetVec, Control, Lease};
 use crate::error::{Error, Result};
 use crate::json::Value;
+use crate::json::ValueExt;
 use crate::validation::{ATTRIBUTES, KINDS, NUMERIC};
 use sha2::{Digest, Sha256};
 use std::fmt::Write;
@@ -66,7 +67,7 @@ impl FeatureConfig {
             &["history", "max_elements", "hash_buckets", "history_window"],
             &[],
         )?;
-        let history = value.require("history")?.as_str()?;
+        let history = value.require("history")?.string()?;
         if !["none", "public_aggregate"].contains(&history) {
             return Err(Error::contract("unsupported encoder history"));
         }
@@ -279,12 +280,12 @@ fn field<'a>(value: Option<&'a Value>, key: &str) -> Option<&'a Value> {
 }
 fn array(value: Option<&Value>) -> Result<&[Value]> {
     match value {
-        Some(v) => v.as_array(),
+        Some(v) => v.array(),
         None => Ok(&[]),
     }
 }
 fn string(value: Option<&Value>) -> Option<&str> {
-    value.and_then(|v| v.as_str().ok())
+    value.and_then(|v| v.as_str())
 }
 fn number(value: Option<&Value>) -> Result<f64> {
     match value {
@@ -376,45 +377,44 @@ fn definition(
     sink.hash(
         prefix,
         &[".definition."],
-        field(card, "definition_id").into_iter().map(Value::as_str),
+        field(card, "definition_id").into_iter().map(Value::string),
         config.hash_buckets,
     )?;
     sink.hash(
         prefix,
         &[".ability."],
-        field(card, "ability").into_iter().map(Value::as_str),
+        field(card, "ability").into_iter().map(Value::string),
         config.hash_buckets,
     )
 }
 fn bytes(value: &Value) -> Result<&[u8]> {
     if let Value::String(text) = value {
-        Ok(text.bytes())
+        Ok(text.as_bytes())
     } else {
         Err(Error::contract("string reference required"))
     }
 }
 struct Lookup<'a> {
-    catalog: BudgetVec<(&'a [u8], &'a Value)>,
-    hand: BudgetVec<(i128, &'a Value)>,
-    learned: BudgetVec<&'a [u8]>,
-    usable_hand: BudgetVec<i128>,
-    usable_learned: BudgetVec<&'a [u8]>,
+    catalog: Vec<(&'a [u8], &'a Value)>,
+    hand: Vec<(i128, &'a Value)>,
+    learned: Vec<&'a [u8]>,
+    usable_hand: Vec<i128>,
+    usable_learned: Vec<&'a [u8]>,
 }
 impl<'a> Lookup<'a> {
     fn new(input: &'a Value, control: Option<&Control>) -> Result<Self> {
         let Value::Object(entries) = input.require("catalog")? else {
             return Err(Error::contract("catalog object required"));
         };
-        let budget = entries.budget();
-        let mut catalog = BudgetVec::with_capacity(budget, entries.len())?;
+        let mut catalog = Vec::with_capacity(entries.len());
         for (key, card) in entries.iter() {
             poll(control)?;
-            catalog.push((key.bytes(), card))?;
+            catalog.push((key.as_bytes(), card));
         }
         crate::validation::sort_controlled(&mut catalog, control, |a, b| a.0.cmp(b.0))?;
         let own = input.require("observation")?.require("own")?;
-        let entries = own.require("hand")?.as_array()?;
-        let mut hand = BudgetVec::with_capacity(budget, entries.len())?;
+        let entries = own.require("hand")?.array()?;
+        let mut hand = Vec::with_capacity(entries.len());
         for card in entries {
             poll(control)?;
             let reference = bytes(card.require("definition_id")?)?;
@@ -424,14 +424,14 @@ impl<'a> Lookup<'a> {
             hand.push((
                 card.require("instance_id")?.integer(0, u64::MAX as i128)?,
                 catalog[index].1,
-            ))?;
+            ));
         }
         crate::validation::sort_controlled(&mut hand, control, |a, b| a.0.cmp(&b.0))?;
-        let entries = own.require("learned_miracles")?.as_array()?;
-        let mut learned = BudgetVec::with_capacity(budget, entries.len())?;
+        let entries = own.require("learned_miracles")?.array()?;
+        let mut learned = Vec::with_capacity(entries.len());
         for reference in entries {
             poll(control)?;
-            learned.push(bytes(reference)?)?;
+            learned.push(bytes(reference)?);
         }
         crate::validation::sort_controlled(&mut learned, control, Ord::cmp)?;
         let options = input
@@ -439,17 +439,17 @@ impl<'a> Lookup<'a> {
             .filter(|v| !v.is_null())
             .and_then(|v| v.get("action_options"));
         let entries = array(field(options, "usable_hand_elements"))?;
-        let mut usable_hand = BudgetVec::with_capacity(budget, entries.len())?;
+        let mut usable_hand = Vec::with_capacity(entries.len());
         for reference in entries {
             poll(control)?;
-            usable_hand.push(reference.integer(0, u64::MAX as i128)?)?;
+            usable_hand.push(reference.integer(0, u64::MAX as i128)?);
         }
         crate::validation::sort_controlled(&mut usable_hand, control, Ord::cmp)?;
         let entries = array(field(options, "usable_learned_miracles"))?;
-        let mut usable_learned = BudgetVec::with_capacity(budget, entries.len())?;
+        let mut usable_learned = Vec::with_capacity(entries.len());
         for reference in entries {
             poll(control)?;
-            usable_learned.push(bytes(reference)?)?;
+            usable_learned.push(bytes(reference)?);
         }
         crate::validation::sort_controlled(&mut usable_learned, control, Ord::cmp)?;
         Ok(Self {
@@ -489,7 +489,7 @@ fn hand_reference<'a>(lookup: &Lookup<'a>, key: &'a Value) -> Result<Reference<'
     })
 }
 fn typed_reference<'a>(lookup: &Lookup<'a>, value: &'a Value) -> Result<Reference<'a>> {
-    match value.require("source")?.as_str()? {
+    match value.require("source")?.string()? {
         "hand_artifact" => {
             value.closed(&["source", "instance_id"], &[])?;
             hand_reference(lookup, value.require("instance_id")?)
@@ -517,7 +517,7 @@ fn references<'a>(
     action: &'a Value,
     config: &FeatureConfig,
 ) -> Result<([Option<Reference<'a>>; 3], usize)> {
-    let tag = action.require("type")?.as_str()?;
+    let tag = action.require("type")?.string()?;
     action.closed(
         match tag {
             "pray" => &["type"],
@@ -542,7 +542,7 @@ fn references<'a>(
         }
     }
     if let Some(accept) = action.get("accept") {
-        accept.as_bool()?;
+        accept.boolean()?;
     }
     for key in ["hp", "mp", "money"] {
         if let Some(value) = action.get(key) {
@@ -554,10 +554,10 @@ fn references<'a>(
     }
     let mut output = [None; 3];
     let elements = match tag {
-        "play_sequence" => Some((action.require("ordered_elements")?.as_array()?, true)),
-        "respond_sequence" => Some((action.require("ordered_defenses")?.as_array()?, true)),
-        "respond" => Some((action.require("ordered_defenses")?.as_array()?, false)),
-        "discard" | "sacrifice" => Some((action.require("instance_ids")?.as_array()?, false)),
+        "play_sequence" => Some((action.require("ordered_elements")?.array()?, true)),
+        "respond_sequence" => Some((action.require("ordered_defenses")?.array()?, true)),
+        "respond" => Some((action.require("ordered_defenses")?.array()?, false)),
+        "discard" | "sacrifice" => Some((action.require("instance_ids")?.array()?, false)),
         _ => None,
     };
     let count;
@@ -646,7 +646,7 @@ fn calculate(
                 guardian
                     .filter(|v| !v.is_null())
                     .into_iter()
-                    .map(Value::as_str),
+                    .map(Value::string),
                 config.hash_buckets,
             )?;
             sink.put(
@@ -729,14 +729,14 @@ fn calculate(
             sink.hash(
                 prefix,
                 &[".definitions."],
-                cards().map(|card| card?.require("definition_id")?.as_str()),
+                cards().map(|card| card?.require("definition_id")?.string()),
                 config.hash_buckets,
             )?;
             sink.hash(
                 prefix,
                 &[".abilities."],
                 cards().filter_map(|card| match card {
-                    Ok(card) => card.get("ability").map(Value::as_str),
+                    Ok(card) => card.get("ability").map(Value::string),
                     Err(error) => Some(Err(error)),
                 }),
                 config.hash_buckets,
@@ -918,7 +918,7 @@ fn calculate(
             &[".definitions."],
             events
                 .iter()
-                .filter_map(|event| event.get("definition_id").map(Value::as_str)),
+                .filter_map(|event| event.get("definition_id").map(Value::string)),
             config.hash_buckets,
         )?;
     }
