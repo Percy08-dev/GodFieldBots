@@ -6,6 +6,7 @@ actions = "../actions/beam.toml"
 training = "../training/lightgbm-fixed-data.toml"
 model = "../models/lightgbm-history.toml"
 opponent = "../models/heuristic.toml"
+preprocessing = "../preprocessing/native.toml"
 
 [run]
 name = "lightgbm-fixed-history"

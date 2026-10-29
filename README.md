@@ -94,7 +94,7 @@ Torchは用途別extraです。`torch`はCPU版、`torch-cuda`はCUDA 13.2版で
 通常のCLIとbaselineはTorchを必要としません。GPU学習でも対戦中の推論はCPUで行います。
 
 ```console
-env -u VIRTUAL_ENV uv sync --extra torch-cuda --extra data --extra lightgbm
+env -u VIRTUAL_ENV uv sync --extra native --extra torch-cuda --extra data --extra lightgbm
 env -u VIRTUAL_ENV uv run --no-sync gf-bots train --config configs/experiments/ppo.toml --mode fresh --run-dir runs/ppo/seed17 --pause-after-update 2
 env -u VIRTUAL_ENV uv run --no-sync gf-bots train --config configs/experiments/ppo.toml --mode resume --run-dir runs/ppo/seed17
 ```
@@ -118,9 +118,9 @@ validationは各64試合で、既存32 seedのうち前半16ペアをRandom、�
 
 ```console
 env -u VIRTUAL_ENV uv run --no-sync gf-bots validate-policy --config configs/experiments/ppo.toml --parent-run runs/ppo-comparison-v2/train-seed17 --output runs/ppo-comparison-v2/validation17
-env -u VIRTUAL_ENV uv run --no-sync gf-bots dataset build --ppo-runs runs/ppo-comparison-v2/train-seed17 runs/ppo-comparison-v2/train-seed29 runs/ppo-comparison-v2/train-seed43 --validation-runs runs/ppo-comparison-v2/validation17 runs/ppo-comparison-v2/validation29 runs/ppo-comparison-v2/validation43 --output runs/ppo-comparison-v2/dataset.json
-env -u VIRTUAL_ENV uv run --no-sync gf-bots dataset inspect runs/ppo-comparison-v2/dataset.json
-env -u VIRTUAL_ENV uv run --no-sync gf-bots dataset index runs/ppo-comparison-v2/dataset.json --output runs/ppo-comparison-v2/index.parquet
+env -u VIRTUAL_ENV uv run --no-sync gf-bots dataset build --ppo-runs runs/ppo-comparison-v2/train-seed17 runs/ppo-comparison-v2/train-seed29 runs/ppo-comparison-v2/train-seed43 --validation-runs runs/ppo-comparison-v2/validation17 runs/ppo-comparison-v2/validation29 runs/ppo-comparison-v2/validation43 --output runs/ppo-comparison-v2/dataset.json --preprocessing-config configs/preprocessing/native.toml
+env -u VIRTUAL_ENV uv run --no-sync gf-bots dataset inspect runs/ppo-comparison-v2/dataset.json --preprocessing-config configs/preprocessing/native.toml
+env -u VIRTUAL_ENV uv run --no-sync gf-bots dataset index runs/ppo-comparison-v2/dataset.json --output runs/ppo-comparison-v2/index.parquet --preprocessing-config configs/preprocessing/native.toml
 env -u VIRTUAL_ENV uv run --no-sync gf-bots train --config configs/experiments/lightgbm-fixed-observation.toml
 env -u VIRTUAL_ENV uv run --no-sync gf-bots train --config configs/experiments/lightgbm-fixed-history.toml
 ```
@@ -130,21 +130,37 @@ validation収集は29／43についても、それぞれ対応する学習seed�
 PPOのvalue／advantageをLightGBMの教師にしません。
 datasetの作成・利用時は元journal・Replay・親runを再検証します。
 
-前処理は試合単位で検証・変換・解放し、メモリと一時領域の予算を管理します。
+PPOと固定データLightGBMのpresetは共通のRust前処理を使います。
+Rustがjournal・Replay・来歴・特徴変換を処理し、Pythonが報酬・教師・GAE・学習を担当します。
+`native` extraは独立したMaturin packageです。ソースからの導入にはRust toolchainが必要です。
+baselineには追加依存は不要です。
+
+```sh
+env -u VIRTUAL_ENV uv sync --extra native --extra data --extra lightgbm --extra torch-cuda
+```
+
+前処理は予算内の試合群を繰り返し検証・変換・解放し、メモリと一時領域を管理します。
+処理単位あたりの数値データ受け渡しは1回のFFI呼び出しで、NumPyがRustの配列を共有します。
+生存中のviewも予算に計上します。Rust内部のコピーやファイル書き出しは別に残ります。
 標準設定はメモリ8GiB・処理単位64MiBです。固定83,783行で検証した
 2GiB・16MiBの設定もあります。これらは前処理の管理上限であり、OSのhard quotaや
 LightGBM native fitのメモリ上限ではありません。
 
 ```sh
-env -u VIRTUAL_ENV uv run --no-sync gf-bots dataset inspect runs/ppo-comparison-v2/dataset.json --preprocessing-config configs/preprocessing/low-memory.toml
+env -u VIRTUAL_ENV uv run --no-sync gf-bots dataset inspect runs/ppo-comparison-v2/dataset.json --preprocessing-config configs/preprocessing/native-low-memory.toml
 env -u VIRTUAL_ENV uv run --no-sync gf-bots train --config configs/experiments/lightgbm-fixed-history.toml --set preprocessing.memory_budget_mib=2048 --set preprocessing.chunk_target_mib=16
 ```
 
-実験presetからは `[references] preprocessing="../preprocessing/low-memory.toml"`
-で参照できます。`dataset index --output`は出力と`.json` sidecarの両方が未作成の
+実験presetからは `[references] preprocessing="../preprocessing/native-low-memory.toml"`
+で参照できます。Python比較実装は学習CLIの`--set preprocessing.backend='"python"'`、
+dataset CLIの`configs/preprocessing/low-memory.toml`で明示できます。
+dataset CLIは設定を省略すると互換用のPython設定を使います。Rust失敗時の自動fallbackはありません。
+standalone datasetの`--address-space-limit-mib`は任意の`RLIMIT_AS`設定です。
+RSSではなく仮想アドレス空間を制限し、学習・CUDA子プロセスには適用しません。
+`dataset index --output`は出力と`.json` sidecarの両方が未作成の
 パスを要求します。再生成時は新しい出力先を指定してください。
-設定・互換性は[ADR0010](docs/adr/0010-budgeted-preparation-and-encoding.md)、
-時間・CPU・メモリ・ストレージの比較は[検証記録](docs/verification/budgeted-preparation.md)
+設定・互換性は[ADR0011](docs/adr/0011-native-preprocessing.md)、
+時間・CPU・メモリ・ストレージ・コピー回数の比較は[Rust前処理の検証記録](docs/verification/native-preprocessing.md)
 を参照してください。
 固定データ方式では検証・特徴変換・fit・保存・回収を各fitの2時間へ含め、共有データ生成費を別途報告します。
 従来の生成費込み方式と記録schemaで区別し、PPOと総費用が同条件だったとは扱いません。

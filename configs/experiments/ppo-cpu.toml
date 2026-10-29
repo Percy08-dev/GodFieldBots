@@ -7,6 +7,7 @@ actions = "../actions/beam.toml"
 model = "../models/mlp.toml"
 opponent = "../models/heuristic.toml"
 training = "../training/ppo-cpu.toml"
+preprocessing = "../preprocessing/native.toml"
 
 [run]
 name = "mlp-ppo-cpu"

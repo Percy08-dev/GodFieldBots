@@ -77,5 +77,23 @@ def test_native_shared_budget_and_explicit_worker_counts():
                                      'max_in_flight': workers, 'memory_budget_mib': 2048})
         assert config.memory_budget_mib == 2048
         assert config.workers == workers and config.max_in_flight == workers
-    assert PreparationConfig().backend == 'python'  # Switch target presets only after acceptance.
+    assert PreparationConfig().backend == 'python'  # Unspecified/reference settings remain Python.
     assert preparation_config({'backend': 'rust', 'native_json_depth': 16}).native_json_depth == 16
+
+
+@pytest.mark.parametrize('name', ['ppo', 'ppo-cpu', 'lightgbm-fixed-observation', 'lightgbm-fixed-history'])
+def test_rollout_presets_resolve_native_defaults_and_explicit_overrides(name):
+    path = f'configs/experiments/{name}.toml'
+    native = load_config(path).config.preprocessing
+    assert (native.backend, native.memory_budget_mib, native.chunk_target_mib,
+            native.workers, native.max_in_flight) == ('rust', 8192, 64, 1, 1)
+
+    reference = load_config(path, {'preprocessing': {'backend': 'python'}}).config.preprocessing
+    assert reference.backend == 'python'
+    assert (reference.memory_budget_mib, reference.chunk_target_mib, reference.workers) == (8192, 64, 1)
+
+    low_memory = load_preprocessing_config('configs/preprocessing/native-low-memory.toml')
+    assert (low_memory.backend, low_memory.memory_budget_mib, low_memory.chunk_target_mib,
+            low_memory.workers, low_memory.max_in_flight) == ('rust', 2048, 16, 1, 1)
+    resolved = load_config(path, {'preprocessing': asdict(low_memory)}).config.preprocessing
+    assert resolved == low_memory

@@ -4,16 +4,20 @@
 
 [ADR0011](adr/0011-native-preprocessing.md) specifies the user-approved migration
 of offline preprocessing and PPO post-collection ingestion to a common Rust core.
-The scoped production design has independent architecture READY; dependency and
-base-owner compatibility checks precede implementation. This work is in progress,
-not native implementation/performance acceptance. Python remains the learning
-authority. Live participant worker migration remains a separate completion unit.
+The implementation and independent correctness/conformance reviews are accepted.
+Full-corpus/index equivalence, installed wheels,751Python/31Rust tests, three
+paired preparations (2.682x), an exact reference fit and real CUDA pause/resume
+checks pass. Python remains the learning authority. Target PPO/fixed-LightGBM
+presets select Rust; dataset CLI selects a native preprocessing preset explicitly.
+Live participant worker migration remains a separate completion unit. Measured
+scratch/write traffic increases; see [native verification](verification/native-preprocessing.md).
 
 [ADR0010](adr/0010-budgeted-preparation-and-encoding.md) specifies budgeted
 offline preparation and per-decision feature reuse. Implementation, independent
 reviews, paired wall/CPU/memory/storage measurements and exact output equivalence
 are accepted. The two remaining fits are complete; the prior four fits and frozen
-dataset remain unchanged. The measured native feasibility screen retains Python.
+dataset remain unchanged. Its historical native feasibility screen retained Python;
+ADR0011 supersedes that implementation choice after broader native verification.
 See the
 [performance verification record](verification/budgeted-preparation.md).
 

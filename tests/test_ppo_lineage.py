@@ -18,7 +18,7 @@ from tests.lightgbm_support import synthetic_run
 
 
 def configuration(tmp_path, max_updates=2, seed=17):
-    loaded = load_config('configs/experiments/ppo-cpu.toml')
+    loaded = load_config('configs/experiments/ppo-cpu.toml', {'preprocessing': {'backend': 'python'}})
     config = replace(loaded.config, training=replace(loaded.config.training, seeds=(seed,), max_updates=max_updates))
     return LoadedConfig(config, asdict(config), digest(asdict(config)), ())
 

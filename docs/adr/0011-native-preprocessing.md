@@ -1,6 +1,6 @@
 # 0011: Shared Rust preprocessing with Python-owned learning
 
-- Status: Proposed; user authorized implementation on 2026-10-29.
+- Status: Accepted on 2026-10-30; user authorized implementation on 2026-10-29.
 - Owner: root. Resolved boundary design independently reviewed READY for planning.
 - Production design gate: independent architecture READY for scoped units;
   dependency pins and disposable owner/compatibility checks must pass first.
@@ -11,6 +11,11 @@
   `/tmp/gfb-native-probe`. Prototype code is not automatically production code.
 - Supersedes ADR0010's bounded native feasibility scope, not its historical evidence.
 - Reference: clean `42ce5e6`, Python3.14.9/GIL, NumPy2.5.4, Rust1.99.0.
+- Acceptance: independent correctness and conformance READY;751Python/31Rust
+  tests, installed-wheel/baseline checks, exact full-corpus/index equivalence,
+  three paired preparations (2.682x), one exact reference fit and real CUDA
+  two-update/pause-resume verification PASS. See
+  [verification](../verification/native-preprocessing.md).
 
 ## Scope and responsibility
 
@@ -193,8 +198,10 @@ If compatibility fails, root revises before dependent production implementation.
 
 Record loaded extension digest, Cargo/build identity, ABI and recipe identity in
 fit provenance and PPO resume identity. Backend/native upgrade rejects ordinary
-resume. Keep Python default until acceptance; switch only target presets after
-all gates. Missing native dependencies fail preflight, before collection/source work.
+resume. The CUDA/CPU PPO and two fixed-LightGBM target presets select native after
+acceptance. Standalone dataset commands select a native preprocessing preset
+explicitly; library/default reference settings retain Python compatibility.
+Missing native dependencies fail preflight, before collection/source work.
 
 Implementation units: packaging/ownership foundation; parser+validation; feature
 and offline integration; PPO ingestion; independent acceptance/performance rollout.
@@ -224,3 +231,16 @@ Preserve six fits, reproduce one reference fit, and run bounded real two-update
 PPO/normal-boundary resume checks; no new three-parent campaign or finaltest.
 Run pytest/Rust tests/ruff/mypy, installed wheels, baseline without native and
 independent reviews. Never weaken validation to meet performance targets.
+
+## Accepted consequences and follow-up conditions
+
+The complete history preparation is2.682x faster with lower measured RSS; the
+remaining largest instrumented phase is JSON/DTO decoding. NumPy numerical
+exports have pointer-verified zero copies at the FFI boundary, while Rust internal
+buffer growth/extensions and compatible NPZ staging still copy data. Raw native
+spools increase sampled maximum scratch from0.87GiB to1.73GiB and kernel-accounted
+write traffic approximately doubles. Accept this measured cost within the8GiB
+scratch budget. Revisit direct buffer reuse/spooling when measured decode/copy/I/O
+cost prevents the next workload's practical target; preserve exact outputs,
+Python learning ownership and source validation. Live inference migration and
+final-test evaluation remain separate work.
