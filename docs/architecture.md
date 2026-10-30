@@ -12,6 +12,12 @@ to378/382/420/502MiB under the unchanged2GiB soft budget. Defaults/main wheel
 remain unchanged. [Verification](verification/parallel-borrowed-journal.md) also
 separates dispatch/join from validation and documents short-thread profile limits.
 
+A subsequent [isolated8/16/32parse experiment](verification/journal-parse-scaling.md)
+holds read workers4 and resident episodes32 fixed. Parse medians2.264/1.926/1.859s
+show diminishing gain:16to32 saves3.45%, with higher CPU and command peak RSS.
+The private release harness preserves the parser/scheduler and does not introduce
+an independent production parse-workers Config or an end-to-end speed claim.
+
 [ADR0017](adr/0017-combined-borrowed-journal-practicality.md) implements a verified
 opt-in mimalloc/borrowed-Journal candidate. Scoped ownership, complete typed
 semantic/feature parity, saved PPO inputs, lifecycle checks and all48actual-path
