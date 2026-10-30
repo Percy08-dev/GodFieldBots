@@ -14,6 +14,10 @@ diagnostics, not a wall partition. Logical slots/active job overlap are distinct
 from persistent threads/CPU utilization. Fork/window/join, ordered serial feature
 processing, shared quotas and publication ownership remain unchanged. Evidence:
 [wall attribution and scaling](verification/wall-attribution-and-worker-scaling.md).
+An unchanged-source release/symbols diagnostic now adds
+[function-level CPU profiles](verification/function-profiling.md). It identifies
+JSON allocation and document-release allocator costs with caller-filtered stacks;
+sampled CPU estimates are distinct from elapsed/I/O-wait measurements.
 
 [ADR0014](adr/0014-bulk-numeric-io-and-episode-lookups.md) adopts bounded bulk
 f64/i64 I/O and per-collection episode indexes. Design and code-conformance review
