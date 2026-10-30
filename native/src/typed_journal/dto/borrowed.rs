@@ -2,6 +2,7 @@
 use super::contract::*;
 use super::text::Text;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 #[derive(Debug, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Outcome {
@@ -467,7 +468,7 @@ pub struct Observation<'a> {
     pub r#action_schema_version: u32,
     pub r#actionable: bool,
     #[serde(borrow)]
-    pub r#typed_action_schema: Vec<Schema<'a>>,
+    pub r#typed_action_schema: Arc<Vec<Schema<'a>>>,
     pub r#state_revision: u64,
     pub r#viewer_player_id: Player,
     pub r#turn: u32,
@@ -637,7 +638,7 @@ impl<'a> Validate for AtomicOptions<'a> {
         Ok(())
     }
 }
-#[derive(Debug, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Input<'a> {
     #[serde(borrow)]
@@ -647,11 +648,49 @@ pub struct Input<'a> {
     #[serde(deserialize_with = "super::text::required_nullable", borrow)]
     pub r#history_end: Option<Text<'a>>,
     #[serde(borrow)]
-    pub r#typed_metadata: Vec<Schema<'a>>,
+    pub r#typed_metadata: Arc<Vec<Schema<'a>>>,
     #[serde(borrow)]
     pub r#catalog: UniqueMap<Text<'a>, Definition<'a>>,
     #[serde(deserialize_with = "super::text::required_nullable", borrow)]
     pub r#action_options: Option<AtomicOptions<'a>>,
+}
+#[derive(Deserialize)]
+#[serde(rename = "Input", deny_unknown_fields)]
+struct InputWire<'a> {
+    #[serde(borrow)]
+    pub r#observation: Observation<'a>,
+    #[serde(borrow)]
+    pub r#events: Vec<Event<'a>>,
+    #[serde(deserialize_with = "super::text::required_nullable", borrow)]
+    pub r#history_end: Option<Text<'a>>,
+    #[serde(borrow)]
+    pub r#typed_metadata: Arc<Vec<Schema<'a>>>,
+    #[serde(borrow)]
+    pub r#catalog: UniqueMap<Text<'a>, Definition<'a>>,
+    #[serde(deserialize_with = "super::text::required_nullable", borrow)]
+    pub r#action_options: Option<AtomicOptions<'a>>,
+}
+impl<'de: 'a, 'a> Deserialize<'de> for Input<'a> {
+    fn deserialize<D: serde::Deserializer<'de>>(decoder: D) -> Result<Self, D::Error> {
+        InputWire::deserialize(decoder).map(Self::from_wire)
+    }
+}
+impl<'a> Input<'a> {
+    fn from_wire(wire: InputWire<'a>) -> Self {
+        let typed_metadata = if wire.typed_metadata == wire.observation.typed_action_schema {
+            Arc::clone(&wire.observation.typed_action_schema)
+        } else {
+            wire.typed_metadata
+        };
+        Self {
+            observation: wire.observation,
+            events: wire.events,
+            history_end: wire.history_end,
+            typed_metadata,
+            catalog: wire.catalog,
+            action_options: wire.action_options,
+        }
+    }
 }
 impl<'a> Input<'a> {
     fn presence(&self) -> [(&'static str, bool); 6] {
@@ -670,7 +709,9 @@ impl<'a> Validate for Input<'a> {
         self.r#observation.validate()?;
         self.r#events.validate()?;
         self.r#history_end.validate()?;
-        self.r#typed_metadata.validate()?;
+        if !Arc::ptr_eq(&self.typed_metadata, &self.observation.typed_action_schema) {
+            self.typed_metadata.validate()?;
+        }
         self.r#catalog.validate()?;
         self.r#action_options.validate()?;
         Ok(())

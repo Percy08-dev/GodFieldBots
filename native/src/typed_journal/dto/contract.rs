@@ -1,7 +1,7 @@
 //! Representation-independent scalar/presence checks; no JSON grammar implementation.
 use super::text::Text;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, sync::Arc};
 
 pub trait Validate {
     fn validate(&self) -> Result<(), String>;
@@ -110,6 +110,11 @@ impl<T: Validate> Validate for Vec<T> {
             v.validate()?;
         }
         Ok(())
+    }
+}
+impl<T: Validate + ?Sized> Validate for Arc<T> {
+    fn validate(&self) -> Result<(), String> {
+        self.as_ref().validate()
     }
 }
 impl<T: Validate> Validate for Box<T> {

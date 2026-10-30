@@ -125,9 +125,90 @@ adoption disagreement. Do not add a global or configurable polling mechanism.
 Use Stage2 as the next accepted comparison baseline. Stage-to-stage percentages
 come from fresh controls and must not be multiplied into a claimed total speedup.
 
+## Stage3a: accepted schema sharing under shared load
+
+Candidate source`89385a40697e091ae895f37f893937484d2993330bc0126d3c9e34b06868d2c3`,
+ELF`d876348047f473f85339bf272a570cd110490d0795fff413d23ca4c12ae304e9`.
+Control is accepted Stage2source`d9413ab...`/ELF`c8f35f...`.
+
+Borrowed Observation and Input schema fields retain an Arc-backed collection.
+The generated closed six-field wire adapter decodes both fields normally before
+complete structural equality permits sharing. Observation validates first; only
+pointer-identical immutable schemas avoid a second shape traversal. Unequal
+metadata retains its original validation and mismatch rejection. Serialize still
+emits both fields. The initial two deserializations remain; no raw/lazy parser,
+cross-input cache, source-format or Config change is included. Native/standalone
+Serde enable matching rc support; dependency versions, locks and AP stay fixed.
+
+### Executed correctness gates
+
+- Native mimalloc Rust79PASS/2ignored; standalone AP/noAP contract tests15PASS
+  each. Direct Stage2 compatibility oracle9PASS in each mode, including132depth
+  boundary fixtures, unknown/duplicate/numeric/serialization/pointer/lifetime
+  cases. Generator regeneration, formatting, Ruff and diff checks pass.
+- Final isolated wheel:826Python tests PASS/5conditional skips,525.01s. This ran
+  while external work was active and is correctness evidence only.
+- Both frozen feature recipes,83,783-row Parquet index and actual saved current-v2
+  PPO at1/4workers preserve exact original arrays, hashes and source proofs. All
+  five sequential jobs in`stage3a-verification-retry/` pass,64.031s. Diagnostic PPO
+  clones remain at zero updates. An earlier copied harness selected the Stage1
+  site; its identity guard failed. That attempt is retained and excluded from
+  Stage3a evidence, rather than relabelled as a successful candidate run.
+- Independent source correctness and architecture conformance READY; independent
+  final measurement audit PASS with no blocking findings.
+
+### Authorized shared-load comparison
+
+The user requested advance notice because another heavy task was active, then
+authorized this trial while reporting roughly20% all-core CPU usage. Notice was
+given before execution. Same83,783history rows, releaseopt3/debug0 mimalloc,
+4workers/inflight4 and2048/512/16MiBmemory/cache/chunk; one warmup and five
+alternating fresh-process trials per variant. No own build/test/edit ran during
+timing. The background workload was not controlled. All12commands and final
+source/protected-model/main/code checks pass; all timing ledgers reconcile.
+
+| Metric | Stage2 control | Stage3a |
+| --- | ---: | ---: |
+| Whole median [range] s |19.770 [19.374,20.109]|19.094 [18.746,19.611]|
+| OS-reported CPU median s |17.583|16.763|
+| Maximum workload-self kernel peak RSS MiB |429.92|423.91|
+| Median workload-self peak RSS MiB |428.73|394.38|
+| Median post-release RSS MiB |295.58|295.02|
+| Median post-release PSS MiB |287.51|286.66|
+| Managed peak bytes |1,605,390,806|1,605,390,806|
+
+Whole median improves0.675946s/3.419123%. All five paired wall gains are
+0.653000/0.445316/0.498159/0.675946/0.702815s. Journal-validation improves in
+every pair by0.362375–0.433695s; its measured ranges separate2.811832–2.869000s
+versus2.423769–2.465289s. The actual median-whole trials are trial3in both variants:
+validation2.868999516->2.435304361s, typed parse dispatch/join4.621195655->
+4.440023088s and temporary release2.378485893->2.138978186s. These are
+representative trials, not independently selected stage medians or a causal
+partition of the median gain.
+
+Maximum peak RSS falls6.01MiB and median peak34.34MiB; coarse admission estimates
+do not change with actual tree sharing. Scratch/output formats and logical
+content do not change. Sampled storage peaks and OS I/O counters are retained
+in the report; differing samples are not evidence of storage savings. The many
+logical reads with few charged device reads are consistent with a warm page
+cache; no25-second physical I/O wait or disk bottleneck is established.
+
+Guest aggregate CPU busy across the ten measured commands is10.63–11.12%
+(9.85–11.12%including warmups). It includes this workload and other guest work;
+it does not quantify the user's Windows Task Manager report. Reported process CPU
+median falls4.67%, but CPU API uncertainty remains and physical attribution is
+not established. Whole ranges overlap and shared load limits generalization.
+
+Decision: retain this bounded schema-sharing change for consistent paired/target
+elapsed gains and lower measured peak memory in this authorized shared-load
+environment. No uncontended or generalized speedup is claimed. Artifacts:
+`stage3a-primary-shared-load/{freeze,plan,results,completion,summary,stage-attribution}.json`
+and its sibling log. Do not multiply stage percentages from different controls
+into a claimed total speedup. Additional performance work requires advance notice.
+
 ## Remaining sequence
 
-Stage3 schema sharing, Stage4 history representation and Stage5
+Stage4 history representation and Stage5
 supply/pool work remain separately scoped under ADR0019. Their implementation,
 measurement and adoption decisions are pending; this report is not a completion
 claim for those later stages.

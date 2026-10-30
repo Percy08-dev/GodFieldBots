@@ -18,7 +18,7 @@ ndarray = "=0.17.2"
 sha2 = "=0.10.9"
 ryu = "=1.0.23"
 libc = "=0.2.191"
-serde = { version = "=1.0.229", features = ["derive"] }
+serde = { version = "=1.0.229", features = ["derive", "rc"] }
 serde_json = { version = "=1.0.151", features = ["arbitrary_precision", "float_roundtrip"] }
 bytemuck = "=1.25.2"
 mimalloc = { version = "=0.1.52", optional = true, features = ["local_dynamic_tls"] }

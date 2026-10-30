@@ -11,6 +11,12 @@ peak420->422MiB; Config budgets unchanged. Later stages remain separately gated.
 Stage2 retains a small local removal of adjacent history checks:16.972->16.729s
 (1.43%), all five alternating paired/target-phase wins, exact outputs and guards.
 Whole ranges overlap; no generalized or physical CPU improvement is claimed.
+Stage3a shares equal, strictly decoded schema trees within each borrowed Input.
+Both fields still deserialize normally; only shared immutable shape validation
+and retained storage are reused. Under the user-authorized competing workload,
+whole median19.770->19.094s (3.42%), with five paired wins; median peak RSS
+428.73->394.38MiB. All output proofs,826Python tests and independent reviews pass.
+This is evidence under shared load; uncontended performance remains unmeasured.
 
 A subsequent [root-cause investigation](verification/preprocessing-root-cause.md)
 keeps production unchanged and separates graph/task supply, repeated input/history

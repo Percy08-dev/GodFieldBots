@@ -128,7 +128,7 @@ not bypass checkpoint/environment identity checks. Report each stage separately.
 | --- | --- | --- |
 |1single-pass history|ACCEPTED|14.15%wholewall gain, exactoutputs; verificationrecord|
 |2polling|ACCEPTED local coalescence|1.43%wholemedian/5pairedwins; no globalpollchange|
-|3schema sharing|pending gated design|no format/acceptance assumptions approved|
+|3schema sharing|ACCEPTED Stage3a|3.42%wholemedian under authorized shared load; median peak RSS -34.34MiB|
 |4history representation|pending gated design|producer/current-data benefit separate|
 |5supply/pool/streaming|conditional pending|reassess remaining waiting after prior stages|
 
@@ -160,7 +160,18 @@ If the gain is within variation or time/resources regress, reject the candidate
 and keep Stage1. Check counts alone do not justify adoption. Broader clock-polling
 changes stay unapproved unless further evidence makes them consequential.
 
-## Stage3a proposed candidate: post-decode schema sharing
+## Stage3a: accepted post-decode schema sharing
+
+Status: ACCEPTED after independent source, conformance and measurement reviews.
+Accepted Stage2
+`8ae4235`/source`d9413ab...` is the comparison baseline. Native and standalone
+Serde enable matching rc support without dependency-version or AP changes.
+Candidate source`89385a4...`/ELF`d876348...` passes826Python tests(5skips), full
+both-recipe/index/savedPPO1/4parity and independent source reviews. Following
+advance notice, the user explicitly authorized a trial while reporting roughly
+20% all-core CPU usage from another task. This comparison is an explicit exception
+to the uncontended primary protocol above, not evidence of uncontended speed.
+Future performance measurements still require advance notification.
 
 Root chooses a small compatibility-preserving sharing experiment before lazy
 RawValue decoding. The pinned serde_json RawValue path uses iterative ignore_value
@@ -198,3 +209,12 @@ duplicate fields, numeric lexical forms, actual recursion boundaries and direct
 JSON/Value fixture compatibility. Preserve all invalid rejection and source health
 before publication. Run original both-recipe/index/PPO/NumPy lifetime proofs and
 appropriate regression on the final isolated wheel before primary measurements.
+
+All12commands pass the original numeric/source/build/lifecycle proofs. The five
+alternating measured pairs favor the candidate; whole median19.769560->19.093615s
+(3.419123%). Journal-validation ranges separate2.811832–2.869000s versus
+2.423769–2.465289s. Median workload-self peak RSS428.73->394.38MiB and maximum
+429.92->423.91MiB; the coarse managed peak remains1,605,390,806bytes. Independent
+measurement review accepts bounded retention without requiring an uncontended
+rerun. Shared-load and CPU-accounting limits remain explicit. Full evidence:
+[verification](../verification/sequential-preprocessing-optimization.md#stage3a-accepted-schema-sharing-under-shared-load).

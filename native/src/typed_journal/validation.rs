@@ -553,4 +553,144 @@ pub(crate) mod tests {
             assert_eq!(valid(&mutation, true), (false, false));
         }
     }
+    #[test]
+    fn input_schemas_share_only_after_complete_equality_and_preserve_value_decoding() {
+        use serde::Deserialize;
+        use std::borrow::Cow;
+        let value = fixture();
+        let wire = serde_json::to_string(&value).unwrap();
+        let first: Input = serde_json::from_str(&wire).unwrap();
+        let second: Input = serde_json::from_str(&wire).unwrap();
+        assert!(Arc::ptr_eq(
+            &first.typed_metadata,
+            &first.observation.typed_action_schema
+        ));
+        assert_eq!(Arc::strong_count(&first.typed_metadata), 2);
+        assert!(!Arc::ptr_eq(&first.typed_metadata, &second.typed_metadata));
+        let from_value = Input::deserialize(&value).unwrap();
+        assert!(Arc::ptr_eq(
+            &from_value.typed_metadata,
+            &from_value.observation.typed_action_schema
+        ));
+        assert_eq!(serde_json::to_value(&first).unwrap(), value);
+        assert_eq!(serde_json::to_value(&from_value).unwrap(), value);
+        let metadata = serde_json::to_string(&value["typed_metadata"]).unwrap();
+        let escaped = serde_json::to_string_pretty(&value["typed_metadata"])
+            .unwrap()
+            .replace("\"type\"", r#""\u0074ype""#)
+            .replace("\"pray\"", r#""\u0070ray""#);
+        let escaped_wire = wire.replace(
+            &format!("\"typed_metadata\":{metadata}"),
+            &format!("\"typed_metadata\":{escaped}"),
+        );
+        assert_ne!(escaped_wire, wire);
+        let different_encoding: Input = serde_json::from_str(&escaped_wire).unwrap();
+        assert!(Arc::ptr_eq(
+            &different_encoding.typed_metadata,
+            &different_encoding.observation.typed_action_schema
+        ));
+        assert!(matches!(
+            different_encoding.typed_metadata[0]
+                .r#type
+                .value()
+                .unwrap()
+                .0,
+            Cow::Borrowed(_)
+        ));
+        assert_eq!(
+            serde_json::to_vec(&different_encoding).unwrap(),
+            serde_json::to_vec(&first).unwrap()
+        );
+        let budget = Budget::new(128 * 1024 * 1024);
+        let control = Control::new(monotonic() + 30.).unwrap();
+        super::input(&different_encoding, Some(false), &budget, &control).unwrap();
+        assert_eq!(budget.used(), 0);
+    }
+
+    #[test]
+    fn shared_invalid_shapes_still_reject_and_unequal_metadata_keeps_its_validation() {
+        let budget = Budget::new(128 * 1024 * 1024);
+        let control = Control::new(monotonic() + 30.).unwrap();
+        let mut value = fixture();
+        value["typed_metadata"] = serde_json::json!([]);
+        let wire = serde_json::to_vec(&value).unwrap();
+        let unequal: Input = serde_json::from_slice(&wire).unwrap();
+        assert!(!Arc::ptr_eq(
+            &unequal.typed_metadata,
+            &unequal.observation.typed_action_schema
+        ));
+        unequal.validate().unwrap();
+        assert!(
+            matches!(super::input(&unequal, None, &budget, &control), Err(Error::Contract(message)) if message == "worker payload boundary mismatch")
+        );
+        value["typed_metadata"] = serde_json::json!([{"type":"integer"}]);
+        let wire = serde_json::to_vec(&value).unwrap();
+        let invalid_metadata: Input = serde_json::from_slice(&wire).unwrap();
+        assert!(!Arc::ptr_eq(
+            &invalid_metadata.typed_metadata,
+            &invalid_metadata.observation.typed_action_schema
+        ));
+        assert!(invalid_metadata.observation.validate().is_ok());
+        assert!(invalid_metadata.validate().is_err());
+        value["observation"]["typed_action_schema"] = value["typed_metadata"].clone();
+        value["events"] = serde_json::json!([{"type":"unknown_event"}]);
+        let wire = serde_json::to_vec(&value).unwrap();
+        let invalid_shared: Input = serde_json::from_slice(&wire).unwrap();
+        assert!(Arc::ptr_eq(
+            &invalid_shared.typed_metadata,
+            &invalid_shared.observation.typed_action_schema
+        ));
+        assert_eq!(
+            invalid_shared.validate().unwrap_err(),
+            invalid_shared.observation.validate().unwrap_err()
+        );
+        assert_eq!(budget.used(), 0);
+    }
+
+    #[test]
+    fn shared_schema_arc_outlives_record_guard_but_remains_bound_to_external_raw_owner() {
+        fn send_sync<T: Send + Sync>() {}
+        send_sync::<Input<'_>>();
+        send_sync::<Arc<Vec<Schema<'_>>>>();
+        let root = std::env::temp_dir().join(format!(
+            "gf-schema-arc-{}-{}",
+            std::process::id(),
+            monotonic().to_bits()
+        ));
+        std::fs::create_dir(&root).unwrap();
+        let path = root.join("player-1.jsonl");
+        let value = fixture();
+        std::fs::write(
+            &path,
+            serde_json::to_vec(&serde_json::json!({"kind":"decision","input":value})).unwrap(),
+        )
+        .unwrap();
+        let budget = Budget::new(128 * 1024 * 1024);
+        let control = Control::new(monotonic() + 30.).unwrap();
+        let telemetry = crate::telemetry::Telemetry::default();
+        let mut sources =
+            crate::source::Sources::new(budget.clone(), 8 * 1024 * 1024, 8 * 1024 * 1024);
+        let raw = sources.raw_journal(&path, &control).unwrap();
+        let retained = {
+            let records = raw.parse(&control, &telemetry).unwrap();
+            let input = records.records[0].input.value().unwrap();
+            assert!(Arc::ptr_eq(
+                &input.typed_metadata,
+                &input.observation.typed_action_schema
+            ));
+            Arc::clone(&input.typed_metadata)
+        }; // Records/admission guard drops; the raw owner remains external and live.
+        retained.validate().unwrap();
+        assert_eq!(
+            serde_json::to_value(&retained).unwrap(),
+            value["typed_metadata"]
+        );
+        std::thread::scope(|scope| scope.spawn(|| retained.validate().unwrap()).join().unwrap());
+        assert!(budget.used() > 0);
+        drop(retained);
+        drop(raw);
+        drop(sources);
+        assert_eq!(budget.used(), 0);
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }
