@@ -106,10 +106,12 @@ pub enum CoordinatorPhase {
     TemporaryRelease,
     CollectionProof,
     GlobalChecks,
+    PoolWait,
+    OrderedCommit,
     Other,
 }
 impl CoordinatorPhase {
-    const ALL: [Self; 12] = [
+    const ALL: [Self; 14] = [
         Self::CollectionSetup,
         Self::DecodeWaitMerge,
         Self::TypedParseWait,
@@ -121,6 +123,8 @@ impl CoordinatorPhase {
         Self::TemporaryRelease,
         Self::CollectionProof,
         Self::GlobalChecks,
+        Self::PoolWait,
+        Self::OrderedCommit,
         Self::Other,
     ];
     fn name(self) -> &'static str {
@@ -136,6 +140,8 @@ impl CoordinatorPhase {
             Self::TemporaryRelease => "episode_and_collection_temporary_release",
             Self::CollectionProof => "collection_source_proof_check",
             Self::GlobalChecks => "global_identity_split_source_manifest_checks",
+            Self::PoolWait => "episode_pool_wait",
+            Self::OrderedCommit => "episode_ordered_commit",
             Self::Other => "other",
         }
     }
@@ -144,7 +150,7 @@ impl CoordinatorPhase {
 struct WallState {
     current: CoordinatorPhase,
     since: Instant,
-    ns: [u64; 12],
+    ns: [u64; 14],
 }
 /// Single-coordinator stopwatch; Cell borrows never span any application hook.
 /// The final Drop charges all remaining elapsed time, including error unwinding.
@@ -272,7 +278,81 @@ impl Drop for ParseJob<'_> {
 #[cfg(test)]
 type ParseHook = std::sync::Arc<dyn Fn(usize, bool) + Send + Sync>;
 #[derive(Default)]
+struct EpisodePipeline {
+    threads_started: AtomicU64,
+    threads_exited: AtomicU64,
+    collections: AtomicU64,
+    admitted: AtomicU64,
+    completed: AtomicU64,
+    committed: AtomicU64,
+    failed: AtomicU64,
+    active: AtomicU64,
+    active_peak: AtomicU64,
+    outstanding_peak: AtomicU64,
+    reorder_peak: AtomicU64,
+    slots: [WorkerSlot; 8],
+    phases: [AtomicU64; 14],
+}
+/// Nested exclusive phases within each episode job, including source destruction.
+/// Different jobs overlap; their sums are never the command's wall partition.
+pub(crate) struct EpisodeWall<'a> {
+    telemetry: &'a Telemetry,
+    state: Cell<WallState>,
+}
+impl EpisodeWall<'_> {
+    pub fn set(&self, phase: CoordinatorPhase) {
+        let now = Instant::now();
+        let mut state = self.state.get();
+        state.ns[state.current as usize] += now.duration_since(state.since).as_nanos() as u64;
+        state.since = now;
+        state.current = phase;
+        self.state.set(state);
+    }
+}
+impl Drop for EpisodeWall<'_> {
+    fn drop(&mut self) {
+        self.set(CoordinatorPhase::Other);
+        for (counter, ns) in self
+            .telemetry
+            .episode_pipeline
+            .phases
+            .iter()
+            .zip(self.state.get().ns)
+        {
+            counter.fetch_add(ns, Ordering::Relaxed);
+        }
+    }
+}
+pub(crate) struct EpisodeJob<'a> {
+    telemetry: &'a Telemetry,
+    started: Instant,
+    slot: usize,
+    success: bool,
+}
+impl EpisodeJob<'_> {
+    pub fn success(&mut self) {
+        self.success = true;
+    }
+}
+impl Drop for EpisodeJob<'_> {
+    fn drop(&mut self) {
+        let p = &self.telemetry.episode_pipeline;
+        let slot = &p.slots[self.slot];
+        slot.jobs.fetch_add(1, Ordering::Relaxed);
+        slot.ns
+            .fetch_add(self.started.elapsed().as_nanos() as u64, Ordering::Relaxed);
+        if !self.success {
+            p.failed.fetch_add(1, Ordering::Relaxed);
+            slot.failed.fetch_add(1, Ordering::Relaxed);
+        }
+        p.completed.fetch_add(1, Ordering::Relaxed);
+        p.active.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
+#[derive(Default)]
 pub struct Telemetry {
+    episode_pipeline: EpisodePipeline,
     parse_parallelism: ParseParallelism,
     #[cfg(test)]
     parse_hook: std::sync::Mutex<Option<ParseHook>>,
@@ -280,7 +360,7 @@ pub struct Telemetry {
     typed_journal_files: AtomicU64,
     typed_journal_records: AtomicU64,
     legacy_journal_files: AtomicU64,
-    coordinator_ns: [AtomicU64; 12],
+    coordinator_ns: [AtomicU64; 14],
     coordinator_parent_ns: AtomicU64,
     coordinator_calls: AtomicU64,
     coordinator_failed: AtomicU64,
@@ -336,6 +416,85 @@ impl Drop for Timer<'_> {
     }
 }
 impl Telemetry {
+    pub(crate) fn episode_wall(&self) -> EpisodeWall<'_> {
+        EpisodeWall {
+            telemetry: self,
+            state: Cell::new(WallState {
+                current: CoordinatorPhase::Other,
+                since: Instant::now(),
+                ns: [0; 14],
+            }),
+        }
+    }
+    pub(crate) fn episode_thread_started(&self) {
+        self.episode_pipeline
+            .threads_started
+            .fetch_add(1, Ordering::Relaxed);
+    }
+    pub(crate) fn episode_thread_exited(&self) {
+        self.episode_pipeline
+            .threads_exited
+            .fetch_add(1, Ordering::Relaxed);
+    }
+    pub(crate) fn episode_collection(&self) {
+        self.episode_pipeline
+            .collections
+            .fetch_add(1, Ordering::Relaxed);
+    }
+    pub(crate) fn episode_admitted(&self, outstanding: usize) {
+        self.episode_pipeline
+            .admitted
+            .fetch_add(1, Ordering::Relaxed);
+        self.episode_pipeline
+            .outstanding_peak
+            .fetch_max(outstanding as u64, Ordering::Relaxed);
+    }
+    pub(crate) fn episode_reorder(&self, ready: usize) {
+        self.episode_pipeline
+            .reorder_peak
+            .fetch_max(ready as u64, Ordering::Relaxed);
+    }
+    pub(crate) fn episode_committed(&self) {
+        self.episode_pipeline
+            .committed
+            .fetch_add(1, Ordering::Relaxed);
+    }
+    pub(crate) fn episode_job(&self) -> EpisodeJob<'_> {
+        let p = &self.episode_pipeline;
+        let active = p.active.fetch_add(1, Ordering::Relaxed) + 1;
+        p.active_peak.fetch_max(active, Ordering::Relaxed);
+        EpisodeJob {
+            telemetry: self,
+            started: Instant::now(),
+            slot: rayon::current_thread_index().unwrap_or(0),
+            success: false,
+        }
+    }
+    fn episode_pipeline_json(&self) -> serde_json::Value {
+        let p = &self.episode_pipeline;
+        let v = |c: &AtomicU64| c.load(Ordering::Relaxed);
+        let slots: Vec<_> = p.slots.iter().enumerate().map(|(index, slot)| serde_json::json!({
+            "worker_index": index, "jobs": v(&slot.jobs), "failed_jobs": v(&slot.failed), "elapsed_nanoseconds": v(&slot.ns),
+        })).collect();
+        let phases: serde_json::Map<String, serde_json::Value> = CoordinatorPhase::ALL
+            .iter()
+            .map(|phase| {
+                (
+                    phase.name().to_owned(),
+                    serde_json::json!(v(&p.phases[*phase as usize])),
+                )
+            })
+            .collect();
+        serde_json::json!({"version": 1, "job_unit": "complete-episode", "job_unit_version": 1,
+            "scope": "one owned scoped Rayon pool per scan; inline at one worker; nested worker wall, not CPU time or command wall",
+            "configured_workers": v(&self.configured_workers), "configured_max_in_flight": v(&self.configured_in_flight),
+            "pool_threads_started": v(&p.threads_started), "pool_threads_exited": v(&p.threads_exited),
+            "collections": v(&p.collections), "admitted": v(&p.admitted), "completed": v(&p.completed), "committed": v(&p.committed),
+            "failed": v(&p.failed), "active_jobs": v(&p.active), "active_peak": v(&p.active_peak),
+            "admitted_uncommitted_peak": v(&p.outstanding_peak), "reorder_peak": v(&p.reorder_peak),
+            "reused_worker_jobs": if v(&p.threads_started) == 0 { 0 } else { p.slots.iter().map(|slot| v(&slot.jobs).saturating_sub(1)).sum::<u64>() },
+            "worker_slots": slots, "nested_job_phase_nanoseconds": phases})
+    }
     pub fn scan_wall(&self) -> ScanWall<'_> {
         let started = Instant::now();
         ScanWall {
@@ -344,7 +503,7 @@ impl Telemetry {
             state: Cell::new(WallState {
                 current: CoordinatorPhase::Other,
                 since: started,
-                ns: [0; 12],
+                ns: [0; 14],
             }),
             success: Cell::new(false),
         }
@@ -415,7 +574,7 @@ impl Telemetry {
             .iter()
             .map(|c| c.load(Ordering::Relaxed))
             .sum();
-        serde_json::json!({"scope": "exclusive sequential scan coordinator wall; worker diagnostics are nested and excluded from this sum", "parent_nanoseconds": parent,
+        serde_json::json!({"version": 2, "scope": "exclusive scan coordinator wall; owned episode pool wait (inline episode work at one worker) and ordered commits; worker diagnostics are nested and excluded from this sum", "parent_nanoseconds": parent,
             "partition_nanoseconds": partitions, "partition_sum_nanoseconds": sum,
             "residual_nanoseconds": i128::from(parent) - i128::from(sum),
             "parent_seconds": parent as f64 / 1e9,
@@ -654,13 +813,14 @@ impl Telemetry {
             .collect::<Vec<_>>()
             .join(",");
         format!(
-            "{},\"source_kind_decode\":{{{}}},\"json_memory_policy\":\"{}\",\"coordinator_scan_wall\":{},\"decode_parallelism\":{},\"typed_parse_parallelism\":{},\"reader_contract\":\"{}\",\"typed_journal_files\":{},\"typed_journal_records\":{},\"legacy_journal_files\":{},\"journal_parse_scope\":\"{}\"}}",
+            "{},\"source_kind_decode\":{{{}}},\"json_memory_policy\":\"{}\",\"coordinator_scan_wall\":{},\"decode_parallelism\":{},\"typed_parse_parallelism\":{},\"complete_episode_pipeline\":{},\"reader_contract\":\"{}\",\"typed_journal_files\":{},\"typed_journal_records\":{},\"legacy_journal_files\":{},\"journal_parse_scope\":\"{}\"}}",
             &output[..output.len() - 1],
             kinds,
             crate::json::MEMORY_POLICY,
             self.coordinator_json(),
             self.parallel_json(),
             self.parse_parallel_json(),
+            self.episode_pipeline_json(),
             if value(&self.typed_reader) == 0 {
                 "legacy"
             } else {
@@ -669,10 +829,12 @@ impl Telemetry {
             value(&self.typed_journal_files),
             value(&self.typed_journal_records),
             value(&self.legacy_journal_files),
-            if value(&self.typed_reader) == 0 {
+            if value(&self.episode_pipeline.collections) > 0 {
+                "complete episode jobs own read/parse/validate/encode/spool and large source destruction; coordinator commits compact results in original order; historical decoder/parse-window diagnostics exclude these jobs"
+            } else if value(&self.typed_reader) == 0 {
                 "legacy Journal parsing occurs in decoder jobs"
             } else {
-                "typed Journal parsing occurs in bounded scoped borrowed-raw parse windows (inline at one worker); ordered coordinator validates and encodes after joins; decoder diagnostics exclude parse jobs"
+                "complete episode jobs own read/parse/validate/encode/spool and large source destruction; coordinator commits compact results in original order; historical decoder/parse-window diagnostics exclude these jobs"
             }
         )
     }

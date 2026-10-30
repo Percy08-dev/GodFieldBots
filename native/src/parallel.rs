@@ -39,15 +39,18 @@ impl JournalData {
 type Completed = (EpisodeData, Sources);
 /// Raw owners and movable source evidence are disjoint: parsing borrows only data.
 /// Consumers must drop parsed records before releasing this window.
+#[cfg(test)]
 pub(crate) struct EpisodeWindow<'a> {
     pub paths: &'a [PathBuf],
     pub data: BudgetVec<EpisodeData>,
     pub evidence: BudgetVec<Option<Sources>>,
 }
+#[cfg(test)]
 pub(crate) struct ParsedEpisode<'raw> {
     pub records1: Option<crate::typed_journal::journal::Records<'raw>>,
     pub records2: Option<crate::typed_journal::journal::Records<'raw>>,
 }
+#[cfg(test)]
 struct ParsedJournal<'raw> {
     episode: usize,
     // Original input file slot, independent of the journal header's viewer.
@@ -93,6 +96,7 @@ impl<'a> EpisodeReader<'a> {
             reader,
         }
     }
+    #[cfg(test)]
     pub(crate) fn next_window(
         &mut self,
         sources: &mut Sources,
@@ -202,6 +206,24 @@ fn decode(
 ) -> Result<Completed> {
     control.check()?;
     let mut job = telemetry.decode_job(slot);
+    let result = read_episode(
+        path, budget, control, max_file, max_record, telemetry, reader,
+    )?;
+    job.success();
+    Ok(result)
+}
+/// Reading is also used by the complete worker pipeline, without recreating a
+/// decoder window or incrementing historical decoder-job counters.
+pub(crate) fn read_episode(
+    path: &Path,
+    budget: &Arc<Budget>,
+    control: &Control,
+    max_file: usize,
+    max_record: usize,
+    telemetry: &Arc<crate::telemetry::Telemetry>,
+    reader: Reader,
+) -> Result<Completed> {
+    control.check()?;
     let mut sources = Sources::with_telemetry(budget.clone(), max_file, max_record, telemetry);
     let mut journal = |name: &str| match reader {
         Reader::Legacy => sources
@@ -215,7 +237,6 @@ fn decode(
     let records2 = journal("player-2.jsonl")?;
     let replay1 = sources.json(&path.join("replay-player-1.json"), true, control)?;
     let replay2 = sources.json(&path.join("replay-player-2.json"), true, control)?;
-    job.success();
     Ok((
         EpisodeData {
             records1,
@@ -353,6 +374,7 @@ fn window(
     Ok(ready)
 }
 
+#[cfg(test)]
 fn record_parse_failure(failure: &Mutex<Option<Error>>, control: &Control, error: Error) {
     let mut first = failure.lock().expect("parse worker failure lock");
     if first.is_none() {
@@ -362,6 +384,7 @@ fn record_parse_failure(failure: &Mutex<Option<Error>>, control: &Control, error
 }
 /// Scoped workers borrow stable raw owners. No result can escape their lifetime.
 /// All joins drain before any failure is returned or downstream publication starts.
+#[cfg(test)]
 pub(crate) fn parse_window<'raw>(
     data: &'raw [EpisodeData],
     workers: usize,
@@ -375,6 +398,7 @@ pub(crate) fn parse_window<'raw>(
     }
     result
 }
+#[cfg(test)]
 fn parse_window_inner<'raw>(
     data: &'raw [EpisodeData],
     workers: usize,

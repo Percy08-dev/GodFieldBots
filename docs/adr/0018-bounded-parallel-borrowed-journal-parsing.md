@@ -1,5 +1,9 @@
 # 0018: Bounded parallel borrowed-Journal parsing
 
+Current scheduling ownership is superseded by
+[ADR0020](0020-owned-episode-pipeline-pool.md). This record retains the accepted
+historical design and its measurements; source/reader/NumPy contracts stay valid.
+
 - Status: Accepted2026-10-30; independent design and implementation source
   correctness/conformance reviews READY, execution correctness gates pass.
   All48controlled measurements and independent measurement audit pass;

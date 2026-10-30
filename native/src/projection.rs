@@ -259,6 +259,31 @@ impl<'a> EpisodeIndex<'a> {
     }
 }
 
+/// Actual preflight source hashes, shared immutably by all jobs in a collection.
+/// File hashes still come exclusively from each job's own Sources evidence.
+pub(crate) struct CollectionDigests {
+    pub manifest: String,
+    report: String,
+    _metadata: crate::budget::Lease,
+}
+impl CollectionDigests {
+    pub fn new(
+        collection: &Collection,
+        sources: &Sources,
+        budget: &Arc<Budget>,
+        control: &Control,
+    ) -> Result<Self> {
+        let manifest = sources.digest(&collection.directory.join("manifest.json"), control)?;
+        let report = sources.digest(&collection.directory.join("report.json"), control)?;
+        let metadata = budget.reserve(manifest.len() + report.len())?;
+        Ok(Self {
+            manifest: manifest.to_owned(),
+            report: report.to_owned(),
+            _metadata: metadata,
+        })
+    }
+}
+
 pub(crate) fn source_metadata(
     collection: &Collection,
     source: &Path,
@@ -266,6 +291,7 @@ pub(crate) fn source_metadata(
     journal: &crate::typed_journal::view::JournalView<'_, '_>,
     links: &EpisodeLinks<'_>,
     sources: &Sources,
+    digests: &CollectionDigests,
     budget: &Arc<Budget>,
     control: &Control,
 ) -> Result<Value> {
@@ -401,7 +427,7 @@ pub(crate) fn source_metadata(
             "expected_sha256",
             json::copy(m.require("report_sha256")?, control)?,
         ),
-        ("sha256", json::text(sources.digest(&report_path, control)?)),
+        ("sha256", json::text(&digests.report)),
         (
             "comparison_valid",
             json::copy(report.require("comparison_valid")?, control)?,
@@ -448,10 +474,7 @@ pub(crate) fn source_metadata(
             json::text(path_text(&std::fs::canonicalize(source)?)?),
         ),
         ("sha256", json::text(sources.digest(source, control)?)),
-        (
-            "manifest_sha256",
-            json::text(sources.digest(&collection.directory.join("manifest.json"), control)?),
-        ),
+        ("manifest_sha256", json::text(&digests.manifest)),
         ("header", json::copy(header, control)?),
         ("lineage", lineage),
         (

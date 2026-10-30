@@ -66,8 +66,8 @@ pub struct Sources {
     lookup: HashMap<PathBuf, usize>,
     telemetry: Arc<Telemetry>,
 }
-/// Coordinator-owned bytes/admission stay stable while scoped parsing workers
-/// borrow them. DTOs cannot outlive this external raw owner.
+/// Worker-owned bytes/admission stay stable while Journal DTOs borrow them.
+/// DTOs cannot outlive this external raw owner.
 pub struct RawJournal {
     bytes: BudgetVec<u8>,
     admission: Arc<JsonAdmission>,

@@ -1,4 +1,4 @@
-"""Public numeric and telemetry checks for the ADR0019 Stage5a candidate wheel."""
+"""Public parity for historical parse windows and owned episode pipeline wheels."""
 import json
 import os
 import time
@@ -59,7 +59,26 @@ def test_scoped_parse_public_arrays_order_wall_and_retained_views(
         assert parse['configured_workers'] == decode['configured_workers'] == workers
         assert parse['job_unit'] == 'participant-journal-file'
         assert parse['job_unit_version'] == 2
-        if reader == 'legacy':
+        pipeline = diagnostic.get('complete_episode_pipeline')
+        if pipeline is not None:
+            assert pipeline['version'] == pipeline['job_unit_version'] == 1
+            assert pipeline['job_unit'] == 'complete-episode'
+            assert pipeline['configured_workers'] == workers
+            assert pipeline['configured_max_in_flight'] == workers
+            assert pipeline['admitted'] == pipeline['completed'] == pipeline['committed'] == 240
+            assert pipeline['failed'] == pipeline['active_jobs'] == 0
+            assert pipeline['pool_threads_started'] == pipeline['pool_threads_exited'] == (0 if workers == 1 else workers)
+            assert 1 <= pipeline['active_peak'] <= workers
+            assert pipeline['admitted_uncommitted_peak'] <= workers
+            assert wall['version'] == 2
+            assert partitions['episode_pool_wait'] > 0
+            assert partitions['episode_ordered_commit'] > 0
+            assert parse['scheduled_journal_tasks'] == parse['spawned_threads'] == 0
+            assert decode['scheduled_episodes'] == decode['spawned_threads'] == 0
+            assert diagnostic['typed_journal_files'] == (0 if reader == 'legacy' else 480)
+            if reader != 'legacy':
+                assert 'complete episode jobs own' in diagnostic['journal_parse_scope']
+        elif reader == 'legacy':
             assert partitions['typed_parse_window_dispatch_and_join'] == 0
             assert parse['scheduled_episodes'] == parse['spawned_threads'] == parse['active_parse_peak'] == 0
             assert parse['scheduled_journal_tasks'] == 0

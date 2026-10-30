@@ -28,6 +28,9 @@
 追加: [0009](0009-catalog-v2-simulator-adoption.md) — Accepted:
 Magical Stick新契約・catalog v2・遅延認証応答の失敗ラッチと新規実験。
 
+追加: [0020](0020-owned-episode-pipeline-pool.md) — Accepted:
+所有する固定poolと試合単位のworker内処理。実装・同条件48実行の前後比較・採用検証済み。
+
 ## 記録テンプレート
 
 ```markdown

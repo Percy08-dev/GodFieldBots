@@ -2,6 +2,7 @@ use crate::json::ValueExt;
 pub mod budget;
 pub mod control_memory;
 pub mod controls;
+mod episode_pool;
 pub mod error;
 pub mod feature;
 pub mod index;
@@ -1020,6 +1021,7 @@ fn build_info() -> Vec<(&'static str, &'static str)> {
             },
         ),
         ("typed_reader_contract", "typed-borrowed-v1"),
+        ("episode_pipeline_contract", "owned-complete-episode-v1"),
     ]
 }
 

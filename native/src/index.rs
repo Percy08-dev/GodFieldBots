@@ -8,7 +8,6 @@ use crate::{
     pipeline::Episode,
     projection::EpisodeLinks,
     session::Collection,
-    source::Sources,
 };
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
@@ -27,10 +26,11 @@ impl IndexInfo {
         header: &Value,
         reward: f64,
         dataset: &Value,
-        sources: &Sources,
+        manifest_digest: &str,
         budget: &Arc<Budget>,
         control: &Control,
     ) -> Result<Self> {
+        control.check()?;
         let m = &collection.manifest.root;
         let link = m.require("ppo")?;
         let viewer = header.require("viewer")?.integer(1, 2)? as i64;
@@ -41,7 +41,7 @@ impl IndexInfo {
             string(link, "batch_id")?,
             string(m, "split")?,
             policies[(2 - viewer) as usize].string()?,
-            sources.digest(&collection.directory.join("manifest.json"), control)?,
+            manifest_digest,
             string(header, "game_id")?,
             string(dataset, "content_sha256")?,
         ];

@@ -130,6 +130,25 @@ pub struct Collection {
 }
 
 #[cfg(test)]
+impl Collection {
+    pub(crate) fn test_new(
+        directory: PathBuf,
+        manifest: Document,
+        report: Document,
+        budget: &Arc<Budget>,
+    ) -> Self {
+        Self {
+            directory,
+            manifest,
+            report,
+            parent: 0,
+            expected_source: None,
+            _path_lease: budget.reserve(1024).unwrap(),
+        }
+    }
+}
+
+#[cfg(test)]
 mod reader_tests {
     use super::*;
     fn settings() -> Value {

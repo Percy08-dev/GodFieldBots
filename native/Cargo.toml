@@ -21,6 +21,7 @@ libc = "=0.2.191"
 serde = { version = "=1.0.229", features = ["derive", "rc"] }
 serde_json = { version = "=1.0.151", features = ["arbitrary_precision", "float_roundtrip"] }
 bytemuck = "=1.25.2"
+rayon = "=1.12.0"
 mimalloc = { version = "=0.1.52", optional = true, features = ["local_dynamic_tls"] }
 
 [build-dependencies]

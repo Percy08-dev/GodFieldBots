@@ -2,6 +2,19 @@
 
 ## Status and scope
 
+[ADR0020](adr/0020-owned-episode-pipeline-pool.md) accepts the design for one
+owned scoped Rayon pool per scan, with complete worker-local episode processing
+and bounded ordered coordinator commits. Source/failure reviews,89Rust tests,
+826Python tests and both fixed recipes/index/savedPPO1/4proofs pass. All48same-
+campaign before/after commands and independent arithmetic audit pass: whole
+medians1/2/4/8before22.721/19.641/16.310/14.406s, after22.688/14.857/10.906/8.794s.
+Root retains the combined change: no meaningful1worker gain,24.36/33.14/38.96%
+at2/4/8with explicit reportedCPU and memory costs. After8maximum RSS512.72MiB,
+managed1677.34MiB under unchanged2GiBpolicy; defaults stay unchanged. Exact
+tested2ed57a31/sourcefaf71b33wheel is installed with verified97f1rollback backup.
+[Verification](verification/episode-pipeline-pool.md) keeps phase-version, CPU-
+accounting, sampling, provenance and failed-cleanup limits explicit.
+
 The [final-runtime scaling/function investigation](verification/final-preprocessing-scaling-and-profile.md)
 compares unchanged source d5090c41/release-mimalloc97f1at1/2/4/8workers:
 whole medians22.599/19.242/15.907/14.362s, maximum self RSS346/396/432/507MiB,
