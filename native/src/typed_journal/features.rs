@@ -228,7 +228,7 @@ fn calculate<'a, 'raw>(
     input: &'a Input<'raw>,
     action: Option<&'a Action<'raw>>,
     config: &FeatureConfig,
-    sink: &mut impl Sink,
+    sink: &mut NumericSink<'_>,
     control: &Control,
     common: bool,
     lookup: &Lookup<'a, 'raw>,
@@ -533,79 +533,111 @@ fn calculate<'a, 'raw>(
         sink.put(prefix, &[".usable"], None, u8::from(usable) as f64)?;
     }
     if common && config.history == "public_aggregate" {
-        let all = &input.events;
-        let events = &all[all.len().saturating_sub(config.history_window)..];
-        let prefix = Prefix::new("history");
-        sink.put(
-            prefix,
-            &[".window_truncated"],
-            None,
-            u8::from(all.len() > config.history_window) as f64,
-        )?;
-        sink.put(prefix, &[".count"], None, events.len() as f64)?;
-        for tag in EVENTS {
-            let mut count = 0;
-            for event in events {
-                control.check()?;
-                count += usize::from(event.r#type.as_ref() == *tag);
-            }
-            sink.put(prefix, &[".type.", tag], None, count as f64)?;
-        }
-        for (role, participant) in [("own", viewer), ("opponent", 3 - viewer)] {
-            let selected = || {
-                events.iter().filter(|event| {
-                    event
-                        .player
-                        .value()
-                        .or_else(|| event.attacker.value())
-                        .or_else(|| event.active_player.value())
-                        .is_some_and(|p| p.0 == participant)
-                })
+        history(input, config, sink, control)?;
+    }
+    Ok(())
+}
+
+/// Aggregate exactly the configured event tail once. Definition buckets live in
+/// the caller's output; only fixed counts and i128 sums occupy the stack.
+fn history(
+    input: &Input<'_>,
+    config: &FeatureConfig,
+    sink: &mut NumericSink<'_>,
+    control: &Control,
+) -> Result<()> {
+    control.check()?;
+    let all = &input.events;
+    let events = &all[all.len().saturating_sub(config.history_window)..];
+    let viewer = input.observation.own.player_id.0;
+    sink.block(42 + config.hash_buckets, |output| {
+        let mut tags = [0usize; 24];
+        let mut roles = [0usize; 2];
+        let mut sums = [[0i128; 7]; 2];
+        for event in events {
+            control.check()?;
+            let tag = match event.r#type.as_ref() {
+                "turn_started" => Some(0),
+                "action_accepted" => Some(1),
+                "artifact_used" => Some(2),
+                "artifact_drawn" => Some(3),
+                "devil_appeared" => Some(4),
+                "artifact_discarded" => Some(5),
+                "guardian_set" => Some(6),
+                "guardian_left" => Some(7),
+                "guardian_acted" => Some(8),
+                "miracle_used" => Some(9),
+                "attack_declared" => Some(10),
+                "attack_missed" => Some(11),
+                "damage_applied" => Some(12),
+                "healed" => Some(13),
+                "resource_changed" => Some(14),
+                "buy_offered" => Some(15),
+                "sale_offered" => Some(16),
+                "artifact_transferred" => Some(17),
+                "sun_amulet_activated" => Some(18),
+                "status_changed" => Some(19),
+                "phenomenon_invoked" => Some(20),
+                "player_ascended" => Some(21),
+                "player_defeated" => Some(22),
+                "game_ended" => Some(23),
+                _ => None,
             };
-            let mut sums = [0i128; 7];
-            let mut count = 0;
-            for event in selected() {
-                control.check()?;
-                count += 1;
+            if let Some(tag) = tag {
+                tags[tag] += 1;
+            }
+            // Presence, including explicit null, blocks lower-priority roles in
+            // the independent legacy/Python recipe. Reader validation is separate.
+            let actor = if event.player.present() {
+                &event.player
+            } else if event.attacker.present() {
+                &event.attacker
+            } else {
+                &event.active_player
+            };
+            let role = actor.value().and_then(|player| {
+                if player.0 == viewer {
+                    Some(0)
+                } else if player.0 == 3 - viewer {
+                    Some(1)
+                } else {
+                    None
+                }
+            });
+            if let Some(role) = role {
+                roles[role] += 1;
                 let values = [
-                    event.amount.value().map(|v| *v as i128),
-                    event.hp_delta.value().map(|v| *v as i128),
-                    event.mp_delta.value().map(|v| *v as i128),
-                    event.money_delta.value().map(|v| *v as i128),
-                    event.mp_spent.value().map(|v| *v as i128),
-                    event.price.value().map(|v| *v as i128),
-                    event.attack.value().map(|v| *v as i128),
+                    event.amount.value().map(|value| *value as i128),
+                    event.hp_delta.value().map(|value| *value as i128),
+                    event.mp_delta.value().map(|value| *value as i128),
+                    event.money_delta.value().map(|value| *value as i128),
+                    event.mp_spent.value().map(|value| *value as i128),
+                    event.price.value().map(|value| *value as i128),
+                    event.attack.value().map(|value| *value as i128),
                 ];
-                for (sum, value) in sums.iter_mut().zip(values) {
+                for (sum, value) in sums[role].iter_mut().zip(values) {
                     *sum += value.unwrap_or(0);
                 }
             }
-            sink.put(prefix, &[".", role, ".count"], None, count as f64)?;
-            for (key, sum) in [
-                "amount",
-                "hp_delta",
-                "mp_delta",
-                "money_delta",
-                "mp_spent",
-                "price",
-                "attack",
-            ]
-            .iter()
-            .zip(sums)
-            {
-                sink.put(prefix, &[".", role, ".", key], None, sum as f64)?;
+            if let Some(definition) = event.definition_id.value() {
+                output[42 + bucket(definition.as_ref(), config.hash_buckets)] += 1.;
+            }
+            control.check()?;
+        }
+        output[0] = u8::from(all.len() > config.history_window) as f64;
+        output[1] = events.len() as f64;
+        for (slot, count) in output[2..26].iter_mut().zip(tags) {
+            *slot = count as f64;
+        }
+        for role in 0..2 {
+            let start = 26 + 8 * role;
+            output[start] = roles[role] as f64;
+            for (slot, sum) in output[start + 1..start + 8].iter_mut().zip(sums[role]) {
+                *slot = sum as f64;
             }
         }
-        sink.hash(
-            prefix,
-            &[".definitions."],
-            events
-                .iter()
-                .filter_map(|event| event.definition_id.value().map(|v| Ok(v.as_ref()))),
-            config.hash_buckets,
-        )?;
-    }
-    Ok(())
+        control.check()
+    })
 }
 
 pub struct PreparedDecision<'a, 'raw> {
@@ -811,5 +843,225 @@ mod tests {
             }
             assert_eq!(budget.used(), 0);
         }
+    }
+    fn history_config(elements: usize, buckets: usize, window: usize) -> FeatureConfig {
+        FeatureConfig {
+            history: "public_aggregate".into(),
+            max_elements: elements,
+            hash_buckets: buckets,
+            history_window: window,
+        }
+    }
+    fn history_parity(value: &Value, config: &FeatureConfig) -> usize {
+        let wire = serde_json::to_vec(value).unwrap();
+        let input: Input = serde_json::from_slice(&wire).unwrap();
+        let budget = Budget::new(32 * 1024 * 1024);
+        let control = Control::new(monotonic() + 30.).unwrap();
+        let legacy =
+            crate::feature::PreparedDecision::new(value, config, &budget, &control).unwrap();
+        let typed = PreparedDecision::new(&input, config, &budget, &control).unwrap();
+        let mut expected = vec![0.; config.width()];
+        let mut actual = vec![f64::NAN; config.width()];
+        legacy.state(&mut expected, &control).unwrap();
+        typed.state(&mut actual, &control).unwrap();
+        assert_eq!(bits(&actual), bits(&expected), "history state {config:?}");
+        let action = serde_json::json!({"type":"pray"});
+        let typed_action: Action = serde_json::from_str(r#"{"type":"pray"}"#).unwrap();
+        legacy.encode(&action, &mut expected, &control).unwrap();
+        typed.encode(&typed_action, &mut actual, &control).unwrap();
+        assert_eq!(bits(&actual), bits(&expected), "history action {config:?}");
+        let used = budget.used();
+        drop(legacy);
+        drop(typed);
+        assert_eq!(budget.used(), 0);
+        used
+    }
+    fn all_feature_events() -> Vec<Value> {
+        let mut events = Vec::new();
+        for tag in EVENTS {
+            let value = match *tag {
+                "turn_started" => serde_json::json!({"type":tag,"turn":u32::MAX,"active_player":1}),
+                "action_accepted"
+                | "sun_amulet_activated"
+                | "player_ascended"
+                | "player_defeated" => serde_json::json!({"type":tag,"player":2}),
+                "artifact_used" | "artifact_drawn" | "devil_appeared" | "artifact_discarded"
+                | "guardian_set" | "guardian_left" | "guardian_acted" | "phenomenon_invoked" => {
+                    if *tag == "phenomenon_invoked" {
+                        serde_json::json!({"type":tag,"definition_id":"definition with \"escape\" 雪"})
+                    } else {
+                        serde_json::json!({"type":tag,"player":1,"definition_id":"definition with \"escape\" 雪"})
+                    }
+                }
+                "miracle_used" => {
+                    serde_json::json!({"type":tag,"player":2,"definition_id":"definition-b","mp_spent":u32::MAX})
+                }
+                "attack_declared" => {
+                    serde_json::json!({"type":tag,"attacker":1,"target":2,"attack":i32::MAX})
+                }
+                "attack_missed" => serde_json::json!({"type":tag,"attacker":2,"target":1}),
+                "damage_applied" => {
+                    serde_json::json!({"type":tag,"player":1,"amount":i32::MIN,"remaining_hp":i32::MAX})
+                }
+                "healed" => {
+                    serde_json::json!({"type":tag,"player":2,"amount":i32::MAX,"hp":i32::MIN})
+                }
+                "resource_changed" => {
+                    serde_json::json!({"type":tag,"player":1,"hp_delta":i32::MIN,"mp_delta":i32::MAX,"money_delta":-1})
+                }
+                "buy_offered" => {
+                    serde_json::json!({"type":tag,"buyer":1,"seller":2,"definition_id":"definition-c","price":u32::MAX})
+                }
+                "sale_offered" => {
+                    serde_json::json!({"type":tag,"seller":2,"target":1,"definition_id":"definition-b","price":u32::MAX})
+                }
+                "artifact_transferred" => {
+                    serde_json::json!({"type":tag,"from":1,"to":2,"definition_id":"definition-c","price":u32::MAX})
+                }
+                "status_changed" => {
+                    serde_json::json!({"type":tag,"player":1,"status":"poisoned","active":true})
+                }
+                "game_ended" => serde_json::json!({"type":tag,"result":"draw"}),
+                _ => unreachable!("feature tag fixture missing"),
+            };
+            let wire = serde_json::to_vec(&value).unwrap();
+            let typed: Event = serde_json::from_slice(&wire).unwrap();
+            typed.validate().unwrap();
+            events.push(value);
+        }
+        events
+    }
+
+    #[test]
+    fn single_pass_history_all_tags_windows_configs_and_integer_bounds_match_legacy_bits() {
+        let mut value = crate::typed_journal::validation::tests::fixture();
+        let events = all_feature_events();
+        // Three distinct definitions force a collision at two buckets; include
+        // repeats and escaped/Unicode definitions to exercise the existing SHA math.
+        assert!(
+            events
+                .iter()
+                .filter_map(|event| event.get("definition_id"))
+                .count()
+                > 2
+        );
+        for viewer in [1, 2] {
+            value["observation"]["own"]["player_id"] = serde_json::json!(viewer);
+            value["observation"]["opponent"]["player_id"] = serde_json::json!(3 - viewer);
+            value["observation"]["viewer_player_id"] = serde_json::json!(viewer);
+            for length in [0, 1, events.len() - 1, events.len()] {
+                value["events"] = Value::Array(events[..length].to_vec());
+                for elements in [2, 3] {
+                    for buckets in [2, 32, 4096] {
+                        for window in [1, length.max(1), length + 1, 100000] {
+                            history_parity(&value, &history_config(elements, buckets, window));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn history_actor_priority_null_presence_unknown_feature_kinds_and_optional_fields_match_legacy()
+    {
+        let mut value = crate::typed_journal::validation::tests::fixture();
+        // This is a feature-only adversarial fixture: mixed actor fields and
+        // unknown tags remain rejected by unchanged event contract validation.
+        value["events"] = serde_json::json!([
+            {"type":"future_feature_kind","player":1,"attacker":2,"active_player":2,"amount":i32::MAX,"hp_delta":i32::MIN,"mp_delta":i32::MAX,"money_delta":i32::MIN,"mp_spent":u32::MAX,"price":u32::MAX,"attack":i32::MIN,"definition_id":"a"},
+            {"type":"future_feature_kind","attacker":2,"active_player":1,"amount":i32::MIN,"definition_id":"b"},
+            {"type":"future_feature_kind","active_player":1,"price":u32::MAX,"definition_id":"c"},
+            {"type":"future_feature_kind","player":null,"attacker":2,"active_player":1,"amount":null},
+            {"type":"future_feature_kind","attacker":null,"active_player":1,"attack":null},
+            {"type":"future_feature_kind","active_player":null},
+            {"type":"future_feature_kind"},
+            {"type":"game_ended","result":null}
+        ]);
+        let wire = serde_json::to_vec(&value).unwrap();
+        let input: Input = serde_json::from_slice(&wire).unwrap();
+        assert!(input.events[0].validate().is_err());
+        assert!(input.events[3].validate().is_err());
+        for buckets in [2, 32, 4096] {
+            for window in [1, 3, 8, 100000] {
+                history_parity(&value, &history_config(3, buckets, window));
+            }
+        }
+    }
+
+    #[test]
+    fn maximum_history_tail_and_large_signed_sums_match_legacy_without_history_allocation() {
+        let mut value = crate::typed_journal::validation::tests::fixture();
+        let event = serde_json::json!({"type":"resource_changed","player":1,
+            "hp_delta":i32::MIN,"mp_delta":i32::MAX,"money_delta":i32::MAX});
+        value["events"] = serde_json::json!([event]);
+        let config = history_config(2, 2, 100000);
+        let short_used = history_parity(&value, &config);
+        value["events"] = Value::Array(vec![event; 100001]);
+        assert_eq!(history_parity(&value, &config), short_used);
+    }
+
+    #[test]
+    fn history_checks_cancel_deadline_and_width_without_publishing_a_completed_block() {
+        use crate::error::Error;
+        let fixture = crate::typed_journal::validation::tests::fixture();
+        let wire = serde_json::to_vec(&fixture).unwrap();
+        let mut input: Input = serde_json::from_slice(&wire).unwrap();
+        let event_wire = serde_json::to_vec(&serde_json::json!({"type":"artifact_used","player":1,
+            "definition_id":"long-definition-for-cancellation-and-deadline-checks".repeat(8)}))
+        .unwrap();
+        input.events = (0..100000)
+            .map(|_| serde_json::from_slice(&event_wire).unwrap())
+            .collect();
+        let config = history_config(3, 2, 100000);
+        let control = Control::new(monotonic() + 30.).unwrap();
+        let mut wrong_width = vec![0.; 43];
+        let mut sink = NumericSink {
+            output: &mut wrong_width,
+            position: 0,
+            control: Some(&control),
+        };
+        assert!(matches!(
+            history(&input, &config, &mut sink, &control),
+            Err(Error::Contract(_))
+        ));
+        assert_eq!(sink.position, 0);
+        let mut output = vec![0.; 44];
+        let expired = Control::new(monotonic() - 1.).unwrap();
+        let mut sink = NumericSink {
+            output: &mut output,
+            position: 0,
+            control: Some(&expired),
+        };
+        assert!(matches!(
+            history(&input, &config, &mut sink, &expired),
+            Err(Error::Deadline)
+        ));
+        let deadline = Control::new(monotonic() + 0.001).unwrap();
+        let mut sink = NumericSink {
+            output: &mut output,
+            position: 0,
+            control: Some(&deadline),
+        };
+        assert!(matches!(
+            history(&input, &config, &mut sink, &deadline),
+            Err(Error::Deadline)
+        ));
+        assert_eq!(sink.position, 0);
+        let cancel = Control::new(monotonic() + 30.).unwrap();
+        let cancellation = cancel.clone();
+        let thread = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+            cancellation.cancel();
+        });
+        let mut sink = NumericSink {
+            output: &mut output,
+            position: 0,
+            control: Some(&cancel),
+        };
+        let result = history(&input, &config, &mut sink, &cancel);
+        thread.join().unwrap();
+        assert!(matches!(result, Err(Error::Cancelled)));
+        assert_eq!(sink.position, 0);
     }
 }

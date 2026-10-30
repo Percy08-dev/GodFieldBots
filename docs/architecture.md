@@ -2,6 +2,13 @@
 
 ## Status and scope
 
+[ADR0019](adr/0019-sequential-preprocessing-optimization.md) Stage1 adopts one-pass
+typed history aggregation. All numeric/index/PPO proofs and826Python tests pass;
+independent reviews accept12controlled commands: wholewall20.60->17.69s (14.15%),
+feature/spooling4.84->2.01s in actualmedian trials. Maximum RSS431->457MiB, median
+peak420->422MiB; Config budgets unchanged. Later stages remain separately gated.
+[Verification](verification/sequential-preprocessing-optimization.md).
+
 A subsequent [root-cause investigation](verification/preprocessing-root-cause.md)
 keeps production unchanged and separates graph/task supply, repeated input/history
 work, clock-check counts and scoped I/O from proposed pool/streaming remedies.

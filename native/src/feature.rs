@@ -141,6 +141,27 @@ struct NumericSink<'a> {
     position: usize,
     control: Option<&'a Control>,
 }
+impl NumericSink<'_> {
+    /// Fill one checked initialized numeric block without a history-sized temporary.
+    /// Commit the cursor only after the producer and finite-value checks succeed.
+    fn block(&mut self, size: usize, fill: impl FnOnce(&mut [f64]) -> Result<()>) -> Result<()> {
+        let stop = self
+            .position
+            .checked_add(size)
+            .ok_or_else(|| Error::contract("invalid encoder vector width"))?;
+        let slots = self
+            .output
+            .get_mut(self.position..stop)
+            .ok_or_else(|| Error::contract("invalid encoder vector width"))?;
+        slots.fill(0.);
+        fill(slots)?;
+        if slots.iter().any(|value| !value.is_finite()) {
+            return Err(Error::contract("nonfinite/invalid encoder vector"));
+        }
+        self.position = stop;
+        Ok(())
+    }
+}
 impl Sink for NumericSink<'_> {
     fn put(&mut self, _: Prefix<'_>, _: &[&str], _: Option<usize>, value: f64) -> Result<()> {
         if !value.is_finite() {
@@ -1119,5 +1140,52 @@ impl<'a> PreparedDecision<'a> {
             return Err(Error::contract("invalid encoder vector width"));
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod numeric_block_tests {
+    use super::*;
+    #[test]
+    fn checked_numeric_block_initializes_only_its_storage_and_rejects_bad_output() {
+        let mut output = [f64::NAN; 6];
+        let mut sink = NumericSink {
+            output: &mut output,
+            position: 1,
+            control: None,
+        };
+        sink.block(3, |slots| {
+            assert_eq!(slots, &[0., 0., 0.]);
+            slots.copy_from_slice(&[1., -2., 3.]);
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(sink.position, 4);
+        assert!(sink.output[0].is_nan() && sink.output[5].is_nan());
+        assert!(
+            sink.block(2, |slots| {
+                slots[0] = f64::INFINITY;
+                Ok(())
+            })
+            .is_err()
+        );
+        assert_eq!(sink.position, 4);
+        let mut called = false;
+        assert!(
+            sink.block(3, |_| {
+                called = true;
+                Ok(())
+            })
+            .is_err()
+        );
+        assert!(!called);
+        assert_eq!(sink.position, 4);
+        assert!(matches!(
+            sink.block(1, |_| Err(Error::Cancelled)),
+            Err(Error::Cancelled)
+        ));
+        assert_eq!(sink.position, 4);
+        sink.position = usize::MAX;
+        assert!(sink.block(1, |_| Ok(())).is_err());
     }
 }
