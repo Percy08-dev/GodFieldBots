@@ -1,5 +1,8 @@
 # Combined mimalloc and borrowed-Journal practicality
 
+Current stage/function attribution is in
+[combined borrowed-Journal profiling](combined-borrowed-profiling.md).
+
 Accepted 2026-10-30 under
 [ADR0017](../adr/0017-combined-borrowed-journal-practicality.md). Independent
 pre-implementation architecture review is READY. This unit determines the

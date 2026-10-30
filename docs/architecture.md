@@ -8,6 +8,9 @@ semantic/feature parity, saved PPO inputs, lifecycle checks and all48actual-path
 measurements pass independent acceptance. Medians25.34/24.03s at1/4workers reduce
 21.35%/12.26% versus mimalloc+legacy; kernel RSS maxima349/368MiB. Production
 defaults remain unchanged. Evidence: [combined practicality](verification/combined-borrowed-journal.md).
+Current [stage/function profiles](verification/combined-borrowed-profiling.md)
+separate the ordered Journal parse/validation stage (about10.15s) from decoder
+wait/merge, and retain release-symbols CPU traces with explicit unwind limits.
 
 [ADR0016](adr/0016-staged-preprocessing-optimization.md) accepts isolated
 allocator and typed-Journal experiments (stages0–2); production adoption remains
