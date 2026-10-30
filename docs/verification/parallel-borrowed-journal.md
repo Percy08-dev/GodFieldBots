@@ -1,5 +1,9 @@
 # Bounded parallel borrowed-Journal verification
 
+Later [root-cause diagnostics](preprocessing-root-cause.md) investigate scheduling,
+repeated work and CPU-time API sensitivity. Historical CPU fields below remain
+OS-reported observations; they do not establish physical utilization or work savings.
+
 [ADR0018](../adr/0018-bounded-parallel-borrowed-journal-parsing.md) has independent
 pre-implementation architecture READY. Implementation and independent source
 correctness/conformance reviews are READY; execution gates below pass.

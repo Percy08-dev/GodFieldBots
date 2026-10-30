@@ -2,6 +2,12 @@
 
 ## Status and scope
 
+A subsequent [root-cause investigation](verification/preprocessing-root-cause.md)
+keeps production unchanged and separates graph/task supply, repeated input/history
+work, clock-check counts and scoped I/O from proposed pool/streaming remedies.
+All11diagnostic captures preserve original outputs. CPU-time API sensitivity and
+partial instrumentation scopes remain explicit; no optimization is adopted.
+
 [ADR0018](adr/0018-bounded-parallel-borrowed-journal-parsing.md) accepts the design
 for bounded scoped-worker Journal parsing with ordered consumption and unchanged
 Config budgets. Source reviews,826Python tests, complete corpus/index and saved

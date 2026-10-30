@@ -1,5 +1,9 @@
 # Isolated Journal parse scaling: 8 / 16 / 32
 
+Later [root-cause diagnostics](preprocessing-root-cause.md) investigate scheduling,
+repeated work and CPU-time API sensitivity. Historical CPU fields below remain
+OS-reported observations; they do not establish physical utilization or work savings.
+
 Design accepted2026-10-30 with independent architecture READY, at the user's
 request to vary parsing independently of reads. Harness correctness/fidelity and
 implementation conformance reviews READY. All18primary commands and independent
