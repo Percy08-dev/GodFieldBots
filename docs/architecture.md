@@ -5,8 +5,12 @@
 [ADR0018](adr/0018-bounded-parallel-borrowed-journal-parsing.md) accepts the design
 for bounded scoped-worker Journal parsing with ordered consumption and unchanged
 Config budgets. Source reviews,826Python tests, complete corpus/index and saved
-PPO parity pass. Controlled1/2/4/8before/after measurements remain in progress;
-[verification](verification/parallel-borrowed-journal.md).
+PPO parity pass. All48controlled measurements and independent arithmetic audit
+pass: median wall25.43/23.19/19.79/18.02s at1/2/4/8workers;4/8reduce16.14%/20.37%
+versus same-worker serial parsing. The1-worker cost rises1.14%; peak RSS grows
+to378/382/420/502MiB under the unchanged2GiB soft budget. Defaults/main wheel
+remain unchanged. [Verification](verification/parallel-borrowed-journal.md) also
+separates dispatch/join from validation and documents short-thread profile limits.
 
 [ADR0017](adr/0017-combined-borrowed-journal-practicality.md) implements a verified
 opt-in mimalloc/borrowed-Journal candidate. Scoped ownership, complete typed

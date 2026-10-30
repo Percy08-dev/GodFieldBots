@@ -2,7 +2,8 @@
 
 - Status: Accepted2026-10-30; independent design and implementation source
   correctness/conformance reviews READY, execution correctness gates pass.
-  Controlled performance acceptance pending.
+  All48controlled measurements and independent measurement audit pass;
+  closing documentation/profile correctness and conformance reviews READY.
 - Owner: root. Baseline code1d3b059/native source37cae919; opt-in mimalloc typed
   wheelbc455458. Supersedes only ADR0017's coordinator-local parsing decision.
 
@@ -66,6 +67,23 @@ candidate order and current Simulator pinffcffa0966dbf6d7ce1d982f4ee6444e291d42d
 Binary/source identity changes naturally reject ordinary cross-version resume;
 do not add a bypass or reinterpret old metadata.
 
+## Alternatives and consequences
+
+Retaining serial parsing is the measured baseline and has the simplest lifetime
+scope. Owned DTOs returned directly from decoder workers would alter borrowing/
+allocation behavior as well as concurrency. A self-referential owner would add
+ownership machinery beyond this task. The chosen externally owned raw window
+keeps ordinary safe references and isolates the scheduling change.
+
+Persistent workers and overlapped read/parse windows could change dispatch costs,
+but introduce additional queue/lifetime/failure ownership. Keep the two bounded
+barriers in this unit. Their costs remain visible in the new exclusive phase and
+job/thread counters. Revisit reuse/overlap if more throughput is required after
+measuring those scopes. Retaining complete raw/DTO windows increases peak memory;
+revisit smaller windows when target memory budgets approach the measured peak.
+The measured1-worker1.14%cost is accepted for this bounded concurrent design;
+revisit its inline path if single-worker throughput becomes the main requirement.
+
 ## Timing and diagnostics
 
 Add an exclusive native coordinator category for typed parse-window dispatch/
@@ -108,3 +126,16 @@ vDSO callers; profiler resources must not replace ordinary benchmark resources.
 Independent correctness and final architecture-conformance review plus executed
 evidence are required for acceptance. Report any slowdown/resource increase;
 do not raise budgets, drop sources or alter defaults to manufacture a gain.
+
+## Executed result
+
+Implementation`ad605c9`/native source`e604697d...` passes68System Rust tests
+(2ignored),37mimalloc library tests(2ignored),826Python tests(5conditional skips),
+complete both-recipe corpus/index and actual saved current-v2 PPO1/4parity.
+Independent source correctness/conformance reviews READY. The fixed83,783-row
+comparison completes all48commands with exact proofs and zero-residual ledgers.
+Same-worker wall reductions are-1.14%/8.07%/16.14%/20.37%at1/2/4/8workers;
+new kernel RSS maxima378/382/420/502MiB retain the same2GiB Config budget.
+Post-release RSS stays about294–302MiB; no default/main-wheel change occurs.
+Full timings, resource scopes, costs, profile limitations and optional coverage
+are in[verification](../verification/parallel-borrowed-journal.md).
