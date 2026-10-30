@@ -166,6 +166,34 @@ representation ratios must not be multiplied to predict a combined speedup.
 
 ## Artifacts, costs and decision
 
+### Kernel RSS high-water supplement
+
+The earlier RSS columns are sampled process-tree peaks. The observer also saves
+kernel `wait4` ru_maxrss: the largest individual-process peak per trial, which
+can capture brief peaks missed by sampling. The following are the **maximum of
+five measured trials**, excluding warmups, in MiB. They are not sums of simultaneous
+process-tree RSS; PSS remains a separately sampled measure.
+
+| Allocator / complete preparation | 1 worker | 4 workers |
+| --- | ---: | ---: |
+| System |412.5|591.6|
+| mimalloc |360.5|409.5|
+| jemalloc |361.8|380.2|
+
+| Standalone Journal representation, System | Kernel peak RSS MiB |
+| --- | ---: |
+| A: Value/AP |49.4|
+| B: owned/AP |23.3|
+| C: borrowed/AP |22.6|
+| D: Value/no AP, diagnostic |46.3|
+
+Raw per-trial values and medians are in `peak-memory-supplement.json`. These two
+tables measure different workloads and must not be compared as if the standalone
+numbers were the complete pipeline. No mimalloc+borrowed production combination
+was measured; borrowed-input lifetime/worker ownership and exact feature-array
+equivalence remain integration gates. The 2 GiB setting is the application budget,
+not a measured peak or an OS hard limit.
+
 All local evidence is under `runs/assessments/staged-preprocessing-20261030/`:
 `measured-freeze`, `final-builds`, `final-typed-builds`, `allocator-validation`,
 `typed-oracles/{B,C}`, `allocator-primary`, `typed-primary`, `typed-counters`,
