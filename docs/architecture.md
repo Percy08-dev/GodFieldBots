@@ -4,8 +4,11 @@
 
 [ADR0016](adr/0016-staged-preprocessing-optimization.md) accepts isolated
 allocator and typed-Journal experiments (stages0–2); production adoption remains
-a later decision. Independent design/counter/TLS review is READY. Implementation
-and measurements are tracked in
+a later decision. Independent design/code/measurement acceptance is complete:
+mimalloc reduces whole preparation28.7%/10.3% at1/4workers; borrowed typed Journal
+lifecycle reduces32.1% in the standalone experiment, with0newreal-data rejections.
+The latter does not prove production feature-array or end-to-end equivalence.
+Measurements and resource tradeoffs are tracked in
 [staged optimization verification](verification/staged-preprocessing-optimization.md).
 
 [ADR0015](adr/0015-complete-wall-attribution-and-worker-scaling.md) adds reconciled

@@ -156,6 +156,11 @@ journal／Replay読込・デコードで、後段の検証・特徴変換・解�
 RSSは406／469／580／749MiBでした。設定の判断には
 [内訳・資源使用量・比較条件](docs/verification/wall-attribution-and-worker-scaling.md)を参照してください。
 
+アロケータ・型付きJournalの隔離比較は
+[実験結果](docs/verification/staged-preprocessing-optimization.md)にあります。
+実験CLIは`benchmarks/native_preprocessing/runner.py`で、既定はdry-runです。
+本番reader・アロケータの既定値には、この実験の候補をまだ採用していません。
+
 ```sh
 env -u VIRTUAL_ENV uv run --no-sync gf-bots dataset inspect runs/ppo-comparison-v2/dataset.json --preprocessing-config configs/preprocessing/native-low-memory.toml
 env -u VIRTUAL_ENV uv run --no-sync gf-bots train --config configs/experiments/lightgbm-fixed-history.toml --set preprocessing.memory_budget_mib=2048 --set preprocessing.chunk_target_mib=16

@@ -1,7 +1,8 @@
 # 0016: Isolated allocator and typed-Journal experiments
 
-- Status: Accepted design2026-10-30; independent architecture READY for stages0–2.
-  Implementation/runtime/conformance acceptance remains pending.
+- Status: Accepted2026-10-30; stages0–2 implemented and independently reviewed.
+  Runtime/corpus/measurement acceptance PASS; no production adoption.
+  Evidence: [verification](../verification/staged-preprocessing-optimization.md).
 - Owner: root. Production adoption is a later decision; no fixed target speedup.
 - Baseline: e441053, loaded native32e3ad68..., corpus ab5d4913... (83,783learner
   actions,6,784games,13,568participant journals). Recheck these identities at freeze.
@@ -129,3 +130,16 @@ Commit experimental code/config/docs at verified milestones. Report candidates a
 promising/inconclusive/incompatible; do not auto-adopt an allocator/reader. Future
 Journal -> Replay -> worker/pipeline -> remaining feature/I/O changes require a
 new measured decision and the applicable architecture gate.
+
+## Observed outcome
+
+All36allocator,24typed-primary and4counter commands succeeded. FullB/C corpus
+acceptance is13,568files/534,640records with0newrejections and exact canonical
+values/order; all native numeric outputs match the original archive/sample hashes.
+With five trials per primary cell, mimalloc reduces whole preparation28.70% at
+one worker and10.25% at four; jemalloc reduces23.13%/8.25% with lower post-GC RSS.
+Standalone owned/borrowed typed Journal lifecycles reduce22.56%/32.13% versusValue,
+including additional typed shape checks. Borrowed DTOs reduce deserialize
+allocation requests92.92%; cumulative requested bytes and resident memory are
+different metrics. No-AP Value remains diagnostic. These effects are not combined
+or extrapolated into a production typed feature-pipeline speedup.
