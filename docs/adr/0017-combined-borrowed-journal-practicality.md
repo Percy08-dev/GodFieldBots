@@ -59,6 +59,10 @@ file counts, proving the selected route ran (Replay/control Values are separate)
 
 ## Ownership and scheduling
 
+The following is the accepted serial baseline. ADR0018 accepts a subsequent
+[bounded parallel parsing design](0018-bounded-parallel-borrowed-journal-parsing.md);
+its implementation and measurement acceptance are recorded separately.
+
 Preserve fork/window/join, episode order and existing serial validation/feature
 spooling. Typed reader workers return owned raw journal buffers plus existing
 owned Replay documents/evidence. The coordinator creates borrowed DTOs only after

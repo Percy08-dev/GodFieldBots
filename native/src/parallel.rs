@@ -34,6 +34,18 @@ impl JournalData {
     }
 }
 type Completed = (EpisodeData, Sources);
+/// Raw owners and movable source evidence are disjoint: parsing borrows only data.
+/// Consumers must drop parsed records before releasing this window.
+pub(crate) struct EpisodeWindow<'a> {
+    pub paths: &'a [PathBuf],
+    pub data: BudgetVec<EpisodeData>,
+    pub evidence: BudgetVec<Option<Sources>>,
+}
+pub(crate) struct ParsedEpisode<'raw> {
+    pub records1: Option<crate::typed_journal::journal::Records<'raw>>,
+    pub records2: Option<crate::typed_journal::journal::Records<'raw>>,
+}
+
 pub struct EpisodeReader<'a> {
     paths: &'a [PathBuf],
     position: usize,
@@ -71,6 +83,65 @@ impl<'a> EpisodeReader<'a> {
             max_record,
             reader,
         }
+    }
+    pub(crate) fn next_window(
+        &mut self,
+        sources: &mut Sources,
+    ) -> Result<Option<EpisodeWindow<'a>>> {
+        // Preserve legacy decoding, ordered merging and per-episode release.
+        if self.reader == Reader::Legacy {
+            let start = self.position;
+            let Some((_, episode)) = self.next(sources)? else {
+                return Ok(None);
+            };
+            let mut data = BudgetVec::with_capacity(&self.budget, 1)?;
+            data.push(episode)?;
+            let mut evidence = BudgetVec::with_capacity(&self.budget, 1)?;
+            evidence.push(None)?;
+            return Ok(Some(EpisodeWindow {
+                paths: &self.paths[start..start + 1],
+                data,
+                evidence,
+            }));
+        }
+        self.control.check()?;
+        sources.telemetry().configure_reader(true);
+        sources
+            .telemetry()
+            .configure_workers(self.workers, self.in_flight);
+        if self.position == self.paths.len() {
+            return Ok(None);
+        }
+        let end = self
+            .position
+            .saturating_add(self.in_flight)
+            .min(self.paths.len());
+        let paths = &self.paths[self.position..end];
+        let completed = window(
+            paths,
+            self.workers,
+            &self.budget,
+            &self.control,
+            self.max_file,
+            self.max_record,
+            sources.telemetry(),
+            self.reader,
+        )?;
+        let mut data = BudgetVec::with_capacity(&self.budget, paths.len())?;
+        let mut evidence = BudgetVec::with_capacity(&self.budget, paths.len())?;
+        let (completed, _capacity) = completed.into_parts();
+        for result in completed {
+            let (episode, source) =
+                result.ok_or_else(|| Error::contract("missing ordered native worker result"))?;
+            data.push(episode)?;
+            evidence.push(Some(source))?;
+        }
+        self.position = end;
+        Ok(Some(EpisodeWindow {
+            paths,
+            data,
+            evidence,
+        }))
     }
     pub fn next(&mut self, sources: &mut Sources) -> Result<Option<(&'a Path, EpisodeData)>> {
         self.control.check()?;
@@ -273,6 +344,152 @@ fn window(
     Ok(ready)
 }
 
+fn record_parse_failure(failure: &Mutex<Option<Error>>, control: &Control, error: Error) {
+    let mut first = failure.lock().expect("parse worker failure lock");
+    if first.is_none() {
+        *first = Some(error);
+    }
+    control.cancel();
+}
+/// Scoped workers borrow stable raw owners. No result can escape their lifetime.
+/// All joins drain before any failure is returned or downstream publication starts.
+pub(crate) fn parse_window<'raw>(
+    data: &'raw [EpisodeData],
+    workers: usize,
+    budget: &Arc<Budget>,
+    control: &Control,
+    telemetry: &Arc<crate::telemetry::Telemetry>,
+) -> Result<BudgetVec<Option<ParsedEpisode<'raw>>>> {
+    let result = parse_window_inner(data, workers, budget, control, telemetry);
+    if result.is_err() {
+        control.cancel();
+    }
+    result
+}
+fn parse_window_inner<'raw>(
+    data: &'raw [EpisodeData],
+    workers: usize,
+    budget: &Arc<Budget>,
+    control: &Control,
+    telemetry: &Arc<crate::telemetry::Telemetry>,
+) -> Result<BudgetVec<Option<ParsedEpisode<'raw>>>> {
+    control.check()?;
+    let mut ready = BudgetVec::with_capacity(budget, data.len())?;
+    for _ in data {
+        ready.push(None)?;
+    }
+    if data.iter().all(|episode| {
+        matches!(episode.records1, JournalData::Legacy(_))
+            && matches!(episode.records2, JournalData::Legacy(_))
+    }) {
+        return Ok(ready);
+    }
+    telemetry.parse_window(workers, data.len());
+    let parse = |index: usize, slot: usize| -> Result<ParsedEpisode<'raw>> {
+        control.check()?;
+        let mut job = telemetry.parse_job(slot);
+        #[cfg(test)]
+        telemetry.test_parse_hook(index, false);
+        control.check()?;
+        let episode = &data[index];
+        let records1 = episode.records1.parse_typed(control, telemetry)?;
+        let records2 = episode.records2.parse_typed(control, telemetry)?;
+        control.check()?;
+        #[cfg(test)]
+        telemetry.test_parse_hook(index, true);
+        job.success();
+        Ok(ParsedEpisode { records1, records2 })
+    };
+    if workers == 1 {
+        for (index, output) in ready.iter_mut().enumerate() {
+            *output = Some(
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| parse(index, 0)))
+                    .unwrap_or_else(|_| {
+                        Err(Error::contract("native Journal parse worker panicked"))
+                    })?,
+            );
+        }
+        return Ok(ready);
+    }
+    let _failure_capacity = budget.reserve(1024)?;
+    let failure = Mutex::new(None::<Error>);
+    std::thread::scope(|scope| -> Result<()> {
+        let count = workers.min(data.len());
+        let mut handles = BudgetVec::with_capacity(budget, count)?;
+        let mut stacks = BudgetVec::with_capacity(budget, count)?;
+        for worker in 0..count {
+            if let Err(error) = control.check() {
+                record_parse_failure(&failure, control, error);
+                break;
+            }
+            let stack = match budget.reserve(8 * 1024 * 1024) {
+                Ok(stack) => stack,
+                Err(error) => {
+                    record_parse_failure(&failure, control, error);
+                    break;
+                }
+            };
+            let parse = &parse;
+            let failure = &failure;
+            let spawned = std::thread::Builder::new()
+                .name(format!("gf-journal-parse-{worker}"))
+                .stack_size(8 * 1024 * 1024)
+                .spawn_scoped(scope, move || {
+                    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+                        || -> Result<BudgetVec<(usize, ParsedEpisode<'raw>)>> {
+                            let mut results =
+                                BudgetVec::with_capacity(budget, data.len().div_ceil(count))?;
+                            for index in (worker..data.len()).step_by(count) {
+                                results.push((index, parse(index, worker)?))?;
+                            }
+                            Ok(results)
+                        },
+                    ))
+                    .unwrap_or_else(|_| {
+                        Err(Error::contract("native Journal parse worker panicked"))
+                    });
+                    if let Err(error) = &outcome {
+                        record_parse_failure(failure, control, error.clone());
+                    }
+                    outcome
+                });
+            match spawned {
+                Ok(handle) => {
+                    telemetry.parse_thread_started();
+                    // Capacity was admitted before spawning, so these cannot grow.
+                    stacks.push(stack)?;
+                    handles.push(handle)?;
+                }
+                Err(error) => {
+                    record_parse_failure(&failure, control, error.into());
+                    break;
+                }
+            }
+        }
+        while let Some(handle) = handles.pop() {
+            match handle.join() {
+                Ok(Ok(results)) => {
+                    let (results, _capacity) = results.into_parts();
+                    for (index, result) in results {
+                        ready[index] = Some(result);
+                    }
+                }
+                Ok(Err(_)) => {}
+                Err(_) => record_parse_failure(
+                    &failure,
+                    control,
+                    Error::contract("native Journal parse worker panicked"),
+                ),
+            }
+        }
+        if let Some(error) = failure.lock().expect("parse worker failure lock").take() {
+            return Err(error);
+        }
+        control.check()
+    })?;
+    Ok(ready)
+}
+
 #[cfg(test)]
 mod worker_observation_tests {
     use super::*;
@@ -469,6 +686,299 @@ mod worker_observation_tests {
                 reader.next(&mut sources),
                 Err(Error::ResourceLimit(_))
             ));
+            drop(reader);
+            drop(sources);
+            assert_eq!(budget.used(), 0);
+        }
+    }
+    fn typed_fixture(count: usize) -> Fixture {
+        let fixture = Fixture::new(count);
+        for (index, path) in fixture.paths.iter().enumerate() {
+            for name in ["player-1.jsonl", "player-2.jsonl"] {
+                fs::write(
+                    path.join(name),
+                    format!("{{\"kind\":\"episode{index}\"}}\n"),
+                )
+                .unwrap();
+            }
+        }
+        fixture
+    }
+
+    #[test]
+    fn scoped_parse_reversed_finish_order_preserves_raw_and_input_order() {
+        use std::sync::Condvar;
+        for workers in [2, 4, 8] {
+            let fixture = typed_fixture(workers);
+            let budget = Budget::new(128 * 1024 * 1024);
+            let control = Control::new(monotonic() + 30.).unwrap();
+            let telemetry = Arc::new(Telemetry::default());
+            let mut sources =
+                Sources::with_telemetry(budget.clone(), 1024 * 1024, 1024 * 1024, &telemetry);
+            let mut reader = EpisodeReader::new(
+                &fixture.paths,
+                workers,
+                workers,
+                &budget,
+                &control,
+                1024 * 1024,
+                1024 * 1024,
+                Reader::TypedBorrowedV1,
+            );
+            let mut window = reader.next_window(&mut sources).unwrap().unwrap();
+            assert_eq!(sources.entries.len(), 0); // No evidence merged before parsing succeeds.
+            let all_started = Arc::new(std::sync::Barrier::new(workers));
+            let finish_order = Arc::new((Mutex::new(Vec::new()), Condvar::new()));
+            let order = finish_order.clone();
+            telemetry.test_set_parse_hook(Arc::new(move |index, finished| {
+                if !finished {
+                    all_started.wait();
+                }
+                let (lock, wake) = &*order;
+                let mut completed = lock.lock().unwrap();
+                if finished {
+                    completed.push(index);
+                    wake.notify_all();
+                } else {
+                    while completed.len() != workers - 1 - index {
+                        let (state, timeout) = wake
+                            .wait_timeout(completed, std::time::Duration::from_secs(5))
+                            .unwrap();
+                        assert!(!timeout.timed_out(), "parse order rendezvous timed out");
+                        completed = state;
+                    }
+                }
+            }));
+            let mut parsed =
+                parse_window(&window.data, workers, &budget, &control, &telemetry).unwrap();
+            assert_eq!(
+                *finish_order.0.lock().unwrap(),
+                (0..workers).rev().collect::<Vec<_>>()
+            );
+            for index in 0..workers {
+                let result = parsed[index].take().unwrap();
+                let records1 = result.records1.unwrap();
+                let records2 = result.records2.unwrap();
+                assert_eq!(records1.records[0].kind.as_ref(), format!("episode{index}"));
+                assert_eq!(records2.records[0].kind.as_ref(), format!("episode{index}"));
+                // Borrowed DTOs stay valid while separately owned evidence moves.
+                sources
+                    .merge(window.evidence[index].take().unwrap(), &control)
+                    .unwrap();
+                assert!(matches!(
+                    records1.records[0].kind.0,
+                    std::borrow::Cow::Borrowed(_)
+                ));
+            }
+            let metrics = counters(&telemetry);
+            assert_eq!(
+                metrics["typed_parse_parallelism"]["active_parse_peak"],
+                workers
+            );
+            assert_eq!(metrics["typed_parse_parallelism"]["active_jobs"], 0);
+            assert_eq!(
+                metrics["typed_parse_parallelism"]["spawned_threads"],
+                workers
+            );
+            assert_eq!(metrics["typed_journal_files"], 2 * workers);
+            assert_eq!(metrics["decode_parallelism"]["spawned_threads"], workers);
+            for slot in 0..workers {
+                assert_eq!(
+                    metrics["typed_parse_parallelism"]["logical_slots"][slot]["jobs"],
+                    1
+                );
+                assert_eq!(
+                    metrics["typed_parse_parallelism"]["logical_slots"][slot]["failed_jobs"],
+                    0
+                );
+            }
+            drop(parsed);
+            drop(window);
+            drop(reader);
+            drop(sources);
+            assert_eq!(budget.used(), 0);
+        }
+    }
+
+    #[test]
+    fn inline_parse_has_no_threads_and_legacy_has_no_parse_jobs() {
+        for reader_kind in [Reader::Legacy, Reader::TypedBorrowedV1] {
+            let fixture = typed_fixture(4);
+            let budget = Budget::new(128 * 1024 * 1024);
+            let control = Control::new(monotonic() + 30.).unwrap();
+            let telemetry = Arc::new(Telemetry::default());
+            let mut sources =
+                Sources::with_telemetry(budget.clone(), 1024 * 1024, 1024 * 1024, &telemetry);
+            let mut reader = EpisodeReader::new(
+                &fixture.paths,
+                1,
+                4,
+                &budget,
+                &control,
+                1024 * 1024,
+                1024 * 1024,
+                reader_kind,
+            );
+            let mut seen = 0;
+            while let Some(window) = reader.next_window(&mut sources).unwrap() {
+                // The legacy release boundary is still a single episode.
+                assert_eq!(
+                    window.data.len(),
+                    if reader_kind == Reader::Legacy { 1 } else { 4 }
+                );
+                let parsed = parse_window(&window.data, 1, &budget, &control, &telemetry).unwrap();
+                for episode in parsed.iter() {
+                    if reader_kind == Reader::Legacy {
+                        assert!(episode.is_none());
+                    } else {
+                        assert!(episode.as_ref().unwrap().records1.is_some());
+                    }
+                }
+                seen += window.data.len();
+            }
+            assert_eq!(seen, 4);
+            let metrics = counters(&telemetry);
+            assert_eq!(metrics["typed_parse_parallelism"]["spawned_threads"], 0);
+            assert_eq!(metrics["typed_parse_parallelism"]["active_jobs"], 0);
+            assert_eq!(
+                metrics["typed_parse_parallelism"]["active_parse_peak"],
+                if reader_kind == Reader::Legacy { 0 } else { 1 }
+            );
+            assert_eq!(
+                metrics["typed_parse_parallelism"]["logical_slots"][0]["jobs"],
+                if reader_kind == Reader::Legacy { 0 } else { 4 }
+            );
+            drop(reader);
+            drop(sources);
+            assert_eq!(budget.used(), 0);
+        }
+    }
+
+    #[test]
+    fn parse_syntax_panic_cancel_and_deadline_drain_without_source_publication() {
+        for workers in [1, 4] {
+            for failure in ["syntax", "panic", "cancel", "deadline"] {
+                let fixture = typed_fixture(4);
+                if failure == "syntax" {
+                    fs::write(fixture.paths[0].join("player-1.jsonl"), b"[\n").unwrap();
+                }
+                let budget = Budget::new(128 * 1024 * 1024);
+                let control = Control::new(monotonic() + 30.).unwrap();
+                let telemetry = Arc::new(Telemetry::default());
+                let mut sources =
+                    Sources::with_telemetry(budget.clone(), 1024 * 1024, 1024 * 1024, &telemetry);
+                let mut reader = EpisodeReader::new(
+                    &fixture.paths,
+                    workers,
+                    4,
+                    &budget,
+                    &control,
+                    1024 * 1024,
+                    1024 * 1024,
+                    Reader::TypedBorrowedV1,
+                );
+                let window = reader.next_window(&mut sources).unwrap().unwrap();
+                let parse_control = if failure == "deadline" {
+                    Control::new(monotonic() + 0.001).unwrap()
+                } else {
+                    control.clone()
+                };
+                if failure == "deadline" {
+                    std::thread::sleep(std::time::Duration::from_millis(3));
+                }
+                if failure == "panic" || failure == "cancel" {
+                    let all_started = Arc::new(std::sync::Barrier::new(workers));
+                    let cancel = parse_control.clone();
+                    telemetry.test_set_parse_hook(Arc::new(move |index, finished| {
+                        if !finished {
+                            all_started.wait();
+                            if index == 0 {
+                                if failure == "panic" {
+                                    panic!("injected parse panic");
+                                }
+                                cancel.cancel();
+                            }
+                        }
+                    }));
+                }
+                let result =
+                    parse_window(&window.data, workers, &budget, &parse_control, &telemetry);
+                match (failure, result) {
+                    ("syntax", Err(Error::Contract(message))) => {
+                        assert!(message.contains("EOF"), "{message}")
+                    }
+                    ("panic", Err(Error::Contract(message))) => {
+                        assert!(message.contains("parse worker panicked"))
+                    }
+                    ("cancel", Err(Error::Cancelled)) => {}
+                    ("deadline", Err(Error::Deadline)) => {}
+                    _ => panic!("wrong parse failure for {failure}"),
+                }
+                assert_eq!(sources.entries.len(), 0);
+                assert!(matches!(parse_control.check(), Err(Error::Cancelled)));
+                let metrics = counters(&telemetry);
+                assert_eq!(metrics["typed_parse_parallelism"]["active_jobs"], 0);
+                if failure == "panic" || failure == "cancel" {
+                    assert_eq!(
+                        metrics["typed_parse_parallelism"]["active_parse_peak"],
+                        workers
+                    );
+                }
+                drop(window);
+                drop(reader);
+                drop(sources);
+                assert_eq!(budget.used(), 0);
+            }
+        }
+    }
+
+    #[test]
+    fn parse_capacity_and_partial_stack_refusal_release_all_leases() {
+        for failure in ["capacity", "first-stack", "partial-stacks"] {
+            let fixture = typed_fixture(4);
+            let budget = Budget::new(if failure == "partial-stacks" {
+                20 * 1024 * 1024
+            } else {
+                4 * 1024 * 1024
+            });
+            let control = Control::new(monotonic() + 30.).unwrap();
+            let telemetry = Arc::new(Telemetry::default());
+            let mut sources =
+                Sources::with_telemetry(budget.clone(), 1024 * 1024, 1024 * 1024, &telemetry);
+            // Serial decode admits raw storage without using any worker stacks.
+            let mut reader = EpisodeReader::new(
+                &fixture.paths,
+                1,
+                4,
+                &budget,
+                &control,
+                1024 * 1024,
+                1024 * 1024,
+                Reader::TypedBorrowedV1,
+            );
+            let window = reader.next_window(&mut sources).unwrap().unwrap();
+            let quota = if failure == "capacity" {
+                Some(budget.reserve(budget.limit() - budget.used()).unwrap())
+            } else {
+                None
+            };
+            assert!(matches!(
+                parse_window(&window.data, 4, &budget, &control, &telemetry),
+                Err(Error::ResourceLimit(_))
+            ));
+            let metrics = counters(&telemetry);
+            let spawned = metrics["typed_parse_parallelism"]["spawned_threads"]
+                .as_u64()
+                .unwrap();
+            if failure == "partial-stacks" {
+                assert!(spawned > 0 && spawned < 4);
+            } else {
+                assert_eq!(spawned, 0);
+            }
+            assert_eq!(metrics["typed_parse_parallelism"]["active_jobs"], 0);
+            assert_eq!(sources.entries.len(), 0);
+            drop(quota);
+            drop(window);
             drop(reader);
             drop(sources);
             assert_eq!(budget.used(), 0);

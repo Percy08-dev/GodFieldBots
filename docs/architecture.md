@@ -2,6 +2,12 @@
 
 ## Status and scope
 
+[ADR0018](adr/0018-bounded-parallel-borrowed-journal-parsing.md) accepts the design
+for bounded scoped-worker Journal parsing with ordered consumption and unchanged
+Config budgets. Source reviews,826Python tests, complete corpus/index and saved
+PPO parity pass. Controlled1/2/4/8before/after measurements remain in progress;
+[verification](verification/parallel-borrowed-journal.md).
+
 [ADR0017](adr/0017-combined-borrowed-journal-practicality.md) implements a verified
 opt-in mimalloc/borrowed-Journal candidate. Scoped ownership, complete typed
 semantic/feature parity, saved PPO inputs, lifecycle checks and all48actual-path

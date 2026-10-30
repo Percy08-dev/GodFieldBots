@@ -97,6 +97,7 @@ impl Drop for DecodeTimer<'_> {
 pub enum CoordinatorPhase {
     CollectionSetup,
     DecodeWaitMerge,
+    TypedParseWait,
     JournalValidation,
     SourceMetadata,
     ProofLedger,
@@ -108,9 +109,10 @@ pub enum CoordinatorPhase {
     Other,
 }
 impl CoordinatorPhase {
-    const ALL: [Self; 11] = [
+    const ALL: [Self; 12] = [
         Self::CollectionSetup,
         Self::DecodeWaitMerge,
+        Self::TypedParseWait,
         Self::JournalValidation,
         Self::SourceMetadata,
         Self::ProofLedger,
@@ -125,6 +127,7 @@ impl CoordinatorPhase {
         match self {
             Self::CollectionSetup => "collection_setup_index_inventory",
             Self::DecodeWaitMerge => "decode_window_wait_and_source_merge",
+            Self::TypedParseWait => "typed_parse_window_dispatch_and_join",
             Self::JournalValidation => "journal_validation",
             Self::SourceMetadata => "source_metadata_linkage_canonical_checks",
             Self::ProofLedger => "proof_ledger_serialization",
@@ -141,7 +144,7 @@ impl CoordinatorPhase {
 struct WallState {
     current: CoordinatorPhase,
     since: Instant,
-    ns: [u64; 11],
+    ns: [u64; 12],
 }
 /// Single-coordinator stopwatch; Cell borrows never span any application hook.
 /// The final Drop charges all remaining elapsed time, including error unwinding.
@@ -233,12 +236,50 @@ impl Drop for DecodeJob<'_> {
     }
 }
 #[derive(Default)]
+struct ParseParallelism {
+    windows: AtomicU64,
+    episodes: AtomicU64,
+    threads: AtomicU64,
+    effective_slots_peak: AtomicU64,
+    active: AtomicU64,
+    active_peak: AtomicU64,
+    slots: [WorkerSlot; 8],
+}
+pub struct ParseJob<'a> {
+    parallel: &'a ParseParallelism,
+    slot: usize,
+    started: Instant,
+    success: bool,
+}
+impl ParseJob<'_> {
+    pub fn success(&mut self) {
+        self.success = true;
+    }
+}
+impl Drop for ParseJob<'_> {
+    fn drop(&mut self) {
+        let slot = &self.parallel.slots[self.slot];
+        slot.jobs.fetch_add(1, Ordering::Relaxed);
+        slot.ns
+            .fetch_add(self.started.elapsed().as_nanos() as u64, Ordering::Relaxed);
+        if !self.success {
+            slot.failed.fetch_add(1, Ordering::Relaxed);
+        }
+        self.parallel.active.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+#[cfg(test)]
+type ParseHook = std::sync::Arc<dyn Fn(usize, bool) + Send + Sync>;
+#[derive(Default)]
 pub struct Telemetry {
+    parse_parallelism: ParseParallelism,
+    #[cfg(test)]
+    parse_hook: std::sync::Mutex<Option<ParseHook>>,
     typed_reader: AtomicU64,
     typed_journal_files: AtomicU64,
     typed_journal_records: AtomicU64,
     legacy_journal_files: AtomicU64,
-    coordinator_ns: [AtomicU64; 11],
+    coordinator_ns: [AtomicU64; 12],
     coordinator_parent_ns: AtomicU64,
     coordinator_calls: AtomicU64,
     coordinator_failed: AtomicU64,
@@ -302,7 +343,7 @@ impl Telemetry {
             state: Cell::new(WallState {
                 current: CoordinatorPhase::Other,
                 since: started,
-                ns: [0; 11],
+                ns: [0; 12],
             }),
             success: Cell::new(false),
         }
@@ -391,6 +432,55 @@ impl Telemetry {
             "windows": value(&self.windows), "scheduled_episodes": value(&self.window_episodes),
             "spawned_threads": value(&self.threads_started), "effective_slots_peak": value(&self.effective_slots_peak),
             "active_jobs": value(&self.active_decode), "active_decode_peak": value(&self.active_decode_peak),
+            "logical_slots": slots}).to_string()
+    }
+
+    pub fn parse_window(&self, workers: usize, episodes: usize) {
+        let p = &self.parse_parallelism;
+        p.windows.fetch_add(1, Ordering::Relaxed);
+        p.episodes.fetch_add(episodes as u64, Ordering::Relaxed);
+        p.effective_slots_peak
+            .fetch_max(workers.min(episodes) as u64, Ordering::Relaxed);
+    }
+    pub fn parse_thread_started(&self) {
+        self.parse_parallelism
+            .threads
+            .fetch_add(1, Ordering::Relaxed);
+    }
+    pub fn parse_job(&self, slot: usize) -> ParseJob<'_> {
+        let p = &self.parse_parallelism;
+        let active = p.active.fetch_add(1, Ordering::Relaxed) + 1;
+        p.active_peak.fetch_max(active, Ordering::Relaxed);
+        ParseJob {
+            parallel: p,
+            slot,
+            started: Instant::now(),
+            success: false,
+        }
+    }
+    #[cfg(test)]
+    pub(crate) fn test_set_parse_hook(&self, hook: ParseHook) {
+        *self.parse_hook.lock().unwrap() = Some(hook);
+    }
+    #[cfg(test)]
+    pub(crate) fn test_parse_hook(&self, index: usize, finished: bool) {
+        let hook = self.parse_hook.lock().unwrap().clone();
+        if let Some(hook) = hook {
+            hook(index, finished);
+        }
+    }
+    fn parse_parallel_json(&self) -> String {
+        let value = |c: &AtomicU64| c.load(Ordering::Relaxed);
+        let p = &self.parse_parallelism;
+        let slots: Vec<_> = p.slots.iter().enumerate().map(|(index, slot)| serde_json::json!({
+            "logical_slot": index, "jobs": value(&slot.jobs), "failed_jobs": value(&slot.failed),
+            "elapsed_nanoseconds": value(&slot.ns), "elapsed_seconds": value(&slot.ns) as f64 / 1e9,
+        })).collect();
+        serde_json::json!({"scope": "typed Journal parse jobs only; scoped threads borrow coordinator-owned raw buffers; elapsed is nested wall time, not CPU time; active peak is job overlap, not CPU utilization",
+            "configured_workers": value(&self.configured_workers), "configured_max_in_flight": value(&self.configured_in_flight),
+            "windows": value(&p.windows), "scheduled_episodes": value(&p.episodes),
+            "spawned_threads": value(&p.threads), "effective_slots_peak": value(&p.effective_slots_peak),
+            "active_jobs": value(&p.active), "active_parse_peak": value(&p.active_peak),
             "logical_slots": slots}).to_string()
     }
 
@@ -559,12 +649,13 @@ impl Telemetry {
             .collect::<Vec<_>>()
             .join(",");
         format!(
-            "{},\"source_kind_decode\":{{{}}},\"json_memory_policy\":\"{}\",\"coordinator_scan_wall\":{},\"decode_parallelism\":{},\"reader_contract\":\"{}\",\"typed_journal_files\":{},\"typed_journal_records\":{},\"legacy_journal_files\":{},\"journal_parse_scope\":\"{}\"}}",
+            "{},\"source_kind_decode\":{{{}}},\"json_memory_policy\":\"{}\",\"coordinator_scan_wall\":{},\"decode_parallelism\":{},\"typed_parse_parallelism\":{},\"reader_contract\":\"{}\",\"typed_journal_files\":{},\"typed_journal_records\":{},\"legacy_journal_files\":{},\"journal_parse_scope\":\"{}\"}}",
             &output[..output.len() - 1],
             kinds,
             crate::json::MEMORY_POLICY,
             self.coordinator_json(),
             self.parallel_json(),
+            self.parse_parallel_json(),
             if value(&self.typed_reader) == 0 {
                 "legacy"
             } else {
@@ -576,7 +667,7 @@ impl Telemetry {
             if value(&self.typed_reader) == 0 {
                 "legacy Journal parsing occurs in decoder jobs"
             } else {
-                "typed Journal parsing occurs on ordered coordinator; decoder jobs own raw buffers and legacy Replay documents"
+                "typed Journal parsing occurs in bounded scoped borrowed-raw parse windows (inline at one worker); ordered coordinator validates and encodes after joins; decoder diagnostics exclude parse jobs"
             }
         )
     }

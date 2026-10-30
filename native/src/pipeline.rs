@@ -382,369 +382,398 @@ pub fn scan(session: &mut Session) -> Result<Stage> {
         loop {
             let decoded = {
                 let _scope = wall.scope(WallPhase::DecodeWaitMerge);
-                reader.next(&mut session.sources)?
+                reader.next_window(&mut session.sources)?
             };
-            let Some((directory, data)) = decoded else {
-                break;
+            let Some(mut window) = decoded else { break };
+            let mut parsed = if session.settings.reader == crate::session::Reader::TypedBorrowedV1 {
+                let _scope = wall.scope(WallPhase::TypedParseWait);
+                crate::parallel::parse_window(
+                    &window.data,
+                    session.settings.workers,
+                    budget,
+                    control,
+                    &session.telemetry,
+                )?
+            } else {
+                BudgetVec::new(budget)
             };
+            for (index, (directory, data)) in
+                window.paths.iter().zip(window.data.iter()).enumerate()
             {
-                wall.set(WallPhase::SourceMetadata);
-                control.check()?;
-                let id = directory
-                    .file_name()
-                    .and_then(|v| v.to_str())
-                    .ok_or_else(|| Error::contract("invalid episode path"))?;
-                let links = episode_index.links(id, control)?;
-                let crate::parallel::EpisodeData {
-                    records1,
-                    records2,
-                    replay1,
-                    replay2,
-                } = &data;
-                wall.set(WallPhase::JournalValidation);
-                let parsed1 = records1.parse_typed(control, &session.telemetry)?;
-                let parsed2 = records2.parse_typed(control, &session.telemetry)?;
-                let journal1 = {
-                    let _timer = session
-                        .telemetry
-                        .phase_timer(crate::telemetry::Phase::JournalInputValidation);
-                    JournalView::validate(
-                        records1,
-                        parsed1.as_ref(),
-                        session.settings.reader,
-                        budget,
-                        control,
-                    )?
-                };
-                let journal2 = {
-                    let _timer = session
-                        .telemetry
-                        .phase_timer(crate::telemetry::Phase::JournalInputValidation);
-                    JournalView::validate(
-                        records2,
-                        parsed2.as_ref(),
-                        session.settings.reader,
-                        budget,
-                        control,
-                    )?
-                };
-                let first_viewer = journal1.header().require("viewer")?.integer(1, 2)? as usize;
-                let second_viewer = journal2.header().require("viewer")?.integer(1, 2)? as usize;
-                if first_viewer == second_viewer {
-                    return Err(Error::contract("duplicate source participant identity"));
+                {
+                    let _scope = wall.scope(WallPhase::DecodeWaitMerge);
+                    if let Some(evidence) = window.evidence[index].take() {
+                        session.sources.merge(evidence, control)?;
+                    }
                 }
-                let by_viewer = if first_viewer == 1 {
-                    [&journal1, &journal2]
-                } else {
-                    [&journal2, &journal1]
+                let (parsed1, parsed2) = match parsed.get_mut(index).and_then(Option::take) {
+                    Some(parsed) => (parsed.records1, parsed.records2),
+                    None => (None, None),
                 };
-                let journals = [&journal1, &journal2];
-                let replays = [&replay1.root, &replay2.root];
-                for (slot, journal) in journals.iter().enumerate() {
+                {
                     wall.set(WallPhase::SourceMetadata);
                     control.check()?;
-                    let viewer = journal.header().require("viewer")?.integer(1, 2)? as usize;
-                    let replay = replays[viewer - 1];
-                    let source = directory.join(format!("player-{}.jsonl", slot + 1));
-                    let metadata = projection::source_metadata(
-                        collection,
-                        &source,
-                        replay,
-                        journal,
-                        &links,
-                        &session.sources,
-                        budget,
-                        control,
-                    )?;
-                    wall.set(WallPhase::ProofLedger);
-                    let _proof_timer = session
-                        .telemetry
-                        .phase_timer(crate::telemetry::Phase::ProofStaging);
-                    let encoded = json::canonical(&metadata, budget, control)?;
-                    proof_ledger.append(
-                        &std::fs::canonicalize(&source)?,
-                        &encoded,
-                        &stage.scratch,
-                    )?;
-                    source_count += 1;
+                    let id = directory
+                        .file_name()
+                        .and_then(|v| v.to_str())
+                        .ok_or_else(|| Error::contract("invalid episode path"))?;
+                    let links = episode_index.links(id, control)?;
+                    let crate::parallel::EpisodeData {
+                        records1,
+                        records2,
+                        replay1,
+                        replay2,
+                    } = data;
+                    wall.set(WallPhase::JournalValidation);
+                    let journal1 = {
+                        let _timer = session
+                            .telemetry
+                            .phase_timer(crate::telemetry::Phase::JournalInputValidation);
+                        JournalView::validate(
+                            records1,
+                            parsed1.as_ref(),
+                            session.settings.reader,
+                            budget,
+                            control,
+                        )?
+                    };
+                    let journal2 = {
+                        let _timer = session
+                            .telemetry
+                            .phase_timer(crate::telemetry::Phase::JournalInputValidation);
+                        JournalView::validate(
+                            records2,
+                            parsed2.as_ref(),
+                            session.settings.reader,
+                            budget,
+                            control,
+                        )?
+                    };
+                    let first_viewer = journal1.header().require("viewer")?.integer(1, 2)? as usize;
+                    let second_viewer =
+                        journal2.header().require("viewer")?.integer(1, 2)? as usize;
+                    if first_viewer == second_viewer {
+                        return Err(Error::contract("duplicate source participant identity"));
+                    }
+                    let by_viewer = if first_viewer == 1 {
+                        [&journal1, &journal2]
+                    } else {
+                        [&journal2, &journal1]
+                    };
+                    let journals = [&journal1, &journal2];
+                    let replays = [&replay1.root, &replay2.root];
+                    for (slot, journal) in journals.iter().enumerate() {
+                        wall.set(WallPhase::SourceMetadata);
+                        control.check()?;
+                        let viewer = journal.header().require("viewer")?.integer(1, 2)? as usize;
+                        let replay = replays[viewer - 1];
+                        let source = directory.join(format!("player-{}.jsonl", slot + 1));
+                        let metadata = projection::source_metadata(
+                            collection,
+                            &source,
+                            replay,
+                            journal,
+                            &links,
+                            &session.sources,
+                            budget,
+                            control,
+                        )?;
+                        wall.set(WallPhase::ProofLedger);
+                        let _proof_timer = session
+                            .telemetry
+                            .phase_timer(crate::telemetry::Phase::ProofStaging);
+                        let encoded = json::canonical(&metadata, budget, control)?;
+                        proof_ledger.append(
+                            &std::fs::canonicalize(&source)?,
+                            &encoded,
+                            &stage.scratch,
+                        )?;
+                        source_count += 1;
+                        wall.set(WallPhase::EpisodeFactsBuffers);
+                        identities.push(Identity {
+                            _metadata: budget.reserve(
+                                string(journal.header(), "run_id")?.len()
+                                    + string(journal.header(), "game_id")?.len()
+                                    + 2 * size_of::<String>(),
+                            )?,
+                            run: (string(journal.header(), "run_id")?).to_owned(),
+                            game: (string(journal.header(), "game_id")?).to_owned(),
+                            viewer: viewer as i128,
+                        })?;
+                        let lineage = metadata.require("lineage")?;
+                        lineages.push(Lineage {
+                            _metadata: budget.reserve(
+                                string(lineage, "seed")?.len()
+                                    + if lineage.require("ancestry")?.is_null() {
+                                        0
+                                    } else {
+                                        string(lineage, "ancestry")?.len()
+                                    }
+                                    + 2 * size_of::<String>(),
+                            )?,
+                            seed: (string(lineage, "seed")?).to_owned(),
+                            ancestry: if lineage.require("ancestry")?.is_null() {
+                                None
+                            } else {
+                                Some((string(lineage, "ancestry")?).to_owned())
+                            },
+                            split: if string(lineage, "split")? == "train" {
+                                0
+                            } else {
+                                1
+                            },
+                        })?;
+                        let current = string(journal.header(), "action_config_hash")?;
+                        if action_hash
+                            .as_ref()
+                            .is_some_and(|prior| prior.as_bytes() != current.as_bytes())
+                        {
+                            return Err(Error::contract(
+                                "frozen sources must share identical action conditions",
+                            ));
+                        }
+                        if action_hash.is_none() {
+                            action_hash = Some((current).to_owned());
+                        }
+                    }
                     wall.set(WallPhase::EpisodeFactsBuffers);
-                    identities.push(Identity {
-                        _metadata: budget.reserve(
-                            string(journal.header(), "run_id")?.len()
-                                + string(journal.header(), "game_id")?.len()
-                                + 2 * size_of::<String>(),
-                        )?,
-                        run: (string(journal.header(), "run_id")?).to_owned(),
-                        game: (string(journal.header(), "game_id")?).to_owned(),
-                        viewer: viewer as i128,
-                    })?;
-                    let lineage = metadata.require("lineage")?;
-                    lineages.push(Lineage {
-                        _metadata: budget.reserve(
-                            string(lineage, "seed")?.len()
-                                + if lineage.require("ancestry")?.is_null() {
-                                    0
-                                } else {
-                                    string(lineage, "ancestry")?.len()
-                                }
-                                + 2 * size_of::<String>(),
-                        )?,
-                        seed: (string(lineage, "seed")?).to_owned(),
-                        ancestry: if lineage.require("ancestry")?.is_null() {
-                            None
-                        } else {
-                            Some((string(lineage, "ancestry")?).to_owned())
-                        },
-                        split: if string(lineage, "split")? == "train" {
-                            0
+                    let learner = links.spec.require("learner_viewer")?.integer(1, 2)? as usize;
+                    let journal = by_viewer[learner - 1];
+                    let outcomes = [
+                        by_viewer[0]
+                            .end()
+                            .ok_or_else(|| Error::contract("missing journal end"))?,
+                        by_viewer[1]
+                            .end()
+                            .ok_or_else(|| Error::contract("missing journal end"))?,
+                    ];
+                    if !outcomes[0]
+                        .require("outcome")?
+                        .eq_python(outcomes[1].require("outcome")?)
+                    {
+                        return Err(Error::contract("participant terminal facts disagree"));
+                    }
+                    let outcome = outcomes[0].require("outcome")?;
+                    let winner = if outcome.string().is_ok_and(|s| s == "draw") {
+                        0
+                    } else {
+                        outcome.require("win")?.require("winner")?.integer(1, 2)? as i64
+                    };
+                    let rewards = [
+                        outcomes[0].require("terminal_reward")?.integer(-1, 1)? as f64,
+                        outcomes[1].require("terminal_reward")?.integer(-1, 1)? as f64,
+                    ];
+                    let split = if string(m, "split")? == "train" { 0 } else { 1 };
+                    let decisions = journal.decision_count();
+                    let mut candidates = 0usize;
+                    for decision_index in 0..journal.decision_count() {
+                        let decision = journal.decision(decision_index)?;
+                        control.check()?;
+                        identity_ledger.append(
+                            split as usize,
+                            journal.header(),
+                            decision,
+                            budget,
+                            &stage.scratch,
+                            control,
+                        )?;
+                        let length = if session.online {
+                            decision.candidate_count()?
                         } else {
                             1
-                        },
-                    })?;
-                    let current = string(journal.header(), "action_config_hash")?;
-                    if action_hash
-                        .as_ref()
-                        .is_some_and(|prior| prior.as_bytes() != current.as_bytes())
-                    {
-                        return Err(Error::contract(
-                            "frozen sources must share identical action conditions",
-                        ));
+                        };
+                        candidates = candidates
+                            .checked_add(length)
+                            .ok_or_else(|| Error::resource("candidate count overflow"))?;
                     }
-                    if action_hash.is_none() {
-                        action_hash = Some((current).to_owned());
-                    }
-                }
-                wall.set(WallPhase::EpisodeFactsBuffers);
-                let learner = links.spec.require("learner_viewer")?.integer(1, 2)? as usize;
-                let journal = by_viewer[learner - 1];
-                let outcomes = [
-                    by_viewer[0]
-                        .end()
-                        .ok_or_else(|| Error::contract("missing journal end"))?,
-                    by_viewer[1]
-                        .end()
-                        .ok_or_else(|| Error::contract("missing journal end"))?,
-                ];
-                if !outcomes[0]
-                    .require("outcome")?
-                    .eq_python(outcomes[1].require("outcome")?)
-                {
-                    return Err(Error::contract("participant terminal facts disagree"));
-                }
-                let outcome = outcomes[0].require("outcome")?;
-                let winner = if outcome.string().is_ok_and(|s| s == "draw") {
-                    0
-                } else {
-                    outcome.require("win")?.require("winner")?.integer(1, 2)? as i64
-                };
-                let rewards = [
-                    outcomes[0].require("terminal_reward")?.integer(-1, 1)? as f64,
-                    outcomes[1].require("terminal_reward")?.integer(-1, 1)? as f64,
-                ];
-                let split = if string(m, "split")? == "train" { 0 } else { 1 };
-                let decisions = journal.decision_count();
-                let mut candidates = 0usize;
-                for decision_index in 0..journal.decision_count() {
-                    let decision = journal.decision(decision_index)?;
-                    control.check()?;
-                    identity_ledger.append(
-                        split as usize,
-                        journal.header(),
-                        decision,
-                        budget,
-                        &stage.scratch,
-                        control,
-                    )?;
-                    let length = if session.online {
-                        decision.candidate_count()?
+                    let width = if ["prepare", "ppo"].contains(&session.operation.as_str()) {
+                        session.config.width()
                     } else {
-                        1
+                        0
                     };
-                    candidates = candidates
-                        .checked_add(length)
-                        .ok_or_else(|| Error::resource("candidate count overflow"))?;
-                }
-                let width = if ["prepare", "ppo"].contains(&session.operation.as_str()) {
-                    session.config.width()
-                } else {
-                    0
-                };
-                let bytes = candidates
-                    .checked_add(decisions)
-                    .and_then(|n| n.checked_mul(width))
-                    .and_then(|n| n.checked_add(7 * decisions + 1))
-                    .and_then(|n| n.checked_mul(8))
-                    .ok_or_else(|| Error::resource("episode numeric size overflow"))?;
-                let scratch_lease = stage.scratch.reserve(bytes)?;
-                let path = stage
-                    .directory
-                    .join(format!("episode-{:08}.bin", stage.episodes.len()));
-                let _write_buffer = budget.reserve(32768)?;
-                let mut file = BufWriter::with_capacity(
-                    32768,
-                    OpenOptions::new()
-                        .write(true)
-                        .create_new(true)
-                        .open(&path)?,
-                );
-                let mut offsets = BudgetVec::with_capacity(budget, decisions + 1)?;
-                offsets.push(0i64)?;
-                let mut selected = BudgetVec::with_capacity(budget, decisions)?;
-                let mut logprob = BudgetVec::with_capacity(budget, decisions)?;
-                let mut values = BudgetVec::with_capacity(budget, decisions)?;
-                let mut logprob_present = BudgetVec::with_capacity(budget, decisions)?;
-                let mut value_present = BudgetVec::with_capacity(budget, decisions)?;
-                let mut state_features = BudgetVec::with_capacity(budget, decisions * width)?;
-                let mut candidate_counts = BudgetVec::with_capacity(budget, decisions)?;
-                let mut row = BudgetVec::with_capacity(budget, width)?;
-                for _ in 0..width {
-                    row.push(0.)?;
-                }
-                wall.set(WallPhase::FeaturesSpooling);
-                let mut candidate_count = 0usize;
-                for decision_index in 0..journal.decision_count() {
-                    let decision = journal.decision(decision_index)?;
-                    control.check()?;
-                    let saved_index = decision.selected()?;
-                    let (saved_logprob, value) = decision.old_statistics()?;
-                    let old_logprob = saved_logprob.unwrap_or(0.);
-                    let old_value = value.unwrap_or(0.);
-                    if session.online
-                        && (saved_logprob.is_none()
-                            || value.is_none()
-                            || !old_logprob.is_finite()
-                            || !old_value.is_finite())
-                    {
-                        return Err(Error::contract(
-                            "saved PPO probability/value evidence required",
-                        ));
+                    let bytes = candidates
+                        .checked_add(decisions)
+                        .and_then(|n| n.checked_mul(width))
+                        .and_then(|n| n.checked_add(7 * decisions + 1))
+                        .and_then(|n| n.checked_mul(8))
+                        .ok_or_else(|| Error::resource("episode numeric size overflow"))?;
+                    let scratch_lease = stage.scratch.reserve(bytes)?;
+                    let path = stage
+                        .directory
+                        .join(format!("episode-{:08}.bin", stage.episodes.len()));
+                    let _write_buffer = budget.reserve(32768)?;
+                    let mut file = BufWriter::with_capacity(
+                        32768,
+                        OpenOptions::new()
+                            .write(true)
+                            .create_new(true)
+                            .open(&path)?,
+                    );
+                    let mut offsets = BudgetVec::with_capacity(budget, decisions + 1)?;
+                    offsets.push(0i64)?;
+                    let mut selected = BudgetVec::with_capacity(budget, decisions)?;
+                    let mut logprob = BudgetVec::with_capacity(budget, decisions)?;
+                    let mut values = BudgetVec::with_capacity(budget, decisions)?;
+                    let mut logprob_present = BudgetVec::with_capacity(budget, decisions)?;
+                    let mut value_present = BudgetVec::with_capacity(budget, decisions)?;
+                    let mut state_features = BudgetVec::with_capacity(budget, decisions * width)?;
+                    let mut candidate_counts = BudgetVec::with_capacity(budget, decisions)?;
+                    let mut row = BudgetVec::with_capacity(budget, width)?;
+                    for _ in 0..width {
+                        row.push(0.)?;
                     }
-                    let prepared = if width > 0 {
-                        let _timer = session
-                            .telemetry
-                            .phase_timer(crate::telemetry::Phase::FeatureEncoding);
-                        Some(decision.prepare(&session.config, budget, control)?)
-                    } else {
-                        None
-                    };
-                    if let Some(prepared) = &prepared {
-                        let _timer = session
-                            .telemetry
-                            .phase_timer(crate::telemetry::Phase::FeatureEncoding);
-                        prepared.state(&mut row, control)?;
-                        state_features.extend_from_slice(&row)?;
-                    }
-                    if session.online {
-                        for action_index in 0..decision.candidate_count()? {
-                            let action = decision.action(action_index)?;
-                            {
+                    wall.set(WallPhase::FeaturesSpooling);
+                    let mut candidate_count = 0usize;
+                    for decision_index in 0..journal.decision_count() {
+                        let decision = journal.decision(decision_index)?;
+                        control.check()?;
+                        let saved_index = decision.selected()?;
+                        let (saved_logprob, value) = decision.old_statistics()?;
+                        let old_logprob = saved_logprob.unwrap_or(0.);
+                        let old_value = value.unwrap_or(0.);
+                        if session.online
+                            && (saved_logprob.is_none()
+                                || value.is_none()
+                                || !old_logprob.is_finite()
+                                || !old_value.is_finite())
+                        {
+                            return Err(Error::contract(
+                                "saved PPO probability/value evidence required",
+                            ));
+                        }
+                        let prepared = if width > 0 {
+                            let _timer = session
+                                .telemetry
+                                .phase_timer(crate::telemetry::Phase::FeatureEncoding);
+                            Some(decision.prepare(&session.config, budget, control)?)
+                        } else {
+                            None
+                        };
+                        if let Some(prepared) = &prepared {
+                            let _timer = session
+                                .telemetry
+                                .phase_timer(crate::telemetry::Phase::FeatureEncoding);
+                            prepared.state(&mut row, control)?;
+                            state_features.extend_from_slice(&row)?;
+                        }
+                        if session.online {
+                            for action_index in 0..decision.candidate_count()? {
+                                let action = decision.action(action_index)?;
+                                {
+                                    let _timer = session
+                                        .telemetry
+                                        .phase_timer(crate::telemetry::Phase::FeatureEncoding);
+                                    prepared
+                                        .as_ref()
+                                        .ok_or_else(|| {
+                                            Error::contract("PPO feature context missing")
+                                        })?
+                                        .encode(action, &mut row, control)?;
+                                }
+                                let _timer = session
+                                    .telemetry
+                                    .phase_timer(crate::telemetry::Phase::ProofStaging);
+                                write_f64(&mut file, &row, control)?;
+                                candidate_count += 1;
+                            }
+                            selected.push(saved_index as i64)?;
+                        } else {
+                            if let Some(prepared) = &prepared {
                                 let _timer = session
                                     .telemetry
                                     .phase_timer(crate::telemetry::Phase::FeatureEncoding);
-                                prepared
-                                    .as_ref()
-                                    .ok_or_else(|| Error::contract("PPO feature context missing"))?
-                                    .encode(action, &mut row, control)?;
+                                prepared.encode(decision.command_action()?, &mut row, control)?;
                             }
                             let _timer = session
                                 .telemetry
                                 .phase_timer(crate::telemetry::Phase::ProofStaging);
                             write_f64(&mut file, &row, control)?;
                             candidate_count += 1;
+                            selected.push(saved_index as i64)?;
                         }
-                        selected.push(saved_index as i64)?;
-                    } else {
-                        if let Some(prepared) = &prepared {
-                            let _timer = session
-                                .telemetry
-                                .phase_timer(crate::telemetry::Phase::FeatureEncoding);
-                            prepared.encode(decision.command_action()?, &mut row, control)?;
-                        }
-                        let _timer = session
-                            .telemetry
-                            .phase_timer(crate::telemetry::Phase::ProofStaging);
-                        write_f64(&mut file, &row, control)?;
-                        candidate_count += 1;
-                        selected.push(saved_index as i64)?;
+                        offsets.push(candidate_count as i64)?;
+                        logprob.push(old_logprob)?;
+                        values.push(old_value)?;
+                        logprob_present.push(saved_logprob.is_some() as i64)?;
+                        value_present.push(value.is_some() as i64)?;
+                        candidate_counts.push(decision.candidate_count()? as i64)?;
                     }
-                    offsets.push(candidate_count as i64)?;
-                    logprob.push(old_logprob)?;
-                    values.push(old_value)?;
-                    logprob_present.push(saved_logprob.is_some() as i64)?;
-                    value_present.push(value.is_some() as i64)?;
-                    candidate_counts.push(decision.candidate_count()? as i64)?;
-                }
-                let _staging_timer = session
-                    .telemetry
-                    .phase_timer(crate::telemetry::Phase::ProofStaging);
-                write_f64(&mut file, &state_features, control)?;
-                write_i64(&mut file, &offsets, control)?;
-                write_i64(&mut file, &selected, control)?;
-                write_f64(&mut file, &logprob, control)?;
-                write_f64(&mut file, &values, control)?;
-                write_i64(&mut file, &logprob_present, control)?;
-                write_i64(&mut file, &value_present, control)?;
-                write_i64(&mut file, &candidate_counts, control)?;
-                file.flush()?;
-                if file.get_ref().metadata()?.len() != bytes as u64 {
-                    return Err(Error::contract("numeric staging length mismatch"));
-                }
-                session.telemetry.stage_write(bytes);
-                drop(file);
-                wall.set(WallPhase::EpisodeFactsBuffers);
-                let metadata_lease = budget.reserve(
-                    path.as_os_str().len()
-                        + string(journal.header(), "run_id")?.len()
-                        + string(journal.header(), "game_id")?.len()
-                        + 256,
-                )?;
-                let order = links.ordinal;
-                let index = if session.operation == "index" {
-                    Some(crate::index::IndexInfo::new(
-                        collection,
-                        &links,
-                        journal.header(),
-                        rewards[learner - 1],
-                        &session
-                            .dataset
-                            .as_ref()
-                            .ok_or_else(|| Error::contract("index requires a frozen dataset"))?
-                            .root,
-                        &session.sources,
-                        budget,
-                        control,
-                    )?)
-                } else {
-                    None
-                };
-                let export_bytes = if let Some(info) = &index {
-                    bytes
-                        .checked_add(info.producer_bytes(decisions)?)
-                        .ok_or_else(|| Error::resource("index export size overflow"))?
-                } else {
-                    bytes
-                };
-                stage.episodes.push(Episode {
-                    path,
-                    run: (string(journal.header(), "run_id")?).to_owned(),
-                    game: (string(journal.header(), "game_id")?).to_owned(),
-                    viewer: learner as i64,
-                    split,
-                    winner,
-                    rewards,
-                    decisions,
-                    candidates,
-                    bytes,
-                    export_bytes,
-                    order,
-                    index,
-                    _scratch: scratch_lease,
-                    _metadata: metadata_lease,
-                })?;
-                counts[split as usize] += decisions;
-                wall.set(WallPhase::TemporaryRelease);
-            } // Drop borrowed journals and episode buffers at the original body end.
-            drop(data); // Owned JSON follows immediately, at the same episode boundary.
+                    let _staging_timer = session
+                        .telemetry
+                        .phase_timer(crate::telemetry::Phase::ProofStaging);
+                    write_f64(&mut file, &state_features, control)?;
+                    write_i64(&mut file, &offsets, control)?;
+                    write_i64(&mut file, &selected, control)?;
+                    write_f64(&mut file, &logprob, control)?;
+                    write_f64(&mut file, &values, control)?;
+                    write_i64(&mut file, &logprob_present, control)?;
+                    write_i64(&mut file, &value_present, control)?;
+                    write_i64(&mut file, &candidate_counts, control)?;
+                    file.flush()?;
+                    if file.get_ref().metadata()?.len() != bytes as u64 {
+                        return Err(Error::contract("numeric staging length mismatch"));
+                    }
+                    session.telemetry.stage_write(bytes);
+                    drop(file);
+                    wall.set(WallPhase::EpisodeFactsBuffers);
+                    let metadata_lease = budget.reserve(
+                        path.as_os_str().len()
+                            + string(journal.header(), "run_id")?.len()
+                            + string(journal.header(), "game_id")?.len()
+                            + 256,
+                    )?;
+                    let order = links.ordinal;
+                    let index = if session.operation == "index" {
+                        Some(crate::index::IndexInfo::new(
+                            collection,
+                            &links,
+                            journal.header(),
+                            rewards[learner - 1],
+                            &session
+                                .dataset
+                                .as_ref()
+                                .ok_or_else(|| Error::contract("index requires a frozen dataset"))?
+                                .root,
+                            &session.sources,
+                            budget,
+                            control,
+                        )?)
+                    } else {
+                        None
+                    };
+                    let export_bytes = if let Some(info) = &index {
+                        bytes
+                            .checked_add(info.producer_bytes(decisions)?)
+                            .ok_or_else(|| Error::resource("index export size overflow"))?
+                    } else {
+                        bytes
+                    };
+                    stage.episodes.push(Episode {
+                        path,
+                        run: (string(journal.header(), "run_id")?).to_owned(),
+                        game: (string(journal.header(), "game_id")?).to_owned(),
+                        viewer: learner as i64,
+                        split,
+                        winner,
+                        rewards,
+                        decisions,
+                        candidates,
+                        bytes,
+                        export_bytes,
+                        order,
+                        index,
+                        _scratch: scratch_lease,
+                        _metadata: metadata_lease,
+                    })?;
+                    counts[split as usize] += decisions;
+                    wall.set(WallPhase::TemporaryRelease);
+                } // Validated journals drop before their borrowed records.
+                drop(parsed1);
+                drop(parsed2);
+            } // Preserve input order regardless of parse completion order.
+            wall.set(WallPhase::TemporaryRelease);
+            drop(parsed); // All DTOs precede their raw owners.
+            drop(window);
             wall.set(WallPhase::Other);
         }
         wall.set(WallPhase::CollectionProof);
