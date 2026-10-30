@@ -1,0 +1,28 @@
+[package]
+name = "gfb-preprocessing-json-bench"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99"
+publish = false
+
+[[bin]]
+name = "gfb-json-bench"
+path = "src/main.rs"
+
+[features]
+default = ["arbitrary_precision"]
+arbitrary_precision = ["serde_json/arbitrary_precision"]
+allocation_counts = []
+
+[dependencies]
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = { version = "=1.0.151", features = ["float_roundtrip"] }
+sha2 = "=0.10.9"
+libc = "=0.2.191"
+
+[profile.release]
+opt-level = 3
+debug = false
+strip = "none"
+
+[workspace]

@@ -2,6 +2,12 @@
 
 ## Status and scope
 
+[ADR0016](adr/0016-staged-preprocessing-optimization.md) accepts isolated
+allocator and typed-Journal experiments (stages0–2); production adoption remains
+a later decision. Independent design/counter/TLS review is READY. Implementation
+and measurements are tracked in
+[staged optimization verification](verification/staged-preprocessing-optimization.md).
+
 [ADR0015](adr/0015-complete-wall-attribution-and-worker-scaling.md) adds reconciled
 exclusive coordinator/Python wall ledgers and decoder-worker observations, with
 closed1/2/4/8 support. Design/correctness/conformance reviews and runtime acceptance

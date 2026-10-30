@@ -1,0 +1,25 @@
+schema_version = 1
+dataset = "runs/ppo-comparison-v2/dataset.json"
+preprocessing_config = "configs/preprocessing/native-low-memory.toml"
+memory_budget_mib = 2048
+cache_budget_mib = 512
+chunk_target_mib = 16
+scratch_budget_mib = 8192
+max_source_file_mib = 64
+max_record_mib = 8
+trial_seconds = 1800
+cleanup_seconds = 5
+warmups = 1
+trials = 5
+worker_counts = [1, 4]
+
+[versions]
+mimalloc = "0.1.52"
+tikv_jemallocator = "0.7.0"
+serde = "1.0.229"
+serde_json = "1.0.151"
+maturin = "1.15.0"
+
+[allocator_features]
+mimalloc = ["local_dynamic_tls"]
+jemalloc = ["disable_initial_exec_tls"]
