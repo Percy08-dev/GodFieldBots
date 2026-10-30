@@ -127,9 +127,74 @@ not bypass checkpoint/environment identity checks. Report each stage separately.
 | Stage | State | Evidence / decision |
 | --- | --- | --- |
 |1single-pass history|ACCEPTED|14.15%wholewall gain, exactoutputs; verificationrecord|
-|2polling|conditional pending|reassess after1|
+|2polling|ACCEPTED local coalescence|1.43%wholemedian/5pairedwins; no globalpollchange|
 |3schema sharing|pending gated design|no format/acceptance assumptions approved|
 |4history representation|pending gated design|producer/current-data benefit separate|
 |5supply/pool/streaming|conditional pending|reassess remaining waiting after prior stages|
 
 Stage1 evidence:[verification](../verification/sequential-preprocessing-optimization.md).
+
+## Stage2 bounded candidate: adjacent history-check coalescence
+
+Status: ACCEPTED after source and measurement reviews. Accepted Stage1
+`2325bcb`/source`9bd697d...` is the comparison baseline; Stage2source`d9413ab...`.
+Counts remain18,772,215in feature/spooling and32,926,323overall. Before adding
+a configurable/global polling mechanism, test the smallest remaining duplicate:
+the post-event full Control::check followed immediately by the next event's
+pre-event full check. Retain function entry, every event's pre-check and final
+completion check. Remove only the redundant post-event check. Global Control,
+all read/parse/validation/other-feature checks and per-event aggregation remain
+unchanged. Do not introduce a counter, wall-clock sampling interval or new API.
+
+Cancellation/deadline observation is still bounded by one event plus fixed
+history-output emission before the final check. Numeric block cursor must not
+commit on any error, and no output is published without the final existing proof/
+deadline checks. Verify preexpired and mid-loop cancellation/deadline, one-event
+and final-event cases, maximum history/bucket widths and all Stage1bit oracles.
+Retain before-each-event checking even when a definition hash is large. This is
+a local check-position candidate; it is not approval to remove global safeguards.
+
+Measure latest accepted Stage1 versus Stage2 candidate with the same full4worker
+protocol, warmup+5alternating trials, exact source/numeric proofs and resources.
+If the gain is within variation or time/resources regress, reject the candidate
+and keep Stage1. Check counts alone do not justify adoption. Broader clock-polling
+changes stay unapproved unless further evidence makes them consequential.
+
+## Stage3a proposed candidate: post-decode schema sharing
+
+Root chooses a small compatibility-preserving sharing experiment before lazy
+RawValue decoding. The pinned serde_json RawValue path uses iterative ignore_value
+without the ordinary typed recursion decrement; decoding that subtree later also
+changes its nesting context. Do not assume a RawValue shortcut preserves the old
+accept/reject set, and do not add a custom JSON/depth validator to make it fit.
+Raw/lazy skipping remains unapproved in this candidate.
+
+Decode both schema descriptions through the existing strict typed path, then
+share their retained representation only when complete structural equality holds.
+Use ordinary Arc-backed schema collections (Serde rc feature if needed), retaining
+external raw-text lifetimes. After Observation shape validation has validated a
+shared collection, Input validation need not traverse that same immutable tree
+again. Unequal descriptions remain separately decoded/validated and retain the
+existing semantic mismatch rejection. No cache/intern table across inputs, journal
+files, sessions or versions; no guessed three-value whitelist.
+
+The exact constructor/deserializer design must keep derived closed/duplicate/
+numeric/recursion behavior. A small generated six-field Input wire adapter plus
+normalization is acceptable; no new JSON grammar or Value reconstruction. Update
+the native-owned generator and its generated borrowed DTO coherently; standalone
+borrowed tests must use the same schema. Owned experimental DTO need not change.
+Canonical Serialize must emit both original fields with the same logical values.
+Feature/projection/numeric/source hashes and schema4 bytes stay authoritative.
+
+This candidate deliberately does not eliminate the two initial deserializations;
+it targets retained AST memory, repeated shape validation and heap reuse. Report
+that limit and measure total path/time/resources against the latest accepted
+candidate. Retain only on demonstrated elapsed or meaningful memory benefit with
+no material time regression. No new format or producer changes follow from it.
+
+Before implementation, architecture must review the concrete Arc/adapter/lifetime/
+Serde-feature design. Test equal/distinct raw encodings, unequal metadata, unknown/
+duplicate fields, numeric lexical forms, actual recursion boundaries and direct
+JSON/Value fixture compatibility. Preserve all invalid rejection and source health
+before publication. Run original both-recipe/index/PPO/NumPy lifetime proofs and
+appropriate regression on the final isolated wheel before primary measurements.

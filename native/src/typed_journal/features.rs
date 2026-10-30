@@ -538,6 +538,12 @@ fn calculate<'a, 'raw>(
     Ok(())
 }
 
+// Deterministic fault injection only; absent from production/release builds.
+#[cfg(test)]
+std::thread_local! {
+    static HISTORY_AFTER_EVENT: std::cell::RefCell<Option<Box<dyn FnMut()>>> = std::cell::RefCell::new(None);
+}
+
 /// Aggregate exactly the configured event tail once. Definition buckets live in
 /// the caller's output; only fixed counts and i128 sums occupy the stack.
 fn history(
@@ -622,7 +628,12 @@ fn history(
             if let Some(definition) = event.definition_id.value() {
                 output[42 + bucket(definition.as_ref(), config.hash_buckets)] += 1.;
             }
-            control.check()?;
+            #[cfg(test)]
+            HISTORY_AFTER_EVENT.with(|hook| {
+                if let Some(callback) = hook.borrow_mut().as_mut() {
+                    callback();
+                }
+            });
         }
         output[0] = u8::from(all.len() > config.history_window) as f64;
         output[1] = events.len() as f64;
@@ -1063,5 +1074,163 @@ mod tests {
         thread.join().unwrap();
         assert!(matches!(result, Err(Error::Cancelled)));
         assert_eq!(sink.position, 0);
+    }
+    struct HistoryEventHook;
+    impl HistoryEventHook {
+        fn install(callback: impl FnMut() + 'static) -> Self {
+            HISTORY_AFTER_EVENT.with(|hook| {
+                assert!(hook.borrow_mut().replace(Box::new(callback)).is_none());
+            });
+            Self
+        }
+    }
+    impl Drop for HistoryEventHook {
+        fn drop(&mut self) {
+            HISTORY_AFTER_EVENT.with(|hook| {
+                hook.borrow_mut().take();
+            });
+        }
+    }
+
+    #[test]
+    fn final_event_cancellation_cannot_commit_one_or_maximum_history_blocks() {
+        use crate::error::Error;
+        use std::{cell::Cell, rc::Rc};
+        let fixture = crate::typed_journal::validation::tests::fixture();
+        let wire = serde_json::to_vec(&fixture).unwrap();
+        let long_event = serde_json::to_vec(&serde_json::json!({"type":"artifact_used","player":1,
+            "definition_id":"long-visible-definition".repeat(400)}))
+        .unwrap();
+        let mut input: Input = serde_json::from_slice(&wire).unwrap();
+        for (length, buckets) in [(1, 2), (1, 4096), (3, 2), (3, 4096), (100000, 4096)] {
+            input.events = (0..length - 1)
+                .map(|_| serde_json::from_str(r#"{"type":"action_accepted","player":1}"#).unwrap())
+                .collect();
+            input
+                .events
+                .push(serde_json::from_slice(&long_event).unwrap());
+            let control = Control::new(monotonic() + 30.).unwrap();
+            let cancellation = control.clone();
+            let observed = Rc::new(Cell::new(0));
+            let seen = observed.clone();
+            let hook = HistoryEventHook::install(move || {
+                seen.set(seen.get() + 1);
+                if seen.get() == length {
+                    cancellation.cancel();
+                }
+            });
+            let config = history_config(3, buckets, 100000);
+            let mut output = vec![f64::NAN; 3 + 42 + buckets];
+            let mut sink = NumericSink {
+                output: &mut output,
+                position: 3,
+                control: Some(&control),
+            };
+            assert!(matches!(
+                history(&input, &config, &mut sink, &control),
+                Err(Error::Cancelled)
+            ));
+            drop(hook);
+            assert_eq!(observed.get(), length);
+            assert_eq!(
+                sink.position, 3,
+                "no completed numeric block on final-event cancellation"
+            );
+            assert_eq!(sink.output[3 + 42..].iter().sum::<f64>(), 1.);
+            assert!(sink.output[..3].iter().all(|value| value.is_nan()));
+        }
+    }
+
+    #[test]
+    fn cancellation_is_checked_before_every_event_and_before_empty_history() {
+        use crate::error::Error;
+        use std::{cell::Cell, rc::Rc};
+        let fixture = crate::typed_journal::validation::tests::fixture();
+        let wire = serde_json::to_vec(&fixture).unwrap();
+        let mut input: Input = serde_json::from_slice(&wire).unwrap();
+        input.events = (0..3)
+            .map(|_| serde_json::from_str(r#"{"type":"action_accepted","player":1}"#).unwrap())
+            .collect();
+        let control = Control::new(monotonic() + 30.).unwrap();
+        let cancellation = control.clone();
+        let observed = Rc::new(Cell::new(0));
+        let seen = observed.clone();
+        let hook = HistoryEventHook::install(move || {
+            seen.set(seen.get() + 1);
+            cancellation.cancel();
+        });
+        let config = history_config(2, 2, 100000);
+        let mut output = vec![0.; 44];
+        let mut sink = NumericSink {
+            output: &mut output,
+            position: 0,
+            control: Some(&control),
+        };
+        assert!(matches!(
+            history(&input, &config, &mut sink, &control),
+            Err(Error::Cancelled)
+        ));
+        drop(hook);
+        assert_eq!(
+            observed.get(),
+            1,
+            "the next pre-event check must stop traversal"
+        );
+        assert_eq!(sink.position, 0);
+        input.events.clear();
+        assert!(matches!(
+            history(&input, &config, &mut sink, &control),
+            Err(Error::Cancelled)
+        ));
+        assert_eq!(sink.position, 0);
+    }
+
+    #[test]
+    fn final_event_deadline_cannot_commit_one_or_multi_event_blocks() {
+        use crate::error::Error;
+        use std::{cell::Cell, rc::Rc};
+        let fixture = crate::typed_journal::validation::tests::fixture();
+        let wire = serde_json::to_vec(&fixture).unwrap();
+        let long_event = serde_json::to_vec(&serde_json::json!({"type":"artifact_used","player":2,
+            "definition_id":"long-visible-definition".repeat(400)}))
+        .unwrap();
+        let mut input: Input = serde_json::from_slice(&wire).unwrap();
+        for length in [1, 3] {
+            input.events = (0..length - 1)
+                .map(|_| serde_json::from_str(r#"{"type":"action_accepted","player":1}"#).unwrap())
+                .collect();
+            input
+                .events
+                .push(serde_json::from_slice(&long_event).unwrap());
+            let deadline = monotonic() + 0.1;
+            let control = Control::new(deadline).unwrap();
+            let observed = Rc::new(Cell::new(0));
+            let seen = observed.clone();
+            let hook = HistoryEventHook::install(move || {
+                seen.set(seen.get() + 1);
+                if seen.get() == length {
+                    let remaining = (deadline - monotonic()).max(0.);
+                    std::thread::sleep(std::time::Duration::from_secs_f64(remaining + 0.002));
+                }
+            });
+            let config = history_config(3, 4096, 100000);
+            let mut output = vec![0.; 42 + 4096];
+            let mut sink = NumericSink {
+                output: &mut output,
+                position: 0,
+                control: Some(&control),
+            };
+            assert!(matches!(
+                history(&input, &config, &mut sink, &control),
+                Err(Error::Deadline)
+            ));
+            drop(hook);
+            assert_eq!(observed.get(), length);
+            assert_eq!(sink.output[42..].iter().sum::<f64>(), 1.);
+            assert_eq!(
+                sink.position, 0,
+                "final completion check must reject the block"
+            );
+        }
     }
 }

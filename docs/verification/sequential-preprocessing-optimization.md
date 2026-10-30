@@ -82,9 +82,52 @@ Decision: retain Stage1 for the measured14.15%complete-path gain with explicit
 peak-memory tradeoff and exact outputs. Later candidates use this accepted wheel
 as their comparison baseline. No further optimization is silently included.
 
+## Stage2: accepted adjacent-check coalescence
+
+Compared accepted Stage1source`9bd697d...`/ELF`8c9a2a...` with candidate
+`d9413ab144d2078606ce176b8fdd083d6c92ddc3d797bb4bb99ef90a05b1604e`/
+`c8f35f6efe703ff16c2875355431ce748acc5fb477e3f3625eab81302284e7c3`.
+Only the post-event full check is removed. Entry, before every event and final
+completion checks remain; global Control and aggregation are unchanged. Detection
+is bounded by one event plus fixed output emission before cursor commit.
+
+Full mimalloc Rust76PASS/2ignored, focused9PASS; deterministic after-hash fault
+injection is cfg(test)only. One/final/next/max-event cases verify cancellation/
+deadline failures never commit the block. Candidate Python execution/wall/feature
+checks40PASS. Full826tests are not repeated for this local check-position change;
+every primary command still revalidates the complete fixed corpus and original
+83,783-row numeric/source proof. Source correctness and conformance READY.
+
+The same4worker/2GiB/mimalloc-release protocol completes all12commands, with
+one warmup and five alternating pairs. Every output/reader/binary proof and all
+integer ledgers match. Final source/protected-model/main/code checks pass.
+
+| Metric | Stage1 control | Stage2 |
+| --- | ---: | ---: |
+| Whole median [range] s |16.972 [16.742,17.135]|16.729 [16.682,16.815]|
+| Reported CPU median s |14.453|14.378|
+| Maximum workload-self peak RSS MiB |428.75|427.17|
+| Median workload-self peak RSS MiB |424.43|405.28|
+| Median post-release RSS MiB |294.84|296.16|
+| Managed peak bytes |1,605,390,806|1,605,390,806|
+
+All five paired whole gains are0.320603/0.202067/0.388159/0.015678/0.051417s;
+target feature/spooling gains are0.189170/0.161180/0.160557/0.147172/0.108432s.
+Whole median improves0.243011s/1.431853%. Whole ranges overlap, but target-phase
+ranges separate:1.646627–1.762071s before and1.528055–1.572900s after. Median CPU
+change is only0.52%and one paired CPU result regresses; no consistent/physical CPU
+improvement or formal statistical significance is claimed.
+
+Decision: retain this small, bounded workload-specific gain because all alternating
+pairs and target phases improve, outputs/guards remain identical and resources
+show no material regression. Independent measurement audit PASS with no blocking
+adoption disagreement. Do not add a global or configurable polling mechanism.
+Use Stage2 as the next accepted comparison baseline. Stage-to-stage percentages
+come from fresh controls and must not be multiplied into a claimed total speedup.
+
 ## Remaining sequence
 
-Stage2 polling, Stage3 schema sharing, Stage4 history representation and Stage5
+Stage3 schema sharing, Stage4 history representation and Stage5
 supply/pool work remain separately scoped under ADR0019. Their implementation,
 measurement and adoption decisions are pending; this report is not a completion
 claim for those later stages.

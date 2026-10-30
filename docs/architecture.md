@@ -8,6 +8,9 @@ independent reviews accept12controlled commands: wholewall20.60->17.69s (14.15%)
 feature/spooling4.84->2.01s in actualmedian trials. Maximum RSS431->457MiB, median
 peak420->422MiB; Config budgets unchanged. Later stages remain separately gated.
 [Verification](verification/sequential-preprocessing-optimization.md).
+Stage2 retains a small local removal of adjacent history checks:16.972->16.729s
+(1.43%), all five alternating paired/target-phase wins, exact outputs and guards.
+Whole ranges overlap; no generalized or physical CPU improvement is claimed.
 
 A subsequent [root-cause investigation](verification/preprocessing-root-cause.md)
 keeps production unchanged and separates graph/task supply, repeated input/history
