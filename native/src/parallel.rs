@@ -8,7 +8,10 @@ use crate::{
 };
 use std::{
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicUsize, Ordering},
+    },
 };
 
 pub struct EpisodeData {
@@ -44,6 +47,12 @@ pub(crate) struct EpisodeWindow<'a> {
 pub(crate) struct ParsedEpisode<'raw> {
     pub records1: Option<crate::typed_journal::journal::Records<'raw>>,
     pub records2: Option<crate::typed_journal::journal::Records<'raw>>,
+}
+struct ParsedJournal<'raw> {
+    episode: usize,
+    // Original input file slot, independent of the journal header's viewer.
+    file_slot: usize,
+    records: Option<crate::typed_journal::journal::Records<'raw>>,
 }
 
 pub struct EpisodeReader<'a> {
@@ -384,39 +393,56 @@ fn parse_window_inner<'raw>(
     }) {
         return Ok(ready);
     }
-    telemetry.parse_window(workers, data.len());
-    let parse = |index: usize, slot: usize| -> Result<ParsedEpisode<'raw>> {
+    let tasks = data
+        .len()
+        .checked_mul(2)
+        .ok_or_else(|| Error::resource("native Journal parse task count overflow"))?;
+    telemetry.parse_window(workers, data.len(), tasks);
+    let parse = |ordinal: usize, slot: usize| -> Result<ParsedJournal<'raw>> {
         control.check()?;
         let mut job = telemetry.parse_job(slot);
         #[cfg(test)]
-        telemetry.test_parse_hook(index, false);
+        telemetry.test_parse_hook(ordinal, false);
         control.check()?;
-        let episode = &data[index];
-        let records1 = episode.records1.parse_typed(control, telemetry)?;
-        let records2 = episode.records2.parse_typed(control, telemetry)?;
+        let episode = ordinal / 2;
+        let file_slot = ordinal % 2;
+        let journal = if file_slot == 0 {
+            &data[episode].records1
+        } else {
+            &data[episode].records2
+        };
+        let records = journal.parse_typed(control, telemetry)?;
         control.check()?;
         #[cfg(test)]
-        telemetry.test_parse_hook(index, true);
+        telemetry.test_parse_hook(ordinal, true);
         job.success();
-        Ok(ParsedEpisode { records1, records2 })
+        Ok(ParsedJournal {
+            episode,
+            file_slot,
+            records,
+        })
     };
     if workers == 1 {
         for (index, output) in ready.iter_mut().enumerate() {
-            *output = Some(
-                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| parse(index, 0)))
-                    .unwrap_or_else(|_| {
-                        Err(Error::contract("native Journal parse worker panicked"))
-                    })?,
-            );
+            let pair = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                Ok(ParsedEpisode {
+                    records1: parse(2 * index, 0)?.records,
+                    records2: parse(2 * index + 1, 0)?.records,
+                })
+            }))
+            .unwrap_or_else(|_| Err(Error::contract("native Journal parse worker panicked")))?;
+            *output = Some(pair);
         }
         return Ok(ready);
     }
     let _failure_capacity = budget.reserve(1024)?;
     let failure = Mutex::new(None::<Error>);
+    let next = AtomicUsize::new(0);
     std::thread::scope(|scope| -> Result<()> {
-        let count = workers.min(data.len());
+        let count = workers.min(tasks);
         let mut handles = BudgetVec::with_capacity(budget, count)?;
         let mut stacks = BudgetVec::with_capacity(budget, count)?;
+        let mut completed = BudgetVec::with_capacity(budget, count)?;
         for worker in 0..count {
             if let Err(error) = control.check() {
                 record_parse_failure(&failure, control, error);
@@ -431,16 +457,22 @@ fn parse_window_inner<'raw>(
             };
             let parse = &parse;
             let failure = &failure;
+            let next = &next;
             let spawned = std::thread::Builder::new()
                 .name(format!("gf-journal-parse-{worker}"))
                 .stack_size(8 * 1024 * 1024)
                 .spawn_scoped(scope, move || {
                     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
-                        || -> Result<BudgetVec<(usize, ParsedEpisode<'raw>)>> {
+                        || -> Result<BudgetVec<ParsedJournal<'raw>>> {
                             let mut results =
-                                BudgetVec::with_capacity(budget, data.len().div_ceil(count))?;
-                            for index in (worker..data.len()).step_by(count) {
-                                results.push((index, parse(index, worker)?))?;
+                                BudgetVec::with_capacity(budget, tasks.div_ceil(count))?;
+                            loop {
+                                control.check()?;
+                                let ordinal = next.fetch_add(1, Ordering::Relaxed);
+                                if ordinal >= tasks {
+                                    break;
+                                }
+                                results.push(parse(ordinal, worker)?)?;
                             }
                             Ok(results)
                         },
@@ -469,10 +501,8 @@ fn parse_window_inner<'raw>(
         while let Some(handle) = handles.pop() {
             match handle.join() {
                 Ok(Ok(results)) => {
-                    let (results, _capacity) = results.into_parts();
-                    for (index, result) in results {
-                        ready[index] = Some(result);
-                    }
+                    // Keep results worker-local until every started worker has joined.
+                    completed.push(results)?;
                 }
                 Ok(Err(_)) => {}
                 Err(_) => record_parse_failure(
@@ -484,6 +514,25 @@ fn parse_window_inner<'raw>(
         }
         if let Some(error) = failure.lock().expect("parse worker failure lock").take() {
             return Err(error);
+        }
+        control.check()?;
+        for output in ready.iter_mut() {
+            *output = Some(ParsedEpisode {
+                records1: None,
+                records2: None,
+            });
+        }
+        for results in completed.iter_mut() {
+            while let Some(result) = results.pop() {
+                let output = ready[result.episode]
+                    .as_mut()
+                    .expect("initialized ordered parse result");
+                if result.file_slot == 0 {
+                    output.records1 = result.records;
+                } else {
+                    output.records2 = result.records;
+                }
+            }
         }
         control.check()
     })?;
@@ -694,10 +743,14 @@ mod worker_observation_tests {
     fn typed_fixture(count: usize) -> Fixture {
         let fixture = Fixture::new(count);
         for (index, path) in fixture.paths.iter().enumerate() {
-            for name in ["player-1.jsonl", "player-2.jsonl"] {
+            for (slot, name) in ["player-1.jsonl", "player-2.jsonl"].into_iter().enumerate() {
                 fs::write(
                     path.join(name),
-                    format!("{{\"kind\":\"episode{index}\"}}\n"),
+                    // Deliberately reverse the viewers relative to file slots.
+                    format!(
+                        "{{\"kind\":\"episode{index}-file{slot}\",\"viewer\":{}}}\n",
+                        2 - slot
+                    ),
                 )
                 .unwrap();
             }
@@ -708,8 +761,10 @@ mod worker_observation_tests {
     #[test]
     fn scoped_parse_reversed_finish_order_preserves_raw_and_input_order() {
         use std::sync::Condvar;
-        for workers in [2, 4, 8] {
-            let fixture = typed_fixture(workers);
+        for (workers, episodes) in [(2, 1), (4, 2), (8, 4), (8, 1)] {
+            let tasks = 2 * episodes;
+            let count = workers.min(tasks);
+            let fixture = typed_fixture(episodes);
             let budget = Budget::new(128 * 1024 * 1024);
             let control = Control::new(monotonic() + 30.).unwrap();
             let telemetry = Arc::new(Telemetry::default());
@@ -727,7 +782,7 @@ mod worker_observation_tests {
             );
             let mut window = reader.next_window(&mut sources).unwrap().unwrap();
             assert_eq!(sources.entries.len(), 0); // No evidence merged before parsing succeeds.
-            let all_started = Arc::new(std::sync::Barrier::new(workers));
+            let all_started = Arc::new(std::sync::Barrier::new(count));
             let finish_order = Arc::new((Mutex::new(Vec::new()), Condvar::new()));
             let order = finish_order.clone();
             telemetry.test_set_parse_hook(Arc::new(move |index, finished| {
@@ -740,7 +795,7 @@ mod worker_observation_tests {
                     completed.push(index);
                     wake.notify_all();
                 } else {
-                    while completed.len() != workers - 1 - index {
+                    while completed.len() != tasks - 1 - index {
                         let (state, timeout) = wake
                             .wait_timeout(completed, std::time::Duration::from_secs(5))
                             .unwrap();
@@ -753,14 +808,22 @@ mod worker_observation_tests {
                 parse_window(&window.data, workers, &budget, &control, &telemetry).unwrap();
             assert_eq!(
                 *finish_order.0.lock().unwrap(),
-                (0..workers).rev().collect::<Vec<_>>()
+                (0..tasks).rev().collect::<Vec<_>>()
             );
-            for index in 0..workers {
+            for index in 0..episodes {
                 let result = parsed[index].take().unwrap();
                 let records1 = result.records1.unwrap();
                 let records2 = result.records2.unwrap();
-                assert_eq!(records1.records[0].kind.as_ref(), format!("episode{index}"));
-                assert_eq!(records2.records[0].kind.as_ref(), format!("episode{index}"));
+                assert_eq!(
+                    records1.records[0].kind.as_ref(),
+                    format!("episode{index}-file0")
+                );
+                assert_eq!(
+                    records2.records[0].kind.as_ref(),
+                    format!("episode{index}-file1")
+                );
+                assert_eq!(records1.records[0].viewer.value().unwrap().0, 2);
+                assert_eq!(records2.records[0].viewer.value().unwrap().0, 1);
                 // Borrowed DTOs stay valid while separately owned evidence moves.
                 sources
                     .merge(window.evidence[index].take().unwrap(), &control)
@@ -769,20 +832,38 @@ mod worker_observation_tests {
                     records1.records[0].kind.0,
                     std::borrow::Cow::Borrowed(_)
                 ));
+                assert!(matches!(
+                    records2.records[0].kind.0,
+                    std::borrow::Cow::Borrowed(_)
+                ));
             }
             let metrics = counters(&telemetry);
             assert_eq!(
                 metrics["typed_parse_parallelism"]["active_parse_peak"],
-                workers
+                count
             );
             assert_eq!(metrics["typed_parse_parallelism"]["active_jobs"], 0);
+            assert_eq!(metrics["typed_parse_parallelism"]["spawned_threads"], count);
             assert_eq!(
-                metrics["typed_parse_parallelism"]["spawned_threads"],
-                workers
+                metrics["typed_parse_parallelism"]["effective_slots_peak"],
+                count
             );
-            assert_eq!(metrics["typed_journal_files"], 2 * workers);
-            assert_eq!(metrics["decode_parallelism"]["spawned_threads"], workers);
-            for slot in 0..workers {
+            assert_eq!(
+                metrics["typed_parse_parallelism"]["scheduled_episodes"],
+                episodes
+            );
+            assert_eq!(
+                metrics["typed_parse_parallelism"]["scheduled_journal_tasks"],
+                tasks
+            );
+            assert_eq!(
+                metrics["typed_parse_parallelism"]["job_unit"],
+                "participant-journal-file"
+            );
+            assert_eq!(metrics["typed_parse_parallelism"]["job_unit_version"], 2);
+            assert_eq!(metrics["typed_journal_files"], tasks);
+            assert_eq!(metrics["decode_parallelism"]["spawned_threads"], episodes);
+            for slot in 0..count {
                 assert_eq!(
                     metrics["typed_parse_parallelism"]["logical_slots"][slot]["jobs"],
                     1
@@ -807,6 +888,13 @@ mod worker_observation_tests {
             let budget = Budget::new(128 * 1024 * 1024);
             let control = Control::new(monotonic() + 30.).unwrap();
             let telemetry = Arc::new(Telemetry::default());
+            let starts = Arc::new(Mutex::new(Vec::new()));
+            let observed_starts = starts.clone();
+            telemetry.test_set_parse_hook(Arc::new(move |ordinal, finished| {
+                if !finished {
+                    observed_starts.lock().unwrap().push(ordinal);
+                }
+            }));
             let mut sources =
                 Sources::with_telemetry(budget.clone(), 1024 * 1024, 1024 * 1024, &telemetry);
             let mut reader = EpisodeReader::new(
@@ -837,6 +925,14 @@ mod worker_observation_tests {
                 seen += window.data.len();
             }
             assert_eq!(seen, 4);
+            assert_eq!(
+                *starts.lock().unwrap(),
+                if reader_kind == Reader::Legacy {
+                    Vec::new()
+                } else {
+                    (0..8).collect::<Vec<_>>()
+                }
+            );
             let metrics = counters(&telemetry);
             assert_eq!(metrics["typed_parse_parallelism"]["spawned_threads"], 0);
             assert_eq!(metrics["typed_parse_parallelism"]["active_jobs"], 0);
@@ -846,8 +942,152 @@ mod worker_observation_tests {
             );
             assert_eq!(
                 metrics["typed_parse_parallelism"]["logical_slots"][0]["jobs"],
+                if reader_kind == Reader::Legacy { 0 } else { 8 }
+            );
+            assert_eq!(
+                metrics["typed_parse_parallelism"]["scheduled_episodes"],
                 if reader_kind == Reader::Legacy { 0 } else { 4 }
             );
+            assert_eq!(
+                metrics["typed_parse_parallelism"]["scheduled_journal_tasks"],
+                if reader_kind == Reader::Legacy { 0 } else { 8 }
+            );
+            drop(reader);
+            drop(sources);
+            assert_eq!(budget.used(), 0);
+        }
+    }
+
+    #[test]
+    fn participant_dispatch_claims_again_while_a_sibling_file_is_blocked() {
+        use std::sync::Condvar;
+        let fixture = typed_fixture(3);
+        let budget = Budget::new(128 * 1024 * 1024);
+        let control = Control::new(monotonic() + 30.).unwrap();
+        let telemetry = Arc::new(Telemetry::default());
+        let mut sources =
+            Sources::with_telemetry(budget.clone(), 1024 * 1024, 1024 * 1024, &telemetry);
+        let mut reader = EpisodeReader::new(
+            &fixture.paths,
+            2,
+            3,
+            &budget,
+            &control,
+            1024 * 1024,
+            1024 * 1024,
+            Reader::TypedBorrowedV1,
+        );
+        let window = reader.next_window(&mut sources).unwrap().unwrap();
+        let finish_order = Arc::new((Mutex::new(Vec::new()), Condvar::new()));
+        let observed = finish_order.clone();
+        telemetry.test_set_parse_hook(Arc::new(move |ordinal, finished| {
+            let (lock, wake) = &*observed;
+            let mut completed = lock.lock().unwrap();
+            if finished {
+                completed.push(ordinal);
+                wake.notify_all();
+            } else if ordinal == 0 {
+                while completed.len() < 5 {
+                    let (state, timeout) = wake
+                        .wait_timeout(completed, std::time::Duration::from_secs(5))
+                        .unwrap();
+                    assert!(!timeout.timed_out(), "participant dispatcher stalled");
+                    completed = state;
+                }
+            }
+        }));
+        let parsed = parse_window(&window.data, 2, &budget, &control, &telemetry).unwrap();
+        assert_eq!(*finish_order.0.lock().unwrap(), vec![1, 2, 3, 4, 5, 0]);
+        for (index, episode) in parsed.iter().enumerate() {
+            let episode = episode.as_ref().unwrap();
+            assert_eq!(
+                episode.records1.as_ref().unwrap().records[0].kind.as_ref(),
+                format!("episode{index}-file0")
+            );
+            assert_eq!(
+                episode.records2.as_ref().unwrap().records[0].kind.as_ref(),
+                format!("episode{index}-file1")
+            );
+        }
+        let metrics = counters(&telemetry);
+        let parse = &metrics["typed_parse_parallelism"];
+        assert_eq!(parse["scheduled_episodes"], 3);
+        assert_eq!(parse["scheduled_journal_tasks"], 6);
+        assert_eq!(parse["spawned_threads"], 2);
+        assert_eq!(parse["active_parse_peak"], 2);
+        let mut jobs: Vec<_> = parse["logical_slots"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|slot| slot["jobs"].as_u64().unwrap())
+            .filter(|jobs| *jobs > 0)
+            .collect();
+        jobs.sort_unstable();
+        assert_eq!(jobs, vec![1, 5]);
+        drop(parsed);
+        drop(window);
+        drop(reader);
+        drop(sources);
+        assert_eq!(budget.used(), 0);
+    }
+
+    #[test]
+    fn mixed_windows_keep_original_file_slots_and_legacy_no_op_results() {
+        for workers in [1, 4] {
+            let fixture = typed_fixture(3);
+            let budget = Budget::new(128 * 1024 * 1024);
+            let control = Control::new(monotonic() + 30.).unwrap();
+            let telemetry = Arc::new(Telemetry::default());
+            let mut sources =
+                Sources::with_telemetry(budget.clone(), 1024 * 1024, 1024 * 1024, &telemetry);
+            let mut reader = EpisodeReader::new(
+                &fixture.paths,
+                workers,
+                3,
+                &budget,
+                &control,
+                1024 * 1024,
+                1024 * 1024,
+                Reader::TypedBorrowedV1,
+            );
+            let mut window = reader.next_window(&mut sources).unwrap().unwrap();
+            window.data[0].records1 = JournalData::Legacy(Vec::new());
+            window.data[1].records2 = JournalData::Legacy(Vec::new());
+            window.data[2].records1 = JournalData::Legacy(Vec::new());
+            window.data[2].records2 = JournalData::Legacy(Vec::new());
+            let parsed =
+                parse_window(&window.data, workers, &budget, &control, &telemetry).unwrap();
+            let first = parsed[0].as_ref().unwrap();
+            assert!(first.records1.is_none());
+            assert_eq!(
+                first.records2.as_ref().unwrap().records[0].kind.as_ref(),
+                "episode0-file1"
+            );
+            let second = parsed[1].as_ref().unwrap();
+            assert_eq!(
+                second.records1.as_ref().unwrap().records[0].kind.as_ref(),
+                "episode1-file0"
+            );
+            assert!(second.records2.is_none());
+            let legacy = parsed[2].as_ref().unwrap();
+            assert!(legacy.records1.is_none() && legacy.records2.is_none());
+            let metrics = counters(&telemetry);
+            let parse = &metrics["typed_parse_parallelism"];
+            assert_eq!(parse["scheduled_episodes"], 3);
+            assert_eq!(parse["scheduled_journal_tasks"], 6);
+            assert_eq!(
+                parse["logical_slots"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|slot| slot["jobs"].as_u64().unwrap())
+                    .sum::<u64>(),
+                6
+            );
+            assert_eq!(parse["active_jobs"], 0);
+            assert_eq!(metrics["typed_journal_files"], 2);
+            drop(parsed);
+            drop(window);
             drop(reader);
             drop(sources);
             assert_eq!(budget.used(), 0);
@@ -857,7 +1097,7 @@ mod worker_observation_tests {
     #[test]
     fn parse_syntax_panic_cancel_and_deadline_drain_without_source_publication() {
         for workers in [1, 4] {
-            for failure in ["syntax", "panic", "cancel", "deadline"] {
+            for failure in ["syntax", "panic", "cancel", "deadline", "active-deadline"] {
                 let fixture = typed_fixture(4);
                 if failure == "syntax" {
                     fs::write(fixture.paths[0].join("player-1.jsonl"), b"[\n").unwrap();
@@ -878,25 +1118,31 @@ mod worker_observation_tests {
                     Reader::TypedBorrowedV1,
                 );
                 let window = reader.next_window(&mut sources).unwrap().unwrap();
-                let parse_control = if failure == "deadline" {
-                    Control::new(monotonic() + 0.001).unwrap()
+                let parse_control = if failure == "deadline" || failure == "active-deadline" {
+                    Control::new(monotonic() + if failure == "deadline" { 0.001 } else { 1.0 })
+                        .unwrap()
                 } else {
                     control.clone()
                 };
                 if failure == "deadline" {
                     std::thread::sleep(std::time::Duration::from_millis(3));
                 }
-                if failure == "panic" || failure == "cancel" {
+                if failure == "panic" || failure == "cancel" || failure == "active-deadline" {
                     let all_started = Arc::new(std::sync::Barrier::new(workers));
                     let cancel = parse_control.clone();
                     telemetry.test_set_parse_hook(Arc::new(move |index, finished| {
-                        if !finished {
+                        if !finished && index < workers {
                             all_started.wait();
+                            if failure == "active-deadline" {
+                                std::thread::sleep(std::time::Duration::from_millis(1020));
+                            }
                             if index == 0 {
                                 if failure == "panic" {
                                     panic!("injected parse panic");
                                 }
-                                cancel.cancel();
+                                if failure == "cancel" {
+                                    cancel.cancel();
+                                }
                             }
                         }
                     }));
@@ -912,13 +1158,14 @@ mod worker_observation_tests {
                     }
                     ("cancel", Err(Error::Cancelled)) => {}
                     ("deadline", Err(Error::Deadline)) => {}
+                    ("active-deadline", Err(Error::Deadline)) => {}
                     _ => panic!("wrong parse failure for {failure}"),
                 }
                 assert_eq!(sources.entries.len(), 0);
                 assert!(matches!(parse_control.check(), Err(Error::Cancelled)));
                 let metrics = counters(&telemetry);
                 assert_eq!(metrics["typed_parse_parallelism"]["active_jobs"], 0);
-                if failure == "panic" || failure == "cancel" {
+                if failure == "panic" || failure == "cancel" || failure == "active-deadline" {
                     assert_eq!(
                         metrics["typed_parse_parallelism"]["active_parse_peak"],
                         workers

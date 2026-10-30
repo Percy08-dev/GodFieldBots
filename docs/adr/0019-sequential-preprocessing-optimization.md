@@ -1,10 +1,11 @@
 # 0019: Measured sequential preprocessing optimization
 
-- Status: Accepted roadmap/Stage1design2026-10-30; independent architecture READY,
-  no blocking findings. Later structural stages remain separately gated.
+- Status: Accepted2026-10-30; Stage1/2/3a/5a implementation, proofs and measured
+  adoption accepted after independent reviews. Stage4 current-format migration is
+  conditionally skipped. Further alternatives remain separately gated.
 - Owner: root. Baseline`b71ad31`/native source`e604697d...` and accepted release
-  mimalloc/typed wheel`5eba6710...`. Main installed32e3 remains comparison control
-  until final adoption. User authorizes applying changes sequentially, measuring
+  mimalloc/typed wheel`5eba6710...`. Main32e3 was the unchanged comparison control;
+  final adopted97f1wheel is installed after comparisons. User authorizes applying changes sequentially, measuring
   each, and retaining only demonstrated improvements.
 
 ## Requirements and staged decision
@@ -129,8 +130,8 @@ not bypass checkpoint/environment identity checks. Report each stage separately.
 |1single-pass history|ACCEPTED|14.15%wholewall gain, exactoutputs; verificationrecord|
 |2polling|ACCEPTED local coalescence|1.43%wholemedian/5pairedwins; no globalpollchange|
 |3schema sharing|ACCEPTED Stage3a|3.42%wholemedian under authorized shared load; median peak RSS -34.34MiB|
-|4history representation|pending gated design|producer/current-data benefit separate|
-|5supply/pool/streaming|conditional pending|reassess remaining waiting after prior stages|
+|4history representation|conditional skip current format migration|original sources/provenance immutable; future producer experiment separate|
+|5supply/pool/streaming|ACCEPTED Stage5a|2.73%wholemedian/21.82%parsemedian gain; explicit CPU/medianRSS cost; no pool|
 
 Stage1 evidence:[verification](../verification/sequential-preprocessing-optimization.md).
 
@@ -218,3 +219,121 @@ alternating measured pairs favor the candidate; whole median19.769560->19.093615
 measurement review accepts bounded retention without requiring an uncontended
 rerun. Shared-load and CPU-accounting limits remain explicit. Full evidence:
 [verification](../verification/sequential-preprocessing-optimization.md#stage3a-accepted-schema-sharing-under-shared-load).
+
+## Stage4 disposition: no current-source format migration
+
+No history-reference/delta format is adopted in this optimization unit. Original
+schema4 source bytes, parent/generation/update proofs and the six fitted artifacts
+remain immutable. Replay does not independently attest omitted event-feed deltas.
+Rewriting original cumulative inputs or trusting a derived compact cache instead
+of authoritative source validation would cross that boundary. A producer format
+requires explicit versioning, writer/reader reconstruction and new collection
+evidence; those are future work outside this unit's no-games/updates constraint.
+Existing-data preprocessing and future collection/storage savings are different
+experiments. Preserve full original acting-player history and current eligibility.
+
+This is a compatibility-based conditional skip, not a measured claim that delta
+history cannot help. No speed or memory benefit is claimed for an unbuilt format.
+Independent architecture review accepts this scoped disposition. Reusing already
+validated event prefixes after complete strict decoding and exact comparison is
+a compatible, unassessed alternative. It would not remove initial decoding and
+requires its own design/measurement gate; this disposition does not claim that
+all possible in-memory history optimizations have been exhausted.
+
+## Stage5a candidate: bounded participant-file parse tasks
+
+Status: ACCEPTED after independent design, source-correctness, conformance and
+measurement reviews. Source d5090c4/ELF97f1b50; full evidence is in the
+[verification record](../verification/sequential-preprocessing-optimization.md#stage5a-accepted-participant-file-task-supply).
+Baseline is accepted Stage3a source89385a4/ELFd876348. A read-only source audit
+identifies a smaller task-supply experiment before persistent workers/Rayon.
+Four in-flight episodes expose only four episode tasks, each sequentially parsing
+two participant files. Dynamic episode assignment alone cannot improve that
+four-job full window. Exposing its eight files as independently claimable jobs
+can reduce tails without changing read concurrency, resident episodes or threads.
+It is a hypothesis to measure; no improvement is assumed from the source graph.
+
+### Responsibilities and interfaces
+
+Change private parse scheduling in native/src/parallel.rs, corresponding tests,
+and explicit parse-job diagnostic scope in telemetry.rs/test_native_parallel_parse.
+Keep parse_window's existing borrowed window and ordered ParsedEpisode return
+interface. No dependency, unsafe code, persistent thread pool, independent new
+Config setting, raw-file streaming, record parser, validator, feature or format
+change. Root owns design/config/docs; implementer owns scoped native code/tests.
+
+One checked task ordinal identifies (episode ordinal, participant slot). At most
+two tasks per resident episode are eligible. The same configured worker limit
+applies; each scoped worker claims from a window-local atomic next ordinal,
+parses one journal, then claims again. Use budgeted worker-local results carrying
+ordinals and regroup into the original ordered pairs only after every join.
+The ordinal identifies the original file slot; downstream header-based viewer
+mapping remains authoritative and must not be inferred from file slot alone.
+No unbounded work queue or source-wide task list. Raw owners stay coordinator-
+owned and immobile; all Records borrow them through the existing scope. Legacy
+all-legacy bypass and mixed-path behavior remain compatible. One worker remains
+inline and processes episode/participant order without creating parse threads.
+
+Do not silently reinterpret diagnostics: retain scheduled_episodes for window
+membership, add scheduled journal-task count and explicit job_unit/version for
+per-slot jobs/elapsed/overlap. Older artifacts continue to mean episode jobs.
+Read/decode telemetry and coordinator exclusive phase names retain their scopes;
+all wall partitions must reconcile. Nested task elapsed is not CPU utilization.
+
+### Ownership, failure and resource boundaries
+
+Reserve every thread's existing8MiB stack and collection capacities through the
+existing shared Budget. Active parse threads never exceed configured workers;
+the final partial window may use min(workers,2*episodes). No hidden second pool
+or prefetch window. Check cancellation/deadline before claiming/starting work,
+during unchanged parsing and before success. First failure cancels siblings;
+join all started workers on syntax/quota/spawn/panic/cancel/deadline failure,
+release raw/DTO/temporary leases, and return no successful partial window.
+Order source-evidence merges, semantic checks, numeric/proof emission and final
+source revalidation exactly as before. Parsing acceptance does not confer source
+eligibility. Keep caller-owned raw/DTO lifetimes and NumPy storage ownership.
+
+### Verification and adoption
+
+Test shuffled completion and correct episode/participant regrouping, borrowed
+lifetimes, actual bounded overlap, inline/mixed/legacy behavior, task/episode
+telemetry, panic/cancel/deadline/invalid input and quota cleanup. Retain full
+independent legacy/Python numeric/source oracles. Run appropriate native/Python
+regression, both fixed recipes, Parquet and saved current-v2 PPO1/4 proofs on an
+isolated releaseopt3/debug0 mimalloc wheel. No games, fits or optimizer updates.
+Independent correctness/conformance reviews precede acceptance.
+
+Then notify the user before performance execution. Compare against Stage3a with
+the existing fixed83,783-row4read/4parse/inflight4/2GiB/cache512/chunk16 protocol,
+one warmup plus five alternating fresh-process pairs, exact proofs every run.
+Record whole/stage wall, reported CPU, peak/post RSS/PSS, managed memory and
+storage/I/O with original scopes. If the external task is active, label shared
+load and do not generalize to uncontended speed. No concurrent own heavy jobs,
+source edits, or multiple source jobs. Retain only demonstrated complete-path
+time/resource benefit without consequential regression; reject or leave
+inconclusive otherwise. Pool reuse/line batches/overlap remain separate gated
+decisions, never automatically included in this candidate.
+
+All12primary commands pass. Whole median19.261019->18.734746s (2.732321%),
+four of five paired wins; parse improves every pair with separated ranges,
+median4.409453->3.447428s (21.82%). Reported CPU median rises1.542533%and
+median peak RSS18.12MiB; maximum peak is similar and post-release RSS falls2.04MiB.
+Managed peak1,605,390,806bytes and logical staging/scratch totals stay unchanged.
+Root accepts those bounded resource costs for the measured elapsed gain under
+authorized shared load. This does not establish uncontended speed, lower CPU
+work or per-job speedups across changed job units. Current Stage5a is the final
+accepted candidate for this sequence; no pool/line/overlap implementation follows.
+
+## Final operational acceptance
+
+After all comparisons and independent acceptance, back up the exact old32e3ad68
+package, distribution metadata and loaded identity, then install accepted
+Stage5a97f1b509wheel into Bots.venv offline with no-deps/no-build. Fresh interpreter
+identity matches source d5090c41/build/allocator/ABI/capabilities and the exact
+tested ELF. Optional-free CLI help starts without importing native or learning
+runtimes. All24protected original fit files remain unchanged. Evidence:
+`runs/assessments/sequential-optimization-20261030/final-installation.json` and
+`main-before-final-install/`. Config budgets/defaults, dependencies and ordinary
+resume compatibility checks are unchanged. No games, fits or optimizer updates
+were executed. This closes the bounded sequence; unassessed history/pool/streaming
+alternatives do not become accepted implementations.

@@ -17,6 +17,18 @@ and retained storage are reused. Under the user-authorized competing workload,
 whole median19.770->19.094s (3.42%), with five paired wins; median peak RSS
 428.73->394.38MiB. All output proofs,826Python tests and independent reviews pass.
 This is evidence under shared load; uncontended performance remains unmeasured.
+Stage5a retains bounded participant-file parse tasks, with the same read settings,
+worker caps, raw owners and ordered validation. Shared-load whole median improves
+19.261->18.735s (2.73%); parse median4.409->3.447s (21.82%). Reported CPU rises
+1.54%and median peak RSS18.12MiB; maximum/retained memory stays similar or falls.
+All826distinct Python cases,81Rust tests and five real-data proofs pass; independent
+reviews accept this explicit tradeoff. No persistent pool or line streaming is
+introduced. Stage4 persisted history migration is conditionally skipped for the
+immutable current corpus; future versioned formats/prefix reuse need separate gates.
+After all comparisons, the exact accepted release/mimalloc wheel97f1b509/source
+d5090c41is installed into Bots.venv with no dependency changes. The historical
+32e3ad68package/metadata is backed up; fresh identity/capability and optional-free
+CLI startup checks pass. Reader/worker Config defaults and resume guards remain.
 
 A subsequent [root-cause investigation](verification/preprocessing-root-cause.md)
 keeps production unchanged and separates graph/task supply, repeated input/history

@@ -239,6 +239,7 @@ impl Drop for DecodeJob<'_> {
 struct ParseParallelism {
     windows: AtomicU64,
     episodes: AtomicU64,
+    journal_tasks: AtomicU64,
     threads: AtomicU64,
     effective_slots_peak: AtomicU64,
     active: AtomicU64,
@@ -435,12 +436,14 @@ impl Telemetry {
             "logical_slots": slots}).to_string()
     }
 
-    pub fn parse_window(&self, workers: usize, episodes: usize) {
+    pub fn parse_window(&self, workers: usize, episodes: usize, journal_tasks: usize) {
         let p = &self.parse_parallelism;
         p.windows.fetch_add(1, Ordering::Relaxed);
         p.episodes.fetch_add(episodes as u64, Ordering::Relaxed);
+        p.journal_tasks
+            .fetch_add(journal_tasks as u64, Ordering::Relaxed);
         p.effective_slots_peak
-            .fetch_max(workers.min(episodes) as u64, Ordering::Relaxed);
+            .fetch_max(workers.min(journal_tasks) as u64, Ordering::Relaxed);
     }
     pub fn parse_thread_started(&self) {
         self.parse_parallelism
@@ -476,9 +479,11 @@ impl Telemetry {
             "logical_slot": index, "jobs": value(&slot.jobs), "failed_jobs": value(&slot.failed),
             "elapsed_nanoseconds": value(&slot.ns), "elapsed_seconds": value(&slot.ns) as f64 / 1e9,
         })).collect();
-        serde_json::json!({"scope": "typed Journal parse jobs only; scoped threads borrow coordinator-owned raw buffers; elapsed is nested wall time, not CPU time; active peak is job overlap, not CPU utilization",
+        serde_json::json!({"scope": "participant-file Journal parse jobs; mixed windows include legacy no-op file slots; all-legacy windows bypass parsing; scoped threads borrow coordinator-owned raw buffers; elapsed is nested wall time, not CPU time; active peak is job overlap, not CPU utilization",
+            "job_unit": "participant-journal-file", "job_unit_version": 2,
             "configured_workers": value(&self.configured_workers), "configured_max_in_flight": value(&self.configured_in_flight),
             "windows": value(&p.windows), "scheduled_episodes": value(&p.episodes),
+            "scheduled_journal_tasks": value(&p.journal_tasks),
             "spawned_threads": value(&p.threads), "effective_slots_peak": value(&p.effective_slots_peak),
             "active_jobs": value(&p.active), "active_parse_peak": value(&p.active_peak),
             "logical_slots": slots}).to_string()

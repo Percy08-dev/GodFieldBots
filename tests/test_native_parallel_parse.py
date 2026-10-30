@@ -1,4 +1,4 @@
-"""Public numeric and telemetry checks for the ADR0018 candidate wheel."""
+"""Public numeric and telemetry checks for the ADR0019 Stage5a candidate wheel."""
 import json
 import os
 import time
@@ -17,7 +17,7 @@ from tests.test_fixed_ppo_data import frozen_sources as frozen_sources  # noqa: 
 
 pytestmark = pytest.mark.skipif(
     os.environ.get('GFB_TEST_PARALLEL_PARSE') != '1',
-    reason='requires the isolated ADR0018 candidate wheel; opt in with GFB_TEST_PARALLEL_PARSE=1',
+    reason='requires the isolated Stage5a candidate wheel; opt in with GFB_TEST_PARALLEL_PARSE=1',
 )
 
 
@@ -57,16 +57,20 @@ def test_scoped_parse_public_arrays_order_wall_and_retained_views(
         decode = diagnostic['decode_parallelism']
         assert parse['active_jobs'] == decode['active_jobs'] == 0
         assert parse['configured_workers'] == decode['configured_workers'] == workers
+        assert parse['job_unit'] == 'participant-journal-file'
+        assert parse['job_unit_version'] == 2
         if reader == 'legacy':
             assert partitions['typed_parse_window_dispatch_and_join'] == 0
             assert parse['scheduled_episodes'] == parse['spawned_threads'] == parse['active_parse_peak'] == 0
+            assert parse['scheduled_journal_tasks'] == 0
         else:
             assert partitions['typed_parse_window_dispatch_and_join'] > 0
-            assert parse['scheduled_episodes'] * 2 == diagnostic['typed_journal_files'] == 480
-            assert sum(slot['jobs'] for slot in parse['logical_slots']) == parse['scheduled_episodes']
+            assert parse['scheduled_episodes'] * 2 == parse['scheduled_journal_tasks'] == diagnostic['typed_journal_files'] == 480
+            assert sum(slot['jobs'] for slot in parse['logical_slots']) == parse['scheduled_journal_tasks']
             assert sum(slot['failed_jobs'] for slot in parse['logical_slots']) == 0
             assert 1 <= parse['active_parse_peak'] <= workers
             assert parse['spawned_threads'] == (0 if workers == 1 else decode['spawned_threads'])
+            assert parse['effective_slots_peak'] == workers
             assert 'bounded scoped borrowed-raw parse windows' in diagnostic['journal_parse_scope']
     assert owner._session.control_reserved_bytes() == 0
     for split, samples in ((0, train), (1, validation)):

@@ -3,8 +3,8 @@
 [ADR0019](../adr/0019-sequential-preprocessing-optimization.md) governs independent
 changes and retain/reject decisions. User authorized sequential application and
 measurement. No simulator changes, source rewrites, games/fits/learning updates or
-automatic reader/worker-count switch. Main native is held as the historical
-baseline until final adopted-wheel installation.
+automatic reader/worker-count switch. The historical main native stays unchanged
+through all comparisons; final accepted-wheel installation is recorded below.
 
 ## Stage1: accepted single-pass typed history
 
@@ -206,9 +206,141 @@ environment. No uncontended or generalized speedup is claimed. Artifacts:
 and its sibling log. Do not multiply stage percentages from different controls
 into a claimed total speedup. Additional performance work requires advance notice.
 
-## Remaining sequence
+## Stage5a: accepted participant-file task supply
 
-Stage4 history representation and Stage5
-supply/pool work remain separately scoped under ADR0019. Their implementation,
-measurement and adoption decisions are pending; this report is not a completion
-claim for those later stages.
+Architecture design/source-conformance and independent source-correctness reviews
+are READY with no blockers. Candidate source
+`d5090c4199c7462d83b50c486057aa682b0e0808475a048d3d48621f288ed961`,
+isolated releaseopt3/debug0 mimalloc ELF
+`97f1b50990b4b97100c922e0191de4dd447ecb2c27bbbd81615d0c75ce67b628`.
+No runtime dependency, Config, persisted format, learning or source-authority
+change. Read windows and worker caps remain unchanged.
+
+Within each bounded window an atomic ordinal assigns original participant-file
+slots to scoped workers. Budgeted worker-local results regroup by original
+episode/file slot after every join; downstream header-based viewer mapping is
+unchanged. One worker remains inline; all-legacy bypass and mixed legacy no-op
+slots preserve compatibility. First failure cancels siblings and drains joins;
+no partial parsed window reaches validation/publication.
+
+`typed_parse_parallelism` now explicitly reports job_unit
+`participant-journal-file`, job_unit_version2and scheduled_journal_tasks, retaining
+scheduled_episodes for window membership. Mixed windows include legacy no-op
+slots in task counts; all-legacy windows schedule no parse work. Historical
+episode-job diagnostics keep their old interpretation. Nested elapsed and active
+job overlap remain distinct from physical CPU utilization.
+
+Full mimalloc native tests81PASS/2ignored (50library+31integration); focused
+worker cases10PASS. Checks cover reverse file completion, reversed viewer/file
+mapping, borrowing/evidence movement, dynamic progress while a file is blocked,
+inline/mixed/legacy behavior, partial windows, panic/cancel/deadline/quota cleanup.
+Formatting, scoped Ruff and diff checks pass. Optional combined later-task
+failure-after-earlier-success coverage was deferred: repeated claiming and failure
+cleanup are independently covered and no blocker was identified.
+
+### Executed correctness and primary comparison
+
+Full isolated-wheel Python regression818PASS/13skips in364.78s initially omitted
+the explicit parallel-parser opt-in. A separate invocation with
+GFB_TEST_PARALLEL_PARSE=1passes all8cases in115.46s:826distinct tests covered,
+with five original conditional skips remaining. No whole-suite rerun was needed.
+Full Ruff and mypy59source files pass.
+
+History/observation/index proofs pass in`stage5a-verification/`. Its first PPO
+wrapper fails before source work with missing json import; preserve/exclude that
+protocol attempt. Corrected PPO-only jobs at1/4workers pass in
+`stage5a-verification-ppo-retry/`, with complete identity guards and clones at zero
+updates. Combined five-job success duration66.514s is correctness evidence only.
+All original arrays/NPZ/sample/source/dataset and83,783-row index identities match.
+
+After advance notice, all own tests/builds/source jobs stop before timing.
+`stage5a-primary-shared-load/` compares accepted Stage3a against this candidate:
+same releaseopt3/debug0mimalloc,4read/parse workers/inflight4,
+2048/512/16MiBmemory/cache/chunk, one warmup plus five alternating fresh-process
+pairs. Background work is uncontrolled. The earlier user20%CPU report is
+historical, not a contemporaneous measurement. All12commands, original output/
+build/source/protected-model/main/code checks, job/worker caps and ledgers pass.
+
+| Metric | Stage3a control | Stage5a |
+| --- | ---: | ---: |
+| Whole median [range] s |19.261 [18.689,19.331]|18.735 [18.054,19.045]|
+| Parse dispatch/join median [range] s |4.409 [4.330,4.463]|3.447 [3.406,3.473]|
+| OS-reported CPU median s |16.882|17.143|
+| Maximum workload-self peak RSS MiB |432.03|431.79|
+| Median workload-self peak RSS MiB |408.88|427.00|
+| Median post-release RSS MiB |296.39|294.35|
+| Median post-release PSS MiB |287.52|286.09|
+| Managed peak bytes |1,605,390,806|1,605,390,806|
+
+Whole median improves0.526273s/2.732321%. Four of five paired whole results
+improve:0.581283/0.526273/1.214726/0.285832/-0.128756s. Parse improves every
+pair by0.902755–1.057067s, with separated ranges; its median falls21.82%.
+Whole ranges overlap. Reported CPU median rises1.542533%and median peak RSS
+rises18.12MiB; maximum and post-release memory do not rise. These tradeoffs
+remain visible under unchanged budgets; no claim of CPU or memory improvement.
+Guest aggregate busy during measured commands is10.79–11.55%, including this
+workload and other guest work; physical/Windows-host attribution is unavailable.
+Storage formats/content remain identical; raw observer storage/I/O samples retain
+their lower-bound and sampling scopes, and do not demonstrate storage savings.
+Every command records the same logical staging read/write totals
+1,068,020,777/1,003,260,077bytes and owned scratch peak1,856,048,056bytes. These
+are logical ownership/call totals, not physical device traffic or resident memory.
+
+Actual median-whole trials are trial1in both variants. This disjoint ledger
+includes all outer work so stage sums can be reconciled with whole elapsed:
+
+| Exclusive scope | Control s | Candidate s |
+| --- | ---: | ---: |
+| Native parse dispatch/join |4.409453|3.472528|
+| Native read/decode wait and source merge |3.188937|3.401342|
+| Native Journal validation |2.417445|2.555422|
+| Native features/numeric spooling |1.894740|1.900822|
+| Native temporary release |2.124057|2.126872|
+| Other native scan categories |1.799632|1.814101|
+| Preparation envelope outside native scan |1.805221|1.676125|
+| Archive numeric staging |0.437125|0.409740|
+| Archive output proof |0.433790|0.475019|
+| Final source check/cleanup |0.546805|0.699965|
+| Outer envelope residual |0.203814|0.202811|
+| Whole elapsed |19.261019|18.734746|
+
+The envelope residual is not separately instrumented startup/GC time; outside
+scan is envelope subtraction. Native integer partitions reconcile exactly.
+Representative stage changes are not independent medians or a causal allocation
+of the median benefit. Baseline scheduled6,784episode jobs; candidate schedules
+13,568file jobs with the same6,784spawned scoped threads and active peak4.
+This remains file-granularity parsing, not per-line streaming or a persistent
+pool. The candidate amortizes to0.224ms per accepted action over83,783rows;
+that is preparation throughput, with inference and game waiting outside scope.
+
+Independent arithmetic/resource/lifecycle audit PASS; READY for scoped retention.
+Decision: retain Stage5a's measured elapsed improvement with the explicit CPU/
+median-memory cost above. No uncontended or formal significance claim, and no
+per-job duration comparison across the changed episode/file job units.
+
+## Closeout and separately gated alternatives
+
+Stage4 persisted history-format migration is conditionally skipped for the
+immutable current corpus; no speed claim is made. A future versioned producer
+experiment and compatible in-memory prefix reuse remain unassessed, separately
+gated alternatives. Stage5a source, execution and measured adoption are accepted.
+No persistent pool, line-batching or stage overlap follows automatically from
+this candidate.
+
+The final accepted source d5090c41/release-mimalloc ELF97f1b509is installed into
+Bots.venv from the exact tested wheel after all comparisons. Old32e3ad68package
+and distribution metadata are backed up in`main-before-final-install/site/`, with
+verified rollback identity. Installation is offline/native-only/no-deps/no-build;
+fresh loaded binary/build/ABI/allocator/reader capabilities match the private
+candidate exactly apart from installation path. Optional-free CLI help starts
+without importing gf_native/Torch/LightGBM/PyArrow. All24protected original fit
+files retain their original hashes/stats. `final-installation.json` and
+`final-installation-help.log` retain commands and proofs. Config/defaults and
+normal checkpoint/environment identity guards stay unchanged. No further full
+regression is repeated after installing the same already-tested ELF.
+
+The bounded sequential optimization unit is complete: retain Stage1/2/3a/5a;
+conditionally skip Stage4 persisted-format migration. Future prefix reuse,
+versioned delta producers, persistent pools, line batches and stage overlap need
+their own scoped evidence and acceptance. No total speedup is inferred by
+multiplying fresh-control or shared-load percentages from different comparisons.
