@@ -1,8 +1,8 @@
 # 0017: Combined mimalloc and borrowed-Journal practicality
 
-- Status: Design accepted2026-10-30 after independent READY; implementation and
-  empirical acceptance pending. User requests a practical verdict after
-  ADR0016's independent allocator/representation results. No default adoption.
+- Status: Accepted2026-10-30; implementation, executed correctness/measurement
+  gates and independent conformance/correctness reviews READY. The opt-in
+  combination is practically usable for the verified workload; no default adoption.
 - Owner: root. Baseline9704f93; preserve original datasets/models/main environment
   while building and verifying opt-in candidate wheels. Architecture review is
   mandatory before dependent implementation.
@@ -162,3 +162,24 @@ required before calling the candidate practically usable. Report throughput and
 resource tradeoffs against legacy+mimalloc as well as the original baseline. If
 correct but slower, report that explicitly; do not change unrelated scheduling or
 claim a speedup. Production default adoption remains a separate user decision.
+
+## Accepted result
+
+Implementation3472700/native source37cae919... passes818Python tests(5opt-in skips),
+64native Rust tests(2ignored), public both-reader array-lifetime tests, complete
+both-recipe original NPZ/source/sample/index parity and saved real current-v2
+16-game PPO eight-array parity at1/4workers. Strict Outcome rejection and exact
+scalar metadata shapes were fixed before final measurements. No source/model
+producer bytes or main installation/defaults changed.
+
+All48actual-pathcommands passed under a clean84-file code freeze, with5measured
+trials per8cells. mimalloc+typed medians25.337/24.030s at1/4workers reduce21.35%/
+12.26% versus current mimalloc+legacy and45.14%/21.36% versus System+legacy.
+Maximum kernel RSS349.13/368.02MiB stays below the configured2GiB soft budget.
+Four workers reduce whole wall time by5.16% versus one, reflecting the explicit coordinator-
+local parsing/feature boundary; no full-core-utilization claim is made.
+
+This establishes practical usability as an explicit preprocessing candidate in
+the pinned Python/NumPy/Simulator environment. It does not establish broader-
+platform performance, a change in learning quality or default adoption.
+Evidence: [combined verification](../verification/combined-borrowed-journal.md).

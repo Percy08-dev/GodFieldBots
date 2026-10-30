@@ -1,6 +1,6 @@
 # Combined mimalloc and borrowed-Journal practicality
 
-Status: implementation in progress under
+Accepted 2026-10-30 under
 [ADR0017](../adr/0017-combined-borrowed-journal-practicality.md). Independent
 pre-implementation architecture review is READY. This unit determines the
 combination's usability; ADR0016's separate effects are not combined predictions.
@@ -10,7 +10,7 @@ update or simulator modification is authorized as an automatic side effect.
 Baseline9704f93 and original installed native32e3ad68... remain the reference.
 Existing corpus/NPZ/index/saved-PPO proofs and original six fits must remain intact.
 An opt-in `preprocessing.reader="typed-borrowed-v1"` candidate and optional
-`allocator-mimalloc` wheel feature are being implemented; legacy stays default.
+`allocator-mimalloc` wheel feature are available; legacy stays default.
 
 ## Required evidence
 
@@ -38,8 +38,10 @@ from immutable source/dataset hashes. No capability is advertised until the path
 is wired. Runtime counters must prove typed Journal work actually occurred.
 
 Readiness requires independent correctness/conformance review and executed corpus/
-failure/ownership/measurement gates. A correct but slower candidate must be
-reported as such. A final verdict and any remaining limitations are pending.
+failure/ownership/measurement gates. Those gates and the complete measurements
+below now pass: the combination is practically usable as an explicit opt-in
+preprocessing candidate in the verified environment. Main/default adoption was
+not performed.
 
 ## Combined standalone component evidence
 
@@ -146,8 +148,111 @@ escaped win keys and all result positions. The document-quota fixture now reache
 actual raw/document admission after a prior episode is queued and returns all
 leases to zero. Actual typed worker overlap/cancellation uses2/4/8distinct tasks.
 
-Independent correctness and architecture source/evidence reviews are READY for
-primary execution. Eight actual-path cells (System/mimalloc x legacy/typed x1/4)
-will have one warmup and five rotating trials. Current System+legacy is the
-control; historical results are not substituted. Performance/practicality and
-final documentation signoff remain pending.
+Independent correctness and architecture source/evidence reviews are READY.
+Eight actual-path cells (System/mimalloc x legacy/typed x1/4) completed one warmup
+and five rotating trials. Current System+legacy is the control; historical
+results are not substituted. Final quantitative evidence follows.
+
+## Final complete-path measurements and practicality verdict
+
+The actual-path matrix used clean implementation `34727000f89548aaff39559a28b3fdd3a1d7a5dc`
+with 84 frozen code files. All 48 commands succeeded: eight warmups and five
+measured trials in each of eight cells. Every result has the expected original
+NPZ/dataset/source/sample identity, actual selected reader and exact Journal path
+counts, pinned loaded binary, and joined owner without cancellation or expiry.
+All original source/model/binary/code checks passed at matrix end.
+
+Same Python 3.14.10/GIL, NumPy 2.5.4, Rust 1.99.0, Linux/WSL2, pinned Simulator/
+catalog v2, complete 83,783-row history preparation, 2,048 MiB shared managed
+budget, cache 512 MiB, chunk 16 MiB, matching worker/in-flight counts, thread
+environment 1 and release opt-level 3. No concurrent builds, tests, profiler,
+source edits or heavy experiment work. Counters/profiles are separate from timing.
+
+Wall/CPU/post-release columns are medians of five trials. Kernel RSS is the
+**maximum** `wait4` high-water value across the five trials, for the largest
+individual process; it is not summed simultaneous tree RSS. Sampled tree RSS,
+PSS, all observations/ranges/IQRs and ownership proofs remain in the raw artifacts.
+
+| Allocator / reader | Workers | Whole wall s | Process CPU s | Kernel peak RSS max MiB | Post-GC RSS median MiB |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| System / legacy |1|46.183|46.041|412.2|381.1|
+| System / typed |1|31.109|30.977|391.1|363.9|
+| mimalloc / legacy |1|32.215|32.055|359.8|299.5|
+| mimalloc / typed |1|25.337|25.175|349.1|298.8|
+| System / legacy |4|30.558|32.919|589.5|388.7|
+| System / typed |4|26.369|25.160|417.2|367.4|
+| mimalloc / legacy |4|27.387|28.390|413.7|297.3|
+| mimalloc / typed |4|24.030|22.794|368.0|297.6|
+
+Compared with current mimalloc+legacy, the combination reduces whole wall time
+21.35% at one worker and 12.26% at four. Compared with System+legacy it reduces
+45.14%/21.36%. The additional allocator benefit over System+typed is 18.55%/8.87%
+in this complete path, distinct from the standalone Journal component's 5.51%.
+Do not multiply separate-stage ratios or mix historical controls into this matrix.
+
+Five-trial wall min–max / inclusive IQR, seconds:
+
+| Allocator / reader / workers | Min–max | IQR |
+| --- | ---: | ---: |
+| System / legacy / 1 |44.991–47.455|0.325|
+| System / typed / 1 |30.999–31.479|0.139|
+| mimalloc / legacy / 1 |32.159–33.386|0.162|
+| mimalloc / typed / 1 |25.112–25.903|0.498|
+| System / legacy / 4 |30.196–30.626|0.339|
+| System / typed / 4 |25.887–26.548|0.244|
+| mimalloc / legacy / 4 |26.960–27.955|0.222|
+| mimalloc / typed / 4 |23.604–24.317|0.442|
+
+Four workers reduce the combination's whole wall time by 5.16% versus one
+(about 1.31 s), with
+kernel peak 368.0 vs 349.1 MiB. This is consistent with the deliberately serial
+Journal parse/validation/feature-spooling consumer. Configured decoder overlap
+does not prove utilization of four full CPU cores. The opt-in preset retains one
+worker; four is an explicit speed/resource choice, not a silent default change.
+
+The two-GiB setting is a shared application admission budget, not measured RSS
+or a hard OS quota. Post-release snapshots include interpreter/imports, use no
+forced purge and do not prove long-term allocator retention or a live-object
+leak. Scratch/output categories overlap, and OS byte counters are not WSL host
+physical-device traffic. No GPU workload or end-to-end training/win-rate gain is
+claimed by this preprocessing comparison.
+
+## Reproduction, costs and supported use
+
+Final local evidence lives under `runs/assessments/combined-borrowed-20261030/`:
+`native-final/{system,mimalloc}`, `native-measured-freeze`, `native-primary`,
+`native-summary.json`, `native-assessment.json`, `final-corpus`,
+`final-legacy-corpus`, `final-ppo-{1,4}`, `final-index-mi.parquet` and its sidecar.
+The independent component evidence/source snapshot remains separately retained.
+Root runtime logs additionally record test/check/package outcomes. The installed
+app wheel contains all 59 current Python source files byte-for-byte; its SHA256 is
+`0cc3605e5854f08217c16fa820a7964440ddb38e1684f5523aa8941634dfbab6`.
+
+The 48 primary commands cost 1,461.33 cumulative command-wall seconds (24.36 min)
+and 1,463.89 CPU seconds (24.40 min), including warmups; these are not total
+elapsed session cost. OS write-byte lower bounds sum 93,265,346,560 bytes
+(86.86 GiB), including repeated identical temporary archives/staging. These bytes
+were not retained data generation. Experiment-owned retained files/builds/source
+snapshot were about 1.83 GiB logical / 1.43 GiB inode-deduplicated allocated before
+final report writes, excluding original data and shared tool caches. Correctness
+runs, failed lock-coordination attempts, discarded v1 builds, test suites and
+setup costs are separate evidence; not every setup/edit/check interval was timed.
+
+Use a wheel built with Cargo feature `allocator-mimalloc` and explicitly select
+`preprocessing.reader="typed-borrowed-v1"`, or the provided standalone preset
+`configs/preprocessing/native-borrowed.toml`. Dataset CLI selects that preset;
+training can set the same reader on its existing Rust preprocessing configuration.
+The main environment has **not** been installed/switched, and all existing reader
+defaults remain legacy. An old/incapable native wheel rejects the new selector
+before source/collection work. The reader is strict for the pinned generated
+schema; legacy remains available for historical permissive inputs. Ordinary
+resume across changed code/binary/reader/environment identities is still refused.
+
+**Verdict:** practically usable as an opt-in preprocessing candidate in the
+verified offline/fixed-data and PPO-ingestion environment. Numerical equivalence,
+source/reader provenance, scoped lifetimes, public NumPy ownership, mutation/
+failure/cancellation cleanup, actual combined speed and peak memory are verified.
+Broader platforms/schemas, future recipe changes, live participant-worker changes,
+full-core scaling, new training-quality evidence and production default adoption
+remain outside this verdict. Independent correctness and architecture measurement
+reviews are READY; no unresolved blocker remains.

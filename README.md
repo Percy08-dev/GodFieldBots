@@ -161,6 +161,12 @@ RSSは406／469／580／749MiBでした。設定の判断には
 実験CLIは`benchmarks/native_preprocessing/runner.py`で、既定はdry-runです。
 本番reader・アロケータの既定値には、この実験の候補をまだ採用していません。
 
+mimalloc＋借用型Journalの実経路も
+[組合せ検証](docs/verification/combined-borrowed-journal.md)で確認済みです。
+利用には`allocator-mimalloc`付きnative wheelと、明示的な
+`configs/preprocessing/native-borrowed.toml`（または`preprocessing.reader`設定）が必要です。
+既存wheel・reader既定値・main環境は自動で切り替わりません。
+
 ```sh
 env -u VIRTUAL_ENV uv run --no-sync gf-bots dataset inspect runs/ppo-comparison-v2/dataset.json --preprocessing-config configs/preprocessing/native-low-memory.toml
 env -u VIRTUAL_ENV uv run --no-sync gf-bots train --config configs/experiments/lightgbm-fixed-history.toml --set preprocessing.memory_budget_mib=2048 --set preprocessing.chunk_target_mib=16
