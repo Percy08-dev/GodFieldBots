@@ -2,6 +2,17 @@
 
 ## Status and scope
 
+The [final-runtime scaling/function investigation](verification/final-preprocessing-scaling-and-profile.md)
+compares unchanged source d5090c41/release-mimalloc97f1at1/2/4/8workers:
+whole medians22.599/19.242/15.907/14.362s, maximum self RSS346/396/432/507MiB,
+all24original-output/source/lifecycle/ledger checks and independent audit PASS.
+Eight is9.71%faster than four with75.35MiBmore maximum RSS; defaults stay unchanged.
+Separate source-identical debug2captures and versioned observed-suffix analysis
+locate validation/presence/event checks and Replay/Value-tree/allocator destruction.
+Filtered sampled CPU, incomplete coverage and overlapping owners are explicit;
+no pool, validation shortcut, source-format or runtime change is adopted here.
+Design, harness and final correctness/conformance reviews are READY.
+
 [ADR0019](adr/0019-sequential-preprocessing-optimization.md) Stage1 adopts one-pass
 typed history aggregation. All numeric/index/PPO proofs and826Python tests pass;
 independent reviews accept12controlled commands: wholewall20.60->17.69s (14.15%),
