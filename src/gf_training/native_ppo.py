@@ -15,7 +15,7 @@ from gf_models.config import MLPModelConfig
 from gf_training.collection import OnlinePPOContext
 from gf_training.lineage import _OWNED_LOCKS
 from gf_training.native_authorization import NativePreparation
-from gf_training.native_backend import binary_identity, load_native
+from gf_training.native_backend import binary_identity, load_native, reader_settings
 from gf_training.native_learning import PPOLearning
 from gf_training.q_data import check_deadline
 
@@ -24,10 +24,13 @@ def preprocessing_identity(config: PreparationConfig, *, deadline: float) -> Jso
     """Fail before collection and identify the actual loaded native binary."""
     check_deadline(deadline)
     if config.backend == 'python':
-        return {'backend': 'python'}
+        if config.reader != 'legacy':
+            raise ContractError('typed preprocessing reader requires the Rust backend')
+        return {'backend': 'python', 'reader_contract': config.reader}
     if config.backend != 'rust':
         raise ContractError('unsupported PPO preprocessing backend')
     native = load_native()
+    reader_settings(config, native)
     session = getattr(native, 'NativeSession', None)
     if session is None or any(not callable(getattr(session, name, None)) for name in (
             'cancel_handle', 'control_summary', 'authorize', 'next_batch', 'proof', 'finalize', 'close')):
@@ -43,7 +46,7 @@ def preprocessing_identity(config: PreparationConfig, *, deadline: float) -> Jso
         raise ContractError('independent native PPO cancellation handle required')
     identity = binary_identity(native)
     check_deadline(deadline)
-    return {'backend': 'rust', 'native': identity}
+    return {'backend': 'rust', 'native': identity, 'reader_contract': config.reader}
 
 
 def _context(directory: Path, linkage: Json, context: OnlinePPOContext) -> Path:
@@ -78,7 +81,8 @@ async def stage_rollout(directory: Path, numeric: Path, model: MLPModelConfig, l
     deadline/storage checks and unchanged numerical parity/update/save gates.
     """
     check_deadline(deadline)
-    if config.backend != 'rust' or expected_identity.get('backend') != 'rust':
+    if (config.backend != 'rust' or expected_identity.get('backend') != 'rust'
+            or expected_identity.get('reader_contract') != config.reader):
         raise ContractError('explicit Rust PPO preprocessing identity required')
     parent = _context(directory, linkage, online_context)
     plan = {'kind': 'online', 'encoder': asdict(model.encoder),

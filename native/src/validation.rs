@@ -897,7 +897,7 @@ pub fn replay_closure<'a>(
     Ok(Some(value))
 }
 
-fn equals_player(value: &Value, expected: i128) -> bool {
+pub(crate) fn equals_player(value: &Value, expected: i128) -> bool {
     value.eq_python(&Value::Number(
         crate::json::Number::from_i128(expected).expect("i128 number"),
     ))

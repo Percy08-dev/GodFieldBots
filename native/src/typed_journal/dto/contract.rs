@@ -1,5 +1,5 @@
 //! Representation-independent scalar/presence checks; no JSON grammar implementation.
-use crate::feasibility::Text;
+use super::text::Text;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::BTreeMap;
 
@@ -29,7 +29,7 @@ pub fn shape(fields: &[(&str, bool)], required: &[&str], optional: &[&str]) -> R
     Ok(())
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub struct Player(pub u8);
 impl<'de> Deserialize<'de> for Player {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
@@ -47,7 +47,7 @@ impl Validate for Player {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, PartialEq)]
 pub enum Presence<T> {
     #[default]
     Missing,
@@ -126,7 +126,7 @@ impl<K: Validate + Ord, V: Validate> Validate for BTreeMap<K, V> {
         Ok(())
     }
 }
-#[derive(Debug, Serialize)]
+#[derive(Debug, PartialEq, Serialize)]
 #[serde(transparent)]
 pub struct UniqueMap<K: Ord, V>(pub BTreeMap<K, V>);
 impl<'de, K: Ord + Deserialize<'de>, V: Deserialize<'de>> Deserialize<'de> for UniqueMap<K, V> {

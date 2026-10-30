@@ -248,7 +248,7 @@ def preparation_settings(args: argparse.Namespace) -> dict[str, Any]:
     settings: dict[str, Any] = {'memory_budget_mib': args.memory_mib, 'chunk_target_mib': args.chunk_mib,
                               'cache_budget_mib': 512}
     if args.variant == 'rust':
-        settings.update(backend='rust', workers=args.workers, max_in_flight=args.max_in_flight)
+        settings.update(backend='rust', reader=getattr(args,'reader','legacy'), workers=args.workers, max_in_flight=args.max_in_flight)
     return settings
 
 
@@ -334,6 +334,7 @@ def preparation(args: argparse.Namespace) -> dict[str, Any]:
     elapsed = time.monotonic() - started
     # These wall phases are disjoint. Scanner's nested diagnostics remain nested.
     return {'kind': 'preparation', 'variant': args.variant, 'encoder': args.encoder,
+            'reader_contract': getattr(args,'reader','legacy') if args.variant == 'rust' else 'legacy',
             'dataset_content_sha256': dataset['content_sha256'],
             'dataset_manifest_sha256': file_hash(args.dataset), 'arrays': proof,
             'numeric_archive_sha256': archive_hash, 'sample_identity_sha256': identities,
@@ -350,7 +351,7 @@ def preparation(args: argparse.Namespace) -> dict[str, Any]:
             'diagnostic_snapshot_scope': 'data_stage_preparation_diagnostics captured before archive/finalize; nested_preparation_diagnostics includes later finalization counters',
             'config': {'memory_mib': args.memory_mib, 'chunk_mib': args.chunk_mib,
                        'cache_mib': 512,
-                       **({'backend': 'rust', 'workers': args.workers,
+                       **({'backend': 'rust', 'reader': getattr(args,'reader','legacy'), 'workers': args.workers,
                            'max_in_flight': args.max_in_flight} if args.variant == 'rust' else {})}
                       if args.variant != 'old' else None,
             'unavailable_phases': ['native_fit: not applicable; no fit is run',
@@ -638,6 +639,7 @@ def argument_parser() -> argparse.ArgumentParser:
     prep.add_argument('--max-in-flight', type=int)
     prep.add_argument('--source', type=Path)
     prep.add_argument('--native-sha256', help=argparse.SUPPRESS)
+    prep.add_argument('--reader', choices=('legacy', 'typed-borrowed-v1'), default='legacy')
     policy = sub.add_parser('policy')
     policy.add_argument('--mode', choices=('fixed', 'replay'), default='fixed')
     policy.add_argument('--root', type=Path, default=ROOT / 'runs/ppo-comparison-v2')
@@ -673,6 +675,9 @@ def workload_source_proof(args: argparse.Namespace) -> dict[str, Any]:
     actual = source_probe(source, source_modules('preparation', native=native))
     result = {'source': str(source.resolve()), 'actual_imports': actual}
     if native:
+        from gf_common.preprocessing import PreparationConfig
+        from gf_training.native_backend import load_native, reader_settings
+        reader_settings(PreparationConfig(backend='rust',reader=getattr(args,'reader','legacy')),load_native())
         identity = native_identity()
         if args.native_sha256 is not None and identity['extension_sha256'] != args.native_sha256:
             raise ValueError('native loaded binary changed after preflight')
@@ -702,6 +707,8 @@ def main() -> None:
         raise ValueError('positive calls and nonnegative replay limit required')
     declared_source = None
     if args.command == 'preparation':
+        if args.variant != 'rust' and args.reader != 'legacy':
+            raise ValueError('typed reader requires the Rust workload')
         if args.variant != 'rust' and (args.workers != 1 or args.max_in_flight != 1):
             raise ValueError('Python preparation is serial')
         if args.variant in ('python', 'rust') or args.source is not None:

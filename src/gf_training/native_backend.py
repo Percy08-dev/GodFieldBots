@@ -5,12 +5,35 @@ import hashlib
 import importlib
 import sys
 import sysconfig
+from dataclasses import asdict
 from importlib.machinery import EXTENSION_SUFFIXES
 from pathlib import Path
 from types import ModuleType
 from typing import Any
 
 from gf_common.domain import ContractError, Json
+from gf_common.preprocessing import PreparationConfig
+
+TYPED_READER = 'typed-borrowed-v1'
+
+
+def reader_settings(config: PreparationConfig, native: ModuleType | None = None) -> Json:
+    """Closed reader preflight before handles/source owners; old wheels keep old DTOs."""
+    if config.reader not in ('legacy', TYPED_READER):
+        raise ContractError('unsupported preprocessing reader')
+    if config.backend != 'rust':
+        if config.reader != 'legacy':
+            raise ContractError('typed preprocessing reader requires the Rust backend')
+        raise ContractError('native preprocessing settings require the Rust backend')
+    module = native or load_native()
+    information = dict(getattr(module, 'build_info', lambda: ())())
+    capable = information.get('typed_reader_contract') == TYPED_READER
+    if config.reader == TYPED_READER and not capable:
+        raise ContractError('native binary does not support typed-borrowed-v1')
+    settings = asdict(config)
+    if not capable and config.reader == 'legacy':
+        settings.pop('reader')
+    return settings
 
 
 def load_native() -> ModuleType:

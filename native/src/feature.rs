@@ -2,6 +2,8 @@
 use crate::budget::{Budget, BudgetVec, Control, Lease};
 use crate::error::{Error, Result};
 use crate::json::ValueExt;
+#[path = "typed_journal/features.rs"]
+pub mod typed;
 use crate::json::{Map, Value};
 use crate::validation::{ATTRIBUTES, KINDS, NUMERIC};
 use sha2::{Digest, Sha256};
@@ -307,7 +309,20 @@ fn optional(
     key: &str,
 ) -> Result<()> {
     let value = field(source, key);
-    sink.put(prefix, &[".", key], None, number(value)?)?;
+    optional_scalar(
+        sink,
+        prefix,
+        key,
+        value.map(|value| number(Some(value))).transpose()?,
+    )
+}
+fn optional_scalar(
+    sink: &mut impl Sink,
+    prefix: Prefix<'_>,
+    key: &str,
+    value: Option<f64>,
+) -> Result<()> {
+    sink.put(prefix, &[".", key], None, value.unwrap_or(0.))?;
     sink.put(
         prefix,
         &[".", key, ".missing"],
@@ -322,6 +337,23 @@ fn category(
     value: Option<&Value>,
     categories: &[&str],
 ) -> Result<()> {
+    category_scalar(
+        sink,
+        prefix,
+        suffix,
+        string(value),
+        value.is_none_or(Value::is_null),
+        categories,
+    )
+}
+fn category_scalar(
+    sink: &mut impl Sink,
+    prefix: Prefix<'_>,
+    suffix: &[&str],
+    value: Option<&str>,
+    missing: bool,
+    categories: &[&str],
+) -> Result<()> {
     // Stack-only composition: suffix lengths in this recipe never exceed two.
     for category in categories {
         let parts = [
@@ -334,7 +366,7 @@ fn category(
             prefix,
             &parts,
             None,
-            u8::from(string(value) == Some(category)) as f64,
+            u8::from(value == Some(category)) as f64,
         )?;
     }
     let parts = [
@@ -342,12 +374,7 @@ fn category(
         suffix.get(1).copied().unwrap_or(""),
         ".missing",
     ];
-    sink.put(
-        prefix,
-        &parts,
-        None,
-        u8::from(value.is_none_or(Value::is_null)) as f64,
-    )
+    sink.put(prefix, &parts, None, u8::from(missing) as f64)
 }
 fn definition(
     sink: &mut impl Sink,

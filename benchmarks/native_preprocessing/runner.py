@@ -211,14 +211,18 @@ def source_hash(directory: Path) -> str:
 def typed_source_hash() -> str:
     h = hashlib.sha256()
     for path in sorted([*HERE.joinpath('rust/src').glob('*.rs'), HERE / 'generate_schema.py',
+                        *ROOT.joinpath('native/src/typed_journal/dto').glob('*.rs'),
+                        ROOT / 'native/src/typed_journal/dto/generate_schema.py',
                         HERE / 'rust/Cargo.toml', HERE / 'rust/Cargo.lock']):
-        h.update(str(path.relative_to(HERE)).encode() + b'\0')
+        h.update(str(path.relative_to(ROOT)).encode() + b'\0')
         h.update(path.read_bytes() + b'\0')
     return h.hexdigest()
 
 
 def code_files(config_path: Path) -> list[dict[str, str]]:
     files = {*ROOT.joinpath('src').rglob('*.py'), *HERE.rglob('*.py'),
+             *ROOT.joinpath('native/src/typed_journal/dto').glob('*.rs'),
+             ROOT / 'native/src/typed_journal/dto/generate_schema.py',
              *HERE.joinpath('rust/src').glob('*.rs'), ROOT / 'pyproject.toml', ROOT / 'uv.lock',
              ROOT / 'native/Cargo.toml', ROOT / 'native/Cargo.lock',
              HERE / 'rust/Cargo.toml', HERE / 'rust/Cargo.lock', config_path.resolve(),
@@ -268,16 +272,8 @@ def private_recipe(allocator: str, cfg: dict[str, Any]) -> tuple[str, str]:
     lib = (ROOT / 'native/src/lib.rs').read_text()
     if allocator not in ALLOCATORS:
         raise ValueError('unknown allocator label')
-    if allocator != 'system':
-        dependency, version, declaration = (
-            ('mimalloc', cfg['versions']['mimalloc'],
-             'mimalloc::MiMalloc = mimalloc::MiMalloc') if allocator == 'mimalloc' else
-            ('tikv-jemallocator', cfg['versions']['tikv_jemallocator'],
-             'tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc'))
-        features = json.dumps(cfg['allocator_features'][allocator])
-        dependency_line = f'{dependency} = {{ version = "={version}", features = {features} }}'
-        manifest = manifest.replace('[dependencies]', '[dependencies]\n' + dependency_line, 1)
-        lib = '#[global_allocator]\nstatic EXPERIMENT_ALLOCATOR: ' + declaration + ';\n' + lib
+    if allocator == 'jemalloc':
+        raise ValueError('jemalloc recipe belongs to the frozen ADR0016 source; candidate builds support System/mimalloc')
     return manifest + '\n[workspace]\n', lib
 
 
@@ -311,6 +307,8 @@ def verify_variant(path: Path, cfg: dict[str, Any] | None = None) -> dict[str, A
         raise ValueError('loaded native lock identity mismatch')
     if actual['build']['profile'] != 'release' or actual['build']['rustflags']:
         raise ValueError('uncontrolled native profile/flags')
+    if actual['build'].get('allocator') != item['allocator']:
+        raise ValueError('native allocator feature/identity mismatch')
     return item
 
 
@@ -402,9 +400,10 @@ def build(args: argparse.Namespace, cfg: dict[str, Any]) -> None:
     env = environment()
     env['CARGO_TARGET_DIR'] = str(args.output / 'target')
     original_lock = (private / 'Cargo.lock').read_bytes()
+    cargo_features = ['allocator-mimalloc'] if args.allocator == 'mimalloc' else []
     metadata = json.loads(checked(['cargo', 'metadata', '--offline', '--format-version', '1',
                                   '--manifest-path', str(manifest),
-                                  *(['--locked'] if args.allocator == 'system' else [])],
+                                  '--locked', *(['--features', ','.join(cargo_features)] if cargo_features else [])],
                                  seconds=120, env=env))
     current_lock = (private / 'Cargo.lock').read_bytes()
     if args.allocator == 'system' and current_lock != original_lock:
@@ -421,6 +420,8 @@ def build(args: argparse.Namespace, cfg: dict[str, Any]) -> None:
     command = ['/tmp/gfb-opt-build-env/bin/maturin', 'build', '--release', '--locked',
                '--offline', '--manifest-path', str(manifest), '--interpreter', sys.executable,
                '--out', str(args.output / 'wheels')]
+    if cargo_features:
+        command += ['--features', ','.join(cargo_features)]
     started = time.monotonic()
     build_log(command, args.output, seconds=cfg['trial_seconds'], env=env)
     wheels = list((args.output / 'wheels').glob('*.whl'))
@@ -439,6 +440,7 @@ def build(args: argparse.Namespace, cfg: dict[str, Any]) -> None:
             'native_identity': native_probe(site), 'source_sha256': source_hash(private),
             'manifest_sha256': sha(manifest), 'lock_sha256': sha(private / 'Cargo.lock'),
             'allocator_features': cfg['allocator_features'].get(args.allocator, []),
+            'cargo_features': cargo_features,
             'default_features': True, 'release_profile': {'opt_level': 3, 'debug': 0},
             'build_seconds': time.monotonic() - started, 'command': command,
             'environment_sanitization': sanitization_proof(),
@@ -449,6 +451,8 @@ def build(args: argparse.Namespace, cfg: dict[str, Any]) -> None:
 
 
 def typed_build(args: argparse.Namespace, cfg: dict[str, Any]) -> None:
+    if args.allocator == 'mimalloc' and (args.counter or args.no_ap):
+        raise ValueError('combined mimalloc builds require AP and no System allocation counter')
     args.output.mkdir(parents=True, exist_ok=False)
     env = environment()
     env['CARGO_TARGET_DIR'] = str(args.output / 'target')
@@ -460,12 +464,14 @@ def typed_build(args: argparse.Namespace, cfg: dict[str, Any]) -> None:
         command += ['--no-default-features']
     if args.counter:
         command += ['--features', 'allocation_counts']
+    if args.allocator == 'mimalloc':
+        command += ['--features', 'allocator-mimalloc']
     started = time.monotonic()
     build_log(command, args.output, env=env, seconds=cfg['trial_seconds'])
     binary = args.output / 'target/release/gfb-json-bench'
     identity = json.loads(checked([str(binary), '--identity'], seconds=10))
     if typed_source_hash() != source or identity != {
-            'allocator': 'System', 'arbitrary_precision': not args.no_ap,
+            'allocator': 'mimalloc' if args.allocator == 'mimalloc' else 'System', 'arbitrary_precision': not args.no_ap,
             'allocation_counts': args.counter, 'source_sha256': source,
             'contract': 'typed-journal-experiment-v1'}:
         raise ValueError('typed build source/feature identity mismatch')
@@ -495,6 +501,8 @@ def typed_trial_plan(args: argparse.Namespace, cfg: dict[str, Any]) -> list[dict
     wanted_counter = args.command == 'typed-counter'
     lookup = {}
     for build in builds:
+        if build['identity'].get('allocator', 'System') != 'System':
+            raise ValueError('ADR0016 typed/counter matrix requires System; use combined-plan/run for mimalloc')
         if build['identity']['allocation_counts'] != wanted_counter:
             raise ValueError('counter builds must be separate from primary trials')
         ap = build['identity']['arbitrary_precision']
@@ -518,6 +526,36 @@ def typed_trial_plan(args: argparse.Namespace, cfg: dict[str, Any]) -> list[dict
                        '--seconds', str(cfg['trial_seconds']), '--memory-budget-mib',
                        str(cfg['memory_budget_mib'])]
             result.append({'variant': variant, 'trial': trial, 'directory': str(directory),
+                           'binary_sha256': build['binary_sha256'], 'command': command})
+    return result
+
+
+def combined_trial_plan(args: argparse.Namespace, cfg: dict[str, Any]) -> list[dict[str, Any]]:
+    builds = [json.loads(path.read_text()) for path in args.typed_build]
+    lookup = {}
+    for build in builds:
+        identity = build['identity']
+        allocator = identity['allocator']
+        if (not identity['arbitrary_precision'] or identity['allocation_counts']
+                or allocator not in ('System', 'mimalloc') or allocator in lookup):
+            raise ValueError('combined matrix requires one AP primary build per allocator')
+        lookup[allocator] = build
+    if set(lookup) != {'System', 'mimalloc'}:
+        raise ValueError('combined matrix requires both System and mimalloc')
+    cells = [(allocator, variant) for allocator in ('System', 'mimalloc') for variant in ('A', 'C')]
+    result = []
+    for trial in range(-cfg['warmups'], cfg['trials']):
+        offset = max(0, trial) % len(cells)
+        for allocator, variant in cells[offset:] + cells[:offset]:
+            build = lookup[allocator]
+            directory = args.output / f'{trial}-{allocator}-{variant}'
+            command = [sys.executable, str(ROOT / 'tools/benchmark_performance.py'),
+                       '--output', str(directory), '--seconds', str(cfg['trial_seconds']), '--',
+                       build['binary'], '--inventory', str(args.inventory), '--variant', variant,
+                       '--mode', 'measure', '--seconds', str(cfg['trial_seconds']),
+                       '--memory-budget-mib', str(cfg['memory_budget_mib'])]
+            result.append({'variant': variant, 'allocator': allocator, 'combined': True,
+                           'trial': trial, 'directory': str(directory),
                            'binary_sha256': build['binary_sha256'], 'command': command})
     return result
 
@@ -565,15 +603,18 @@ def typed_run(args: argparse.Namespace, cfg: dict[str, Any]) -> None:
     inventory_hash = sha(args.inventory)
     frozen_journals(frozen, args.inventory)
     validation = [completed_oracle(path) for path in args.validation]
-    if {v['variant'] for v in validation} != {'B', 'C'} or len(validation) != 2:
-        raise ValueError('complete B/C correctness oracles required before timed/counter runs')
+    combined = args.command == 'combined-run'
+    expected_oracles = {('System', 'C'), ('mimalloc', 'C')} if combined else {('System', 'B'), ('System', 'C')}
+    if ({(v['binary_identity']['allocator'], v['variant']) for v in validation} != expected_oracles
+            or len(validation) != 2):
+        raise ValueError('complete per-build correctness oracles required before timed/counter runs')
     for item in validation:
         if (item['status'] != 'PASS' or item['files'] != 13568 or item['records'] != 534640
                 or item['new_rejections'] != 0 or item['inventory_sha256'] != inventory_hash):
             raise ValueError('invalid/incomplete correctness oracle')
         if item['source_sha256'] != typed_source_hash():
             raise ValueError('correctness oracle used a different typed source')
-        expected_identity = {'allocator': 'System', 'arbitrary_precision': True,
+        expected_identity = {'allocator': item['binary_identity']['allocator'] if combined else 'System', 'arbitrary_precision': True,
                              'allocation_counts': False, 'source_sha256': typed_source_hash(),
                              'contract': 'typed-journal-experiment-v1'}
         if (not item.get('completed') or item.get('binary_identity') != expected_identity
@@ -581,13 +622,13 @@ def typed_run(args: argparse.Namespace, cfg: dict[str, Any]) -> None:
                 or item['helper_sha256'] != sha(HERE / 'typed_oracle.py')
                 or json.loads(checked([item['binary'], '--identity'], seconds=10)) != expected_identity):
             raise ValueError('correctness oracle binary/features/completion proof mismatch')
-        if args.command == 'typed-run' and item['binary_sha256'] not in {
+        if args.command in ('typed-run', 'combined-run') and item['binary_sha256'] not in {
                 build['binary_sha256'] for build in builds
                 if build['identity']['arbitrary_precision'] and not build['identity']['allocation_counts']}:
             raise ValueError('correctness oracle did not use the primary AP binary')
     if validation[0]['canonical_records_sha256'] != validation[1]['canonical_records_sha256']:
         raise ValueError('B/C canonical correctness identity mismatch')
-    plan = typed_trial_plan(args, cfg)
+    plan = combined_trial_plan(args, cfg) if combined else typed_trial_plan(args, cfg)
     args.output.mkdir(parents=True, exist_ok=False)
     write(args.output / 'plan.json', plan)
     results = []
@@ -600,7 +641,8 @@ def typed_run(args: argparse.Namespace, cfg: dict[str, Any]) -> None:
         else:
             item['workload'] = json.loads((directory / 'stdout.log').read_text())
             if (item['workload']['files'] != 13568 or item['workload']['records'] != 534640
-                    or item['workload']['variant'] != item['variant']):
+                    or item['workload']['variant'] != item['variant']
+                    or (combined and item['workload']['allocator'] != item['allocator'])):
                 item['failure'] = 'typed workload count/variant mismatch'
         results.append(item)
         write(args.output / 'results.json', results)
@@ -648,11 +690,44 @@ def trial_plan(args: argparse.Namespace, cfg: dict[str, Any]) -> list[dict[str, 
     return plan
 
 
+def native_combined_plan(args: argparse.Namespace, cfg: dict[str, Any]) -> list[dict[str, Any]]:
+    variants = [json.loads(path.read_text()) for path in args.variant]
+    if (len(variants) != 2 or {variant['allocator'] for variant in variants} != {'system', 'mimalloc'}
+            or any(variant['native_identity']['build'].get('typed_reader_contract') != 'typed-borrowed-v1'
+                   for variant in variants)):
+        raise ValueError('actual-path matrix requires System/mimalloc wheels with typed reader capability')
+    result = []
+    for workers in cfg['worker_counts']:
+        cells = [(variant, reader) for variant in variants for reader in ('legacy', 'typed-borrowed-v1')]
+        for trial in range(-cfg['warmups'], cfg['trials']):
+            offset = max(0, trial) % len(cells)
+            for variant, reader in cells[offset:] + cells[:offset]:
+                directory = args.output / f'{workers}-{trial}-{variant["allocator"]}-{reader}'
+                env = environment(Path(variant['site']))
+                command = [sys.executable, str(ROOT / 'tools/benchmark_performance.py'),
+                           '--output', str(directory), '--seconds', str(cfg['trial_seconds']), '--',
+                           'env', '-u', 'VIRTUAL_ENV', '-u', 'LD_PRELOAD',
+                           *[f'{key}={env[key]}' for key in ('PYTHONPATH', 'PYTHONDONTWRITEBYTECODE',
+                              'OMP_NUM_THREADS', 'MKL_NUM_THREADS', 'OPENBLAS_NUM_THREADS')],
+                           sys.executable, str(HERE / 'workload_child.py'), 'preparation',
+                           '--variant', 'rust', '--source', str(ROOT / 'src'), '--dataset',
+                           str(ROOT / cfg['dataset']), '--encoder', 'history', '--memory-mib', '2048',
+                           '--chunk-mib', '16', '--workers', str(workers), '--max-in-flight', str(workers),
+                           '--reader', reader, '--seconds', str(cfg['trial_seconds']), '--native-sha256',
+                           variant['native_identity']['extension_sha256']]
+                result.append({'allocator': variant['allocator'], 'reader': reader, 'workers': workers,
+                               'trial': trial, 'directory': str(directory), 'command': command,
+                               'native_identity': variant['native_identity']})
+    return result
+
+
 def run_trials(args: argparse.Namespace, cfg: dict[str, Any]) -> None:
-    verify_freeze(args.freeze, cfg, require_code=args.command == 'run')
+    primary = args.command in ('run', 'native-combined-run')
+    verify_freeze(args.freeze, cfg, require_code=primary)
     for path in args.variant:
         verify_variant(path, cfg)
-    plan = trial_plan(args, cfg)
+    combined = args.command == 'native-combined-run'
+    plan = native_combined_plan(args, cfg) if combined else trial_plan(args, cfg)
     args.output.mkdir(parents=True, exist_ok=False)
     write(args.output / 'plan.json', plan)
     reference = json.loads(args.reference.read_text()) if args.reference else None
@@ -672,11 +747,20 @@ def run_trials(args: argparse.Namespace, cfg: dict[str, Any]) -> None:
             reference = proof if reference is None else reference
             if proof != reference or result['native_identity'] != item['native_identity']:
                 item['failure'] = 'output or loaded binary identity mismatch'
+            if combined:
+                diagnostics = result['nested_preparation_diagnostics']
+                typed = item['reader'] == 'typed-borrowed-v1'
+                expected_counts = (13568,534640,0) if typed else (0,0,13568)
+                actual_counts = tuple(diagnostics.get(key) for key in
+                                      ('typed_journal_files','typed_journal_records','legacy_journal_files'))
+                if (result.get('reader_contract') != item['reader']
+                        or diagnostics.get('reader_contract') != item['reader'] or actual_counts != expected_counts):
+                    item['failure'] = 'selected reader or actual Journal path counts mismatch'
         results.append(item)
         write(args.output / 'results.json', results)
         if 'failure' in item:
             raise ValueError(item['failure'])
-    verify_freeze(args.freeze, cfg, require_code=args.command == 'run')
+    verify_freeze(args.freeze, cfg, require_code=primary)
     write(args.output / 'output-identity.json', reference)
 
 
@@ -692,10 +776,15 @@ def report(args: argparse.Namespace) -> dict[str, Any]:
     rows = json.loads(args.results.read_text())
     groups = {}
     typed = bool(rows) and 'variant' in rows[0]
-    labels = sorted({(row['variant'], None) if typed else (row['allocator'], row['workers'])
+    combined = typed and bool(rows[0].get('combined'))
+    def representation(row: dict[str, Any]) -> str:
+        return f'{row["allocator"]}-{row["variant"]}' if combined else row['variant']
+    def native_label(row: dict[str, Any]) -> str:
+        return f'{row["allocator"]}-{row["reader"]}' if 'reader' in row else row['allocator']
+    labels = sorted({(representation(row), None) if typed else (native_label(row), row['workers'])
                      for row in rows})
     for label, workers in labels:
-        selected = [row for row in rows if row.get('variant' if typed else 'allocator') == label
+        selected = [row for row in rows if (representation(row) if typed else native_label(row)) == label
                     and row.get('workers') == workers and row['trial'] >= 0]
         good = [row for row in selected if 'failure' not in row]
         fields: dict[str, tuple[str, ...]] = {
@@ -753,7 +842,9 @@ def report(args: argparse.Namespace) -> dict[str, Any]:
         groups[label if typed else f'{label}-{workers}'] = group
     for label, workers in labels:
         name = label if typed else f'{label}-{workers}'
-        base = groups.get('A' if typed else f'system-{workers}', {}).get('wall_seconds', {}).get('median')
+        base_name = 'System-A' if combined else ('A' if typed else
+                    f'system-legacy-{workers}' if any('reader' in row for row in rows) else f'system-{workers}')
+        base = groups.get(base_name, {}).get('wall_seconds', {}).get('median')
         median = groups[name]['wall_seconds']['median']
         groups[name]['wall_ratio_to_A' if typed else 'wall_ratio_to_system'] = (
             median / base if median is not None and base else None)
@@ -771,12 +862,13 @@ def parser() -> argparse.ArgumentParser:
                         default=ROOT / 'runs/assessments/native-migration-original-six.json')
     sub = result.add_subparsers(dest='command', required=True)
     for name in ('freeze', 'build', 'validate', 'run', 'allocator-plan', 'typed-plan',
-                 'typed-build', 'typed-validate', 'typed-run', 'typed-counter', 'report'):
+                 'typed-build', 'typed-validate', 'typed-run', 'typed-counter',
+                 'combined-plan', 'combined-run', 'native-combined-plan', 'native-combined-run', 'report'):
         p = sub.add_parser(name)
         p.add_argument('--output', type=Path)
         if name == 'build':
             p.add_argument('--allocator', choices=ALLOCATORS, required=True)
-        if name in ('validate', 'run', 'allocator-plan'):
+        if name in ('validate', 'run', 'allocator-plan', 'native-combined-plan', 'native-combined-run'):
             p.add_argument('--variant', type=Path, action='append', required=True)
             p.add_argument('--freeze', type=Path)
             p.add_argument('--reference', type=Path)
@@ -785,7 +877,8 @@ def parser() -> argparse.ArgumentParser:
         if name == 'typed-build':
             p.add_argument('--no-ap', action='store_true')
             p.add_argument('--counter', action='store_true')
-        if name in ('typed-run', 'typed-counter', 'typed-plan'):
+            p.add_argument('--allocator', choices=('system', 'mimalloc'), default='system')
+        if name in ('typed-run', 'typed-counter', 'typed-plan', 'combined-plan', 'combined-run'):
             p.add_argument('--typed-build', type=Path, action='append', required=True)
             p.add_argument('--inventory', type=Path, required=True)
             p.add_argument('--freeze', type=Path)
@@ -811,11 +904,16 @@ def main() -> None:
         return
     if args.output is None:
         raise ValueError('--output required')
-    if args.command == 'typed-plan':
-        print(json.dumps({'execute': False, 'plan': typed_trial_plan(args, cfg)}, indent=2))
+    if args.command in ('typed-plan', 'combined-plan'):
+        plan = combined_trial_plan(args, cfg) if args.command == 'combined-plan' else typed_trial_plan(args, cfg)
+        print(json.dumps({'execute': False, 'plan': plan}, indent=2))
+        return
+    if args.command == 'native-combined-plan':
+        print(json.dumps({'execute': False, 'plan': native_combined_plan(args,cfg)}, indent=2))
         return
     if not args.execute or args.command == 'allocator-plan':
-        plan = trial_plan(args, cfg) if args.command in ('validate', 'run', 'allocator-plan') else (
+        plan = native_combined_plan(args,cfg) if args.command == 'native-combined-run' else trial_plan(args, cfg) if args.command in ('validate', 'run', 'allocator-plan') else (
+            combined_trial_plan(args, cfg) if args.command == 'combined-run' else
             typed_trial_plan(args, cfg) if args.command in ('typed-run', 'typed-counter') else [])
         print(json.dumps({'execute': False, 'command': args.command, 'config': cfg,
                           'output': str(args.output), 'plan': plan}, indent=2))
@@ -828,12 +926,12 @@ def main() -> None:
         typed_build(args, cfg)
     elif args.command == 'typed-validate':
         typed_validate(args, cfg)
-    elif args.command in ('typed-run', 'typed-counter'):
+    elif args.command in ('typed-run', 'typed-counter', 'combined-run'):
         if args.freeze is None:
             raise ValueError('freeze required')
         typed_run(args, cfg)
     else:
-        if args.freeze is None or (args.command == 'run' and args.reference is None):
+        if args.freeze is None or (args.command in ('run','native-combined-run') and args.reference is None):
             raise ValueError('freeze required; measured run also requires validated output reference')
         run_trials(args, cfg)
 

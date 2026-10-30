@@ -16,7 +16,12 @@ pub mod session;
 pub mod source;
 pub mod stack;
 pub mod telemetry;
+pub(crate) mod typed_journal;
 pub mod validation;
+
+#[cfg(feature = "allocator-mimalloc")]
+#[global_allocator]
+static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 use crate::budget::{Budget, Control};
 use crate::error::Error;
@@ -1006,6 +1011,15 @@ fn build_info() -> Vec<(&'static str, &'static str)> {
         ("encoder_version", "participant-action-v1"),
         ("recipe_identity", "native-preprocessing-v1"),
         ("abi", "cp314-gil"),
+        (
+            "allocator",
+            if cfg!(feature = "allocator-mimalloc") {
+                "mimalloc"
+            } else {
+                "system"
+            },
+        ),
+        ("typed_reader_contract", "typed-borrowed-v1"),
     ]
 }
 

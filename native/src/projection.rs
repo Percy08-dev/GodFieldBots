@@ -1,10 +1,10 @@
 //! Source linkage and exact legacy source-proof serialization, without policy I/O.
 use crate::json::ValueExt;
 use crate::{
-    budget::{Budget, BudgetVec, Control, Lease},
+    budget::{Budget, Control, Lease},
     controls,
     error::{Error, Result},
-    journal::{self, Journal, equal, string},
+    journal::{self, equal, string},
     json::{self, Value},
     session::{Collection, path_text},
     source::Sources,
@@ -259,17 +259,18 @@ impl<'a> EpisodeIndex<'a> {
     }
 }
 
-pub fn source_metadata(
+pub(crate) fn source_metadata(
     collection: &Collection,
     source: &Path,
     replay: &Value,
-    journal: &Journal<'_>,
+    journal: &crate::typed_journal::view::JournalView<'_, '_>,
     links: &EpisodeLinks<'_>,
     sources: &Sources,
     budget: &Arc<Budget>,
     control: &Control,
 ) -> Result<Value> {
-    let header = journal.header;
+    let facts = journal.provenance();
+    let header = facts.header;
     let m = &collection.manifest.root;
     let viewer = header.require("viewer")?.integer(1, 2)?;
     equal(
@@ -331,20 +332,20 @@ pub fn source_metadata(
                 .strip_prefix("mlp-")
                 .unwrap_or(string(header, "policy")?)
         );
-        for decision in journal.decisions.iter() {
+        for index in 0..facts.decision_count {
             control.check()?;
-            if string(decision.require("selection")?, "policy_version")? != expected {
+            if journal.decision(index)?.policy_version()? != expected {
                 return Err(Error::contract(
                     "PPO learner selection differs from frozen inference identity",
                 ));
             }
         }
     }
-    let end = journal
+    let end = facts
         .end
         .ok_or_else(|| Error::contract("missing natural journal end"))?;
     if string(end, "end_kind")? != "natural"
-        || journal.accepted.len() != journal.decisions.len()
+        || facts.accepted_count != facts.decision_count
         || !end.require("pending_decisions")?.array()?.is_empty()
     {
         return Err(Error::contract(
@@ -371,18 +372,14 @@ pub fn source_metadata(
         header.require("game_id")?,
         "replay game identity mismatch",
     )?;
-    let mut accepted = BudgetVec::with_capacity(budget, journal.accepted.len())?;
-    for decision in journal.accepted.iter() {
-        accepted.push(decision.require("command")?.require("action")?)?;
-    }
     let _replay_timer = sources
         .telemetry()
         .phase_timer(crate::telemetry::Phase::ReplayValidation);
-    validation::reconcile_replay_controlled(
+    journal.reconcile_replay(
         replay,
         viewer,
-        &accepted,
         links.episode.require("outcome")?,
+        budget,
         control,
     )?;
     let closure = validation::replay_closure(replay, string(header, "game_id")?, viewer)?;
@@ -459,7 +456,7 @@ pub fn source_metadata(
         ("lineage", lineage),
         (
             "decision_count",
-            json::integer(journal.decisions.len() as i128),
+            json::integer(facts.decision_count as i128),
         ),
         ("end", json::copy(end, control)?),
         ("episode_result", json::copy(links.episode, control)?),

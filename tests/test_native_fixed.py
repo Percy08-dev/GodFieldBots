@@ -280,12 +280,12 @@ def test_final_source_checks_use_original_cleanup_wall_not_work_clock(monkeypatc
     fake = fake_native(monkeypatch, None)
     async def run():
         wall = time.monotonic() + 20
-        owner = await NativePreparation.create_async({'kind': 'offline'}, PreparationConfig(),
+        owner = await NativePreparation.create_async({'kind': 'offline'}, PreparationConfig(backend='rust'),
                                                      deadline=wall - 5, wall_deadline=wall)
         owner.deadline = time.monotonic() - 1
         await owner.afinalize()  # Work ended; the original cleanup reserve remains.
         assert owner._closed and fake.sessions[-1].closed
-        owner = await NativePreparation.create_async({'kind': 'offline'}, PreparationConfig(),
+        owner = await NativePreparation.create_async({'kind': 'offline'}, PreparationConfig(backend='rust'),
                                                      deadline=wall - 5, wall_deadline=wall)
         owner.wall_deadline = time.monotonic() - 1
         with pytest.raises(TimeoutError):

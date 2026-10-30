@@ -188,7 +188,7 @@ def test_async_preparation_cancellation_joins_each_lifecycle_phase(monkeypatch, 
     fake = fake_native(monkeypatch, phase)
     async def run():
         async def lifecycle():
-            owner = await NativePreparation.create_async({'kind': 'offline'}, PreparationConfig(),
+            owner = await NativePreparation.create_async({'kind': 'offline'}, PreparationConfig(backend='rust'),
                                                          deadline=time.monotonic() + 10)
             async with owner:
                 await owner.anext_batch(0, (0, 0, 0, 0))
@@ -214,7 +214,7 @@ def test_async_preparation_cancellation_joins_each_lifecycle_phase(monkeypatch, 
 def test_constructor_success_cancel_race_captures_handle_for_explicit_close(monkeypatch):
     fake = fake_native(monkeypatch, 'construct', success_on_cancel=True)
     async def run():
-        task = asyncio.create_task(NativePreparation.create_async({'kind': 'offline'}, PreparationConfig(),
+        task = asyncio.create_task(NativePreparation.create_async({'kind': 'offline'}, PreparationConfig(backend='rust'),
                                                                   deadline=time.monotonic() + 10))
         await wait_event(fake.entered)
         task.cancel('constructor cancellation')
@@ -230,7 +230,7 @@ def test_constructor_success_cancel_race_captures_handle_for_explicit_close(monk
 
 def test_real_native_precreated_handle_cancels_constructor_work(tmp_path):
     native = pytest.importorskip('gf_native')
-    from dataclasses import asdict
+    from gf_training.native_backend import reader_settings
     settings = PreparationConfig(backend='rust', memory_budget_mib=256, cache_budget_mib=16)
     # Source parsing is deliberately long; cancellation must be observed before
     # semantic parent validation. No simulator, source-run copy or policy is used.
@@ -246,7 +246,7 @@ def test_real_native_precreated_handle_cancels_constructor_work(tmp_path):
     async def run():
         async with NativeExecution(handle) as execution:
             task = asyncio.create_task(execution.acall(native.NativeSession, plan,
-                                                       json.dumps(asdict(settings)).encode(), deadline, deadline, handle))
+                                                       json.dumps(reader_settings(settings, native)).encode(), deadline, deadline, handle))
             await asyncio.sleep(.001)
             task.cancel('real native cancellation')
             with pytest.raises(asyncio.CancelledError, match='real native cancellation'):

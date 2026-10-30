@@ -3,6 +3,7 @@ use crate::{
     budget::{Budget, BudgetVec, Control},
     error::{Error, Result},
     json::Document,
+    session::Reader,
     source::Sources,
 };
 use std::{
@@ -11,10 +12,26 @@ use std::{
 };
 
 pub struct EpisodeData {
-    pub records1: Vec<Document>,
-    pub records2: Vec<Document>,
+    pub records1: JournalData,
+    pub records2: JournalData,
     pub replay1: Document,
     pub replay2: Document,
+}
+pub enum JournalData {
+    Legacy(Vec<Document>),
+    Typed(crate::source::RawJournal),
+}
+impl JournalData {
+    pub fn parse_typed(
+        &self,
+        control: &Control,
+        telemetry: &crate::telemetry::Telemetry,
+    ) -> Result<Option<crate::typed_journal::journal::Records<'_>>> {
+        match self {
+            Self::Legacy(_) => Ok(None),
+            Self::Typed(raw) => raw.parse(control, telemetry).map(Some),
+        }
+    }
 }
 type Completed = (EpisodeData, Sources);
 pub struct EpisodeReader<'a> {
@@ -28,6 +45,7 @@ pub struct EpisodeReader<'a> {
     control: Control,
     max_file: usize,
     max_record: usize,
+    reader: Reader,
 }
 impl<'a> EpisodeReader<'a> {
     pub fn new(
@@ -38,6 +56,7 @@ impl<'a> EpisodeReader<'a> {
         control: &Control,
         max_file: usize,
         max_record: usize,
+        reader: Reader,
     ) -> Self {
         Self {
             paths,
@@ -50,10 +69,14 @@ impl<'a> EpisodeReader<'a> {
             control: control.clone(),
             max_file,
             max_record,
+            reader,
         }
     }
     pub fn next(&mut self, sources: &mut Sources) -> Result<Option<(&'a Path, EpisodeData)>> {
         self.control.check()?;
+        sources
+            .telemetry()
+            .configure_reader(self.reader == Reader::TypedBorrowedV1);
         sources
             .telemetry()
             .configure_workers(self.workers, self.in_flight);
@@ -73,6 +96,7 @@ impl<'a> EpisodeReader<'a> {
                 self.max_file,
                 self.max_record,
                 sources.telemetry(),
+                self.reader,
             )?;
             self.ready_position = 0;
         }
@@ -94,12 +118,21 @@ fn decode(
     max_record: usize,
     telemetry: &Arc<crate::telemetry::Telemetry>,
     slot: usize,
+    reader: Reader,
 ) -> Result<Completed> {
     control.check()?;
     let mut job = telemetry.decode_job(slot);
     let mut sources = Sources::with_telemetry(budget.clone(), max_file, max_record, telemetry);
-    let records1 = sources.journal(&path.join("player-1.jsonl"), control)?;
-    let records2 = sources.journal(&path.join("player-2.jsonl"), control)?;
+    let mut journal = |name: &str| match reader {
+        Reader::Legacy => sources
+            .journal(&path.join(name), control)
+            .map(JournalData::Legacy),
+        Reader::TypedBorrowedV1 => sources
+            .raw_journal(&path.join(name), control)
+            .map(JournalData::Typed),
+    };
+    let records1 = journal("player-1.jsonl")?;
+    let records2 = journal("player-2.jsonl")?;
     let replay1 = sources.json(&path.join("replay-player-1.json"), true, control)?;
     let replay2 = sources.json(&path.join("replay-player-2.json"), true, control)?;
     job.success();
@@ -121,6 +154,7 @@ fn window(
     max_file: usize,
     max_record: usize,
     telemetry: &Arc<crate::telemetry::Telemetry>,
+    reader: Reader,
 ) -> Result<BudgetVec<Option<Completed>>> {
     telemetry.decode_window(workers, paths.len());
     let mut ready = BudgetVec::with_capacity(budget, paths.len())?;
@@ -130,7 +164,7 @@ fn window(
     if workers == 1 {
         for (index, path) in paths.iter().enumerate() {
             ready[index] = Some(decode(
-                path, budget, control, max_file, max_record, telemetry, 0,
+                path, budget, control, max_file, max_record, telemetry, 0, reader,
             )?);
         }
         return Ok(ready);
@@ -178,6 +212,7 @@ fn window(
                                     max_record,
                                     &worker_telemetry,
                                     worker,
+                                    reader,
                                 )?;
                                 results.push((index, result))?;
                             }
@@ -283,9 +318,13 @@ mod worker_observation_tests {
 
     #[test]
     fn real_decode_overlap_is_observed_and_cancelled_jobs_are_joined() {
-        for (workers, cancelled) in [2, 4, 8]
+        for (reader_kind, workers, cancelled) in [Reader::Legacy, Reader::TypedBorrowedV1]
             .into_iter()
-            .flat_map(|workers| [false, true].map(|cancelled| (workers, cancelled)))
+            .flat_map(|reader| {
+                [2, 4, 8].into_iter().flat_map(move |workers| {
+                    [false, true].map(move |cancelled| (reader, workers, cancelled))
+                })
+            })
         {
             let fixture = Fixture::new(workers);
             let budget = Budget::new(128 * 1024 * 1024);
@@ -304,6 +343,7 @@ mod worker_observation_tests {
                         &control,
                         1024 * 1024,
                         1024 * 1024,
+                        reader_kind,
                     );
                     let mut count = 0;
                     while let Some((path, _data)) = reader.next(&mut sources)? {
@@ -360,6 +400,7 @@ mod worker_observation_tests {
             &control,
             1024 * 1024,
             1024 * 1024,
+            Reader::Legacy,
         );
         while reader.next(&mut sources).unwrap().is_some() {}
         let metrics = counters(&telemetry);
@@ -375,5 +416,62 @@ mod worker_observation_tests {
         drop(reader);
         drop(sources);
         assert_eq!(budget.used(), 0);
+    }
+    #[test]
+    fn typed_consumer_failure_drops_queued_raw_results_and_shared_admission() {
+        let fixture = Fixture::new(4);
+        fs::write(fixture.paths[0].join("player-1.jsonl"), b"[\n").unwrap();
+        let budget = Budget::new(128 * 1024 * 1024);
+        let control = Control::new(monotonic() + 10.).unwrap();
+        let telemetry = Arc::new(Telemetry::default());
+        let mut sources =
+            Sources::with_telemetry(budget.clone(), 1024 * 1024, 1024 * 1024, &telemetry);
+        let mut reader = EpisodeReader::new(
+            &fixture.paths,
+            4,
+            4,
+            &budget,
+            &control,
+            1024 * 1024,
+            1024 * 1024,
+            Reader::TypedBorrowedV1,
+        );
+        let (_, data) = reader.next(&mut sources).unwrap().unwrap();
+        assert!(data.records1.parse_typed(&control, &telemetry).is_err());
+        assert!(budget.used() > 0); // Current and queued windows still own raw/admission.
+        drop(data);
+        drop(reader);
+        drop(sources);
+        assert_eq!(budget.used(), 0);
+        let metrics = counters(&telemetry);
+        assert_eq!(metrics["decode_parallelism"]["spawned_threads"], 4);
+        assert_eq!(metrics["legacy_journal_files"], 0);
+        assert_eq!(metrics["typed_journal_files"], 0);
+    }
+    #[test]
+    fn both_reader_windows_refuse_shared_budget_without_retaining_raw_or_docs() {
+        for reader_kind in [Reader::Legacy, Reader::TypedBorrowedV1] {
+            let fixture = Fixture::new(4);
+            let budget = Budget::new(1024 * 1024);
+            let control = Control::new(monotonic() + 10.).unwrap();
+            let mut sources = Sources::new(budget.clone(), 1024 * 1024, 1024 * 1024);
+            let mut reader = EpisodeReader::new(
+                &fixture.paths,
+                4,
+                4,
+                &budget,
+                &control,
+                1024 * 1024,
+                1024 * 1024,
+                reader_kind,
+            );
+            assert!(matches!(
+                reader.next(&mut sources),
+                Err(Error::ResourceLimit(_))
+            ));
+            drop(reader);
+            drop(sources);
+            assert_eq!(budget.used(), 0);
+        }
     }
 }

@@ -19,6 +19,7 @@ class PreparationConfig:
     max_in_flight: int = 1
     workers: int = 1
     backend: str = "python"
+    reader: str = "legacy"
     scratch_budget_mib: int = 8192
     wall_seconds: float = 7200
     cleanup_seconds: float = 5
@@ -29,7 +30,7 @@ def preparation_config(value: Json) -> PreparationConfig:
     closed(value, set(), set(defaults))
     values = {**defaults, **value}
     for key in defaults:
-        if key in ("backend", "wall_seconds", "cleanup_seconds"):
+        if key in ("backend", "reader", "wall_seconds", "cleanup_seconds"):
             continue
         integer(values[key], 0 if key == "cache_budget_mib" else 1)
     for key in ("wall_seconds", "cleanup_seconds"):
@@ -38,6 +39,10 @@ def preparation_config(value: Json) -> PreparationConfig:
             raise ContractError(f"preprocessing.{key}: positive finite number required")
     if values["backend"] not in ("python", "rust"):
         raise ContractError("unsupported preprocessing backend")
+    if values["reader"] not in ("legacy", "typed-borrowed-v1"):
+        raise ContractError("unsupported preprocessing reader")
+    if values["backend"] == "python" and values["reader"] != "legacy":
+        raise ContractError("typed preprocessing reader requires the Rust backend")
     if values["backend"] == "python" and (values["workers"] != 1 or values["max_in_flight"] != 1):
         raise ContractError("Python reference preparation is serial")
     if values["backend"] == "rust" and values["workers"] not in (1, 2, 4, 8):

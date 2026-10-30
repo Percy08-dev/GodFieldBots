@@ -25,6 +25,7 @@ from gf_common.domain import (
     canonical,
     digest,
 )
+from gf_common.preprocessing import PreparationConfig
 from gf_common.schedule import serialize_schedule
 from gf_evaluation.evaluation import report, schedule
 from gf_models.baselines import make_policy
@@ -70,8 +71,14 @@ def _code_provenance(deadline: float = float("inf")) -> Json:
     return {"revision": None, "dirty": None, "installed_build_revision": None}
 
 
-def _fit_code_provenance(deadline: float, *, preprocessing_backend: str = "python") -> Json:
+def _fit_code_provenance(deadline: float, *, preprocessing_backend: str = "python",
+                         preprocessing_config: PreparationConfig | None = None) -> Json:
     """Current fit identity, measured only in the parent's preparation budget."""
+    selected_preprocessing = preprocessing_config or PreparationConfig(backend=preprocessing_backend)
+    if selected_preprocessing.backend != preprocessing_backend:
+        raise ValueError("preprocessing backend/config mismatch")
+    if selected_preprocessing.backend == "python" and selected_preprocessing.reader != "legacy":
+        raise ValueError("typed preprocessing reader requires the Rust backend")
     import importlib.metadata
     import importlib.util
     provenance = _code_provenance(deadline)
@@ -103,8 +110,11 @@ def _fit_code_provenance(deadline: float, *, preprocessing_backend: str = "pytho
     worker_file = worker_spec.origin if worker_spec is not None else None
     provenance["fit_module_sha256"]["gf_training.lightgbm_worker"] = _file_hash(worker_file, deadline) if worker_file is not None else None
     if preprocessing_backend == "rust":
-        from gf_training.native_backend import binary_identity
-        provenance["native_preprocessing"] = binary_identity()
+        from gf_training.native_backend import binary_identity, load_native, reader_settings
+        native = load_native()
+        reader_settings(selected_preprocessing, native)
+        provenance["native_preprocessing"] = binary_identity(native)
+        provenance["reader_contract"] = selected_preprocessing.reader
         for name in ("native_backend", "native_authorization", "native_execution", "native_learning",
                      "native_preparation", "native_index", "native_ppo"):
             spec = importlib.util.find_spec("gf_training." + name)
@@ -490,7 +500,8 @@ def main(argv: list[str] | None = None) -> int:
                 if args.run_dir is not None or args.pause_after_update is not None:
                     raise ValueError("LightGBM has no PPO run/pause controls")
                 def fit_identity(deadline: float) -> Json:
-                    return _fit_code_provenance(deadline, preprocessing_backend=loaded.config.preprocessing.backend)
+                    return _fit_code_provenance(deadline, preprocessing_backend=loaded.config.preprocessing.backend,
+                                                preprocessing_config=loaded.config.preprocessing)
                 result = asyncio.run(train_experiments(loaded, mode=args.mode, code_provenance_provider=fit_identity))
             print(canonical(result))
             return 0

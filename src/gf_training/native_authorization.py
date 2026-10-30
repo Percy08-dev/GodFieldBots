@@ -15,7 +15,7 @@ from gf_common.preprocessing import PreparationConfig
 from gf_common.schedule import serialize_schedule
 from gf_training.collection import OnlinePPOContext, training_groups, validation_groups
 from gf_training.lineage import _OWNED_LOCKS, run_lock
-from gf_training.native_backend import binary_identity, load_native
+from gf_training.native_backend import binary_identity, load_native, reader_settings
 from gf_training.native_execution import NativeExecution
 from gf_training.preparation import ResourceLimit
 
@@ -111,11 +111,13 @@ class NativePreparation:
         self._session: Any = None
         self._execution: NativeExecution | None = None
         native = load_native()
+        self._settings = reader_settings(config, native)
         self.identity = binary_identity(native)
         self._native = native
         self._cancel = _invoke(native.CancelHandle, deadline)
         self._execution = NativeExecution(self._cancel)
         self.diagnostics: Json = {'schema_version': 1, 'backend': 'rust', 'settings': asdict(config),
+                                  'reader_contract': config.reader,
                                   'native_identity': self.identity, 'cleanup': 'pending',
                                   'accounting_policy': 'native-capacity-leases-and-owned-numpy-v1',
                                   'control_admission_policy': 'python-controls-64x-plus32mib-v1',
@@ -133,7 +135,7 @@ class NativePreparation:
         try:
             self._check_mode(plan, online_context)
             _invoke(self._executor().call, self._construct, canonical(plan).encode(),
-                    canonical(asdict(config)).encode(), deadline)
+                    canonical(self._settings).encode(), deadline)
             self.summary = json.loads(_invoke(self._executor().call, self._session.control_summary))
             authorization = self._authorization(online_context)
             _invoke(self._executor().call, self._session.authorize, self._authorization_bytes(authorization))
@@ -152,7 +154,7 @@ class NativePreparation:
         try:
             self._check_mode(plan, online_context)
             await self._acall(self._construct, canonical(plan).encode(),
-                              canonical(asdict(config)).encode(), deadline)
+                              canonical(self._settings).encode(), deadline)
             self.summary = json.loads(await self._acall(self._session.control_summary))
             authorization = await self._aauthorization(online_context)
             await self._acall(self._session.authorize, self._authorization_bytes(authorization))
@@ -274,8 +276,19 @@ class NativePreparation:
             return None
         *arrays, proof = batch
         if proof is not None:
-            self._proof = json.loads(proof)
+            self._proof = self._decode_proof(proof)
         return NativeBatch(*arrays)
+
+    def _decode_proof(self, encoded: Any) -> Json:
+        proof: Json = json.loads(encoded)
+        selected = proof.get('reader_contract')
+        if selected is None and self.config.reader == 'legacy':
+            # This is the current operation's selection, outside historical
+            # dataset/source payloads. Producer records are never rewritten.
+            proof['reader_contract'] = 'legacy'
+        elif selected != self.config.reader:
+            raise ContractError('native source proof reader differs from selected contract')
+        return proof
 
     def next_batch(self, retained_python_bytes: int, consumer_layout: tuple[int, int, int, int]) -> Any:
         self.check()
@@ -358,7 +371,7 @@ class NativePreparation:
         original: BaseException | None = None
         try:
             self.check(cleanup=True)
-            result: Json = json.loads(_invoke(self._executor().call, self._session.finalize))
+            result = self._decode_proof(_invoke(self._executor().call, self._session.finalize))
             if self._proof is not None and result != self._proof:
                 raise ContractError('native final proof differs from admitted source proof')
             self._metrics('complete')
@@ -384,7 +397,7 @@ class NativePreparation:
         original: BaseException | None = None
         try:
             self.check(cleanup=True)
-            result: Json = json.loads(await self._acall(self._session.finalize))
+            result = self._decode_proof(await self._acall(self._session.finalize))
             if self._proof is not None and result != self._proof:
                 raise ContractError('native final proof differs from admitted source proof')
             await self._ametrics('complete')

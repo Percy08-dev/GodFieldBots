@@ -433,7 +433,7 @@ pub fn acknowledgement(response: &Value, command: &Value) -> Result<()> {
     }
     Ok(())
 }
-fn uuid(value: &str) -> Result<()> {
+pub(crate) fn uuid(value: &str) -> Result<()> {
     if value.len() != 36
         || value.bytes().enumerate().any(|(i, b)| {
             if [8, 13, 18, 23].contains(&i) {

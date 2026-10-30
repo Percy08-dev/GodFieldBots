@@ -1,6 +1,7 @@
 use gf_native::{
     budget::{Budget, Control, monotonic},
-    parallel::EpisodeReader,
+    parallel::{EpisodeReader, JournalData},
+    session::Reader,
     source::Sources,
 };
 use std::{fs, path::PathBuf};
@@ -45,7 +46,10 @@ impl Drop for Fixture {
 
 #[test]
 fn real_workers_preserve_order_and_share_capacity() {
-    for workers in [1, 2, 4, 8] {
+    for (reader_kind, workers) in [Reader::Legacy, Reader::TypedBorrowedV1]
+        .into_iter()
+        .flat_map(|reader| [1, 2, 4, 8].map(|workers| (reader, workers)))
+    {
         let fixture = Fixture::new();
         let budget = Budget::new(128 * 1024 * 1024);
         let control = Control::new(monotonic() + 10.).unwrap();
@@ -58,11 +62,15 @@ fn real_workers_preserve_order_and_share_capacity() {
             &control,
             2 * 1024 * 1024,
             1024 * 1024,
+            reader_kind,
         );
         let mut count = 0;
         while let Some((path, data)) = reader.next(&mut sources).unwrap() {
             assert_eq!(path, fixture.paths[count]);
-            assert_eq!(data.records1.len(), 1);
+            match &data.records1 {
+                JournalData::Legacy(records) => assert_eq!(records.len(), 1),
+                JournalData::Typed(_) => assert_eq!(reader_kind, Reader::TypedBorrowedV1),
+            };
             count += 1;
         }
         assert_eq!(count, 8);
@@ -78,24 +86,33 @@ fn real_workers_preserve_order_and_share_capacity() {
 
 #[test]
 fn worker_failure_drains_every_result_and_lease() {
-    let fixture = Fixture::new();
-    fs::write(fixture.paths[1].join("player-1.jsonl"), b"[\n").unwrap();
-    let budget = Budget::new(128 * 1024 * 1024);
-    let control = Control::new(monotonic() + 10.).unwrap();
-    let mut sources = Sources::new(budget.clone(), 2 * 1024 * 1024, 1024 * 1024);
-    let mut reader = EpisodeReader::new(
-        &fixture.paths,
-        4,
-        4,
-        &budget,
-        &control,
-        2 * 1024 * 1024,
-        1024 * 1024,
-    );
-    assert!(reader.next(&mut sources).is_err());
-    drop(reader);
-    drop(sources);
-    assert_eq!(budget.used(), 0);
+    for reader_kind in [Reader::Legacy, Reader::TypedBorrowedV1] {
+        for missing in [false, true] {
+            let fixture = Fixture::new();
+            if missing {
+                fs::remove_file(fixture.paths[1].join("player-1.jsonl")).unwrap();
+            } else {
+                fs::write(fixture.paths[1].join("replay-player-1.json"), b"[").unwrap();
+            }
+            let budget = Budget::new(128 * 1024 * 1024);
+            let control = Control::new(monotonic() + 10.).unwrap();
+            let mut sources = Sources::new(budget.clone(), 2 * 1024 * 1024, 1024 * 1024);
+            let mut reader = EpisodeReader::new(
+                &fixture.paths,
+                4,
+                4,
+                &budget,
+                &control,
+                2 * 1024 * 1024,
+                1024 * 1024,
+                reader_kind,
+            );
+            assert!(reader.next(&mut sources).is_err());
+            drop(reader);
+            drop(sources);
+            assert_eq!(budget.used(), 0);
+        }
+    }
 }
 
 #[test]
@@ -104,7 +121,7 @@ fn source_depth_bound_parse_canonical_and_drop_on_actual_worker_stacks() {
         .name("depth-executor".to_owned())
         .stack_size(8 * 1024 * 1024)
         .spawn(|| {
-            for depth in [126, 127, 128, 990] {
+            for (reader_kind,depth) in [Reader::Legacy,Reader::TypedBorrowedV1].into_iter().flat_map(|reader|[126,127,128,990].map(|depth|(reader,depth))) {
                 let fixture = Fixture::new();
                 let encoded = format!("{}0{}", "[".repeat(depth), "]".repeat(depth));
                 fs::write(fixture.paths[0].join("replay-player-1.json"), &encoded).unwrap();
@@ -119,6 +136,7 @@ fn source_depth_bound_parse_canonical_and_drop_on_actual_worker_stacks() {
                     &control,
                     2 * 1024 * 1024,
                     1024 * 1024,
+                    reader_kind,
                 );
                 if depth < 128 {
                     let (_, data) = reader.next(&mut sources).unwrap().unwrap();

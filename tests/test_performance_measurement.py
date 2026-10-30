@@ -340,9 +340,11 @@ def test_existing_source_directory_refused_and_symlinks_not_followed(tmp_path: P
 
 
 def test_paired_plan_has_warmup_alternation_and_budget_matrix(tmp_path: Path) -> None:
+    reference=tmp_path/'reference'
+    make_reference(reference)
     completed = subprocess.run(
         [sys.executable, str(WORKLOAD), 'paired', '--kind', 'preparation',
-         '--output', str(tmp_path / 'planned')],
+         '--output', str(tmp_path / 'planned'),'--reference',str(reference)],
         text=True, capture_output=True, timeout=10, check=False,
     )
     assert completed.returncode == 0, completed.stderr

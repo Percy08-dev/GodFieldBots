@@ -168,7 +168,7 @@ pub fn admit(bytes: usize, budget: &Arc<Budget>) -> Result<Arc<JsonAdmission>> {
 }
 const RESERVED: &[u8] = b"$serde_json::private::Number";
 /// Reject the member name serde uses internally for arbitrary-precision numbers.
-fn reject_reserved_number_members(bytes: &[u8], control: &Control) -> Result<()> {
+pub(crate) fn reject_reserved_number_members(bytes: &[u8], control: &Control) -> Result<()> {
     let mut index = 0usize;
     let mut next_poll = 0usize;
     while index < bytes.len() {

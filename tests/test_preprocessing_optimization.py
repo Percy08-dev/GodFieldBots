@@ -267,6 +267,53 @@ def test_typed_primary_and_counter_plans_require_distinct_feature_builds(tmp_pat
         runner.typed_trial_plan(args, cfg)
 
 
+def test_combined_plan_is_closed_value_borrowed_by_system_mimalloc(tmp_path):
+    builds = []
+    for allocator in ('System', 'mimalloc'):
+        path = tmp_path / f'{allocator}.json'
+        runner.write(path, {'identity': {'allocator': allocator, 'arbitrary_precision': True,
+                                        'allocation_counts': False},
+                            'binary': f'/owned/{allocator}', 'binary_sha256': allocator})
+        builds.append(path)
+    args = runner.parser().parse_args(['combined-plan', '--output', str(tmp_path / 'trials'),
+                                      '--inventory', '/frozen/journals.json',
+                                      *[part for path in builds for part in ('--typed-build', str(path))]])
+    plan = runner.combined_trial_plan(args, runner.config(runner.HERE / 'experiment.toml'))
+    assert len(plan) == 24
+    assert {(row['allocator'], row['variant']) for row in plan} == {
+        ('System', 'A'), ('System', 'C'), ('mimalloc', 'A'), ('mimalloc', 'C')}
+    assert [(row['allocator'], row['variant']) for row in plan[8:12]] == [
+        ('System', 'C'), ('mimalloc', 'A'), ('mimalloc', 'C'), ('System', 'A')]
+    data = json.loads(builds[-1].read_text())
+    data['identity']['allocation_counts'] = True
+    runner.write(builds[-1], data)
+    with pytest.raises(ValueError, match='AP primary build per allocator'):
+        runner.combined_trial_plan(args, runner.config(runner.HERE / 'experiment.toml'))
+
+
+def test_actual_path_matrix_has_all_eight_reader_allocator_worker_cells(tmp_path):
+    variants=[]
+    for allocator in ('system','mimalloc'):
+        path=tmp_path/f'{allocator}.json'
+        runner.write(path,{'allocator':allocator,'site':f'/owned/{allocator}',
+                           'native_identity':{'extension_sha256':allocator,'build':{'typed_reader_contract':'typed-borrowed-v1'}}})
+        variants.append(path)
+    args=runner.parser().parse_args(['native-combined-plan','--output',str(tmp_path/'trials'),
+                                    *[part for path in variants for part in ('--variant',str(path))]])
+    plan=runner.native_combined_plan(args,runner.config(runner.HERE/'experiment.toml'))
+    assert len(plan)==48
+    assert len({(row['allocator'],row['reader'],row['workers'])for row in plan})==8
+    for row in plan:
+        command=row['command']
+        assert command[command.index('--reader')+1]==row['reader']
+        assert command[command.index('--workers')+1]==command[command.index('--max-in-flight')+1]==str(row['workers'])
+        assert command[command.index('--memory-mib')+1]=='2048'
+        assert command[command.index('--chunk-mib')+1]=='16'
+    data=json.loads(variants[0].read_text());data['native_identity']['build'].pop('typed_reader_contract');runner.write(variants[0],data)
+    with pytest.raises(ValueError,match='typed reader capability'):
+        runner.native_combined_plan(args,runner.config(runner.HERE/'experiment.toml'))
+
+
 def test_generated_schema_matches_single_schema_source():
     spec = importlib.util.spec_from_file_location('schema_generator',
                                                  runner.HERE / 'generate_schema.py')
@@ -274,7 +321,8 @@ def test_generated_schema_matches_single_schema_source():
     generator = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(generator)
     for borrowed, name in ((False, 'owned.rs'), (True, 'borrowed.rs')):
-        assert (generator.OUT / name).read_text() == generator.generate(borrowed)
+        output = generator.BORROWED_OUT if borrowed else generator.OUT / name
+        assert output.read_text() == generator.generate(borrowed)
 
 
 def test_protected_original_fit_manifest_rejects_changed_bytes(tmp_path):

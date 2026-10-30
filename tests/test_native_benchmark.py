@@ -201,7 +201,7 @@ def test_preparation_passes_backend_settings_to_owner_and_preserves_output_gates
     result = workload.preparation(args)
     settings: dict[str, Any] = {'memory_budget_mib': 2048, 'chunk_target_mib': 16, 'cache_budget_mib': 512}
     if variant == 'rust':
-        settings.update(backend='rust', workers=4, max_in_flight=4)
+        settings.update(backend='rust', reader='legacy', workers=4, max_in_flight=4)
         assert result['native_transfer_metrics']['ffi_data_calls']['value'] == 99
     assert calls['preprocessing'] == settings
     assert calls['finalized'] is True

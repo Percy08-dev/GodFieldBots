@@ -1,5 +1,5 @@
 //! Bounded immutable reads; metadata and digest remain owned through publication.
-use crate::budget::{Budget, BudgetVec, Control, Lease};
+use crate::budget::{Budget, BudgetVec, Control, JsonAdmission, Lease};
 use crate::error::{Error, Result};
 use crate::json::{self, Document};
 use crate::telemetry::{Phase, Telemetry};
@@ -65,6 +65,33 @@ pub struct Sources {
     inventories: BudgetVec<Inventory>,
     lookup: HashMap<PathBuf, usize>,
     telemetry: Arc<Telemetry>,
+}
+/// Workers own bytes/admission only. Borrowed DTOs are created by the ordered
+/// consumer and cannot outlive this external raw owner.
+pub struct RawJournal {
+    bytes: BudgetVec<u8>,
+    admission: Arc<JsonAdmission>,
+    max_record: usize,
+}
+impl RawJournal {
+    pub fn parse<'a>(
+        &'a self,
+        control: &Control,
+        telemetry: &Telemetry,
+    ) -> Result<crate::typed_journal::journal::Records<'a>> {
+        let _timer = telemetry.phase_timer(Phase::SourceDecode);
+        let mut kind =
+            telemetry.decode_timer(crate::telemetry::DecodeKind::Journal, self.bytes.len());
+        let records = crate::typed_journal::journal::parse_admitted(
+            &self.bytes,
+            self.max_record,
+            &self.admission,
+            control,
+        )?;
+        telemetry.typed_journal(records.records.len());
+        kind.success();
+        Ok(records)
+    }
 }
 
 impl Sources {
@@ -215,7 +242,17 @@ impl Sources {
         }
         control.check()?;
         kind.success();
+        self.telemetry.legacy_journal();
         Ok(records)
+    }
+    pub fn raw_journal(&mut self, path: &Path, control: &Control) -> Result<RawJournal> {
+        let bytes = self.read(path, control)?;
+        let admission = json::admit(bytes.len(), &self.budget)?;
+        Ok(RawJournal {
+            bytes,
+            admission,
+            max_record: self.max_record,
+        })
     }
     pub fn verify(&self, control: &Control) -> Result<()> {
         for entry in self.entries.iter() {

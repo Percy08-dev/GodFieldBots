@@ -3,13 +3,13 @@ use crate::json::ValueExt;
 use crate::{
     budget::{Budget, BudgetVec, Control, Lease},
     error::{Error, Result},
-    feature::PreparedDecision,
-    journal::{self, string},
+    journal::string,
     json::{self, Value},
     numeric_io::{read_f64, read_i64, write_f64, write_i64},
     projection,
     session::Session,
     telemetry::CoordinatorPhase as WallPhase,
+    typed_journal::view::{DecisionView, JournalView},
 };
 use sha2::{Digest, Sha256};
 use std::{
@@ -267,7 +267,7 @@ impl IdentityLedger {
         &mut self,
         split: usize,
         header: &Value,
-        decision: &Value,
+        decision: DecisionView<'_, '_>,
         budget: &Arc<Budget>,
         scratch: &Arc<Budget>,
         control: &Control,
@@ -277,7 +277,7 @@ impl IdentityLedger {
             json::copy(header.require("run_id")?, control)?,
             json::copy(header.require("game_id")?, control)?,
             json::copy(header.require("viewer")?, control)?,
-            json::copy(decision.require("decision")?, control)?,
+            decision.identity_number(control)?,
         ];
         let encoded = json::canonical(&json::array(values), budget, control)?;
         self.leases.reserve(1)?;
@@ -377,6 +377,7 @@ pub fn scan(session: &mut Session) -> Result<Stage> {
             control,
             session.settings.file,
             session.settings.record,
+            session.settings.reader,
         );
         loop {
             let decoded = {
@@ -401,20 +402,34 @@ pub fn scan(session: &mut Session) -> Result<Stage> {
                     replay2,
                 } = &data;
                 wall.set(WallPhase::JournalValidation);
+                let parsed1 = records1.parse_typed(control, &session.telemetry)?;
+                let parsed2 = records2.parse_typed(control, &session.telemetry)?;
                 let journal1 = {
                     let _timer = session
                         .telemetry
                         .phase_timer(crate::telemetry::Phase::JournalInputValidation);
-                    journal::validate(&records1, budget, control)?
+                    JournalView::validate(
+                        records1,
+                        parsed1.as_ref(),
+                        session.settings.reader,
+                        budget,
+                        control,
+                    )?
                 };
                 let journal2 = {
                     let _timer = session
                         .telemetry
                         .phase_timer(crate::telemetry::Phase::JournalInputValidation);
-                    journal::validate(&records2, budget, control)?
+                    JournalView::validate(
+                        records2,
+                        parsed2.as_ref(),
+                        session.settings.reader,
+                        budget,
+                        control,
+                    )?
                 };
-                let first_viewer = journal1.header.require("viewer")?.integer(1, 2)? as usize;
-                let second_viewer = journal2.header.require("viewer")?.integer(1, 2)? as usize;
+                let first_viewer = journal1.header().require("viewer")?.integer(1, 2)? as usize;
+                let second_viewer = journal2.header().require("viewer")?.integer(1, 2)? as usize;
                 if first_viewer == second_viewer {
                     return Err(Error::contract("duplicate source participant identity"));
                 }
@@ -428,7 +443,7 @@ pub fn scan(session: &mut Session) -> Result<Stage> {
                 for (slot, journal) in journals.iter().enumerate() {
                     wall.set(WallPhase::SourceMetadata);
                     control.check()?;
-                    let viewer = journal.header.require("viewer")?.integer(1, 2)? as usize;
+                    let viewer = journal.header().require("viewer")?.integer(1, 2)? as usize;
                     let replay = replays[viewer - 1];
                     let source = directory.join(format!("player-{}.jsonl", slot + 1));
                     let metadata = projection::source_metadata(
@@ -455,12 +470,12 @@ pub fn scan(session: &mut Session) -> Result<Stage> {
                     wall.set(WallPhase::EpisodeFactsBuffers);
                     identities.push(Identity {
                         _metadata: budget.reserve(
-                            string(journal.header, "run_id")?.len()
-                                + string(journal.header, "game_id")?.len()
+                            string(journal.header(), "run_id")?.len()
+                                + string(journal.header(), "game_id")?.len()
                                 + 2 * size_of::<String>(),
                         )?,
-                        run: (string(journal.header, "run_id")?).to_owned(),
-                        game: (string(journal.header, "game_id")?).to_owned(),
+                        run: (string(journal.header(), "run_id")?).to_owned(),
+                        game: (string(journal.header(), "game_id")?).to_owned(),
                         viewer: viewer as i128,
                     })?;
                     let lineage = metadata.require("lineage")?;
@@ -486,7 +501,7 @@ pub fn scan(session: &mut Session) -> Result<Stage> {
                             1
                         },
                     })?;
-                    let current = string(journal.header, "action_config_hash")?;
+                    let current = string(journal.header(), "action_config_hash")?;
                     if action_hash
                         .as_ref()
                         .is_some_and(|prior| prior.as_bytes() != current.as_bytes())
@@ -504,10 +519,10 @@ pub fn scan(session: &mut Session) -> Result<Stage> {
                 let journal = by_viewer[learner - 1];
                 let outcomes = [
                     by_viewer[0]
-                        .end
+                        .end()
                         .ok_or_else(|| Error::contract("missing journal end"))?,
                     by_viewer[1]
-                        .end
+                        .end()
                         .ok_or_else(|| Error::contract("missing journal end"))?,
                 ];
                 if !outcomes[0]
@@ -527,24 +542,21 @@ pub fn scan(session: &mut Session) -> Result<Stage> {
                     outcomes[1].require("terminal_reward")?.integer(-1, 1)? as f64,
                 ];
                 let split = if string(m, "split")? == "train" { 0 } else { 1 };
-                let decisions = journal.decisions.len();
+                let decisions = journal.decision_count();
                 let mut candidates = 0usize;
-                for decision in journal.decisions.iter() {
+                for decision_index in 0..journal.decision_count() {
+                    let decision = journal.decision(decision_index)?;
                     control.check()?;
                     identity_ledger.append(
                         split as usize,
-                        journal.header,
+                        journal.header(),
                         decision,
                         budget,
                         &stage.scratch,
                         control,
                     )?;
                     let length = if session.online {
-                        decision
-                            .require("candidates")?
-                            .require("actions")?
-                            .array()?
-                            .len()
+                        decision.candidate_count()?
                     } else {
                         1
                     };
@@ -590,17 +602,16 @@ pub fn scan(session: &mut Session) -> Result<Stage> {
                 }
                 wall.set(WallPhase::FeaturesSpooling);
                 let mut candidate_count = 0usize;
-                for decision in journal.decisions.iter() {
+                for decision_index in 0..journal.decision_count() {
+                    let decision = journal.decision(decision_index)?;
                     control.check()?;
-                    let input = decision.require("input")?;
-                    let selection = decision.require("selection")?;
-                    let saved_index =
-                        selection.require("index")?.integer(0, u64::MAX as i128)? as usize;
-                    let old_logprob = optional_number(selection.require("logprob")?)?;
-                    let old_value = optional_number(selection.require("value")?)?;
+                    let saved_index = decision.selected()?;
+                    let (saved_logprob, value) = decision.old_statistics()?;
+                    let old_logprob = saved_logprob.unwrap_or(0.);
+                    let old_value = value.unwrap_or(0.);
                     if session.online
-                        && (selection.require("logprob")?.is_null()
-                            || selection.require("value")?.is_null()
+                        && (saved_logprob.is_none()
+                            || value.is_none()
                             || !old_logprob.is_finite()
                             || !old_value.is_finite())
                     {
@@ -612,12 +623,7 @@ pub fn scan(session: &mut Session) -> Result<Stage> {
                         let _timer = session
                             .telemetry
                             .phase_timer(crate::telemetry::Phase::FeatureEncoding);
-                        Some(PreparedDecision::new(
-                            input,
-                            &session.config,
-                            budget,
-                            control,
-                        )?)
+                        Some(decision.prepare(&session.config, budget, control)?)
                     } else {
                         None
                     };
@@ -629,11 +635,8 @@ pub fn scan(session: &mut Session) -> Result<Stage> {
                         state_features.extend_from_slice(&row)?;
                     }
                     if session.online {
-                        for action in decision
-                            .require("candidates")?
-                            .require("actions")?
-                            .array()?
-                        {
+                        for action_index in 0..decision.candidate_count()? {
+                            let action = decision.action(action_index)?;
                             {
                                 let _timer = session
                                     .telemetry
@@ -655,11 +658,7 @@ pub fn scan(session: &mut Session) -> Result<Stage> {
                             let _timer = session
                                 .telemetry
                                 .phase_timer(crate::telemetry::Phase::FeatureEncoding);
-                            prepared.encode(
-                                decision.require("command")?.require("action")?,
-                                &mut row,
-                                control,
-                            )?;
+                            prepared.encode(decision.command_action()?, &mut row, control)?;
                         }
                         let _timer = session
                             .telemetry
@@ -671,15 +670,9 @@ pub fn scan(session: &mut Session) -> Result<Stage> {
                     offsets.push(candidate_count as i64)?;
                     logprob.push(old_logprob)?;
                     values.push(old_value)?;
-                    logprob_present.push((!selection.require("logprob")?.is_null()) as i64)?;
-                    value_present.push((!selection.require("value")?.is_null()) as i64)?;
-                    candidate_counts.push(
-                        decision
-                            .require("candidates")?
-                            .require("actions")?
-                            .array()?
-                            .len() as i64,
-                    )?;
+                    logprob_present.push(saved_logprob.is_some() as i64)?;
+                    value_present.push(value.is_some() as i64)?;
+                    candidate_counts.push(decision.candidate_count()? as i64)?;
                 }
                 let _staging_timer = session
                     .telemetry
@@ -701,8 +694,8 @@ pub fn scan(session: &mut Session) -> Result<Stage> {
                 wall.set(WallPhase::EpisodeFactsBuffers);
                 let metadata_lease = budget.reserve(
                     path.as_os_str().len()
-                        + string(journal.header, "run_id")?.len()
-                        + string(journal.header, "game_id")?.len()
+                        + string(journal.header(), "run_id")?.len()
+                        + string(journal.header(), "game_id")?.len()
                         + 256,
                 )?;
                 let order = links.ordinal;
@@ -710,7 +703,7 @@ pub fn scan(session: &mut Session) -> Result<Stage> {
                     Some(crate::index::IndexInfo::new(
                         collection,
                         &links,
-                        journal.header,
+                        journal.header(),
                         rewards[learner - 1],
                         &session
                             .dataset
@@ -733,8 +726,8 @@ pub fn scan(session: &mut Session) -> Result<Stage> {
                 };
                 stage.episodes.push(Episode {
                     path,
-                    run: (string(journal.header, "run_id")?).to_owned(),
-                    game: (string(journal.header, "game_id")?).to_owned(),
+                    run: (string(journal.header(), "run_id")?).to_owned(),
+                    game: (string(journal.header(), "game_id")?).to_owned(),
                     viewer: learner as i64,
                     split,
                     winner,
@@ -843,6 +836,10 @@ pub fn scan(session: &mut Session) -> Result<Stage> {
         Value::Null
     };
     stage.proof = json::object([
+        (
+            "reader_contract",
+            json::text(session.settings.reader.contract()),
+        ),
         ("structural_valid", Value::Bool(true)),
         ("learning_valid", Value::Bool(false)),
         ("source_set_sha256", json::text(&source_hash)),
@@ -880,13 +877,6 @@ pub fn scan(session: &mut Session) -> Result<Stage> {
     ]);
     wall.success();
     Ok(stage)
-}
-fn optional_number(value: &Value) -> Result<f64> {
-    if value.is_null() {
-        Ok(0.)
-    } else {
-        value.number()
-    }
 }
 fn verify_journal_inventory(
     directory: &Path,

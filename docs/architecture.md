@@ -2,6 +2,12 @@
 
 ## Status and scope
 
+[ADR0017](adr/0017-combined-borrowed-journal-practicality.md) designs an opt-in
+combined mimalloc/borrowed-Journal candidate. Pre-implementation review is READY;
+production defaults remain unchanged. Safe scoped raw ownership, complete typed
+semantic/feature parity and combined actual-path measurements are acceptance
+gates. Progress: [combined practicality](verification/combined-borrowed-journal.md).
+
 [ADR0016](adr/0016-staged-preprocessing-optimization.md) accepts isolated
 allocator and typed-Journal experiments (stages0–2); production adoption remains
 a later decision. Independent design/code/measurement acceptance is complete:

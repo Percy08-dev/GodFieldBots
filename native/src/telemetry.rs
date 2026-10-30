@@ -234,6 +234,10 @@ impl Drop for DecodeJob<'_> {
 }
 #[derive(Default)]
 pub struct Telemetry {
+    typed_reader: AtomicU64,
+    typed_journal_files: AtomicU64,
+    typed_journal_records: AtomicU64,
+    legacy_journal_files: AtomicU64,
     coordinator_ns: [AtomicU64; 11],
     coordinator_parent_ns: AtomicU64,
     coordinator_calls: AtomicU64,
@@ -555,13 +559,37 @@ impl Telemetry {
             .collect::<Vec<_>>()
             .join(",");
         format!(
-            "{},\"source_kind_decode\":{{{}}},\"json_memory_policy\":\"{}\",\"coordinator_scan_wall\":{},\"decode_parallelism\":{}}}",
+            "{},\"source_kind_decode\":{{{}}},\"json_memory_policy\":\"{}\",\"coordinator_scan_wall\":{},\"decode_parallelism\":{},\"reader_contract\":\"{}\",\"typed_journal_files\":{},\"typed_journal_records\":{},\"legacy_journal_files\":{},\"journal_parse_scope\":\"{}\"}}",
             &output[..output.len() - 1],
             kinds,
             crate::json::MEMORY_POLICY,
             self.coordinator_json(),
-            self.parallel_json()
+            self.parallel_json(),
+            if value(&self.typed_reader) == 0 {
+                "legacy"
+            } else {
+                "typed-borrowed-v1"
+            },
+            value(&self.typed_journal_files),
+            value(&self.typed_journal_records),
+            value(&self.legacy_journal_files),
+            if value(&self.typed_reader) == 0 {
+                "legacy Journal parsing occurs in decoder jobs"
+            } else {
+                "typed Journal parsing occurs on ordered coordinator; decoder jobs own raw buffers and legacy Replay documents"
+            }
         )
+    }
+    pub fn configure_reader(&self, typed: bool) {
+        self.typed_reader.store(u64::from(typed), Ordering::Relaxed);
+    }
+    pub fn typed_journal(&self, records: usize) {
+        self.typed_journal_files.fetch_add(1, Ordering::Relaxed);
+        self.typed_journal_records
+            .fetch_add(records as u64, Ordering::Relaxed);
+    }
+    pub fn legacy_journal(&self) {
+        self.legacy_journal_files.fetch_add(1, Ordering::Relaxed);
     }
 }
 

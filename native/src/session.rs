@@ -16,6 +16,19 @@ use std::{
     sync::Arc,
 };
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Reader {
+    Legacy,
+    TypedBorrowedV1,
+}
+impl Reader {
+    pub fn contract(self) -> &'static str {
+        match self {
+            Self::Legacy => "legacy",
+            Self::TypedBorrowedV1 => "typed-borrowed-v1",
+        }
+    }
+}
 pub struct Settings {
     pub memory: usize,
     pub file: usize,
@@ -24,6 +37,7 @@ pub struct Settings {
     pub scratch: usize,
     pub workers: usize,
     pub in_flight: usize,
+    pub reader: Reader,
 }
 impl Settings {
     pub fn decode(encoded: &[u8], control: &Control) -> Result<Self> {
@@ -49,7 +63,7 @@ impl Settings {
                 "wall_seconds",
                 "cleanup_seconds",
             ],
-            &[],
+            &["reader"],
         )?;
         let mib = |key| -> Result<usize> {
             let n = value
@@ -70,6 +84,16 @@ impl Settings {
         let in_flight = value
             .require("max_in_flight")?
             .integer(1, usize::MAX as i128)? as usize;
+        let reader = match value
+            .get("reader")
+            .map(Value::string)
+            .transpose()?
+            .unwrap_or("legacy")
+        {
+            "legacy" => Reader::Legacy,
+            "typed-borrowed-v1" => Reader::TypedBorrowedV1,
+            _ => return Err(Error::contract("unsupported native preprocessing reader")),
+        };
         if ![1, 2, 4, 8].contains(&workers)
             || string(value, "backend")? != "rust"
             || cache > memory
@@ -91,6 +115,7 @@ impl Settings {
             scratch,
             workers,
             in_flight,
+            reader,
         })
     }
 }
@@ -102,6 +127,42 @@ pub struct Collection {
     pub parent: usize,
     pub expected_source: Option<String>,
     _path_lease: Lease,
+}
+
+#[cfg(test)]
+mod reader_tests {
+    use super::*;
+    fn settings() -> Value {
+        serde_json::json!({"memory_budget_mib":128,"cache_budget_mib":0,"chunk_target_mib":1,
+            "max_source_file_mib":64,"max_record_mib":8,"max_in_flight":1,"workers":1,
+            "backend":"rust","scratch_budget_mib":8192,"wall_seconds":7200,"cleanup_seconds":5})
+    }
+    #[test]
+    fn reader_is_optional_legacy_or_closed_explicit_contract() {
+        let mut value = settings();
+        assert_eq!(Settings::parse(&value).unwrap().reader, Reader::Legacy);
+        for (text, expected) in [
+            ("legacy", Reader::Legacy),
+            ("typed-borrowed-v1", Reader::TypedBorrowedV1),
+        ] {
+            value
+                .as_object_mut()
+                .unwrap()
+                .insert("reader".into(), Value::String(text.into()));
+            assert_eq!(Settings::parse(&value).unwrap().reader, expected);
+        }
+        for invalid in [
+            Value::Null,
+            Value::Bool(false),
+            Value::String("future".into()),
+        ] {
+            value
+                .as_object_mut()
+                .unwrap()
+                .insert("reader".into(), invalid);
+            assert!(Settings::parse(&value).is_err());
+        }
+    }
 }
 pub struct Session {
     pub budget: Arc<Budget>,
@@ -143,6 +204,7 @@ impl Session {
                 scratch: 1024 * 1024,
                 workers: 1,
                 in_flight: 1,
+                reader: Reader::Legacy,
             },
             sources: Sources::new(budget.clone(), 1024 * 1024, 1024 * 1024),
             parents: BudgetVec::new(budget),
@@ -179,6 +241,7 @@ impl Session {
         wall_deadline: f64,
         telemetry: Arc<crate::telemetry::Telemetry>,
     ) -> Result<Self> {
+        telemetry.configure_reader(settings.reader == Reader::TypedBorrowedV1);
         telemetry.configure_workers(settings.workers, settings.in_flight);
         let cleanup_control = control.at_deadline(wall_deadline)?;
         // Bounded runtime/path/hash metadata and fixed native stack work are

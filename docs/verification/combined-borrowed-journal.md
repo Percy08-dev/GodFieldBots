@@ -1,0 +1,153 @@
+# Combined mimalloc and borrowed-Journal practicality
+
+Status: implementation in progress under
+[ADR0017](../adr/0017-combined-borrowed-journal-practicality.md). Independent
+pre-implementation architecture review is READY. This unit determines the
+combination's usability; ADR0016's separate effects are not combined predictions.
+No production default/main installation, game generation, model fitting, PPO
+update or simulator modification is authorized as an automatic side effect.
+
+Baseline9704f93 and original installed native32e3ad68... remain the reference.
+Existing corpus/NPZ/index/saved-PPO proofs and original six fits must remain intact.
+An opt-in `preprocessing.reader="typed-borrowed-v1"` candidate and optional
+`allocator-mimalloc` wheel feature are being implemented; legacy stays default.
+
+## Required evidence
+
+- Combined standalone System/mimalloc x Value/borrowed comparison with separate
+  allocator/binary/source proofs and full-corpus canonical oracles.
+- Typed Journal semantic validation, source/Replay reconciliation and direct
+  typed feature traversal, with no ordinary input/action conversion back to Value.
+- Scoped raw-buffer ownership across existing window/join ordering. Journal parse
+  becomes coordinator-local; this scheduling tradeoff must be measured explicitly.
+- Exact full-corpus float64 arrays for both recipes, MLP float32 transforms,
+  sample/source/dataset/index identities and saved16-game all-candidate PPO inputs.
+- Shared Config budgets, cancellation/failure cleanup, retained NumPy views,
+  source mutation refusal, old-wheel legacy compatibility and early capability
+  rejection; no resume identity bypass or failed-parent data reuse.
+- Complete-path System/mimalloc x legacy/typed measurements at1/1and4/4, warmup
+  plus five rotating trials, no concurrent heavy experiment work, CPU/RSS/PSS,
+  kernel RSS peaks, post-release memory, storage/I/O and experiment costs.
+
+## Design decisions
+
+Native owns the pure DTO schema; the standalone harness includes only that module
+directly and retains independent AP/no-AP and allocator selection. The production
+package does not import benchmark code. Selected-reader provenance is separate
+from immutable source/dataset hashes. No capability is advertised until the path
+is wired. Runtime counters must prove typed Journal work actually occurred.
+
+Readiness requires independent correctness/conformance review and executed corpus/
+failure/ownership/measurement gates. A correct but slower candidate must be
+reported as such. A final verdict and any remaining limitations are pending.
+
+## Combined standalone component evidence
+
+Milestone1 checks:39targeted Python tests,12Rust tests each System/mimalloc,
+native library24tests plus the new Reader test, expected counter+mimalloc build
+refusal, Ruff/mypy/format checks. Existing legacy-wheel lifecycle/cleanup checks
+pass16tests after their fixtures explicitly select the Rust backend. The native
+typed capability remains unadvertised until its actual route is implemented.
+
+System-C and mimalloc-C each passed all13,568files/534,640records with0newrejections
+and original canonical records hash`c05bfca5...c7d90c`. Both correct oracles bind
+actual allocator/AP/source/binary identity and completed cleanup owners.
+
+All24component commands succeeded (fourwarmups, five measured trials per cell),
+with no concurrent builds/tests/edits. Full frozen source snapshot105files is
+retained under`runs/assessments/combined-borrowed-20261030/component-source-snapshot`
+so subsequent native integration does not lose this experiment's code reference.
+
+| Component | Median whole wall s | Kernel peak RSS maximum MiB |
+| --- | ---: | ---: |
+| System + Value |16.670|49.4|
+| System + borrowed |10.954|22.6|
+| mimalloc + Value |12.565|58.9|
+| mimalloc + borrowed |10.350|38.8|
+
+The combination reduces this standalone command37.91% versus System+Value,
+17.63% versus mimalloc+Value and5.51% versus System+borrowed. The latter costs
+additional peak/retained resident memory: post-release RSS is about28.46versus
+16.40MiB. Kernel peaks in the table are the maximum of five individual process
+high-water observations; mimalloc+Value's median is58.73MiB (not58.9). No combined
+native/feature-pipeline speed or usability conclusion is established by this table.
+Independent metadata/arithmetic review PASS. Raw oracles/results, summaries and
+`component-assessment.json` are under the same experiment root.
+
+## Native candidate v1: executed correctness gates
+
+The first opt-in native route compiled and passed all native unit/integration/
+documentation targets:61tests,2ignored, plus54targeted Python checks, Ruff,
+mypy64files and both Rust format checks. Actual multi-episode2/4/8worker overlap,
+cancellation, queued raw failure and proof/representation guards are exercised.
+
+Both recipes over the full83,783learner rows match original NPZ bytes for System
+and mimalloc typed reader: history`c5c3f3c1...cbcc94d`, observation`841c6f885...5d0c8`.
+Reader counters prove13,568typedfiles/534,640records and0legacyJournal files.
+Dataset/source/sample identities remain unchanged. The new typed Parquet index
+matches original rows83783/content`574b81ec...`/file`9bce50db...` exactly.
+The initial attempted concurrent full-corpus runs collided with the existing
+exclusive parent-run locks; those three coordination failures are retained,
+excluded from candidate/performance evidence, and repeated sequentially. Source
+ownership checks were not weakened. No correctness elapsed time is a speed trial.
+
+The explicit current-v2 source
+`runs/ppo-comparison-v2/train-seed17/collections/batch-000000` supplies the saved
+16-game PPO reference, actual NPZ`cbb6169a4a271cdf115e9f68a6d98620adb5d214ac82757802ac403dc86043af`.
+Diagnostic generation-zero clones pass ordinary ownership/lineage guards and
+remain running/zero-update, so they cannot authorize complete-parent offline use.
+Original immutable records/artifacts remain unchanged; only documented copied
+manifest/checkpoint paths are relinked. No normal resume or optimizer ran.
+At workers1/4, Python/nativelegacy/nativetyped outputs match all eight saved
+arrays: actor5671x690f32,state224x373f32,offsets225i64,selected224i64,and224element
+old_logprob/old_value/advantage/targetf32. Eight same-policy-ID episodes exercise
+both learner seats. Exact source, file and array identities are retained in
+`current-v2-ppo-reference.json` and`candidate-v1-ppo-{1,4}/result.json`.
+
+Separate installed app/native wheels pass optional-free baseline startup and
+actual MI/typed capability/reader-identity checks outside the source tree.
+The v1 full Python run is817PASS,5SKIP,1FAIL: an existing plan test incorrectly
+assumed a global temporary reference checkout. It was repaired to create and
+explicitly select its own reference fixture; no source-probe bypass was added.
+
+A tiny strict-wire differential found v1's derived Outcome accepts
+`{"draw":null}` while legacy accepts only string`"draw"` or a win map. This is
+an explicit rejection-gate defect, not a current-corpus numerical mismatch.
+It was fixed with a minimal standard-Serde domain visitor and regression tests
+before final candidate verification or primary timing.
+
+## Final candidate: pre-measurement acceptance
+
+Final native source SHA256:
+`37cae919a0291fb2fbbb28738d0e13a206f7f060887bf2bfe7a6658a465770ca`.
+System wheel extension SHA256:
+`d1af0c3ca5c14ddeac0a2c1cefdbcc37e78239626a17cb8cd480deafeb01c0a0`;
+mimalloc extension:
+`bc45545822f06e92659a1c2f65543cbc5237ca12ba8352d028f51f876369a21a`.
+Both keep parser/resource/encoder/ABI contracts and report the actual allocator
+and supported reader contract. Main installed32e3... remains unchanged.
+
+All final current-data correctness gates PASS: typed System/mimalloc x both
+recipes retain original archive/sample/source/dataset identities; current legacy
+System/mimalloc history archives also retain the original hash. Final index
+bytes/content/rows match the original; final PPO clones at1/4retain every saved
+array exactly, with immutable original bytes unchanged.
+
+Final actual mimalloc-candidate full Python suite:818PASS,5opt-in SKIP,303.18s.
+Explicit public session tests:11PASS,118.84s, covering both recipes/readers,
+reader proof/path counters, source invalidation, summary/index and actual NumPy
+readonly slices surviving close/GC. Native all-target tests:64PASS,2ignored;
+standalone APSystem/no-AP each12PASS. Ruff, mypy63files, Rust format checks and
+uv lock consistency PASS. Installed optional-free baseline and final candidate
+allocator/capability/selected-reader checks PASS outside the source tree.
+
+New rejection tests cover draw objects, malformed/null/duplicate/extra win maps,
+escaped win keys and all result positions. The document-quota fixture now reaches
+actual raw/document admission after a prior episode is queued and returns all
+leases to zero. Actual typed worker overlap/cancellation uses2/4/8distinct tasks.
+
+Independent correctness and architecture source/evidence reviews are READY for
+primary execution. Eight actual-path cells (System/mimalloc x legacy/typed x1/4)
+will have one warmup and five rotating trials. Current System+legacy is the
+control; historical results are not substituted. Performance/practicality and
+final documentation signoff remain pending.

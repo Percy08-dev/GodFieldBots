@@ -1,8 +1,9 @@
 //! Standalone ADR0016 Journal experiment. No production or learning output.
 #![allow(dead_code)] // Generated DTO leaf helpers also serve contract fixtures.
-mod borrowed;
 mod common;
-mod contract;
+#[path = "../../../../native/src/typed_journal/dto/mod.rs"]
+mod shared_dto;
+use shared_dto::{borrowed, contract};
 #[cfg(test)]
 mod contract_tests;
 #[cfg(feature = "allocation_counts")]
@@ -10,6 +11,20 @@ mod counter;
 mod feasibility;
 mod memory;
 mod owned;
+
+#[cfg(all(feature = "allocation_counts", feature = "allocator-mimalloc"))]
+compile_error!("System allocation counting and mimalloc must use separate builds");
+#[cfg(feature = "allocator-mimalloc")]
+#[global_allocator]
+static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
+fn allocator_name() -> &'static str {
+    if cfg!(feature = "allocator-mimalloc") {
+        "mimalloc"
+    } else {
+        "System"
+    }
+}
 
 use contract::Validate;
 use serde::{Deserialize, Serialize};
@@ -92,7 +107,7 @@ fn main_result() -> Result<(), String> {
     if std::env::args().nth(1).as_deref() == Some("--identity") {
         println!(
             "{}",
-            serde_json::json!({"allocator":"System",
+            serde_json::json!({"allocator":allocator_name(),
             "arbitrary_precision":cfg!(feature="arbitrary_precision"),
             "allocation_counts":cfg!(feature="allocation_counts"),
             "source_sha256":option_env!("GFB_EXPERIMENT_SOURCE_SHA256").unwrap_or("unrecorded"),
@@ -273,7 +288,7 @@ fn main_result() -> Result<(), String> {
         println!(
             "{}",
             serde_json::json!({"schema_version":1,"contract":"typed-journal-experiment-v1",
-            "variant":variant,"mode":mode,"allocator":"System","arbitrary_precision":cfg!(feature="arbitrary_precision"),
+            "variant":variant,"mode":mode,"allocator":allocator_name(),"arbitrary_precision":cfg!(feature="arbitrary_precision"),
             "allocation_counts":cfg!(feature="allocation_counts"),"files":files,"records":records,"bytes":bytes,
             "phases":phases,"phase_cpu_seconds":null,
             "managed_memory_budget_bytes":managed.limit,"coarse_managed_peak_bytes":managed.peak,

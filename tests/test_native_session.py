@@ -24,14 +24,23 @@ from tests.test_fixed_ppo_data import frozen_sources as frozen_sources  # noqa: 
 pytest.importorskip('gf_native')
 
 
+@pytest.fixture(params=('legacy','typed-borrowed-v1'))
+def reader(request):
+    import gf_native
+
+    if request.param=='typed-borrowed-v1' and dict(gf_native.build_info()).get('typed_reader_contract')!='typed-borrowed-v1':
+        pytest.skip('installed historical native wheel has no typed reader capability')
+    return request.param
+
+
 @pytest.mark.parametrize('history', ['none', 'public_aggregate'])
-def test_native_whole_source_numeric_and_manifest_parity(tmp_path, frozen_sources, history):
+def test_native_whole_source_numeric_and_manifest_parity(reader, tmp_path, frozen_sources, history):
     parents, validations = frozen_sources
     path = tmp_path / 'dataset.json'
     frozen = build_dataset(parents, validations, path)
     _, train, validation = inspect_dataset(path)
     encoder = EncoderConfig(history=history)
-    settings = replace(PreparationConfig(), backend='rust', memory_budget_mib=128, cache_budget_mib=16,
+    settings = replace(PreparationConfig(), backend='rust', reader=reader, memory_budget_mib=128, cache_budget_mib=16,
                        chunk_target_mib=1)
     features = {0: [], 1: []}
     targets = {0: [], 1: []}
@@ -51,9 +60,14 @@ def test_native_whole_source_numeric_and_manifest_parity(tmp_path, frozen_source
             del batch
             del labels
         assert owner.proof()['dataset_manifest'] == frozen
+        assert owner.proof()['reader_contract']==reader
         assert owner._session.control_reserved_bytes() >= 32 * 1024 * 1024
     assert owner._session.control_reserved_bytes() == 0
     assert owner.diagnostics['ffi_data_calls'] == batches + 1
+    assert owner.diagnostics['reader_contract']==reader
+    if reader=='typed-borrowed-v1':
+        assert owner.diagnostics['typed_journal_files']==480
+        assert owner.diagnostics['legacy_journal_files']==0
     assert owner.diagnostics['ffi_batches_returned'] == batches
     assert owner.diagnostics['ffi_eof_returns'] == 1
     copies = owner.diagnostics['payload_copy_stats']
@@ -71,12 +85,12 @@ def test_native_whole_source_numeric_and_manifest_parity(tmp_path, frozen_source
         np.testing.assert_array_equal(np.concatenate(targets[split]), [sample.target for sample in samples])
 
 
-def test_native_source_mutation_invalidates_finalization_and_slices_survive_close(tmp_path, frozen_sources):
+def test_native_source_mutation_invalidates_finalization_and_slices_survive_close(reader, tmp_path, frozen_sources):
     parents, validations = frozen_sources
     path = tmp_path / 'dataset.json'
     build_dataset(parents, validations, path)
     encoder = EncoderConfig()
-    settings = replace(PreparationConfig(), backend='rust', memory_budget_mib=128, cache_budget_mib=16, chunk_target_mib=1)
+    settings = replace(PreparationConfig(), backend='rust', reader=reader, memory_budget_mib=128, cache_budget_mib=16, chunk_target_mib=1)
     owner = NativePreparation({'kind': 'offline', 'encoder': asdict(encoder),
                                'dataset_path': str(path)}, settings, deadline=time.monotonic() + 60)
     batch = owner.next_batch(0, fixed_consumer_layout(encoder))
@@ -93,6 +107,7 @@ def test_native_source_mutation_invalidates_finalization_and_slices_survive_clos
     with pytest.raises(ContractError, match='source invalidated'):
         owner.finalize()
     np.testing.assert_array_equal(view, expected)
+    assert owner.diagnostics['reader_contract']==reader
     retained = owner._session.used_bytes()
     assert retained >= view.nbytes
     del view
@@ -111,11 +126,11 @@ def test_native_binary_identity_is_the_loaded_extension():
     assert identity['build']['native_source_sha256']
 
 
-def test_native_public_summary_build_and_numeric_writer_match_legacy(tmp_path, frozen_sources):
+def test_native_public_summary_build_and_numeric_writer_match_legacy(reader, tmp_path, frozen_sources):
     parents, validations = frozen_sources
     path = tmp_path / 'dataset.json'
     manifest = build_dataset(parents, validations, path)
-    settings = replace(PreparationConfig(), backend='rust', memory_budget_mib=128,
+    settings = replace(PreparationConfig(), backend='rust', reader=reader, memory_budget_mib=128,
                        cache_budget_mib=16, chunk_target_mib=1)
     assert inspect_dataset_summary(path, preprocessing=settings) == manifest
     assert build_dataset(parents, validations, tmp_path / 'native-dataset.json',
@@ -128,6 +143,7 @@ def test_native_public_summary_build_and_numeric_writer_match_legacy(tmp_path, f
     with prepare_fixed_inputs(path, config, preprocessing=settings) as prepared:
         prepared.write_numeric(tmp_path / 'native.npz')
         assert prepared.diagnostics['sample_identity_sha256'] == identity
+        assert prepared.diagnostics['reader_contract']==reader
         np.testing.assert_array_equal(prepared.x, expected)
         view = prepared.x[::2]
         captured = view.copy()
@@ -135,12 +151,12 @@ def test_native_public_summary_build_and_numeric_writer_match_legacy(tmp_path, f
     assert (tmp_path / 'reference.npz').read_bytes() == (tmp_path / 'native.npz').read_bytes()
 
 
-def test_native_index_typed_columns_match_legacy_order_and_content(tmp_path, frozen_sources):
+def test_native_index_typed_columns_match_legacy_order_and_content(reader, tmp_path, frozen_sources):
     pq = pytest.importorskip('pyarrow.parquet')
     parents, validations = frozen_sources
     path = tmp_path / 'dataset.json'
     build_dataset(parents, validations, path)
-    settings = replace(PreparationConfig(), backend='rust', memory_budget_mib=128,
+    settings = replace(PreparationConfig(), backend='rust', reader=reader, memory_budget_mib=128,
                        cache_budget_mib=16, chunk_target_mib=1)
     reference = index_dataset(path, tmp_path / 'reference.parquet')
     actual = index_dataset(path, tmp_path / 'native.parquet', preprocessing=settings)
