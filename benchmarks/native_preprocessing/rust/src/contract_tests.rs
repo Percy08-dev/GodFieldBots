@@ -96,6 +96,98 @@ fn nested_dynamic_keys_reject_duplicates_and_borrow() {
 }
 
 #[test]
+fn both_ownerships_reject_decoded_reserved_dynamic_keys_but_allow_values() {
+    // The shared helper intentionally aligns direct standalone DTO acceptance
+    // with production's existing reserved-key restriction, for String and Text.
+    for (raw, expected) in [
+        (r#"{"const":"$serde_json::private::Number"}"#, true),
+        (
+            r#"{"required_fields":{"ordinary":{"const":"$serde_json::private::Number"}}}"#,
+            true,
+        ),
+        (
+            r#"{"required_fields":{"$serde_json::private::Number":{}}}"#,
+            false,
+        ),
+        (
+            r#"{"required_fields":{"\u0024serde_json::private::Number":{}}}"#,
+            false,
+        ),
+        (
+            r#"{"optional_fields":{"ordinary":{},"$serde_json::private::Numbe\u0072":{}}}"#,
+            false,
+        ),
+        (
+            r#"{"items":{"one_of":[{"required_fields":{"x":{"optional_fields":{"$serde_json::private::Number":{}}}}}]}}"#,
+            false,
+        ),
+        (r#"{"required_fields":{"x":{},"\u0078":{}}}"#, false),
+    ] {
+        assert_eq!(
+            serde_json::from_str::<owned::Schema>(raw).is_ok(),
+            expected,
+            "{raw}"
+        );
+        assert_eq!(
+            serde_json::from_str::<borrowed::Schema>(raw).is_ok(),
+            expected,
+            "{raw}"
+        );
+    }
+    // The key must reject before its value is consumed, including on malformed
+    // values. Both actual key representations use the same MapAccess visitor.
+    let raw = r#"{"\u0024serde_json::private::Number": [invalid}"#;
+    let owned =
+        serde_json::from_str::<crate::contract::UniqueMap<String, String>>(raw).unwrap_err();
+    let borrowed =
+        serde_json::from_str::<crate::contract::UniqueMap<Text, String>>(raw).unwrap_err();
+    for error in [owned, borrowed] {
+        assert!(
+            error
+                .to_string()
+                .contains("reserved serde numeric member key")
+        );
+    }
+}
+
+#[test]
+fn both_custom_visitors_reject_arbitrary_precision_synthetic_number_maps() {
+    for raw in [
+        "18446744073709551616",
+        "9007199254740993.0",
+        "1e999",
+        r#"{"$serde_json::private::Number":"1"}"#,
+        r#"{"\u0024serde_json::private::Number":"1"}"#,
+    ] {
+        assert!(
+            serde_json::from_str::<owned::Outcome>(raw).is_err(),
+            "{raw}"
+        );
+        assert!(
+            serde_json::from_str::<borrowed::Outcome>(raw).is_err(),
+            "{raw}"
+        );
+        assert!(
+            serde_json::from_str::<owned::Defense>(raw).is_err(),
+            "{raw}"
+        );
+        assert!(
+            serde_json::from_str::<borrowed::Defense>(raw).is_err(),
+            "{raw}"
+        );
+    }
+    assert!(serde_json::from_str::<owned::Defense>("18446744073709551615").is_ok());
+    assert!(serde_json::from_str::<borrowed::Defense>("18446744073709551615").is_ok());
+    for raw in [r#""draw""#, r#"{"win":{"winner":1}}"#, r#"{"win":[2]}"#] {
+        assert!(serde_json::from_str::<owned::Outcome>(raw).is_ok(), "{raw}");
+        assert!(
+            serde_json::from_str::<borrowed::Outcome>(raw).is_ok(),
+            "{raw}"
+        );
+    }
+}
+
+#[test]
 fn required_nullable_presence_is_preserved_in_record_contract() {
     let raw =
         r#"{"kind":"transition","decision":0,"next_decision":null,"reward":1,"terminal":true}"#;

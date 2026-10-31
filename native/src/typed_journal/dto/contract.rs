@@ -134,11 +134,13 @@ impl<K: Validate + Ord, V: Validate> Validate for BTreeMap<K, V> {
 #[derive(Debug, PartialEq, Serialize)]
 #[serde(transparent)]
 pub struct UniqueMap<K: Ord, V>(pub BTreeMap<K, V>);
-impl<'de, K: Ord + Deserialize<'de>, V: Deserialize<'de>> Deserialize<'de> for UniqueMap<K, V> {
+impl<'de, K: Ord + AsRef<str> + Deserialize<'de>, V: Deserialize<'de>> Deserialize<'de>
+    for UniqueMap<K, V>
+{
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         struct Visitor<K, V>(std::marker::PhantomData<(K, V)>);
-        impl<'de, K: Ord + Deserialize<'de>, V: Deserialize<'de>> serde::de::Visitor<'de>
-            for Visitor<K, V>
+        impl<'de, K: Ord + AsRef<str> + Deserialize<'de>, V: Deserialize<'de>>
+            serde::de::Visitor<'de> for Visitor<K, V>
         {
             type Value = UniqueMap<K, V>;
             fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
@@ -149,7 +151,15 @@ impl<'de, K: Ord + Deserialize<'de>, V: Deserialize<'de>> Deserialize<'de> for U
                 mut map: M,
             ) -> Result<Self::Value, M::Error> {
                 let mut result = BTreeMap::new();
-                while let Some((key, value)) = map.next_entry()? {
+                while let Some(key) = map.next_key::<K>()? {
+                    // Serde decodes escaped keys first. Fixed DTO objects are
+                    // closed; this is their only dynamic string-key counterpart.
+                    if key.as_ref() == "$serde_json::private::Number" {
+                        return Err(serde::de::Error::custom(
+                            "reserved serde numeric member key",
+                        ));
+                    }
+                    let value = map.next_value()?;
                     if result.insert(key, value).is_some() {
                         return Err(serde::de::Error::custom("duplicate object key"));
                     }

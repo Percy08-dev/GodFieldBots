@@ -2,6 +2,19 @@
 
 ## Status and scope
 
+[ADR0021](adr/0021-measured-single-worker-optimization.md) Stage1 removes only
+the typed Journal's separate reserved-key scan, using existing closed DTO/key
+decoding. Generic Value retains its guard. Independent design/source/result
+reviews,92Rust/11standalone/106native Python tests and five full source/index/
+savedPPO proofs pass. All12same-campaign commands pass; one-worker whole median
+22.554->21.609s (4.19%), five paired wins and lower reported CPU. Peak RSS median
+rises9.92MiB, maximum1.77MiB; unchanged managed1531.02MiB/scratch1770.07MiB and
+Config budgets. Root accepts that measured tradeoff; ranges overlap and other
+worker speeds are unmeasured. Main2ed57stays fixed through the remaining local
+Record capacity experiment. Duplicate-Schema compare-deserialization and typed
+Replay are deferred after notifying the user of their larger implementation
+scope. [Verification](verification/single-worker-optimization.md).
+
 The [current single-worker allocation analysis](verification/single-worker-bottleneck-analysis.md)
 keeps productionfaf71b/main2ed57 unchanged. Seven exact-output commands and current
 CPU profile pass independent safety, fidelity, arithmetic and report reviews.

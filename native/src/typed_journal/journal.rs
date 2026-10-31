@@ -35,13 +35,14 @@ pub fn parse_admitted<'raw>(
             return Err(Error::resource("journal exceeds max_record_mib"));
         }
         let bytes = &raw[start..end];
-        json::reject_reserved_number_members(bytes, control)?;
         let mut decoder = serde_json::Deserializer::from_slice(bytes);
+        control.check()?;
         let record = Record::deserialize(&mut decoder)
             .map_err(|error| Error::contract(error.to_string()))?;
         decoder
             .end()
             .map_err(|error| Error::contract(error.to_string()))?;
+        control.check()?;
         if matches!(record.kind.as_ref(), "header" | "end") {
             control_bound = control_bound
                 .checked_add(bytes.len())
@@ -456,7 +457,7 @@ pub(crate) mod tests {
         }
     }
     #[test]
-    fn common_record_checks_are_the_existing_guard_and_framing() {
+    fn common_record_checks_preserve_reserved_keys_and_framing() {
         let values = fixture();
         let bytes = wire(&values);
         let budget = Budget::new(128 * 1024 * 1024);
@@ -471,5 +472,220 @@ pub(crate) mod tests {
             .into_bytes();
         let records = parse_admitted(&crlf, 8 * 1024 * 1024, &admission, &control).unwrap();
         validate(&records, &budget, &control).unwrap();
+    }
+
+    // These explicit outcomes were checked against the old production decoder
+    // (reserved-member scan plus the unmodified DTOs) before removing its scan.
+    // They remain an independent acceptance oracle, rather than deriving the
+    // expected result from the new DTO decoder with the old scan prepended.
+    fn assert_wire_acceptance(raw: &[u8], expected: bool) {
+        let budget = Budget::new(128 * 1024 * 1024);
+        let control = Control::new(monotonic() + 10.).unwrap();
+        let admission = json::admit(raw.len(), &budget).unwrap();
+        let result = parse_admitted(raw, 8 * 1024 * 1024, &admission, &control);
+        assert_eq!(result.is_ok(), expected, "{}", String::from_utf8_lossy(raw));
+        drop(result);
+        drop(admission);
+        assert_eq!(budget.used(), 0);
+    }
+
+    fn schema_record(schema: &str) -> String {
+        let mut input = fixture()[1]["input"].clone();
+        input["typed_metadata"] = serde_json::json!([]);
+        let input = serde_json::to_string(&input).unwrap().replace(
+            "\"typed_metadata\":[]",
+            &format!("\"typed_metadata\":[{schema}]"),
+        );
+        format!(r#"{{"kind":"decision","input":{input}}}"#)
+    }
+
+    #[test]
+    fn frozen_record_wire_acceptance_covers_fixed_custom_and_sequence_forms() {
+        for (wire, expected) in [
+            (r#"{"kind":"x"}"#, true),
+            (r#"{"kind":"$serde_json::private::Number"}"#, true),
+            (r#"{"kind":"\u0024serde_json::private::Number"}"#, true),
+            (r#"{"kind":"\ud83d\ude00"}"#, true),
+            (r#"{"kind":"\ud800"}"#, false),
+            (r#"{"kind":"\udc00"}"#, false),
+            (r#"{"kind":"x","$serde_json::private::Number":"1"}"#, false),
+            (
+                r#"{"kind":"x","\u0024serde_json::private::Number":"1"}"#,
+                false,
+            ),
+            (
+                r#"{"kind":"x","catalog":{"$serde_json::private::Number":"1"}}"#,
+                false,
+            ),
+            (r#"{"kind":"x","kind":"x"}"#, false),
+            (r#"{"kind":"x","\u006bind":"x"}"#, false),
+            (r#"{"kind":"x","decision":18446744073709551615}"#, true),
+            (r#"{"kind":"x","decision":18446744073709551616}"#, false),
+            (r#"{"kind":"x","decision":0.0}"#, false),
+            (r#"{"kind":"x","decision":-1}"#, false),
+            (r#"{"kind":"x","selection_elapsed_ms":1e999}"#, false),
+            (r#"{"kind":"x","outcome":"draw"}"#, true),
+            (r#"{"kind":"x","outcome":{"win":{"winner":1}}}"#, true),
+            (r#"{"kind":"x","outcome":{"win":[2]}}"#, true),
+            (
+                r#"{"kind":"x","outcome":{"$serde_json::private::Number":"1"}}"#,
+                false,
+            ),
+            (
+                r#"{"kind":"x","outcome":{"win":{"winner":1},"\u0024serde_json::private::Number":"1"}}"#,
+                false,
+            ),
+            (
+                r#"{"kind":"x","outcome":{"win":{"winner":1,"$serde_json::private::Number":"1"}}}"#,
+                false,
+            ),
+            (r#"{"kind":"x","outcome":18446744073709551616}"#, false),
+            (r#"{"kind":"x","outcome":9007199254740993.0}"#, false),
+            (r#"{"kind":"x","outcome":1e999}"#, false),
+            (
+                r#"{"kind":"x","command":{"command_id":"c","expected_revision":0,"action":{"type":"respond","ordered_defenses":[18446744073709551615]}}}"#,
+                true,
+            ),
+            (
+                r#"{"kind":"x","command":{"command_id":"c","expected_revision":0,"action":{"type":"respond_sequence","ordered_defenses":[{"source":"hand_artifact","instance_id":1}]}}}"#,
+                true,
+            ),
+            (
+                r#"{"kind":"x","command":{"command_id":"c","expected_revision":0,"action":{"type":"respond","ordered_defenses":[{"$serde_json::private::Number":"1"}]}}}"#,
+                false,
+            ),
+            (
+                r#"{"kind":"x","command":{"command_id":"c","expected_revision":0,"action":{"type":"respond","ordered_defenses":[{"source":"hand_artifact","instance_id":1,"\u0024serde_json::private::Number":"1"}]}}}"#,
+                false,
+            ),
+            (
+                r#"{"kind":"x","command":{"command_id":"c","expected_revision":0,"action":{"type":"respond","ordered_defenses":[18446744073709551616]}}}"#,
+                false,
+            ),
+            (
+                r#"{"kind":"x","command":{"command_id":"c","expected_revision":0,"action":{"type":"respond","ordered_defenses":[9007199254740993.0]}}}"#,
+                false,
+            ),
+            (
+                r#"{"kind":"x","command":{"command_id":"c","expected_revision":0,"action":{"type":"respond","ordered_defenses":[1e999]}}}"#,
+                false,
+            ),
+            (
+                r#"{"kind":"x","selection":[0,"$serde_json::private::Number",null,null]}"#,
+                true,
+            ),
+            (r#"{"kind":"x","selection":[0,"p",null,null,0]}"#, false),
+            (r#"["x"]"#, true),
+            (r#"{"kind":"x"} {}"#, false),
+            (r#"{"kind":"x"}\n"#, false),
+        ] {
+            assert_wire_acceptance(wire.as_bytes(), expected);
+        }
+        assert_wire_acceptance(b"{\"kind\":\"\xff\"}", false);
+        for ending in ["", "\n", "\r", "\r\n"] {
+            assert_wire_acceptance(format!(r#"{{"kind":"x"}}{ending}"#).as_bytes(), true);
+        }
+        assert_wire_acceptance(b"{\"kind\":\"x\"}\n\n", false);
+    }
+
+    #[test]
+    fn frozen_dynamic_map_acceptance_covers_recursive_escaped_and_nonfirst_keys() {
+        for (schema, expected) in [
+            (r#"{"const":"$serde_json::private::Number"}"#, true),
+            (r#"{"required_fields":{"x":{}},"optional_fields":{}}"#, true),
+            (
+                r#"{"required_fields":{"$serde_json::private::Number":{}}}"#,
+                false,
+            ),
+            (
+                r#"{"required_fields":{"\u0024serde_json::private::Number":{}}}"#,
+                false,
+            ),
+            (
+                r#"{"required_fields":{"x":{},"$serde_json::private::Numbe\u0072":{}}}"#,
+                false,
+            ),
+            (
+                r#"{"optional_fields":{"$serde_json::private::Number":{}}}"#,
+                false,
+            ),
+            (
+                r#"{"items":{"one_of":[{"optional_fields":{"x":{"required_fields":{"$serde_json::private::Number":{}}}}}]}}"#,
+                false,
+            ),
+            (r#"{"required_fields":{"x":{},"\u0078":{}}}"#, false),
+            (r#"{"required_fields":{"\ud800":{}}}"#, false),
+            (
+                r#"{"minimum":-170141183460469231731687303715884105728,"maximum":170141183460469231731687303715884105727}"#,
+                true,
+            ),
+            (
+                r#"{"minimum":-170141183460469231731687303715884105729}"#,
+                false,
+            ),
+            (
+                r#"{"maximum":170141183460469231731687303715884105728}"#,
+                false,
+            ),
+        ] {
+            assert_wire_acceptance(schema_record(schema).as_bytes(), expected);
+        }
+        let input = fixture()[1]["input"].clone();
+        let definition = r#"{"definition_id":"d","display_name":"$serde_json::private::Number","kind":"weapon"}"#;
+        for (keys, expected) in [
+            (format!(r#""ordinary":{definition}"#), true),
+            (
+                format!(r#""$serde_json::private::Number":{definition}"#),
+                false,
+            ),
+            (
+                format!(r#""\u0024serde_json::private::Number":{definition}"#),
+                false,
+            ),
+            (
+                format!(r#""x":{definition},"$serde_json::private::Number":{definition}"#),
+                false,
+            ),
+            (format!(r#""x":{definition},"\u0078":{definition}"#), false),
+        ] {
+            let mut input = input.clone();
+            input["catalog"] = serde_json::json!({});
+            let object = serde_json::to_string(&input)
+                .unwrap()
+                .replace("\"catalog\":{}", &format!("\"catalog\":{{{keys}}}"));
+            assert_wire_acceptance(
+                format!(r#"{{"kind":"x","input":{object}}}"#).as_bytes(),
+                expected,
+            );
+            let sequence = format!(
+                "[{},{},{},{},{{{keys}}},{}]",
+                input["observation"],
+                input["events"],
+                input["history_end"],
+                input["typed_metadata"],
+                input["action_options"]
+            );
+            assert_wire_acceptance(
+                format!(r#"{{"kind":"x","input":{sequence}}}"#).as_bytes(),
+                expected,
+            );
+        }
+    }
+
+    #[test]
+    fn frozen_typed_recursion_boundary_preserves_standard_serde_limit() {
+        std::thread::Builder::new()
+            .stack_size(8 * 1024 * 1024)
+            .spawn(|| {
+                // Record, Input, typed_metadata array and root Schema use four levels.
+                for depth in [122, 123, 124, 125] {
+                    let schema =
+                        format!("{}{{}}{}", "{\"items\":".repeat(depth), "}".repeat(depth));
+                    assert_wire_acceptance(schema_record(&schema).as_bytes(), depth < 124);
+                }
+            })
+            .unwrap()
+            .join()
+            .unwrap();
     }
 }
