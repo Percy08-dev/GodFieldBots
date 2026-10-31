@@ -2,6 +2,13 @@
 
 ## Status and scope
 
+The proposed [GRU/Transformer PPO plan](adr/0022-gru-transformer-ppo-plan.md)
+extends ADR0008's deferred model scope using finite participant-decision windows,
+standard PyTorch models, versioned numeric rollouts and the existing owned PPO
+runtime. Independent design and learning/correctness reviews are READY. It is a
+planning record only: neither new model is implemented, and no
+new learning/benchmark campaign or final-test evaluation has run under it.
+
 [ADR0021](adr/0021-measured-single-worker-optimization.md) Stage1 removes only
 the typed Journal's separate reserved-key scan, using existing closed DTO/key
 decoding. Generic Value retains its guard. Independent design/source/result
