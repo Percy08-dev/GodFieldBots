@@ -10,13 +10,16 @@ savedPPO proofs pass. All12same-campaign commands pass; one-worker whole median
 22.554->21.609s (4.19%), five paired wins and lower reported CPU. Peak RSS median
 rises9.92MiB, maximum1.77MiB; unchanged managed1531.02MiB/scratch1770.07MiB and
 Config budgets. Root accepts that measured tradeoff; ranges overlap and other
-worker speeds are unmeasured. Main2ed57stays fixed through the remaining local
-Record capacity experiment. Duplicate-Schema compare-deserialization and typed
+worker speeds are unmeasured. A separate bounded Record-capacity candidate passes
+all proofs but is3.55%slower, losing all5pairs; independent audits support rejection.
+Only its source changes are removed, exactStage1restored, and tested38ad8a23/
+sourcef98b0312wheel installed with verified2ed57rollback copy/CLI/model checks.
+Duplicate-Schema compare-deserialization and typed
 Replay are deferred after notifying the user of their larger implementation
 scope. [Verification](verification/single-worker-optimization.md).
 
-The [current single-worker allocation analysis](verification/single-worker-bottleneck-analysis.md)
-keeps productionfaf71b/main2ed57 unchanged. Seven exact-output commands and current
+The preceding [single-worker allocation analysis](verification/single-worker-bottleneck-analysis.md)
+kept productionfaf71b/main2ed57 unchanged at capture time. Seven exact-output commands and current
 CPU profile pass independent safety, fidelity, arithmetic and report reviews.
 The private scan observes140,148,348allocation-producing requests; Replay has
 71.28%of requests (not CPU share), and Schema scopes18,550,112including terminal

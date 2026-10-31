@@ -1,7 +1,8 @@
 # 0021: Measured local improvements to single-worker preprocessing
 
-- Status: Stage 1 accepted, 2026-10-31, after independent design/source/result
-  correctness and conformance READY. Stage 2 local design READY; not yet run.
+- Status: Stage 1 accepted and installed, 2026-10-31, after independent
+  design/source/result correctness and conformance READY. Stage 2 measured and
+  rejected after separate independent audits; exact Stage 1 source restored.
 - Owner: root. The user authorizes sequential implementation and measurements,
   reports no competing heavy task, and requires notice before any major rewrite
   or work equivalent to creating a custom library.
@@ -138,6 +139,26 @@ paired wins, whole median22.554416->21.609089s (4.191318%), reported CPU
 ranges overlap; this is measured corpus evidence, not a significance or other-
 worker claim. Peak RSS median rises9.92MiB, maximum1.77MiB; managed/scratch
 peaks and Config remain unchanged. Root explicitly accepts that small memory
-cost for the elapsed/CPU reduction. Main installation is deferred until the
-remaining local capacity experiment is decided. Full metrics and limitations:
+cost for the elapsed/CPU reduction. Full metrics and limitations:
 [verification](../verification/single-worker-optimization.md).
+
+## Stage 2 disposition and final runtime
+
+The bounded capacity candidate passes95native/69Python tests and all five
+source/index/savedPPO proofs. All12comparison commands pass correctness, but
+whole median21.168841->21.919617s is3.546610% slower; all five pairs regress,
+with disjoint ranges. Reported CPU and Journal phase time rise; there is no
+consistent memory benefit. Independent result correctness/conformance audits
+are READY to reject. Root rejects the candidate, restores only journal.rs to
+exact4717077 bytes and verifies native sourcef98b0312. The private9a6f2b56/
+ELFb5794114candidate, tests and all negative evidence remain available.
+
+Only accepted Stage1release/mimalloc ELF38ad8a23/sourcef98b0312 is installed in
+Bots.venv, offline with no dependency resolution/build. Backup of prior2ed57
+package/metadata is verified; full installed identity, optional-free CLI startup
+and all24 protected original files pass. Config/defaults and resume guards stay
+unchanged. No games, fits, optimizer experiments or source/model rewrites occur.
+Duplicate-Schema comparison and typed Replay remain deferred as notified; no
+custom parser/library, Event heuristic or arena is introduced. Revisit a larger
+candidate only with its own bounded design, measured benefit and maintenance
+assessment, plus architecture review before implementation.

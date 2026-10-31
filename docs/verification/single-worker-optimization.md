@@ -41,7 +41,7 @@ Final native tests:92 PASS,2 existing ignored; standalone DTO contract tests:
 Isolated release opt3/debug0/mimalloc candidate source:
 `f98b03122c548e6ce897e4ee8454822997a9ffc7449a390c34e6eaf0db6ac935`.
 ELF:`38ad8a230a6a3601ec7228df6826971a75d4218d7993a5d27c9b9d15a7957f45`.
-Baseline is current installed sourcefaf71b33/ELF2ed57a31, preserved separately.
+Baseline is then-installed sourcefaf71b33/ELF2ed57a31, preserved separately.
 The main wheel stays unchanged throughout correctness and timing comparisons.
 
 The isolated wheel passes106 Python parser/reader/validation/parallel/execution/
@@ -89,8 +89,81 @@ stays1,856,048,056bytes. The six protected models remain1,898,536bytes in total;
 all24 protected files retain their hashes. Warm-cache logical traffic is not
 physical disk activity or measured I/O wait. Campaign elapsed is278.279555s.
 Independent correctness and conformance result audits are READY. Root accepts
-Stage1 with the documented memory cost. Main installation remains2ed57a31 until
-the local Record capacity experiment has been decided.
+Stage1 with the documented memory cost. Main installation stays2ed57a31 through
+both comparisons; final installation is recorded below.
+
+## Stage 2: bounded Record capacity experiment
+
+Stage1 is accepted before this experiment starts. Only Journal record storage
+changes: count existing CR/LF/CRLF-framed segments once after the first successful
+decode, then fallibly reserve a total slot count bounded by raw length divided
+by Record size. Empty input skips both operations; capped hints retain normal
+growth. The extra scan checks Control per4096bytes. No arena, custom JSON parser,
+Event hint, dependency, Config, schema or ownership change. Production addition
+is31lines in one file; allocator failure is inspected, not experimentally forced.
+
+Independent design and final correctness/conformance source reviews are READY.
+Native95tests PASS/2existing ignored; targeted capacity tests, Cargo check/fmt
+and diff check PASS. Isolated release opt3/debug0/mimalloc source:
+`9a6f2b56c211adb037434da01a70afab7c0d5e350a2907353d1cac82e69a81dc`,
+ELF:`b579411489e967871f585b661e22b9ebf920ca56fc82c50162fc078c60c4e42e`.
+Python parser/reader/validation/zero-decision/parallel regressions69PASS in
+99.22s, with pool tests enabled. Full source/output proofs all PASS: both recipes,
+exact Parquet/sidecar and saved PPO1/4worker inputs. All five commands, five
+identity probes and ten pre/post metadata gates exit0. No checker projection
+errors occur in Stage2. Baseline
+for this separate comparison is accepted Stage1sourcef98b0312/ELF38ad8a23;
+main2ed57a31 stays fixed throughout comparison. All12 commands PASS; the
+source/build/code/model/owner/output invariants and memory settings remain
+unchanged. Performance artifacts:`stage2-primary/`.
+
+| Metric | Accepted Stage1 | Record reservation candidate |
+| --- | ---: | ---: |
+| Whole elapsed median (s) | 21.168841 | 21.919617 |
+| Whole elapsed range (s) | 21.041311–21.669466 | 21.726225–22.373982 |
+| Reported OS CPU median (s) | 21.011168 | 21.760314 |
+| Journal parse job-phase median (s) | 6.908831 | 7.367124 |
+| Kernel peak RSS median (MiB) | 340.171875 | 339.562500 |
+| Kernel peak RSS maximum (MiB) | 350.593750 | 351.820313 |
+| Post-release RSS median (MiB) | 302.242188 | 303.511719 |
+| Sampled peak PSS median (MiB) | 320.841797 | 324.508789 |
+| Managed peak maximum (MiB) | 1531.020025 | 1531.020025 |
+| Owned scratch peak maximum (MiB) | 1770.065361 | 1770.065361 |
+| Native ELF size (bytes) | 7,478,128 | 7,480,792 |
+
+The candidate is3.546610% slower in whole median; all five pairs lose and the
+ranges do not overlap. CPU also rises. The small median RSS reduction is not
+supported by maximum/post-release/PSS improvements. Logical staging I/O, scratch,
+models and all outputs are unchanged. Counting and reserving are one combined
+candidate; no separate function measurement isolates the cost of counting from
+the benefit/cost of reservation. Do not claim the entire regression is counting.
+Campaign elapsed is270.864327s. Independent correctness and conformance result
+audits are READY to reject. Root rejects this candidate and restores only the
+Journal file to exact4717077 bytes. Native source hash again equalsf98b0312;
+Journal diff is empty and Cargo fmt/diff checks pass. No unrelated edits are
+reverted and no discarded candidate code is installed.
+Preserve private source/wheel/tests and all negative evidence; no further
+preallocation, scanner or allocator work follows automatically.
+
+## Final installed state
+
+`installation.json` and `main-before-final/identity.json` record a verified
+rollback copy of the prior2ed57package/metadata, then offline native-wheel-only
+installation (`--no-deps --no-build`) of exacttestedStage1. Installed full build,
+ELF38ad8a23/sourcef98b0312 match the accepted private candidate; only its filesystem
+location differs. The rejected candidate remains private. Optional-free CLI help
+passes with Torch/torchvision/LightGBM/PyArrow imports blocked. All24 original
+fit files retain their hashes; the six model bytes are unchanged. Main source
+matches accepted commit4717077. No Config/default/dependency or resume-guard
+change is made. No source/model data is rewritten and no learning experiment runs.
+
+The final retained code's verification is92native/11standalone/106relevant Python
+tests plus both recipes/index/savedPPO proofs; the95/69counts above apply only to
+the discarded capacity experiment. Exact restoration and installed identity are
+checked instead of rerunning unrelated tests on identical accepted bytes. Both
+campaigns total24commands (4excluded warmups,20measured),549.143883s campaign
+elapsed, with builds, correctness jobs and reviews accounted separately in their
+artifacts. Cross-campaign absolute medians are not a paired combined speedup.
 
 ## Comparison policy
 
