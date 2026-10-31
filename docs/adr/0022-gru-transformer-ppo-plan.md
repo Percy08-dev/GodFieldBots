@@ -1,10 +1,10 @@
 # 0022: GRU／Transformer PPOの実装計画
 
-- 状態: 提案。独立した設計レビューと学習/正しさレビューはREADY。
-  実装・学習・性能測定は未実施。実装指示後に段階Aから進める。
+- 状態: Accepted、2026-11-01。実装・機能/実対戦/性能検証完了。
+  独立した正しさ・設計適合・修正済み2GiB typed実対戦証拠の監査はREADY。
 - 作成日: 2026-10-31。責任者: root。
 - 対象: GRU PPO、Transformer PPO、および両者に必要な系列入力・保存・比較基盤。
-- この文書の初期値は今回の提案。過去に承認済みの値と混同しない。
+- 旧32回入力窓・正式9runまでの案を置き換える。旧案はgit履歴に保存。
 
 ## 1. 過去の計画と現在地
 
@@ -47,195 +47,191 @@ GRU／Transformerと最終testは後続にしていた。GRUの層数、Transfor
 - 世代0・10世代ごと・最新の重み/再開状態、全世代の不変来歴、正常batch境界だけの
   paused再開、排他ロック、同じコード/環境/数値設定を要求する条件を維持。
 
-## 3. 初版の系列契約
+## 3. 承認済みの系列とConfig
 
-**直近32回の本人の意思決定時点の特徴を、現在時点を含めて入力する有限窓方式**を提案する。
-全ゲームturnや全Eventを32個に切る意味ではない。元の各時点の特徴は、既存MLPの
-public_aggregate/window128 encoderから候補に依存しない373次元を選択し、CPUで
-signed-log1p→FP32へ変換する。幅はsignatureから検証し、373という数だけで互換としない。
-新recipe IDを `own-decision-window-v1` とし、窓長と基底encoder signatureを保存する。
+完成単位はGRU/Transformerの実装、各モデル実対戦2更新、正常境界pause/resume、
+性能・資源測定まで。正式9runと最終testは後続。
 
-時点tの窓は同じepisode・同じviewerの `[max(0,t-31), …, t]` のみ。
-教師return、advantage、old_value、選択確率は特徴に含めない。過去の観測を現在の
-catalog解釈や現在の手札で再構成せず、保存された当時の入力から作る。
-現在の候補列は保存済み順序・内容のまま利用し、690次元の既存actor特徴を再利用する。
+1ステップは本人が行動を選ぶ直前のDecisionInput。既存MLPと同じ公開履歴集約encoder
+（直近128visible events）から候補非依存stateを選択し、CPU signed-log1p→FP32へ変換する。
+現signatureではstate373次元、候補690次元だが次元だけで互換とせずsignatureも照合する。
+相手の1手ごとのtoken化はしない。本人の過去state全体を参照し、未来・別viewer/episode、
+GameSeed/RNG・generation・相手model ID・return/advantage/old_valueを特徴にしない。
 
-推論policyはreset時に空にする固定長NumPy ringを持つ。各selectで現在のstate特徴を
-1回追加し、窓全体を計算する。既存workerはepisode/participantごとに独立し、selectは逐次。
-HTTP retryは同じcommandを再送し、selectを再実行しない。拒否・送達不確定・worker失敗では
-その収集を失敗にするため、未受理の選択を次の成功軌跡へ持ち越さない。この条件を回帰テストする。
-Policy.reset/select、DecisionInput、Environment.run_groupの外部契約は拡張不要。
+初版の最大履歴は本人1,024意思決定。全game20,000行動上限とは独立。
+1,025回目はforward/送信前に資源エラーとして親run全体を失敗にし、履歴を切らない。
+新系列recipeは `own-decision-full-history-tbptt-v1`。
 
-GRUは**各窓の先頭でhidden=0**、Transformerは各窓で位置0から計算する。
-学習可能なhidden/KV cacheを判断間で持ち越さない。したがって学習中に古い重みで生成した
-hiddenを再利用せず、burn-inやepisode全体のTBPTTを初版に導入する必要がない。
-これは有限窓GRUであり、無限に履歴を保持するGRUとの同等性は主張しない。
-より長い履歴や状態/KV cacheは、初版の勝率・遅延・記憶課題の結果を見て別設計とする。
+系列PPO専用の閉じたConfigへ `training.sequence_length` を追加する。既定32、
+厳密な整数1..1024（bool/float/0/負数/上限超過拒否）。MLP/LightGBMの設定へ黙って適用しない。
+Wは勾配区間の長さであり、推論履歴長でも論理minibatchのloss件数でもない。
+実効Config・学習記録・再開manifestにWを保存し、通常resumeでの変更を拒否する。
 
-## 4. モデルの提案preset
+終点tについてs=max(0,t-W+1)とし、prefix[0,s)を現在の重みでno_grad再計算する。
+そのhidden/全層KVをdetachし、suffix[s,t]に勾配を流して、lossは終点tに1回だけ加える。
+W>=t+1なら全履歴BPTTと一致する。短いWはTBPTT近似であり、全履歴勾配と同等ではない。
+optimizer step後に古いprefix状態を再利用しない。窓内の他の時点にもlossを重複加算しない。
+GAEは自然終了episode全体、advantage正規化は受理batch全体で一度行う。
 
-| 項目 | GRU v1 | Transformer v1 |
+## 4. モデルと推論状態
+
+| 項目 | GRU | Transformer |
 | --- | --- | --- |
-| 入力 | 同じ最大32 state tokens | 同左 |
-| state投影 | Linear(state幅,128)+ReLU | 同左+固定sin/cos位置符号 |
-| 系列層 | nn.GRU、1層、hidden128、単方向 | nn.TransformerEncoder、2層、幅128、4heads、FFN256、pre-norm、ReLU |
+| state投影 | Linear(state幅,128)+ReLU | 同左+固定sin/cos絶対位置符号 |
+| 系列層 | nn.GRU、1層、hidden128、単方向 | 2層、幅128、4heads、FFN256、pre-norm、ReLU |
 | dropout | 0 | 0 |
-| context | 最後の有効位置の出力 | 最後の有効位置の出力 |
-| actor | contextと現在の各候補特徴を連結、128-ReLU→1 logit | 同左 |
-| critic | contextと現在stateを連結、128-ReLU→1 value | 同左 |
+| 推論状態 | 前回のhidden | 各層の過去K/V |
+| actor | context+現在候補特徴→128-ReLU→1logit | 同左 |
+| critic | context+現在state→128-ReLU→1value | 同左 |
 
-系列encoderはactor/criticで共有し、入力はstateのみ。候補内容・個数・順序を変えても
-同じ重みのcritic値は不変でなければならない。候補順置換にはlogit列だけが追従する。
-全窓をright paddingし、lengthsとpadding maskを渡す。GRUはpad後の最終hiddenではなく
-最後の有効位置を選ぶ。Transformerはcausal maskとpadding maskを明示し、空窓を拒否する。
-paddingの値を変えても有効出力が変わらず、未来tokenが過去位置へ伝わらないことを検証する。
+state encoderは共有するが候補情報を入力しない。同じ重みのcriticは候補の個数/内容/順序に
+依存せず、候補順の変更はlogit列だけに反映する。Policy.reset/selectとDecisionInputの契約を維持。
+本人workerはepisode単位で作られ、resetでhidden/cache/位置/sampling RNGを初期化する。
+HTTP retryは同じcommandの再送でありselectを再実行しない。拒否/送達不確定/worker失敗は
+親収集失敗とし、未受理状態を次の成功軌跡へ持ち越さない。途中episodeの再開は追加しない。
 
-CPU上でseed固定初期化。Linearは直交初期化、ReLU段gain√2、actor出力.01、value出力1、
-bias0。GRUの各gate行列はgain1で個別に直交初期化。TransformerのQ/K/Vとattention出力は
-gain1、LayerNorm weight1/bias0。複製されたencoder層も独立の乱数drawで再初期化する。
-初期化recipeと全パラメータ順序を保存する。幅128だけで同じparameter数とは扱わず実数を報告する。
+Transformerは標準Linear/LayerNorm/SDPAによる小さなcache対応モデル層とする。
+同じparameter/数式を全履歴・prefix/suffix・逐次推論で共有する。絶対位置はepisode開始から
+連続させる。逐次query1個がpast/current keysだけを見る場合はis_causal=False。
+学習suffixの複数queryにはprefix offset付きcausal maskとpadding maskを明示する。
+prefix KVはdetachするがsuffix内KVまでdetachしない。padding queryはloss対象にしない。
 
-初版GRUのCUDA経路はcuDNNを明示的に無効化したPyTorch標準経路を使い、Transformerは
-標準SDPAのMATH backendに固定する。Transformerのnested tensorとMHA fast pathは無効にして
-推論/学習・CPU/CUDAの経路差を抑える。この設定もmanifestへ記録する。
-CPU/GPUの1e-5照合が成立するかは実機で確認し、失敗時に許容値を緩めたり自動fallbackしない。
-FlashAttention/cuDNN高速経路/compile/AMPは、必要なら個別の同出力比較を行う後続候補とする。
+CPU seed固定初期化。Linearは直交初期化、ReLU段gain√2、actor出力.01、value出力1、bias0。
+GRU各gateはgain1で個別直交初期化。Transformer Q/K/V/attention出力はgain1、LayerNorm
+weight1/bias0。各層を独立drawで初期化する。parameter順序と初期化recipeを固定する。
+初版GRUはcuDNNを明示的に無効化した標準Torch経路、TransformerはSDPA MATHを使用する。
+FP32 IEEE、AMP/TF32なし。backend設定をmanifestに保存し、失敗時の自動切替はしない。
 
-使用APIは既存依存に含まれる
+標準APIの根拠:
 [GRU](https://docs.pytorch.org/docs/2.14/generated/torch.nn.GRU.html)、
-[TransformerEncoder](https://docs.pytorch.org/docs/2.14/generated/torch.nn.TransformerEncoder.html)、
 [SDPA](https://docs.pytorch.org/docs/2.14/generated/torch.nn.functional.scaled_dot_product_attention.html)。
-maskの真偽の意味やkernel選択による数値差はAPIごとに検証する。
-独自RNN、attention kernel、外部flash-attn、汎用trainerフレームワークは作らない。
+独自RNN/attention kernel、外部flash-attn、汎用trainer frameworkは追加しない。
 
-## 5. 学習、保存形式、メモリ
+## 5. 学習配列・数値ゲート・保存
 
-1. Rustの既存全候補PPO経路から、検証済み特徴配列・episode_offsets・候補offsetを受け取る。
-   現在のNativeSessionは完全episode単位を保持する。列をPythonオブジェクトへ展開し直さない。
-2. Python学習層がstate変換、episode内の窓index、GAE、全batch advantage正規化を行う。
-   現在のBulkRollout→RolloutDecisionではepisode境界が失われるため、系列経路はchunksと
-   episode_offsetsを直接保持する。候補や履歴を再生成しない。
-3. 新しい数値rollout **schema2** を閉じたJSON＋型付きNumPyで定義する。
-   state token bank、decisionごとのwindow start/length、元のepisode/decision対応、候補offset、
-   selected/old_logprob/old_value/advantage/targetとrecipe/hashを保存する。
-   episode IDなどは照合用metadataでありネットワークへ渡さない。
-4. 全データを32倍に複製しない。tokenはbankへ1回格納し、64MiB以下のshard境界には必要な
-   同episodeの直前最大31 tokenだけをprefixとして複製する。prefixはloss対象にしない。
-   windowは同episode内・現在位置まで・最大32、現在token/state一致を全件検証する。
-   shardを跨いでも欠落/重複したlossや別episodeへの参照を認めない。
-5. 毎更新前に全batchの窓を凍結CPU方策で再計算し、保存selected logprob/valueおよび
-   CPU/GPU全有効候補logprob/valueをatol=rtol=1e-5で照合。全件PASS前にAdamを変更しない。
-6. シャッフル単位は終点decision。各終点に完全な有限窓を付け、窓内の全32位置へ勾配を流す。
-   PPO lossは終点にだけ加える。全episodeのGAEを学習窓で打ち切らない。
-   windowとmaskが同じなら、終点を並べ替えても正しい有限窓PPOになる。
-7. 論理minibatch128の中で、padding込みcandidate slots≤4096、state token slots≤4096、
-   Transformerでは `layers × heads × B × T² ≤ 524288`、数値入力≤64MiBを満たす
-   決定的microbatchを構成する。lossを終点件数で重み付けし、clip/Adam stepは論理minibatchに1回。
-   1件でも上限に入らない入力は失敗。実行中のOOMを理由にサイズを自動変更しない。
+Rustの検証済み全候補特徴配列とcomplete-episode offsetsを再利用する。Python学習層が
+state変換、prefix/suffix index、GAEを所有する。BulkRolloutの既存decision iteratorで失われる
+episode境界は、系列経路ではchunks/episode_offsetsから直接保持する。
 
-既存のpreprocessing memory/cache/chunk/scratch Configを維持し、token bank・index・shard
-prefix・padding一時配列を予約量へ含める。CPU推論ringの固定上限も設定から算出して記録する。
-GPUのactivationは数値入力量とは別であり、allocated/reserved peakを測る。予算はsoft limit。
-新たな独自allocatorや細粒度オブジェクト台帳は追加しない。
+新しい閉じた数値rollout schema2は、episode単位のstate token bank、decision/episode対応、
+候補offset、selected/old_logprob/old_value/advantage/target、recipe/signature/hashを持つ。
+各終点の全prefixを複製しない。候補・decision shardは64MiB以下、token bankも64MiB以下。
+episode最大1024*373*4bytesは単独bankに収まる。各shardはbankと終点位置をhash付きで参照し、
+元のepisode内の[0,t]だけを入力とする。ID類は照合metadataでありnetworkへ渡さない。
+元journal/collection schema4、MLP rollout schema1、旧feature署名を再解釈しない。
 
-元のjournal/collection schema4は変更不要。既存MLP rollout schema1・特徴signature・
-チェックポイントを読み替えず、旧経路でそのまま扱う。系列checkpointは専用version2の
-inference/resume manifestを持ち、model ID、窓recipe、encoder、ネットワーク形状、数値backend、
-全array key/shape/dtype/hash、Adam、乱数を閉じて検証する。unknown model/versionは拒否する。
-世代/更新は既存のhash付き参照を使う。checkpoint loaderだけでなく、現在MLPに限定された
-方策identity照合もPython参照/PPO/native source検証で同時に拡張する。
-`mlp-ppo-v1-`／`gru-ppo-v1-`／`transformer-ppo-v1-` と対応するmodel ID・inference
-manifest digestを閉じて結び付ける。prefixだけで通したり任意の文字列を許可しない。
-特に `native/src/projection.rs` のsource_metadataとPython `ppo.py` の保存selection照合は
-新モデルの正例、model ID/prefix/digest取り違えの負例、既存MLPの不変性を一緒にテストする。
-`native_authorization.py` のbinding再構成、`lineage.owned_binding`、`fixed_data.py` の
-最終方策validation用bindingもこの閉じたdispatchへ含める。ただし共有検証器の一般化で
-旧dataset build/fitのsource許可を広げない。既存の固定データ契約はMLP親のみと明示的に制限し、
-正常終了したGRU/Transformer親でも旧固定データ契約へ渡すと拒否される負例を追加する。
-境界pause時には全ゲームが終了しているため、推論ring/hidden/KVの保存は不要。
-途中のepisode再開は追加しない。MLP↔GRU↔Transformerの通常resume/重み変換は認めない。
-旧形式の互換性は、コード/実行環境を跨いだ通常resumeの許可ではない。既存のidentity検査を維持し、
-MLPの連続/停止再開回帰は同じ新コード/環境で作ったfresh対を使う。
+各epochで終点をシャッフルして論理minibatch128を選択する。その中だけで
+(prefix長,suffix長)をstable groupし、同じ境界の系列をまとめる。epoch全体を先に並べ替えない。
+グループ内の順序を維持して資源上限で分割し、候補をpaddingする。lossは終点件数で重み付けし、
+clip/Adam stepは論理minibatchに1回。1件でも収まらなければ失敗し、Wを短縮しない。
 
-## 6. 変更する責務と実装の順序
+各batchの最初のAdam変更前に、全終点・全有効候補について次をatol=rtol=1e-5で照合する:
+保存selected logprob/value、凍結CPU逐次cache、CPU全prefix、GPU全prefix、そして実際のWで
+実行するlearner deviceのsplit forward（prefix no_grad、suffix grad有効）。CPU presetでも
+実際のCPU split照合は必須。CUDA時の追加CPU split参照だけを任意とする。
+fixtureのsplitテストだけでは代用しない。照合graphはmicrobatchごとに解放し、全件PASS前に
+更新しない。更新後はCUDA同期・finite metrics・CPU array保存・検証の順で応答する。
 
-| 段階 | 実装内容・主な担当ファイル | 完成条件 |
+既存の2GiB memory/cache512MiB/chunk16MiB/scratch8GiBの前処理presetを継承する。
+推論cache予算はparticipantごと128MiBのConfigとして追加し、model・配列所有・予約量を記録。
+microbatchはpadding込み候補slots4096、state tokens32768、attention score slots8388608
+（layers*heads*B*T²）、数値入力64MiB以内。prefix再計算/KV/照合も事前受付する。
+Transformer1系列1024tokenがattention上限に一致する。GPU activation実量は別に測定し、
+soft limitをOS hard quotaやOOM回避保証とは扱わない。容量/期限/OOM/非同期エラーは親run失敗。
+
+系列inference/resumeは専用version2 JSON+型付きNumPy、allow_pickle=Falseとし、model ID、
+全履歴recipe/signature/構成/backend、tensor key/shape/dtype/hash、Adam/RNG、Wを閉じて検証する。
+世代/更新の既存hash参照・保存順・保持規則を維持する。正常batch境界では全episodeが終了済み
+なのでhidden/KVをresumeへ保存しない。モデル種別/W/code/runtime/backend変更の通常resumeを拒否。
+旧形式互換はコード/環境を跨いだ通常resumeの許可ではない。
+
+MLP専用だったPython/nativeのsource/selection照合、lineage.owned_binding、native_authorization、
+CLI bindings/preflight、最終policy validationも閉じたmlp/gru/transformer選択へ拡張する。
+model ID、{mlp,gru,transformer}-ppo-v1-prefix、inference digestを正確に結ぶ。
+旧fixed-data build/fitのMLP親限定は明示的に維持し、正常GRU/Transformer親を渡す負例も追加する。
+
+native build_infoの既存string値形式に `ppo_policy_models` capabilityを追加する。
+GRU段階は`mlp,gru`、Transformer完成時は`mlp,gru,transformer`。欠落は旧MLP専用として扱い、
+unknown/重複/不正な値を拒否する。native backendでは選択modelの対応をlearner/collector開始前に
+確認し、旧wheelで16試合を集めてから失敗することを防ぐ。これは元データの検証を代替しない。
+既存binary identityに記録し、旧wheelのMLP互換/GRU早期拒否をテストする。
+
+Native Parentのcompact summaryはeffective_config全体を返さない。Python authorizationへは
+既にnativeで検証したstate.effective_config.model.model_idから導いた小さなstate.model_idだけを
+追加して渡し、閉じた対応モデルを再検証する。親JSONの二重読込やConfig全体のIPCコピーで
+補わない。capability対応wheelとPython/native differential testでsummary形状を検証する。
+capability markerがないと識別済みの旧wheelだけは欠落model_idをMLPと解釈できる。
+markerのあるwheelではmodel_id欠落/未知値をContractErrorとして拒否し、GRUをMLPへ推測しない。
+
+## 6. 段階・所有と受入
+
+| 段階 | 内容 | 完成条件 |
 | --- | --- | --- |
-| A | 閉じたGRU/Transformer Config・dispatch、Torch runtime/安全な配列保存の共通化、Python/nativeの方策identity照合。gf_models/config、CLI config/bindings、workers、ppo_run/worker、native projection | 既存MLPの数値・保存・学習/再開が回帰しない。baselineは任意依存なしで起動 |
-| B | 有限窓feature ringと系列rollout schema2。gf_models/sequence、gf_training/sequence_rollout、native_learning/ppoの限定接続 | Python/Rust経由のtoken/順序/hash一致、shard/padding/予算/失敗テストPASS |
-| C | gf_models/gruと系列PPO learner、CPU policy、保存復元。共通PPO loss/GAEを再利用 | CPU/GPU全件照合、勾配/microbatch一致、実16試合×2更新と境界再開一致 |
-| D | gf_models/transformer。B/Cの窓・learnerを再利用 | causal/padding漏洩テスト、同じ数値/実対戦/再開ゲートPASS |
-| E | 固定入力によるCPU推論・CPU/GPU更新・collect→prepare→update→saveの比較 | 時間・資源・出力同一性を記録。速度や勝率を受入の代用品にしない |
-| F | 下記の事前固定した正式比較 | 正常終了、validationと費用報告。最終testは別段階 |
+| A | 閉じたConfig、共通Torch/安全配列/artifact dispatch、方策identity照合 | MLPの数値/保存/再開回帰、baseline任意依存なし起動 |
+| B | token banks、rollout schema2、TBPTT境界、資源予約 | Python/nativeの順序・feature・教師・shard一致 |
+| C | GRU hidden/learner/policy/artifact | 全件parity、gradients、実2更新/境界resume一致 |
+| D | Transformer KV/offset masks/learner | cache/full/split照合、同じ実対戦/保存ゲート |
+| E | 固定入力と実対戦で速度・資源測定、最終review | 記録と制限の報告。勝率改善を実装受入の代用にしない |
 
-rootがConfig・文書・仕様・実験条件・統合/コミットを所有し、bot_implementerが限定した
-実装/テストを所有する。1人の書き手で進め、各完成単位をbot_reviewerと
-bot_architecture_reviewerが独立確認する。変更が採用設計の境界を超えたら設計へ戻る。
+rootは設計・Config要件・project依存/preset・文書・統合/commitを所有する。
+bot_implementer一人が割当済み実装とテストを行い、rootはその所有ファイルを同時編集しない。
+各完成単位はbot_reviewerとbot_architecture_reviewerが独立確認する。
+大規模な独自library/kernel/parserが必要になった場合は着手前に目的・証拠・保守負担を説明する。
+Simulator sourceや既存のモデル/データを変更しない。
 
-これは前処理の局所修正より大きい、モデル/rollout/dispatchを跨ぐ実装である。
-標準PyTorchを組み合わせる範囲に収めるが、独自デシリアライザ・RNN kernelや汎用学習libraryが
-必要になった場合は着手前に目的・測定上の必要性・保守負担をユーザーへ説明する。
+必須テスト:
+- W=1/31/32/33/128/1024、短いepisode、0決定episode、shard境界、1024/1025の上限。
+- prefix token/hidden/KVへの勾配が切れ、suffixには届く。共有parameterはsuffix勾配を持つ。
+- Wが全履歴を覆う場合のfull BPTT勾配一致。同じ重みのforwardはW変更で変わらない。
+- 未来・別viewer/episode・private漏洩がない。候補順、critic独立、padding、絶対offset mask。
+- cache reset、HTTP retryの非二重更新、W変更resume拒否、snapshot方策/同policyID両席。
+- unavailable CUDA、parity失敗、OOM/非同期error、quota/期限/保存/回収失敗で成功世代を作らない。
+- 各モデルseed17で連続2更新と1更新後pause/resumeのfresh対を実行する。各run16試合/batch、
+  32試合/run、計4run/128試合。元の2時間/90分/119分予算は短縮しない。
+  weights/Adam/RNG/rollout一致を確認し、smokeを正式比較/学習品質と呼ばない。
+- pytest/ruff/mypy、必要native checks、別環境wheel、optional-free CLI、元モデルhash維持。
 
-## 7. 測定と実験の順序
+## 7. 性能実装と測定
 
-性能測定前にユーザーへ通知し、他の重い作業の状況を記録する。計測中は自身のbuild/testを止める。
-正しさ確認後の固定入力benchmarkはwarmup1回＋交互順5回、release native版と同じデータ・
-候補数・worker条件で行う。CPU推論p50/p95、全行動の候補生成込み時間、更新時間、16試合全体、
-RSS/PSS、CPU秒、GPU allocated/reserved、モデルbytes、scratch/I/O、期限超過を報告する。
-既存の約22秒という全offline前処理を、実対戦推論や新モデルの速度保証として使わない。
+NumPy/Torchの連続配列を単位とし、token/candidateごとのPython dict/list再構築を避ける。
+cacheは有界storageへ追記し、全履歴を毎手concat/copyしない。TBPTTのprefix再計算は
+optimizer変更を跨いでcacheしない。標準ライブラリで十分な範囲を優先し、未測定の独自arenaや
+schedulerを作らない。配列コピー、prefix再構成、suffix/逆伝播、padding、保存を区別して測る。
 
-全モデル実装後にコード/設定/runtime/実バイナリを固定して、**MLP/GRU/Transformer各3 seed**
-（17/29/43、計9run）を順番に実行する。最大枠は9×2時間=18時間で、smoke/測定/validationは別計上。
-既存の3MLP runは保存し、正式な同条件比較用MLPは現在の基盤でfresh runする。
-GRU/Transformerだけなら6run/最大12時間だが、旧MLPとの時間予算を揃えた比較とは呼ばない。
-実行順は事前に、seed17: MLP→GRU→Transformer、seed29: GRU→Transformer→MLP、
-seed43: Transformer→MLP→GRUと固定する。各親runのCPU/GPU外部負荷を記録する。
-方策sampling seedもcampaign/学習seed/ペア番号/役割から事前固定し、GameSeedから導出せず、
-成績を見た再抽選や実行順の変更をしない。
+性能測定前にユーザーへ通知し、外部負荷を記録する。測定中は他のown build/testを止める。
+固定された同じ重み・データ・RNGに毎回戻してwarmup1回+5回測定する。推論cache/fullprefix、
+W32/64/128の更新時間とRSS/PSS/CPU秒/GPU allocated/reserved/model bytes/scratch/I/Oを報告する。
+W間の勾配差は仕様であり、モデル更新結果のbit一致を要求したり速度から学習品質を推測しない。
+モデル間で同じ出力は要求せず、各モデル内のreferenceとの照合を行う。
+実smokeで16試合collect→prepare→update→saveと推論p50/p95を記録し、固定入力測定と区別する。
+上限1024のmemory/parityを確認し、全候補の境界条件と失敗を隠さない。
 
-新train namespaceをcampaign単位で固定する。同じlearning seed/batch/pairには各モデルで同じ
-GameSeedを割り当て、validationの既存32seedおよびtest namespaceと分離する。
-同じtrain seedでも各方策が生成する軌跡やsnapshotは異なる。公平性の主比較は同じ実時間予算、
-更新数/行動数も併記する。モデル間のparameter数、履歴入力差は明記し、既存MLPと系列モデルの
-差を純粋な層構造だけの効果とは断定しない。GRUとTransformerは同じ32token契約で比較する。
+正式9run・validation576試合・直接対戦・最終testは今回実行しない。既存MLP3親、LightGBM6fit、
+固定データは保持する。旧共有データ生成費を重複計上しない。新系列親を旧fixed-data契約へ混ぜない。
+実装と実機の数値/再開/性能が成立した時点で今回の完成とし、品質比較は別計画にする。
 
-各完成親の最終世代を、32ペア/64試合（半分Random、半分heuristic）の同じvalidationにかける。
-9親合計576試合。ハイパーパラメータ/窓長はこの結果を見て選び直さない。追加のモデル間直接対戦を
-行う場合は、3組のモデル対×同じ学習seed3個×32ペア×先後交換=576試合を事前割当にする。
-勝敗・引分・無効試合・paired区間・seed別結果を報告し、3学習seedを多数の独立runと見せない。
-失敗セルを短い予算の再実行や成績選別で埋めない。
+## 8. 計画レビューと未実施の証拠
 
-LightGBMの既存6fitと固定データはそのまま比較資料として保持する。共有生成費とfit費用は
-別に示し、PPOと同一総費用の比較とは呼ばない。この単位では新しい系列親を旧固定データへ
-混ぜたり、既存fitsを上書きしない。新親から固定データを作る拡張は別のsource契約を必要とする。
-最終testは本計画の実装受入には含めず、モデル/設定/評価手順の凍結後に別計画で実行する。
+旧有限窓案はa2f005bの履歴に残る。会話でユーザーが全履歴・hidden/KV・1024上限、完成範囲A–E、
+設定可能TBPTT・本人意思決定単位を選択し、実装を承認した。
+変更後のbot_architecture_reviewerとbot_reviewerの書面reviewはREADY。
+追加指摘を反映済み: 実際のGPU split forwardも全batch pre-Adam照合、prefix/KVの資源受付、
+logical minibatch内だけのgrouping、共有parameterとprefix tokenの勾配検査の区別。
+実装後の独立review、実機CPU/GPU誤差・メモリ・遅延・再開一致はまだPASSとしない。
 
-## 8. 必須の受入と残る実機確認
+## 9. 実装結果と記録
 
-- 未来token変更、相手private入力、episode/viewer混合、候補順/個数変更、padding変更による
-  漏洩がないこと。window1/32/33、同じpolicy ID、0決定episode、途中shard境界を含める。
-- 同じ保存入力から推論ringと学習窓が一致し、whole-batch CPU/saved/GPU照合が更新前に完了。
-  既存journalは受理順序・単体入力・Replayの行動列を照合するが、全観測がReplayから再生された
-  ことまでは証明していない。この保証を拡大したと主張しない。系列は保存された本人入力を正本とする。
-- GAEはepisode単位、正規化はbatch単位、lossは終点1回。候補/時間の二重padding、microbatch
-  分割、parameter gradient、shuffle、checkpoint roundtrip、pause/resume連続実行一致を確認。
-- unavailable CUDA、parity不一致、OOM、非同期CUDA error、quota/期限/保存/回収失敗では
-  成功世代を作らない。元run失敗時は全offlineデータ拒否。古い形式は明示的loaderのみで読む。
-- pytest、ruff、mypy、native Cargo checks、別環境wheel、baseline任意依存なし起動、
-  現在のMLP/LightGBMの数値・元データ・モデルhashを確認する。
+実装はGRU/Transformerの閉じたConfig、全履歴cache、W指定TBPTT、schema2bank/artifact、
+Python/native identity、CLI学習/正常境界resumeまで接続した。標準Torch演算を使い、新しい
+第三者依存や汎用library/kernelを追加していない。既存MLP/LightGBMの仕様・元データは保持。
+891Python tests、別実行20CUDA cases、93Rust tests、旧データ5proofs、76ファイル一致の
+別環境wheel、60固定入力測定を検証。実対戦は予備8GiB/legacy128試合の後、参照presetを
+合意済み2GiB/16MiB/typedへ修正してfresh128試合を再検証した。各モデルの連続/停止再開は
+weights/Adam/RNG/numericが一致。source/runtime/codeはこの修正中も不変で、Config参照のみ変更。
+性能測定の履歴は最大29なのでW32/64/128は全てfull gradientとなり、長期窓の性能/品質効果を
+主張しない。CPU更新がこの小batchではCUDAより速いことも記録。最終受入と全指標は
+[検証記録](../verification/sequence-ppo.md)を正本とする。正式9run/最終testは未実施。
 
-未測定なのは、標準GRU/Transformerの実機CPU/GPU誤差、CPU推論遅延、32tokenでの記憶能力、
-更新あたり資源、2時間で進む更新数と勝率である。A～Eで証拠を揃えてからFへ進む。
-FP32/1e-5を満たせなければ原因を切り分けて設計を再レビューし、実装成功と学習品質を分けて報告する。
-
-## 9. 計画レビューの記録
-
-- bot_verifier: 現在のPolicy、本人workerの寿命、HTTP retry、元journalの順序検証、
-  nativeの完全episode配列、MLP固有dispatchを読み取り調査。実行検証はしていない。
-- bot_architecture_reviewer: 修正版の設計READY。MLP専用のsource/方策identity照合を
-  Python/native/lineage/authorization/最終validationで明示的に拡張する指摘を採用。
-  共有検証器の一般化によって旧固定データのsource許可が広がらない負例も追加した。
-- bot_reviewer: 学習/正しさの観点でREADY、blockingなし。正式run順の事前固定という
-  任意提案を採用し、学習seedごとにモデル順を交代させ、外部負荷を記録する。
-- root: 上記指摘の反映を確認。今回は文書/リンク/差分だけを検証し、アプリの変更や
-  benchmark、対戦、fitは実行していない。計画のREADYは実機の数値/性能/学習品質のPASSではない。
+rootは独立した最終監査後にA〜Eの完成を受け入れる。初期preset参照の誤りと測定helperの
+回収問題は証拠を保持して修正・再検証し、未解決のblocking findingはない。
+既存のデータ/モデル24ファイル・依存設定・Simulator識別情報は最終照合でも不変。

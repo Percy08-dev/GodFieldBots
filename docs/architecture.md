@@ -2,12 +2,19 @@
 
 ## Status and scope
 
-The proposed [GRU/Transformer PPO plan](adr/0022-gru-transformer-ppo-plan.md)
-extends ADR0008's deferred model scope using finite participant-decision windows,
-standard PyTorch models, versioned numeric rollouts and the existing owned PPO
-runtime. Independent design and learning/correctness reviews are READY. It is a
-planning record only: neither new model is implemented, and no
-new learning/benchmark campaign or final-test evaluation has run under it.
+[ADR0022](adr/0022-gru-transformer-ppo-plan.md) implements GRU/Transformer PPO
+with full own-decision history (up to1024), participant-local bounded hidden/KV
+caches, and Config sequence_length32(default,1..1024) for detached-prefix TBPTT.
+Endpoint loss/episode GAE, source visibility, safe artifacts, native model-capability
+preflight and normal-boundary resume preserve the existing ownership. Source
+reviews are READY;891Python/20separateCUDA/93Rust tests and old-data/wheel checks
+pass. Corrected2GiB/16MiB typed-reader real smokes complete128natural games with
+exact continuous/resume states; earlier8GiB legacy smokes remain preliminary.
+Sixty fixed-input comparisons report cached forward benefits and CPU-faster update
+on the small fixture, with no long-window/strength claim. Both CLI presets and the
+tested three-model native wheel are available. Final acceptance is recorded in
+[sequence verification](verification/sequence-ppo.md); formal campaigns and final
+test remain separate.
 
 [ADR0021](adr/0021-measured-single-worker-optimization.md) Stage1 removes only
 the typed Journal's separate reserved-key scan, using existing closed DTO/key
@@ -247,7 +254,8 @@ dynamic-weapon singleton. The latter is fixed in generator v3; the whole failed
 pilot is retained and remains ineligible. The corrected-contract pilot described
 below now passes provisional feasibility. The original Phases 5–9 were outside
 that acceptance; ADR0008 now implements the MLP PPO/generation/fixed-data subset.
-Recurrent models and final-test evaluation remain future work. See the
+ADR0022 implements GRU/Transformer after that acceptance; final-test evaluation
+remains future work. See the
 [current verification](verification/action-options.md).
 Phase 4 implements [ADR0006](adr/0006-lightgbm-action-value.md): native
 CPU LightGBM action scoring, versioned public encoders, checkpoint inference and
@@ -320,7 +328,7 @@ Wire DTOs may resolve representation details; no engine dependency is allowed.
 | `gf_simulator_client` | validated HTTP, attestation, subprocess/game ownership, worker transport | common, httpx |
 | `gf_training` | journals/projection, split/feasibility, owned numeric training, generation lineage and frozen datasets | common, model adapters, optional PyArrow |
 | `gf_evaluation` | paired scheduling, aggregation and costs | common |
-| `gf_models` | participant-local Random/heuristic/LightGBM/MLP, common encoder/config and native artifacts | common, lazy extras |
+| `gf_models` | participant-local Random/heuristic/LightGBM/MLP/GRU/Transformer, common encoder/config and artifacts | common, lazy extras |
 | `gf_cli` | strict config, composition, commands, manifest | application packages |
 | `gf_native` (optional Rust extension) | Serde offline parsing/structural validation, fixed feature kernels, typed staging/index columns and numeric capacity/document-admission leases | Rust crates, Serde, PyO3, rust-numpy; no upper Python package or learning dependency |
 

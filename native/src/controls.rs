@@ -105,6 +105,10 @@ impl Parent {
             }
         }
         let config = s.require("effective_config")?;
+        let model = string(config.require("model")?, "model_id")?;
+        if !["mlp", "gru", "transformer"].contains(&model) {
+            return Err(Error::contract("unsupported PPO model identity"));
+        }
         if digest(config, budget, control)? != string(s, "config_sha256")?
             || !["cpu", "cuda:0"].contains(&string(s, "device")?)
         {
@@ -229,6 +233,11 @@ impl Parent {
                 control,
             )?;
             let inference = sources.json(&path.join("inference.json"), false, control)?;
+            if string(inference.root.require("model")?, "model_id")? != model {
+                return Err(Error::contract(
+                    "generation model differs from parent identity",
+                ));
+            }
             equal(
                 inference.root.require("weights")?.require("sha256")?,
                 r.require("weights_sha256")?,
@@ -381,6 +390,17 @@ impl Parent {
             };
             fields.insert(key.to_owned(), value);
         }
+        fields.insert(
+            "model_id".to_owned(),
+            json::copy(
+                self.state
+                    .root
+                    .require("effective_config")?
+                    .require("model")?
+                    .require("model_id")?,
+                control,
+            )?,
+        );
         let state = Value::Object(fields);
         Ok(json::object([
             (

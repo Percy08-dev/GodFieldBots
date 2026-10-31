@@ -1907,6 +1907,12 @@ mod episode_pipeline_tests {
                 let path = directory.join(&id);
                 fs::create_dir(&path).unwrap();
                 let empty = ordinal == 0;
+                let model = match ordinal % 3 {
+                    0 => "mlp",
+                    1 => "gru",
+                    _ => "transformer",
+                };
+                let policy = format!("{model}-p");
                 for slot in 1..=2 {
                     // Deliberately swap file slots independently of viewer and learner.
                     let viewer = if ordinal % 2 == 0 { slot } else { 3 - slot };
@@ -1914,6 +1920,7 @@ mod episode_pipeline_tests {
                     records[0]["episode_id"] = json::text(&id);
                     records[0]["game_id"] = json::text(&game);
                     records[0]["viewer"] = serde_json::json!(viewer);
+                    records[0]["policy"] = json::text(&policy);
                     records[0]["action_config_hash"] = json::text(&action_hash);
                     records[1]["input"]["observation"]["viewer_player_id"] =
                         serde_json::json!(viewer);
@@ -1923,7 +1930,8 @@ mod episode_pipeline_tests {
                         serde_json::json!(viewer);
                     records[1]["input"]["observation"]["opponent"]["player_id"] =
                         serde_json::json!(3 - viewer);
-                    records[1]["selection"]["policy_version"] = json::text("mlp-ppo-v1-p");
+                    records[1]["selection"]["policy_version"] =
+                        json::text(&format!("{model}-ppo-v1-p"));
                     records[1]["candidates"]["config_hash"] = json::text(&action_hash);
                     records[4]["final_observation"]["viewer_player_id"] = serde_json::json!(viewer);
                     records[4]["final_observation"]["own"]["player_id"] = serde_json::json!(viewer);
@@ -1956,9 +1964,9 @@ mod episode_pipeline_tests {
                     )
                     .unwrap();
                 }
-                episodes.push(serde_json::json!({"episode_id":id,"game_id":game,"policies":["p","p"],"pair_id":id,
+                episodes.push(serde_json::json!({"episode_id":id,"game_id":game,"policies":[policy,policy],"pair_id":id,
                     "seed":ordinal.to_string(),"end_kind":"natural","simulator_abort_reason":null,"outcome":"draw"}));
-                schedule.push(serde_json::json!({"seed":ordinal.to_string(),"episodes":[{"episode_id":id,"pair_id":id,"policies":["p","p"],"learner_viewer":ordinal % 2 + 1}]}));
+                schedule.push(serde_json::json!({"seed":ordinal.to_string(),"episodes":[{"episode_id":id,"pair_id":id,"policies":[policy,policy],"learner_viewer":ordinal % 2 + 1}]}));
                 groups.push(serde_json::json!({"episode_ids":[id]}));
                 paths.push(path);
             }

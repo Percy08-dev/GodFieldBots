@@ -79,3 +79,25 @@ def binary_identity(native: ModuleType | None = None) -> Json:
     return {'backend': 'native', 'extension_path': str(path), 'extension_sha256': checksum,
             'build': dict(module.build_info()), 'python_abi': sys.implementation.cache_tag,
             'gil_disabled': bool(sysconfig.get_config_var('Py_GIL_DISABLED'))}
+
+
+def require_ppo_model(model_id: str, native: ModuleType) -> None:
+    """Pre-collection model capability; old wheels advertise only historical MLP."""
+    from gf_models.ppo_identity import PPO_MODELS
+    if model_id not in PPO_MODELS:
+        raise ContractError('unsupported PPO model identity')
+    build_info = getattr(native, 'build_info', None)
+    if not callable(build_info):
+        raise ContractError('native PPO preprocessing implementation is incomplete')
+    information = dict(build_info())
+    if 'ppo_policy_models' not in information:
+        supported = ['mlp']
+    else:
+        marker = information['ppo_policy_models']
+        if not isinstance(marker, str):
+            raise ContractError('malformed native PPO model capability')
+        supported = marker.split(',')
+        if not supported or len(set(supported)) != len(supported) or any(value not in PPO_MODELS for value in supported):
+            raise ContractError('malformed native PPO model capability')
+    if model_id not in supported:
+        raise ContractError(f'native binary does not support PPO model {model_id}')

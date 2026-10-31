@@ -16,6 +16,19 @@ pub const SIMULATOR_REVISION: &str = "ffcffa0966dbf6d7ce1d982f4ee6444e291d42d6";
 const REVIEWED_SPECS_DIGEST: &str =
     "17dc86ba14c8fac378e352acd5c7c55429e910b37482954f74ca3673f8b1767d";
 
+fn ppo_selection_version(label: &str) -> Result<String> {
+    let (identity, checksum) = ["mlp", "gru", "transformer"]
+        .iter()
+        .find_map(|identity| {
+            label
+                .strip_prefix(&format!("{identity}-"))
+                .map(|checksum| (*identity, checksum))
+        })
+        .filter(|(_, checksum)| !checksum.is_empty())
+        .ok_or_else(|| Error::contract("unsupported frozen PPO policy label"))?;
+    Ok(format!("{identity}-ppo-v1-{checksum}"))
+}
+
 fn optional(value: &Value, key: &str, control: &Control) -> Result<Value> {
     match value.get(key) {
         Some(v) => json::copy(v, control),
@@ -352,12 +365,7 @@ pub(crate) fn source_metadata(
     }
     let learner = links.spec.require("learner_viewer")?.integer(1, 2)?;
     if viewer == learner {
-        let expected = format!(
-            "mlp-ppo-v1-{}",
-            string(header, "policy")?
-                .strip_prefix("mlp-")
-                .unwrap_or(string(header, "policy")?)
-        );
+        let expected = ppo_selection_version(string(header, "policy")?)?;
         for index in 0..facts.decision_count {
             control.check()?;
             if journal.decision(index)?.policy_version()? != expected {
@@ -718,5 +726,22 @@ mod episode_index_tests {
             scan_seconds,
             start.elapsed().as_secs_f64()
         );
+    }
+}
+
+#[cfg(test)]
+mod ppo_identity_tests {
+    use super::*;
+    #[test]
+    fn closed_ppo_policy_labels_preserve_mlp_and_gru_and_reject_bare_or_unknown() {
+        assert_eq!(ppo_selection_version("mlp-p").unwrap(), "mlp-ppo-v1-p");
+        assert_eq!(ppo_selection_version("gru-p").unwrap(), "gru-ppo-v1-p");
+        assert_eq!(
+            ppo_selection_version("transformer-p").unwrap(),
+            "transformer-ppo-v1-p"
+        );
+        for label in ["p", "", "mlp-", "gru-", "transformer-", "future-p"] {
+            assert!(ppo_selection_version(label).is_err(), "accepted {label}");
+        }
     }
 }

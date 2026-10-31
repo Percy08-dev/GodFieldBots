@@ -68,7 +68,11 @@ def encoder_config(value: Json) -> EncoderConfig:
     return config
 
 
-def model_config(value: Json) -> ModelConfig | MLPModelConfig:
+def model_config(value: Json) -> ModelConfig | MLPModelConfig | SequenceModelConfig:
+    if value.get("model_id") == "transformer":
+        return transformer_model_config(value)
+    if value.get("model_id") == "gru":
+        return gru_model_config(value)
     if value.get("model_id") == "mlp":
         return mlp_model_config(value)
     closed(value, set(asdict(ModelConfig())))
@@ -91,7 +95,7 @@ def model_config(value: Json) -> ModelConfig | MLPModelConfig:
 
 def training_config(value: Json) -> TrainingConfig | PPOTrainingConfig:
     if value.get("algorithm") == "ppo":
-        return ppo_training_config(value)
+        return sequence_ppo_training_config(value) if "sequence_length" in value else ppo_training_config(value)
     closed(value, set(asdict(TrainingConfig())))
     if value["cost_mode"] not in ("inclusive_generation", "fixed_data"):
         raise ContractError("unsupported training cost mode")
@@ -124,8 +128,8 @@ def training_config(value: Json) -> TrainingConfig | PPOTrainingConfig:
     return TrainingConfig(**converted)
 
 
-def validate_capacity(model: ModelConfig | MLPModelConfig, max_sequence_length: int) -> None:
-    if model.model_id in ("lightgbm", "mlp") and (not max_sequence_length or max_sequence_length > model.encoder.max_elements):
+def validate_capacity(model: ModelConfig | MLPModelConfig | SequenceModelConfig, max_sequence_length: int) -> None:
+    if model.model_id in ("lightgbm", "mlp", "gru", "transformer") and (not max_sequence_length or max_sequence_length > model.encoder.max_elements):
         raise ContractError("generator exceeds encoder element capacity")
 
 
@@ -203,3 +207,112 @@ def ppo_training_config(value: Json) -> PPOTrainingConfig:
     if type(value["cleanup_seconds"]) not in (int, float) or not math.isfinite(value["cleanup_seconds"]) or not 0 < value["cleanup_seconds"] <= 60:
         raise ContractError("invalid PPO cleanup budget")
     return PPOTrainingConfig(**{**value, "seeds": tuple(value["seeds"])})
+
+
+@dataclass(frozen=True)
+class GRUNetworkConfig:
+    hidden_size: int = 128
+    num_layers: int = 1
+
+
+@dataclass(frozen=True)
+class GRUInitializationConfig:
+    recipe: str = "orthogonal-gru-v1"
+
+
+@dataclass(frozen=True)
+class SequenceInferenceConfig:
+    device: str = "cpu"
+    cache_budget_bytes: int = 134217728
+
+
+@dataclass(frozen=True)
+class GRUModelConfig:
+    model_id: str = "gru"
+    version: str = "1"
+    checkpoint: str | None = None
+    encoder: EncoderConfig = field(default_factory=lambda: EncoderConfig(history="public_aggregate"))
+    network: GRUNetworkConfig = field(default_factory=GRUNetworkConfig)
+    initialization: GRUInitializationConfig = field(default_factory=GRUInitializationConfig)
+    inference: SequenceInferenceConfig = field(default_factory=SequenceInferenceConfig)
+
+
+@dataclass(frozen=True)
+class SequencePPOTrainingConfig(PPOTrainingConfig):
+    sequence_length: int = 32
+
+
+def gru_model_config(value: Json) -> GRUModelConfig:
+    closed(value, set(asdict(GRUModelConfig())))
+    encoder = encoder_config(value['encoder'])
+    if encoder != EncoderConfig(history='public_aggregate'):
+        raise ContractError('GRU v1 requires the pinned public aggregate encoder')
+    closed(value['network'], {'hidden_size', 'num_layers'})
+    integer(value['network']['hidden_size'], 128, 128)
+    integer(value['network']['num_layers'], 1, 1)
+    closed(value['initialization'], {'recipe'})
+    closed(value['inference'], {'device', 'cache_budget_bytes'})
+    integer(value['inference']['cache_budget_bytes'], 1, 2**31 - 1)
+    if (value['initialization']['recipe'] != 'orthogonal-gru-v1'
+            or value['inference']['device'] != 'cpu' or value['model_id'] != 'gru' or value['version'] != '1'):
+        raise ContractError('unsupported GRU recipe/version/device')
+    checkpoint = value['checkpoint']
+    if checkpoint is not None and (not isinstance(checkpoint, str) or not checkpoint):
+        raise ContractError('invalid GRU checkpoint')
+    return GRUModelConfig(checkpoint=checkpoint, encoder=encoder,
+                          inference=SequenceInferenceConfig(**value['inference']))
+
+
+def sequence_ppo_training_config(value: Json) -> SequencePPOTrainingConfig:
+    closed(value, set(asdict(SequencePPOTrainingConfig())))
+    integer(value['sequence_length'], 1, 1024)
+    base = ppo_training_config({key: item for key, item in value.items() if key != 'sequence_length'})
+    return SequencePPOTrainingConfig(**asdict(base), sequence_length=value['sequence_length'])
+
+
+@dataclass(frozen=True)
+class TransformerNetworkConfig:
+    hidden_size: int = 128
+    num_layers: int = 2
+    num_heads: int = 4
+    feedforward_size: int = 256
+
+
+@dataclass(frozen=True)
+class TransformerInitializationConfig:
+    recipe: str = 'orthogonal-transformer-v1'
+
+
+@dataclass(frozen=True)
+class TransformerModelConfig:
+    model_id: str = 'transformer'
+    version: str = '1'
+    checkpoint: str | None = None
+    encoder: EncoderConfig = field(default_factory=lambda: EncoderConfig(history='public_aggregate'))
+    network: TransformerNetworkConfig = field(default_factory=TransformerNetworkConfig)
+    initialization: TransformerInitializationConfig = field(default_factory=TransformerInitializationConfig)
+    inference: SequenceInferenceConfig = field(default_factory=SequenceInferenceConfig)
+
+
+def transformer_model_config(value: Json) -> TransformerModelConfig:
+    closed(value, set(asdict(TransformerModelConfig())))
+    encoder = encoder_config(value['encoder'])
+    if encoder != EncoderConfig(history='public_aggregate'):
+        raise ContractError('Transformer v1 requires the pinned public aggregate encoder')
+    closed(value['network'], set(asdict(TransformerNetworkConfig())))
+    for key, expected in asdict(TransformerNetworkConfig()).items():
+        integer(value['network'][key], expected, expected)
+    closed(value['initialization'], {'recipe'})
+    closed(value['inference'], {'device', 'cache_budget_bytes'})
+    integer(value['inference']['cache_budget_bytes'], 1, 2**31 - 1)
+    if (value['initialization']['recipe'] != 'orthogonal-transformer-v1' or value['inference']['device'] != 'cpu'
+            or value['model_id'] != 'transformer' or value['version'] != '1'):
+        raise ContractError('unsupported Transformer recipe/version/device')
+    checkpoint = value['checkpoint']
+    if checkpoint is not None and (not isinstance(checkpoint, str) or not checkpoint):
+        raise ContractError('invalid Transformer checkpoint')
+    return TransformerModelConfig(checkpoint=checkpoint, encoder=encoder,
+                                  inference=SequenceInferenceConfig(**value['inference']))
+
+
+SequenceModelConfig = GRUModelConfig | TransformerModelConfig

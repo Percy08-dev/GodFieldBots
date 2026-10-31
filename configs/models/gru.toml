@@ -1,0 +1,23 @@
+schema_version = 1
+kind = "model"
+
+[model]
+model_id = "gru"
+version = "1"
+
+[model.encoder]
+history = "public_aggregate"
+max_elements = 3
+hash_buckets = 32
+history_window = 128
+
+[model.network]
+hidden_size = 128
+num_layers = 1
+
+[model.initialization]
+recipe = "orthogonal-gru-v1"
+
+[model.inference]
+device = "cpu"
+cache_budget_bytes = 134217728

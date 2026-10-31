@@ -1022,6 +1022,7 @@ fn build_info() -> Vec<(&'static str, &'static str)> {
         ),
         ("typed_reader_contract", "typed-borrowed-v1"),
         ("episode_pipeline_contract", "owned-complete-episode-v1"),
+        ("ppo_policy_models", "mlp,gru,transformer"),
     ]
 }
 

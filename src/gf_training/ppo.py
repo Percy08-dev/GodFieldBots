@@ -10,9 +10,10 @@ from typing import Any
 import numpy as np
 
 from gf_common.domain import ContractError, DecisionInput, Json, closed
-from gf_models.config import MLPModelConfig
-from gf_models.mlp.arrays import MAX_ARRAY_BYTES, load_arrays, save_arrays, sha256
-from gf_models.mlp.features import encode_decision
+from gf_models.arrays import MAX_ARRAY_BYTES, load_arrays, save_arrays, sha256
+from gf_models.config import GRUModelConfig, MLPModelConfig, TransformerModelConfig
+from gf_models.features import encode_decision
+from gf_models.ppo_identity import selection_version
 from gf_training.journal import atomic_json
 from gf_training.q_data import check_deadline, load_run, validate_bundles
 
@@ -49,7 +50,7 @@ def normalize_advantages(values: Any) -> Any:
     return ((values - values.mean()) / (values.std(ddof=0) + 1e-8)).astype(np.float32)
 
 
-def ingest_collection(directory: Path, model: MLPModelConfig, linkage: Json, *, deadline: float, online_context: Any) -> tuple[list[RolloutDecision], Json]:
+def ingest_collection(directory: Path, model: MLPModelConfig | GRUModelConfig | TransformerModelConfig, linkage: Json, *, deadline: float, online_context: Any) -> tuple[Any, Json]:
     bundle = load_run(directory, 'train', deadline=deadline, online_context=online_context)
     manifest = bundle.manifest
     if manifest.get('schema_version') != 4 or manifest.get('collection_kind') != 'ppo_batch' or manifest.get('ppo') != linkage:
@@ -63,19 +64,27 @@ def ingest_collection(directory: Path, model: MLPModelConfig, linkage: Json, *, 
         if row['viewer'] == seats[episode_games[row['game_id']]]:
             trajectories[row['game_id']].append(row)
     decisions = []
+    sequence_chunks = []
     for game_id, trajectory in trajectories.items():
         check_deadline(deadline)
         trajectory.sort(key=lambda row: row['decision'])
         if not trajectory:
+            if isinstance(model, (GRUModelConfig, TransformerModelConfig)):
+                from gf_training.sequence_reference import empty_chunk
+                sequence_chunks.append(empty_chunk(model))
             continue  # A learner may naturally finish without taking an action.
         selections = [json.loads(row['selection_json']) for row in trajectory]
         episode_name = episode_games[game_id]
         expected_label = next(spec['policies'][seats[episode_name] - 1] for group in manifest['schedule'] for spec in group['episodes'] if spec['episode_id'] == episode_name)
-        if not expected_label.startswith('mlp-') or any(item['policy_version'] != 'mlp-ppo-v1-' + expected_label[4:] for item in selections):
+        if not expected_label.startswith(model.model_id + '-') or any(item['policy_version'] != selection_version(expected_label) for item in selections):
             raise ContractError('learner selection identity differs from frozen generation')
-        if any(type(item['logprob']) not in (float, int) or type(item['value']) not in (float, int) or not item['policy_version'].startswith('mlp-ppo-v1-') for item in selections):
+        if any(type(item['logprob']) not in (float, int) or type(item['value']) not in (float, int) or not item['policy_version'].startswith(model.model_id + '-ppo-v1-') for item in selections):
             raise ContractError('saved PPO probability/value evidence required')
         advantages, targets = gae([item['value'] for item in selections], returns[(game_id, seats[episode_games[game_id]])])
+        if isinstance(model, (GRUModelConfig, TransformerModelConfig)):
+            from gf_training.sequence_reference import trajectory_chunk
+            sequence_chunks.append(trajectory_chunk(trajectory, selections, advantages, targets, model, deadline))
+            continue
         for row, selection, advantage, target in zip(trajectory, selections, advantages, targets, strict=True):
             check_deadline(deadline)
             raw = json.loads(row['input_json'])
@@ -83,6 +92,11 @@ def ingest_collection(directory: Path, model: MLPModelConfig, linkage: Json, *, 
             candidates = json.loads(row['candidate_set_json'])['actions']
             actor, state = encode_decision(value, tuple(candidates), model.encoder)
             decisions.append(RolloutDecision(actor, state, selection['index'], float(selection['logprob']), float(selection['value']), float(advantage), float(target)))
+    if isinstance(model, (GRUModelConfig, TransformerModelConfig)):
+        from gf_training.sequence_reference import finalize
+        sequence_result = finalize(sequence_chunks)
+        return sequence_result, {'source_set_sha256': evidence['source_set_sha256'], 'manifest_sha256': sha256(directory / 'manifest.json'),
+                        'decisions': len(sequence_result), 'games': len(manifest['episodes'])}
     if not decisions:
         raise ContractError('PPO batch contains no accepted learner decisions')
     normalized = normalize_advantages([item.advantage for item in decisions])

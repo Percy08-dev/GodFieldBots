@@ -19,9 +19,15 @@ from typing import Any
 import numpy as np
 
 from gf_common.domain import REVIEWED_SPEC_HASHES, ContractError, Json, RuntimePolicyBinding, digest
-from gf_models.config import MLPModelConfig, PPOTrainingConfig
-from gf_models.mlp.arrays import sha256
-from gf_models.mlp.model import NUMERICS, runtime_metadata
+from gf_models.arrays import sha256
+from gf_models.config import (
+    GRUModelConfig,
+    MLPModelConfig,
+    PPOTrainingConfig,
+    SequencePPOTrainingConfig,
+    TransformerModelConfig,
+)
+from gf_models.torch_runtime import NUMERICS, runtime_metadata
 from gf_training.collection import (
     CollectionPlan,
     FinalizedCollection,
@@ -251,8 +257,10 @@ async def train_ppo(loaded: Any, collector: Collector, directory: Path, *, mode:
     operation_unix = time.time()
     config = loaded.config
     model, training = config.model, config.training
-    if not isinstance(model, MLPModelConfig) or not isinstance(training, PPOTrainingConfig) or model.checkpoint is not None or config.run.split != 'train':
-        raise ContractError('PPO requires fresh MLP recipe and train split')
+    if not isinstance(model, (MLPModelConfig, GRUModelConfig, TransformerModelConfig)) or not isinstance(training, PPOTrainingConfig) or model.checkpoint is not None or config.run.split != 'train':
+        raise ContractError('PPO requires fresh supported model recipe and train split')
+    if isinstance(model, (GRUModelConfig, TransformerModelConfig)) != isinstance(training, SequencePPOTrainingConfig):
+        raise ContractError("PPO model/sequence training mismatch")
     if config.server.external_url is not None:
         raise ContractError('PPO requires owned distinct-seed Simulator groups')
     if not (config.run.wall_seconds <= 7200 and config.run.admission_seconds <= 5400 and config.run.execution_seconds <= 7140 and config.run.finalization_seconds >= 60):
@@ -261,13 +269,14 @@ async def train_ppo(loaded: Any, collector: Collector, directory: Path, *, mode:
         raise ContractError('unsupported PPO mode')
     if mode == 'fresh' and pause_after_update is not None and (type(pause_after_update) is not int or not 0 < pause_after_update <= training.max_updates):
         raise ContractError('invalid absolute pause target')
-    preprocessing = (preprocessing_identity(config.preprocessing, deadline=operation_started + config.run.execution_seconds)
+    preprocessing_options: Json = {'model_id': model.model_id} if isinstance(model, (GRUModelConfig, TransformerModelConfig)) else {}
+    preprocessing = (preprocessing_identity(config.preprocessing, deadline=operation_started + config.run.execution_seconds, **preprocessing_options)
                      if mode == 'fresh' else None)
     directory = directory.resolve()
     with run_lock(directory, create=mode == 'fresh') as ownership:
         identity_deadline = operation_started + config.run.execution_seconds if mode == 'fresh' else operation_started + read_json(directory / 'run.json')['execution_deadline_unix'] - operation_unix
         if preprocessing is None:
-            preprocessing = preprocessing_identity(config.preprocessing, deadline=identity_deadline)
+            preprocessing = preprocessing_identity(config.preprocessing, deadline=identity_deadline, **preprocessing_options)
         identity = source_identity(identity_deadline)
         identity["integration"] = integration_identity(config, identity_deadline)
         identity["configuration_inputs_sha256"] = digest(loaded.inputs)
@@ -319,6 +328,8 @@ async def train_ppo(loaded: Any, collector: Collector, directory: Path, *, mode:
             await child.start()
             request = {'command': 'initialize', 'model': asdict(model), 'seed': training.seeds[0], 'device': training.device,
                        'output': str(checkpoint_path(directory, 0)), 'action_hash': digest(asdict(config.actions))}
+            if isinstance(training, SequencePPOTrainingConfig):
+                request['sequence_length'] = training.sequence_length
             if mode == 'resume':
                 request['restore'] = str(checkpoint_path(directory, state['updates']))
             initial = await child.request(request, execution)
@@ -373,7 +384,11 @@ async def train_ppo(loaded: Any, collector: Collector, directory: Path, *, mode:
                 else:
                     decisions, proof = ingest_collection(collection.directory, model, linkage, deadline=execution,
                                                          online_context=online_context)
-                    write_rollout(numeric, decisions, deadline=execution)
+                    if isinstance(model, (GRUModelConfig, TransformerModelConfig)):
+                        from gf_training.sequence_rollout import write_rollout as write_sequence
+                        write_sequence(numeric, decisions, model, deadline=execution)
+                    else:
+                        write_rollout(numeric, decisions, deadline=execution)
                     decision_count = len(decisions)
                     del decisions
                 numeric_hash = sha256(numeric / 'rollout.json', execution)

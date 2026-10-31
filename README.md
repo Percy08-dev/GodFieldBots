@@ -5,6 +5,9 @@ Phase 0〜3のRandom／heuristic、候補生成、TestServer対戦、本人別jo
 Phase 4のCPU LightGBM、特徴変換、checkpoint推論、学習CLIも実装しています。
 実対戦学習に必要なclean pilotの判定は[購入契約更新・再検証記録](docs/verification/buy-contract-adoption.md)を参照してください。
 CUDA MLP PPO・世代管理・境界再開・固定データ比較も実装しています。
+全履歴GRU／Transformer PPOと、Config指定のTBPTTも実装しています。
+両モデルのCUDA実対戦2更新・停止再開一致と測定結果は
+[系列モデル検証記録](docs/verification/sequence-ppo.md)にあります。
 設計は[ADR0008](docs/adr/0008-mlp-ppo-generations-and-fixed-data.md)、実装・実験の受入状況は
 [PPO検証記録](docs/verification/mlp-ppo.md)を参照してください。
 実対戦2更新・停止再開の完全一致は確認済みです。対象契約はSimulatorで明確化され、新契約での検証・正式比較を進めています。
@@ -32,7 +35,7 @@ Simulator契約はrevision `ffcffa0966dbf6d7ce1d982f4ee6444e291d42d6`、HTTP `/v
 
 - [experiments](configs/experiments): 設定の選択、seed、split、予算、保存先、接続。
 - [actions](configs/actions): enumerate／beam、固定scorer、長さ・候補数・展開数の上限。
-- [models](configs/models): Random／heuristic／LightGBM／MLPのID、構造、encoderと版。
+- [models](configs/models): Random／heuristic／LightGBM／MLP／GRU／TransformerのID、構造、encoderと版。
 - [training](configs/training): 学習方式、実行device、データ参照、予算と乱数seed。
 - [test-server.toml](configs/test-server.toml): Simulatorの実効ライフサイクル設定。
 
@@ -110,6 +113,23 @@ criticは候補一覧から独立した本人の公開特徴だけを使いま�
 元の実時間期限は停止中も進みます。期限切れ、コード・実行環境・CPU／CUDA設定の変更、二重所有を拒否します。
 世代0・10世代ごと・最新の重みと再開状態を保持し、全世代のhash・来歴を残します。
 run全体が失敗した場合は、完了済みbatchを含めoffline学習に使えません。
+
+## GRU／Transformer PPO
+
+1ステップは本人の意思決定1回です。推論はゲーム開始からの履歴をGRU hidden／Transformer KV
+に引き継ぎ、学習は現在の重みでprefixを再計算してから、最後の`training.sequence_length`回に
+勾配を流します。既定値は32、指定範囲は1〜1,024です。窓長は推論履歴を切り詰める設定ではありません。
+最大履歴1,024回を超えた場合は、行動送信前に親run全体を失敗にします。
+
+```console
+env -u VIRTUAL_ENV uv run --no-sync gf-bots train --config configs/experiments/gru-ppo.toml --set training.sequence_length=64 --set training.max_updates=2 --run-dir runs/gru-smoke-new --mode fresh
+env -u VIRTUAL_ENV uv run --no-sync gf-bots train --config configs/experiments/transformer-ppo.toml --set training.sequence_length=32 --set training.max_updates=2 --run-dir runs/transformer-smoke-new --mode fresh
+```
+
+CUDA学習・CPU推論・2GiB/16MiBの型付きRust前処理を使います。明示的なCPU学習には
+`gru-ppo-cpu.toml`／`transformer-ppo-cpu.toml`を選びます。依存の導入は既存のCUDA/CPU extra手順と同じです。
+停止再開はMLPと同じ正常batch境界に限り、窓長・コード・実行環境を変えた通常resumeは拒否します。
+今回の実装受入は2更新と資源測定までで、正式な多seed比較・最終testの結果ではありません。
 
 ## 固定データでのLightGBM比較
 

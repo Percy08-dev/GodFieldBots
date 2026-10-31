@@ -6,7 +6,7 @@ from typing import Any
 
 from gf_common.domain import CandidateSet, DecisionInput, PolicyDecision
 from gf_models.config import mlp_model_config
-from gf_models.mlp.features import encode_decision
+from gf_models.features import encode_decision
 from gf_models.mlp.model import load_artifact
 
 

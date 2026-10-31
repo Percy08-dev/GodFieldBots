@@ -1,0 +1,44 @@
+# Implementation acceptance uses seed17 with --set training.max_updates=2.
+# Formal multi-seed comparisons are a later, separately frozen campaign.
+# Train GameSeeds are generated in the versioned PPO train namespace.
+# No final test evaluation is authorized by this preset.
+schema_version = 1
+kind = "experiment"
+
+[references]
+actions = "../actions/beam.toml"
+model = "../models/transformer.toml"
+opponent = "../models/heuristic.toml"
+training = "../training/sequence-ppo.toml"
+preprocessing = "../preprocessing/native-borrowed.toml"
+
+[run]
+name = "transformer-ppo"
+split = "train"
+output_dir = "../../runs/ppo"
+sampling_seeds = [17]
+pairs_per_seed = 1
+concurrency = 2
+wall_seconds = 7200
+admission_seconds = 5400
+execution_seconds = 7140
+finalization_seconds = 60
+report_reserve_seconds = 1
+max_decisions = 20000
+
+[server]
+simulator_revision = "ffcffa0966dbf6d7ce1d982f4ee6444e291d42d6"
+source_dir = "../../../GodFieldSimurator"
+binary = "../../../GodFieldSimurator/target/debug/gf-test-server"
+config = "../test-server.toml"
+fixed_seed_experiment = true
+startup_seconds = 15
+request_seconds = 10
+worker_seconds = 10
+shutdown_seconds = 30
+cleanup_reserve_seconds = 2
+transport_retries = 2
+
+[evaluation]
+bootstrap_samples = 200
+bootstrap_seed = 0

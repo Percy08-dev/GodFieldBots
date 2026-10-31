@@ -1,19 +1,19 @@
 """Owned-child PPO FP32 math, parity, microbatch gradients and typed resume."""
 from __future__ import annotations
 
-import json
 import math
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 
-from gf_common.domain import ContractError, Json, closed
+from gf_common.domain import ContractError, Json
+from gf_models.arrays import load_arrays
 from gf_models.config import MLPModelConfig
-from gf_models.mlp.arrays import load_arrays, save_arrays
 from gf_models.mlp.model import make_network, restore_weights, save_artifact, torch_runtime
-from gf_training.journal import atomic_json
 from gf_training.ppo import RolloutDecision
+from gf_training.ppo_math import losses
+from gf_training.ppo_state import restore_resume, save_resume
 
 
 def microbatches(indices: list[int], decisions: list[RolloutDecision], slots: int = 4096) -> list[list[int]]:
@@ -48,18 +48,6 @@ def padded(decisions: list[RolloutDecision], indices: list[int], device: str) ->
     return tuple(torch.from_numpy(value).to(device) for value in arrays)
 
 
-def losses(logprobs: Any, values: Any, mask: Any, selected: Any, old: Any, advantage: Any, target: Any) -> tuple[Any, Json]:
-    import torch
-    chosen = logprobs.gather(1, selected[:, None]).squeeze(1)
-    ratio = (chosen - old).exp()
-    policy = -torch.minimum(ratio * advantage, ratio.clamp(.8, 1.2) * advantage).mean()
-    mse = ((values - target) ** 2).mean()
-    safe_logprobs = logprobs.masked_fill(~mask, 0)
-    entropy = -(logprobs.exp() * safe_logprobs).sum(-1).mean()
-    loss = policy + .5 * mse - .01 * entropy
-    return loss, {'policy_loss': float(policy.detach()), 'value_mse': float(mse.detach()),
-                  'entropy': float(entropy.detach()), 'approx_kl': float((old - chosen).mean().detach()),
-                  'total_loss': float(loss.detach())}
 
 
 class Learner:
@@ -75,24 +63,8 @@ class Learner:
         self.steps = 0
 
     def hardware(self) -> Json:
-        torch = self.torch
-        name = torch.cuda.get_device_name(0) if self.device != 'cpu' else 'cpu'
-        driver_api = None
-        if self.device != 'cpu':
-            # CUDA is initialized before this query. This is the supported CUDA
-            # API version, not an attested NVIDIA driver build number.
-            import ctypes
-            driver = ctypes.CDLL('libcuda.so.1')
-            query = driver.cuDriverGetVersion
-            query.argtypes = [ctypes.POINTER(ctypes.c_int)]
-            query.restype = ctypes.c_int
-            actual = ctypes.c_int()
-            if query(ctypes.byref(actual)) != 0 or actual.value <= 0:
-                raise ContractError('CUDA driver API identity query failed')
-            driver_api = actual.value
-        return {'device': self.device, 'name': name, 'cuda_runtime': torch.version.cuda,
-                'device_count': torch.cuda.device_count() if self.device != 'cpu' else 0,
-                'cuda_driver_api_version': driver_api, 'exact_driver_build': 'unverified'}
+        from gf_models.torch_runtime import hardware
+        return hardware(self.device)
 
     def synchronize(self) -> None:
         if self.device != 'cpu':
@@ -156,61 +128,16 @@ class Learner:
                 'cuda_peak_reserved_bytes': torch.cuda.max_memory_reserved(self.device) if self.device != 'cpu' else 0}
 
     def save(self, directory: Path, action_hash: str) -> Json:
-        torch = self.torch
         self.synchronize()
         inference = save_artifact(self.network, directory, self.model, action_hash)
-        arrays = {'torch_cpu_rng': torch.get_rng_state().numpy().copy()}
-        for index, state in enumerate(torch.cuda.get_rng_state_all() if self.device != 'cpu' else []):
-            arrays[f'torch_cuda_rng.{index}'] = state.cpu().numpy().copy()
-        for index, parameter in enumerate(self.network.parameters()):
-            state = self.optimizer.state.get(parameter, {})
-            if state:
-                arrays[f'adam.{index}.step'] = np.asarray(int(state['step'].item()), dtype=np.int64)
-                for key in ('exp_avg', 'exp_avg_sq'):
-                    arrays[f'adam.{index}.{key}'] = state[key].detach().cpu().numpy().astype(np.float32, copy=True)
-        metadata = save_arrays(directory / 'resume.npz', arrays)
-        resume = {'schema_version': 1, 'arrays': metadata, 'shuffle_rng': self.shuffle.bit_generator.state,
-                  'optimizer_steps': self.steps, 'device': self.device}
-        atomic_json(directory / 'resume.json', resume)
+        save_resume(directory, self.network, self.optimizer, self.shuffle, self.steps, self.device)
         # Verify exact array roundtrip while original tensors remain alive.
         restored = load_arrays(directory / 'weights.npz', inference['weights'])
         for key, value in self.network.state_dict().items():
             if not np.array_equal(value.detach().cpu().numpy(), restored[key]):
                 raise ContractError('CPU checkpoint roundtrip failed')
-        load_arrays(directory / 'resume.npz', metadata)
         return {'weights': inference['weights']['sha256'], 'optimizer_steps': self.steps}
 
     def restore(self, directory: Path) -> None:
-        torch = self.torch
         restore_weights(self.network, load_arrays(directory / 'weights.npz'))
-        resume = json.loads((directory / 'resume.json').read_text())
-        closed(resume, {'schema_version', 'arrays', 'shuffle_rng', 'optimizer_steps', 'device'})
-        if resume['schema_version'] != 1 or resume['device'] != self.device:
-            raise ContractError('resume device/schema mismatch')
-        arrays = load_arrays(directory / 'resume.npz', resume['arrays'])
-        expected_keys = {'torch_cpu_rng'}
-        cuda_count = torch.cuda.device_count() if self.device != 'cpu' else 0
-        expected_keys.update(f'torch_cuda_rng.{index}' for index in range(cuda_count))
-        self.steps = resume['optimizer_steps']
-        if type(self.steps) is not int or self.steps < 0:
-            raise ContractError('invalid optimizer step count')
-        if self.steps:
-            for index, parameter in enumerate(self.network.parameters()):
-                for key in ('step', 'exp_avg', 'exp_avg_sq'):
-                    expected_keys.add(f'adam.{index}.{key}')
-                step = arrays[f'adam.{index}.step']
-                if step.dtype != np.int64 or step.shape != () or int(step) != self.steps:
-                    raise ContractError('Adam counter mismatch')
-                state = {'step': torch.tensor(float(step), dtype=torch.float32)}
-                for key in ('exp_avg', 'exp_avg_sq'):
-                    value = arrays[f'adam.{index}.{key}']
-                    if value.dtype != np.float32 or tuple(value.shape) != tuple(parameter.shape):
-                        raise ContractError('Adam state mismatch')
-                    state[key] = torch.from_numpy(value.copy()).to(self.device)
-                self.optimizer.state[parameter] = state
-        if set(arrays) != expected_keys:
-            raise ContractError('resume RNG/optimizer keys mismatch')
-        torch.set_rng_state(torch.from_numpy(arrays['torch_cpu_rng'].copy()))
-        if cuda_count:
-            torch.cuda.set_rng_state_all([torch.from_numpy(arrays[f'torch_cuda_rng.{index}'].copy()) for index in range(cuda_count)])
-        self.shuffle.bit_generator.state = resume['shuffle_rng']
+        self.steps = restore_resume(directory, self.network, self.optimizer, self.shuffle, self.device)

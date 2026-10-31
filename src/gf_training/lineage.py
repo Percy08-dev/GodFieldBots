@@ -21,7 +21,8 @@ from gf_common.domain import (
     digest,
     integer,
 )
-from gf_models.mlp.arrays import sha256
+from gf_models.arrays import sha256
+from gf_models.ppo_identity import model_id
 from gf_training.journal import atomic_json
 
 
@@ -95,6 +96,7 @@ def validate_chain(directory: Path, *, require_complete: bool = True, require_ar
         raise ContractError('PPO parent contains failure evidence')
     config = state.get('effective_config', {})
     run = config.get('run', {})
+    identity = model_id(config.get('model', {}))
     if digest(config) != state.get('config_sha256') or state.get('device') not in ('cpu', 'cuda:0'):
         raise ContractError('PPO parent config/device identity mismatch')
     times: list[Any] = [state.get(key) for key in ('created_unix', 'last_unix', 'wall_deadline_unix', 'admission_deadline_unix', 'execution_deadline_unix')]
@@ -141,6 +143,8 @@ def validate_chain(directory: Path, *, require_complete: bool = True, require_ar
         if _hash(path / 'inference.json') != record['inference_sha256']:
             raise ContractError('generation inference hash mismatch')
         inference = _read(path / 'inference.json')
+        if model_id(inference.get('model', {})) != identity:
+            raise ContractError('generation model differs from parent identity')
         if inference['weights']['sha256'] != record['weights_sha256']:
             raise ContractError('generation weights identity mismatch')
         retained = number == 0 or number % 10 == 0 or number == count
@@ -176,13 +180,18 @@ def validate_chain(directory: Path, *, require_complete: bool = True, require_ar
     return state, records
 
 
-def qualify_mlp(checkpoint: Path, expected_digest: str) -> Json:
+def qualify_ppo(checkpoint: Path, expected_digest: str) -> Json:
     directory = checkpoint.resolve().parent.parent
     with run_lock(directory):
         state, records = validate_chain(directory)
         if checkpoint.resolve() != checkpoint_path(directory, state['updates']).resolve() or records[-1]['inference_sha256'] != expected_digest:
-            raise ContractError('formal MLP binding requires final committed policy')
+            raise ContractError('formal PPO binding requires final committed policy')
         return state
+
+
+def qualify_mlp(checkpoint: Path, expected_digest: str) -> Json:
+    """Historical entrypoint; qualification is shared by the closed PPO models."""
+    return qualify_ppo(checkpoint, expected_digest)
 
 
 def owned_binding(directory: Path, generation: int) -> tuple[str, RuntimePolicyBinding]:
@@ -192,7 +201,8 @@ def owned_binding(directory: Path, generation: int) -> tuple[str, RuntimePolicyB
     if sha256(path / 'inference.json') != record['inference_sha256'] or sha256(path / 'weights.npz') != record['weights_sha256']:
         raise ContractError('owned frozen policy artifact changed')
     sha = record['inference_sha256']
-    return 'mlp-' + sha, RuntimePolicyBinding('mlp', {'checkpoint': str(path.resolve()), 'expected_manifest_digest': sha})
+    identity = model_id(read_json(path / 'inference.json')['model'])
+    return identity + '-' + sha, RuntimePolicyBinding(identity, {'checkpoint': str(path.resolve()), 'expected_manifest_digest': sha})
 
 
 def commit_generation(directory: Path, state: Json, *, generation: int, update: Json | None, controls: Json, deadline: float = float("inf")) -> Json:
@@ -293,13 +303,14 @@ def validate_collection_parent(manifest: Json, collection_directory: Path, *, on
             raise ContractError('owned online PPO context does not authorize this exact frozen batch')
     elif state['status'] != 'complete':
         raise ContractError('offline PPO data requires a healthy completed whole parent')
-    label = 'mlp-' + records[generation]['inference_sha256']
+    identity = model_id(state['effective_config']['model'])
+    label = identity + '-' + records[generation]['inference_sha256']
     config = records[generation]['parent_controls']
     registry = {'random': RuntimePolicyBinding('random'), 'heuristic': RuntimePolicyBinding('heuristic')}
     # Reconstruct bindings from immutable inference identities; tensors may have been retained/deleted.
     def binding(number: int) -> tuple[str, RuntimePolicyBinding]:
         sha = records[number]['inference_sha256']
-        return 'mlp-' + sha, RuntimePolicyBinding('mlp', {'checkpoint': str(checkpoint_path(parent, number)), 'expected_manifest_digest': sha})
+        return identity + '-' + sha, RuntimePolicyBinding(identity, {'checkpoint': str(checkpoint_path(parent, number)), 'expected_manifest_digest': sha})
     name, value = binding(generation)
     registry[name] = value
     if manifest['collection_kind'] == 'ppo_batch':

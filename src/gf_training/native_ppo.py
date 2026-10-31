@@ -11,16 +11,21 @@ from pathlib import Path
 
 from gf_common.domain import ContractError, Json, integer
 from gf_common.preprocessing import PreparationConfig
-from gf_models.config import MLPModelConfig
+from gf_models.config import GRUModelConfig, MLPModelConfig, TransformerModelConfig
 from gf_training.collection import OnlinePPOContext
 from gf_training.lineage import _OWNED_LOCKS
 from gf_training.native_authorization import NativePreparation
-from gf_training.native_backend import binary_identity, load_native, reader_settings
+from gf_training.native_backend import (
+    binary_identity,
+    load_native,
+    reader_settings,
+    require_ppo_model,
+)
 from gf_training.native_learning import PPOLearning
 from gf_training.q_data import check_deadline
 
 
-def preprocessing_identity(config: PreparationConfig, *, deadline: float) -> Json:
+def preprocessing_identity(config: PreparationConfig, *, deadline: float, model_id: str = 'mlp') -> Json:
     """Fail before collection and identify the actual loaded native binary."""
     check_deadline(deadline)
     if config.backend == 'python':
@@ -31,6 +36,7 @@ def preprocessing_identity(config: PreparationConfig, *, deadline: float) -> Jso
         raise ContractError('unsupported PPO preprocessing backend')
     native = load_native()
     reader_settings(config, native)
+    require_ppo_model(model_id, native)
     session = getattr(native, 'NativeSession', None)
     if session is None or any(not callable(getattr(session, name, None)) for name in (
             'cancel_handle', 'control_summary', 'authorize', 'next_batch', 'proof', 'finalize', 'close')):
@@ -71,7 +77,7 @@ def _source_proof(owner: NativePreparation) -> Json:
     return proof
 
 
-async def stage_rollout(directory: Path, numeric: Path, model: MLPModelConfig, linkage: Json,
+async def stage_rollout(directory: Path, numeric: Path, model: MLPModelConfig | GRUModelConfig | TransformerModelConfig, linkage: Json,
                   config: PreparationConfig, *, deadline: float, online_context: OnlinePPOContext,
                   expected_identity: Json, wall_deadline: float | None = None) -> tuple[int, Json]:
     """Stage the existing rollout format and close its source owner before return.
@@ -122,12 +128,16 @@ async def stage_rollout(directory: Path, numeric: Path, model: MLPModelConfig, l
         # Import lazily: ppo retains learning authority and the existing shard
         # boundary, and can explicitly use this adapter without an import cycle.
         from gf_training.ppo import write_rollout
-        write_rollout(numeric, rollout, deadline=deadline)
+        if isinstance(model, (GRUModelConfig, TransformerModelConfig)):
+            from gf_training.sequence_rollout import write_rollout as write_sequence
+            write_sequence(numeric, rollout, model, deadline=deadline)
+        else:
+            write_rollout(numeric, rollout, deadline=deadline)
         check_deadline(deadline)
         finalized = await owner.afinalize()
         if finalized != source:
             raise ContractError('native PPO final source proof changed')
-        if preprocessing_identity(config, deadline=deadline) != expected_identity:
+        if preprocessing_identity(config, deadline=deadline, model_id=model.model_id) != expected_identity:
             raise ContractError('native PPO preprocessing binary changed during ingestion')
     return decisions, {'source_set_sha256': source['source_set_sha256'],
                        'manifest_sha256': source['manifest_sha256'],

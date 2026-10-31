@@ -510,7 +510,8 @@ def _project_journals(sources: list[Path], *, deadline: float = float("inf"), on
         transitions = {r["decision"]: r for r in records if r["kind"] == "transition"}
         decisions = [r for r in records if r["kind"] == "decision"]
         if manifest["schema_version"] == 4 and header["viewer"] == lineage["learner_viewer"]:
-            expected_policy = "mlp-ppo-v1-" + header["policy"].removeprefix("mlp-")
+            from gf_models.ppo_identity import selection_version
+            expected_policy = selection_version(header["policy"])
             if any(record["selection"]["policy_version"] != expected_policy for record in decisions):
                 raise ContractError("PPO learner selection differs from frozen inference identity")
         end = next((r for r in records if r["kind"] == "end"), None)

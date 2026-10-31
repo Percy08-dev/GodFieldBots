@@ -17,7 +17,7 @@ import numpy.typing as npt
 from gf_common.domain import ContractError
 from gf_models.config import EncoderConfig, encoder_config
 from gf_models.encoder import feature_names
-from gf_models.mlp.features import critic_indices, signed_log
+from gf_models.features import critic_indices, signed_log
 
 if TYPE_CHECKING:
     from gf_training.ppo import RolloutDecision

@@ -172,7 +172,7 @@ def fake_native(monkeypatch, blocked, *, success_on_cancel=False):
         def peak_bytes(self):
             phase('peak', self.handle)
             return 0
-    def controls(summary, check=None):
+    def controls(summary, check=None, *, legacy_mlp=False):
         authorities.append(threading.get_ident())
         assert threading.get_ident() == main
         return iter(())

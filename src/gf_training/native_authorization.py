@@ -13,6 +13,7 @@ from typing import Any, NamedTuple, Self
 from gf_common.domain import ContractError, Json, canonical
 from gf_common.preprocessing import PreparationConfig
 from gf_common.schedule import serialize_schedule
+from gf_models.ppo_identity import model_id
 from gf_training.collection import OnlinePPOContext, training_groups, validation_groups
 from gf_training.lineage import _OWNED_LOCKS, run_lock
 from gf_training.native_backend import binary_identity, load_native, reader_settings
@@ -49,7 +50,8 @@ class NativeBatch(NamedTuple):
     index_columns: Any = None
 
 
-def _expected_collection_items(summary: Json, check: Callable[[], None] | None = None) -> Iterator[Json]:
+def _expected_collection_items(summary: Json, check: Callable[[], None] | None = None, *,
+                               legacy_mlp: bool = False) -> Iterator[Json]:
     """Reconstruct policy decisions from compact immutable controls, never rows."""
     import numpy as np
 
@@ -59,16 +61,20 @@ def _expected_collection_items(summary: Json, check: Callable[[], None] | None =
         parent = summary['parents'][collection['parent_index']]
         generations = parent['generations']
         generation = collection['collection_generation']
+        state = parent['state']
+        identity = model_id({'model_id': state.get('model_id', 'mlp' if legacy_mlp else None)})
+        if legacy_mlp and identity != 'mlp':
+            raise ContractError('historical native authorization supports only MLP')
         record = generations[generation]
         controls = record['parent_controls']
         registry: Json = {'random': {'model_id': 'random', 'policy_options': None},
                           'heuristic': {'model_id': 'heuristic', 'policy_options': None}}
 
         def binding(number: int, generations: Any = generations, registry: Json = registry,
-                    parent: Json = parent) -> str:
+                    parent: Json = parent, identity: str = identity) -> str:
             checksum = generations[number]['inference_sha256']
-            name = 'mlp-' + checksum
-            registry[name] = {'model_id': 'mlp', 'policy_options': {
+            name = identity + '-' + checksum
+            registry[name] = {'model_id': identity, 'policy_options': {
                 'checkpoint': str(Path(parent['directory']) / 'artifacts' / f'{number:06}'),
                 'expected_manifest_digest': checksum}}
             return name
@@ -216,7 +222,8 @@ class NativePreparation:
     def _authorization(self, online_context: OnlinePPOContext | None) -> Json:
         self._ownership(online_context)
         return {'control_fingerprint': self.summary['control_fingerprint'],
-                'collections': list(_expected_collection_items(self.summary, self.check))}
+                'collections': list(_expected_collection_items(self.summary, self.check,
+                                                                  legacy_mlp='ppo_policy_models' not in self.identity.get('build', {})))}
 
     def _authorization_bytes(self, authorization: Json) -> bytes:
         # Native admitted summary and the full escaped recipe bound BEFORE this
@@ -232,7 +239,8 @@ class NativePreparation:
     async def _aauthorization(self, online_context: OnlinePPOContext | None) -> Json:
         self._ownership(online_context)
         collections = []
-        for collection in _expected_collection_items(self.summary, self.check):
+        for collection in _expected_collection_items(self.summary, self.check,
+                                                                  legacy_mlp='ppo_policy_models' not in self.identity.get('build', {})):
             collections.append(collection)
             await asyncio.sleep(0)
         return {'control_fingerprint': self.summary['control_fingerprint'], 'collections': collections}

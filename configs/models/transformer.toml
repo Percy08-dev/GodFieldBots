@@ -1,0 +1,25 @@
+schema_version = 1
+kind = "model"
+
+[model]
+model_id = "transformer"
+version = "1"
+
+[model.encoder]
+history = "public_aggregate"
+max_elements = 3
+hash_buckets = 32
+history_window = 128
+
+[model.network]
+hidden_size = 128
+num_layers = 2
+num_heads = 4
+feedforward_size = 256
+
+[model.initialization]
+recipe = "orthogonal-transformer-v1"
+
+[model.inference]
+device = "cpu"
+cache_budget_bytes = 134217728

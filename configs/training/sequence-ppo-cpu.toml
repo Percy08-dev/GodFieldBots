@@ -1,0 +1,16 @@
+# Explicit CPU execution. Resume across CPU/CUDA is unsupported.
+schema_version = 1
+kind = "training"
+
+[training]
+algorithm = "ppo"
+device = "cpu"
+seeds = [17]
+max_updates = 1000
+max_owned_bytes = 10737418240
+admission_reservation_bytes = 1073741824
+cleanup_seconds = 30
+max_log_bytes = 1048576
+
+# Gradient unroll over own decisions; inference retains full episode history.
+sequence_length = 32

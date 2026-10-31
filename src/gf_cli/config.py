@@ -21,10 +21,13 @@ from gf_common.domain import (
 )
 from gf_common.preprocessing import PreparationConfig, preparation_config
 from gf_models.config import (
+    GRUModelConfig,
     MLPModelConfig,
     ModelConfig,
     PPOTrainingConfig,
+    SequencePPOTrainingConfig,
     TrainingConfig,
+    TransformerModelConfig,
     model_config,
     training_config,
     validate_capacity,
@@ -78,8 +81,8 @@ class ExperimentConfig:
     run: RunConfig = field(default_factory=RunConfig)
     server: ServerConfig = field(default_factory=ServerConfig)
     actions: ActionConfig = field(default_factory=ActionConfig)
-    model: ModelConfig | MLPModelConfig = field(default_factory=ModelConfig)
-    opponent: ModelConfig | MLPModelConfig = field(default_factory=ModelConfig)
+    model: ModelConfig | MLPModelConfig | GRUModelConfig | TransformerModelConfig = field(default_factory=ModelConfig)
+    opponent: ModelConfig | MLPModelConfig | GRUModelConfig | TransformerModelConfig = field(default_factory=ModelConfig)
     evaluation: EvaluationConfig = field(default_factory=EvaluationConfig)
     training: TrainingConfig | PPOTrainingConfig = field(default_factory=TrainingConfig)
     preprocessing: PreparationConfig = field(default_factory=PreparationConfig)
@@ -134,14 +137,17 @@ def _validate_table(name: str, values: Json) -> None:
                     raise ContractError(f"{name}.{key}: positive finite number required")
             elif type(value) is not str or not value:
                 raise ContractError(f"{name}.{key}: nonempty string required")
-    cls = MLPModelConfig if name in ("model", "opponent") and values.get("model_id") == "mlp" else PPOTrainingConfig if name == "training" and values.get("algorithm") == "ppo" else _TABLES[name]
-    # Partial model presets can specify MLP structural keys before dispatch.
+    cls = TransformerModelConfig if name in ("model", "opponent") and values.get("model_id") == "transformer" else GRUModelConfig if name in ("model", "opponent") and values.get("model_id") == "gru" else SequencePPOTrainingConfig if name == "training" and "sequence_length" in values else MLPModelConfig if name in ("model", "opponent") and values.get("model_id") == "mlp" else PPOTrainingConfig if name == "training" and values.get("algorithm") == "ppo" else _TABLES[name]
+    # Partial model presets may specify closed structural keys before dispatch.
     defaults = asdict(cls())
     if name in ("model", "opponent") and "model_id" not in values:
         defaults["inference"] = asdict(MLPModelConfig().inference)
         defaults["network"].update(asdict(MLPModelConfig().network))
+        defaults["network"].update(asdict(GRUModelConfig().network))
+        defaults["network"].update(asdict(TransformerModelConfig().network))
+        defaults["inference"].update(asdict(GRUModelConfig().inference))
     if name == "training" and "algorithm" not in values:
-        defaults.update(asdict(PPOTrainingConfig()))
+        defaults.update(asdict(SequencePPOTrainingConfig()))
     check(values, defaults)
 
 
@@ -219,10 +225,14 @@ def load_config(path: str | Path, overrides: Json | None = None) -> LoadedConfig
                         values[key] = [str(Path(item).resolve()) for item in values[key]]
         data = _merge(data, overrides)
     for name in ("model", "opponent"):
+        if data.get(name, {}).get("model_id") == "transformer":
+            base[name] = asdict(TransformerModelConfig())
+        if data.get(name, {}).get("model_id") == "gru":
+            base[name] = asdict(GRUModelConfig())
         if data.get(name, {}).get("model_id") == "mlp":
             base[name] = asdict(MLPModelConfig())
     if data.get("training", {}).get("algorithm") == "ppo":
-        base["training"] = asdict(PPOTrainingConfig())
+        base["training"] = asdict(SequencePPOTrainingConfig() if data.get("model", {}).get("model_id") in ("gru", "transformer") else PPOTrainingConfig())
     effective = _merge(base, data)
     for name in _TABLES:
         _validate_table(name, effective[name])
@@ -246,10 +256,12 @@ def load_config(path: str | Path, overrides: Json | None = None) -> LoadedConfig
     models = {name: model_config(effective[name]) for name in ("model", "opponent")}
     training = training_config(effective["training"])
     preprocessing = preparation_config(effective["preprocessing"])
-    if ("training" in data or "training" in data.get("references", {})) and models["model"].model_id not in ("lightgbm", "mlp"):
+    if ("training" in data or "training" in data.get("references", {})) and models["model"].model_id not in ("lightgbm", "mlp", "gru", "transformer"):
         raise ContractError("training/model mismatch")
-    if (isinstance(training, PPOTrainingConfig)) != (models["model"].model_id == "mlp") and "training" in data:
+    if (isinstance(training, PPOTrainingConfig)) != (models["model"].model_id in ("mlp", "gru", "transformer")) and "training" in data:
         raise ContractError("training algorithm/model mismatch")
+    if isinstance(training, SequencePPOTrainingConfig) != (models["model"].model_id in ("gru", "transformer")) and isinstance(training, PPOTrainingConfig):
+        raise ContractError("sequence training/model mismatch")
     for model in models.values():
         validate_capacity(model, effective["actions"]["max_sequence_length"])
     actions = effective["actions"]

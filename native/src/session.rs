@@ -328,6 +328,19 @@ impl Session {
                     &budget,
                     &control,
                 )?;
+                if string(
+                    parent
+                        .state
+                        .root
+                        .require("effective_config")?
+                        .require("model")?,
+                    "model_id",
+                )? != "mlp"
+                {
+                    return Err(Error::contract(
+                        "legacy fixed-data contract requires MLP PPO parents",
+                    ));
+                }
                 if !controls::numeric_field(&parent.state.root, "seed", [17, 29, 43][index]) {
                     return Err(Error::contract(
                         "fixed ordered PPO learning seeds must be 17,29,43",
@@ -463,6 +476,16 @@ impl Session {
             )?
             .len();
             let training = string(m, "collection_kind")? == "ppo_batch";
+            let model = string(
+                parent
+                    .state
+                    .root
+                    .require("effective_config")?
+                    .require("model")?,
+                "model_id",
+            )?;
+            let label_extra = model.len().saturating_sub(3);
+
             let models = if training {
                 let generation = m
                     .require("ppo")?
@@ -484,10 +507,10 @@ impl Session {
             // Recipe UUIDs/labels/IDs are bounded ASCII; each group is two
             // episodes with uint64 sampling seeds. Paths use escaped UTF8 size.
             let schedule = (if training { 8usize } else { 32 })
-                .checked_mul(1024)
+                .checked_mul(1024 + 4 * label_extra)
                 .ok_or_else(|| Error::resource("authorization size overflow"))?;
             let bindings = quoted_path
-                .checked_add(320)
+                .checked_add(320 + 2 * label_extra)
                 .and_then(|n| n.checked_mul(models))
                 .and_then(|n| n.checked_add(256))
                 .ok_or_else(|| Error::resource("authorization size overflow"))?;

@@ -488,7 +488,7 @@ def main(argv: list[str] | None = None) -> int:
             print(canonical(asyncio.run(validate_policy(validation_loaded, args.parent_run, args.output, collect_validation))))
             return 0
         if args.command == "train":
-            if loaded.config.model.model_id == "mlp":
+            if loaded.config.model.model_id in ("mlp", "gru", "transformer"):
                 from gf_training.ppo_run import train_ppo
                 if args.run_dir is None:
                     raise ValueError("PPO train requires --run-dir")

@@ -1,16 +1,11 @@
 """Lazy Torch model, public inference artifacts and exact numerical recipe."""
 from __future__ import annotations
 
-import importlib.metadata
 import json
 import math
-import platform
-import sys
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
-
-import numpy as np
 
 from gf_common.actions import GENERATOR_VERSION, SCORER_VERSION
 from gf_common.domain import (
@@ -23,41 +18,17 @@ from gf_common.domain import (
     canonical,
     closed,
 )
+from gf_models.arrays import atomic_json, load_arrays, save_arrays, sha256
 from gf_models.config import MLPModelConfig, mlp_model_config
 from gf_models.encoder import feature_names, signature
-from gf_models.mlp.arrays import atomic_json, load_arrays, save_arrays, sha256
-from gf_models.mlp.features import critic_indices
-
-NUMERICS = {"precision": "ieee-fp32", "tf32": False, "amp": False, "deterministic": True,
-            "cublas_workspace_config": ":4096:8", "threads": 1}
-
-
-def runtime_metadata() -> Json:
-    versions = {"torch": importlib.metadata.version('torch'), "numpy": np.__version__,
-                "python": platform.python_version(), "gil_enabled": sys._is_gil_enabled()}
-    if versions['torch'] not in ('2.14.1+cpu', '2.14.1+cu132') or versions['numpy'] != '2.5.4' or sys.version_info[:2] != (3, 14) or not versions['gil_enabled']:
-        raise ContractError('unverified MLP native runtime')
-    return versions
-
-
-def torch_runtime(device: str) -> Any:
-    versions = runtime_metadata()
-    import torch
-    if torch.__version__ != versions['torch'] or torch.version.cuda != ('13.2' if versions['torch'].endswith('+cu132') else None):
-        raise ContractError('MLP module/distribution/CUDA runtime mismatch')
-    if device == 'cuda:0' and versions['torch'] != '2.14.1+cu132':
-        raise ContractError('CUDA learner requires the pinned cu132 build')
-    if device not in ('cpu', 'cuda:0') or device == 'cuda:0' and not torch.cuda.is_available():
-        raise ContractError("configured learner device unavailable")
-    torch.set_num_threads(1)
-    torch.use_deterministic_algorithms(True)
-    backends: Any = torch.backends
-    backends.fp32_precision = "ieee"
-    torch.backends.cuda.matmul.fp32_precision = "ieee"
-    torch.backends.cudnn.fp32_precision = "ieee"
-    torch.backends.cudnn.benchmark = False
-    torch.backends.cudnn.deterministic = True
-    return torch
+from gf_models.features import critic_indices
+from gf_models.torch_runtime import (
+    NUMERICS,
+    restore_weights,
+    runtime_metadata,
+    torch_runtime,
+    weights,
+)
 
 
 def make_network(model: MLPModelConfig, seed: int) -> Any:
@@ -83,22 +54,6 @@ def make_network(model: MLPModelConfig, seed: int) -> Any:
     network = ActorCritic()
     torch.set_rng_state(original_rng)
     return network
-
-
-def weights(network: Any) -> dict[str, Any]:
-    return {name: tensor.detach().cpu().numpy().astype(np.float32, copy=True) for name, tensor in network.state_dict().items()}
-
-
-def restore_weights(network: Any, arrays: dict[str, Any]) -> None:
-    import torch
-    expected = network.state_dict()
-    if set(arrays) != set(expected):
-        raise ContractError("MLP weight keys mismatch")
-    for key, tensor in expected.items():
-        value = arrays[key]
-        if value.dtype != np.float32 or tuple(value.shape) != tuple(tensor.shape) or not np.isfinite(value).all():
-            raise ContractError("MLP weight shape/type mismatch")
-    network.load_state_dict({key: torch.from_numpy(value.copy()) for key, value in arrays.items()}, strict=True)
 
 
 def save_artifact(network: Any, directory: Path, model: MLPModelConfig, action_hash: str) -> Json:

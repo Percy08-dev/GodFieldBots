@@ -9,27 +9,27 @@ from dataclasses import asdict
 from pathlib import Path
 
 from gf_common.domain import ActionConfig, ContractError, Json, RuntimePolicyBinding, digest
-from gf_models.config import MLPModelConfig, ModelConfig
+from gf_models.config import GRUModelConfig, MLPModelConfig, ModelConfig, TransformerModelConfig
 
 
-def bindings(model: ModelConfig | MLPModelConfig, opponent: ModelConfig | MLPModelConfig, actions: ActionConfig, *, deadline: float = float("inf")) -> tuple[dict[str, RuntimePolicyBinding], tuple[str, str]]:
+def bindings(model: ModelConfig | MLPModelConfig | GRUModelConfig | TransformerModelConfig, opponent: ModelConfig | MLPModelConfig | GRUModelConfig | TransformerModelConfig, actions: ActionConfig, *, deadline: float = float("inf")) -> tuple[dict[str, RuntimePolicyBinding], tuple[str, str]]:
     registry: dict[str, RuntimePolicyBinding] = {}
     labels = []
     for config in (model, opponent):
         if config.model_id in ("random", "heuristic"):
             label = config.model_id
             binding = RuntimePolicyBinding(label)
-        elif isinstance(config, MLPModelConfig):
+        elif isinstance(config, (MLPModelConfig, GRUModelConfig, TransformerModelConfig)):
             if config.checkpoint is None:
-                raise ContractError("formal MLP inference requires a completed parent checkpoint")
-            from gf_models.mlp.arrays import sha256
-            from gf_models.mlp.model import inspect_artifact as inspect_mlp
-            from gf_training.lineage import qualify_mlp
+                raise ContractError("formal PPO inference requires a completed parent checkpoint")
+            from gf_models.arrays import sha256
+            from gf_models.ppo_artifacts import inspect_artifact as inspect_mlp
+            from gf_training.lineage import qualify_ppo
             sha = sha256(Path(config.checkpoint) / "inference.json")
             inspect_mlp(Path(config.checkpoint), expected_digest=sha, action_config_hash=digest(asdict(actions)), model=config, deadline=deadline)
-            qualify_mlp(Path(config.checkpoint), sha)
-            label = "mlp-" + sha
-            binding = RuntimePolicyBinding("mlp", {"checkpoint": config.checkpoint, "expected_manifest_digest": sha})
+            qualify_ppo(Path(config.checkpoint), sha)
+            label = config.model_id + "-" + sha
+            binding = RuntimePolicyBinding(config.model_id, {"checkpoint": config.checkpoint, "expected_manifest_digest": sha})
         else:
             if config.checkpoint is None:
                 raise ContractError("formal inference requires a ready trained checkpoint")
@@ -87,7 +87,7 @@ async def native_preflight(registry: dict[str, RuntimePolicyBinding], actions: A
     from gf_models.baselines import make_policy
     from gf_simulator_client.workers import ParticipantWorker
     for binding in registry.values():
-        if binding.model_id not in ("lightgbm", "mlp"):
+        if binding.model_id not in ("lightgbm", "mlp", "gru", "transformer"):
             continue
         remaining = deadline - time.monotonic()
         if remaining <= 0:

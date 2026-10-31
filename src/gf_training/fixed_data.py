@@ -17,8 +17,14 @@ import numpy as np
 from gf_common.domain import ContractError, Json, canonical, digest
 from gf_common.preprocessing import PreparationConfig
 from gf_common.schedule import serialize_schedule
-from gf_models.config import EncoderConfig, MLPModelConfig, PPOTrainingConfig
-from gf_models.mlp.arrays import sha256
+from gf_models.arrays import sha256
+from gf_models.config import (
+    EncoderConfig,
+    GRUModelConfig,
+    MLPModelConfig,
+    PPOTrainingConfig,
+    TransformerModelConfig,
+)
 from gf_training.collection import training_groups, validation_groups
 from gf_training.journal import (
     AcceptedDecision,
@@ -57,7 +63,9 @@ def _scan_sources(ppo_runs: tuple[Path, ...], validation_runs: tuple[Path, ...],
     total_seconds = 0.
     expected_proofs = {}
     for directory in sorted(ppo_runs):
-        session.validate_parent(directory)
+        state, _ = session.validate_parent(directory)
+        if state['effective_config']['model']['model_id'] != 'mlp':
+            raise ContractError('legacy fixed-data contract requires MLP PPO parents')
     for directory, validation_directory, seed in zip(ppo_runs, validation_runs, (17, 29, 43), strict=True):
         state, records = session.validate_parent(directory)
         if state['seed'] != seed:
@@ -265,11 +273,13 @@ async def validate_policy(loaded: Any, directory: Path, output: Path, collector:
     config = loaded.config
     if config.server.external_url is not None:
         raise ContractError('final validation requires owned distinct-seed Simulator groups')
-    if not isinstance(config.model, MLPModelConfig) or not isinstance(config.training, PPOTrainingConfig):
-        raise ContractError('MLP validation requires MLP config')
+    if not isinstance(config.model, (MLPModelConfig, GRUModelConfig, TransformerModelConfig)) or not isinstance(config.training, PPOTrainingConfig):
+        raise ContractError('PPO validation requires supported PPO config')
     directory = directory.resolve()
     with run_lock(directory):
         state, records = validate_chain(directory, deadline=started + config.run.execution_seconds)
+        if state['effective_config']['model']['model_id'] != config.model.model_id:
+            raise ContractError('validation model differs from completed parent')
         from gf_training.ppo_run import integration_identity
         if integration_identity(config, started + config.run.execution_seconds) != state['identity']['integration']:
             raise ContractError('validation Simulator integration differs from frozen parent identity')
