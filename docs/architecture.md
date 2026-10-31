@@ -2,6 +2,15 @@
 
 ## Status and scope
 
+The [current single-worker allocation analysis](verification/single-worker-bottleneck-analysis.md)
+keeps productionfaf71b/main2ed57 unchanged. Seven exact-output commands and current
+CPU profile pass independent safety, fidelity, arithmetic and report reviews.
+The private scan observes140,148,348allocation-producing requests; Replay has
+71.28%of requests (not CPU share), and Schema scopes18,550,112including terminal
+observations. Record/Event capacity growth is measured, but no reserve/arena/
+parser/format optimization is adopted. Counter-request, CPU-suffix, liveness,
+overhead and scope limitations remain explicit in the verification record.
+
 [ADR0020](adr/0020-owned-episode-pipeline-pool.md) accepts the design for one
 owned scoped Rayon pool per scan, with complete worker-local episode processing
 and bounded ordered coordinator commits. Source/failure reviews,89Rust tests,
