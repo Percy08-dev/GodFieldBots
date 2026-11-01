@@ -16,6 +16,8 @@ CUDA MLP PPO・世代管理・境界再開・固定データ比較も実装し�
 現在の検証結果・Gate・制約は [ActionOptions検証記録](docs/verification/action-options.md)、
 [LightGBM検証記録](docs/verification/lightgbm-phase4.md)、過去の基盤検証は
 [初期記録](docs/verification/phase0-3.md) に記録します。
+モデル構造・最適化・学習制御の探索方法と適用条件は
+[ハイパーパラメータ探索調査](docs/research/hyperparameter-search.md)に整理しています。
 
 Python **3.14（GIL有効）** とuvを使用します。ゲームルールと最終合法性は外部の
 `../GodFieldSimurator`が所有します。Simulatorをビルド・変更する機能は含みません。
