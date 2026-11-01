@@ -2,6 +2,17 @@
 
 ## Status and scope
 
+[ADR0023](adr/0023-structured-encoders-and-diverse-search.md) accepts an additive
+model/actions-v2 route for detailed participant frames, event banks, compact
+diverse candidates and configurable E2E state/hand/event encoders across the three
+PPO models, plus deterministic LightGBM and CPU/CUDA inference. The legacy paths
+retain their exact semantics. Independent design reviews authorize the core and
+confirmed candidate rows. Implementation and acceptance are pending; the
+public utility completion/target dependency is tracked in
+[issue0005](issues/0005-public-utility-action-semantics.md). It is not resolved by
+atomic hints or successful play. See the
+[verification ledger](verification/structured-encoders-and-search.md).
+
 [ADR0022](adr/0022-gru-transformer-ppo-plan.md) implements GRU/Transformer PPO
 with full own-decision history (up to1024), participant-local bounded hidden/KV
 caches, and Config sequence_length32(default,1..1024) for detached-prefix TBPTT.

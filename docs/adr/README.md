@@ -33,6 +33,10 @@ Magical Stick新契約・catalog v2・遅延認証応答の失敗ラッチと新
 
 ## 記録テンプレート
 
+追加: [0023](0023-structured-encoders-and-diverse-search.md) — Accepted (独立実装可能部分):
+構造化入力・設定可能E2E encoderと予算付き多様候補探索の共同導入。
+core・確認済み候補の設計レビューはREADY。公開utility行動契約の不足はissue0005、全体受入は未完了。
+
 ```markdown
 # NNNN: 判断の題名
 
