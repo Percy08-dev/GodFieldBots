@@ -151,10 +151,57 @@ same166cases and original edge repros; architecture reviewer ran22targeted
 generator/record and5refresh/preallocation checks. No fresh GPU/native/wheel/
 real-game/performance result follows; no numeric Torch path changed in this slice.
 
-## Remaining full-unit acceptance evidence
+## Pure persistence and E2E numeric slice C1
 
-Currently NOT RUN: integrated E2E PPO numerics/gradients,
-sharded artifacts/optimizer/RNG resume, worker2/journal5/
+New model modules: `sharded_arrays`, `structured_artifacts`, `structured_policy`;
+training modules: `structured_rollout`, `structured_numeric`. MLP's private
+history path validates original history but encodes only its current frame.
+No CLI/worker/journal/native/Generation2/formal-source path is connected yet.
+
+Artifact/resume3 and rollout3 preserve raw own snapshots/event banks/compact
+tables and deterministic tokens, without learned latents. Typed shards are
+pickle-free with decoded total<=64MiB; separate bounded JSON manifests<=64MiB
+have complete preplanned metadata sizes. Standard Adam remains unchanged; named
+state preserves missing moments and per-parameter steps/RNG. CPU processes need
+the clean-child CUDA-visibility boundary for strict physical ownership; pure CPU
+math does not promise that standard Torch Adam never probes available GPUs.
+
+Both independent reviews are READY after a coherent fix cycle A–F. Resolved:
+actual network/wrapper/save semantic and runtime binding consistency; joint
+raw/token/decoded/JSON and per-candidate ownership before allocations; full actual
+canonical Adam options/order/ownership; impossible negative variance; preflight
+of every owned final/temp path including dangling symlinks; full bundle/manifest
+planning and identical reader/writer size bounds. Failed restore preserves live
+weights/optimizer/RNG. No advisor escalation was needed: two overbroad CPU-Adam
+test sweeps were corrected against pinned Torch behavior, not repeated failed
+production fixes. Real source qualification remains a separate C2 responsibility.
+
+Root final-source commands:
+
+```sh
+UV_CACHE_DIR=/tmp/gf-structured-uv uv run --no-sync pytest -q tests/test_structured_learning.py tests/test_structured_network.py tests/test_structured_config.py tests/test_structured_learning_cuda.py
+CUBLAS_WORKSPACE_CONFIG=:4096:8 GFB_RUN_STRUCTURED_LEARNING_CUDA=1 UV_CACHE_DIR=/tmp/gf-structured-uv uv run --no-sync pytest -q tests/test_structured_learning_cuda.py
+UV_CACHE_DIR=/tmp/gf-structured-uv uv run --no-sync ruff check src/gf_models/sharded_arrays.py src/gf_models/structured_artifacts.py src/gf_models/structured_policy.py src/gf_training/structured_rollout.py src/gf_training/structured_numeric.py src/gf_models/structured_network.py tests/test_structured_learning.py tests/test_structured_learning_cuda.py
+UV_CACHE_DIR=/tmp/gf-structured-uv uv run --no-sync mypy src/gf_models/sharded_arrays.py src/gf_models/structured_artifacts.py src/gf_models/structured_policy.py src/gf_training/structured_rollout.py src/gf_training/structured_numeric.py src/gf_models/structured_network.py
+```
+
+Results:168PASS/4opt-in SKIPPED in22.96s; final separate GPU4PASS in24.16s,
+reaped exit0; Ruff PASS; mypy PASS(6modules). Earlier GPU4PASS9.79s preceded the
+review fixes and is superseded by that final result; these elapsed test times
+are not controlled performance comparisons. C1 overlaps A tests and must not be
+summed as distinct cases. The independent correctness reviewer ran87C1 cases and
+the original corruption/ownership reproductions; architecture ran18focused cases.
+
+Evidence includes all3temporal numeric/resume paths, all3hand mode late-state
+behavior, whole-batch saved/cache/full/learner/split parity at unchanged1e-5,
+129-endpoint logical stepping,10,001-candidate global normalization, negative
+state/token/manifest cases and actual1024-frame sharded roundtrip/1025early
+rejection. Independent P2-loss/P1-win/P2-draw probes verify target perspective
+and whole-batch normalization. Synthetic data is not a feasibility/quality gate.
+
+## Remaining integrated acceptance evidence
+
+Currently NOT RUN: actual worker/collection E2E PPO integration, worker2/journal5/
 native differential,192-game baseline, attention3models×2inference devices×
 continuous/pause-resume real2updates, other hand-mode MLP games, fixed512train
 decision CPU p95<=3s panel and separate stress/GPU attribution, pytest/Ruff/mypy/

@@ -6,7 +6,7 @@
 - Source: user's integrated implementation plan, 2026-11-01.
 - Review: bot_architecture_reviewer READY for §§1–9/11/12 and the confirmed public
   boundary; BLOCKED only for issue0005/full completion. No tests were run by that
-  design review. Final correctness/conformance and implementation acceptance pending.
+  design review. Full integrated correctness/conformance and acceptance remain pending.
 
 ## Implementation status
 
@@ -17,9 +17,12 @@ conformance reviews are READY after fixing joint endpoint admission, event/cache
 bounds, inherited initialization and fixed KV storage. Root accepts only this
 slice:102CPU/6separateCUDA and110selected legacy checks pass, scoped Ruff/mypy pass.
 The pure v4 generator slice is also implemented/accepted after independent
-correctness/conformance review and166affected checks. Worker/application routing,
-transport, persistence, native, PPO/LightGBM application integration and required
-real-game/performance acceptance remain incomplete.
+correctness/conformance review and166affected checks. The pure artifact3/resume3/
+rollout3 and E2E PPO numeric/inference API slice is implemented/accepted after
+both reviews,168affected CPU/4separate CUDA checks and scoped Ruff/mypy, including
+1024 persistence and synthetic exact two-update/resume. Worker/application
+routing, source journal/native/generation integration, LightGBM integration and
+required real-game/performance acceptance remain incomplete.
 Issue0005 still blocks full completion. See the verification ledger for scope.
 
 ## 1. Context and completion boundary
@@ -271,6 +274,17 @@ candidates. Never normalize separately by chunk.
 Reference: https://docs.pytorch.org/docs/2.14/checkpoint.html (checked2026-11-01).
 
 ## 7. Persistence and failure ownership
+
+New C1 JSON manifests have a bounded64MiB ceiling, distinct from each decoded
+numeric shard's64MiB total. Size planning includes the complete typed-bundle/
+member metadata and final canonical manifest, not only episode metadata. Writer
+and reader use the same bound; JSON expansion and simultaneous decoded/raw/token
+ownership are admitted before parsing/reconstruction. This accommodates maximum
+history across the16-game batch without lowering the1024decision limit merely
+to fit an incidental metadata ceiling. Large inputs can still fail an explicit
+active resource limit; no record truncation is allowed. Focused independent
+design review of this ceiling/admission clarification is READY (2026-11-01);
+implementation fixes and final conformance remain pending.
 
 Schema5 stores event-bank appends once and frame/table references with actor,
 revision, offsets, lengths and digests; projection validates every link before
@@ -525,6 +539,17 @@ Torch reports unavailable and must fail without silently choosing CPU.
 
 ## 13. Application integration design (review before dependent implementation)
 
+Pinned Torch2.14 Adam's accelerator graph-health check may query CUDA availability
+and current stream even for CPU parameters. Keep standard Adam. Production CPU
+numerical/policy workers set `CUDA_VISIBLE_DEVICES=""` inside their clean child
+bootstrap before any Torch import; never mutate the coordinator or an already
+initialized shared process. CUDA workers retain configured visibility and charged
+contexts. Pure direct CPU learner APIs guarantee CPU math, not absence of standard
+Torch probes in an arbitrary GPU-visible host; strict context ownership requires
+the clean CPU child boundary. Constructor/save/restore avoid unnecessary CUDA
+queries; do not assert that standard Adam never performs them or override private
+Torch internals to force that assertion.
+
 V2 Selection logprob/value become optional to preserve baseline `None` values;
 validate finite/nonpositive values when present. Do not invent baseline critic
 values. PPO source authorization/ingestion explicitly requires both finite fields
@@ -632,3 +657,139 @@ validate these new identities rather than accepting an old model solely by ID.
 These are application-level extensions of the accepted ownership, not a new
 trainer, engine, serving service or generic dispatch framework. Required gate
 evidence remains in §§7–9/12; real fitting/campaigns remain separately gated.
+
+## 14. Native additive boundary (review before dependent implementation)
+
+Extend the existing closed preprocessing reader-contract enum with
+`structured-v1`, without changing old fields/defaults or serialized values.
+Require that contract for structured-input/journal5 preparation and reject it
+for legacy-input/schema4 paths; gate by input recipe, including valid baseline
+model1 with actions2, rather than nominal model version alone. New presets select
+it explicitly. No auto-mapping from legacy/typed-borrowed-v1 or backend fallback.
+Native uses a separate owned typed journal5 path with existing thread/memory
+limits; an explicitly chosen Python reference backend identifies its own
+journal5 reference implementation, never claims Rust processing.
+
+Independent architecture design review: READY (2026-11-01). Native code/build/
+parity and final conformance remain pending. Preserve existing summary/IPC bounds
+and lease/cancellation ownership; derive actual window/signature from validated
+source/model semantics rather than echoing an untrusted request.
+
+Read-only C2 investigation maps the existing boundary through Python journal/
+native_authorization/native_ppo and Rust session/controls/projection/journal/
+typed_journal/pipeline/feature. The old NativeBatch/feature.rs hashed encoder and
+schema4 typed reader must not be overloaded with new token semantics.
+
+Keep existing base `recipe_identity=native-preprocessing-v1`, legacy reader
+contracts and v1 fingerprints unchanged. Append exact build-info strings:
+`structured_preprocessing_contract=participant-structured-v1;journal=5;rollout=3;generation=2;model=2`
+and `structured_default_signature=<Python signature(aggregate_window=128)>`.
+The latter binds the complete ordered layout/vocabulary at the default window;
+each request/proof additionally binds its actual configured window/signature.
+For model2 require both markers before collection/fixed preparation. Existing
+`ppo_policy_models` gates apply to neural learners and PPO source-parent IDs,
+not Random/heuristic counterparts or the LightGBM2 consumer. Those roles have
+their own closed model checks plus the structured schema/token capability;
+LightGBM2's PPO source parents still require supported neural IDs. No missing-marker
+MLP fallback is permitted for2; historical fallback remains only for1. Header
+strings are not legality data.
+
+Add a structured native session/batch path, rather than changing NativeBatch's
+existing positional payload. It validates schema5 bank/frame/table records and
+returns raw category/numeric/presence banks/offsets with compact candidate refs
+and structural proof. Python still owns source authorization, GAE/labels,
+optimization, Arrow publication and interpretation of natural/failed outcomes.
+Native never calls Python model code or stores learned latents. Existing scoped
+ownership/cancellation/lease/finalization patterns remain, with no fallback.
+
+V2 parent/generation/collection compact summaries and proofs explicitly surface
+model_id/model_version/input_recipe/journal_schema/feature identity/generation
+schema, and rollout schema3 where applicable, plus actual token signature. Bind
+these into a domain-separated v2 control fingerprint together with original
+source file digests and authorized policy-binding labels. A metadata string
+carried only by an untrusted request is insufficient. Collection3/4 still selects
+non-PPO/whole-PPO-parent qualification independently of journal5. Baseline opponent
+Config version1 with actions2 remains valid; parent/learner model2 identity must
+not be incorrectly imposed on Random/heuristic counterpart artifacts.
+
+Rust generation2 validates explicit artifact file maps/manifests and semantic
+identity; generation1's fixed five-file retention/hash behavior is preserved.
+Python native authorization consumes the small v2 summary without rereading or
+copying full effective_config into IPC. Native preprocessing identity in parent
+resume includes actual binary/build/capability/recipe/signature identities.
+
+Required evidence: Python/native raw token/category/presence/order/hash equality
+on same original owned inputs, all invalid prefix/actor/version/missing policy
+values/shard cases, and exact old corpus/index/saved-PPO proofs using fresh output
+directories. Build/install a fresh locked offline wheel and verify loaded ELF/
+build_info/source digests; checkout HEAD alone is not build provenance. Existing
+saved-data probe is `tests/native_v2_ppo_probe.py` (its name denotes the historical
+catalog-v2 fixture, not this new schema5/model2 contract). No native tests/builds
+or new-runtime parity were run by the investigation.
+
+## 15. Journal5 candidate-column storage (design review required)
+
+Focused independent architecture design review: READY (2026-11-01), including
+raw-code convention and publication/failure ordering. Codec implementation and
+all executable compatibility/resource/performance checks remain pending.
+
+Raw kind/target codes are explicitly zero-based ACTION_KINDS/TARGETS indices.
+PAD/MISSING offsets belong to tokenization only and never appear in these raw
+table columns.
+
+Publish each sidecar at a unique actor+decision-owned basename: no-overwrite
+temporary write, hash/close, then atomic owned publication before the referencing
+JSONL row. Submit no Act if either sidecar or journal-row write fails. Preserve
+failed/orphan evidence without inventing an accepted transition, and retain the
+existing positive-acknowledgement/closure qualification rules.
+
+A bounded size investigation uses synthetic32768-row tables, not observed game
+counts or legality evidence. With18zero-valued references per row the full current
+CandidateTable JSON is3,565,775bytes; two participant journals with20such decisions
+each cause4.25GiB candidate-only admission under existing whole-file32×JSON policy.
+At128references it is10,804,995bytes/table. No throughput/RSS/normal-game inference
+is drawn. Raising the existing2GiB preprocessing budget or dropping proposals to
+hide this representation cost would violate the plan's baseline comparison.
+
+Schema5 therefore stores table columns in an owned uncompressed typed sidecar;
+the JSONL row retains frame/table hashes, a closed sidecar descriptor, search
+report and Selection, without duplicating the table vectors. Parent owns writes
+after validating worker output; no journal paths or management state go to workers.
+In-memory CandidateTable and token semantics do not change. Protocol2 remains
+separately bounded JSON initially; measure its actual512-panel communication cost
+before considering a transport optimization.
+
+Codec `candidate-columns-v1` has a fixed closed column order: kinds uint8,
+relative targets uint8, numerics int64[N,4], presence uint8[N,4], offsets
+int64[N+1], slots uint8[S]. Codes use the existing exact ACTION_KINDS/TARGETS
+order, not a new feature vocabulary. N1..65536, S<=128*N; each slot0..17,
+presence0/1, canonical absent numerics0, offsets start0/endS and row lengths
+respect128/active capacity. Integer data is little-endian; int64 regions align
+to8bytes with checked zero padding. Descriptor includes codec/schema, N/S,
+column dtype/shape/offset/byte counts, exact owned relative basename, file length,
+SHA-256 and semantic table/frame hashes. Reject unknown fields/layouts, overlap,
+path traversal/symlinks, bad lengths/codes and trailing data before use.
+
+The complete default single-table payload is at most about11MiB at65536×128,
+including fixed columns; nevertheless enforce decoded-shard total<=64MiB before
+allocation/write. Smaller configured resource limits may reject explicitly.
+No pickle, compression, new crate, general serialization framework or model code
+in native. Reuse existing bounded read_i64/write_i64, add the corresponding tiny
+chunked u8 I/O with cancellation/reservation/rollback, and existing typed-owner
+leases. Fixed layout and hashes identify bytes; it is not an engine-rule parser.
+
+Journal/source inventories include referenced sidecar files and verified hashes,
+not merely the JSONL path. Native derives and validates those links from original
+schema5 records; include actual files/semantic identities in v2 fingerprint and
+final source recheck. An altered/missing/reordered/foreign frame/table sidecar
+rejects the source. Old journal4 JSON/body/inventory/fingerprint remain unchanged.
+Candidate sidecars use newly owned safe publication; do not change legacy array
+writers as a side effect. Numeric rollout3/model artifact3 keep their separately
+reviewed NumPy shard formats and per-shard decoded64MiB bound.
+
+Verification: exact Python/raw-column/native reconstruction and canonical hashes,
+edge columns/targets/presence/order, all corruption/ownership/64MiB cases and
+source-inventory mutation; default2GiB/16MiB preprocessing presets remain. Size
+calculation is only design evidence; build, differential, real-game and512-panel
+performance acceptance are still required. This new storage detail needs focused
+architecture review before dependent implementation.

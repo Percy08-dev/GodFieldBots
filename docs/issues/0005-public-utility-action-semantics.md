@@ -52,3 +52,14 @@ Do not resolve this issue by silently omitting a requested family, consulting
 private engine rules, treating atomic hints as combinations, or claiming a clean
 pilot proves the missing rules. Unaffected encoder/compatibility work can proceed
 after its design gate; full ADR0023 acceptance remains dependent on this scope.
+
+## Additional public-source check
+
+Root also checked the [official game landing page](https://godfield.net/) and
+Simulator-cited [miracle list](https://w.atwiki.jp/piong/pages/20.html) and
+[general rules](https://w.atwiki.jp/piong/pages/16.html). The web reader returned
+no readable rules from the landing page. The cited secondary pages explain game
+effects/basic UI, but do not supply the missing Simulator typed-Action completion,
+per-card target/default or compatibility table. They are not adopted as a
+substitute wire contract. This bounded check did not resolve the dependency;
+it is not a claim that no other public source exists.

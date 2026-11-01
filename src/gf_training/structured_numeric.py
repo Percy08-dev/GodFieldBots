@@ -1,0 +1,194 @@
+"""E2E structured endpoint PPO using the shared fixed loss/GAE conventions.
+
+No collection, source authorization, publication or independent trainer loop.
+Scalar endpoint accumulation preserves logical128-endpoint Adam/clip/shuffle
+semantics while keeping all-candidate normalization and suffix gradients intact.
+For strict physical CPU ownership, the caller starts a clean process with CUDA
+visibility disabled before any Torch import. Standard pinned Adam may probe an
+available accelerator on a GPU-visible host even when its parameters are on CPU.
+This module never mutates process visibility or overrides Adam health checks.
+"""
+from __future__ import annotations
+
+import math
+from dataclasses import replace
+from pathlib import Path
+
+import numpy as np
+
+from gf_common.domain import ContractError, Json, integer
+from gf_models.arrays import MAX_ARRAY_BYTES, sha256
+from gf_models.structured_artifacts import (
+    inspect_inference,
+    load_inference,
+    read_resume,
+    restore_resume,
+    save_inference,
+    save_resume,
+    validate_save_context,
+)
+from gf_models.structured_config import (
+    InferenceBindingV2,
+    ModelConfigV2,
+    architecture_identity,
+    resource_estimate,
+)
+from gf_models.structured_network import make_network
+from gf_models.torch_runtime import torch_runtime
+from gf_training.ppo_math import losses
+from gf_training.structured_rollout import StructuredRollout
+
+
+class Learner:
+    def __init__(self, model: ModelConfigV2, seed: int, binding: InferenceBindingV2,
+                 action_config_hash: str, resume_identity: str) -> None:
+        for value in (action_config_hash, resume_identity):
+            if not isinstance(value, str) or len(value) != 64 or set(value) - set("0123456789abcdef"):
+                raise ContractError("closed action/resume identity digests required")
+        integer(seed, 0, 2**63 - 1)
+        resource_estimate(model, binding)
+        self.torch = torch_runtime(binding.device)
+        self.torch.random.default_generator.manual_seed(seed)
+        if binding.device != "cpu":
+            self.torch.cuda.manual_seed_all(seed)
+        self.model, self.binding = model, binding
+        self.action_config_hash, self.resume_identity = action_config_hash, resume_identity
+        self.network = make_network(model, seed, binding)
+        self.optimizer = self.torch.optim.Adam(self.network.parameters(), lr=3e-4, betas=(.9, .999), eps=1e-8)
+        self.shuffle = np.random.Generator(np.random.PCG64(seed))
+        self.steps = 0
+
+    def synchronize(self) -> None:
+        if self.binding.device != "cpu":
+            self.torch.cuda.synchronize(self.binding.device)
+
+    def admit(self, rollout: StructuredRollout) -> None:
+        rollout.require_learning()
+        if architecture_identity(rollout.model) != architecture_identity(self.model) or rollout.action_config_hash != self.action_config_hash:
+            raise ContractError("learner rollout architecture/action mismatch")
+        # Complete batch preflight before reference construction, packing or any
+        # optimizer step; no legacy4096 candidate total admission is inherited.
+        for index in range(len(rollout)):
+            frames, candidates = rollout.endpoint(index)
+            endpoint_bytes = resource_estimate(self.model, self.binding, decisions=len(frames),
+                              interval_events=max(len(frame.interval_numerics) for frame in frames),
+                              candidates=len(candidates.kinds), suffix_decisions=min(len(frames), self.model.temporal.sequence_length))["total_bytes"]
+            if rollout.resident_bytes + endpoint_bytes > min(self.model.resources.max_owned_bytes, self.binding.managed_budget_bytes):
+                raise ContractError("whole rollout plus endpoint exceeds learner reservation")
+
+    def parity(self, rollout: StructuredRollout) -> Json:
+        self.admit(rollout)
+        torch = self.torch
+        cpu_binding = replace(self.binding, device="cpu")
+        cpu = make_network(self.model, 0, cpu_binding)
+        cpu.load_state_dict({name: value.detach().cpu() for name, value in self.network.state_dict().items()})
+        maximum = 0.
+        for episode in rollout.episodes:
+            cache = cpu.new_cache()
+            for position, (frame, candidates, selection) in enumerate(zip(episode.frames, episode.tables, episode.records.selections, strict=True)):
+                frames = episode.frames[:position + 1]
+                with torch.no_grad():
+                    context, cards = cpu.step(frame, cache)
+                    cached_logs, _ = cpu.distribution(context, cards, candidates)
+                    cached_value = cpu.value(context)
+                    cpu_logs, cpu_value, _ = cpu(frames, candidates)
+                    device_logs, device_value, _ = self.network(frames, candidates)
+                # This actual learner-device suffix graph stays differentiable;
+                # no persisted or previous-update latent is used as a shortcut.
+                split_logs, split_value, _ = self.network(frames, candidates,
+                    suffix_length=min(len(frames), self.model.temporal.sequence_length))
+                if not split_logs.requires_grad or not split_value.requires_grad:
+                    raise ContractError("learner split lost suffix gradients")
+                self.synchronize()
+                checks = ((cpu_logs[selection.index], torch.tensor(selection.logprob, dtype=torch.float32)),
+                          (cpu_value, torch.tensor(selection.value, dtype=torch.float32)),
+                          (cpu_logs, cached_logs), (cpu_value, cached_value),
+                          (cpu_logs, device_logs.detach().cpu()), (cpu_value, device_value.detach().cpu()),
+                          (cpu_logs, split_logs.detach().cpu()), (cpu_value, split_value.detach().cpu()))
+                for expected, actual in checks:
+                    if not torch.isfinite(actual).all() or not torch.isfinite(expected).all() or not torch.allclose(expected, actual, atol=1e-5, rtol=1e-5):
+                        raise ContractError("whole-batch frozen saved/cache/full/device/split parity failed before update")
+                    maximum = max(maximum, float((actual - expected).abs().max()))
+                del split_logs, split_value, checks
+        return {"atol": 1e-5, "rtol": 1e-5, "max_abs_error": maximum, "decisions": len(rollout),
+                "checks": ["saved", "cpu-cache", "cpu-full", "learner-full", "learner-split"]}
+
+    def update(self, rollout: StructuredRollout) -> Json:
+        torch = self.torch
+        parity = self.parity(rollout)  # ENTIRE frozen batch before any Adam change.
+        totals: dict[str, float] = {}
+        denominator = 0
+        self.network.train()
+        for _ in range(4):
+            order = self.shuffle.permutation(len(rollout)).tolist()
+            for start in range(0, len(order), 128):
+                logical = order[start:start + 128]
+                # Scalar endpoint graphs are admitted individually before packing;
+                # original logical ordering/weights and the one clip/step remain.
+                self.optimizer.zero_grad(set_to_none=True)
+                for index in logical:
+                    frames, candidates = rollout.endpoint(index)
+                    logs, value, _ = self.network(frames, candidates,
+                        suffix_length=min(len(frames), self.model.temporal.sequence_length))
+                    selected, old, _, advantage, target = rollout.vector(index)
+                    self.synchronize()
+                    mask = torch.ones((1, len(candidates.kinds)), dtype=torch.bool, device=self.binding.device)
+                    selected_tensor = torch.tensor([selected], dtype=torch.int64, device=self.binding.device)
+                    vectors = [torch.tensor([number], dtype=torch.float32, device=self.binding.device)
+                               for number in (old, advantage, target)]
+                    loss, measured = losses(logs[None], value[None], mask, selected_tensor, *vectors)
+                    if not torch.isfinite(loss):
+                        raise ContractError("nonfinite structured PPO loss")
+                    (loss / len(logical)).backward()
+                    for name, number in measured.items():
+                        totals[name] = totals.get(name, 0.) + number
+                    denominator += 1
+                    del logs, value, loss
+                norm = torch.nn.utils.clip_grad_norm_(self.network.parameters(), .5, error_if_nonfinite=True)
+                if not torch.isfinite(norm):
+                    raise ContractError("nonfinite structured PPO gradients")
+                self.optimizer.step()
+                self.steps += 1
+        self.synchronize()
+        metrics = {name: value / denominator for name, value in totals.items()}
+        if not all(math.isfinite(value) for value in metrics.values()) or any(not torch.isfinite(parameter).all() for parameter in self.network.parameters()):
+            raise ContractError("nonfinite structured PPO update output")
+        return {**metrics, "optimizer_steps": self.steps, "parity": parity,
+                "sequence_length": self.model.temporal.sequence_length}
+
+    def save(self, directory: Path, *, code_revision: str | None = None,
+             shard_bytes: int = MAX_ARRAY_BYTES) -> Json:
+        validate_save_context(self.network, self.model, self.binding, self.optimizer)
+        self.synchronize()
+        manifest = save_inference(directory, self.network, self.model, self.action_config_hash,
+                                  code_revision=code_revision, shard_bytes=shard_bytes)
+        resume = save_resume(directory, self.network, self.optimizer, self.shuffle, self.steps,
+                             self.model, self.binding, self.resume_identity, shard_bytes=shard_bytes)
+        return {"inference_digest": sha256(directory / "inference.json"),
+                "resume_digest": sha256(directory / "resume.json"),
+                "files": {**manifest["weights"]["files"], **resume["state"]["files"],
+                          "inference.json": sha256(directory / "inference.json"),
+                          "resume.json": sha256(directory / "resume.json")}}
+
+    def restore(self, directory: Path) -> None:
+        # Stage complete weights/optimizer validation in fresh owners. A failed
+        # ordinary resume never partially overwrites this learner's parameters.
+        existing_bytes = sum(buffer.numel() * buffer.element_size() for buffer in self.network.buffers())
+        existing_bytes += sum(parameter.numel() * parameter.element_size() for parameter in self.network.parameters())
+        existing_bytes += sum(parameter.grad.numel() * parameter.grad.element_size() for parameter in self.network.parameters() if parameter.grad is not None)
+        existing_bytes += sum(value.numel() * value.element_size() for state in self.optimizer.state.values()
+                              for value in state.values() if isinstance(value, self.torch.Tensor))
+        staged = resource_estimate(self.model, self.binding)["total_bytes"]
+        if existing_bytes + staged > min(self.model.resources.max_owned_bytes, self.binding.managed_budget_bytes):
+            raise ContractError("staged resume plus live learner exceeds managed reservation")
+        inspect_inference(directory, model=self.model, binding=self.binding,
+                          action_config_hash=self.action_config_hash)
+        # Stream/validate every resume shard and RNG/header before constructing
+        # a staged network. The final publisher revalidates its own fresh data.
+        read_resume(directory, self.model, self.binding, self.resume_identity)
+        network, _ = load_inference(directory, model=self.model, binding=self.binding,
+                                     action_config_hash=self.action_config_hash)
+        optimizer = self.torch.optim.Adam(network.parameters(), lr=3e-4, betas=(.9, .999), eps=1e-8)
+        steps = restore_resume(directory, network, optimizer, self.shuffle, self.model,
+                                self.binding, self.resume_identity)
+        self.network, self.optimizer, self.steps = network, optimizer, steps

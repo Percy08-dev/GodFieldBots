@@ -12,7 +12,11 @@ implemented and accepted after independent correctness/conformance reviews:
 102CPU/6separateCUDA tests,110selected legacy tests and scoped Ruff/mypy pass.
 The pure v4 candidate generator is also accepted after both independent reviews
 and166affected Python checks. It is not yet connected to the application workers.
-Application integration and full acceptance are pending; the
+The pure artifact3/rollout3/E2E numeric learner/inference API slice is accepted
+after independent reviews,168affected CPU/4separate CUDA checks and scoped
+Ruff/mypy. It includes1024-frame persistence and exact synthetic two-update/resume
+with partial Adam state; these are component results. Config/worker/journal/
+native application integration and full acceptance are pending; the
 public utility completion/target dependency is tracked in
 [issue0005](issues/0005-public-utility-action-semantics.md). It is not resolved by
 atomic hints or successful play. See the

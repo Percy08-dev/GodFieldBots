@@ -267,6 +267,8 @@ def make_network(model: ModelConfigV2, seed: int,
             integer(suffix_length, 1, len(frames))
             for index, frame in enumerate(frames):
                 validate_frame_tokens(frame)
+                if frame.aggregate_window != model.event.aggregate_window or len(frame.interval_numerics) > model.event.max_interval:
+                    raise ContractError("historical frame window/interval cap mismatch")
                 if frame.event_end > model.event.max_episode:
                     raise ContractError("configured episode event cap exceeded")
                 if index and ((frame.actor, frame.episode) != (frames[0].actor, frames[0].episode)
@@ -278,6 +280,10 @@ def make_network(model: ModelConfigV2, seed: int,
             resource_estimate(model, runtime_binding, decisions=len(frames),
                               interval_events=max(len(frame.interval_numerics) for frame in frames),
                               candidates=1, suffix_decisions=suffix_length if torch.is_grad_enabled() else 1)
+            if model.model_id == "mlp":
+                # Historical frames are validated above, but MLP consumes only
+                # the current detailed state/hand/interval/aggregate observation.
+                return self.encode_frame(frames[-1])
             prefix = len(frames) - suffix_length
             past = None
             if prefix and model.model_id != "mlp":
