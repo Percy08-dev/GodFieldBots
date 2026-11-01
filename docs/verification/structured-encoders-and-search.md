@@ -778,6 +778,51 @@ correspondence, authorize engineering real I/O or satisfy physical GPU high-wate
 performance/learning acceptance. The small CPU cases and default CUDA numerical
 cases are component checks, not real16-game batches.
 
+## S3b1 original Source and recorded rollout correspondence acceptance
+
+One private decoder now serves the unchanged strict active reader and a private
+recorded-declaration path. The latter binds to the S2-validated generation's
+declarations rather than querying installed Torch/current runtime/hardware or
+producer identity. Each reconstructed episode must match the ordered original
+bank/event bytes/prefixes, frame payload/revision/interval/hash, full table columns/
+hash, Selection and closure before reusing that SAME original record. Existing
+token/scalar/GAE/reward-perspective reconstruction then checks stored numerical
+inputs without another full Source tokenization or learned-latent input.
+Zero-endpoint/interrupted records remain; the learning gate separately rejects
+the whole interrupted cohort.
+
+The private Source context retains the original owner through publication and
+final rechecks. Joint admission counts actual shared objects once, distinct copied
+containers separately, and includes retained Source, decoded reconstruction,
+planning/packing, actual encoded JSON parsing and per-file archive scratch before
+open. NPZ guards admit32times largest encoded archive; main and sidecar JSON are
+admitted at their actual encoded sizes, including valid whitespace. Historical
+hash/ZipFile/NumPy reads use the same verified nofollow regular FD with bounded
+per-file ownership and original path checks. Private deadline injection reaches
+chunked hash/member/load/save/bundle boundaries; old None/default behavior and
+public read/write signatures stay unchanged. Original exceptions/cancellations
+survive a failing same-owner recheck, with diagnostics; normal recheck failures
+still reject output.
+
+Both scoped reviews are READY. Three reproduced P2 cases were fixed: Source
+shared ownership counted twice, padded JSON escaping the caller cap, and final
+recheck masking the initiating exception. The20,998,719-byte sidecar is now
+rejected before JSON parsing under17,232,556total bytes and remains valid with an
+adequate cap. Independent final selections each pass8cases; prior31raw/token/FD/
+deadline/reward checks are reused, not added to the final suite.
+
+Exact final frozen-source HOST regression:
+
+```sh
+UV_CACHE_DIR=/tmp/gf-structured-uv uv run --no-sync pytest -q tests/test_structured_ppo_source.py tests/test_structured_array_deadlines.py tests/test_structured_learning.py tests/test_structured_source.py tests/test_structured_lineage.py tests/test_structured_sealed_metadata.py tests/test_ppo_numeric.py tests/test_gru_ppo.py tests/test_transformer_ppo.py
+```
+
+PASS329in83.98s(exit0). This includes active C1/legacy array consumers and Source/
+Gen2 regressions. Root full Ruff PASS, mypy PASS(106source files), diff/link checks
+PASS. No model math, current active semantics, Generation1/C1 persisted format,
+rule or dependency changes. This checkpoint grants no whole-parent/formal Source
+authority or real I/O; common coordinator/CLI composition remains next.
+
 ## S3 resource-accounting preparation: derived facts only
 
 A bounded read-only calculation confirms that `own_worker_settings` separates

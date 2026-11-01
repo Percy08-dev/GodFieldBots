@@ -13,6 +13,8 @@ import os
 import re
 import stat
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -52,7 +54,7 @@ from gf_training.candidate_storage import (
 )
 from gf_training.preparation import ResourceLimit
 from gf_training.structured_journal import STRUCTURED_FEATURE_VERSION, read_structured_journal
-from gf_training.structured_rollout import EpisodeRecords
+from gf_training.structured_rollout import EpisodeRecords, _owned_bytes
 
 
 @dataclass(frozen=True)
@@ -338,14 +340,97 @@ def _header_identity(header: Json, manifest: Json, episode: Json, spec: Json, ac
         raise ContractError('original journal caps differ from declared actions/policy')
 
 
-def inspect_component_collection(directory: Path, *, actions: ActionConfigV2, settings: PreparationConfig,
-                                 expected_split: str | None = None, deadline: float = float('inf')) -> ComponentCollection:
-    """Read structural components only; no Generation2/whole-parent qualification."""
+def _source_owner(directory: Path, settings: PreparationConfig, deadline: float) -> _SourceOwner:
     settings = preparation_config(asdict(settings))
     if settings.backend != 'python' or settings.reader != 'structured-v1':
         raise ContractError('explicit Python structured source reader required; no native fallback')
     deadline = min(deadline, time.monotonic() + settings.wall_seconds - settings.cleanup_seconds)
-    owner = _SourceOwner(directory, settings, deadline)
+    return _SourceOwner(directory, settings, deadline)
+
+
+def inspect_component_collection(directory: Path, *, actions: ActionConfigV2, settings: PreparationConfig,
+                                 expected_split: str | None = None, deadline: float = float('inf')) -> ComponentCollection:
+    """Read structural components only; no Generation2/whole-parent qualification."""
+    return _inspect_component_collection(_source_owner(directory, settings, deadline), actions, expected_split)
+
+
+@dataclass
+class _SourceSnapshot:
+    collection: ComponentCollection
+    _owner: _SourceOwner
+    _retained_bytes: int
+    _external_bytes: int = 0
+
+    @property
+    def resident_bytes(self) -> int:
+        return self._retained_bytes
+
+    @property
+    def max_owned_bytes(self) -> int:
+        return self._owner.settings.memory_budget_mib * 1024**2
+
+    def check(self) -> None:
+        self._owner.check()
+        # Final rechecks need one bounded hash buffer and a bounded inventory
+        # comparison in addition to retained Source and caller-owned results.
+        scratch = 1024**2 + 1024 * len(self._owner.files)
+        if self.resident_bytes + self._external_bytes + scratch > self.max_owned_bytes:
+            raise ResourceLimit('joint Source/decode/publication reservation exceeded')
+
+    def reserve(self, extra_owned_bytes: int) -> None:
+        integer(extra_owned_bytes, 0)
+        previous = self._external_bytes
+        self._external_bytes = max(self._external_bytes, extra_owned_bytes)
+        try:
+            self.check()
+        except BaseException:
+            self._external_bytes = previous  # no ownership was acquired on failed admission.
+            raise
+
+    def extra_bytes_for(self, shared: Any) -> int:
+        """Deduct only references to the exact same retained Python objects."""
+        seen: set[int] = set()
+        _owned_bytes(shared, seen)
+        return _owned_bytes((self.collection.episodes, self.collection._manifest, self.collection._proof,
+                             self._owner.files, self._owner.inventories), seen)
+
+    def additional_bytes(self, value: Any) -> int:
+        """External union minus actual retained Source identities."""
+        seen: set[int] = set()
+        _owned_bytes((self.collection.episodes, self.collection._manifest, self.collection._proof,
+                      self._owner.files, self._owner.inventories), seen)
+        return _owned_bytes(value, seen)
+
+    def recheck(self) -> None:
+        self.check()
+        self._owner.finalize()
+        self.check()
+
+
+@contextmanager
+def _component_source_snapshot(directory: Path, *, actions: ActionConfigV2, settings: PreparationConfig,
+                               expected_split: str | None = None, deadline: float = float('inf')) -> Iterator[_SourceSnapshot]:
+    owner = _source_owner(directory, settings, deadline)
+    collection = _inspect_component_collection(owner, actions, expected_split)
+    retained = _owned_bytes((collection.episodes, collection._manifest, collection._proof, owner.files, owner.inventories))
+    snapshot = _SourceSnapshot(collection, owner, retained)
+    snapshot.check()
+    try:
+        yield snapshot
+    except BaseException as error:
+        try:
+            snapshot.recheck()
+        except BaseException as recheck_error:  # noqa: BLE001 - initiating cancellation/failure survives cleanup
+            error.add_note('original Source recheck failed: ' + type(recheck_error).__name__ + ': ' + str(recheck_error))
+        raise
+    else:
+        # Keep the ORIGINAL identities/inventories through the caller's work.
+        snapshot.recheck()
+
+
+def _inspect_component_collection(owner: _SourceOwner, actions: ActionConfigV2,
+                                  expected_split: str | None) -> ComponentCollection:
+    settings, deadline = owner.settings, owner.deadline
     manifest = owner.object(owner.root / 'manifest.json')
     episodes, specs = _manifest(manifest, actions, expected_split)
     report = owner.object(owner.root / 'report.json')

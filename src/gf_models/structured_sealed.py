@@ -239,7 +239,10 @@ class SealedScan:
         return descriptors
 
 
-def _semantics(value: Json, model: Any) -> None:
+def validate_recorded_semantics(value: Json, model: Any) -> None:
+    """Validate supported static recipes and recorded runtime shape, no queries."""
+    if not SEMANTIC_KEYS <= value.keys():
+        raise ContractError('missing recorded semantic declaration')
     expected = {'input_recipe': INPUT_RECIPE, 'generator_version': GENERATOR_V2, 'policy_input_version': POLICY_INPUT_VERSION,
         'end_projection_version': END_PROJECTION_VERSION, 'reward_policy_version': 'natural-terminal-v1',
         'reviewed_spec_hashes': REVIEWED_SPEC_HASHES, 'simulator_revision': SIMULATOR_REVISION, 'catalog': CATALOG_META,
@@ -249,6 +252,10 @@ def _semantics(value: Json, model: Any) -> None:
     runtime = closed(value['runtime'], {'torch', 'numpy', 'python', 'gil_enabled'})
     if any(type(runtime[key]) is not str or not runtime[key] for key in ('torch', 'numpy', 'python')) or type(runtime['gil_enabled']) is not bool:
         raise ContractError('invalid recorded runtime shape')
+
+
+def _semantics(value: Json, model: Any) -> None:
+    validate_recorded_semantics(value, model)
     producer = closed(value['producer'], {'code_revision', 'source_digest'})
     checksum(producer['source_digest'])
     if producer['code_revision'] is not None and (type(producer['code_revision']) is not str or re.fullmatch(r'[0-9a-f]{40}', producer['code_revision']) is None):

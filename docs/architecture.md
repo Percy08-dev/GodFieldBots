@@ -34,7 +34,9 @@ selected regressions and10NumPy-only metadata checks. Full Ruff/mypy pass for
 103source files. S3a numerical wire3/process ownership, lifetime CUDA envelopes
 and versioned labels also pass both reviews,154related CPU tests/3skips and3actual
 CUDA model lifecycle/resume checks; current full Ruff/mypy pass for105source
-files. Qualified Source authority, PPO2 coordinator, new native
+files. S3b1 recorded Source↔numeric correspondence, retained snapshot context and
+joint I/O admission pass329selected regressions and both reviews; current full
+Ruff/mypy cover106source files. Qualified Source authority, PPO2 coordinator, new native
 processing and deterministic LightGBM2 integration remain pending;
 their bounded design is accepted in ADR0023. No real v2 experiment or full-plan
 acceptance is claimed. Milestone scopes, overlapping historical counts and

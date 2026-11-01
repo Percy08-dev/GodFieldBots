@@ -1444,3 +1444,54 @@ S3a tests actual CPU/CUDA child lifecycle, exact C1 continuous/resume state,
 pre-import visibility, malformed acknowledgements, creation cancellation/cleanup,
 lifetime/no-overlap and legacy schedule/process defaults. It adds no coordinator
 loop, Source authority or real-I/O bypass.
+
+S3b first factors only decoder/correspondence and original-Source snapshot
+ownership. Keep public active read_rollout's signature and exact installed-runtime
+checks; put its existing deterministic decode body behind a private core. A
+separate private historical wrapper accepts S2-validated generation inference
+declarations and exact original EpisodeRecords. Compare recorded rollout
+semantics/runtime with that historical declaration, not the inspecting machine.
+Validate every original bank/event byte, frame payload/revision/interval/hash,
+full table column/hash, Selection and closure in ordered lockstep, including
+zero-frame/interrupted records. Existing deterministic token/GAE reconstruction
+then establishes correspondence; do not tokenize Source twice or compare latents.
+Reuse original records after a successful per-episode comparison rather than
+retaining a second complete raw Source copy.
+
+A narrow private Source snapshot handle/context retains the existing reader owner
+through numeric decoding/publication and reruns its original final checks afterward;
+never replace the original identities with a fresh baseline. Keep the existing
+inspect_component_collection return/proof behavior for old component callers.
+Joint admission includes retained Source objects plus decoder arrays/scratch under
+one deadline/budget, not independent full allowances. Structural correspondence
+preserves every closure; the learning caller separately rejects interrupted
+cohorts. This checkpoint adds no common runner or Source qualification.
+Where shared sharded-array loops otherwise lack a caller deadline, add only an
+optional private `_check` callable through the existing bundle inspect/read/write
+and underlying array save/load/chunked-hash helpers, with None as the unchanged
+default. Poll per file/shard, chunked hashing and archive-member/load/save
+boundaries so one padded on-disk NPZ or a whole multi-shard call cannot bypass the
+caller deadline;64MiB is a decoded cap, not an encoded-file bound. The callback is only an
+injected check; it adds no upper-package import or artifact-format change, and
+is not a native per-batch Python callback or a general I/O framework.
+Similarly keep public write_rollout unchanged and factor only its existing private
+writer core to accept extra retained Source bytes plus caller cap/check. Admission
+covers planning/packing/publication under min(recorded model cap, caller cap),
+including Source-owned objects not already counted by rollout residency. Do not
+relabel model/resources to force a lower budget or count shared objects twice;
+shared subtraction requires actual reused object identity, not equal contents.
+Injected deadline TimeoutError must remain a deadline failure even where existing
+array loading catches OSError; preserve the old None/default exception behavior.
+The private historical decoder also pre-admits encoded archive/central-directory
+scratch from verified regular-file sizes (conservative32times largest encoded
+NPZ, consistent with S2) alongside retained Source and decoded/reconstruction
+ownership, before ZipFile/NumPy opens. A64MiBdecoded bound alone is insufficient
+for a padded archive. Preserve the active reader's existing default behavior and
+reject size/path changes across this admission; do not adopt a new baseline.
+
+For the later two-argument collector, derive owned runtime context from the locked
+parent and frozen plan plus the supplied ledger's concrete learner owner/identity.
+Reject missing/mismatched ownership before collection and pass that exact ledger
+through CLI composition. CollectionPlan remains a pure serializable value; no
+ownership token or runtime object reaches participant settings. Common-loop
+composition starts only after this correspondence checkpoint stabilizes.

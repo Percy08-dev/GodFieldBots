@@ -7,13 +7,14 @@ import math
 import os
 import re
 import stat
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 
 from gf_common.domain import ContractError, Json, canonical, closed, integer
-from gf_models.arrays import MAX_ARRAY_BYTES, load_arrays, save_arrays, sha256
+from gf_models.arrays import MAX_ARRAY_BYTES, _source_guard, load_arrays, save_arrays, sha256
 
 MAX_MANIFEST_BYTES = 64 * 1024**2
 DTYPES = {"float32": 4, "int64": 8, "uint8": 1}
@@ -213,30 +214,58 @@ def validate_bundle_metadata(manifest: Json, *, max_decoded_bytes: int = 12 * 10
     return tensors
 
 
-def inspect_bundle(directory: Path, manifest: Json, *, max_decoded_bytes: int = 12 * 1024**3) -> Json:
+def inspect_bundle(directory: Path, manifest: Json, *, max_decoded_bytes: int = 12 * 1024**3,
+                   _check: Callable[[], None] | None = None, _snapshots: dict[str, tuple[int, ...]] | None = None,
+                   _json_budget: int | None = None) -> Json:
+    if _check is not None:
+        _check()
     tensors = validate_bundle_metadata(manifest, max_decoded_bytes=max_decoded_bytes)
     files, shards = manifest["files"], manifest["shards"]
+    if _snapshots is not None and set(_snapshots) != set(files):
+        raise ContractError('bundle original snapshots/file map mismatch')
     # Validate the entire closed inventory before decoding any tensor.
     for name, expected in files.items():
+        if _check is not None:
+            _check()
         _hash(expected)
         path = directory / name
-        if path.is_symlink() or not path.is_file() or sha256(path) != expected:
+        if _snapshots is not None:
+            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            with os.fdopen(fd, 'rb') as source:
+                guard = _source_guard(path, source, _snapshots[name], _check)
+                guard()
+                actual = sha256(path, _check=guard, _source=source)
+                guard()
+        else:
+            if path.is_symlink() or not path.is_file():
+                raise ContractError("bundle file hash/ownership mismatch")
+            actual = sha256(path, _check=_check) if _check is not None else sha256(path)
+        if path.is_symlink() or not path.is_file() or actual != expected:
             raise ContractError("bundle file hash/ownership mismatch")
     for shard in shards:
+        if _check is not None:
+            _check()
         if canonical(read_json((directory / shard["file"]).with_suffix(".json"),
-                                    expected_digest=files[shard["file"][:-4] + ".json"])) != canonical(shard["metadata"]):
+                                    expected_digest=files[shard["file"][:-4] + ".json"],
+                                    **({} if _json_budget is None else {'max_owned_bytes': _json_budget}))) != canonical(shard["metadata"]):
             raise ContractError("shard sidecar mismatch")
+    if _check is not None:
+        _check()
     return tensors
 
 
 def write_bundle(directory: Path, prefix: str, arrays: dict[str, Any], *,
-                 shard_bytes: int = MAX_ARRAY_BYTES) -> Json:
+                 shard_bytes: int = MAX_ARRAY_BYTES, _check: Callable[[], None] | None = None) -> Json:
+    if _check is not None:
+        _check()
     integer(shard_bytes, 1, MAX_ARRAY_BYTES)
     if not isinstance(prefix, str) or re.fullmatch(r"[a-z][a-z0-9-]*", prefix) is None or not arrays:
         raise ContractError("invalid typed bundle request")
     # No np.asarray(list) or dtype conversion before size validation. Callers
     # supply already-owned typed arrays; a huge declared tensor cannot allocate.
     for key, array in arrays.items():
+        if _check is not None:
+            _check()
         _key(key)
         if (not isinstance(array, np.ndarray) or str(array.dtype) not in DTYPES
                 or array.dtype.hasobject or array.nbytes > shard_bytes or not np.isfinite(array).all()):
@@ -248,28 +277,49 @@ def write_bundle(directory: Path, prefix: str, arrays: dict[str, Any], *,
                                 for key, value in arrays.items()}, shard_bytes=shard_bytes)
     destinations = list(plan["files"]) + [shard["file"][:-4] + ".json.tmp" for shard in plan["shards"]]
     preflight_outputs(directory, destinations)
+    if _check is not None:
+        _check()
     shards, files = [], {}
     for shard in plan["shards"]:
+        if _check is not None:
+            _check()
         name = shard["file"]
         batch = {key: arrays[key] for key in shard["metadata"]["arrays"]}
         path = directory / name
-        metadata = save_arrays(path, batch)
+        metadata = save_arrays(path, batch, _check=_check) if _check is not None else save_arrays(path, batch)
         if canonical(metadata["arrays"]) != canonical(shard["metadata"]["arrays"]):
             raise ContractError("written tensor metadata differs from admitted plan")
         shards.append({"file": name, "metadata": metadata})
         files[name] = metadata["sha256"]
-        files[name[:-4] + ".json"] = sha256(path.with_suffix(".json"))
+        files[name[:-4] + ".json"] = (sha256(path.with_suffix(".json"), _check=_check)
+                                     if _check is not None else sha256(path.with_suffix(".json")))
     manifest = {"schema_version": 1, "prefix": prefix, "shards": shards, "files": files,
                 "tensor_count": len(arrays), "decoded_bytes": sum(array.nbytes for array in arrays.values())}
-    inspect_bundle(directory, manifest)
+    inspect_bundle(directory, manifest, _check=_check)
     return manifest
 
 
-def read_bundle(directory: Path, manifest: Json, *, max_decoded_bytes: int = 12 * 1024**3) -> dict[str, Any]:
-    inspect_bundle(directory, manifest, max_decoded_bytes=max_decoded_bytes)
+def read_bundle(directory: Path, manifest: Json, *, max_decoded_bytes: int = 12 * 1024**3,
+                _check: Callable[[], None] | None = None, _snapshots: dict[str, tuple[int, ...]] | None = None,
+                _json_budget: int | None = None) -> dict[str, Any]:
+    inspect_bundle(directory, manifest, max_decoded_bytes=max_decoded_bytes, _check=_check,
+                   _snapshots=_snapshots, _json_budget=_json_budget)
     result: dict[str, Any] = {}
     for shard in manifest["shards"]:
-        result.update(load_arrays(directory / shard["file"], shard["metadata"]))
+        if _check is not None:
+            _check()
+        path = directory / shard['file']
+        if _snapshots is not None:
+            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            with os.fdopen(fd, 'rb') as source:
+                result.update(load_arrays(path, shard['metadata'], _check=_check, _source=source, _snapshot=_snapshots[shard['file']]))
+        else:
+            result.update(load_arrays(path, shard["metadata"], _check=_check)
+                          if _check is not None else load_arrays(path, shard["metadata"]))
+        if _check is not None:
+            _check()
     for value in result.values():
+        if _check is not None:
+            _check()
         value.flags.writeable = False
     return result
