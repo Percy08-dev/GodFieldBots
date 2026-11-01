@@ -7,6 +7,7 @@ and never form an authoritative learning input or a persisted latent format.
 from __future__ import annotations
 
 import math
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
@@ -139,6 +140,8 @@ def make_network(model: ModelConfigV2, seed: int,
         def __init__(self) -> None:
             super().__init__()
             self.config, self.binding = model, runtime_binding
+            self._measure_input_packing = False
+            self._input_packing_seconds = 0.
             self.state_encoder = (mlp((STATE_WIDTH,
                                        *model.state.hidden_sizes, model.state.output_size), True)
                                   if model.state.kind == "mlp" else nn.Identity())
@@ -176,12 +179,34 @@ def make_network(model: ModelConfigV2, seed: int,
         def device(self) -> Any:
             return self.frame_projection.weight.device
 
+        def _begin_packing_timing(self) -> None:
+            if torch.is_grad_enabled() or self._measure_input_packing:
+                raise ContractError("packing timing is participant-inference only")
+            self._input_packing_seconds = 0.
+            self._measure_input_packing = True
+
+        def _end_packing_timing(self) -> float:
+            self._measure_input_packing = False
+            return self._input_packing_seconds * 1000
+
+        def _tensor(self, values: Any, *, dtype: Any = None, device: Any = None) -> Any:
+            if not self._measure_input_packing:
+                return torch.tensor(values, dtype=dtype, device=self.device if device is None else device)
+            started = time.perf_counter()
+            try:
+                return torch.tensor(values, dtype=dtype, device=self.device if device is None else device)
+            finally:
+                # Host wall time for raw construction/copy submission. CUDA
+                # allocation/transfers may wait prior stream work; this is not
+                # a measurement of isolated H2D or GPU kernel durations.
+                self._input_packing_seconds += time.perf_counter() - started
+
         def _float(self, values: Any) -> Any:
-            raw = torch.tensor(values, dtype=torch.float32, device=self.device)
+            raw = self._tensor(values, dtype=torch.float32, device=self.device)
             return raw.sign() * raw.abs().log1p()
 
         def _onehot(self, values: Any, categories: tuple[tuple[str, ...], ...]) -> Any:
-            raw = torch.tensor(values, dtype=torch.long, device=self.device)
+            raw = self._tensor(values, dtype=torch.long, device=self.device)
             return torch.cat([functional.one_hot(raw[..., index], len(vocabulary) + 2).float()
                               for index, vocabulary in enumerate(categories)], -1)
 
@@ -192,23 +217,23 @@ def make_network(model: ModelConfigV2, seed: int,
             if len(tokens.interval_numerics) > model.event.max_interval:
                 raise ContractError("configured interval event limit exceeded")
             state_input = torch.cat((self._float(tokens.state_numerics),
-                                     torch.tensor(tokens.state_present, dtype=torch.float32, device=self.device),
+                                     self._tensor(tokens.state_present, dtype=torch.float32, device=self.device),
                                      self._onehot(tokens.state_categories, STATE_CATEGORIES),
-                                     torch.tensor(tokens.state_category_present, dtype=torch.float32, device=self.device),
-                                     functional.one_hot(torch.tensor(tokens.opponent_learned, dtype=torch.long, device=self.device),
+                                     self._tensor(tokens.state_category_present, dtype=torch.float32, device=self.device),
+                                     functional.one_hot(self._tensor(tokens.opponent_learned, dtype=torch.long, device=self.device),
                                                         len(CARD_CATEGORIES[0]) + 2).float().flatten()))
             # PAD opponent slots have no representation; category0 is not a fact.
             opponent_width = len(CARD_CATEGORIES[0]) + 2
-            state_input[-18 * opponent_width:] *= torch.tensor(
+            state_input[-18 * opponent_width:] *= self._tensor(
                 [value != 0 for value in tokens.opponent_learned], dtype=torch.float32,
                 device=self.device).repeat_interleave(opponent_width)
             state = self.state_encoder(state_input)
-            cats = torch.tensor(tokens.card_categories, dtype=torch.long, device=self.device)
+            cats = self._tensor(tokens.card_categories, dtype=torch.long, device=self.device)
             numbers = torch.cat((self._float(tokens.card_numerics),
-                                 torch.tensor(tokens.card_present, dtype=torch.float32, device=self.device)), -1)
+                                 self._tensor(tokens.card_present, dtype=torch.float32, device=self.device)), -1)
             card_input = torch.cat((self.definition_embedding(cats[:, 0]), self.ability_embedding(cats[:, 1]),
                                     self._onehot(tuple(row[2:] for row in tokens.card_categories), CARD_CATEGORIES[2:]), numbers), -1)
-            mask = torch.tensor(tokens.card_mask, dtype=torch.bool, device=self.device)
+            mask = self._tensor(tokens.card_mask, dtype=torch.bool, device=self.device)
             cards = self.card_encoder(card_input).relu().masked_fill(~mask[:, None], 0)
             source = functional.one_hot(cats[:, -1], len(SOURCES) + 2).float().masked_fill(~mask[:, None], 0)
             order = self._float(tuple(row[8] for row in tokens.card_numerics))[:, None]
@@ -231,7 +256,7 @@ def make_network(model: ModelConfigV2, seed: int,
                     hand = torch.where(mask.any(), hand, torch.zeros_like(hand))
             if tokens.interval_numerics:
                 event_input = torch.cat((self._float(tokens.interval_numerics),
-                                         torch.tensor(tokens.interval_present, dtype=torch.float32, device=self.device),
+                                         self._tensor(tokens.interval_present, dtype=torch.float32, device=self.device),
                                          self._onehot(tokens.interval_categories, EVENT_CATEGORIES)), -1)
                 with no_cudnn():
                     _, hidden = self.event_encoder(event_input[None])
@@ -339,14 +364,14 @@ def make_network(model: ModelConfigV2, seed: int,
             return output[0], cards
 
         def _candidate_features(self, tokens: CandidateTokens) -> Any:
-            kinds = functional.one_hot(torch.tensor(tokens.kinds, device=self.device), len(ACTION_KINDS) + 2).float()
-            targets = functional.one_hot(torch.tensor(tokens.targets, device=self.device), len(TARGETS) + 2).float()
+            kinds = functional.one_hot(self._tensor(tokens.kinds, device=self.device), len(ACTION_KINDS) + 2).float()
+            targets = functional.one_hot(self._tensor(tokens.targets, device=self.device), len(TARGETS) + 2).float()
             return torch.cat((kinds, targets, self._float(tokens.numerics),
-                              torch.tensor(tokens.present, dtype=torch.float32, device=self.device)), -1)
+                              self._tensor(tokens.present, dtype=torch.float32, device=self.device)), -1)
 
         def _references(self, tokens: CandidateTokens, start: int, end: int) -> Any:
             rows = [list(tokens.slots[tokens.offsets[index]:tokens.offsets[index + 1]]) for index in range(start, end)]
-            return torch.tensor([row + [18] * (model.max_positions - len(row)) for row in rows],
+            return self._tensor([row + [18] * (model.max_positions - len(row)) for row in rows],
                                 dtype=torch.long, device=self.device)
 
         def dense_logits(self, context: Any, cards: Any, tokens: CandidateTokens) -> Any:

@@ -26,7 +26,10 @@ draft graph loads. Worker/application routing, source journal/native/generation
 integration, LightGBM integration and
 required real-game/performance acceptance remain incomplete. The standalone
 candidate-columns-v1 codec/sidecar I/O is accepted after33checks and both reviews;
-journal/Act/source qualification and native decoding remain pending.
+standalone protocol2/structural journal5 transactions are also accepted after
+223affected CPU/3full-default CUDA checks and both reviews. Environment/CLI,
+formal source qualification, Generation2/PPO orchestration and native decoding
+remain pending.
 Issue0005 still blocks full completion. See the verification ledger for scope.
 
 ## 1. Context and completion boundary
@@ -55,6 +58,19 @@ and accepted ADR0005/0007/0009. Engine/internal support/SequenceOptions/rejectio
 probes are forbidden as candidate or policy authority.
 
 ## 2. Responsibilities and dependency direction
+
+Bounded v2 exception accepted after focused architecture design review: client worker/
+bootstrap may import stdlib-only metadata helpers from
+`gf_models.structured_binding`, `structured_config` and `structured_runtime` to
+validate own closed settings/identities and derive reservation/cost dimensions.
+There is no reverse dependency, Torch/native model import or inference call in
+the coordinator; actual policy factory import/execution stays in the clean child.
+Sharing these pure formulas avoids a second inconsistent copy or a generic
+dispatch framework. Common remains independent of upper layers; client never
+imports training. Revisit if metadata gains I/O/Torch or new model kinds require
+client policy-behavior branches; move/inject the closed descriptor then. Focused
+design review is READY (2026-11-01); actual runtime conformance still requires
+the separate journal/process-invariant fixes and recheck.
 
 - `gf_common`: closed v2 action settings, public coverage/completion/payment rules,
   pre-count and bounded search, exact reference tables, participant-local event

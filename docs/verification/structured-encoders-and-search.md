@@ -281,10 +281,61 @@ Earlier32-case evidence preceded the final EOF guard and is superseded. The
 implementer also ran66affected C1/codec I/O checks,53deselected, in14.88s before
 that final localized publisher fix. No GPU math, native or performance claim.
 
+## C2 standalone protocol2 worker and journal5 transactions
+
+Implemented pure wire DTOs, compact Random/heuristic adapters, own caps/cost
+derivation, global reservation primitives, fresh structured bootstrap/worker,
+structural journal5 writer/reader and private host timing counters. This is a
+component boundary; Environment/CLI selection and formal Source/Replay/split/
+whole-parent qualification are not connected yet. Reader documentation makes
+that structural-only evidence explicit. No real Simulator game was run here.
+
+Both independent reviews are READY after the initial fixes and one residual
+cap recheck. Fixed startup-thread construction/start and all initialization
+validation failures (including cancellation/overflow), preserving original errors
+and reaping before lease release; strict J5 schema2-vs-None typing, advertised
+candidate/decision/interval/episode/position caps before side effects, neural
+value requirements, closed outcomes, canonical UUID/integer command validation
+and no-overwrite verified final-journal publication. Interval writer/reader
+consistency was the residual; it rejects before event decoding/bank/files change.
+No same issue remained after two bounded fix/recheck cycles, so no advisor was
+needed. Legacy journal4 publication/serialization remains unchanged.
+
+The documented stdlib-only model-metadata/cost helper dependency from the v2
+client is independently design-approved; common stays pure, coordinator imports
+no Torch and model execution remains inside the clean child. Actual CPU/CUDA
+visibility, artifact/action hash, per-view bank/frame/table references and separate
+search/CPU sampling RNG are bound. Model loading is timed outside decisions;
+host pack/enqueue/sync/return/sampling counters do not claim GPU kernel time.
+
+Root final-source CPU checks:
+
+```sh
+UV_CACHE_DIR=/tmp/gf-structured-uv uv run --no-sync pytest -q tests/test_structured_protocol.py tests/test_structured_protocol_cuda.py tests/test_structured_network.py tests/test_structured_learning.py
+UV_CACHE_DIR=/tmp/gf-structured-uv uv run --no-sync ruff check src/gf_common/structured_wire.py src/gf_models/structured_baselines.py src/gf_models/structured_runtime.py src/gf_simulator_client/structured_resources.py src/gf_simulator_client/structured_worker.py src/gf_simulator_client/structured_bootstrap.py src/gf_training/structured_journal.py src/gf_models/structured_network.py src/gf_models/structured_policy.py tests/structured_worker_fixtures.py tests/test_structured_protocol.py tests/test_structured_protocol_cuda.py
+UV_CACHE_DIR=/tmp/gf-structured-uv uv run --no-sync mypy src/gf_common/structured_wire.py src/gf_models/structured_baselines.py src/gf_models/structured_runtime.py src/gf_simulator_client/structured_resources.py src/gf_simulator_client/structured_worker.py src/gf_simulator_client/structured_bootstrap.py src/gf_training/structured_journal.py src/gf_models/structured_network.py src/gf_models/structured_policy.py
+```
+
+Results:223PASS/3opt-in SKIPPED in29.63s, Ruff PASS, mypy PASS(9modules).
+The implementer additionally ran legacy `tests/test_journal.py`:28PASS0.69s.
+Correctness independently ran79protocol cases and original failure repros;
+architecture ran44focused prior boundaries and7final cap regressions. Counts
+overlap earlier stages and are not additive full-project totals.
+
+Root separate CUDA command:
+`CUBLAS_WORKSPACE_CONFIG=:4096:8 GFB_RUN_STRUCTURED_PROTOCOL_CUDA=1 UV_CACHE_DIR=/tmp/gf-structured-uv uv run --no-sync pytest -q tests/test_structured_protocol_cuda.py`.
+Final startup-fixed GPU result3PASS18.92s/reaped exit0; subsequent changes were
+only journal interval-cap checks unused by this GPU path. Earlier3PASS25.64s
+predated startup/J5 fixes and is historical. Full documented default attention/
+model widths are used for all3kinds, real clean CUDA bootstrap/2frames vs CPU
+full reference, same-seed fresh-worker CPUGenerator replay, finite host metrics
+and reservation release after reap. These are not controlled speed/peak-memory,
+real-game or final source-qualification evidence.
+
 ## Remaining application acceptance
 
-Currently NOT RUN: actual worker/collection E2E PPO integration, worker2/journal5/
-native differential,192-game baseline, attention3models×2inference devices×
+Currently NOT RUN: Environment/CLI/qualified collection E2E PPO integration,
+journal5/native differential,192-game baseline, attention3models×2inference devices×
 continuous/pause-resume real2updates, other hand-mode MLP games, fixed512train
 decision CPU p95<=3s panel and separate stress/GPU attribution, pytest/Ruff/mypy/
 Rust, old-data proofs, isolated wheel and optional-dependency-free startup.

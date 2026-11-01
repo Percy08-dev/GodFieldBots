@@ -17,10 +17,13 @@ after independent reviews,168affected CPU/4separate CUDA checks and scoped
 Ruff/mypy. It includes1024-frame persistence and exact synthetic two-update/resume
 with partial Adam state; these are component results. Version2 Config/binding
 dispatch is also accepted after independent reviews and112scoped checks, exact
-old12config identities and6new graph loads. Worker/journal/native application
-integration and full acceptance are pending. The standalone candidate-column
+old12config identities and6new graph loads. Standalone protocol2 workers and
+journal5 structural transactions are accepted after both reviews,223affected CPU/
+3separate full-default CUDA checks and legacy journal regressions. Environment/
+CLI/source/native application integration and full acceptance are pending. The
+standalone candidate-column
 codec and owned sidecar I/O are accepted after33checks and independent reviews,
-but are not yet journal/Act/source-qualified paths; the
+with journal-local transactions but no formal source qualification; the
 public utility completion/target dependency is tracked in
 [issue0005](issues/0005-public-utility-action-semantics.md). It is not resolved by
 atomic hints or successful play. See the
@@ -349,7 +352,7 @@ Wire DTOs may resolve representation details; no engine dependency is allowed.
 | Package | Responsibility | Dependencies |
 | --- | --- | --- |
 | `gf_common` | JSON-safe domain types, protocols, public action space, lazy search, pure scheduling | stdlib, NumPy |
-| `gf_simulator_client` | validated HTTP, attestation, subprocess/game ownership, worker transport | common, httpx |
+| `gf_simulator_client` | validated HTTP, attestation, subprocess/game ownership, worker transport | common, httpx; v2 stdlib-only model binding/config/cost metadata |
 | `gf_training` | journals/projection, split/feasibility, owned numeric training, generation lineage and frozen datasets | common, model adapters, optional PyArrow |
 | `gf_evaluation` | paired scheduling, aggregation and costs | common |
 | `gf_models` | participant-local Random/heuristic/LightGBM/MLP/GRU/Transformer, common encoder/config and artifacts | common, lazy extras |

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import time
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -41,6 +42,7 @@ class StructuredPolicy:
         self.cuda_visible_devices = validate_cuda_visibility(os.environ.get("CUDA_VISIBLE_DEVICES"))
         self.version = policy_label(model, binding, manifest_digest, cuda_visible_devices=self.cuda_visible_devices)
         self.cache = network.new_cache()
+        self.last_timing: dict[str, float] = {}
         self.rng = torch.Generator(device="cpu")
         self.reset(0)
 
@@ -54,11 +56,14 @@ class StructuredPolicy:
     def reset(self, sampling_seed: int) -> None:
         integer(sampling_seed, 0, 2**64 - 1)
         self.cache.reset()
+        self.last_timing = {}
         self.rng.manual_seed(sampling_seed)
 
     def select_frame(self, frame: DecisionFrame, bank_view: EventBankView,
                      table: CandidateTable) -> Selection:
         torch = self.torch
+        self.last_timing = {}
+        token_started = time.perf_counter()
         # Reject all known scalar caps before tokenization/array ownership work.
         integer(frame.boundary.end, 0, self.model.event.max_episode)
         integer(frame.boundary.end - frame.interval_start, 0, self.model.event.max_interval)
@@ -72,17 +77,36 @@ class StructuredPolicy:
         validate_candidate_tokens(candidates, tokens, self.model.max_positions)
         resource_estimate(self.model, self.binding, decisions=self.cache.position + 1,
                           interval_events=len(tokens.interval_numerics), candidates=len(candidates.kinds), suffix_decisions=1)
+        token_ms = (time.perf_counter() - token_started) * 1000
         with torch.no_grad():
-            context, cards = self.network.step(tokens, self.cache)
-            logs, _ = self.network.distribution(context, cards, candidates)
-            value = self.network.value(context)
+            self.network._begin_packing_timing()
+            forward_started = time.perf_counter()
+            try:
+                context, cards = self.network.step(tokens, self.cache)
+                logs, _ = self.network.distribution(context, cards, candidates)
+                value = self.network.value(context)
+            finally:
+                packing_ms = self.network._end_packing_timing()
+            forward_ms = max(0., (time.perf_counter() - forward_started) * 1000 - packing_ms)
+            sync_started = time.perf_counter()
             if self.binding.device != "cpu":
                 torch.cuda.synchronize(self.binding.device)
             if not torch.isfinite(logs).all() or not torch.isfinite(value):
                 raise ContractError("nonfinite structured inference output")
+            sync_ms = (time.perf_counter() - sync_started) * 1000
+            return_started = time.perf_counter()
             probabilities = logs.exp().cpu()
             if not torch.isfinite(probabilities).all():
                 raise ContractError("nonfinite CPU sampling probabilities")
+            return_ms = (time.perf_counter() - return_started) * 1000
+            sampling_started = time.perf_counter()
             selected = int(torch.multinomial(probabilities, 1, generator=self.rng).item())
-            return Selection(table.table_hash, selected, self.version,
-                             float(logs[selected].cpu()), float(value.cpu()))
+            sampling_ms = (time.perf_counter() - sampling_started) * 1000
+            return_started = time.perf_counter()
+            result = Selection(table.table_hash, selected, self.version,
+                               float(logs[selected].cpu()), float(value.cpu()))
+            return_ms += (time.perf_counter() - return_started) * 1000
+            self.last_timing = {"tokenization_ms": token_ms, "input_pack_transfer_host_ms": packing_ms,
+                                "forward_enqueue_host_ms": forward_ms, "sync_host_ms": sync_ms,
+                                "return_ms": return_ms, "sampling_ms": sampling_ms}
+            return result
