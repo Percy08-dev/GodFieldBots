@@ -15,11 +15,12 @@ from gf_common.domain import ContractError, Json
 from gf_common.preprocessing import PreparationConfig
 
 TYPED_READER = 'typed-borrowed-v1'
+STRUCTURED_CONTRACT = 'participant-structured-v1;journal=5;rollout=3;generation=2;model=2'
 
 
 def reader_settings(config: PreparationConfig, native: ModuleType | None = None) -> Json:
     """Closed reader preflight before handles/source owners; old wheels keep old DTOs."""
-    if config.reader not in ('legacy', TYPED_READER):
+    if config.reader not in ('legacy', TYPED_READER, 'structured-v1'):
         raise ContractError('unsupported preprocessing reader')
     if config.backend != 'rust':
         if config.reader != 'legacy':
@@ -27,6 +28,12 @@ def reader_settings(config: PreparationConfig, native: ModuleType | None = None)
         raise ContractError('native preprocessing settings require the Rust backend')
     module = native or load_native()
     information = dict(getattr(module, 'build_info', lambda: ())())
+    if config.reader == 'structured-v1':
+        from gf_common.structured_tokens import signature
+        if (information.get('structured_preprocessing_contract') != STRUCTURED_CONTRACT
+                or information.get('structured_default_signature') != signature(128)):
+            raise ContractError('native binary does not support structured-v1 contract/signature')
+        return asdict(config)
     capable = information.get('typed_reader_contract') == TYPED_READER
     if config.reader == TYPED_READER and not capable:
         raise ContractError('native binary does not support typed-borrowed-v1')

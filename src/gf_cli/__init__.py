@@ -20,6 +20,8 @@ from gf_common.domain import (
     POLICY_INPUT_VERSION,
     REVIEWED_SPEC_HASHES,
     SIMULATOR_REVISION,
+    ActionConfig,
+    ContractError,
     GroupResult,
     Json,
     canonical,
@@ -27,6 +29,7 @@ from gf_common.domain import (
 )
 from gf_common.preprocessing import PreparationConfig
 from gf_common.schedule import serialize_schedule
+from gf_common.structured import ActionConfigV2
 from gf_evaluation.evaluation import report, schedule
 from gf_models.baselines import make_policy
 from gf_simulator_client.environment import EnvironmentSettings, SimulatorEnvironment
@@ -217,11 +220,38 @@ async def run_experiment(loaded: LoadedConfig, command: str, *, collection: Coll
     replay_deadline = work_deadline - config.server.cleanup_reserve_seconds
     execution_deadline = collection.execution_deadline if collection is not None else started + config.run.execution_seconds
     preflight_deadline = min(execution_deadline, replay_deadline)
-    if collection is None:
+    structured = isinstance(config.actions, ActionConfigV2)
+    ledger = None
+    structured_preprocessing = None
+    if structured:
+        from gf_cli.config import RunConfigV2
+        from gf_cli.structured import structured_backend, structured_bindings
+        from gf_simulator_client.structured_resources import ReservationLedger
+        structured_preprocessing = structured_backend(config.preprocessing)
+        assert isinstance(config.run, RunConfigV2)
+        ledger = ReservationLedger(config.run.global_cuda_budget_bytes, config.run.max_participant_workers)
+    if collection is None and structured:
+        registry, labels = structured_bindings(config.model, config.opponent)
+    elif collection is None:
+        from gf_models.structured_binding import ConfiguredNeuralModelV2
+        assert isinstance(config.actions, ActionConfig)
+        assert not isinstance(config.model, ConfiguredNeuralModelV2)
+        assert not isinstance(config.opponent, ConfiguredNeuralModelV2)
         registry, labels = bindings(config.model, config.opponent, config.actions, deadline=preflight_deadline)
     else:
         registry, labels = collection.bindings, ("owned", "owned")
-    await native_preflight(registry, config.actions, deadline=preflight_deadline, worker_seconds=config.server.worker_seconds)
+    if structured:
+        # Generation2 owned/formal neural contexts are qualified by the next
+        # integration stage, never by accepting bare component artifacts here.
+        if any(binding.model_id not in ("random", "heuristic") or binding.policy_options is not None for binding in registry.values()):
+            raise ContractError("structured neural collection requires Generation2 qualification")
+        if any(label != binding.model_id + "-structured-v1" for label, binding in registry.items()):
+            raise ContractError("structured baseline registry label/role mismatch")
+        if collection is not None and any(label not in registry for group in collection.groups for spec in group.episodes for label in spec.policies):
+            raise ContractError("structured collection schedule lacks an owned policy binding")
+    else:
+        assert isinstance(config.actions, ActionConfig)
+        await native_preflight(registry, config.actions, deadline=preflight_deadline, worker_seconds=config.server.worker_seconds)
     run_id = str(uuid.uuid4())
     directory = collection.output if collection is not None else Path(config.run.output_dir) / (config.run.name + "-" + run_id[:12])
     directory.mkdir(parents=True, exist_ok=False)
@@ -252,6 +282,10 @@ async def run_experiment(loaded: LoadedConfig, command: str, *, collection: Coll
         "reproducibility_limits": ["prebuilt binary build revision unverified", "seed alone does not guarantee future model training determinism",
                                    "synchronous local filesystem operations cannot provide a hard realtime wall guarantee"],
     }
+    if structured:
+        manifest.update(journal_schema_version=5, feature_version="participant-structured-v1",
+                        input_recipe="participant-structured-v1", participant_runtime="python-reference-v2",
+                        preprocessing_implementation=structured_preprocessing)
     if collection is not None:
         manifest.update(collection_kind=collection.kind, ppo=collection.linkage,
                         sampling_seed_derivation={
@@ -295,7 +329,13 @@ async def run_experiment(loaded: LoadedConfig, command: str, *, collection: Coll
             admission_deadline=execution_deadline if collection is not None else started + config.run.admission_seconds, execution_deadline=execution_deadline,
             wall_deadline=wall_deadline, work_deadline=work_deadline, replay_deadline=replay_deadline,
         )
-        environment = SimulatorEnvironment(settings, make_policy, ParticipantJournal)
+        environment: SimulatorEnvironment
+        if structured:
+            from gf_cli.structured import structured_environment
+            assert ledger is not None
+            environment = structured_environment(settings, ledger)
+        else:
+            environment = SimulatorEnvironment(settings, make_policy, ParticipantJournal)
         semaphore = asyncio.Semaphore(config.run.concurrency)
         async def group_run(group: Any) -> Any:
             nonlocal admission_closed, group_failure

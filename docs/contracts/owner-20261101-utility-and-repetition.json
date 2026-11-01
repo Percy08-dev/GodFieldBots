@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "confirmation_id": "owner-20261101-utility-and-repetition-v1",
+  "baseline_simulator_revision": "ffcffa0966dbf6d7ce1d982f4ee6444e291d42d6",
+  "baseline_catalog_version": "public-ja-v2",
+  "source": "explicit user clarification received 2026-11-01; not yet published in Simulator normative specifications",
+  "utility_singletons": ["smile-dew", "heart-dew", "romance-water", "galaxy-geyser", "smile-flower", "heart-flower", "romance-fragrance", "spring", "treasure", "thump-thump-tear", "heaven-herb", "tone", "song", "smile-shell", "heart-shell", "goddess-s-soap", "nocturnal-broom", "guardian-pot", "release"],
+  "utility_explicit_targets": ["self", "opponent"],
+  "pure_cut_cost": {"definition_id": "spiritual-doll", "singleton": false, "requires_miracle_companion": true},
+  "intrinsic_cut_cost_cards": {"retain_intrinsic_weapon_or_armor_singleton": true, "armor_may_support_turn_miracle_cost_exemption": true},
+  "miracle_reference_rules": {"same_physical_reference_repeated_in_one_action": false, "distinct_physical_copies_of_same_definition_in_one_action": true, "hand_copies_require_distinct_instance_ids": true, "learned_reference_reuse_across_turns": true, "card_specific_cross_turn_consecutive_use_limit": false},
+  "utility_no_op": {"healing_at_full_hp_allowed": true, "cleansing_without_curse_allowed": true},
+  "payment_and_absorption": {"miracle_payment": "at action decision", "ghost_sword_absorption": "after defense and established damage, after miracle payment", "cut_cost_actual_miracle_payment": 0},
+  "response_rules": {"one_action_per_response_opportunity": true, "reflection_may_create_another_response_opportunity": true, "reflection_exchange_may_continue_between_participants": true, "own_deflection_lands_on_self_creates_new_response": false},
+  "effect_branch_parameters": "game chooses results; current play_sequence has no additional branch field",
+  "selection_is_not_effect_recipient": {"thump-thump-tear": "catalog says user; choosing opponent does not establish changed effect recipient", "heaven-herb": "catalog says user; choosing opponent does not establish changed effect recipient"},
+  "unresolved": ["per-card omitted/null target default", "selected-target versus user-fixed effect mapping", "mixed utility and weapon/utility sequences and order", "precise CutCost placement and nonattack miracle companions", "response opportunities for opponent-target utility", "summoning with an existing guardian", "removal when target count is below the stated count"],
+  "normative_conflicts": ["same-definition distinct normal-attack miracle copies versus blanket normal-miracle combination prohibition", "reflection exchange versus blanket returned-attack response prohibition"],
+  "simulator_specification_update_issued": false
+}

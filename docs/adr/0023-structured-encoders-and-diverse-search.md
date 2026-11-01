@@ -10,6 +10,15 @@
 
 ## Implementation status
 
+LATEST OWNER STEERING: [2026-11-01 confirmation](../contracts/owner-20261101-utility-and-repetition.md)
+disallows repeated physical/learned references within one Action and confirms
+utility singleton/explicit-target assertions, while leaving several boundaries
+unresolved and public Simulator specs unchanged. Earlier B readiness below is
+historical component evidence under the previous proposal assumptions; it is
+not acceptance of the corrected rule domain. Root has paused rule-dependent
+collection/adoption and requested advisor review before amending semantic
+identity/experiment gates. No real v2 source/fit/experiment has run.
+
 The first pure records/token/config/network slice is implemented in
 `gf_common.structured`, `structured_tokens`, `structured_vocab` and
 `gf_models.structured_config`, `structured_network`. Independent correctness and
@@ -559,6 +568,13 @@ Torch reports unavailable and must fail without silently choosing CPU.
 
 ## 13. Application integration design (review before dependent implementation)
 
+Actions2 uses explicit baseline registry/schedule/journal/Selection labels
+`random-structured-v1` and `heuristic-structured-v1`; their nominal configured
+model IDs/version1 remain separate closed identities. Actions1 labels stay
+unchanged. New collection/source authorization derives expected baseline labels
+explicitly, never infers learner role from label equality or accepts an unknown
+model merely from a matching prefix.
+
 Initial protocol2 private timing counters label host wall scopes accurately:
 input packing/transfer host time, forward enqueue host time, explicit sync host
 time, CPU return and CPU sampling separately, plus tokenization/search/IPC/startup
@@ -898,3 +914,116 @@ all held/learned/target/order/missingness/public-history cases, large position/c
 admission, native categorical fit/inference and safe schema3 publication, old
 dataset/artifact regressions and complete-parent/split/seed/budget negative cases.
 No production preset advertises LightGBM2 before these paths are implemented.
+
+## 17. Owner clarification and engineering-only proposal adoption
+
+Root disposition after `bot_advisor`: adopt alternative B, an explicit
+engineering-only proposal profile. Assertions authorize correcting new Bots
+proposals, not claiming conformance of the current binary or completing missing
+coverage. Adopted subset/omissions are in
+[owner-proposal-engineering-v1.json](../contracts/owner-proposal-engineering-v1.json),
+profile SHA-256 `4f18089923ab8b6b4b6346d5adfbe0ca5fba401ead3a6d7c186c9596327c7a16`.
+The rule/omission/verification-claim digest is
+`f4132843bb700947d51e19b57bed1b3bc9bcaf5f63c0cfa60998f1ddc3d6d978`.
+Focused independent architecture review is READY for engineering-only
+implementation (2026-11-01), including canonical hashes, explicit raw Config
+discrimination and all real-I/O guards. This records root's reviewed decision,
+not implementation/runtime/learning acceptance.
+
+One closed `action_contract` descriptor contains profile_id, owner_confirmation_
+sha256, adopted_rules_sha256 and eligibility=engineering_only. Bind the same
+descriptor in actions2 effective Config/SearchReport, run/Journal5, artifact3/
+resume3/Generation2, rollout3, native source-derived summaries/proofs and
+Dataset2/LightGBM3. It is compatibility/control metadata, never a feature. Preserve
+all baseline simulator/catalog/reviewed-spec fields separately and leave the
+global v1 constants/readers unchanged. Missing descriptors on pre-adoption v2
+artifacts reject current inference/update/resume/qualification; no implicit
+default or automatic upgrade. Pure tensor/layout signatures need not change.
+
+Raw actions2 Config must explicitly contain that descriptor or inherit it from
+an explicit versioned engineering actions preset. Default merging must not fill
+it into pre-adoption v2 TOMLs/effective configs. Partial overrides may omit it
+only if their resolved reference already declared it. One authoritative Config
+descriptor propagates to every boundary; readers closed-require/compare it,
+never independently infer a missing value from current globals. A small central
+validator can recognize the adopted descriptor; no generic rule framework is
+needed. New synthetic component construction is explicit about contract/purpose.
+
+CandidateTable additionally closed-requires purpose=component|qualified_game and
+synthetic_capacity boolean, both bound in semantic hash/sidecar/wire metadata.
+Repeated physical refs or rows above18 are allowed only in a component fixture
+explicitly marked synthetic_capacity=true. Every generator/protocol/Journal5
+game-proposal path rejects that marker and requires unique<=18 even while the
+engineering profile itself is component-only. Qualified-game purpose requires a
+qualified contract and still conveys no Source authority. Thus FakeHTTP and
+frozen real-input replays do not acquire a false “synthetic128” provenance, and
+a marker/flag cannot upgrade any engineering source. Numeric column layout and
+network feature signatures remain unchanged.
+
+Engineering-only permits component/FakeHTTP/synthetic numerical/storage tests and
+offline fixed-input performance work. Real collection/evaluation, the192-game
+feasibility gate, real PPO acceptance, qualified-source/fit/strength/full acceptance
+remain blocked until required public coverage and runtime conformance are adopted.
+Qualified game records require unique physical refs and the reachable18slot
+bound.128-reference structural fixtures remain explicit synthetic components,
+never qualified trajectories. Persist component-vs-qualified purpose explicitly
+for new rollout/schema readers; source authority must still revalidate originals,
+not trust a purpose flag alone. No budgets/counts/models/panel requirements shrink.
+
+The real-I/O gate applies before any Simulator request/spawn in every supported
+actions2 entry: collect/evaluate/train/smoke/real-game benchmark and direct
+supported Environment use, not only two CLI command names. There is no
+user-controlled component flag that can authorize formal sources. FakeHTTP tests
+use a dedicated internal test path/double and remain component-only; original
+source/profile revalidation always rejects this engineering profile for qualified
+learning, regardless of a claimed purpose/eligibility field. Offline participant
+inference with frozen visible inputs is not a Simulator experiment.
+
+For utility proposals, the profile uses explicit targets; Tear/Herb currently
+adopt self only pending the target/effect discrepancy. Summons require explicit
+public guardian absence; soap requires a visible learned list with at least2;
+broom adopts self with at least3remaining own hand refs after its carrier, never
+an opponent private-count predicate. These are pending-coverage exclusions, not
+public illegality claims or accepted scope reduction. Mixed utilities/CutCost
+placement and the same-normal-miracle-copy exception remain pending. Reflection
+decision flow remains entirely simulator-driven.
+
+Material external-state update: read-only checks now find dirty Simulator07/09/
+verification-register changes plus a new utility investigation, while HEAD is
+still ffcffa. The observed document SHA-256 values are
+07=`66d18191c596a7e371d963c0fa66a8e040cbef7b60433a2ede8acf9bccff650f`,
+09=`dc363d47bb27f145e7dd7fbc95f75c8bd9f705fc229766fc56ad35b8c797f18b`,
+register=`d38dda2eadabd36e6615892ea5ed4609005c21ebda630a95c0d44fe1026ba71a`.
+They differ from the initial clean/declared baseline and were not modified by
+Bots agents. The working copy reconciles some copy/reflect text, but17.5.4 is
+narrower than the user summary for per-card target selection. No new committed
+revision, full document adoption or binary-conformance proof is asserted.
+
+The user's reply is recorded as immutable owner assertions with canonical hash
+`a0e6acb7fdc708ce4bd1b11f23d5dd3f0e41373cc1c1c1bef0a43a3e3efc2cb2`.
+It is not a newly published Simulator revision/spec hash. Do not overwrite the
+baseline ffcffa/public-ja-v2 identities or reinterpret historical artifacts.
+
+New proposals must stop relying on one learned reference repeated in an Action.
+Distinct physical copies and across-turn learned reuse are different rules.
+With18total possession slots, unique actual references cannot realize a128-element
+game proposal; retain128position/config/shard/network capacity tests as synthetic
+structural/numerical evidence, alongside real-domain uniqueness/18slot coverage.
+No experiment budget, input facts or final-test policy changes follow from this.
+
+Owner-confirmed utilities may use explicit self/opponent target syntax, avoiding
+unknown None defaults, but chosen target must not be reinterpreted as effect
+recipient for user-fixed effects. Unconfirmed mixed utility/CutCost placement,
+guardian/removal boundaries and opponent utility responses remain unknown. Same-
+definition normal-miracle copies and reflection exchanges conflict with broad
+current normative statements; the Simulator owns resulting decision/state flow.
+Never synthesize reflection opportunities or probe rejections to fill the gap.
+
+Root considered these alternatives: wait for Simulator normative adoption for every
+dependent rule; adopt only a separately versioned owner-proposal profile with
+unchanged baseline pins and strict experiment gates; or claim full contract
+readiness from the owner reply alone. The third alternative lacks implementation/
+normative reconciliation evidence. Advisor review recommended the versioned
+engineering-only subset adopted above; root owns the disposition and required
+architecture review before dependent rule edits. Independent FakeHTTP dispatch,
+storage, numerical and cleanup work can proceed within its actual scope.

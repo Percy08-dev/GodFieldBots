@@ -332,7 +332,48 @@ full reference, same-seed fresh-worker CPUGenerator replay, finite host metrics
 and reservation release after reap. These are not controlled speed/peak-memory,
 real-game or final source-qualification evidence.
 
-## Remaining application acceptance
+## C2 Environment/CLI mechanical dispatch checkpoint
+
+Six frozen files implement base-Environment private hooks with unchanged v1
+defaults, a structured client adapter and CLI composition, and additive native
+capability checks. CLI injects journal/factory/one shared ledger; client imports
+no training. Opaque actor-local banks and original-frame Action reconstruction
+precede J5 transaction/Act. Formal bare neural2 use remains rejected pending
+Generation2 source qualification. New real rule-dependent collection was not run.
+
+Both independent reviews are READY for this mechanical/component scope.
+Command: `UV_CACHE_DIR=/tmp/gf-structured-uv uv run --no-sync pytest -q tests/test_structured_environment.py tests/test_episode_behavior.py tests/test_runtime.py tests/test_journal.py`.
+Implementer69PASS4.84s; correctness independently69PASS5.19s; architecture12focused
+FakeHTTP cases PASS. Scoped Ruff6files/mypy5sources/diff checks PASS. Tests cover
+two-seat baseline labels, actual CPU children, markers/inventories/natural test
+closures, two concurrent games/four slots sharing one ledger, cleanup and no-Act
+on sidecar/row failure, early old-native/NN2 qualification denial and no Torch
+import for metadata dispatch. They use ordinary single physical weapon fixtures,
+not old learned-repetition legality or actual Simulator behavior.
+
+The subsequent user clarification changes proposal semantics. The new required
+action_contract/engineering-only real-I/O gates are a separate reviewed amendment
+and are NOT implemented by this checkpoint. The dispatch result cannot count as
+feasibility, Source eligibility, real PPO, native processing or performance.
+
+## Owner clarification/adoption gate
+
+The full user assertions and root's proposed adopted subset are recorded in
+`docs/contracts/`. Advisor recommends B(engineering-only); root adopts B and
+architecture design is READY. Owner assertion hash a0e6acb7…; full profile4f180899…;
+adopted rule/omission/claim hash f4132843… (full values in ADR0023 §17/JSON).
+Current live Simulator working-tree document hashes differ from initial clean
+declarations while HEAD remains ffcffa; no Bots agent edited them and no binary
+conformance is inferred. Target wording and several coverage rows remain pending.
+
+Previous B generator repeat-domain READY is historical evidence only. New actions2
+must use unique physical references, real-domain18, explicit contract propagation
+and synthetic-only128 provenance. Real-I/O/feasibility/qualified learning/full
+acceptance stays blocked; component/FakeHTTP/offline/synthetic work continues.
+New pre-adoption v2 artifacts missing contract fields must reject current use;
+v1 configurations/readers/pins and protected data remain untouched.
+
+## Remaining full acceptance
 
 Currently NOT RUN: Environment/CLI/qualified collection E2E PPO integration,
 journal5/native differential,192-game baseline, attention3models×2inference devices×

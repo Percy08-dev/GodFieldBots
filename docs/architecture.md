@@ -2,6 +2,18 @@
 
 ## Status and scope
 
+The six-file Environment/CLI dispatch mechanics also pass scoped independent
+reviews and69FakeHTTP/legacy tests. This is transport/composition evidence only;
+the newly reviewed owner-contract discrimination and real-I/O gates remain
+pending implementation, so it does not authorize a real actions2 experiment.
+
+Latest steering: the [owner confirmation](contracts/owner-20261101-utility-and-repetition.md)
+changes the proposed v4 miracle-reference rules and partly clarifies utility
+singletons. Simulator normative identities remain unchanged. Rule-dependent v2
+collection remains paused. Root's engineering-only semantic/gate amendment is
+design-reviewed READY but not implemented yet;
+prior component evidence is retained in scope. No real new v2 experiment has run.
+
 [ADR0023](adr/0023-structured-encoders-and-diverse-search.md) accepts an additive
 model/actions-v2 route for detailed participant frames, event banks, compact
 diverse candidates and configurable E2E state/hand/event encoders across the three

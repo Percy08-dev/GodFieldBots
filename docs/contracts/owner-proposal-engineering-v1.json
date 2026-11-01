@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "profile_id": "owner-proposal-engineering-20261101-v1",
+  "eligibility": "engineering_only",
+  "owner_confirmation_id": "owner-20261101-utility-and-repetition-v1",
+  "owner_confirmation_sha256": "a0e6acb7fdc708ce4bd1b11f23d5dd3f0e41373cc1c1c1bef0a43a3e3efc2cb2",
+  "adopted_rules": {
+    "physical_reference_identity": "source plus hand instance_id or learned definition_id",
+    "repeat_reference_within_action": false,
+    "learned_reuse_across_decisions": true,
+    "distinct_same_definition_hand_instances_preserved": true,
+    "existing_attack_matrix": "retain independently reviewed normal/additional/Aura/Mirage/Wand/Staff/zero-MP proposal rules except repeated references",
+    "utility_singletons_explicit_self_and_opponent": ["smile-dew", "heart-dew", "romance-water", "galaxy-geyser", "smile-flower", "heart-flower", "romance-fragrance", "spring", "treasure", "tone", "song", "smile-shell", "heart-shell"],
+    "user_fixed_utility_singletons_explicit_self_only": ["thump-thump-tear", "heaven-herb"],
+    "guardian_singletons": {"definitions": ["guardian-pot", "release"], "targets": "only explicitly observed guardian absence"},
+    "remove_used_miracles_singleton": {"definition": "goddess-s-soap", "targets": "only visible learned list has at least two entries"},
+    "remove_items_singleton": {"definition": "nocturnal-broom", "target": "self only with at least three own hand items remaining after carrier consumption; never use opponent hand count"},
+    "utility_no_op": "HP-full healing and no-curse cleansing allowed",
+    "printed_mp": "each chosen miracle reference pays printed cost at action decision unless an already-adopted CutCost rule applies",
+    "intrinsic_cut_cost_singletons": "ordinary weapon/armor roles retained",
+    "pure_spiritual_doll_singleton": false,
+    "effect_branch_parameters": "none added",
+    "response_control": "follow actual public simulator decisions; synthesize no reflection or action transitions",
+    "targets": "explicit self/opponent where adopted; never invent omitted/null defaults",
+    "existing_basics_defense_discard_trade": "retain reviewed proposal scope and protections without inferring additional legality"
+  },
+  "pending_coverage": ["same-definition distinct normal-attack miracle combination exception", "mixed utility with weapon or utility and order", "pure Doll and CutCost armor attack-support placement/companions", "Tear/Herb explicit-opponent versus user-fixed effect mapping", "guardian-present or unknown-guardian use", "underfull soap/broom removal", "opponent broom without a permitted visible count", "per-definition omitted/null defaults", "normative target-document discrepancy", "runtime conformance and reconciled reflection opportunity contract"],
+  "verification_claims": {"unique_reference_gameplay_bound": 18, "configured_representation_capacity": 128, "capacity_128_data": "synthetic and ineligible as qualified game records", "formal_feasibility_training_and_full_acceptance": "blocked until coherent full contract and runtime/source gates are satisfied"}
+}

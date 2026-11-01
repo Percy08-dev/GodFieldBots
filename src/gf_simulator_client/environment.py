@@ -26,6 +26,7 @@ from gf_common.domain import (
     canonical,
     digest,
 )
+from gf_common.structured import ActionConfigV2
 from gf_common.validation import (
     decision_input,
     projected_abort_kind,
@@ -58,7 +59,7 @@ class EnvironmentSettings:
     server_config: str
     output_dir: Path
     run_id: str
-    actions: ActionConfig
+    actions: ActionConfig | ActionConfigV2
     fixed_seed_experiment: bool = True
     expected_fingerprint: str | None = None
     external_url: str | None = None
@@ -74,6 +75,16 @@ class EnvironmentSettings:
     work_deadline: float = float("inf")
     replay_deadline: float = float("inf")
     policy_bindings: dict[str, RuntimePolicyBinding] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class _DecisionReceipt:
+    command: Json
+    index: int
+    candidate_count: int
+    search_ms: float
+    attempts: int
+    inference_ms: float | None
 
 
 def _failure(exc: BaseException) -> str:
@@ -115,15 +126,56 @@ class SimulatorEnvironment:
         self.settings = settings
         self.policy_factory = policy_factory
         self.journal_factory = journal_factory
+        self._include_input_time = False
+
+    def _new_result(self, group: EpisodeGroup, spec: EpisodeSpec) -> EpisodeResult:
+        return EpisodeResult(spec.episode_id, spec.pair_id, group.seed, spec.policies)
+
+    def _create_actor(self, directory: Path, spec: EpisodeSpec, viewer: int, game: str,
+                      journals: dict[int, Journal], workers: dict[int, ParticipantWorker],
+                      contexts: dict[int, Any], result: EpisodeResult) -> None:
+        try:
+            journals[viewer] = self.journal_factory(directory, spec.episode_id, viewer, spec.policies[viewer - 1],
+                run_id=self.settings.run_id, game_id=game, action_config_hash=digest(asdict(self.settings.actions)),
+                use_action_options=self.settings.actions.use_action_options)
+        except OSError as exc:
+            result.health["save_failure"] = str(exc)
+            raise
+        label = spec.policies[viewer - 1]
+        binding = self.settings.policy_bindings.get(label, RuntimePolicyBinding(label))
+        worker_options = {"policy_options": binding.policy_options} if binding.policy_options is not None else {}
+        if not isinstance(self.settings.actions, ActionConfig):
+            raise ContractError("actions2 requires explicit structured environment composition")
+        workers[viewer] = ParticipantWorker(self.policy_factory, binding.model_id, spec.sampling_seeds[viewer - 1],
+                                           self.settings.actions, self.settings.worker_seconds, **worker_options)
+        contexts[viewer] = None
+
+    async def _ready_actors(self, workers: dict[int, ParticipantWorker], result: EpisodeResult) -> None:
+        return
+
+    async def _select_and_journal(self, value: DecisionInput, worker: ParticipantWorker, journal: Journal,
+                                  context: Any, selection_started: float, result: EpisodeResult) -> _DecisionReceipt:
+        candidates, selected = await worker.select(value)
+        elapsed_ms = (time.monotonic() - selection_started) * 1000
+        command = {"command_id": str(uuid.uuid4()), "expected_revision": value.observation["state_revision"],
+                   "action": candidates.actions[selected.index]}
+        try:
+            index = journal.begin(value, candidates, selected, command, elapsed_ms)
+        except OSError as exc:
+            result.health["save_failure"] = str(exc)
+            raise
+        return _DecisionReceipt(command, index, len(candidates.actions), candidates.latency_ms, candidates.attempts,
+                                getattr(worker, "inference_elapsed_ms", None))
 
     async def _episode(self, client: AttestedClient, definitions: Json, group: EpisodeGroup,
                        spec: EpisodeSpec) -> EpisodeResult:
         started = time.monotonic()
-        result = EpisodeResult(spec.episode_id, spec.pair_id, group.seed, spec.policies)
+        result = self._new_result(group, spec)
         directory = self.settings.output_dir / spec.episode_id
         directory.mkdir(parents=True, exist_ok=False)
         journals: dict[int, Journal] = {}
         workers: dict[int, ParticipantWorker] = {}
+        contexts: dict[int, Any] = {}
         accepted: dict[int, list[Json]] = {1: [], 2: []}
         final: dict[int, Json] = {}
         game: str | None = None
@@ -137,20 +189,8 @@ class SimulatorEnvironment:
                     joined = await client.join(game, str(uuid.uuid4()))
                     if joined["player_id"] != viewer:
                         raise ContractError("unexpected participant allocation")
-                    try:
-                        journals[viewer] = self.journal_factory(directory, spec.episode_id, viewer, spec.policies[viewer - 1],
-                                                                   run_id=self.settings.run_id, game_id=game,
-                                                                   action_config_hash=digest(asdict(self.settings.actions)),
-                                                                   use_action_options=self.settings.actions.use_action_options)
-                    except OSError as exc:
-                        result.health["save_failure"] = str(exc)
-                        raise
-                    label = spec.policies[viewer - 1]
-                    binding = self.settings.policy_bindings.get(label, RuntimePolicyBinding(label))
-                    worker_options = {"policy_options": binding.policy_options} if binding.policy_options is not None else {}
-                    workers[viewer] = ParticipantWorker(self.policy_factory, binding.model_id,
-                                                        spec.sampling_seeds[viewer - 1], self.settings.actions,
-                                                        self.settings.worker_seconds, **worker_options)
+                    self._create_actor(directory, spec, viewer, game, journals, workers, contexts, result)
+                await self._ready_actors(workers, result)
                 histories: dict[int, list[Json]] = {1: [], 2: []}
                 cursors: dict[int, str | None] = {1: None, 2: None}
                 obs = await client.observe(game, 1)
@@ -174,24 +214,17 @@ class SimulatorEnvironment:
                     events, cursors[actor] = await client.events(game, actor, cursors[actor])
                     histories[actor].extend(events)
                     options = await client.actor_options(game, actor, obs) if self.settings.actions.use_action_options else None
+                    input_started = time.monotonic() if self._include_input_time else None
                     value = decision_input(obs, histories[actor], cursors[actor], definitions, options)
-                    selection_started = time.monotonic()
-                    candidates, selected = await workers[actor].select(value)
-                    elapsed_ms = (time.monotonic() - selection_started) * 1000
-                    payload = {"command_id": str(uuid.uuid4()), "expected_revision": obs["state_revision"],
-                               "action": candidates.actions[selected.index]}
-                    try:
-                        index = journals[actor].begin(value, candidates, selected, payload, elapsed_ms)
-                    except OSError as exc:
-                        result.health["save_failure"] = str(exc)
-                        raise
-                    result.candidate_counts.append(len(candidates.actions))
-                    result.search_latency_ms.append(candidates.latency_ms)
-                    result.search_attempts.append(candidates.attempts)
-                    inference_ms = getattr(workers[actor], "inference_elapsed_ms", None)
-                    if inference_ms is not None:
-                        result.inference_latency_ms.append(inference_ms)
-                        result.inference_latency_by_policy.setdefault(result.policies[actor - 1], []).append(inference_ms)
+                    selection_started = time.monotonic() if input_started is None else input_started
+                    receipt = await self._select_and_journal(value, workers[actor], journals[actor], contexts[actor], selection_started, result)
+                    payload, index = receipt.command, receipt.index
+                    result.candidate_counts.append(receipt.candidate_count)
+                    result.search_latency_ms.append(receipt.search_ms)
+                    result.search_attempts.append(receipt.attempts)
+                    if receipt.inference_ms is not None:
+                        result.inference_latency_ms.append(receipt.inference_ms)
+                        result.inference_latency_by_policy.setdefault(result.policies[actor - 1], []).append(receipt.inference_ms)
                     acknowledgement = await client.act(game, actor, payload)
                     # Keep known outcome even if subsequent recording fails.
                     if acknowledgement["status"] == "terminal":
@@ -401,6 +434,7 @@ class SimulatorEnvironment:
             recorded = {r.episode_id for r in results}
             for spec in group.episodes:
                 if spec.episode_id not in recorded:
-                    results.append(EpisodeResult(spec.episode_id, spec.pair_id, group.seed, spec.policies,
-                                                 end_kind="incomplete", failure=health.get("failure", "not_admitted")))
+                    missing = self._new_result(group, spec)
+                    missing.end_kind, missing.failure = "incomplete", health.get("failure", "not_admitted")
+                    results.append(missing)
         return GroupResult(results, health)

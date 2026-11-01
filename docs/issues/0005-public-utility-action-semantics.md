@@ -5,6 +5,16 @@
 - Scope: public contract only. No Simulator code change or rejection probe was made.
 - Related: [ADR0023](../adr/0023-structured-encoders-and-diverse-search.md).
 
+Update2026-11-01: the user supplied explicit
+[owner assertions](../contracts/owner-20261101-utility-and-repetition.md) on
+singleton utility use/explicit targets and physical miracle references. They
+partly resolve this issue, but no Simulator spec/hash/revision or Bots adoption
+has been issued. Same-reference repetition is now explicitly disallowed in one
+Action, requiring a correction to the new v4 proposal domain; historical v1
+data/behavior remains intact. Utility defaults/mixes/edge cases and normative
+conflicts remain open. Rule-dependent collection/full acceptance stays paused
+while root reviews a versioned adoption policy. Infrastructure work continues.
+
 The requested new generator includes completed healing, resource recovery,
 cleansing/removal and guardian-setting single actions. Current typed metadata
 provides `play_sequence(ordered_elements, optional target)` but no per-card
