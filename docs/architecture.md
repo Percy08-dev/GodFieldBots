@@ -362,7 +362,7 @@ Wire DTOs may resolve representation details; no engine dependency is allowed.
 | --- | --- | --- |
 | `gf_common` | JSON-safe domain types, protocols, public action space, lazy search, pure scheduling | stdlib, NumPy |
 | `gf_simulator_client` | validated HTTP, attestation, subprocess/game ownership, worker transport | common, httpx; v2 stdlib-only model binding/config/cost metadata |
-| `gf_training` | journals/projection, split/feasibility, owned numeric training, generation lineage and frozen datasets | common, model adapters, optional PyArrow |
+| `gf_training` | journals/projection, split/feasibility, owned numeric training, generation lineage and frozen datasets | common, model adapters, optional PyArrow; v2 stdlib-only client.structured_resources owner |
 | `gf_evaluation` | paired scheduling, aggregation and costs | common |
 | `gf_models` | participant-local Random/heuristic/LightGBM/MLP/GRU/Transformer, common encoder/config and artifacts | common, lazy extras |
 | `gf_cli` | strict config, composition, commands, manifest | application packages |
@@ -371,6 +371,12 @@ Wire DTOs may resolve representation details; no engine dependency is allowed.
 The existing `godfieldbots` entry point becomes a compatibility wrapper.
 Common never imports upper layers. Models never handle HTTP or management
 configuration. CLI constructs concrete policies/environments for evaluation.
+A bounded v2 exception lets training import the one stdlib-only
+`gf_simulator_client.structured_resources` ledger/learner reservation shared with
+participant workers. It adds no HTTP, environment or transport import and no
+reverse resource-module dependency. Revisit its package location if additional
+unrelated consumers appear or that module gains client I/O dependencies; do not
+duplicate the ledger or introduce a process framework to avoid this narrow edge.
 Runtime is CPython 3.14, GIL enabled, uv; baseline dependencies httpx/NumPy.
 Extras are `data` (PyArrow), `lightgbm`, mutually exclusive `torch` (CPU) and
 `torch-cuda` (cu132); dev is pytest/ruff/mypy. NumPy is pinned to 2.5.4, Torch to

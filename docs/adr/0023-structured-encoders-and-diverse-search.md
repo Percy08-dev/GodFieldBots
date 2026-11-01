@@ -1401,3 +1401,41 @@ cache/full/split tolerance, whole-cohort failures, mismatched config/visibility/
 bindings, worker/learner cleanup, shared ledger/no-overlap, publication failures
 and old model1 coordinator regression. These components establish integration and
 resume behavior, not game feasibility, learning strength or final-test acceptance.
+
+S3a first implements only numerical wire3, low-level process ownership, lifetime
+envelopes and explicit version2 schedule labels; S3b connects the common loop and
+historical Source correspondence. Root chooses one small concrete learner lease
+in the existing ledger (not a process framework): reserve/spawn/confirmed-reap/
+no-process rollback, no participant slot consumption, one learner at a time.
+Attach its process owner before asynchronous child creation and preserve it across
+cancellation. A null process pointer alone cannot authorize rollback while a
+shielded creation task may still return a child. Keep the existing static
+learner_bytes constructor behavior for old callers/tests; new v2 composition uses
+the explicit lease and cannot double-charge that static amount.
+Root accepts the bounded training→client.structured_resources dependency needed
+for this same concrete owner. That module stays stdlib/common only, with no HTTP,
+environment, transport or training imports; dependency direction stays acyclic.
+Revisit package ownership if it gains client I/O or additional unrelated consumers.
+This avoids duplicating the ledger or moving process checks into pure common.
+
+Reuse LearningProcess's cancellation-shielded async subprocess creation, drains
+and close; add only private default-preserving hooks needed by its explicit v3
+adapter. Wire3's closed identity contains model_id/version, architecture_identity,
+action_config_hash, resume_identity, input binding, actual execution and the
+existing execution_digest(model, binding, visibility), which also binds resource
+settings excluded from architecture_identity. Initialize carries model/seed/output/
+explicit nullable restore; update/save carries batch path/digest/frozen policy
+version/output; close carries identity. Every request/reply has builtin integer3
+protocol_version. Replies validate command/identity, full C1 artifact maps/digests,
+optimizer counters, fixed declared hardware and finite timings/metrics before
+publication. Unknown/malformed/error replies cannot advance state. Numeric wire3
+dispatch precedes old decoding, and actual visibility is checked before Torch.
+
+Keep the existing training_groups/validation_groups algorithm in
+gf_training.collection and ordinary schedule algorithm in gf_common.schedule;
+select structured baseline labels by explicit actions version with1default.
+Preserve seed draws, pair order, roles and16games; do not copy the algorithm.
+S3a tests actual CPU/CUDA child lifecycle, exact C1 continuous/resume state,
+pre-import visibility, malformed acknowledgements, creation cancellation/cleanup,
+lifetime/no-overlap and legacy schedule/process defaults. It adds no coordinator
+loop, Source authority or real-I/O bypass.
