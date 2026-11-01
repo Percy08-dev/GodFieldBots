@@ -1041,3 +1041,86 @@ normative reconciliation evidence. Advisor review recommended the versioned
 engineering-only subset adopted above; root owns the disposition and required
 architecture review before dependent rule edits. Independent FakeHTTP dispatch,
 storage, numerical and cleanup work can proceed within its actual scope.
+
+## 18. Source/Generation2/PPO integration under the engineering gate
+
+Architecture review accepted this bounded design before dependent implementation.
+Implementation proceeds in separately reviewed Source, Generation2 and coordinator
+increments; design readiness does not imply implemented or qualified execution.
+
+Continue application implementation without treating an engineering profile as a
+qualified game contract. Preserve schema4/model1 sources and Generation1 paths
+byte/meaning unchanged; version dispatch precedes decoding.
+
+New structural collection projection reads original schema5 manifests/journals/
+referenced columns, verifies identities, caps, closure/ack evidence, inventories
+and final hashes, and reconstructs actor-local EpisodeRecords. It can return
+structural component evidence with explicit non-qualified purpose. Public Source/
+export/fit and normal real-game PPO entries independently require a qualified
+contract and original whole-parent/Replay/split qualification. No producer,
+completed status, purpose flag or structural reader supplies that authority.
+Current engineering profile always fails qualified use.
+
+Natural collection projection requires matching original Replays and a successful
+linked report. Interrupted component diagnostics may omit a Replay only when the
+original episode health explicitly records replay/finalization failure. Preserve
+accepted endpoints, exact closure reason, absent outcome and diagnostics; do not
+infer rewards, bootstrap values or qualification from the missing Replay. Every
+present Replay/manifest/sidecar conflict is rejected. Before Generation2 parent
+proof is implemented, structural Source reports qualified=false and
+parent_qualification=not_performed even for a collection4 envelope.
+Compare closures from present Replays against each other and the original known
+cause. An allowed missing view is absent evidence, not a contradictory closure;
+it does not authorize reconstructing that participant's missing history.
+
+Generation2 enumerates exact owned inference/resume manifests/shards and hashes,
+model/version/input/action-contract/classification identity, counters and chain
+links. Retention validates/deletes only listed owned files, preserving inference
+identity manifests/deletion receipts. Generation1's fixed-file protocol remains.
+Sealed historical model2 metadata validation requires no Torch or equality to
+current hardware/code; active policy loading and ordinary resume remain strict.
+
+Reuse the existing PPO coordinator's schedules, locks, deadlines/storage,
+16-game batches, explicit learner-viewer roles, snapshot cadence and committed-
+boundary pause/resume. Dispatch model2 to C1 numeric worker/Learner/rollout3;
+old model1 math/serializers stay intact. Owned current/pool bindings use committed
+Generation2 file maps and exact actual execution identity. Formal binding needs
+a qualified healthy complete parent's final generation, never bare weights.
+
+For model2 the coordinator creates/adopts one ReservationLedger and charges the
+computed resident learner envelope BEFORE numerical-child Popen. Keep that charge
+through collection and release only after learner reap. Use a bounded collector-
+factory closure receiving that SAME ledger; the composed run_experiment/structured
+Environment accepts the injected ledger rather than creating a fresh zero-learner
+ledger. CollectionPlan remains a serializable value with no runtime object/default
+added to v1. Standalone collect may create its own zero-learner ledger; owned PPO
+collection must reject absence/mismatch. Begin updates only after all participant
+leases are gone. Test object identity and charge lifetimes, not merely reported
+worker-count flags. No general resource framework is introduced.
+
+Test now through a dedicated PRIVATE component coordinator entry/internal driver
+sharing the same coordinator with an injected synthetic/FakeHTTP collector. It
+hard-binds component purpose/profile in parent, collection, numeric and generation
+evidence. No CLI real-I/O bypass is exposed; completed component parents/models
+remain rejected by formal Source/dataset/binding paths. Public entries keep the
+real-I/O gate before any Simulator activity. No new trainer framework or
+user-elevatable authority token is introduced.
+
+This Journal5/Source/Generation2 component path always uses purpose=component,
+synthetic_capacity=false and unique<=18proposals even with a synthetic/FakeHTTP
+collector.128/Truecapacity fixtures remain in separate C1 numerical/structural
+tests, not a Source bypass. Model2 training_groups supplies explicit structured
+Random/heuristic labels while retaining16-game schedule, seed derivation and
+snapshot cadence. Learner role is always the explicit viewer, never label text.
+
+Component projection preserves accepted endpoints, natural reward perspective/
+GAE and interrupted closure diagnostics without guessed targets. Verify all three
+model2 kinds, exact two-updates versus1+pause/resume arrays/Adam/RNG/source,
+retention, role binding and missing metadata/values; late whole-parent failure,
+manifest/Replay/sidecar conflicts, locks, changed config/runtime/backend/visibility/
+deadlines and cleanup/publication failures. Qualified engineering negatives are
+mandatory. Native selection fails early without new capabilities until separate
+native implementation; explicit Python reference stays truthful, no fallback.
+
+After this path stabilizes, both reviews and old-format/data proofs are required.
+These components do not fulfill blocked real192-game/PPO/performance acceptance.

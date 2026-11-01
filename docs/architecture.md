@@ -2,46 +2,33 @@
 
 ## Status and scope
 
-The six-file Environment/CLI dispatch mechanics also pass scoped independent
-reviews and69FakeHTTP/legacy tests. This is transport/composition evidence only;
-owner-contract discrimination and real-I/O gates are now implemented and reviewed
-for the engineering profile; it still does not authorize a real actions2 experiment.
+[ADR0023](adr/0023-structured-encoders-and-diverse-search.md) adds an explicit
+model/actions-v2 path. Accepted engineering components include immutable own-view
+frames/event banks, compact diverse candidates, exact deterministic tokens,
+configurable state/hand/interval-event encoders, all three PPO numerical learners,
+factorized chunked scoring, sharded inference/resume artifacts, protocol2
+participant workers, Journal5 transactions and Environment/CLI composition.
+PyTorch owns the learned encoders and runs on the configured CPU or CUDA device.
+Legacy configuration, records and model paths retain their original meanings.
 
-Latest steering: the [owner confirmation](contracts/owner-20261101-utility-and-repetition.md)
-changes the proposed v4 miracle-reference rules and partly clarifies utility
-singletons. Simulator normative identities remain unchanged. Rule-dependent v2
-collection remains paused. Root's engineering-only semantic/gate amendment is
-implemented/reviewed for all current engineering component boundaries;
-prior component evidence is retained in scope. No real new v2 experiment has run.
-Current regression evidence is1460Python PASS/46SKIPPED,13separate CUDA PASS,
-full Ruff/mypy PASS; qualified Source/Generation2/native/tree and full acceptance
-remain pending. Historical milestone counts below overlap and precede this gate.
+The [owner confirmation](contracts/owner-20261101-utility-and-repetition.md)
+changes proposed miracle repetition and partly clarifies utility singletons.
+Current v2 components bind the explicitly versioned engineering-only subset;
+game proposals require distinct actual references and at most18possession slots.
+128-position capacity remains explicit synthetic component evidence. The
+Simulator's normative identities remain unchanged. Public real-I/O and qualified
+source/fit entry points reject the engineering profile before Simulator activity.
+Unresolved public rules and normative/binary adoption are tracked in
+[issue0005](issues/0005-public-utility-action-semantics.md).
 
-[ADR0023](adr/0023-structured-encoders-and-diverse-search.md) accepts an additive
-model/actions-v2 route for detailed participant frames, event banks, compact
-diverse candidates and configurable E2E state/hand/event encoders across the three
-PPO models, plus deterministic LightGBM and CPU/CUDA inference. The legacy paths
-retain their exact semantics. Independent design reviews authorize the core and
-confirmed candidate rows. The first pure records/token/config/network slice is
-implemented and accepted after independent correctness/conformance reviews:
-102CPU/6separateCUDA tests,110selected legacy tests and scoped Ruff/mypy pass.
-The pure v4 candidate generator is also accepted after both independent reviews
-and166affected Python checks. It is not yet connected to the application workers.
-The pure artifact3/rollout3/E2E numeric learner/inference API slice is accepted
-after independent reviews,168affected CPU/4separate CUDA checks and scoped
-Ruff/mypy. It includes1024-frame persistence and exact synthetic two-update/resume
-with partial Adam state; these are component results. Version2 Config/binding
-dispatch is also accepted after independent reviews and112scoped checks, exact
-old12config identities and6new graph loads. Standalone protocol2 workers and
-journal5 structural transactions are accepted after both reviews,223affected CPU/
-3separate full-default CUDA checks and legacy journal regressions. Environment/
-CLI/source/native application integration and full acceptance are pending. The
-standalone candidate-column
-codec and owned sidecar I/O are accepted after33checks and independent reviews,
-with journal-local transactions but no formal source qualification; the
-public utility completion/target dependency is tracked in
-[issue0005](issues/0005-public-utility-action-semantics.md). It is not resolved by
-atomic hints or successful play. See the
+The accepted b31043e milestone has1460Python PASS/46SKIPPED,13separate CUDA PASS,
+full Ruff/mypy PASS, exact old configuration/data checks and an isolated Python
+wheel baseline-worker smoke without optional dependencies. These results precede
+the in-progress structural Source integration. Source/Generation2/coordinator,
+new native processing and deterministic LightGBM2 integration remain pending;
+their bounded design is accepted in ADR0023. No real v2 experiment or full-plan
+acceptance is claimed. Milestone scopes, overlapping historical counts and
+remaining performance/experiment checks are in the
 [verification ledger](verification/structured-encoders-and-search.md).
 
 [ADR0022](adr/0022-gru-transformer-ppo-plan.md) implements GRU/Transformer PPO

@@ -445,11 +445,99 @@ These checks establish current engineering implementation/regression scope.
 They do not satisfy real feasibility, qualified Source, Generation2/PPO orchestration,
 new native differential, LightGBM2 or final performance/full-plan acceptance.
 
-## Remaining full acceptance
+## Current Python wheel and optional-free environment
+
+Root built the committed b31043e Python package offline with
+`UV_CACHE_DIR=/tmp/gf-structured-uv uv build --wheel --package godfieldbots --out-dir /tmp/gfb-owner-wheel-20261102 --offline --no-sources`.
+Wheel SHA-256 `41fa4fa6e9af67b8cdca0f8c4adcc85768c687c1be20c763992a09b14bffeb67`;
+all100packaged Python files exactly match source bytes. This is the current
+Python milestone, not a later native/final package build.
+
+A fresh3.14.10 GIL-enabled venv `/tmp/gfb-owner-wheel-env-b31043e` installed only
+the app wheel with `uv pip --no-deps --offline --no-index`. Verified local baseline
+NumPy/httpx and transitive distribution files were copied into that disposable
+environment with source/destination hashes checked; no optional ML/data/native
+distribution was copied or installed. Package imports originate in the isolated
+wheel environment, with no repository src path.
+
+Under an import blocker for Torch/torchvision/LightGBM/PyArrow/gf_native, help,
+all12oldConfig identities,6explicit engineering graphs,2structured baselines and
+a fresh protocol2 Random worker initialize/ready/close/reap PASS. Worker leases
+are gone and optional imports/distributions remain absent. No Simulator request
+or model learning occurs. Evidence files `/tmp/gfb-owner-wheel-20261102/copy-proof.json`
+and `runtime-proof.json` preserve the bounded scope. Rebuild/reverify after later
+Source/native/tree implementation; do not carry this wheel result forward to
+untested source bytes.
+
+## Offline CPU latency panel: engineering components
+
+Root retained the frozen512 TRAIN inputs and a separate dual-view workload under
+`runs/assessments/structured-latency-20261102`. Dual-view extraction verifies the
+same four original collections and adds512peer/tail decisions:1024accepted inputs
+across49games, with exactly the original512identities marked as panel members.
+Each participant child receives only its own original six-field DecisionInput;
+the original datasets/journals are not rewritten. Panel input canonical digest
+remains `ca0a1e76c80ec7876815e38b15786607819d646c4baf907a55250edce350813c`;
+dual-view JSONL SHA-256 is
+`619c6b707ad4c29b8409da5c5b4f97050cf3d1060824ae34ec1a8837b601d98c`.
+
+The retained harness uses full default attention architectures and action budgets,
+fixed seed17 untrained component weights, CPU inference,2concurrent games and
+at most4independent participant workers. Startup is outside the decision clock.
+The decision clock includes original-input validation, frame/event construction,
+candidate generation, tokenization, scoring, CPU sampling, worker communication,
+parent validation and Action reconstruction. No Simulator requests or journal
+publication occur. Worker processes/reservations are closed after each game.
+All512panel rows and the separate512peer/tail rows complete for each model.
+
+| CPU model | Panel p50 | Panel p95 | Panel maximum | Startup p95 |
+| --- | ---: | ---: | ---: | ---: |
+| MLP | 14.37ms | 92.68ms | 1171.39ms | 1607.93ms |
+| GRU | 14.39ms | 92.38ms | 1079.24ms | 1551.74ms |
+| Transformer | 14.34ms | 87.97ms | 339.04ms | 1565.40ms |
+
+Startup has98observations per model. This panel reaches2809candidates, sequence
+length8 and240visible events; it does not cover the separate tens-of-thousands,
+18/128-position or1024-decision stress conditions. Each model is a single run;
+small differences are not evidence of a model speed ordering. The action profile
+is the explicit engineering-only subset, not a qualified complete game contract.
+These measurements are below3seconds within their measured component scope;
+they do not complete full-plan performance or real-game acceptance.
+
+Exact command, repeated sequentially for `mlp`, `gru`, `transformer` while the
+implementer paused heavy checks:
+
+```sh
+timeout --signal=INT --kill-after=10s 300s env CUDA_VISIBLE_DEVICES= CUBLAS_WORKSPACE_CONFIG=:4096:8 UV_CACHE_DIR=/tmp/gf-structured-uv uv run --no-sync python /tmp/gfb-structured-latency-20261102.py --kind mlp --input /tmp/gfb-structured-performance-dual-view-20261102.jsonl --output /tmp/gfb-structured-latency-mlp-panel-20261102
+```
+
+All commands exit0. Retained harness SHA-256
+`80397e86002a8b3b3ea4b1a62ab8f3b9383fc08945736df54273fb0d88e83bb8`;
+evidence inventory/source snapshot `proof.json` SHA-256
+`8ed8f463a3451a194c742670b7b488428e991f041f6a3ef71cb73dc107ea59a9`.
+Result SHA-256 values are MLP
+`f0c2434b828fceab6b1755ae4fe32f93ae3e92a242c7643186eb2afb1b41b427`, GRU
+`d8a7b2710ac20baf238a5c8f55c864a048c246dd9a277443edb1534ccd986d78`,
+Transformer `870b6ccbf4229b08921fd484869e0e3df6e37e68da427c08ba5d47deb4ad53d4`.
+Independent read-only evidence/arithmetic audit PASS: all17evidence file hashes,
+37inference/worker source hashes, exact512panel/512supplemental identities and all
+reported quantiles match. The successful-run empty-ledger gate implies confirmed
+worker reap before result publication. The audit ran no tests, Torch, Simulator,
+GPU or repeated timings. A separate correctness assessment reproduced a P1
+constructor-exception cleanup gap: exceptions after reservation/before Popen leave
+a lease, and exceptions between returned Popen and registration leave a child
+and lease. Four bounded MemoryError/CancelledError probes were explicitly
+killed/reaped/closed and reservations recovered. This violates agreed failure
+ownership and must be fixed before accepting the next runtime milestone. It is
+not evidence of a leak in these successful measured runs. No new GPU attribution
+result.
+
+## Remaining integrated acceptance
 
 Currently NOT RUN: Environment/CLI/qualified collection E2E PPO integration,
 journal5/native differential,192-game baseline, attention3models×2inference devices×
 continuous/pause-resume real2updates, other hand-mode MLP games, fixed512train
-decision CPU p95<=3s panel and separate stress/GPU attribution, new Rust/native
-checks, old-data full proofs, isolated wheel and optional-dependency-free startup.
+decision CPU p95<=3s acceptance under the complete qualified contract, separate
+stress/GPU attribution and new Rust/native checks. Repeat old-data proofs, wheel
+and optional-dependency-free startup after the remaining implementation.
 Do not turn these entries into PASS without exact commands and actual evidence.
