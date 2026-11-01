@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from gf_common.domain import EpisodeGroup, EpisodeSpec, Json, RuntimePolicyBinding, digest
+from gf_common.schedule import baseline_policy_labels
 
 TRAIN_NAMESPACE = uuid.UUID('2de8b1c1-6db1-5cc9-a2e7-933ce3d10001')
 TEST_NAMESPACE = uuid.UUID('2de8b1c1-6db1-5cc9-a2e7-933ce3d10002')
@@ -29,11 +30,12 @@ class FinalizedCollection:
     report: Json
 
 
-def training_groups(seed: int, batch: int, learner: str, snapshots: tuple[str, ...], rng: object) -> tuple[EpisodeGroup, ...]:
+def training_groups(seed: int, batch: int, learner: str, snapshots: tuple[str, ...], rng: object, *, actions_version: int = 1) -> tuple[EpisodeGroup, ...]:
     import numpy as np
     assert isinstance(rng, np.random.Generator)
     groups = []
-    opponents = ['random'] * 2 + ['heuristic'] * 2 + [snapshots[int(rng.integers(len(snapshots)))] for _ in range(4)]
+    random_label, heuristic_label = baseline_policy_labels(actions_version)
+    opponents = [random_label] * 2 + [heuristic_label] * 2 + [snapshots[int(rng.integers(len(snapshots)))] for _ in range(4)]
     for pair, opponent in enumerate(opponents):
         game_seed = str(uuid.uuid5(TRAIN_NAMESPACE, f'ppo-train-v1/{seed}/{batch}/{pair}'))
         pair_id = f'b{batch:06}-p{pair}'
@@ -45,10 +47,11 @@ def training_groups(seed: int, batch: int, learner: str, snapshots: tuple[str, .
     return tuple(groups)
 
 
-def validation_groups(seed: int, learner: str) -> tuple[EpisodeGroup, ...]:
+def validation_groups(seed: int, learner: str, *, actions_version: int = 1) -> tuple[EpisodeGroup, ...]:
+    random_label, heuristic_label = baseline_policy_labels(actions_version)
     groups = []
     for index in range(32):
-        opponent = 'random' if index < 16 else 'heuristic'
+        opponent = random_label if index < 16 else heuristic_label
         pair_id = f'validation-p{index:02}'
         streams = [int(digest({'recipe': 'ppo-final-validation-stream-v1', 'learning_seed': seed, 'pair': index, 'role': role})[:16], 16)
                    for role in ('learner', 'opponent')]

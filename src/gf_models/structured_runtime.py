@@ -3,7 +3,6 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from itertools import pairwise
-from math import prod
 
 from gf_common.diverse_actions import NumericCosts
 from gf_common.domain import ContractError, Json, integer
@@ -11,11 +10,19 @@ from gf_common.structured import ActionConfigV2
 from gf_models.structured_binding import safe_options_v2
 from gf_models.structured_config import (
     InferenceBindingV2,
+    ModelConfigV2,
     dimensions,
     model_config_v2,
-    parameter_shapes,
     resource_estimate,
 )
+
+PROCESS_ENVELOPE_RECIPE = "structured-process-envelope-v1"
+
+
+def learner_process_bytes(model: ModelConfigV2, binding: InferenceBindingV2) -> int:
+    """Full configured W envelope, charged until the numerical process is reaped."""
+    peak = resource_estimate(model, binding)["total_bytes"]
+    return peak if binding.device != "cpu" else 0
 
 
 @dataclass(frozen=True)
@@ -55,12 +62,6 @@ def own_worker_settings(model_id: str, actions: ActionConfigV2, options: Json | 
     for source, target in pairwise(widths):
         tail_ops += 2 * source * target + target
     tail_ops += sum(model.heads.actor_hidden_sizes[1:])
-    sizes = [shape for shape in parameter_shapes(model).values()]
-    weights = sum(prod(shape) for shape in sizes) * 4
-    cache = (2 * model.temporal.num_layers * model.temporal.max_decisions * model.temporal.hidden_size * 4
-             if model_id == "transformer" else model.temporal.num_layers * model.temporal.hidden_size * 4 if model_id == "gru" else 0)
-    positions = model.temporal.max_decisions * model.temporal.hidden_size * 4
-    resident = weights + cache + positions + model.resources.workspace_bytes + (model.resources.cuda_context_bytes if binding.device != "cpu" else 0)
     peak = resource_estimate(model, binding, suffix_decisions=1)["total_bytes"]
     costs = NumericCosts(context_width=model.temporal.hidden_size, card_width=dims["card_actor"],
                          actor_input_width=dims["actor"], actor_hidden_width=widths[0],
@@ -71,9 +72,7 @@ def own_worker_settings(model_id: str, actions: ActionConfigV2, options: Json | 
                          fixed_bytes=resource_estimate(model, binding, candidates=1, suffix_decisions=1)["total_bytes"],
                          max_preparation_bytes=min(model.resources.max_owned_bytes, binding.managed_budget_bytes),
                          max_tensor_bytes=model.resources.max_tensor_bytes)
-    cuda_resident = resident if binding.device != "cpu" else 0
-    cuda_temporary = max(0, peak - resident) if binding.device != "cpu" else 0
-    return caps, costs, cuda_resident, cuda_temporary
+    return caps, costs, peak if binding.device != "cpu" else 0, 0
 
 
 def caps_dict(value: WorkerCaps) -> Json:

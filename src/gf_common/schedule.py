@@ -3,7 +3,13 @@ from __future__ import annotations
 
 import time
 
-from gf_common.domain import EpisodeGroup, EpisodeSpec, digest
+from gf_common.domain import EpisodeGroup, EpisodeSpec, digest, integer
+
+
+def baseline_policy_labels(actions_version: int = 1) -> tuple[str, str]:
+    integer(actions_version, 1, 2)
+    return (("random", "heuristic") if actions_version == 1
+            else ("random-structured-v1", "heuristic-structured-v1"))
 
 
 def _check_deadline(deadline: float) -> None:

@@ -722,6 +722,62 @@ format, C1 artifact3/resume3 meaning, model math or public rule changes. S3 has
 design readiness only; no coordinator/numeric-wire3 execution, new native/tree,
 real game, final GPU stress or learning-quality acceptance follows from S2.
 
+## S3a numerical wire, lifetime resources and schedule acceptance
+
+The numerical child now dispatches wire3 before legacy decoding, validates its
+closed identity/commands/artifact maps/counters/finite acknowledgements, selects
+actual visibility before Torch import and delegates all numerical work to C1.
+The explicit process adapter reuses existing async creation/drain/cleanup through
+default-preserving hooks. The concrete learner lease retains owner/charge through
+pending creation/cancellation/replies until confirmed reap, without participant
+slots or static-charge duplication. Workers reserve their full inference suffix1
+envelope for process lifetime; learner uses configured W. Scoped ownership remains
+even with0additional bytes. Structured baseline labels use the existing schedule
+algorithm with version1 defaults, seed draws, roles and ordering unchanged.
+
+CPU actual-child cases cover all3small component models, two updates and separate
+restore/update, exact named weights/Adam/CPU+shuffle RNG, malformed replies,
+pre-import visibility and lifetime ownership. Initial GPU3 tests stopped on a
+test helper that hardcoded CPU visibility; GPU returned its correct explicit0.
+The test expectation now distinguishes CPUempty/0devices and CUDA0/1device and
+retains the same selector on restore. No production math/tolerance changed.
+
+Independent review found one lifecycle family: a failed close during delayed
+creation was cached permanently, and close-before-start still permitted a later
+spawn. The v3-only fix preserves prior caller outcomes, permits single-flight
+bounded retry of unresolved cleanup, coordinates late registration/adoption,
+preserves startup cancellation and rejects start after terminal close before any
+reserve/spawn. Legacy close defaults remain unchanged. Both final reviews are
+READY; each independently reruns9targeted cases and the original CPU probes now
+reap through public cleanup with exactly one release, without backup-as-evidence.
+
+Root final frozen-source HOST command:
+
+```sh
+timeout --signal=INT --kill-after=15s 180s env UV_CACHE_DIR=/tmp/gf-structured-uv uv run --no-sync pytest -q tests/test_structured_numeric_worker.py tests/test_structured_numeric_worker_cuda.py tests/test_ppo_lineage.py tests/test_structured_protocol.py tests/test_structured_environment.py
+```
+
+PASS154/3SKIP in59.32s(exit0). The3GPU cases were separately enabled after the
+lifecycle fix:
+
+```sh
+timeout --signal=INT --kill-after=15s 180s env GFB_RUN_STRUCTURED_NUMERIC_CUDA=1 CUBLAS_WORKSPACE_CONFIG=:4096:8 UV_CACHE_DIR=/tmp/gf-structured-uv uv run --no-sync pytest -q tests/test_structured_numeric_worker_cuda.py
+```
+
+PASS3in26.95s with actual GPU/local-IPC permission: configured default attention,
+all3kinds including Transformer2layers, two updates, separate restore/update,
+exact named state and confirmed reap. Earlier3FAIL9.90s was the helper expectation;
+pre-lifecycle3PASS27.28s is superseded for this scope. Four named old GRU/
+Transformer CPU/native coordinator pause-resume regressions PASS21.00s;5legacy
+cleanup checks PASS11.86s after the v3 fix. These overlap other checks and are not
+added to154. Root full Ruff PASS, mypy PASS(105source files), diff/link checks PASS.
+
+S3a accepts wire, process/resource ownership and schedule labels only. It does
+not connect the model2 coordinator/collector, establish original Source↔numeric
+correspondence, authorize engineering real I/O or satisfy physical GPU high-water/
+performance/learning acceptance. The small CPU cases and default CUDA numerical
+cases are component checks, not real16-game batches.
+
 ## S3 resource-accounting preparation: derived facts only
 
 A bounded read-only calculation confirms that `own_worker_settings` separates

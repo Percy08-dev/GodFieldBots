@@ -1412,6 +1412,11 @@ cancellation. A null process pointer alone cannot authorize rollback while a
 shielded creation task may still return a child. Keep the existing static
 learner_bytes constructor behavior for old callers/tests; new v2 composition uses
 the explicit lease and cannot double-charge that static amount.
+In v3, a failed/incomplete close during pending creation is not terminal: once
+creation resolves, a later close must retain a reachable single-flight cleanup
+attempt under its caller-supplied bounded deadline, preserving cancellation and
+exactly-once release. A successful terminal close forbids a subsequent start
+before any reservation/spawn. Keep model1's legacy close defaults unchanged.
 Root accepts the bounded training→client.structured_resources dependency needed
 for this same concrete owner. That module stays stdlib/common only, with no HTTP,
 environment, transport or training imports; dependency direction stays acyclic.

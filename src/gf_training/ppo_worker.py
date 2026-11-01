@@ -24,6 +24,10 @@ def main() -> None:
     model = None
     for line in sys.stdin:
         request = json.loads(line)
+        if 'protocol_version' in request:
+            from gf_training.structured_numeric_worker import serve
+            serve(request, sys.stdin)
+            return
         command = request.get('command')
         started = time.monotonic()
         if command == 'initialize':

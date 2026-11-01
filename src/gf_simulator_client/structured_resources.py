@@ -17,10 +17,20 @@ class ReservationLedger:
         self.serial = 0
         self.updating = False
         self.peak_cuda_bytes = learner_bytes
+        self.learner: LearnerReservation | None = None
 
     @property
     def cuda_bytes(self) -> int:
-        return self.learner_bytes + sum(worker.resident_bytes + sum(worker.decisions.values()) for worker in self.workers.values())
+        return (self.learner_bytes + (self.learner.resident_bytes if self.learner is not None else 0)
+                + sum(worker.resident_bytes + sum(worker.decisions.values()) for worker in self.workers.values()))
+
+    def reserve_learner(self, resident_bytes: int, owner: Any) -> LearnerReservation:
+        integer(resident_bytes, 0, self.global_cuda_bytes)
+        if self.learner_bytes or self.learner is not None or self.workers or self.updating or owner is None:
+            raise ContractError('learner reservation duplicates residency or overlaps active work')
+        self.learner = LearnerReservation(self, resident_bytes, owner)
+        self.peak_cuda_bytes = max(self.peak_cuda_bytes, self.cuda_bytes)
+        return self.learner
 
     def reserve_worker(self, resident_bytes: int) -> WorkerReservation:
         integer(resident_bytes, 0, self.global_cuda_bytes)
@@ -34,15 +44,56 @@ class ReservationLedger:
 
     def begin_update(self, temporary_bytes: int) -> None:
         integer(temporary_bytes, 0, self.global_cuda_bytes)
-        if self.workers or self.updating or self.learner_bytes + temporary_bytes > self.global_cuda_bytes:
+        if self.workers or self.updating or self.cuda_bytes + temporary_bytes > self.global_cuda_bytes:
             raise ContractError("learner update overlaps collection or exceeds shared CUDA budget")
         self.updating = True
-        self.peak_cuda_bytes = max(self.peak_cuda_bytes, self.learner_bytes + temporary_bytes)
+        self.peak_cuda_bytes = max(self.peak_cuda_bytes, self.cuda_bytes + temporary_bytes)
 
     def finish_update(self) -> None:
         if not self.updating:
             raise ContractError("learner update reservation is not active")
         self.updating = False
+
+
+@dataclass
+class LearnerReservation:
+    """One concrete async numerical owner; pending creation is still ownership."""
+    ledger: ReservationLedger
+    resident_bytes: int
+    _cleanup_owner: Any = field(repr=False, compare=False)
+    creation_pending: bool = False
+    pid: int | None = None
+    released: bool = False
+
+    def spawned(self, process: Any) -> None:
+        if self.released or self.pid is not None or self.ledger.learner is not self:
+            raise ContractError('learner reservation already consumed')
+        integer(process.pid, 1)
+        self.pid = process.pid
+        self.creation_pending = False
+
+    def cancel_before_spawn(self) -> None:
+        if (self.released or self.pid is not None or self.creation_pending
+                or getattr(self._cleanup_owner, 'process', None) is not None):
+            raise ContractError('pending/spawned learner requires confirmed creation/reap')
+        self._release()
+
+    def reaped(self, process: Any) -> None:
+        if self.released:
+            return
+        if process is None or process.returncode is None or (self.pid is not None and self.pid != process.pid):
+            raise ContractError('learner residency cannot release before confirmed reap')
+        if (self.creation_pending or self.ledger.updating
+                or process is not getattr(self._cleanup_owner, 'process', None)):
+            raise ContractError('learner residency cannot release before confirmed reap')
+        self._release()
+
+    def _release(self) -> None:
+        if self.ledger.learner is not self:
+            raise ContractError('foreign learner reservation')
+        self.ledger.learner = None
+        self.released = True
+        self._cleanup_owner = None
 
 
 @dataclass

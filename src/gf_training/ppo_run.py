@@ -138,14 +138,29 @@ class LearningProcess:
         self.drainer: asyncio.Task[None] | None = None
         self.health: Json = {}
         self.close_task: asyncio.Task[None] | None = None
+        self.creation_task: asyncio.Task[Any] | None = None
 
-    async def start(self) -> None:
-        environment = {'PATH': os.defpath, 'LANG': 'C.UTF-8', 'LC_ALL': 'C.UTF-8', 'PYTHONHASHSEED': '0',
+    def _environment(self) -> dict[str, str]:
+        return {'PATH': os.defpath, 'LANG': 'C.UTF-8', 'LC_ALL': 'C.UTF-8', 'PYTHONHASHSEED': '0',
                        'OPENBLAS_NUM_THREADS': '1', 'OMP_NUM_THREADS': '1', 'MKL_NUM_THREADS': '1',
                        'CUBLAS_WORKSPACE_CONFIG': ':4096:8'}
+
+    def _process_created(self) -> None:
+        pass
+
+    def _close_request(self) -> Json:
+        return {'command': 'close'}
+
+    def _validate_close(self, result: Json) -> None:
+        if result != {'closed': True}:
+            raise ContractError('invalid learner close acknowledgement')
+
+    async def start(self) -> None:
+        environment = self._environment()
         creation = asyncio.create_task(asyncio.create_subprocess_exec(sys.executable, '-E', '-m', 'gf_training.ppo_worker',
                                       stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
                                       env=environment, limit=1024 * 1024))
+        self.creation_task = creation
         cancelled = None
         while not creation.done():
             try:
@@ -153,6 +168,7 @@ class LearningProcess:
             except asyncio.CancelledError as error:
                 cancelled = cancelled or error
         self.process = creation.result()
+        self._process_created()
         self.drainer = asyncio.create_task(self._drain())
         if cancelled:
             raise cancelled
@@ -187,9 +203,8 @@ class LearningProcess:
             return
         try:
             if process.returncode is None:
-                result = await self.request({'command': 'close'}, deadline)
-                if result != {'closed': True}:
-                    raise ContractError('invalid learner close acknowledgement')
+                result = await self.request(self._close_request(), deadline)
+                self._validate_close(result)
             async with asyncio.timeout_at(deadline):
                 await process.wait()
                 if self.drainer:
