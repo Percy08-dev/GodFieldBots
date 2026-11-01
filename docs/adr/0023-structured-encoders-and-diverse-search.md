@@ -1763,3 +1763,185 @@ LightGBM/dataset regression, homogeneous complete-parent/seed/split/provenance/
 budget negative cases, no-optional-dependency baseline startup and new wheel
 provenance. Exact training completion/manifest2 interfaces receive their bounded
 review before C3b implementation; do not replace them with placeholder success.
+
+## 23. Native token staging and rollout3 correspondence
+
+This pins the concrete C2b bridge following C2a. Its interface/role direction is
+reviewed READY, but dependent implementation remains held for §24's corrected
+aggregate and its conformance checks. The rollout3 implementation is in
+gf_training.structured_rollout; no new rollout format or second trainer is added.
+The existing public writer/active reader and Python Source route keep their
+signatures, installed-runtime checks and original-record comparison behavior.
+
+After validated original Journal5/sidecar scanning and compact-summary
+authorization, a separate structured native batch exports exact C1-named raw
+arrays with read-only owned NumPy leases and bounded episode/frame/Selection
+metadata. Raw event JSON blocks and per-frame payload bytes are uint8; frame,
+event and candidate numbers/categories/offsets/slots are int64; presence/card
+masks are uint8. Selection indices are int64 and old logprob/value vectors FP32.
+The rollout3 publisher/scalar vectors apply ONLY to the selected neural learner
+cohort and reject nullable policy values before publication. General baseline/
+Tree2 raw-token export retains nulls in metadata, without fabricated0/NaN/PPO
+ancestry. Whole-batch normalization means one original collection/update cohort,
+never mixed parents or generations.
+Raw event blocks remain once per participant episode, at most1024events per
+block, with original prefix boundaries; current interval tokens remain tied to
+each frame's observed end rather than the episode's later bank end. Actual card
+padding stays18, while candidate position capacity is the validated configured
+value. Preserve all exact existing key names, shapes, episode/frame order,
+zero-frame episodes, closure metadata and classification. This is a distinct
+batch payload; never reinterpret legacy FloatOwner(f64) as FP32. Add the correctly
+typed FP32 owner only for the scalar columns that need it.
+
+Python computes unchanged per-episode GAE using FULL original Selection values
+from metadata, not their rounded FP32 vector, then performs the existing whole-
+batch advantage normalization in the same order. Natural/interrupted/zero-frame
+target presence remains unchanged. Native supplies no rewards, advantages,
+targets, learned latents or model execution. Factor only the existing writer's
+private validated metadata+typed-array payload publication boundary around
+plan_bundle/write_bundle/write_owned_json. The old StructuredRollout wrapper
+continues to build that payload normally; the native adapter supplies already
+tokenized owners without building and tokenizing another full Python Source.
+
+Keep the source session, original file/inventory snapshots, control ownership and
+array leases alive through serialization and final checks. Count native typed
+owners/spool, Python control metadata, label buffers, encoded NPZ/JSON scratch
+and decoded/packing copies under the one caller cap/deadline. Every decoded shard
+is at most64MiB and an oversized single array rejects before allocation/write.
+Retire completed batch arrays when no longer needed; no per-record Python callback
+enters the native scan. The existing C1 decoder may reconstruct its ONE rollout
+record copy and retokenize it for semantic/array checks; this is verification,
+not saving/reusing detached model latents.
+Export the complete selected collection cohort once so normalization is never
+per-export. Retire its raw payload views/stage before decoder reconstruction,
+retaining original snapshots and expected digests. Explicit exhausted/retired
+states reject a second export or implicit rescan; close cannot rebaseline inputs.
+
+Replace no existing Source comparison. For the native route only, pass ephemeral
+expected per-episode correspondence digests to a narrow private historical decoder
+entry. Native FIRST validates/recomputes original bank/frame/table hashes. A
+domain-separated digest covers input classification, actor and bank episode,
+FINAL bank end/prefix hash, ordered accepted-frame payload/frame/interval/boundary/
+table bindings, FULL exact Selection metadata, and end_kind/outcome/reason.
+Include zero-frame episodes. Bind the ordered digest list AND its count to the
+validated native control fingerprint and actual semantic declaration. The decoder
+computes the same digest from its reconstructed records and still performs all
+normal bank/payload/table/token/selection/GAE/unknown-array checks. An unvalidated
+producer string or rounded FP32 scalar digest is insufficient. This relies on
+the same SHA-256 assumption as existing frame/table/bank identities, not a new
+Source eligibility authority. No correspondence digest field is added to the
+persisted rollout3 manifest or an older dataset.
+The expected digest list must come from the original native Source, never from
+the rollout being checked. Existing expected_records and new expected-digest
+correspondence modes are mutually exclusive; both retain decoder self-consistency
+checks. Reject a missing/wrong count or order even when every individual digest
+appears elsewhere in the same collection.
+
+Historical decoding receives recorded S2-validated semantics and never requires
+current Torch/hardware/producer equality; active loading/resume stays strict.
+Both native and Python S2 artifact snapshot owners recheck their ORIGINAL
+identities after decoding/publication. A changed original invalidates the whole
+batch/parent; do not obtain a fresh baseline, salvage healthy rows or grant
+qualified Source readiness. Continue to reject interrupted collection cohorts
+before Adam and use the existing same-ledger/no-overlap coordinator path.
+
+Verify Python/native exact raw metadata/token banks and resulting rollout3
+arrays/manifests on identical owned inputs, including all hand/state/temporal
+config variants relevant to shape metadata, nondefault windows, missing/padding,
+Fog/Dream/future-prefix isolation, selected values not exactly FP32, negative zero,
+zero-frame/interrupted cases, reordered/corrupt banks/frames/tables/Selections and
+late source/inventory changes. Preserve existing numeric tolerances and whole-
+batch parity/resume checks. Full capability markers activate only after this
+bridge and final old-corpus/index/saved-PPO/wheel checks pass independent review.
+
+## 24. Public history preservation correction
+
+Root adopts the advisor's correction after a verifier confirms the difference
+against unchanged gf_models.encoder v1 public_aggregate. Independent architecture
+design review is READY (2026-11-02); corrected implementation/conformance remain
+pending. [Issue0006](../issues/0006-structured-history-aggregate-preservation.md)
+blocks acceptance of the corrected encoder/native staging/Tree2 path. Earlier
+numerical and latency evidence remains explicitly the62-field implementation.
+
+Keep the current62aggregate fields in their original order and append, in this
+closed order: one count per ordered pinned public definition ID; window event
+count and window_truncated; then for own and opponent respectively, prioritized-
+actor event count and sums of amount,hp_delta,mp_delta,money_delta,mp_spent,price,
+attack. With D definition IDs this adds D+18fields, total D+80 (the pinned
+vocabulary has D=296:314appended fields and376total). No extra statistics
+or hashed policy feature is needed. Definition counts preserve event-time IDs
+without current-perception rewriting or extra catalog lookup. They contain enough
+information to reconstruct the old hash buckets in TEST code only.
+
+Use the last configured window of this participant's visible event prefix ending
+at the frame boundary, including earlier intervals, not the episode's future bank
+end. Actor selection preserves EXACT old key-presence fallback:
+event.get('player', event.get('attacker', event.get('active_player'))). An existing
+null player does not fall through to attacker; targets and all-role marginals
+cannot substitute for this association. Count/sum only when the selected value
+equals the viewer or its opponent. Keep signed raw sums until the existing numeric
+transform. The new event-GRU/current interval and all detailed state/cards remain.
+
+Add aggregate_recipe=public-exact-v2 to fresh effective event configuration and
+bind it into token, architecture, artifact, rollout, tree-feature and native
+identities. Only the corrected recipe is accepted for active model2 inference,
+training and resume. A fresh TOML may receive that default; persisted records
+NEVER receive fresh defaults. Keep broad participant-structured-v1/model2/schema3
+identifiers because raw observation/bank/frame/protocol contracts have not changed;
+the exact checked recipe/config/token/architecture identities distinguish inputs.
+Audit every consuming boundary for actual equality checks before allocation/update,
+including native capability, worker/Source summaries and mixed-recipe rejection.
+
+There are exactly TWO closed supported historical descriptors, not a general
+format registry. Freeze the earlier62-field order, original signature algorithm,
+exact old configuration serialization, parameter shapes and architecture hashing.
+Historical dispatch recognizes its exact old closed config shape PLUS matching
+recorded old signature. A missing field alone is never permission to infer the
+old layout or apply current defaults. Preserve raw old records for hash/identity
+checks; an internal typed descriptor must not rewrite serialized config or
+regenerate artifacts under new semantics. Historical validation may reproduce
+old tokens for original Source correspondence. Current-record historical checks
+use the corrected descriptor. Both remain NumPy-only/no-current-Torch/hardware/
+producer-equality inspections; ordinary active resume stays strict.
+
+Active loaders reject the historical62-field descriptor explicitly before tensor
+allocation, rather than reinterpret its tensors against enlarged shapes. Never
+offer it as an alternative accepted training recipe. Old model1/config/dataset/
+artifact paths remain byte-for-byte semantically unchanged. C2a preserves its
+original recipe asset/shape interpretation and adds a distinct corrected asset;
+C2b projection targets the corrected active descriptor. The baseline/raw Journal5
+contract does not acquire invented neural ancestry or policy scalar values.
+
+Preserve actual PRECHANGE component fixtures byte-for-byte with maps/provenance.
+The initial archive contains27files/2,800,583bytes under
+runs/assessments/structured-history62-compat-20261102, evidence SHA256
+baafe19b1093ae3e266e3680ca4be5c3f74633088f852dd3a5fbe61e3e6b0b09.
+It includes two original C1 artifact/resume bundles, two rollout3 payloads and the
+old recipe asset. Its source parent registry had been deliberately corrupted by
+a test; this archive does not assert parent health/Source eligibility. Preserve
+healthy retained/pruned parent examples separately when available.
+Root also creates a healthy actual C1 two-update fixture BEFORE changing the
+62-field implementation at runs/assessments/structured-history62-healthy-20261102.
+It retains generations0/2 and prunes1 with unchanged current S2 code;38files are
+hash-inventoried by evidence
+ae630adbb2bd9fe0bc93d0309ea94e935e88c1beefcdfdcae7495c8b664a07d3.
+This is component numerical/metadata health, not a game or Source qualification.
+
+Required decisive checks: project corrected raw fields back to every v1 history
+feature (old hash function only in tests); windows/empty/truncation, key-presence
+fallback, conflicting roles, signed/cancelling sums and both viewer perspectives;
+histories identical in state/current interval/old62fields but differing in older
+definition IDs or actor-specific sums; two IDs colliding in an old hash bucket;
+actor/future isolation and Dream event-time facts. Historical original fixtures
+must inspect unchanged, fail active loading, and never mix with the new recipe.
+Verify Python/native signatures, actual named shapes, tokens and Source links.
+
+Recompute shape/tensor/optimizer/resource admission for the enlarged history and
+repeat affected token/persistence/Source roundtrips, all three temporal models and
+hand modes, gradients/dense-chunk/cache-full-split/CPU-CUDA, and continuous versus
+pause-resume comparisons. Rebuild native artifacts and check actual source/binary
+identities. Repeat required CPU performance acceptance and relevant GPU/resource
+measurements with unchanged original budgets/coverage. Earlier ownership/deletion/
+candidate/raw-storage evidence remains valid for its original scope; earlier
+62-field numerics are not corrected-model evidence. Real-I/O/specification and
+fitting gates remain independently closed.

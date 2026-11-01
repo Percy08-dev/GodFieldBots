@@ -1010,6 +1010,26 @@ anchors. The joint result is
 No strength, qualified source, actual worker-cache or physical allocator-sandbox
 acceptance follows from these numerical checks.
 
+## History information correction: acceptance hold
+
+The late root audit, independent verifier and advisor identify a plan violation in
+the first62-field aggregate: older-window public definition counts, truncation and
+prioritized-actor-specific statistics from v1 are omitted. Raw event retention and
+current-interval GRU tokens do not restore those inputs for MLP/Tree2.
+[Issue0006](../issues/0006-structured-history-aggregate-preservation.md) and ADR0023§24
+record the mandatory correction and two closed historical/current descriptors.
+The296-definition vocabulary requires314appended raw fields,376total history width.
+
+All preceding numerical, CPU/GPU panel and allocator-stress results are evidence
+of the62-field model only. They cannot qualify the corrected model. Ownership,
+candidate and raw-storage results retain their original scopes. Preserve actual
+old bundles/rollouts and a healthy retained/pruned actual C1 fixture with the exact
+hashes in §24. Historical inspection must continue; active old-layout use must fail
+explicitly. No model1/data semantics or real-data fit/gate changes are authorized.
+Corrected shape/resource/signature/source, numerical/resume, native and performance
+checks remain NOT RUN pending design review and implementation. Keep all original
+budgets and coverage; do not substitute previous62-field timings as new acceptance.
+
 ## Remaining integrated acceptance
 
 Currently NOT RUN: qualified collection E2E PPO integration,

@@ -22,6 +22,16 @@ source/fit entry points reject the engineering profile before Simulator activity
 Unresolved public rules and normative/binary adoption are tracked in
 [issue0005](issues/0005-public-utility-action-semantics.md).
 
+A late information audit finds that the first62-field structured aggregate omits
+public definition counts and actor-specific sums from the plan's existing history
+aggregate. [Issue0006](issues/0006-structured-history-aggregate-preservation.md) and
+ADR0023§24 require a corrected exact aggregate with explicit current/historical
+descriptors. Its correction design is reviewed READY; implementation and
+reverification are pending. The earlier
+numerical and performance results below remain62-field component evidence and
+cannot qualify the corrected model. Original component fixtures are preserved;
+model1 semantics and the separate public-rule gate remain unchanged.
+
 The accepted b31043e milestone has1460Python PASS/46SKIPPED,13separate CUDA PASS,
 exact old configuration/data checks and an isolated Python wheel baseline-worker
 smoke without optional dependencies. The later structural Source/startup-ownership
