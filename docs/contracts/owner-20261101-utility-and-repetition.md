@@ -4,7 +4,8 @@
 - Source: explicit user reply on2026-11-01, received during ADR0023 implementation.
 - Baseline: Simulator `ffcffa0966dbf6d7ce1d982f4ee6444e291d42d6`, catalog `public-ja-v2`.
 - Status: root chose an engineering-only subset after advisor review; focused
-  architecture review is READY. Dependent implementation remains pending. No
+  architecture and implemented engineering-component reviews are READY. Qualified
+  source/runtime/full-scope acceptance remains pending. No
   adopted Simulator revision/spec pin or binary-conformance proof has been issued;
   subsequently observed dirty specification edits are recorded separately in ADR0023.
   Do not describe this reply

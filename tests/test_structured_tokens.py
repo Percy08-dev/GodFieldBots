@@ -3,6 +3,7 @@ from dataclasses import asdict, replace
 
 import pytest
 
+from gf_common.action_contract import engineering_contract
 from gf_common.domain import ContractError
 from gf_common.structured import CandidateTable, EventDelta
 from gf_common.structured_tokens import (
@@ -97,7 +98,7 @@ def test_signed_events_missingness_and_history_128(make_input):
 def test_candidate_slots_and_recipe_signature_are_deterministic(make_input):
     frame, bank = frame_for(make_input(learned=("aura",)))
     table = CandidateTable.from_actions(frame, [{"type": "play_sequence", "target": None,
-                                               "ordered_elements": [frame.references[1]] * 18}])
+                                               "ordered_elements": [frame.references[1]] * 18}], action_contract=engineering_contract(), purpose="component", synthetic_capacity=True)
     tokens = tokenize_table(table, frame, 18)
     assert tokens.offsets == (0, 18) and tokens.slots == (1,) * 18
     assert tokens.recipe_signature == tokenize_frame(frame, bank.view()).recipe_signature == signature()

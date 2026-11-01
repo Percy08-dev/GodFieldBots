@@ -13,6 +13,7 @@ from typing import Any
 
 import numpy as np
 
+from gf_common.action_contract import ActionContract
 from gf_common.domain import (
     CATALOG_META,
     END_PROJECTION_VERSION,
@@ -37,6 +38,7 @@ from gf_models.sharded_arrays import (
     write_bundle,
     write_owned_json,
 )
+from gf_models.structured_binding import _bind_network_input, check_input_binding, input_binding
 from gf_models.structured_config import (
     InferenceBindingV2,
     ModelConfigV2,
@@ -160,9 +162,13 @@ def validate_save_context(network: Any, model: ModelConfigV2,
 
 
 def save_inference(directory: Path, network: Any, model: ModelConfigV2, action_config_hash: str, *,
-                   code_revision: str | None = None, shard_bytes: int = MAX_ARRAY_BYTES) -> Json:
+                   code_revision: str | None = None, shard_bytes: int = MAX_ARRAY_BYTES,
+                   action_contract: ActionContract, purpose: str, synthetic_capacity: bool) -> Json:
+    classification = input_binding(action_contract, purpose, synthetic_capacity)
     _hash(action_config_hash)
     validate_save_context(network, model)
+    _bind_network_input(network, action_contract=action_contract, purpose=purpose,
+                        synthetic_capacity=synthetic_capacity, fresh=True)
     integer(shard_bytes, 1, MAX_ARRAY_BYTES)
     producer = producer_identity(code_revision)
     create_output_directory(directory, "inference.json")
@@ -173,7 +179,7 @@ def save_inference(directory: Path, network: Any, model: ModelConfigV2, action_c
     if {name: tuple(value.shape) for name, value in network.state_dict().items()} != expected:
         raise ContractError("network/config tensor identity mismatch")
     arrays = {name: _cpu_array(tensor) for name, tensor in network.state_dict().items()}
-    manifest = {"schema_version": 3, "kind": "structured-inference", **semantics(model),
+    manifest = {"schema_version": 3, "kind": "structured-inference", **classification, **semantics(model),
                 "model": asdict(model), "architecture_identity": architecture_identity(model),
                 "action_config_hash": action_config_hash, "producer": producer,
                 "weights": write_bundle(directory, "weights", arrays, shard_bytes=shard_bytes)}
@@ -184,12 +190,16 @@ def save_inference(directory: Path, network: Any, model: ModelConfigV2, action_c
 def inspect_inference(directory: Path, *, expected_digest: str | None = None,
                       model: ModelConfigV2 | None = None,
                       binding: InferenceBindingV2 | None = None,
-                      action_config_hash: str | None = None) -> tuple[Json, ModelConfigV2]:
+                      action_config_hash: str | None = None, action_contract: ActionContract,
+                      purpose: str, synthetic_capacity: bool) -> tuple[Json, ModelConfigV2]:
+    classification = input_binding(action_contract, purpose, synthetic_capacity)
     manifest = read_json(directory / "inference.json", expected_digest=expected_digest,
                          max_owned_bytes=min(model.resources.max_owned_bytes if model is not None else 12 * 1024**3,
                                              binding.managed_budget_bytes if binding is not None else 12 * 1024**3))
-    required = {"schema_version", "kind", "model", "architecture_identity", "action_config_hash", "producer", "weights"} | set(semantics(ModelConfigV2()))
+    required = {"schema_version", "kind", "model", "architecture_identity", "action_config_hash", "producer", "weights"} | set(classification) | set(semantics(ModelConfigV2()))
     closed(manifest, required)
+    check_input_binding({key: manifest[key] for key in classification}, action_contract=action_contract,
+                        purpose=purpose, synthetic_capacity=synthetic_capacity)
     saved = model_config_v2(manifest["model"])
     if type(manifest["schema_version"]) is not int or manifest["schema_version"] != 3 or manifest["kind"] != "structured-inference":
         raise ContractError("unsupported structured inference schema")
@@ -228,6 +238,8 @@ def load_inference(directory: Path, **options: Any) -> tuple[Any, Json]:
     arrays = read_bundle(directory, manifest["weights"], max_decoded_bytes=model.resources.max_owned_bytes)
     from gf_models.structured_network import make_network
     network = make_network(model, 0, binding)
+    _bind_network_input(network, action_contract=options["action_contract"], purpose=options["purpose"],
+                        synthetic_capacity=options["synthetic_capacity"], fresh=True)
     restore_weights(network, arrays)
     network.eval()
     return network, manifest
@@ -235,11 +247,16 @@ def load_inference(directory: Path, **options: Any) -> tuple[Any, Json]:
 
 def save_resume(directory: Path, network: Any, optimizer: Any, shuffle: Any, steps: int,
                 model: ModelConfigV2, binding: InferenceBindingV2, resume_identity: str, *,
-                shard_bytes: int = MAX_ARRAY_BYTES) -> Json:
+                shard_bytes: int = MAX_ARRAY_BYTES, action_contract: ActionContract,
+                purpose: str, synthetic_capacity: bool) -> Json:
+    classification = input_binding(action_contract, purpose, synthetic_capacity)
+    _bind_network_input(network, action_contract=action_contract, purpose=purpose, synthetic_capacity=synthetic_capacity)
     import torch
     _hash(resume_identity)
     integer(steps, 0, 2**31 - 1)
     recipe = validate_save_context(network, model, binding, optimizer)
+    inspect_inference(directory, model=model, binding=binding, action_contract=action_contract,
+                      purpose=purpose, synthetic_capacity=synthetic_capacity)
     preflight_outputs(directory, ["resume.json", "resume.json.tmp"])
     integer(shard_bytes, 1, MAX_ARRAY_BYTES)
     if binding.device != "cpu":
@@ -258,7 +275,7 @@ def save_resume(directory: Path, network: Any, optimizer: Any, shuffle: Any, ste
             arrays[f"adam.{name}.step"] = np.asarray(int(state["step"].item()), dtype=np.int64)
             for key in ("exp_avg", "exp_avg_sq"):
                 arrays[f"adam.{name}.{key}"] = _cpu_array(state[key])
-    manifest = {"schema_version": 3, "kind": "structured-resume", **semantics(model),
+    manifest = {"schema_version": 3, "kind": "structured-resume", **classification, **semantics(model),
                 "inference_digest": sha256(directory / "inference.json"), "model": asdict(model),
                 "binding": asdict(binding), "resume_identity": resume_identity,
                 "producer": producer_identity(), "optimizer_steps": steps,
@@ -271,8 +288,9 @@ def save_resume(directory: Path, network: Any, optimizer: Any, shuffle: Any, ste
 
 
 def read_resume(directory: Path, model: ModelConfigV2, binding: InferenceBindingV2,
-                resume_identity: str) -> tuple[Json, dict[str, Any]]:
-    import torch
+                resume_identity: str, *, action_contract: ActionContract,
+                purpose: str, synthetic_capacity: bool) -> tuple[Json, dict[str, Any]]:
+    classification = input_binding(action_contract, purpose, synthetic_capacity)
     manifest = read_json(directory / "resume.json",
                          max_owned_bytes=min(model.resources.max_owned_bytes, binding.managed_budget_bytes))
     closed(manifest.get("producer"), {"code_revision", "source_digest"})
@@ -282,8 +300,13 @@ def read_resume(directory: Path, model: ModelConfigV2, binding: InferenceBinding
     if producer_revision is not None and (not isinstance(producer_revision, str) or re.fullmatch(r"[0-9a-f]{40}", producer_revision) is None):
         raise ContractError("invalid resume producer revision")
     keys = {"schema_version", "kind", "inference_digest", "model", "binding", "resume_identity", "producer",
-            "optimizer_steps", "optimizer_recipe", "parameter_states", "cuda_rng_count", "shuffle_rng", "state"} | set(semantics(model))
+            "optimizer_steps", "optimizer_recipe", "parameter_states", "cuda_rng_count", "shuffle_rng", "state"} | set(classification) | set(semantics(model))
     closed(manifest, keys)
+    check_input_binding({key: manifest[key] for key in classification}, action_contract=action_contract,
+                        purpose=purpose, synthetic_capacity=synthetic_capacity)
+    inspect_inference(directory, expected_digest=manifest["inference_digest"], model=model, binding=binding,
+                      action_contract=action_contract, purpose=purpose, synthetic_capacity=synthetic_capacity)
+    import torch
     if (type(manifest["schema_version"]) is not int or manifest["schema_version"] != 3
             or manifest["kind"] != "structured-resume"
             or manifest["inference_digest"] != sha256(directory / "inference.json")
@@ -355,10 +378,16 @@ def read_resume(directory: Path, model: ModelConfigV2, binding: InferenceBinding
 
 
 def restore_resume(directory: Path, network: Any, optimizer: Any, shuffle: Any,
-                   model: ModelConfigV2, binding: InferenceBindingV2, resume_identity: str) -> int:
+                   model: ModelConfigV2, binding: InferenceBindingV2, resume_identity: str, *,
+                   action_contract: ActionContract, purpose: str, synthetic_capacity: bool) -> int:
     import torch
+    if hasattr(network, "_structured_input_binding"):
+        _bind_network_input(network, action_contract=action_contract, purpose=purpose, synthetic_capacity=synthetic_capacity)
     validate_save_context(network, model, binding, optimizer)
-    manifest, arrays = read_resume(directory, model, binding, resume_identity)
+    manifest, arrays = read_resume(directory, model, binding, resume_identity, action_contract=action_contract,
+                                   purpose=purpose, synthetic_capacity=synthetic_capacity)
+    _bind_network_input(network, action_contract=action_contract, purpose=purpose,
+                        synthetic_capacity=synthetic_capacity, fresh=True)
     parameters = dict(network.named_parameters())
     count = manifest["cuda_rng_count"]
     states = {}

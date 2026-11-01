@@ -5,7 +5,8 @@ import re
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
-from gf_common.domain import ContractError, Json, clone, closed, digest
+from gf_common.action_contract import ActionContract, parse_action_contract, validate_record_purpose
+from gf_common.domain import ContractError, Json, canonical, clone, closed, digest
 from gf_models.structured_config import (
     InferenceBindingV2,
     ModelConfigV2,
@@ -92,8 +93,53 @@ def policy_label(model: ModelConfigV2, inference: InferenceBindingV2, manifest_d
     return f"{model.model_id}-ppo-v2-{manifest_digest}-{execution_digest(model, inference, cuda_visible_devices=cuda_visible_devices)}"
 
 
-def safe_options_v2(value: Any) -> Json:
-    raw = closed(value, {"version", "checkpoint", "expected_manifest_digest", "model", "inference", "cuda_visible_devices"}, {"allow_toy"})
+def input_binding(action_contract: ActionContract, purpose: str, synthetic_capacity: bool) -> Json:
+    """Closed compatibility/provenance fields, independent of tensor features."""
+    validate_record_purpose(purpose, action_contract)
+    if type(synthetic_capacity) is not bool or synthetic_capacity and purpose != "component":
+        raise ContractError("explicit boolean synthetic capacity/component classification required")
+    return {"action_contract": asdict(action_contract), "purpose": purpose, "synthetic_capacity": synthetic_capacity}
+
+
+def check_input_binding(raw: Json, *, action_contract: ActionContract, purpose: str, synthetic_capacity: bool) -> None:
+    expected = input_binding(action_contract, purpose, synthetic_capacity)
+    closed(raw, set(expected))
+    parse_action_contract(raw["action_contract"], expected=action_contract)
+    if type(raw["synthetic_capacity"]) is not bool or canonical(raw) != canonical(expected):
+        raise ContractError("input contract/purpose/synthetic classification differs from authoritative Config")
+
+
+@dataclass(frozen=True, slots=True)
+class _NetworkInputBinding:
+    action_contract: ActionContract
+    purpose: str
+    synthetic_capacity: bool
+
+
+def _bind_network_input(network: Any, *, action_contract: ActionContract, purpose: str,
+                        synthetic_capacity: bool, fresh: bool = False) -> None:
+    """Bind fresh component weights once; existing provenance cannot be relabeled.
+
+    This immutable runtime value is not a parameter/buffer or a feature. Artifact
+    loaders reconstruct it from validated metadata; it grants no Source authority.
+    """
+    input_binding(action_contract, purpose, synthetic_capacity)
+    expected = _NetworkInputBinding(action_contract, purpose, synthetic_capacity)
+    if hasattr(network, "_structured_input_binding"):
+        actual = network._structured_input_binding
+        if type(actual) is not _NetworkInputBinding or actual != expected:
+            raise ContractError("network input contract/purpose/synthetic classification mismatch")
+        return
+    if not fresh or purpose != "component":
+        raise ContractError("network requires an explicit fresh component input binding")
+    network._structured_input_binding = expected
+
+
+def safe_options_v2(value: Any, *, action_contract: ActionContract, purpose: str, synthetic_capacity: bool) -> Json:
+    raw = closed(value, {"version", "checkpoint", "expected_manifest_digest", "model", "inference", "cuda_visible_devices",
+                         "action_contract", "purpose", "synthetic_capacity"}, {"allow_toy"})
+    check_input_binding({key: raw[key] for key in ("action_contract", "purpose", "synthetic_capacity")},
+                        action_contract=action_contract, purpose=purpose, synthetic_capacity=synthetic_capacity)
     if raw["version"] != "2" or type(raw["checkpoint"]) is not str or not raw["checkpoint"]:
         raise ContractError("invalid safe model2 checkpoint binding")
     model = model_config_v2(raw["model"])

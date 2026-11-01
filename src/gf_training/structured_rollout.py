@@ -13,6 +13,7 @@ from typing import Any
 
 import numpy as np
 
+from gf_common.action_contract import ActionContract
 from gf_common.domain import ContractError, Json, canonical, closed, integer
 from gf_common.structured import (
     ACTION_KINDS,
@@ -40,6 +41,7 @@ from gf_models.sharded_arrays import (
     write_owned_json,
 )
 from gf_models.structured_artifacts import semantics
+from gf_models.structured_binding import check_input_binding, input_binding
 from gf_models.structured_config import ModelConfigV2, architecture_identity
 from gf_training.ppo import gae, normalize_advantages
 
@@ -78,6 +80,9 @@ def _scalar_count(value: Any) -> int:
 
 @dataclass(frozen=True, init=False)
 class EpisodeRecords:
+    action_contract: ActionContract
+    purpose: str
+    synthetic_capacity: bool
     bank: EventBankView
     frames: tuple[DecisionFrame, ...]
     tables: tuple[CandidateTable, ...]
@@ -88,8 +93,10 @@ class EpisodeRecords:
 
     def __init__(self, bank: EventBankView, frames: tuple[DecisionFrame, ...],
                  tables: tuple[CandidateTable, ...], selections: tuple[Selection, ...],
-                 end_kind: str, outcome: Any = None, reason: str | None = None) -> None:
-        for key, value in (("bank", bank), ("frames", frames), ("tables", tables), ("selections", selections),
+                 end_kind: str, outcome: Any = None, reason: str | None = None, *,
+                 action_contract: ActionContract, purpose: str, synthetic_capacity: bool) -> None:
+        input_binding(action_contract, purpose, synthetic_capacity)
+        for key, value in (("action_contract", action_contract), ("purpose", purpose), ("synthetic_capacity", synthetic_capacity), ("bank", bank), ("frames", frames), ("tables", tables), ("selections", selections),
                            ("end_kind", end_kind), ("_outcome", canonical(outcome).encode()), ("reason", reason)):
             object.__setattr__(self, key, value)
         self.__post_init__()
@@ -114,6 +121,9 @@ class EpisodeRecords:
             raise ContractError("interrupted episode requires reason and no invented outcome")
         previous_end, previous_revision = 0, -1
         for frame, table, selection in zip(self.frames, self.tables, self.selections, strict=True):
+            check_input_binding({"action_contract": asdict(table.action_contract), "purpose": table.purpose,
+                                 "synthetic_capacity": table.synthetic_capacity}, action_contract=self.action_contract,
+                                purpose=self.purpose, synthetic_capacity=self.synthetic_capacity)
             frame.bank_view(self.bank)
             if frame.interval_start != previous_end or frame.revision <= previous_revision:
                 raise ContractError("episode frame continuity mismatch")
@@ -132,13 +142,18 @@ class EpisodeTokens:
 
 class StructuredRollout:
     def __init__(self, records: tuple[EpisodeRecords, ...], model: ModelConfigV2, action_config_hash: str, *,
-                 _reserved_bytes: int = 0) -> None:
+                 action_contract: ActionContract, purpose: str, synthetic_capacity: bool, _reserved_bytes: int = 0) -> None:
+        self.input_binding = input_binding(action_contract, purpose, synthetic_capacity)
+        self.action_contract, self.purpose, self.synthetic_capacity = action_contract, purpose, synthetic_capacity
         if type(records) is not tuple or any(type(record) is not EpisodeRecords for record in records):
             raise ContractError("owned episode record tuple required")
         if not isinstance(action_config_hash, str) or len(action_config_hash) != 64 or set(action_config_hash) - set("0123456789abcdef"):
             raise ContractError("rollout action hash required")
         integer(_reserved_bytes, 0, model.resources.max_owned_bytes)
         for record in records:
+            check_input_binding({"action_contract": asdict(record.action_contract), "purpose": record.purpose,
+                                 "synthetic_capacity": record.synthetic_capacity}, action_contract=action_contract,
+                                purpose=purpose, synthetic_capacity=synthetic_capacity)
             if any(selection.logprob is None or selection.value is None for selection in record.selections):
                 raise ContractError("PPO learner rows require finite logprob and value before ingestion")
             integer(len(record.frames), 0, model.temporal.max_decisions)
@@ -206,7 +221,7 @@ class StructuredRollout:
             output.append(episode)
         self.episodes = tuple(output)
         self.eligible = all(episode.records.end_kind == "natural" for episode in self.episodes) and bool(self.locations)
-        self.resident_bytes = _owned_bytes((self.model, self.episodes, self.locations, self.action_config_hash, self.policy_version))
+        self.resident_bytes = _owned_bytes((self.model, self.episodes, self.locations, self.action_config_hash, self.policy_version, self.input_binding))
         if self.resident_bytes + _reserved_bytes > model.resources.max_owned_bytes:
             raise ContractError("rollout owned memory reservation exceeded")
 
@@ -266,6 +281,8 @@ def _shape(value: Any) -> tuple[int, ...]:
 
 
 def write_rollout(directory: Path, rollout: StructuredRollout, *, shard_bytes: int = MAX_ARRAY_BYTES) -> Json:
+    check_input_binding(rollout.input_binding, action_contract=rollout.action_contract,
+                        purpose=rollout.purpose, synthetic_capacity=rollout.synthetic_capacity)
     create_output_directory(directory, "rollout.json")
     integer(shard_bytes, 1, MAX_ARRAY_BYTES)
     planned: dict[str, tuple[Any, Any, bool]] = {}
@@ -312,7 +329,8 @@ def write_rollout(directory: Path, rollout: StructuredRollout, *, shard_bytes: i
                                   "interval_start": frame.interval_start, "boundary": asdict(frame.boundary),
                                   "interval_start_hash": frame.interval_start_hash, "frame_hash": frame.frame_hash,
                                   "payload_key": payload_key, "token_prefix": frame_prefix,
-                                  "event_token_prefix": event_prefix, "table_hash": table.table_hash})
+                                  "event_token_prefix": event_prefix, "table_hash": table.table_hash,
+                                  **input_binding(table.action_contract, table.purpose, table.synthetic_capacity)})
         for name, values in (("selected", tuple(selection.index for selection in record.selections)),
                              ("old_logprob", tuple(selection.logprob for selection in record.selections)),
                              ("old_value", tuple(selection.value for selection in record.selections))):
@@ -320,7 +338,8 @@ def write_rollout(directory: Path, rollout: StructuredRollout, *, shard_bytes: i
         if episode.advantage is not None:
             plan(prefix + ".advantage", episode.advantage, np.float32)
             plan(prefix + ".target", episode.target, np.float32)
-        episodes.append({"actor": record.bank.actor, "episode": record.bank.episode,
+        episodes.append({**input_binding(record.action_contract, record.purpose, record.synthetic_capacity),
+                         "actor": record.bank.actor, "episode": record.bank.episode,
                          "boundary": asdict(record.bank.boundary), "raw_blocks": raw_blocks,
                          "frames": frame_records, "end_kind": record.end_kind,
                          "outcome": record.outcome, "reason": record.reason,
@@ -333,7 +352,7 @@ def write_rollout(directory: Path, rollout: StructuredRollout, *, shard_bytes: i
                          "bytes": len(value) if blob else _scalar_count(value) * np.dtype(dtype).itemsize}
                    for key, (value, dtype, blob) in planned.items()}
     bundle_plan = plan_bundle("rollout", descriptors, shard_bytes=shard_bytes)
-    manifest = {"schema_version": 3, "kind": "structured-rollout", **semantics(rollout.model),
+    manifest = {"schema_version": 3, "kind": "structured-rollout", **rollout.input_binding, **semantics(rollout.model),
                 "architecture_identity": architecture_identity(rollout.model),
                 "action_config_hash": rollout.action_config_hash, "policy_version": rollout.policy_version,
                 "decision_count": len(rollout), "episodes": episodes, "data": bundle_plan}
@@ -368,11 +387,15 @@ def _read_reservation(manifest: Json, descriptors: Json) -> int:
             + 65536 * (len(raw) + 1) + 8 * (decoded - raw_bytes) + 65536 * frame_count)
 
 
-def read_rollout(directory: Path, expected_digest: str, model: ModelConfigV2) -> StructuredRollout:
+def read_rollout(directory: Path, expected_digest: str, model: ModelConfigV2, *,
+                 action_contract: ActionContract, purpose: str, synthetic_capacity: bool) -> StructuredRollout:
+    classification = input_binding(action_contract, purpose, synthetic_capacity)
     manifest = read_json(directory / "rollout.json", expected_digest=expected_digest,
                          max_owned_bytes=model.resources.max_owned_bytes)
     closed(manifest, {"schema_version", "kind", "architecture_identity", "action_config_hash", "policy_version",
-                      "decision_count", "episodes", "data"} | set(semantics(model)))
+                      "decision_count", "episodes", "data"} | set(classification) | set(semantics(model)))
+    check_input_binding({key: manifest[key] for key in classification}, action_contract=action_contract,
+                        purpose=purpose, synthetic_capacity=synthetic_capacity)
     if (type(manifest["schema_version"]) is not int or manifest["schema_version"] != 3
             or manifest["kind"] != "structured-rollout"
             or manifest["architecture_identity"] != architecture_identity(model)
@@ -382,10 +405,17 @@ def read_rollout(directory: Path, expected_digest: str, model: ModelConfigV2) ->
     if not isinstance(manifest["episodes"], list):
         raise ContractError("episode records required")
     for episode in manifest["episodes"]:
-        closed(episode, {"actor", "episode", "boundary", "raw_blocks", "frames", "end_kind", "outcome", "reason", "selections", "has_targets"})
+        closed(episode, {"actor", "episode", "boundary", "raw_blocks", "frames", "end_kind", "outcome", "reason", "selections", "has_targets"} | set(classification))
+        check_input_binding({key: episode[key] for key in classification}, action_contract=action_contract,
+                            purpose=purpose, synthetic_capacity=synthetic_capacity)
         if not isinstance(episode["frames"], list) or not isinstance(episode["selections"], list) or len(episode["frames"]) != len(episode["selections"]):
             raise ContractError("episode frame/selection metadata shape mismatch")
         integer(len(episode["frames"]), 0, model.temporal.max_decisions)
+        for frame_meta in episode["frames"]:
+            closed(frame_meta, {"actor", "episode", "revision", "interval_start", "boundary", "interval_start_hash",
+                               "frame_hash", "payload_key", "token_prefix", "event_token_prefix", "table_hash"} | set(classification))
+            check_input_binding({key: frame_meta[key] for key in classification}, action_contract=action_contract,
+                                purpose=purpose, synthetic_capacity=synthetic_capacity)
         boundary_meta = closed(episode["boundary"], {"end", "prefix_hash"})
         integer(boundary_meta["end"], 0, model.event.max_episode)
     descriptors = inspect_bundle(directory, manifest["data"], max_decoded_bytes=model.resources.max_owned_bytes)
@@ -404,7 +434,7 @@ def read_rollout(directory: Path, expected_digest: str, model: ModelConfigV2) ->
     if not isinstance(manifest["episodes"], list):
         raise ContractError("episode records required")
     for episode_index, metadata in enumerate(manifest["episodes"]):
-        closed(metadata, {"actor", "episode", "boundary", "raw_blocks", "frames", "end_kind", "outcome", "reason", "selections", "has_targets"})
+        closed(metadata, {"actor", "episode", "boundary", "raw_blocks", "frames", "end_kind", "outcome", "reason", "selections", "has_targets"} | set(classification))
         boundary = EventBoundary(**closed(metadata["boundary"], {"end", "prefix_hash"}))
         bank = EventBank(metadata["actor"], metadata["episode"], max_events=max(1, boundary.end))
         prefix = f"e.{episode_index}"
@@ -424,7 +454,9 @@ def read_rollout(directory: Path, expected_digest: str, model: ModelConfigV2) ->
         frames, tables = [], []
         for position, frame_meta in enumerate(metadata["frames"]):
             closed(frame_meta, {"actor", "episode", "revision", "interval_start", "boundary", "interval_start_hash",
-                               "frame_hash", "payload_key", "token_prefix", "event_token_prefix", "table_hash"})
+                               "frame_hash", "payload_key", "token_prefix", "event_token_prefix", "table_hash"} | set(classification))
+            check_input_binding({key: frame_meta[key] for key in classification}, action_contract=action_contract,
+                                purpose=purpose, synthetic_capacity=synthetic_capacity)
             frame_prefix, event_prefix = prefix + f".f.{position}", prefix + f".event-tokens.{position}"
             if (frame_meta["payload_key"] != frame_prefix + ".payload" or frame_meta["token_prefix"] != frame_prefix
                     or frame_meta["event_token_prefix"] != event_prefix):
@@ -448,12 +480,14 @@ def read_rollout(directory: Path, expected_digest: str, model: ModelConfigV2) ->
                 tuple(TARGETS[int(code) - 2] for code in candidate_arrays["targets"]),
                 tuple(tuple(int(value) for value in row) for row in candidate_arrays["numerics"]),
                 tuple(tuple(bool(value) for value in row) for row in candidate_arrays["present"]),
-                tuple(int(value) for value in candidate_arrays["offsets"]), tuple(int(value) for value in candidate_arrays["slots"]), frame_meta["table_hash"])
+                tuple(int(value) for value in candidate_arrays["offsets"]), tuple(int(value) for value in candidate_arrays["slots"]), frame_meta["table_hash"],
+                action_contract=action_contract, purpose=purpose, synthetic_capacity=synthetic_capacity)
             frames.append(frame)
             tables.append(table)
             stored_tokens.append((frame_meta, frame_arrays, event_arrays, candidate_arrays))
         selections = tuple(Selection(**value) for value in metadata["selections"])
-        record = EpisodeRecords(bank.view(), tuple(frames), tuple(tables), selections, metadata["end_kind"], metadata["outcome"], metadata["reason"])
+        record = EpisodeRecords(bank.view(), tuple(frames), tuple(tables), selections, metadata["end_kind"], metadata["outcome"], metadata["reason"],
+                                action_contract=action_contract, purpose=purpose, synthetic_capacity=synthetic_capacity)
         records.append(record)
         count = len(frames)
         scalar = {}
@@ -470,7 +504,8 @@ def read_rollout(directory: Path, expected_digest: str, model: ModelConfigV2) ->
                 raise ContractError("rollout target shape mismatch")
         train_vectors.append(scalar)
     rollout = StructuredRollout(tuple(records), model, manifest["action_config_hash"],
-                                _reserved_bytes=manifest["data"]["decoded_bytes"])
+                                _reserved_bytes=manifest["data"]["decoded_bytes"], action_contract=action_contract,
+                                purpose=purpose, synthetic_capacity=synthetic_capacity)
     if manifest["decision_count"] != len(rollout) or manifest["policy_version"] != rollout.policy_version:
         raise ContractError("rollout endpoint/policy identity mismatch")
     for episode, scalars in zip(rollout.episodes, train_vectors, strict=True):

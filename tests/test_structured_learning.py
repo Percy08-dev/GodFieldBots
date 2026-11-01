@@ -8,6 +8,7 @@ from dataclasses import replace
 import numpy as np
 import pytest
 
+from gf_common.action_contract import engineering_contract
 from gf_common.domain import ContractError, canonical, digest
 from gf_common.structured import CandidateTable, DecisionFrame, EventBank, EventDelta, Selection
 from gf_common.structured_tokens import tokenize_frame, tokenize_table
@@ -32,11 +33,11 @@ ACTION_HASH = digest({"synthetic": "component-only-actions2"})
 RESUME_ID = digest({"synthetic": "component-only-config"})
 
 
-def learner_for(temporal="mlp", hand="attention", device="cpu"):
+def learner_for(temporal="mlp", hand="attention", device="cpu", *, synthetic_capacity=True):
     model = small_model(hand=hand, temporal=temporal)
     model = replace(model, temporal=replace(model.temporal, max_decisions=8, sequence_length=2),
                     event=replace(model.event, max_interval=8))
-    return Learner(model, 17, InferenceBindingV2(device=device), ACTION_HASH, RESUME_ID)
+    return Learner(model, 17, InferenceBindingV2(device=device), ACTION_HASH, RESUME_ID, action_contract=engineering_contract(), purpose="component", synthetic_capacity=synthetic_capacity)
 
 
 def records_for(make_input, learner, *, count=3, empty=False, events=True, candidates=4, episode="episode"):
@@ -60,14 +61,15 @@ def records_for(make_input, learner, *, count=3, empty=False, events=True, candi
             actions = [{"type": "pray"}]
         elif candidates == 4:
             actions = [{"type": "play_sequence", "target": 2, "ordered_elements": [frame.references[0]]},
-                       {"type": "play_sequence", "target": 1, "ordered_elements": [frame.references[2]] * 2},
+                       {"type": "play_sequence", "target": 1, "ordered_elements": [frame.references[2]] * (2 if learner.synthetic_capacity else 1)},
                        {"type": "play_sequence", "target": None, "ordered_elements": [frame.references[0], frame.references[3]]},
                        {"type": "discard", "instance_ids": [2]}]
         else:
             # Repeated rows are an explicitly synthetic normalization stress,
             # not output from the deduplicating production candidate generator.
             actions = [{"type": "play_sequence", "target": 2, "ordered_elements": [frame.references[0]]}] * candidates
-        table = CandidateTable.from_actions(frame, actions)
+        table = CandidateTable.from_actions(frame, actions, action_contract=learner.action_contract, purpose=learner.purpose,
+                                            synthetic_capacity=learner.synthetic_capacity)
         frames.append(frame)
         tables.append(table)
         tokens = tuple(tokenize_frame(item, bank.view(), aggregate_window=learner.model.event.aggregate_window) for item in frames)
@@ -77,11 +79,13 @@ def records_for(make_input, learner, *, count=3, empty=False, events=True, candi
         learner.synchronize()
         selected = index % len(actions)
         selections.append(Selection(table.table_hash, selected, "synthetic-component-policy", float(logs[selected].cpu()), float(value_tensor.cpu())))
-    return EpisodeRecords(bank.view(), tuple(frames), tuple(tables), tuple(selections), "natural", {"win": {"winner": 1}})
+    return EpisodeRecords(bank.view(), tuple(frames), tuple(tables), tuple(selections), "natural", {"win": {"winner": 1}},
+                          action_contract=learner.action_contract, purpose=learner.purpose, synthetic_capacity=learner.synthetic_capacity)
 
 
 def rollout_for(make_input, learner, **settings):
-    return StructuredRollout((records_for(make_input, learner, **settings),), learner.model, ACTION_HASH)
+    return StructuredRollout((records_for(make_input, learner, **settings),), learner.model, ACTION_HASH,
+                             action_contract=learner.action_contract, purpose=learner.purpose, synthetic_capacity=learner.synthetic_capacity)
 
 
 def assert_same_learners(left, right):
@@ -146,10 +150,10 @@ def test_typed_rollout_preserves_tokens_banks_targets_and_future_tail(make_input
     bank.append(EventDelta(1, bank.episode, 0, bank.boundary.prefix_hash, record.bank.events()))
     bank.append(EventDelta(1, bank.episode, bank.boundary.end, bank.boundary.prefix_hash,
                            [{"type": "player_defeated", "player": 2}]))
-    record = EpisodeRecords(bank.view(), record.frames, record.tables, record.selections, record.end_kind, record.outcome)
-    original = StructuredRollout((record,), learner.model, ACTION_HASH)
+    record = EpisodeRecords(bank.view(), record.frames, record.tables, record.selections, record.end_kind, record.outcome, action_contract=engineering_contract(), purpose="component", synthetic_capacity=True)
+    original = StructuredRollout((record,), learner.model, ACTION_HASH, action_contract=engineering_contract(), purpose="component", synthetic_capacity=True)
     manifest = write_rollout(tmp_path / "rollout", original, shard_bytes=32768)
-    loaded = read_rollout(tmp_path / "rollout", sha256(tmp_path / "rollout" / "rollout.json"), learner.model)
+    loaded = read_rollout(tmp_path / "rollout", sha256(tmp_path / "rollout" / "rollout.json"), learner.model, action_contract=engineering_contract(), purpose="component", synthetic_capacity=True)
     assert len(manifest["data"]["shards"]) > 1
     assert loaded.episodes[0].records.bank.boundary.end == 4
     assert loaded.episodes[0].frames[-1].event_end == 3
@@ -201,8 +205,8 @@ def test_whole_batch_parity_failure_precedes_every_adam_change(make_input):
     record = records_for(make_input, learner)
     selections = list(record.selections)
     selections[-1] = replace(selections[-1], value=selections[-1].value + .1)
-    invalid = EpisodeRecords(record.bank, record.frames, record.tables, tuple(selections), record.end_kind, record.outcome)
-    rollout = StructuredRollout((invalid,), learner.model, ACTION_HASH)
+    invalid = EpisodeRecords(record.bank, record.frames, record.tables, tuple(selections), record.end_kind, record.outcome, action_contract=engineering_contract(), purpose="component", synthetic_capacity=True)
+    rollout = StructuredRollout((invalid,), learner.model, ACTION_HASH, action_contract=engineering_contract(), purpose="component", synthetic_capacity=True)
     before = {name: value.detach().clone() for name, value in learner.network.state_dict().items()}
     with pytest.raises(ContractError, match="parity"):
         learner.update(rollout)
@@ -218,23 +222,23 @@ def test_resource_override_for_new_inference_but_exact_resume_binding(make_input
     different = replace(learner.model, resources=replace(learner.model.resources, max_owned_bytes=2 * 1024**3))
     assert architecture_identity(different) == architecture_identity(learner.model)
     network, _ = load_inference(tmp_path / "generation", model=different, binding=learner.binding,
-                                 expected_digest=identity["inference_digest"])
+                                 expected_digest=identity["inference_digest"], action_contract=engineering_contract(), purpose="component", synthetic_capacity=True)
     assert network.config == different
-    resumed = Learner(different, 17, learner.binding, ACTION_HASH, RESUME_ID)
+    resumed = Learner(different, 17, learner.binding, ACTION_HASH, RESUME_ID, action_contract=engineering_contract(), purpose="component", synthetic_capacity=True)
     with pytest.raises(ContractError, match="resume"):
         resumed.restore(tmp_path / "generation")
-    wrong_binding = Learner(learner.model, 17, replace(learner.binding, candidate_chunk=2), ACTION_HASH, RESUME_ID)
+    wrong_binding = Learner(learner.model, 17, replace(learner.binding, candidate_chunk=2), ACTION_HASH, RESUME_ID, action_contract=engineering_contract(), purpose="component", synthetic_capacity=True)
     with pytest.raises(ContractError, match="resume"):
         wrong_binding.restore(tmp_path / "generation")
     with pytest.raises(ContractError, match="architecture"):
-        inspect_inference(tmp_path / "generation", model=replace(learner.model, event=replace(learner.model.event, aggregate_window=7)))
+        inspect_inference(tmp_path / "generation", model=replace(learner.model, event=replace(learner.model.event, aggregate_window=7)), action_contract=engineering_contract(), purpose="component", synthetic_capacity=True)
 
 
 def test_inference_cache_full_sampling_reset_and_ten_thousand_candidates(make_input, tmp_path):
     learner = learner_for("transformer")
     record = records_for(make_input, learner, count=1, candidates=10001)
     identity = learner.save(tmp_path / "generation")
-    policy = StructuredPolicy.from_artifact(tmp_path / "generation", identity["inference_digest"], learner.model, learner.binding, ACTION_HASH)
+    policy = StructuredPolicy.from_artifact(tmp_path / "generation", identity["inference_digest"], learner.model, learner.binding, ACTION_HASH, action_contract=engineering_contract(), purpose="component", synthetic_capacity=True)
     frame, table = record.frames[0], record.tables[0]
     policy.reset(71)
     first = policy.select_frame(frame, record.bank, table)
@@ -250,16 +254,16 @@ def test_inference_cache_full_sampling_reset_and_ten_thousand_candidates(make_in
 def test_zero_decision_and_interrupted_closures_never_invent_targets(make_input, tmp_path, kind):
     learner = learner_for()
     bank = EventBank(1, "zero").view()
-    zero = EpisodeRecords(bank, (), (), (), "natural", "draw")
+    zero = EpisodeRecords(bank, (), (), (), "natural", "draw", action_contract=engineering_contract(), purpose="component", synthetic_capacity=True)
     value = rollout_for(make_input, learner)
     aborted = EpisodeRecords(value.episodes[0].records.bank, value.episodes[0].records.frames,
                              value.episodes[0].records.tables, value.episodes[0].records.selections,
-                             kind, reason="explicit-component-interruption")
-    rollout = StructuredRollout((zero, aborted), learner.model, ACTION_HASH)
+                             kind, reason="explicit-component-interruption", action_contract=engineering_contract(), purpose="component", synthetic_capacity=True)
+    rollout = StructuredRollout((zero, aborted), learner.model, ACTION_HASH, action_contract=engineering_contract(), purpose="component", synthetic_capacity=True)
     assert not rollout.eligible and len(rollout) == 3
     assert all(episode.advantage is None and episode.target is None for episode in rollout.episodes)
     write_rollout(tmp_path / "rollout", rollout)
-    restored = read_rollout(tmp_path / "rollout", sha256(tmp_path / "rollout" / "rollout.json"), learner.model)
+    restored = read_rollout(tmp_path / "rollout", sha256(tmp_path / "rollout" / "rollout.json"), learner.model, action_contract=engineering_contract(), purpose="component", synthetic_capacity=True)
     assert restored.episodes[0].records.outcome == "draw"
     assert restored.episodes[1].records.end_kind == kind
     assert len(restored) == 3
@@ -303,7 +307,7 @@ def test_rehashed_raw_token_corruption_is_rejected_against_original_frame(make_i
     arrays["e.0.f.0.state_numerics"][4] += 1
     digest_after_tamper = rewritten_rollout(directory, manifest, arrays)
     with pytest.raises(ContractError, match="stored tokens"):
-        read_rollout(directory, digest_after_tamper, learner.model)
+        read_rollout(directory, digest_after_tamper, learner.model, action_contract=engineering_contract(), purpose="component", synthetic_capacity=True)
 
 
 def test_rehashed_foreign_slot_cannot_become_an_owned_candidate(make_input, tmp_path):
@@ -322,7 +326,7 @@ def test_rehashed_foreign_slot_cannot_become_an_owned_candidate(make_input, tmp_
     manifest["episodes"][0]["selections"][0]["table_hash"] = new_table_hash
     after_tamper = rewritten_rollout(directory, manifest, arrays)
     with pytest.raises(ContractError, match="slot"):
-        read_rollout(directory, after_tamper, learner.model)
+        read_rollout(directory, after_tamper, learner.model, action_contract=engineering_contract(), purpose="component", synthetic_capacity=True)
     assert len(frame.references) == 4
 
 
@@ -340,7 +344,7 @@ def test_inference_unknown_or_mixed_semantics_reject_before_network(make_input, 
         pytest.fail("network constructed before manifest compatibility check")
     monkeypatch.setattr(module, "make_network", forbidden)
     with pytest.raises(ContractError):
-        load_inference(tmp_path / "generation", model=learner.model, binding=learner.binding)
+        load_inference(tmp_path / "generation", model=learner.model, binding=learner.binding, action_contract=engineering_contract(), purpose="component", synthetic_capacity=True)
 
 
 def test_resume_rng_and_named_presence_exact_roundtrip(make_input, tmp_path):
@@ -404,7 +408,7 @@ def test_mlp_validates_history_but_encodes_only_current_frame(make_input, monkey
 def test_logical_shuffle_128_endpoint_clip_steps_preserved(make_input, monkeypatch):
     learner = learner_for(hand="direct")
     records = tuple(records_for(make_input, learner, count=1, events=False, episode=f"ep-{index}") for index in range(129))
-    rollout = StructuredRollout(records, learner.model, ACTION_HASH)
+    rollout = StructuredRollout(records, learner.model, ACTION_HASH, action_contract=engineering_contract(), purpose="component", synthetic_capacity=True)
     expected_rng = np.random.Generator(np.random.PCG64(17))
     expected = []
     for _ in range(4):
@@ -510,8 +514,8 @@ def test_rollout_owned_token_and_packing_admission_precedes_array_allocation(mak
     with monkeypatch.context() as patch:
         patch.setattr(module, "tokenize_frame", forbidden)
         with pytest.raises(ContractError, match="before encoding"):
-            StructuredRollout((record,), tiny, ACTION_HASH)
-    rollout = StructuredRollout((record,), learner.model, ACTION_HASH)
+            StructuredRollout((record,), tiny, ACTION_HASH, action_contract=engineering_contract(), purpose="component", synthetic_capacity=True)
+    rollout = StructuredRollout((record,), learner.model, ACTION_HASH, action_contract=engineering_contract(), purpose="component", synthetic_capacity=True)
     rollout.model = replace(learner.model, resources=replace(learner.model.resources, max_owned_bytes=rollout.resident_bytes + 1))
     monkeypatch.setattr(module, "_array", forbidden)
     monkeypatch.setattr(module, "_blob", forbidden)
@@ -571,7 +575,7 @@ def test_policy_rejects_relabelled_same_device_network_binding_before_cache(monk
         pytest.fail("cache allocated before captured network binding validation")
     monkeypatch.setattr(learner.network, "new_cache", forbidden)
     with pytest.raises(ContractError, match="config/runtime binding"):
-        StructuredPolicy(learner.network, learner.model, incompatible, "a" * 64)
+        StructuredPolicy(learner.network, learner.model, incompatible, "a" * 64, action_contract=engineering_contract(), purpose="component", synthetic_capacity=True)
 
 
 def test_policy_rejects_relabelled_active_resources_before_cache(monkeypatch):
@@ -582,20 +586,20 @@ def test_policy_rejects_relabelled_active_resources_before_cache(monkeypatch):
         pytest.fail("cache allocated before captured active resource validation")
     monkeypatch.setattr(learner.network, "new_cache", forbidden)
     with pytest.raises(ContractError, match="config/runtime binding"):
-        StructuredPolicy(learner.network, incompatible, learner.binding, "a" * 64)
+        StructuredPolicy(learner.network, incompatible, learner.binding, "a" * 64, action_contract=engineering_contract(), purpose="component", synthetic_capacity=True)
 
 
 def test_matching_policy_binding_labels_actual_envelope_and_fresh_artifact_overrides(tmp_path):
     from gf_models.structured_config import resource_estimate
     learner = learner_for()
-    policy = StructuredPolicy(learner.network, learner.model, learner.binding, "a" * 64)
+    policy = StructuredPolicy(learner.network, learner.model, learner.binding, "a" * 64, action_contract=engineering_contract(), purpose="component", synthetic_capacity=True)
     assert policy.reserved_bytes == resource_estimate(learner.model, learner.network.binding)["total_bytes"]
     assert policy.binding == learner.network.binding
     assert execution_digest(learner.model, learner.network.binding, cuda_visible_devices=os.environ.get("CUDA_VISIBLE_DEVICES")) in policy.version
     identity = learner.save(tmp_path / "generation")
     active = replace(learner.model, resources=replace(learner.model.resources, max_owned_bytes=2 * 1024**3))
     binding = replace(learner.binding, candidate_chunk=1, max_candidates=1000, managed_budget_bytes=2 * 1024**3)
-    fresh = StructuredPolicy.from_artifact(tmp_path / "generation", identity["inference_digest"], active, binding, ACTION_HASH)
+    fresh = StructuredPolicy.from_artifact(tmp_path / "generation", identity["inference_digest"], active, binding, ACTION_HASH, action_contract=engineering_contract(), purpose="component", synthetic_capacity=True)
     assert fresh.network.config == fresh.model == active
     assert fresh.network.binding == fresh.binding == binding
     assert fresh.reserved_bytes == resource_estimate(active, binding)["total_bytes"]
@@ -623,7 +627,7 @@ def test_reader_joint_raw_owner_envelope_rejects_before_decode_or_frame_parse(ma
     monkeypatch.setattr(module, "read_bundle", forbidden)
     monkeypatch.setattr(module, "DecisionFrame", forbidden)
     with pytest.raises(ContractError, match="reservation"):
-        read_rollout(directory, sha256(directory / "rollout.json"), active)
+        read_rollout(directory, sha256(directory / "rollout.json"), active, action_contract=engineering_contract(), purpose="component", synthetic_capacity=True)
 
 
 @pytest.mark.parametrize("mismatch", ["pooling", "resources"])
@@ -639,7 +643,7 @@ def test_save_inference_rejects_same_shape_relabel_before_copy_or_directory(tmp_
     monkeypatch.setattr(module, "_cpu_array", forbidden)
     destination = tmp_path / "invalid"
     with pytest.raises(ContractError, match="full model config"):
-        module.save_inference(destination, learner.network, changed, ACTION_HASH)
+        module.save_inference(destination, learner.network, changed, ACTION_HASH, action_contract=engineering_contract(), purpose="component", synthetic_capacity=True)
     assert not destination.exists()
 
 
@@ -648,7 +652,7 @@ def test_save_resume_rejects_relabelled_actual_context_before_copy(make_input, t
     import gf_models.structured_artifacts as module
     learner = learner_for(hand="deepsets")
     directory = tmp_path / "generation"
-    module.save_inference(directory, learner.network, learner.model, ACTION_HASH)
+    module.save_inference(directory, learner.network, learner.model, ACTION_HASH, action_contract=engineering_contract(), purpose="component", synthetic_capacity=True)
     model, binding = learner.model, learner.binding
     if mismatch == "pooling":
         model = replace(model, hand=replace(model.hand, pooling="max"))
@@ -662,7 +666,7 @@ def test_save_resume_rejects_relabelled_actual_context_before_copy(make_input, t
     monkeypatch.setattr(module, "_cpu_array", forbidden)
     with pytest.raises(ContractError, match="mismatch"):
         module.save_resume(directory, learner.network, learner.optimizer, learner.shuffle, learner.steps,
-                           model, binding, RESUME_ID)
+                           model, binding, RESUME_ID, action_contract=engineering_contract(), purpose="component", synthetic_capacity=True)
     assert {path.name: path.read_bytes() for path in directory.iterdir()} == before
 
 
@@ -764,13 +768,13 @@ def test_resume_manifest_destinations_preflight_dangling_symlinks(make_input, tm
     import gf_models.structured_artifacts as module
     learner = learner_for()
     directory = tmp_path / "owned"
-    module.save_inference(directory, learner.network, learner.model, ACTION_HASH)
+    module.save_inference(directory, learner.network, learner.model, ACTION_HASH, action_contract=engineering_contract(), purpose="component", synthetic_capacity=True)
     before = {path.name: path.read_bytes() for path in directory.iterdir()}
     outside = tmp_path / "outside-must-stay-absent"
     (directory / collision).symlink_to(outside)
     with pytest.raises(ContractError, match="preexisting"):
         module.save_resume(directory, learner.network, learner.optimizer, learner.shuffle, learner.steps,
-                           learner.model, learner.binding, RESUME_ID)
+                           learner.model, learner.binding, RESUME_ID, action_contract=engineering_contract(), purpose="component", synthetic_capacity=True)
     assert not outside.exists()
     assert all((directory / name).read_bytes() == value for name, value in before.items())
     assert not list(directory.glob("resume-*.npz"))
@@ -786,7 +790,7 @@ def test_new_artifact_directory_does_not_reinterpret_preexisting_manifest_links(
     (directory / manifest_name).symlink_to(outside)
     with pytest.raises(ContractError):
         if manifest_name.startswith("inference"):
-            module.save_inference(directory, learner.network, learner.model, ACTION_HASH)
+            module.save_inference(directory, learner.network, learner.model, ACTION_HASH, action_contract=engineering_contract(), purpose="component", synthetic_capacity=True)
         else:
             write_rollout(directory, rollout_for(make_input, learner))
     assert not outside.exists()
@@ -805,31 +809,31 @@ def test_actual_1024_frame_sharded_persistence_and_1025_early_rejection(make_inp
         raw["action_options"]["state_revision"] = revision
         current = replace(value, observation=raw["observation"], action_options=raw["action_options"])
         frame = DecisionFrame.from_input(current, bank, 0)
-        table = CandidateTable.from_actions(frame, [{"type": "pray"}])
+        table = CandidateTable.from_actions(frame, [{"type": "pray"}], action_contract=engineering_contract(), purpose="component", synthetic_capacity=True)
         frames.append(frame)
         tables.append(table)
         selections.append(Selection(table.table_hash, 0, "synthetic-persistence-only", 0., 0.))
     model = ModelConfigV2()
-    records = EpisodeRecords(bank.view(), tuple(frames[:1024]), tuple(tables[:1024]), tuple(selections[:1024]), "natural", "draw")
-    rollout = StructuredRollout((records,), model, ACTION_HASH)
+    records = EpisodeRecords(bank.view(), tuple(frames[:1024]), tuple(tables[:1024]), tuple(selections[:1024]), "natural", "draw", action_contract=engineering_contract(), purpose="component", synthetic_capacity=True)
+    rollout = StructuredRollout((records,), model, ACTION_HASH, action_contract=engineering_contract(), purpose="component", synthetic_capacity=True)
     assert len(rollout) == 1024
     directory = tmp_path / "maximum"
     manifest = write_rollout(directory, rollout, shard_bytes=1024**2)
     assert len(manifest["data"]["shards"]) > 1
     assert manifest["data"]["tensor_count"] == 1024 * (len(module.FRAME_FIELDS) + len(module.EVENT_FIELDS) + len(module.CANDIDATE_FIELDS) + 1) + 5
     assert all(sum(item["bytes"] for item in shard["metadata"]["arrays"].values()) <= 1024**2 for shard in manifest["data"]["shards"])
-    loaded = read_rollout(directory, sha256(directory / "rollout.json"), model)
+    loaded = read_rollout(directory, sha256(directory / "rollout.json"), model, action_contract=engineering_contract(), purpose="component", synthetic_capacity=True)
     assert len(loaded) == 1024 and len(loaded.episodes[0].records.frames) == 1024
     assert loaded.endpoint(1023)[0][-1].frame_hash == frames[1023].frame_hash
     assert loaded.episodes[0].frames == rollout.episodes[0].frames
     assert loaded.episodes[0].tables == rollout.episodes[0].tables
-    too_many = EpisodeRecords(bank.view(), tuple(frames), tuple(tables), tuple(selections), "natural", "draw")
+    too_many = EpisodeRecords(bank.view(), tuple(frames), tuple(tables), tuple(selections), "natural", "draw", action_contract=engineering_contract(), purpose="component", synthetic_capacity=True)
     def forbidden(*args, **kwargs):
         pytest.fail("1025-frame input allocated/decoded before capacity rejection")
     with monkeypatch.context() as patch:
         patch.setattr(module, "tokenize_frame", forbidden)
         with pytest.raises(ContractError, match="1024"):
-            StructuredRollout((too_many,), model, ACTION_HASH)
+            StructuredRollout((too_many,), model, ACTION_HASH, action_contract=engineering_contract(), purpose="component", synthetic_capacity=True)
     # An untrusted manifest must hit the same bound before decoding even one
     # typed shard or constructing a raw DecisionFrame.
     manifest["episodes"][0]["frames"].append(copy.deepcopy(manifest["episodes"][0]["frames"][-1]))
@@ -838,7 +842,7 @@ def test_actual_1024_frame_sharded_persistence_and_1025_early_rejection(make_inp
     monkeypatch.setattr(module, "read_bundle", forbidden)
     monkeypatch.setattr(module, "DecisionFrame", forbidden)
     with pytest.raises(ContractError, match="1024"):
-        read_rollout(directory, sha256(directory / "rollout.json"), model)
+        read_rollout(directory, sha256(directory / "rollout.json"), model, action_contract=engineering_contract(), purpose="component", synthetic_capacity=True)
 
 
 def test_complete_rollout_manifest_plan_checks_descriptors_before_packing(make_input, tmp_path, monkeypatch):
@@ -847,7 +851,7 @@ def test_complete_rollout_manifest_plan_checks_descriptors_before_packing(make_i
     from gf_models.sharded_arrays import json_bytes
     model = learner_for().model
     model = replace(model, temporal=replace(model.temporal, max_decisions=64))
-    learner = Learner(model, 17, InferenceBindingV2(), ACTION_HASH, RESUME_ID)
+    learner = Learner(model, 17, InferenceBindingV2(), ACTION_HASH, RESUME_ID, action_contract=engineering_contract(), purpose="component", synthetic_capacity=True)
     rollout = rollout_for(make_input, learner, count=50, events=False)
     original_directory = tmp_path / "original"
     manifest = write_rollout(original_directory, rollout)
@@ -883,9 +887,9 @@ def raw_record_with_interval(make_input, count):
     events = tuple({"type": "action_accepted", "player": 1} for _ in range(count))
     bank.append(EventDelta(1, bank.episode, 0, bank.boundary.prefix_hash, events))
     frame = DecisionFrame.from_input(replace(value, events=events), bank, 0)
-    table = CandidateTable.from_actions(frame, [{"type": "pray"}])
+    table = CandidateTable.from_actions(frame, [{"type": "pray"}], action_contract=engineering_contract(), purpose="component", synthetic_capacity=True)
     selection = Selection(table.table_hash, 0, "synthetic-unencoded", 0., 0.)
-    return EpisodeRecords(bank.view(), (frame,), (table,), (selection,), "natural", "draw")
+    return EpisodeRecords(bank.view(), (frame,), (table,), (selection,), "natural", "draw", action_contract=engineering_contract(), purpose="component", synthetic_capacity=True)
 
 
 def test_policy_known_interval_and_candidate_caps_precede_tokenization(make_input, monkeypatch):
@@ -893,12 +897,12 @@ def test_policy_known_interval_and_candidate_caps_precede_tokenization(make_inpu
     base = learner_for()
     interval_record = raw_record_with_interval(make_input, 3)
     model = replace(base.model, event=replace(base.model.event, max_interval=2))
-    narrow = Learner(model, 17, base.binding, ACTION_HASH, RESUME_ID)
-    interval_policy = StructuredPolicy(narrow.network, model, narrow.binding, "a" * 64)
+    narrow = Learner(model, 17, base.binding, ACTION_HASH, RESUME_ID, action_contract=engineering_contract(), purpose="component", synthetic_capacity=True)
+    interval_policy = StructuredPolicy(narrow.network, model, narrow.binding, "a" * 64, action_contract=engineering_contract(), purpose="component", synthetic_capacity=True)
     record = records_for(make_input, base, count=1)
     one_binding = replace(base.binding, max_candidates=1)
-    one = Learner(base.model, 17, one_binding, ACTION_HASH, RESUME_ID)
-    one_policy = StructuredPolicy(one.network, one.model, one.binding, "b" * 64)
+    one = Learner(base.model, 17, one_binding, ACTION_HASH, RESUME_ID, action_contract=engineering_contract(), purpose="component", synthetic_capacity=True)
+    one_policy = StructuredPolicy(one.network, one.model, one.binding, "b" * 64, action_contract=engineering_contract(), purpose="component", synthetic_capacity=True)
     def forbidden(*args, **kwargs):
         pytest.fail("known policy scalar cap was checked after tokenization")
     monkeypatch.setattr(module, "tokenize_frame", forbidden)
@@ -923,10 +927,10 @@ def test_rollout_known_caps_and_candidate_tuple_owners_precede_tokenization(make
     monkeypatch.setattr(module, "tokenize_frame", forbidden)
     monkeypatch.setattr(module, "tokenize_table", forbidden)
     with pytest.raises(ContractError, match="before encoding"):
-        StructuredRollout((record,), narrow, ACTION_HASH)
+        StructuredRollout((record,), narrow, ACTION_HASH, action_contract=engineering_contract(), purpose="component", synthetic_capacity=True)
     interval_model = replace(learner.model, event=replace(learner.model.event, max_interval=2))
     with pytest.raises(ContractError):
-        StructuredRollout((interval,), interval_model, ACTION_HASH)
+        StructuredRollout((interval,), interval_model, ACTION_HASH, action_contract=engineering_contract(), purpose="component", synthetic_capacity=True)
 
 
 def test_actual_adam_option_types_and_weight_dtype_are_checked_before_copy(tmp_path, monkeypatch):
@@ -941,7 +945,7 @@ def test_actual_adam_option_types_and_weight_dtype_are_checked_before_copy(tmp_p
     learner.optimizer.param_groups[0]["betas"] = (.9, .999)
     learner.network.double()
     with pytest.raises(ContractError, match="FP32"):
-        module.save_inference(tmp_path / "bad-dtype", learner.network, learner.model, ACTION_HASH)
+        module.save_inference(tmp_path / "bad-dtype", learner.network, learner.model, ACTION_HASH, action_contract=engineering_contract(), purpose="component", synthetic_capacity=True)
     assert not (tmp_path / "bad-betas").exists() and not (tmp_path / "bad-dtype").exists()
 
 
@@ -950,13 +954,13 @@ def test_known_episode_and_position_caps_leave_policy_cache_unchanged_before_tok
     learner = learner_for()
     record = records_for(make_input, learner)
     capped_model = replace(learner.model, event=replace(learner.model.event, aggregate_window=2, max_interval=2, max_episode=2))
-    capped = Learner(capped_model, 17, learner.binding, ACTION_HASH, RESUME_ID)
-    policy = StructuredPolicy(capped.network, capped.model, capped.binding, "a" * 64)
+    capped = Learner(capped_model, 17, learner.binding, ACTION_HASH, RESUME_ID, action_contract=engineering_contract(), purpose="component", synthetic_capacity=True)
+    policy = StructuredPolicy(capped.network, capped.model, capped.binding, "a" * 64, action_contract=engineering_contract(), purpose="component", synthetic_capacity=True)
     for index in range(2):
         policy.select_frame(record.frames[index], record.bank, record.tables[index])
     position_model = replace(learner.model, max_positions=1)
-    narrow = Learner(position_model, 17, learner.binding, ACTION_HASH, RESUME_ID)
-    narrow_policy = StructuredPolicy(narrow.network, narrow.model, narrow.binding, "b" * 64)
+    narrow = Learner(position_model, 17, learner.binding, ACTION_HASH, RESUME_ID, action_contract=engineering_contract(), purpose="component", synthetic_capacity=True)
+    narrow_policy = StructuredPolicy(narrow.network, narrow.model, narrow.binding, "b" * 64, action_contract=engineering_contract(), purpose="component", synthetic_capacity=True)
     def forbidden(*args, **kwargs):
         pytest.fail("known episode/position cap checked after tokenization")
     monkeypatch.setattr(module, "tokenize_frame", forbidden)

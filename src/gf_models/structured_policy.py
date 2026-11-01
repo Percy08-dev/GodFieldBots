@@ -7,11 +7,18 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
+from gf_common.action_contract import ActionContract
 from gf_common.domain import ContractError, canonical, integer
 from gf_common.structured import CandidateTable, DecisionFrame, EventBankView, Selection
 from gf_common.structured_tokens import tokenize_frame, tokenize_table, validate_candidate_tokens
 from gf_models.structured_artifacts import load_inference
-from gf_models.structured_binding import policy_label, validate_cuda_visibility
+from gf_models.structured_binding import (
+    _bind_network_input,
+    check_input_binding,
+    input_binding,
+    policy_label,
+    validate_cuda_visibility,
+)
 from gf_models.structured_config import (
     InferenceBindingV2,
     ModelConfigV2,
@@ -22,7 +29,9 @@ from gf_models.structured_config import (
 
 class StructuredPolicy:
     def __init__(self, network: Any, model: ModelConfigV2, binding: InferenceBindingV2,
-                 manifest_digest: str) -> None:
+                 manifest_digest: str, *, action_contract: ActionContract, purpose: str, synthetic_capacity: bool) -> None:
+        self.input_binding = input_binding(action_contract, purpose, synthetic_capacity)
+        self.action_contract, self.purpose, self.synthetic_capacity = action_contract, purpose, synthetic_capacity
         if (not isinstance(manifest_digest, str) or len(manifest_digest) != 64
                 or set(manifest_digest) - set("0123456789abcdef")):
             raise ContractError("full inference manifest identity required")
@@ -36,6 +45,8 @@ class StructuredPolicy:
         if (canonical(asdict(network.config)) != canonical(asdict(model))
                 or canonical(asdict(network.binding)) != canonical(asdict(binding))):
             raise ContractError("policy network active config/runtime binding mismatch")
+        _bind_network_input(network, action_contract=action_contract, purpose=purpose,
+                            synthetic_capacity=synthetic_capacity, fresh=True)
         import torch
         self.torch, self.network, self.model, self.binding = torch, network, model, binding
         self.reserved_bytes = resource_estimate(model, binding)["total_bytes"]
@@ -48,10 +59,13 @@ class StructuredPolicy:
 
     @classmethod
     def from_artifact(cls, directory: Path, expected_digest: str, model: ModelConfigV2,
-                      binding: InferenceBindingV2, action_config_hash: str) -> StructuredPolicy:
+                      binding: InferenceBindingV2, action_config_hash: str, *, action_contract: ActionContract,
+                      purpose: str, synthetic_capacity: bool) -> StructuredPolicy:
         network, _ = load_inference(directory, expected_digest=expected_digest, model=model,
-                                     binding=binding, action_config_hash=action_config_hash)
-        return cls(network, model, binding, expected_digest)
+                                     binding=binding, action_config_hash=action_config_hash, action_contract=action_contract,
+                                     purpose=purpose, synthetic_capacity=synthetic_capacity)
+        return cls(network, model, binding, expected_digest, action_contract=action_contract,
+                   purpose=purpose, synthetic_capacity=synthetic_capacity)
 
     def reset(self, sampling_seed: int) -> None:
         integer(sampling_seed, 0, 2**64 - 1)
@@ -61,6 +75,13 @@ class StructuredPolicy:
 
     def select_frame(self, frame: DecisionFrame, bank_view: EventBankView,
                      table: CandidateTable) -> Selection:
+        check_input_binding(self.input_binding, action_contract=self.action_contract,
+                            purpose=self.purpose, synthetic_capacity=self.synthetic_capacity)
+        _bind_network_input(self.network, action_contract=self.action_contract,
+                            purpose=self.purpose, synthetic_capacity=self.synthetic_capacity)
+        check_input_binding({"action_contract": asdict(table.action_contract), "purpose": table.purpose,
+                             "synthetic_capacity": table.synthetic_capacity}, action_contract=self.action_contract,
+                            purpose=self.purpose, synthetic_capacity=self.synthetic_capacity)
         torch = self.torch
         self.last_timing = {}
         token_started = time.perf_counter()

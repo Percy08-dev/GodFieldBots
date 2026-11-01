@@ -15,9 +15,12 @@ disallows repeated physical/learned references within one Action and confirms
 utility singleton/explicit-target assertions, while leaving several boundaries
 unresolved and public Simulator specs unchanged. Earlier B readiness below is
 historical component evidence under the previous proposal assumptions; it is
-not acceptance of the corrected rule domain. Root has paused rule-dependent
-collection/adoption and requested advisor review before amending semantic
-identity/experiment gates. No real v2 source/fit/experiment has run.
+not acceptance of the corrected rule domain. Advisor B and architecture review
+approved a separately identified engineering-only profile; its implementation
+and current-boundary metadata propagation are now reviewed READY. Real-I/O and
+qualified-source gates remain closed.1460Python/13separate CUDA cases and full
+Ruff/mypy pass in the supported test environment. No real v2 source/fit/experiment
+has run; remaining Source/Gen2/native/tree integration is not accepted yet.
 
 The first pure records/token/config/network slice is implemented in
 `gf_common.structured`, `structured_tokens`, `structured_vocab` and
@@ -959,6 +962,17 @@ qualified contract and still conveys no Source authority. Thus FakeHTTP and
 frozen real-input replays do not acquire a false “synthetic128” provenance, and
 a marker/flag cannot upgrade any engineering source. Numeric column layout and
 network feature signatures remain unchanged.
+
+Artifact/resume/rollout/Learner/Policy component APIs require the same explicit
+contract, purpose and synthetic_capacity classification. For artifacts this is
+data/provenance/allowed-use metadata, not maximum tensor position capacity: an
+unupdated false-classified component model can still have128position parameters
+while receiving unique<=18game-style tables. True synthetic-capacity artifacts
+cannot be silently relabeled or loaded as false/game-proposal policies; resource
+overrides never change classification. No flag alone grants formal Source
+eligibility. New Frame reference maps also reject duplicate learned IDs/hand IDs
+so distinct slots cannot alias one source+ID physical reference; v1 DTO validation
+remains unchanged and distinct physical hand instances/sources are preserved.
 
 Engineering-only permits component/FakeHTTP/synthetic numerical/storage tests and
 offline fixed-input performance work. Real collection/evaluation, the192-game

@@ -16,6 +16,7 @@ from pathlib import Path
 
 import numpy as np
 
+from gf_common.action_contract import ActionContract
 from gf_common.domain import ContractError, Json, integer
 from gf_models.arrays import MAX_ARRAY_BYTES, sha256
 from gf_models.structured_artifacts import (
@@ -27,6 +28,7 @@ from gf_models.structured_artifacts import (
     save_resume,
     validate_save_context,
 )
+from gf_models.structured_binding import _bind_network_input, check_input_binding, input_binding
 from gf_models.structured_config import (
     InferenceBindingV2,
     ModelConfigV2,
@@ -41,7 +43,10 @@ from gf_training.structured_rollout import StructuredRollout
 
 class Learner:
     def __init__(self, model: ModelConfigV2, seed: int, binding: InferenceBindingV2,
-                 action_config_hash: str, resume_identity: str) -> None:
+                 action_config_hash: str, resume_identity: str, *, action_contract: ActionContract,
+                 purpose: str, synthetic_capacity: bool) -> None:
+        self.input_binding = input_binding(action_contract, purpose, synthetic_capacity)
+        self.action_contract, self.purpose, self.synthetic_capacity = action_contract, purpose, synthetic_capacity
         for value in (action_config_hash, resume_identity):
             if not isinstance(value, str) or len(value) != 64 or set(value) - set("0123456789abcdef"):
                 raise ContractError("closed action/resume identity digests required")
@@ -54,6 +59,8 @@ class Learner:
         self.model, self.binding = model, binding
         self.action_config_hash, self.resume_identity = action_config_hash, resume_identity
         self.network = make_network(model, seed, binding)
+        _bind_network_input(self.network, action_contract=self.action_contract, purpose=self.purpose,
+                            synthetic_capacity=self.synthetic_capacity, fresh=True)
         self.optimizer = self.torch.optim.Adam(self.network.parameters(), lr=3e-4, betas=(.9, .999), eps=1e-8)
         self.shuffle = np.random.Generator(np.random.PCG64(seed))
         self.steps = 0
@@ -63,6 +70,12 @@ class Learner:
             self.torch.cuda.synchronize(self.binding.device)
 
     def admit(self, rollout: StructuredRollout) -> None:
+        _bind_network_input(self.network, action_contract=self.action_contract,
+                            purpose=self.purpose, synthetic_capacity=self.synthetic_capacity)
+        check_input_binding(self.input_binding, action_contract=self.action_contract,
+                            purpose=self.purpose, synthetic_capacity=self.synthetic_capacity)
+        check_input_binding(rollout.input_binding, action_contract=self.action_contract,
+                            purpose=self.purpose, synthetic_capacity=self.synthetic_capacity)
         rollout.require_learning()
         if architecture_identity(rollout.model) != architecture_identity(self.model) or rollout.action_config_hash != self.action_config_hash:
             raise ContractError("learner rollout architecture/action mismatch")
@@ -158,12 +171,18 @@ class Learner:
 
     def save(self, directory: Path, *, code_revision: str | None = None,
              shard_bytes: int = MAX_ARRAY_BYTES) -> Json:
+        _bind_network_input(self.network, action_contract=self.action_contract,
+                            purpose=self.purpose, synthetic_capacity=self.synthetic_capacity)
+        check_input_binding(self.input_binding, action_contract=self.action_contract,
+                            purpose=self.purpose, synthetic_capacity=self.synthetic_capacity)
         validate_save_context(self.network, self.model, self.binding, self.optimizer)
         self.synchronize()
         manifest = save_inference(directory, self.network, self.model, self.action_config_hash,
-                                  code_revision=code_revision, shard_bytes=shard_bytes)
+                                  code_revision=code_revision, shard_bytes=shard_bytes, action_contract=self.action_contract,
+                                  purpose=self.purpose, synthetic_capacity=self.synthetic_capacity)
         resume = save_resume(directory, self.network, self.optimizer, self.shuffle, self.steps,
-                             self.model, self.binding, self.resume_identity, shard_bytes=shard_bytes)
+                             self.model, self.binding, self.resume_identity, shard_bytes=shard_bytes, action_contract=self.action_contract,
+                             purpose=self.purpose, synthetic_capacity=self.synthetic_capacity)
         return {"inference_digest": sha256(directory / "inference.json"),
                 "resume_digest": sha256(directory / "resume.json"),
                 "files": {**manifest["weights"]["files"], **resume["state"]["files"],
@@ -171,6 +190,10 @@ class Learner:
                           "resume.json": sha256(directory / "resume.json")}}
 
     def restore(self, directory: Path) -> None:
+        _bind_network_input(self.network, action_contract=self.action_contract,
+                            purpose=self.purpose, synthetic_capacity=self.synthetic_capacity)
+        check_input_binding(self.input_binding, action_contract=self.action_contract,
+                            purpose=self.purpose, synthetic_capacity=self.synthetic_capacity)
         # Stage complete weights/optimizer validation in fresh owners. A failed
         # ordinary resume never partially overwrites this learner's parameters.
         existing_bytes = sum(buffer.numel() * buffer.element_size() for buffer in self.network.buffers())
@@ -182,13 +205,17 @@ class Learner:
         if existing_bytes + staged > min(self.model.resources.max_owned_bytes, self.binding.managed_budget_bytes):
             raise ContractError("staged resume plus live learner exceeds managed reservation")
         inspect_inference(directory, model=self.model, binding=self.binding,
-                          action_config_hash=self.action_config_hash)
+                          action_config_hash=self.action_config_hash, action_contract=self.action_contract,
+                          purpose=self.purpose, synthetic_capacity=self.synthetic_capacity)
         # Stream/validate every resume shard and RNG/header before constructing
         # a staged network. The final publisher revalidates its own fresh data.
-        read_resume(directory, self.model, self.binding, self.resume_identity)
+        read_resume(directory, self.model, self.binding, self.resume_identity, action_contract=self.action_contract,
+                    purpose=self.purpose, synthetic_capacity=self.synthetic_capacity)
         network, _ = load_inference(directory, model=self.model, binding=self.binding,
-                                     action_config_hash=self.action_config_hash)
+                                     action_config_hash=self.action_config_hash, action_contract=self.action_contract,
+                          purpose=self.purpose, synthetic_capacity=self.synthetic_capacity)
         optimizer = self.torch.optim.Adam(network.parameters(), lr=3e-4, betas=(.9, .999), eps=1e-8)
         steps = restore_resume(directory, network, optimizer, self.shuffle, self.model,
-                                self.binding, self.resume_identity)
+                                self.binding, self.resume_identity, action_contract=self.action_contract,
+                                purpose=self.purpose, synthetic_capacity=self.synthetic_capacity)
         self.network, self.optimizer, self.steps = network, optimizer, steps

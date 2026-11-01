@@ -3,6 +3,7 @@ from dataclasses import FrozenInstanceError, replace
 
 import pytest
 
+from gf_common.action_contract import engineering_contract
 from gf_common.domain import ContractError, digest
 from gf_common.structured import CandidateTable, DecisionFrame, EventBank, EventDelta, Selection
 
@@ -77,7 +78,7 @@ def test_ordered_reference_target_presence_and_selection(make_input, target):
     action = {"type": "play_sequence", "ordered_elements": [frame.references[1], frame.references[2], frame.references[0]]}
     if target != "omitted":
         action["target"] = target
-    table = CandidateTable.from_actions(frame, [action])
+    table = CandidateTable.from_actions(frame, [action], action_contract=engineering_contract(), purpose="component", synthetic_capacity=False)
     assert table.slots == (1, 2, 0)
     assert table.to_action(0, frame) == action
     selection = Selection(table.table_hash, 0, "policy-v2", 0., .5)
@@ -95,29 +96,29 @@ def test_compact_carriers_and_numeric_presence(make_input):
     frame, _ = frame_for(make_input(hand=("exchange", "sell", "bronze-club")))
     actions = [{"type": "exchange", "artifact": 1, "hp": 0, "mp": 10, "money": 60},
                {"type": "sell", "artifact": 2, "sold_artifact": 3, "target": 1}]
-    table = CandidateTable.from_actions(frame, actions)
+    table = CandidateTable.from_actions(frame, actions, action_contract=engineering_contract(), purpose="component", synthetic_capacity=False)
     assert table.numerics == ((0, 10, 60, 0), (0, 0, 0, 0))
     assert table.presence[0] == (True, True, True, False)
     assert [table.to_action(i, frame) for i in range(2)] == actions
     assert table.offsets == (0, 1, 3)
     foreign = {"type": "play_sequence", "ordered_elements": [{"source": "hand_artifact", "instance_id": 999}]}
     with pytest.raises(ContractError):
-        CandidateTable.from_actions(frame, [foreign])
+        CandidateTable.from_actions(frame, [foreign], action_contract=engineering_contract(), purpose="component", synthetic_capacity=False)
     fields = table._content()
     fields["slots"] = (17, 1, 2)
-    forged = CandidateTable(**fields, table_hash=digest(fields))
+    forged = CandidateTable(**{**fields, "action_contract": engineering_contract()}, table_hash=digest(fields))
     with pytest.raises(ContractError):
         forged.validate(frame)
 
 
-def test_position_128_is_syntax_capacity_not_legality_oracle(make_input):
+def test_synthetic_position_128_capacity_is_not_a_game_record(make_input):
     frame, _ = frame_for(make_input(learned=("fireball",)))
     action = {"type": "play_sequence", "ordered_elements": [frame.references[-1]] * 128}
-    table = CandidateTable.from_actions(frame, [action])
+    table = CandidateTable.from_actions(frame, [action], action_contract=engineering_contract(), purpose="component", synthetic_capacity=True)
     assert len(table.slots) == 128
     assert table.to_action(0, frame) == action
     with pytest.raises(ContractError):
-        CandidateTable.from_actions(frame, [action], max_positions=18)
+        CandidateTable.from_actions(frame, [action], max_positions=18, action_contract=engineering_contract(), purpose="component", synthetic_capacity=True)
 
 
 @pytest.mark.parametrize("action", [
@@ -130,7 +131,7 @@ def test_position_128_is_syntax_capacity_not_legality_oracle(make_input):
 def test_malformed_typed_actions_reject(make_input, action):
     frame, _ = frame_for(make_input())
     with pytest.raises(ContractError):
-        CandidateTable.from_actions(frame, [action])
+        CandidateTable.from_actions(frame, [action], action_contract=engineering_contract(), purpose="component", synthetic_capacity=False)
 
 
 def test_fog_payload_and_buy_numeric_encoding_fail_closed(make_input):
@@ -140,17 +141,17 @@ def test_fog_payload_and_buy_numeric_encoding_fail_closed(make_input):
     with pytest.raises(ContractError, match="Fog"):
         frame_for(replace(value, observation=obs))
     frame, _ = frame_for(make_input(choice="buy_accept_reject"))
-    table = CandidateTable.from_actions(frame, [{"type": "buy_decision", "accept": True}])
+    table = CandidateTable.from_actions(frame, [{"type": "buy_decision", "accept": True}], action_contract=engineering_contract(), purpose="component", synthetic_capacity=False)
     fields = table._content()
     fields["numerics"] = ((0, 0, 0, 2),)
-    forged = CandidateTable(**fields, table_hash=digest(fields))
+    forged = CandidateTable(**{**fields, "action_contract": engineering_contract()}, table_hash=digest(fields))
     with pytest.raises(ContractError):
         forged.to_action(0, frame)
 
 
 def test_all_18_own_slots_and_overflow_are_explicit(make_input):
     frame, _ = frame_for(make_input(hand=("bronze-club",) * 18))
-    table = CandidateTable.from_actions(frame, [{"type": "play_sequence", "ordered_elements": list(frame.references)}])
+    table = CandidateTable.from_actions(frame, [{"type": "play_sequence", "ordered_elements": list(frame.references)}], action_contract=engineering_contract(), purpose="component", synthetic_capacity=False)
     assert table.slots == tuple(range(18))
     with pytest.raises(ContractError, match="shape"):
         frame_for(make_input(hand=("bronze-club",) * 19))
@@ -167,7 +168,7 @@ def test_many_rows_reuse_only_one_call_local_owned_decode(make_input, monkeypatc
         decodes.append(1)
         return loads(*args, **kwargs)
     monkeypatch.setattr(module.json, "loads", counted_loads)
-    table = CandidateTable.from_actions(frame, actions)
+    table = CandidateTable.from_actions(frame, actions, action_contract=engineering_contract(), purpose="component", synthetic_capacity=False)
     assert len(decodes) == 1
     decodes.clear()
     table.validate(frame)
@@ -180,4 +181,4 @@ def test_many_rows_reuse_only_one_call_local_owned_decode(make_input, monkeypatc
     # merely checking a representative action after a shared context is built.
     with pytest.raises(ContractError):
         CandidateTable.from_actions(frame, [*actions[:-1], {"type": "play_sequence", "target": True,
-                                                          "ordered_elements": sequence}])
+                                                          "ordered_elements": sequence}], action_contract=engineering_contract(), purpose="component", synthetic_capacity=False)

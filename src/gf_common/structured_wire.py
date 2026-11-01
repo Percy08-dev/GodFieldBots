@@ -4,6 +4,7 @@ from __future__ import annotations
 from dataclasses import asdict
 from typing import Any
 
+from gf_common.action_contract import ActionContract, parse_action_contract, validate_record_purpose
 from gf_common.diverse_actions import (
     GeneratedCandidates,
     NumericCosts,
@@ -37,12 +38,17 @@ def parse_delta(raw: Json) -> EventDelta:
     return EventDelta(**raw)
 
 
-def parse_table(raw: Json) -> CandidateTable:
+def parse_table(raw: Json, *, action_contract: ActionContract, purpose: str, synthetic_capacity: bool) -> CandidateTable:
+    validate_record_purpose(purpose, action_contract)
     closed(raw, set(CandidateTable.__dataclass_fields__))
     for key in ("kinds", "targets", "numerics", "presence", "offsets", "slots"):
         if not isinstance(raw[key], (list, tuple)):
             raise ContractError("compact table column arrays required")
     values = dict(raw)
+    values["action_contract"] = parse_action_contract(raw["action_contract"], expected=action_contract)
+    if (raw["purpose"] != purpose or type(synthetic_capacity) is not bool
+            or type(raw["synthetic_capacity"]) is not bool or raw["synthetic_capacity"] != synthetic_capacity):
+        raise ContractError("wire candidate purpose/synthetic classification mismatch")
     for key in ("kinds", "targets", "offsets", "slots"):
         values[key] = tuple(values[key])
     for key in ("numerics", "presence"):
@@ -58,11 +64,14 @@ def _state(value: Any) -> tuple[Any, ...]:
     return value[0], tuple(value[1]), value[2]
 
 
-def parse_report(raw: Json) -> SearchReport:
+def parse_report(raw: Json, *, action_contract: ActionContract) -> SearchReport:
+    if type(action_contract) is not ActionContract:
+        raise ContractError("expected Config action contract required")
     closed(raw, set(SearchReport.__dataclass_fields__))
     costs = NumericCosts(**closed(raw["numeric_costs"], set(NumericCosts.__dataclass_fields__)))
     count = PrecountReport(**closed(raw["precount"], set(PrecountReport.__dataclass_fields__)))
     values = dict(raw)
+    values["action_contract"] = parse_action_contract(raw["action_contract"], expected=action_contract)
     values.update(numeric_costs=costs, precount=count)
     for key in ("channel_counts", "cutoff_reasons", "omissions"):
         if not isinstance(values[key], (tuple, list)):
@@ -77,9 +86,10 @@ def generated_dict(value: GeneratedCandidates) -> Json:
     return {"table": asdict(value.table), "report": asdict(value.report)}
 
 
-def parse_generated(raw: Json) -> GeneratedCandidates:
+def parse_generated(raw: Json, *, action_contract: ActionContract) -> GeneratedCandidates:
     closed(raw, {"table", "report"})
-    return GeneratedCandidates(parse_table(raw["table"]), parse_report(raw["report"]))
+    return GeneratedCandidates(parse_table(raw["table"], action_contract=action_contract, purpose="component", synthetic_capacity=False),
+                               parse_report(raw["report"], action_contract=action_contract))
 
 
 def parse_selection(raw: Json) -> Selection:

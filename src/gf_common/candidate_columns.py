@@ -8,9 +8,11 @@ from __future__ import annotations
 import hashlib
 import re
 import struct
+from dataclasses import asdict
 from itertools import pairwise
 from typing import Any
 
+from gf_common.action_contract import ActionContract, parse_action_contract, validate_record_purpose
 from gf_common.domain import ContractError, Json, canonical, closed, integer
 from gf_common.structured import ACTION_KINDS, TARGETS, CandidateTable
 
@@ -54,9 +56,16 @@ def column_layout(count: int, elements: int, *, max_bytes: int = MAX_COLUMN_BYTE
 
 
 def validate_descriptor(descriptor: Json, *, expected_file: str | None = None,
-                        expected_frame_hash: str | None = None, max_bytes: int = MAX_COLUMN_BYTES) -> tuple[list[Json], int]:
+                        expected_frame_hash: str | None = None, action_contract: ActionContract,
+                        purpose: str, synthetic_capacity: bool,
+                        max_bytes: int = MAX_COLUMN_BYTES) -> tuple[list[Json], int]:
     closed(descriptor, {"schema_version", "codec", "file", "count", "elements", "bytes", "sha256",
-                        "frame_hash", "table_hash", "columns"})
+                        "frame_hash", "table_hash", "columns", "action_contract", "purpose", "synthetic_capacity"})
+    parse_action_contract(descriptor["action_contract"], expected=action_contract)
+    validate_record_purpose(purpose, action_contract)
+    if (descriptor["purpose"] != purpose or type(synthetic_capacity) is not bool
+            or type(descriptor["synthetic_capacity"]) is not bool or descriptor["synthetic_capacity"] != synthetic_capacity):
+        raise ContractError("candidate column purpose/synthetic classification mismatch")
     if type(descriptor["schema_version"]) is not int or descriptor["schema_version"] != 1 or descriptor["codec"] != CODEC:
         raise ContractError("unsupported candidate column codec/schema")
     name = safe_basename(descriptor["file"])
@@ -102,14 +111,18 @@ def encode_candidate_columns(table: CandidateTable, file: str, *, max_positions:
     owned = bytes(payload)
     return owned, {"schema_version": 1, "codec": CODEC, "file": file, "count": len(table.kinds),
                    "elements": len(table.slots), "bytes": size, "sha256": hashlib.sha256(owned).hexdigest(),
-                   "frame_hash": table.frame_hash, "table_hash": table.table_hash, "columns": columns}
+                   "frame_hash": table.frame_hash, "table_hash": table.table_hash, "columns": columns,
+                   "action_contract": asdict(table.action_contract), "purpose": table.purpose,
+                   "synthetic_capacity": table.synthetic_capacity}
 
 
 def decode_candidate_columns(payload: bytes, descriptor: Json, *, expected_file: str | None = None,
                              expected_frame_hash: str | None = None, max_positions: int = 128,
-                             max_bytes: int = MAX_COLUMN_BYTES) -> CandidateTable:
+                             max_bytes: int = MAX_COLUMN_BYTES, action_contract: ActionContract,
+                             purpose: str, synthetic_capacity: bool) -> CandidateTable:
     columns, size = validate_descriptor(descriptor, expected_file=expected_file,
-                                       expected_frame_hash=expected_frame_hash, max_bytes=max_bytes)
+                                       expected_frame_hash=expected_frame_hash, max_bytes=max_bytes,
+                                       action_contract=action_contract, purpose=purpose, synthetic_capacity=synthetic_capacity)
     integer(max_positions, 1, 128)
     if type(payload) is not bytes or len(payload) != size or hashlib.sha256(payload).hexdigest() != descriptor["sha256"]:
         raise ContractError("candidate column payload length/hash mismatch")
@@ -135,4 +148,5 @@ def decode_candidate_columns(payload: bytes, descriptor: Json, *, expected_file:
         raise ContractError("candidate column offsets/active capacity mismatch")
     return CandidateTable(descriptor["frame_hash"], tuple(ACTION_KINDS[code] for code in parts["kinds"]),
                           tuple(TARGETS[code] for code in parts["targets"]), numerics, presence,
-                          offsets, tuple(parts["slots"]), descriptor["table_hash"])
+                          offsets, tuple(parts["slots"]), descriptor["table_hash"], action_contract=action_contract,
+                          purpose=purpose, synthetic_capacity=synthetic_capacity)

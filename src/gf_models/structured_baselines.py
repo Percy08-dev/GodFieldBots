@@ -4,15 +4,21 @@ from __future__ import annotations
 import os
 import random
 import re
+from dataclasses import asdict
 from typing import Any
 
+from gf_common.action_contract import ActionContract, validate_game_references
 from gf_common.domain import ContractError, Json, integer
 from gf_common.structured import CandidateTable, DecisionFrame, EventBankView, Selection
-from gf_models.structured_binding import safe_options_v2
+from gf_models.structured_binding import check_input_binding, input_binding, safe_options_v2
 
 
 class StructuredBaseline:
-    def __init__(self, kind: str) -> None:
+    def __init__(self, kind: str, *, action_contract: ActionContract, purpose: str, synthetic_capacity: bool) -> None:
+        self.input_binding = input_binding(action_contract, purpose, synthetic_capacity)
+        self.action_contract = action_contract
+        if synthetic_capacity:
+            raise ContractError("baseline game proposals cannot use synthetic capacity")
         if kind not in ("random", "heuristic"):
             raise ContractError("unknown structured baseline")
         self.kind = kind
@@ -24,6 +30,10 @@ class StructuredBaseline:
         self.rng.seed(sampling_seed)
 
     def select_frame(self, frame: DecisionFrame, bank_view: EventBankView, table: CandidateTable) -> Selection:
+        check_input_binding({"action_contract": asdict(table.action_contract), "purpose": table.purpose,
+                             "synthetic_capacity": table.synthetic_capacity}, action_contract=self.action_contract,
+                            purpose="component", synthetic_capacity=False)
+        validate_game_references(table.slots[start:end] for start, end in zip(table.offsets[:-1], table.offsets[1:], strict=True))
         frame.bank_view(bank_view)
         table.validate(frame)
         if self.kind == "random":
@@ -72,14 +82,18 @@ class StructuredBaseline:
         return Selection(table.table_hash, selected, self.version)
 
 
-def make_structured_policy(model_id: str, options: Json | None = None, action_config_hash: str | None = None) -> Any:
+def make_structured_policy(model_id: str, options: Json | None = None, action_config_hash: str | None = None, *,
+                           action_contract: ActionContract, purpose: str, synthetic_capacity: bool) -> Any:
+    input_binding(action_contract, purpose, synthetic_capacity)
+    if synthetic_capacity:
+        raise ContractError("participant game factory rejects synthetic capacity artifacts")
     if model_id in ("random", "heuristic"):
         if options is not None:
             raise ContractError("structured baseline has no checkpoint binding")
-        return StructuredBaseline(model_id)
+        return StructuredBaseline(model_id, action_contract=action_contract, purpose=purpose, synthetic_capacity=synthetic_capacity)
     if model_id not in ("mlp", "gru", "transformer") or options is None:
         raise ContractError("model2 neural checkpoint binding required; LightGBM2 is not implemented")
-    binding = safe_options_v2(options)
+    binding = safe_options_v2(options, action_contract=action_contract, purpose=purpose, synthetic_capacity=synthetic_capacity)
     if type(action_config_hash) is not str or re.fullmatch(r"[0-9a-f]{64}", action_config_hash) is None:
         raise ContractError("own action configuration hash required")
     if os.environ.get("CUDA_VISIBLE_DEVICES") != binding["cuda_visible_devices"]:
@@ -95,4 +109,5 @@ def make_structured_policy(model_id: str, options: Json | None = None, action_co
     # Parent qualification owns formal-vs-owned/toy authorization. This factory
     # receives only this policy's closed numerical and checkpoint settings.
     return StructuredPolicy.from_artifact(Path(binding["checkpoint"]), binding["expected_manifest_digest"],
-                                          model, inference, action_config_hash=action_config_hash)
+                                          model, inference, action_config_hash=action_config_hash,
+                                          action_contract=action_contract, purpose=purpose, synthetic_capacity=synthetic_capacity)

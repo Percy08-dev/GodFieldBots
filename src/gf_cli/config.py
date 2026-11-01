@@ -9,6 +9,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+from gf_common.action_contract import engineering_contract, parse_action_contract
 from gf_common.domain import (
     SIMULATOR_REVISION,
     ActionConfig,
@@ -161,7 +162,7 @@ def _validate_table(name: str, values: Json, *, context: Json | None = None) -> 
     if structured_model:
         defaults = asdict(model_defaults_v2(values.get("model_id", "mlp")))
     elif name == "actions" and values.get("version") == "2":
-        defaults = asdict(ActionConfigV2())
+        defaults = asdict(ActionConfigV2(action_contract=engineering_contract()))
     elif name == "run" and context.get("actions", {}).get("version") == "2":
         defaults = asdict(RunConfigV2())
     if name in ("model", "opponent") and "model_id" not in values and not structured_model:
@@ -252,7 +253,12 @@ def load_config(path: str | Path, overrides: Json | None = None) -> LoadedConfig
         data = _merge(data, overrides)
     structured_actions = data.get("actions", {}).get("version") == "2"
     if structured_actions:
-        base["actions"] = asdict(ActionConfigV2())
+        # Resolved raw inputs must explicitly declare/inherit the descriptor.
+        # Current defaults must never upgrade a pre-adoption v2 Config.
+        if "action_contract" not in data["actions"]:
+            raise ContractError("raw actions2 Config must explicitly declare an action_contract")
+        parse_action_contract(data["actions"]["action_contract"])
+        base["actions"] = asdict(ActionConfigV2(action_contract=engineering_contract()))
         base["run"] = asdict(RunConfigV2())
     for name in ("model", "opponent"):
         if data.get(name, {}).get("version") == "2":

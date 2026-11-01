@@ -12,6 +12,12 @@ import math
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
+from gf_common.action_contract import (
+    ActionContract,
+    parse_action_contract,
+    validate_game_references,
+    validate_record_purpose,
+)
 from gf_common.domain import ContractError, DecisionInput, Json, canonical, closed, digest, integer
 from gf_common.validation import validate_events, validate_worker_input
 
@@ -40,6 +46,7 @@ def _owner(actor: int, episode: str) -> None:
 
 @dataclass(frozen=True)
 class ActionConfigV2:
+    action_contract: ActionContract = field(kw_only=True)
     version: str = "2"
     generator: str = GENERATOR_V2
     use_action_options: bool = True
@@ -54,6 +61,8 @@ class ActionConfigV2:
     channel_weights: tuple[int, ...] = (1, 1, 1, 1, 1, 1, 1)
 
     def __post_init__(self) -> None:
+        if type(self.action_contract) is not ActionContract:
+            raise ContractError("explicit closed action contract required")
         if self.version != "2" or self.generator != GENERATOR_V2:
             raise ContractError("unsupported structured action recipe")
         if type(self.use_action_options) is not bool or not self.use_action_options:
@@ -74,12 +83,13 @@ class ActionConfigV2:
 
 
 def action_config_v2(value: Json) -> ActionConfigV2:
-    closed(value, set(asdict(ActionConfigV2())))
+    closed(value, set(ActionConfigV2.__dataclass_fields__))
     if not isinstance(value["channel_weights"], (list, tuple)):
         raise ContractError("channel weights array required")
     if not isinstance(value["targets"], (list, tuple)):
         raise ContractError("target array required")
-    return ActionConfigV2(**{**value, "channel_weights": tuple(value["channel_weights"]), "targets": tuple(value["targets"])})
+    return ActionConfigV2(**{**value, "action_contract": parse_action_contract(value["action_contract"]),
+                             "channel_weights": tuple(value["channel_weights"]), "targets": tuple(value["targets"])})
 
 
 @dataclass(frozen=True)
@@ -249,6 +259,14 @@ class DecisionFrame:
             raise ContractError("frame actor/revision/shape mismatch")
         if any(key != definition["definition_id"] for key, definition in rebuilt.catalog.items()):
             raise ContractError("perceived catalog key/definition mismatch")
+        own = rebuilt.observation["own"]
+        hand_ids = [card["instance_id"] for card in own["hand"]]
+        learned_ids = own["learned_miracles"]
+        # Slot identity must be an unambiguous physical source+ID mapping.
+        # Distinct hand instances sharing a definition remain separate; a hand
+        # miracle and its learned definition are also different sources.
+        if len(set(hand_ids)) != len(hand_ids) or len(set(learned_ids)) != len(learned_ids):
+            raise ContractError("structured frame contains ambiguous duplicate physical references")
         if (rebuilt.observation["own"]["status"]["fog"]
                 and set(rebuilt.observation["opponent"]) - {"player_id", "learned_miracles", "ascended"}):
             raise ContractError("Fog opponent visibility mismatch")
@@ -312,6 +330,9 @@ class DecisionFrame:
 
 @dataclass(frozen=True)
 class CandidateTable:
+    action_contract: ActionContract = field(kw_only=True)
+    purpose: str = field(kw_only=True)
+    synthetic_capacity: bool = field(kw_only=True)
     frame_hash: str
     kinds: tuple[str, ...]
     targets: tuple[str, ...]
@@ -322,6 +343,11 @@ class CandidateTable:
     table_hash: str
 
     def __post_init__(self) -> None:
+        if type(self.action_contract) is not ActionContract:
+            raise ContractError("candidate table explicit action contract required")
+        validate_record_purpose(self.purpose, self.action_contract)
+        if type(self.synthetic_capacity) is not bool or self.synthetic_capacity and self.purpose != "component":
+            raise ContractError("synthetic capacity requires explicit boolean component classification")
         _hash(self.frame_hash)
         _hash(self.table_hash)
         count = len(self.kinds)
@@ -349,13 +375,17 @@ class CandidateTable:
                     raise ContractError("invalid numeric presence")
         if digest(self._content()) != self.table_hash:
             raise ContractError("candidate table hash mismatch")
+        if not self.synthetic_capacity:
+            validate_game_references(self.slots[start:end] for start, end in zip(self.offsets[:-1], self.offsets[1:], strict=True))
 
     def _content(self) -> Json:
         return {key: value for key, value in asdict(self).items() if key != "table_hash"}
 
     @classmethod
     def from_actions(cls, frame: DecisionFrame, actions: tuple[Json, ...] | list[Json],
-                     max_positions: int = 128) -> CandidateTable:
+                     max_positions: int = 128, *, action_contract: ActionContract, purpose: str,
+                     synthetic_capacity: bool) -> CandidateTable:
+        validate_record_purpose(purpose, action_contract)
         integer(max_positions, 1, 128)
         context = _ActionContext.from_frame(frame)
         refs = {canonical(ref): i for i, ref in enumerate(context.references)}
@@ -385,7 +415,9 @@ class CandidateTable:
         content: Json = {"frame_hash": frame.frame_hash, "kinds": tuple(kinds), "targets": tuple(targets),
                    "numerics": tuple(numerics), "presence": tuple(presence),
                    "offsets": tuple(offsets), "slots": tuple(slots)}
-        result = cls(**content, table_hash=digest(content))
+        result = cls(**content, action_contract=action_contract, purpose=purpose, synthetic_capacity=synthetic_capacity,
+                     table_hash=digest({**content, "action_contract": asdict(action_contract), "purpose": purpose,
+                                        "synthetic_capacity": synthetic_capacity}))
         result._validate_context(context)
         return result
 

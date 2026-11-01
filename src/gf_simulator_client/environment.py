@@ -9,6 +9,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
 
+from gf_common.action_contract import require_qualified_contract
 from gf_common.domain import (
     ActionConfig,
     CandidateSet,
@@ -123,6 +124,8 @@ def _save(path: Path, value: Any) -> None:
 class SimulatorEnvironment:
     def __init__(self, settings: EnvironmentSettings, policy_factory: Callable[[str], Policy],
                  journal_factory: Callable[..., Journal]) -> None:
+        if isinstance(settings.actions, ActionConfigV2):
+            require_qualified_contract(settings.actions.action_contract)
         self.settings = settings
         self.policy_factory = policy_factory
         self.journal_factory = journal_factory
@@ -169,6 +172,8 @@ class SimulatorEnvironment:
 
     async def _episode(self, client: AttestedClient, definitions: Json, group: EpisodeGroup,
                        spec: EpisodeSpec) -> EpisodeResult:
+        if isinstance(self.settings.actions, ActionConfigV2):
+            require_qualified_contract(self.settings.actions.action_contract)
         started = time.monotonic()
         result = self._new_result(group, spec)
         directory = self.settings.output_dir / spec.episode_id
@@ -370,6 +375,8 @@ class SimulatorEnvironment:
 
 
     async def run_group(self, group: EpisodeGroup) -> GroupResult:
+        if isinstance(self.settings.actions, ActionConfigV2):
+            require_qualified_contract(self.settings.actions.action_contract)
         results: list[EpisodeResult] = []
         health: Json = {}
         server: ManagedServer | None = None

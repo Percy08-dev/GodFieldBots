@@ -18,7 +18,12 @@ from gf_common.diverse_actions import GeneratedCandidates
 from gf_common.domain import ContractError, Json, closed, digest, integer
 from gf_common.structured import ActionConfigV2, DecisionFrame, EventBank, EventDelta, Selection
 from gf_common.structured_wire import delta_dict, frame_dict, parse_generated, parse_selection
-from gf_models.structured_binding import policy_label, safe_options_v2
+from gf_models.structured_binding import (
+    check_input_binding,
+    input_binding,
+    policy_label,
+    safe_options_v2,
+)
 from gf_models.structured_config import InferenceBindingV2, model_config_v2
 from gf_models.structured_runtime import own_worker_settings
 from gf_simulator_client.framing import read_frame, write_frame
@@ -34,7 +39,7 @@ class StructuredParticipantWorker(ParticipantWorker):
         integer(sampling_seed)
         if type(timeout) not in (int, float) or not math.isfinite(timeout) or timeout <= 0:
             raise ContractError("positive structured worker timeout required")
-        options = safe_options_v2(policy_options) if policy_options is not None else None
+        options = safe_options_v2(policy_options, action_contract=actions.action_contract, purpose="component", synthetic_capacity=False) if policy_options is not None else None
         self.caps, self.costs, residency, self.temporary_bytes = own_worker_settings(model_id, actions, options)
         if options is None:
             self.expected_policy = model_id + "-structured-v1"
@@ -43,7 +48,8 @@ class StructuredParticipantWorker(ParticipantWorker):
                                                 options["expected_manifest_digest"], cuda_visible_devices=options["cuda_visible_devices"])
         self.initial = {"protocol_version": 2, "factory": descriptor, "model_id": model_id,
                         "sampling_seed": sampling_seed, "actions": asdict(actions), "policy_options": options,
-                        "caps": asdict(self.caps), "numeric_costs": asdict(self.costs)}
+                        "caps": asdict(self.caps), "numeric_costs": asdict(self.costs),
+                        **input_binding(actions.action_contract, "component", False)}
         self.model_id = model_id
         self.actions = actions
         search_seed = int(digest({"recipe": "structured-search-stream-v1", "sampling_seed": sampling_seed})[:16], 16)
@@ -104,7 +110,9 @@ class StructuredParticipantWorker(ParticipantWorker):
             return
         try:
             received = await self._roundtrip(self.initial)
-            closed(received, {"protocol_version", "kind", "policy_version", "model_load_ms"})
+            closed(received, {"protocol_version", "kind", "policy_version", "model_load_ms", "action_contract", "purpose", "synthetic_capacity"})
+            check_input_binding({key: received[key] for key in ("action_contract", "purpose", "synthetic_capacity")},
+                                action_contract=self.actions.action_contract, purpose="component", synthetic_capacity=False)
             if received["protocol_version"] != 2 or type(received["protocol_version"]) is not int or received["kind"] != "ready" or received["policy_version"] != self.expected_policy:
                 raise ContractError("malformed structured initialize/ready identity")
             _timings({"model_load_ms": received["model_load_ms"]}, ready=True)
@@ -132,11 +140,14 @@ class StructuredParticipantWorker(ParticipantWorker):
                 raise ContractError("parent delta must end at exact original frame boundary")
             frame.bank_view(self._parent_bank.view())
             scope = self.lease.reserve_decision(self.temporary_bytes)
-            received = await self._roundtrip({"protocol_version": 2, "kind": "select", "frame": frame_dict(frame), "delta": delta_dict(delta)})
-            closed(received, {"protocol_version", "kind", "generated", "selection", "timings"})
+            received = await self._roundtrip({"protocol_version": 2, "kind": "select", "frame": frame_dict(frame), "delta": delta_dict(delta),
+                                                **input_binding(self.actions.action_contract, "component", False)})
+            closed(received, {"protocol_version", "kind", "generated", "selection", "timings", "action_contract", "purpose", "synthetic_capacity"})
+            check_input_binding({key: received[key] for key in ("action_contract", "purpose", "synthetic_capacity")},
+                                action_contract=self.actions.action_contract, purpose="component", synthetic_capacity=False)
             if type(received["protocol_version"]) is not int or received["protocol_version"] != 2 or received["kind"] != "selection":
                 raise ContractError("malformed protocol2 selection response")
-            generated, selected = parse_generated(received["generated"]), parse_selection(received["selection"])
+            generated, selected = parse_generated(received["generated"], action_contract=self.actions.action_contract), parse_selection(received["selection"])
             generated.table.validate(frame)
             if (generated.report.config_hash != digest(asdict(self.actions))
                     or generated.report.numeric_costs_hash != digest(asdict(self.costs))

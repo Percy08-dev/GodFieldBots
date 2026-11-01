@@ -6,10 +6,11 @@ import os
 import stat
 from collections.abc import Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, BinaryIO
 
+from gf_common.action_contract import ActionContract, parse_action_contract, validate_record_purpose
 from gf_common.candidate_columns import (
     MAX_COLUMN_BYTES,
     decode_candidate_columns,
@@ -62,7 +63,13 @@ def _open_regular(path: Path, size: int) -> BinaryIO:
 
 
 def publish_candidates(directory: Path, frame: DecisionFrame, table: CandidateTable, decision: int, *,
-                       max_positions: int = 128, max_bytes: int = MAX_COLUMN_BYTES) -> Json:
+                       max_positions: int = 128, max_bytes: int = MAX_COLUMN_BYTES,
+                       action_contract: ActionContract, purpose: str, synthetic_capacity: bool) -> Json:
+    validate_record_purpose(purpose, action_contract)
+    parse_action_contract(asdict(table.action_contract), expected=action_contract)
+    if (table.purpose != purpose or type(synthetic_capacity) is not bool
+            or table.synthetic_capacity != synthetic_capacity):
+        raise ContractError("candidate publication purpose/synthetic classification mismatch")
     table.validate(frame)
     name = candidate_basename(frame.actor, decision)
     final, temporary = directory / name, directory / (name + ".tmp")
@@ -138,9 +145,11 @@ def _still_current(snapshot: _ReadSnapshot) -> None:
 
 @contextmanager
 def _verified_read(directory: Path, descriptor: Json, frame: DecisionFrame, decision: int, *,
-                   max_positions: int = 128, max_bytes: int = MAX_COLUMN_BYTES) -> Iterator[_ReadSnapshot]:
+                   max_positions: int = 128, max_bytes: int = MAX_COLUMN_BYTES,
+                   action_contract: ActionContract, purpose: str, synthetic_capacity: bool) -> Iterator[_ReadSnapshot]:
     name = candidate_basename(frame.actor, decision)
-    _, size = validate_descriptor(descriptor, expected_file=name, expected_frame_hash=frame.frame_hash, max_bytes=max_bytes)
+    _, size = validate_descriptor(descriptor, expected_file=name, expected_frame_hash=frame.frame_hash, max_bytes=max_bytes,
+                                  action_contract=action_contract, purpose=purpose, synthetic_capacity=synthetic_capacity)
     path = directory / name
     if directory.is_symlink():
         raise ContractError("symlink candidate sidecar directory")
@@ -151,7 +160,8 @@ def _verified_read(directory: Path, descriptor: Json, frame: DecisionFrame, deci
         if _identity(before) != _identity(after):
             raise ContractError("candidate sidecar changed while reading")
         table = decode_candidate_columns(payload, descriptor, expected_file=name, expected_frame_hash=frame.frame_hash,
-                                         max_positions=max_positions, max_bytes=max_bytes)
+                                         max_positions=max_positions, max_bytes=max_bytes, action_contract=action_contract,
+                                         purpose=purpose, synthetic_capacity=synthetic_capacity)
         table.validate(frame)
         snapshot = _ReadSnapshot(table, _identity(after), hashlib.sha256(payload).hexdigest(), source, path, size)
         yield snapshot
@@ -159,14 +169,20 @@ def _verified_read(directory: Path, descriptor: Json, frame: DecisionFrame, deci
 
 
 def read_candidates(directory: Path, descriptor: Json, frame: DecisionFrame, decision: int, *,
-                    max_positions: int = 128, max_bytes: int = MAX_COLUMN_BYTES) -> CandidateTable:
-    with _verified_read(directory, descriptor, frame, decision, max_positions=max_positions, max_bytes=max_bytes) as snapshot:
+                    max_positions: int = 128, max_bytes: int = MAX_COLUMN_BYTES,
+                    action_contract: ActionContract, purpose: str, synthetic_capacity: bool) -> CandidateTable:
+    with _verified_read(directory, descriptor, frame, decision, max_positions=max_positions, max_bytes=max_bytes,
+                         action_contract=action_contract, purpose=purpose, synthetic_capacity=synthetic_capacity) as snapshot:
         return snapshot.table
 
 
 def sidecar_inventory(directory: Path, descriptor: Json, frame: DecisionFrame, decision: int, *,
-                      max_positions: int = 128, max_bytes: int = MAX_COLUMN_BYTES) -> Json:
-    with _verified_read(directory, descriptor, frame, decision, max_positions=max_positions, max_bytes=max_bytes) as snapshot:
+                      max_positions: int = 128, max_bytes: int = MAX_COLUMN_BYTES,
+                      action_contract: ActionContract, purpose: str, synthetic_capacity: bool) -> Json:
+    with _verified_read(directory, descriptor, frame, decision, max_positions=max_positions, max_bytes=max_bytes,
+                         action_contract=action_contract, purpose=purpose, synthetic_capacity=synthetic_capacity) as snapshot:
         _still_current(snapshot)
         return {"path": str(snapshot.path.absolute()), "sha256": snapshot.sha256, "bytes": snapshot.size,
-                "identity": list(snapshot.identity), "frame_hash": descriptor["frame_hash"], "table_hash": descriptor["table_hash"]}
+                "identity": list(snapshot.identity), "frame_hash": descriptor["frame_hash"], "table_hash": descriptor["table_hash"],
+                "action_contract": asdict(snapshot.table.action_contract), "purpose": snapshot.table.purpose,
+                "synthetic_capacity": snapshot.table.synthetic_capacity}

@@ -4,15 +4,18 @@
 
 The six-file Environment/CLI dispatch mechanics also pass scoped independent
 reviews and69FakeHTTP/legacy tests. This is transport/composition evidence only;
-the newly reviewed owner-contract discrimination and real-I/O gates remain
-pending implementation, so it does not authorize a real actions2 experiment.
+owner-contract discrimination and real-I/O gates are now implemented and reviewed
+for the engineering profile; it still does not authorize a real actions2 experiment.
 
 Latest steering: the [owner confirmation](contracts/owner-20261101-utility-and-repetition.md)
 changes the proposed v4 miracle-reference rules and partly clarifies utility
 singletons. Simulator normative identities remain unchanged. Rule-dependent v2
 collection remains paused. Root's engineering-only semantic/gate amendment is
-design-reviewed READY but not implemented yet;
+implemented/reviewed for all current engineering component boundaries;
 prior component evidence is retained in scope. No real new v2 experiment has run.
+Current regression evidence is1460Python PASS/46SKIPPED,13separate CUDA PASS,
+full Ruff/mypy PASS; qualified Source/Generation2/native/tree and full acceptance
+remain pending. Historical milestone counts below overlap and precede this gate.
 
 [ADR0023](adr/0023-structured-encoders-and-diverse-search.md) accepts an additive
 model/actions-v2 route for detailed participant frames, event banks, compact

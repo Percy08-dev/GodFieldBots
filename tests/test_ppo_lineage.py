@@ -15,12 +15,39 @@ from gf_training.journal import atomic_json
 from gf_training.lineage import checkpoint_path, qualify_mlp, read_json, run_lock, validate_chain
 from gf_training.ppo_run import train_ppo
 from tests.lightgbm_support import synthetic_run
+from tests.ppo_support import synthetic_server_identity
 
 
 def configuration(tmp_path, max_updates=2, seed=17):
-    loaded = load_config('configs/experiments/ppo-cpu.toml', {'preprocessing': {'backend': 'python'}})
+    # Synthetic collectors never execute a Simulator. Bind only an inert local
+    # binary identity, without claiming verification of mutable external specs.
+    loaded = load_config('configs/experiments/ppo-cpu.toml', {
+        'preprocessing': {'backend': 'python'},
+        'server': synthetic_server_identity(tmp_path),
+    })
     config = replace(loaded.config, training=replace(loaded.config.training, seeds=(seed,), max_updates=max_updates))
     return LoadedConfig(config, asdict(config), digest(asdict(config)), ())
+
+
+def test_explicit_source_provenance_still_rejects_changed_normative_documents(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    import gf_training.ppo_run as module
+    from gf_common.domain import REVIEWED_SPEC_HASHES, SIMULATOR_REVISION
+    loaded = configuration(tmp_path)
+    source = tmp_path / 'explicit-source'
+    for name in REVIEWED_SPEC_HASHES:
+        document = source / name
+        document.parent.mkdir(parents=True, exist_ok=True)
+        document.write_bytes(b'deliberately changed normative document identity')
+    config = replace(loaded.config, server=replace(loaded.config.server, source_dir=str(source)))
+    def revision(command, **kwargs):
+        assert command == ['git', '-C', str(source), 'rev-parse', 'HEAD']
+        return SimpleNamespace(stdout=SIMULATOR_REVISION + '\n')
+    monkeypatch.setattr(module.subprocess, 'run', revision)
+    with pytest.raises(ContractError, match='normative source hashes differ'):
+        module.integration_identity(config, float('inf'))
+    assert all((source / name).read_bytes() == b'deliberately changed normative document identity' for name in REVIEWED_SPEC_HASHES)
 
 
 def synthetic_collector(make_input, *, both_viewers=False, outcomes=None):

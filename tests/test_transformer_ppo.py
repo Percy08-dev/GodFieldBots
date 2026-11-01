@@ -19,6 +19,7 @@ from gf_models.transformer.policy import TransformerPolicy
 from gf_training.lineage import owned_binding, read_json, validate_chain
 from gf_training.ppo_run import train_ppo
 from gf_training.sequence_numeric import Learner, microbatches
+from tests.ppo_support import synthetic_server_identity
 from tests.test_gru_ppo import persisted, synthetic_sequence_collector
 
 
@@ -246,7 +247,8 @@ def test_transformer_policy_owns_cache_and_budget_before_allocation(tmp_path, ma
 
 
 def test_transformer_real_coordinator_two_updates_pause_resume_and_identity(tmp_path, make_input):
-    loaded = load_config('configs/experiments/transformer-ppo-cpu.toml', {'preprocessing': {'backend': 'python', 'reader': 'legacy'}})
+    loaded = load_config('configs/experiments/transformer-ppo-cpu.toml', {
+        'preprocessing': {'backend': 'python', 'reader': 'legacy'}, 'server': synthetic_server_identity(tmp_path)})
     config = replace(loaded.config, training=replace(loaded.config.training, max_updates=2, sequence_length=2))
     loaded = LoadedConfig(config, asdict(config), digest(asdict(config)), ())
     directory = tmp_path / 'parent'

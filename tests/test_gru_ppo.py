@@ -34,6 +34,7 @@ from gf_training.ppo_run import train_ppo
 from gf_training.sequence_numeric import Learner, microbatches, packed
 from gf_training.sequence_rollout import read_rollout, write_rollout
 from tests.lightgbm_support import synthetic_run
+from tests.ppo_support import synthetic_server_identity
 
 
 def bulk(learner, lengths=(4, 0, 7), *, seed=3, candidates=3):
@@ -336,7 +337,8 @@ def synthetic_gru_collector(make_input):
 
 
 def test_real_coordinator_worker_gru_two_updates_pause_resume_and_owned_bindings(tmp_path, make_input):
-    loaded = load_config('configs/experiments/gru-ppo-cpu.toml', {'preprocessing': {'backend': 'python', 'reader': 'legacy'}})
+    loaded = load_config('configs/experiments/gru-ppo-cpu.toml', {
+        'preprocessing': {'backend': 'python', 'reader': 'legacy'}, 'server': synthetic_server_identity(tmp_path)})
     config = replace(loaded.config, training=replace(loaded.config.training, max_updates=2, sequence_length=2))
     loaded = LoadedConfig(config, asdict(config), digest(asdict(config)), ())
     directory = tmp_path / 'parent'

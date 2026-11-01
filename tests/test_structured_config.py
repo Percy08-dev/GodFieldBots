@@ -6,6 +6,7 @@ from dataclasses import asdict, replace
 
 import pytest
 
+from gf_common.action_contract import engineering_contract
 from gf_common.domain import ContractError
 from gf_common.structured import ActionConfigV2, action_config_v2
 from gf_models.structured_config import (
@@ -26,10 +27,10 @@ from gf_models.structured_config import (
 
 def test_closed_v2_config_roundtrip_and_no_optional_imports():
     assert model_config_v2(json.loads(json.dumps(asdict(ModelConfigV2())))) == ModelConfigV2()
-    assert action_config_v2(json.loads(json.dumps(asdict(ActionConfigV2())))) == ActionConfigV2()
-    for constructor, parser in ((ModelConfigV2, model_config_v2), (ActionConfigV2, action_config_v2)):
+    assert action_config_v2(json.loads(json.dumps(asdict(ActionConfigV2(action_contract=engineering_contract()))))) == ActionConfigV2(action_contract=engineering_contract())
+    for config, parser in ((ModelConfigV2(), model_config_v2), (ActionConfigV2(action_contract=engineering_contract()), action_config_v2)):
         with pytest.raises(ContractError):
-            parser({**asdict(constructor()), "unknown": 2})
+            parser({**asdict(config), "unknown": 2})
     code = ('import sys; import gf_common.structured; import gf_common.structured_tokens; '
             'import gf_models.structured_config; import gf_models.structured_network; '
             'assert "torch" not in sys.modules and "numpy" not in sys.modules')
@@ -79,7 +80,7 @@ def test_admission_and_runtime_binding_are_separate():
                                       {"use_action_options": False}])
 def test_action_config_strict(settings):
     with pytest.raises(ContractError):
-        ActionConfigV2(**settings)
+        ActionConfigV2(**settings, action_contract=engineering_contract())
 
 
 def test_position_projection_counts_18_slots_plus_padding_and_transient_storage():

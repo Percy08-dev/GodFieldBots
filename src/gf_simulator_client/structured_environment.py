@@ -8,6 +8,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Protocol, cast
 
+from gf_common.action_contract import ActionContract
 from gf_common.diverse_actions import GeneratedCandidates
 from gf_common.domain import (
     ContractError,
@@ -41,6 +42,9 @@ class StructuredJournalSink(Journal, Protocol):
 
 @dataclass
 class StructuredEpisodeResult(EpisodeResult):
+    action_contract: ActionContract = field(kw_only=True)
+    purpose: str = field(kw_only=True)
+    synthetic_capacity: bool = field(kw_only=True)
     journal_schema_version: int = 5
     feature_version: str = "participant-structured-v1"
     participant_runtime: str = "python-reference-v2"
@@ -60,7 +64,9 @@ class StructuredSimulatorEnvironment(SimulatorEnvironment):
         self._include_input_time = True
 
     def _new_result(self, group: EpisodeGroup, spec: EpisodeSpec) -> EpisodeResult:
-        return StructuredEpisodeResult(spec.episode_id, spec.pair_id, group.seed, spec.policies)
+        assert isinstance(self.settings.actions, ActionConfigV2)
+        return StructuredEpisodeResult(spec.episode_id, spec.pair_id, group.seed, spec.policies,
+                                       action_contract=self.settings.actions.action_contract, purpose="component", synthetic_capacity=False)
 
     def _create_actor(self, directory: Path, spec: EpisodeSpec, viewer: int, game: str,
                       journals: dict[int, Journal], workers: dict[int, ParticipantWorker],
@@ -81,7 +87,8 @@ class StructuredSimulatorEnvironment(SimulatorEnvironment):
                 run_id=self.settings.run_id, game_id=game, action_config_hash=digest(asdict(self.settings.actions)),
                 bank_episode=bank.episode, caps=asdict(worker.caps), numeric_costs=asdict(worker.costs),
                 model_id=binding.model_id, model_version="1" if binding.policy_options is None else "2",
-                aggregate_window=aggregate_window, sampling_seed=spec.sampling_seeds[viewer - 1], use_action_options=True)
+                aggregate_window=aggregate_window, sampling_seed=spec.sampling_seeds[viewer - 1], use_action_options=True,
+                action_contract=self.settings.actions.action_contract, purpose="component", synthetic_capacity=False)
         except OSError as exc:
             result.health["save_failure"] = str(exc)
             raise

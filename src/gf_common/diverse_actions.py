@@ -1,8 +1,9 @@
 """Bounded public v4 proposals, never an engine legality oracle.
 
-Authority: pinned Simulator spec09 §§9--18 and ADR0023 §§6/10/12.
+Baseline public inputs remain pinned; ADR0023 §17's owner profile authorizes
+the engineering-only proposal subset. No runtime conformance is asserted.
 Only acting-participant perceived definitions and same-revision atomic hints are
-used. Unknown utility completion remains an explicit issue0005 omission.
+used; every pending coverage item remains explicit in the report.
 """
 from __future__ import annotations
 
@@ -14,6 +15,7 @@ from collections.abc import Callable, Iterator
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
+from gf_common.action_contract import PENDING_COVERAGE, ActionContract, validate_game_references
 from gf_common.domain import ContractError, EmptyCandidates, Json, digest, integer
 from gf_common.structured import (
     GENERATOR_V2,
@@ -25,10 +27,13 @@ from gf_common.structured import (
 
 SATURATION = 2**63 - 1
 CHANNELS = ("attribute_effect", "attack_breadth", "resources", "refresh", "remaining_hand", "length", "exploration")
-OMISSIONS = ("issue0005:utility-completion-targets-and-pure-CutCost",)
+OMISSIONS = PENDING_COVERAGE
 RINGS = frozenset(("counterAtk", "counterCurse", "counterBoost2xMP", "counter2xAtk", "counterTakeCP"))
 EXCLUSIVE = frozenset(("reflectAnything", "reflectWeapon", "reflectMiracle", "bounceWeapon", "bounceMiracle"))
 STATUS_MIRACLES = frozenset(("wind", "heaven-wind", "fog", "dream", "dark-cloud"))
+UTILITY_BOTH = frozenset(("smile-dew", "heart-dew", "romance-water", "galaxy-geyser", "smile-flower", "heart-flower",
+                          "romance-fragrance", "spring", "treasure", "tone", "song", "smile-shell", "heart-shell"))
+UTILITY_SELF = frozenset(("thump-thump-tear", "heaven-herb"))
 
 
 def _sat_add(*values: int) -> int:
@@ -207,6 +212,7 @@ def _rng_state(value: Any) -> None:
 
 @dataclass(frozen=True)
 class SearchReport:
+    action_contract: ActionContract = field(kw_only=True)
     generator_version: str
     config_hash: str
     numeric_costs_hash: str
@@ -231,6 +237,8 @@ class SearchReport:
     selection_ms: float
 
     def __post_init__(self) -> None:
+        if type(self.action_contract) is not ActionContract:
+            raise ContractError("explicit report action contract required")
         if self.generator_version != GENERATOR_V2 or type(self.numeric_costs) is not NumericCosts or type(self.precount) is not PrecountReport:
             raise ContractError("invalid search report recipe")
         for value in (self.config_hash, self.numeric_costs_hash, self.table_hash):
@@ -270,9 +278,12 @@ class GeneratedCandidates:
     def __post_init__(self) -> None:
         if (type(self.table) is not CandidateTable or type(self.report) is not SearchReport
                 or self.table.table_hash != self.report.table_hash
+                or self.table.action_contract != self.report.action_contract or self.table.purpose != "component"
+                or self.table.synthetic_capacity
                 or len(self.table.kinds) != self.report.selected
                 or len(self.table.slots) != self.report.selected_elements):
             raise ContractError("generated table/report mismatch")
+        validate_game_references(self.table.slots[start:end] for start, end in zip(self.table.offsets[:-1], self.table.offsets[1:], strict=True))
 
 
 @dataclass(frozen=True)
@@ -296,10 +307,6 @@ class _Card:
     @property
     def support(self) -> bool:
         return self.miracle and self.definition["definition_id"] in ("aura", "mirage")
-
-    @property
-    def repeatable(self) -> bool:
-        return not self.hand and self.miracle and (self.additional or self.support)
 
 
 @dataclass(frozen=True)
@@ -340,6 +347,25 @@ class _Space:
                                if self.by_slot[hand_ids[item]].definition.get("ability") == ability]
                       for ability in ("exchange", "sell", "buy")}
         self.total = sum(own[key] for key in ("hp", "mp", "money"))
+        self.maximum = min(config.max_sequence_length, len(self.cards), 18)
+
+    def singleton_targets(self, card: _Card) -> tuple[str, ...]:
+        """Explicit adopted targets/predicates, never inferred effect recipients."""
+        if card.slot not in self.usable or card.definition.get("mp_cost", 0) > self.obs["own"]["mp"]:
+            return ()
+        name = card.definition["definition_id"]
+        if name in STATUS_MIRACLES or name in UTILITY_BOTH:
+            return self.targets
+        if name in UTILITY_SELF:
+            return tuple(target for target in self.targets if target == "self")
+        if name in ("guardian-pot", "release"):
+            return tuple(target for target in self.targets if "guardian" in self.obs["own" if target == "self" else "opponent"]
+                         and self.obs["own" if target == "self" else "opponent"]["guardian"] is None)
+        if name == "goddess-s-soap":
+            return tuple(target for target in self.targets if len(self.obs["own" if target == "self" else "opponent"]["learned_miracles"]) >= 2)
+        if name == "nocturnal-broom" and len(self.hand) - int(card.hand) >= 3:
+            return tuple(target for target in self.targets if target == "self")
+        return ()
 
     @staticmethod
     def defense_kind(card: _Card) -> str | None:
@@ -369,9 +395,9 @@ class _Space:
 
     def valid(self, family: str, refs: tuple[int, ...]) -> bool:
         cards = [self.by_slot[slot] for slot in refs]
-        # Instance uniqueness and learned occurrence rules are public, not a
-        # hidden legality mask. Status/normal/defensive miracles never repeat.
-        if any(refs.count(card.slot) > 1 and (family != "offense" or not card.repeatable) for card in cards):
+        # Owner profile: every physical hand/learned reference occurs at most
+        # once within an Action. Cross-decision reuse is a separate rule.
+        if len(set(refs)) != len(refs) or len(refs) > self.maximum:
             return False
         if family == "discard":
             return tuple(sorted(refs)) == refs
@@ -499,40 +525,35 @@ def _prefix_capacity(space: _Space) -> int:
     # Bounded mode has three length-band iterators per start/family. Each DFS
     # retains at most one stack whose prefixes sum to L(L+1)/2 elements.
     jobs = sum(len(space.choices(family)) for family in space.families) * 3
-    return jobs * space.config.max_sequence_length * (space.config.max_sequence_length + 1) // 2
+    return jobs * space.maximum * (space.maximum + 1) // 2
 
 
 def _upper_counts(space: _Space) -> dict[str, int]:
-    length = space.config.max_sequence_length
+    length = space.maximum
     totals = dict.fromkeys(("complete", "prefixes", "attempts", "excluded", "targets", "numeric_variants", "elements"), 0)
     basics = space.basic_count
     target_count = len(space.targets)
-    statuses = sum(card.slot in space.usable and card.miracle
-                   and card.definition["definition_id"] in STATUS_MIRACLES
-                   and card.definition.get("mp_cost", 0) <= space.obs["own"]["mp"] for card in space.cards)
+    statuses = sum(len(space.singleton_targets(card)) for card in space.cards)
     buy = len(space.trade["buy"]) * target_count
     sell = (len(space.trade["sell"]) * max(0, len(space.hand) - 1) * target_count
             if space.config.max_sequence_length >= 2 else 0)
     # Grid visits, balanced/HP1 and up to six cost-neighbor supplements per
     # visible own miracle. This is a public upper bound, not a claimed count.
     exchange = len(space.trade["exchange"]) * (3 * 26**2 + 3 + len(space.cards) * 6)
-    fixed = basics + statuses * target_count + buy + sell + exchange
-    totals.update(complete=fixed, attempts=fixed, targets=statuses * target_count + buy + sell,
+    fixed = basics + statuses + buy + sell + exchange
+    totals.update(complete=fixed, attempts=fixed, targets=statuses + buy + sell,
                   numeric_variants=exchange + (2 if space.obs["required_choice"] == "buy_accept_reject" else 0),
-                  elements=statuses * target_count + buy + 2 * sell + exchange)
+                  elements=statuses + buy + 2 * sell + exchange)
     for family in space.families:
         choices = space.choices(family)
         size = len(choices)
-        repeat = family == "offense" and any(space.by_slot[slot].repeatable for slot in choices)
         previous = 1
         for depth in range(1, length + 1):
             if family == "discard":
                 count = math.comb(size, depth) if depth <= size else 0
-            elif repeat:
-                count = _sat_mul(previous, size)
             else:
                 count = math.perm(size, depth) if depth <= size else 0
-            attempts = _sat_mul(previous, size)
+            attempts = _sat_mul(previous, max(0, size - depth + 1))
             targets = target_count if family == "offense" else 1
             complete = _sat_mul(count, targets)
             totals["complete"] = _sat_add(totals["complete"], complete)
@@ -572,9 +593,11 @@ def _precount(space: _Space, costs: NumericCosts, clock: Callable[[], float]) ->
         totals["excluded"] += excluded
 
     def tree(family: str, prefix: tuple[int, ...]) -> None:
-        if len(prefix) >= space.config.max_sequence_length:
+        if len(prefix) >= space.maximum:
             return
         for slot in space.choices(family):
+            if slot in prefix:
+                continue
             tick()
             refs = (*prefix, slot)
             if not space.valid(family, refs):
@@ -600,9 +623,8 @@ def _precount(space: _Space, costs: NumericCosts, clock: Callable[[], float]) ->
         if space.obs["required_choice"] == "turn_action":
             for card in space.cards:
                 tick()
-                if (card.slot in space.usable and card.miracle and card.definition["definition_id"] in STATUS_MIRACLES
-                        and card.definition.get("mp_cost", 0) <= space.obs["own"]["mp"]):
-                    add(len(space.targets), len(space.targets), len(space.targets), attempts=len(space.targets))
+                count = len(space.singleton_targets(card))
+                add(count, count, count, attempts=count)
             buy = len(space.trade["buy"]) * len(space.targets)
             sell = (len(space.trade["sell"]) * max(0, len(space.hand) - 1) * len(space.targets)
                     if space.config.max_sequence_length >= 2 else 0)
@@ -700,9 +722,11 @@ def _walk(space: _Space, family: str, prefix: tuple[int, ...], length: int | Non
     length=None traverses every prefix once; bounded length-band walkers emit
     intermediate attempts too, so work cannot disappear from expansion budgets.
     """
-    if len(prefix) >= space.config.max_sequence_length or length is not None and len(prefix) >= length:
+    if len(prefix) >= space.maximum or length is not None and len(prefix) >= length:
         return
     for slot in order:
+        if slot in prefix:
+            continue
         attempt()
         refs = (*prefix, slot)
         if not space.valid(family, refs):
@@ -723,7 +747,7 @@ def _length_order(maximum: int, band: int) -> tuple[int, ...]:
 
 def _bounded_walk(space: _Space, family: str, root: tuple[int, ...], band: int,
                   order: tuple[int, ...], attempt: Callable[[], None]) -> Iterator[tuple[int, ...] | None]:
-    for length in _length_order(space.config.max_sequence_length, band):
+    for length in _length_order(space.maximum, band):
         for refs in _walk(space, family, root, length, order, attempt):
             # Intermediate states still consume attempts but only target lengths
             # are presented by this job. None means excluded, () means a valid
@@ -941,7 +965,10 @@ def _table(frame: DecisionFrame, proposals: list[_Proposal], collector: _Collect
                "numerics": tuple(proposal.numerics for proposal in proposals),
                "presence": tuple(proposal.presence for proposal in proposals),
                "offsets": tuple(offsets), "slots": tuple(slots)}
-    table = CandidateTable(**content, table_hash=digest(content))
+    contract = collector.space.config.action_contract
+    table = CandidateTable(**content, action_contract=contract, purpose="component", synthetic_capacity=False,
+                           table_hash=digest({**content, "action_contract": asdict(contract), "purpose": "component",
+                                              "synthetic_capacity": False}))
     return table
 
 
@@ -979,11 +1006,9 @@ class PublicCandidateGeneratorV2:
             collector.offer(proposal, True)
         if space.obs["required_choice"] == "turn_action":
             for card in space.cards:
-                if (card.slot in space.usable and card.miracle and card.definition["definition_id"] in STATUS_MIRACLES
-                        and card.definition.get("mp_cost", 0) <= space.obs["own"]["mp"]):
-                    for target in space.targets:
-                        collector.tick(True)
-                        collector.offer(_Proposal("play_sequence", target, (card.slot,)), True)
+                for target in space.singleton_targets(card):
+                    collector.tick(True)
+                    collector.offer(_Proposal("play_sequence", target, (card.slot,)), True)
             for slot in space.trade["buy"]:
                 for target in space.targets:
                     collector.tick(True)
@@ -1017,10 +1042,6 @@ class PublicCandidateGeneratorV2:
                 else:
                     shuffled_order = list(space.choices(family))
                     search_rng.shuffle(shuffled_order)
-                    # Learned additional/support occurrences can reach the
-                    # configured long endpoint before unused-base exclusions.
-                    # Within each capability class search RNG retains the order.
-                    shuffled_order.sort(key=lambda slot: not space.by_slot[slot].repeatable)
                     for root in roots[family]:
                         for band in range(3):
                             jobs.append((family, _bounded_walk(space, family, root, band,
@@ -1044,7 +1065,7 @@ class PublicCandidateGeneratorV2:
             pass
         if not collector.proposals:
             raise EmptyCandidates("no completed v4 proposal found; cutoffs="
-                                  + ",".join(sorted(collector.reasons)) + "; issue0005 utility omissions remain")
+                                  + ",".join(sorted(collector.reasons)) + "; owner-profile pending coverage remains")
         selection_started = self.clock()
         selected, channel_counts = _select(collector, search_rng)
         selected_elements = sum(len(proposal.refs) for proposal in selected)
@@ -1063,5 +1084,5 @@ class PublicCandidateGeneratorV2:
                               complete, complete and len(selected) == len(collector.proposals),
                               tuple(sorted(collector.reasons)), OMISSIONS, rng_before, search_rng.getstate(),
                               (search_started - count_started) * 1000,
-                              (selection_started - search_started) * 1000, (finished - selection_started) * 1000)
+                              (selection_started - search_started) * 1000, (finished - selection_started) * 1000, action_contract=self.config.action_contract)
         return GeneratedCandidates(table, report)

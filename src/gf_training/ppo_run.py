@@ -253,6 +253,10 @@ def _controls(rng: Any, pool: list[int], collection_position: int) -> Json:
 
 
 async def train_ppo(loaded: Any, collector: Collector, directory: Path, *, mode: str = 'fresh', pause_after_update: int | None = None) -> Json:
+    from gf_common.action_contract import require_qualified_contract
+    from gf_common.structured import ActionConfigV2
+    if isinstance(loaded.config.actions, ActionConfigV2):
+        require_qualified_contract(loaded.config.actions.action_contract)
     operation_started = time.monotonic()
     operation_unix = time.time()
     config = loaded.config

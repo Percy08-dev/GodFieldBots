@@ -12,11 +12,12 @@ from dataclasses import asdict
 
 import pytest
 
+from gf_common.action_contract import engineering_contract
 from gf_common.domain import digest
 from gf_common.structured import EventBank
 from gf_common.structured_tokens import tokenize_frame, tokenize_table
 from gf_models.structured_baselines import make_structured_policy
-from gf_models.structured_binding import policy_label, safe_options_v2
+from gf_models.structured_binding import input_binding, policy_label, safe_options_v2
 from gf_models.structured_config import InferenceBindingV2, ModelConfigV2, TemporalConfigV2
 from gf_simulator_client.structured_resources import ReservationLedger
 from gf_simulator_client.structured_worker import StructuredParticipantWorker
@@ -34,11 +35,11 @@ def test_actual_cuda_child_two_frames_cpu_reference_sampling_replay_and_reap(mak
     # and two decision endpoints are bounded for this runtime component gate.
     model = ModelConfigV2(model_id=kind, temporal=TemporalConfigV2(kind=kind, num_layers=2 if kind == "transformer" else 1))
     learner = Learner(model, 17, InferenceBindingV2(), digest(asdict(action_settings())),
-                      digest({"component": "cuda-protocol-only"}))
+                      digest({"component": "cuda-protocol-only"}), action_contract=engineering_contract(), purpose="component", synthetic_capacity=False)
     artifact = learner.save(tmp_path / "component-checkpoint")
     options = safe_options_v2({"version": "2", "checkpoint": str(tmp_path / "component-checkpoint"),
         "expected_manifest_digest": artifact["inference_digest"], "model": asdict(model),
-        "inference": asdict(learner.binding), "cuda_visible_devices": "", "allow_toy": True})
+        "inference": asdict(learner.binding), "cuda_visible_devices": "", "allow_toy": True, **input_binding(engineering_contract(), "component", False)}, action_contract=engineering_contract(), purpose="component", synthetic_capacity=False)
     binding = InferenceBindingV2(device="cuda:0")
     options["inference"], options["cuda_visible_devices"] = asdict(binding), "0"
     expected_label = policy_label(learner.model, binding, options["expected_manifest_digest"], cuda_visible_devices="0")

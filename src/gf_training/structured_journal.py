@@ -13,6 +13,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, BinaryIO, cast
 
+from gf_common.action_contract import ActionContract
 from gf_common.diverse_actions import GENERATOR_V2, GeneratedCandidates, NumericCosts
 from gf_common.domain import (
     CATALOG_META,
@@ -36,6 +37,7 @@ from gf_common.structured_wire import (
     parse_selection,
 )
 from gf_common.validation import observation, projected_abort_kind, result
+from gf_models.structured_binding import check_input_binding, input_binding
 from gf_training.candidate_storage import (
     _bounded_hash,
     _identity,
@@ -55,7 +57,12 @@ class StructuredJournal(ParticipantJournal):
     def __init__(self, directory: Path, episode_id: str, viewer: int, policy: str, *, run_id: str, game_id: str,
                  action_config_hash: str, bank_episode: str, caps: Json, numeric_costs: Json,
                  model_id: str, model_version: str, aggregate_window: int = 128,
-                 sampling_seed: int = 0, use_action_options: bool = True) -> None:
+                 sampling_seed: int = 0, use_action_options: bool = True, action_contract: ActionContract,
+                 purpose: str, synthetic_capacity: bool) -> None:
+        classification = input_binding(action_contract, purpose, synthetic_capacity)
+        if synthetic_capacity:
+            raise ContractError("journal5 game proposals reject synthetic capacity")
+        self.action_contract, self.purpose = action_contract, purpose
         from gf_models.structured_runtime import WorkerCaps
         caps = asdict(WorkerCaps(**closed(caps, set(WorkerCaps.__dataclass_fields__))))
         numeric_costs = asdict(NumericCosts(**closed(numeric_costs, set(NumericCosts.__dataclass_fields__))))
@@ -86,7 +93,7 @@ class StructuredJournal(ParticipantJournal):
         self.last_frame: DecisionFrame | None = None
         self.bank = EventBank(viewer, bank_episode, caps["max_episode_events"])
         self.caps, self.policy = caps, policy
-        self.header = {"kind": "header", "schema_version": 5, "feature_version": STRUCTURED_FEATURE_VERSION,
+        self.header = {**classification, "kind": "header", "schema_version": 5, "feature_version": STRUCTURED_FEATURE_VERSION,
                        "input_recipe": STRUCTURED_FEATURE_VERSION, "reward_version": REWARD_VERSION,
                        "policy_input_version": POLICY_INPUT_VERSION, "end_projection_version": END_PROJECTION_VERSION,
                        "catalog": CATALOG_META, "episode_id": episode_id, "viewer": viewer, "policy": policy,
@@ -107,6 +114,9 @@ class StructuredJournal(ParticipantJournal):
     def begin_frame(self, frame: DecisionFrame, delta: EventDelta, generated: GeneratedCandidates,
                     selection: Selection, command: Json, timings: Json) -> int:
         started = time.perf_counter()
+        check_input_binding({"action_contract": asdict(generated.table.action_contract), "purpose": generated.table.purpose,
+                             "synthetic_capacity": generated.table.synthetic_capacity}, action_contract=self.action_contract,
+                            purpose=self.purpose, synthetic_capacity=False)
         if self.caps["max_decisions"] is not None:
             integer(self.count + 1, 1, self.caps["max_decisions"])
         integer(len(generated.table.kinds), 1, self.caps["max_candidates"])
@@ -145,7 +155,8 @@ class StructuredJournal(ParticipantJournal):
         _host_timings(timings)
         index = self.count
         descriptor = publish_candidates(self.path.parent, frame, generated.table, index,
-                                        max_positions=self.caps["max_positions"])
+                                        max_positions=self.caps["max_positions"], action_contract=self.action_contract,
+                                        purpose=self.purpose, synthetic_capacity=False)
         # Sidecar is closed/verified/published BEFORE any referencing JSONL row.
         if self.last_accepted is not None:
             self.write({"kind": "transition", "decision": self.last_accepted, "next_decision": index,
@@ -259,12 +270,16 @@ def _host_timings(value: Any) -> None:
 
 def read_structured_journal(path: Path, *, deadline: float = float("inf"),
                             records: list[Json] | None = None, max_jsonl_bytes: int = 64 * 1024**2,
-                            max_record_bytes: int = 8 * 1024**2) -> StructuredJournalData:
+                            max_record_bytes: int = 8 * 1024**2, action_contract: ActionContract,
+                            purpose: str, synthetic_capacity: bool) -> StructuredJournalData:
     """Return structural component records/evidence, NOT source eligibility.
 
     Whole-run, Replay, split and whole-PPO-parent qualification remain mandatory
     in the source layer; this result alone authorizes no training or evaluation.
     """
+    classification = input_binding(action_contract, purpose, synthetic_capacity)
+    if synthetic_capacity:
+        raise ContractError("journal5 game proposals reject synthetic capacity")
     import json
 
     from gf_models.structured_runtime import WorkerCaps
@@ -296,7 +311,9 @@ def read_structured_journal(path: Path, *, deadline: float = float("inf"),
     closed(header, {"kind", "schema_version", "feature_version", "input_recipe", "reward_version", "policy_input_version",
                     "end_projection_version", "catalog", "episode_id", "viewer", "policy", "run_id", "game_id",
                     "action_config_hash", "generator_version", "bank_episode", "caps", "numeric_costs", "model_id",
-                    "model_version", "generation_schema", "aggregate_window", "token_signature", "sampling_seed", "use_action_options"})
+                    "model_version", "generation_schema", "aggregate_window", "token_signature", "sampling_seed", "use_action_options"} | set(classification))
+    check_input_binding({key: header[key] for key in classification}, action_contract=action_contract,
+                        purpose=purpose, synthetic_capacity=synthetic_capacity)
     if (type(header["schema_version"]) is not int or header["schema_version"] != 5
             or header["feature_version"] != STRUCTURED_FEATURE_VERSION or header["input_recipe"] != STRUCTURED_FEATURE_VERSION
             or header["reward_version"] != REWARD_VERSION or header["policy_input_version"] != POLICY_INPUT_VERSION
@@ -376,8 +393,9 @@ def read_structured_journal(path: Path, *, deadline: float = float("inf"),
             frame.bank_view(bank.view())
             if frame.interval_start != (0 if last_frame is None else last_frame.boundary.end) or last_frame is not None and frame.revision <= last_frame.revision:
                 raise ContractError("journal5 frame interval/revision mismatch")
-            table = read_candidates(path.parent, row["table"], frame, index, max_positions=caps.max_positions)
-            report = parse_report(row["search_report"])
+            table = read_candidates(path.parent, row["table"], frame, index, max_positions=caps.max_positions, action_contract=action_contract,
+                                    purpose=purpose, synthetic_capacity=False)
+            report = parse_report(row["search_report"], action_contract=action_contract)
             generated = GeneratedCandidates(table, report)
             if report.rng_before != expected_search_state:
                 raise ContractError("journal5 search RNG stream discontinuity")
@@ -391,7 +409,8 @@ def read_structured_journal(path: Path, *, deadline: float = float("inf"),
             _host_timings(row["timings"])
             commands[index] = command
             decisions.append(StructuredDecision(frame, generated, selection, command, row["timings"]))
-            inventories.append(sidecar_inventory(path.parent, row["table"], frame, index, max_positions=caps.max_positions))
+            inventories.append(sidecar_inventory(path.parent, row["table"], frame, index, max_positions=caps.max_positions, action_contract=action_contract,
+                                    purpose=purpose, synthetic_capacity=False))
             pending, last_frame, delta_pending = index, frame, False
         elif kind == "acknowledgement":
             closed(row, {"kind", "decision", "response"})

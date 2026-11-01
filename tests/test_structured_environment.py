@@ -12,6 +12,7 @@ import pytest
 
 import gf_cli
 from gf_cli.config import load_config
+from gf_common.action_contract import engineering_contract
 from gf_common.domain import ContractError, EpisodeGroup, EpisodeSpec
 from gf_common.preprocessing import PreparationConfig
 from gf_common.structured_tokens import signature
@@ -25,7 +26,7 @@ ROOT = Path(__file__).parents[1]
 
 
 def structured_config(tmp_path, *, backend="python", extra=None):
-    overrides = {"actions": {"version": "2", "max_sequence_length": 2, "max_candidates": 30, "max_expansions": 2000},
+    overrides = {"actions": {"action_contract": asdict(engineering_contract()), "version": "2", "max_sequence_length": 2, "max_candidates": 30, "max_expansions": 2000},
         "model": {"model_id": "heuristic"}, "opponent": {"model_id": "random"},
         "preprocessing": {"reader": "structured-v1", "backend": backend},
         "run": {"output_dir": str(tmp_path / "runs"), "pairs_per_seed": 1, "sampling_seeds": [17],
@@ -45,6 +46,12 @@ def instrument(monkeypatch, mode="natural", *, audit_startup=True):
     import gf_cli.structured as composition
     import gf_simulator_client.structured_environment as module
     from gf_simulator_client import environment
+    def component_only(contract):
+        assert contract == engineering_contract()
+    # Private FakeHTTP double only. The common source-qualification gate stays
+    # intact; there is no public CLI/profile permission to upgrade eligibility.
+    monkeypatch.setattr(gf_cli, "require_qualified_contract", component_only)
+    monkeypatch.setattr(environment, "require_qualified_contract", component_only)
     scripts, workers, ledgers = [], [], []
     actual_worker = module.StructuredParticipantWorker
     actual_compose = composition.structured_environment
@@ -105,7 +112,7 @@ def test_actions2_baseline_cli_two_seats_closed_journal_inventory_and_identity(t
         assert set(saved["model_startup_ms"]) == {"1", "2"}
         assert len(saved["decision_timings"]) == 4
         for viewer in (1, 2):
-            data = read_structured_journal(episode / f"player-{viewer}.jsonl")
+            data = read_structured_journal(episode / f"player-{viewer}.jsonl", action_contract=engineering_contract(), purpose="component", synthetic_capacity=False)
             assert data.header["policy"] == spec["policies"][viewer - 1]
             assert data.header["model_id"] in ("heuristic", "random") and data.header["model_version"] == "1"
             assert data.end["end_kind"] == "natural" and data.end["terminal_reward"] == 0
@@ -159,6 +166,7 @@ def test_actions2_owned_write_failure_blocks_act_and_keeps_orphan_evidence(tmp_p
 def test_missing_native_structured_capability_fails_before_any_simulator_io(tmp_path, monkeypatch, metadata):
     import gf_training.native_backend as backend
     from gf_simulator_client import environment
+    monkeypatch.setattr(gf_cli, "require_qualified_contract", lambda contract: None)  # private metadata-only test double
     monkeypatch.setattr(backend, "load_native", lambda: SimpleNamespace(build_info=lambda: metadata))
     def forbidden(*args, **kwargs):
         pytest.fail("Simulator IO began despite absent structured native capability")
@@ -186,7 +194,7 @@ def test_formal_neural2_component_checkpoint_not_authorized_by_dispatch(tmp_path
     monkeypatch.setattr(composition, "structured_environment", forbidden)
     loaded = structured_config(tmp_path)
     loaded = replace(loaded, config=replace(loaded.config, model=ConfiguredNeuralModelV2(checkpoint=str(tmp_path / "bare-component"))))
-    with pytest.raises(ContractError, match="Generation2 parent qualification"):
+    with pytest.raises(ContractError, match="engineering_only"):
         asyncio.run(gf_cli.run_experiment(loaded, "evaluate"))
     assert not (tmp_path / "runs").exists()
 

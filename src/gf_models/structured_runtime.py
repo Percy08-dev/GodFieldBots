@@ -42,7 +42,7 @@ def own_worker_settings(model_id: str, actions: ActionConfigV2, options: Json | 
         return WorkerCaps(max_positions=actions.max_sequence_length, max_candidates=actions.max_candidates), NumericCosts(), 0, 0
     if model_id not in ("mlp", "gru", "transformer") or options is None:
         raise ContractError("neural2 own settings required")
-    safe = safe_options_v2(options)
+    safe = safe_options_v2(options, action_contract=actions.action_contract, purpose="component", synthetic_capacity=False)
     model = model_config_v2(safe["model"])
     binding = InferenceBindingV2(**safe["inference"])
     if model.model_id != model_id or actions.max_sequence_length > model.max_positions or actions.max_candidates > binding.max_candidates:

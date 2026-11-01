@@ -5,6 +5,7 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
+from gf_common.action_contract import engineering_contract
 from gf_common.domain import ContractError
 from gf_common.structured import CandidateTable, DecisionFrame, EventBank, EventDelta
 from gf_common.structured_tokens import tokenize_frame, tokenize_table
@@ -58,7 +59,7 @@ def inputs(make_input, count=3, *, empty=False, positions=18, window=128):
         {"type": "play_sequence", "target": 1, "ordered_elements": [frames[-1].references[2]] * positions},
         {"type": "play_sequence", "target": None, "ordered_elements": [frames[-1].references[3], frames[-1].references[0]]},
         {"type": "discard", "instance_ids": [2]}])
-    table = CandidateTable.from_actions(frames[-1], actions, positions)
+    table = CandidateTable.from_actions(frames[-1], actions, positions, action_contract=engineering_contract(), purpose="component", synthetic_capacity=not empty and positions > 1)
     return tokens, tokenize_table(table, frames[-1], positions, aggregate_window=window)
 
 
@@ -88,7 +89,7 @@ def test_all_modes_full_split_cache_and_shapes(make_input, hand, temporal):
 @pytest.mark.parametrize("hand", ["direct", "deepsets", "attention"])
 @pytest.mark.parametrize("temporal", ["mlp", "gru", "transformer"])
 @pytest.mark.parametrize("positions", [18, 128])
-def test_dense_factorized_chunks_all_parameter_and_encoder_gradients(make_input, positions, hand, temporal):
+def test_synthetic_dense_factorized_chunks_all_parameter_and_encoder_gradients(make_input, positions, hand, temporal):
     model = small_model(hand, temporal, positions=positions)
     reference, factorized = make_network(model, 8), make_network(model, 8)
     frames, candidates = inputs(make_input, positions=positions)

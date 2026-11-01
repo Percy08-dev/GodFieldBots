@@ -14,6 +14,7 @@ from gf_training.lineage import read_json, validate_chain
 from gf_training.ppo import ingest_collection
 from gf_training.ppo_run import train_ppo
 from gf_training.sequence_rollout import write_rollout
+from tests.ppo_support import synthetic_server_identity
 from tests.test_gru_ppo import synthetic_sequence_collector
 from tests.test_native_ppo import online_context
 
@@ -25,7 +26,7 @@ def test_native_transformer_banks_match_reference_and_source_finalizes_before_tw
     pytest.importorskip('torch')
     import gf_training.native_ppo as native
     import gf_training.ppo_run as coordinator
-    loaded = load_config('configs/experiments/transformer-ppo-cpu.toml')
+    loaded = load_config('configs/experiments/transformer-ppo-cpu.toml', {'server': synthetic_server_identity(tmp_path)})
     config = replace(loaded.config, training=replace(loaded.config.training, max_updates=2, sequence_length=2))
     loaded = LoadedConfig(config, asdict(config), digest(asdict(config)), ())
     collector = synthetic_sequence_collector(make_input, 'transformer')

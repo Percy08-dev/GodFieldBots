@@ -7,6 +7,7 @@ from dataclasses import asdict, replace
 
 import pytest
 
+from gf_common.action_contract import engineering_contract
 from gf_common.diverse_actions import NumericCosts, PublicCandidateGeneratorV2, estimate_costs
 from gf_common.domain import ContractError, canonical
 from gf_common.structured import ActionConfigV2
@@ -15,7 +16,7 @@ from tests.test_structured_records import frame_for
 
 def generate(value, **settings):
     frame, bank = frame_for(value)
-    result = PublicCandidateGeneratorV2(ActionConfigV2(**settings), clock=lambda: 0.).generate(
+    result = PublicCandidateGeneratorV2(ActionConfigV2(**settings, action_contract=engineering_contract()), clock=lambda: 0.).generate(
         frame, bank.view(), random.Random(17), NumericCosts())
     result.table.validate(frame)
     actions = [result.table.to_action(index, frame) for index in range(len(result.table.kinds))]
@@ -58,12 +59,12 @@ def test_zero_stick_support_completion_and_payment(make_input):
 
 
 @pytest.mark.parametrize("length", [18, 128])
-def test_free_learned_repeat_reaches_long_sequences_with_bounded_count(make_input, length):
-    result, actions = generate(make_input(hand=("spiritual-staff",), learned=("fireball", "aura", "mirage"), mp=0),
+def test_unique_gameplay_reaches_eighteen_refs_even_with_structural_capacity_128(make_input, length):
+    result, actions = generate(make_input(hand=("abyss-dart",) * 18, mp=0),
                                max_sequence_length=length, count_states=2,
                                max_expansions=10000, max_candidates=80)
     assert result.report.precount.mode == "upper_bound"
-    assert max(len(action.get("ordered_elements", [])) for action in actions) == length
+    assert max(len(action.get("ordered_elements", [])) for action in actions) == 18
     assert result.report.attempts <= 10000
     assert not result.report.traversal_complete
     assert len(actions) <= 80
@@ -74,27 +75,27 @@ def test_mandatory_target_variants_cannot_be_truncated(make_input):
         generate(make_input(hand=("wand-of-ignition",)), max_candidates=1)
 
 
-def test_repeated_learned_additional_and_aura_match_handwritten_oracle(make_input):
+def test_unique_learned_additional_and_aura_match_handwritten_oracle(make_input):
     _, actions = generate(make_input(hand=("bronze-club",), learned=("fireball",), mp=4), max_sequence_length=3)
     actual = {tuple((item.get("instance_id"), item.get("definition_id")) for item in action["ordered_elements"])
               for action in actions if action["type"] == "play_sequence"}
     expected = set()
     for length in range(1, 4):
         for symbols in itertools.product(("base", "extra"), repeat=length):
-            if symbols.count("base") > 1 or "base" in symbols[1:] or symbols.count("extra") > 2:
+            if symbols.count("base") > 1 or "base" in symbols[1:] or symbols.count("extra") > 1:
                 continue
             expected.add(tuple((1, None) if symbol == "base" else (None, "fireball") for symbol in symbols))
     assert actual == expected
     _, aura = generate(make_input(hand=("bronze-club",), learned=("aura",), mp=12), max_sequence_length=4)
-    assert {len(action["ordered_elements"]) for action in aura if action["type"] == "play_sequence"} == {1, 2, 3}
+    assert {len(action["ordered_elements"]) for action in aura if action["type"] == "play_sequence"} == {1, 2}
 
 
-def test_paid_mirage_repeat_to_128_and_attack_twice_exclusion(make_input):
+def test_unique_paid_mirage_does_not_expand_to_structural_128_and_attack_twice_exclusion(make_input):
     result, actions = generate(make_input(hand=("magical-stick",), learned=("mirage",), mp=635),
                                max_sequence_length=128, count_states=1, max_expansions=10000, max_candidates=30)
     longest = max((action for action in actions if action["type"] == "play_sequence"),
                   key=lambda action: len(action["ordered_elements"]))
-    assert len(longest["ordered_elements"]) == 128 and longest["target"] == 2
+    assert len(longest["ordered_elements"]) == 2 and longest["target"] == 2
     assert result.report.attempts <= 10000
     _, excluded = generate(make_input(hand=("saw-boom-boom",), learned=("mirage",), mp=100), max_sequence_length=3)
     assert not any(any(item.get("definition_id") == "mirage" for item in action.get("ordered_elements", [])) for action in excluded)
@@ -133,12 +134,13 @@ def test_protected_discard_and_sacrifice_are_separate(make_input):
     assert actual == expected
 
 
-def test_status_miracles_complete_targets_and_utility_omission(make_input):
+def test_status_and_adopted_utility_complete_targets_with_pending_coverage_report(make_input):
     result, actions = generate(make_input(hand=("fog", "smile-dew")), max_sequence_length=2)
     status = [action for action in actions if action["type"] == "play_sequence"]
     assert {action["target"] for action in status} == {1, 2}
-    assert all(action["ordered_elements"] == [{"source": "hand_artifact", "instance_id": 1}] for action in status)
-    assert all("issue0005" in omission for omission in result.report.omissions)
+    assert {tuple(item["instance_id"] for item in action["ordered_elements"]) for action in status} == {(1,), (2,)}
+    from gf_common.action_contract import PENDING_COVERAGE
+    assert result.report.omissions == PENDING_COVERAGE
 
 
 def test_trade_exact_two_references_and_buy_choices(make_input):
@@ -212,30 +214,30 @@ def test_order_sensitive_public_summaries_wand_mirage_aura_and_dynamic_payment(m
     from gf_common.diverse_actions import _Proposal, _Space, _summary
     value = make_input(hand=("wand-of-ignition", "abyss-dart", "fireball"), learned=("mirage", "aura"), mp=50)
     frame, _ = frame_for(value)
-    space = _Space(frame, ActionConfigV2())
+    space = _Space(frame, ActionConfigV2(action_contract=engineering_contract()))
     assert _summary(space, _Proposal("play_sequence", refs=(0, 1))).attribute == "fire"
     assert _summary(space, _Proposal("play_sequence", refs=(1, 0))).attribute == "neutral"
     assert _summary(space, _Proposal("play_sequence", refs=(0, 3))).attribute == "neutral"
     assert _summary(space, _Proposal("play_sequence", refs=(1, 3, 0))).attribute == "fire"
     assert _summary(space, _Proposal("play_sequence", refs=(1, 4, 2))).attack == 12  # 5*2+2
     dynamic, _ = frame_for(make_input(hand=("magical-stick", "fireball"), learned=("aura",), mp=10))
-    stick = _Space(dynamic, ActionConfigV2())
+    stick = _Space(dynamic, ActionConfigV2(action_contract=engineering_contract()))
     assert _summary(stick, _Proposal("play_sequence", refs=(0, 1))).attack == 18
     assert _summary(stick, _Proposal("play_sequence", refs=(0, 2))).attack == 16
     zero, _ = frame_for(make_input(hand=("magical-stick",), learned=("aura",), mp=6))
-    assert _summary(_Space(zero, ActionConfigV2()), _Proposal("play_sequence", refs=(0, 1))).attack == 0
+    assert _summary(_Space(zero, ActionConfigV2(action_contract=engineering_contract())), _Proposal("play_sequence", refs=(0, 1))).attack == 0
 
 
 def test_saturated_precount_has_no_proposal_or_action_construction(make_input, monkeypatch):
     import gf_common.diverse_actions as module
-    frame, _ = frame_for(make_input(hand=("spiritual-staff",), learned=("fireball", "aura", "mirage")))
-    space = module._Space(frame, ActionConfigV2(max_sequence_length=128, count_states=1))
+    frame, _ = frame_for(make_input(hand=("abyss-dart",) * 18))
+    space = module._Space(frame, ActionConfigV2(max_sequence_length=128, count_states=1, action_contract=engineering_contract()))
     def forbidden(*args, **kwargs):
         pytest.fail("pre-count constructed a proposal/Action")
     monkeypatch.setattr(module, "_Proposal", forbidden)
     report, reasons = module._precount(space, NumericCosts(), lambda: 0.)
     assert report.mode == "upper_bound" and report.saturated
-    assert report.complete == module.SATURATION and report.count_states == 1
+    assert report.complete < module.SATURATION and report.preparation_bytes == module.SATURATION and report.count_states == 1
     assert not report.full_enumeration_admitted and reasons == {"count_states"}
 
 
@@ -275,7 +277,7 @@ def test_numeric_dimensions_and_each_budget_are_consumed_and_saturate():
 
 
 def test_count_attempt_temp_presentation_and_cost_cutoffs_are_distinct(make_input):
-    value = make_input(hand=("spiritual-staff",), learned=("fireball",), mp=0)
+    value = make_input(hand=("spiritual-staff",), learned=("fireball", "aura", "mirage"), mp=0)
     attempt, _ = generate(value, max_sequence_length=8, count_states=1, max_expansions=20)
     assert attempt.report.attempts <= 20 and "max_expansions" in attempt.report.cutoff_reasons
     temporary, _ = generate(value, max_sequence_length=8, count_states=1, max_temporary_candidates=6)
@@ -285,7 +287,7 @@ def test_count_attempt_temp_presentation_and_cost_cutoffs_are_distinct(make_inpu
     assert len(actions) == 5 and "max_candidates" in subset.report.cutoff_reasons
     frame, bank = frame_for(value)
     with pytest.raises(ContractError, match="mandatory.*numeric_costs"):
-        PublicCandidateGeneratorV2(ActionConfigV2(), clock=lambda: 0.).generate(
+        PublicCandidateGeneratorV2(ActionConfigV2(action_contract=engineering_contract()), clock=lambda: 0.).generate(
             frame, bank.view(), random.Random(1), NumericCosts(max_storage_bytes=1))
 
 
@@ -298,14 +300,14 @@ class StepClock:
 
 
 def test_cooperative_wall_clock_reserves_selection_and_records_actual_work(make_input):
-    frame, bank = frame_for(make_input(hand=("spiritual-staff",), learned=("fireball", "aura", "mirage"), mp=0))
+    frame, bank = frame_for(make_input(hand=("abyss-dart",) * 18, mp=0))
     clock = StepClock(.00001)
     config = ActionConfigV2(max_sequence_length=128, count_states=1, search_milliseconds=100,
-                             max_candidates=60, max_expansions=1000000)
+                             max_candidates=60, max_expansions=1000000, action_contract=engineering_contract())
     result = PublicCandidateGeneratorV2(config, clock=clock).generate(frame, bank.view(), random.Random(8), NumericCosts())
     actions = [result.table.to_action(index, frame) for index in range(len(result.table.kinds))]
     assert result.report.selected > result.report.mandatory
-    assert max(len(action.get("ordered_elements", [])) for action in actions) == 128
+    assert max(len(action.get("ordered_elements", [])) for action in actions) == 18
     assert "search_time" in result.report.cutoff_reasons
     assert result.report.search_ms < 80 and result.report.selection_ms > 0
     assert result.report.search_ms + result.report.selection_ms <= 100.1
@@ -374,7 +376,7 @@ def test_unresolved_pure_cutcost_is_not_promoted_by_hints(make_input):
 def test_generator_rejects_foreign_bank_and_does_not_read_future_events(make_input):
     from gf_common.structured import EventBank, EventDelta
     frame, bank = frame_for(make_input(hand=("bronze-club",)))
-    generator = PublicCandidateGeneratorV2(ActionConfigV2(max_sequence_length=1), clock=lambda: 0.)
+    generator = PublicCandidateGeneratorV2(ActionConfigV2(max_sequence_length=1, action_contract=engineering_contract()), clock=lambda: 0.)
     first = generator.generate(frame, bank.view(), random.Random(5), NumericCosts())
     bank.append(EventDelta(1, "one", 0, bank.boundary.prefix_hash, [{"type": "player_defeated", "player": 2}]))
     later = generator.generate(frame, bank.view(), random.Random(5), NumericCosts())
@@ -385,7 +387,7 @@ def test_generator_rejects_foreign_bank_and_does_not_read_future_events(make_inp
 
 def test_fixed_sell_pair_respects_one_reference_configuration_and_cost_capacity(make_input):
     frame, bank = frame_for(make_input(hand=("sell", "bronze-club")))
-    config = ActionConfigV2(max_sequence_length=1)
+    config = ActionConfigV2(max_sequence_length=1, action_contract=engineering_contract())
     result = PublicCandidateGeneratorV2(config, clock=lambda: 0.).generate(
         frame, bank.view(), random.Random(3), NumericCosts(position_capacity=1))
     result.table.validate(frame)
@@ -427,7 +429,7 @@ def test_skew_channel_weights_preserve_minimum_unique_opportunities(make_input, 
 def test_attempt_budget_precedes_extension_validity_and_numeric_row_construction(make_input, monkeypatch):
     import gf_common.diverse_actions as module
     frame, _ = frame_for(make_input(hand=("spiritual-staff",), learned=("fireball",)))
-    space = module._Space(frame, ActionConfigV2(max_sequence_length=3))
+    space = module._Space(frame, ActionConfigV2(max_sequence_length=3, action_contract=engineering_contract()))
     validity_calls = []
     original_valid = space.valid
     def counted_valid(*args):
@@ -440,7 +442,7 @@ def test_attempt_budget_precedes_extension_validity_and_numeric_row_construction
         next(module._walk(space, "offense", (0,), None, tuple(space.offense), denied))
     assert validity_calls == []
     trade_frame, _ = frame_for(make_input(hand=("exchange", "sell", "bronze-club")))
-    trade = module._Space(trade_frame, ActionConfigV2())
+    trade = module._Space(trade_frame, ActionConfigV2(action_contract=engineering_contract()))
     def forbidden_row(*args, **kwargs):
         pytest.fail("compact proposal was constructed before budget admission")
     monkeypatch.setattr(module, "_Proposal", forbidden_row)
@@ -460,10 +462,10 @@ def test_sell_only_domain_can_have_zero_mandatory_proposals(make_input):
 
 
 def test_exchange_supplements_share_budget_with_long_family_jobs(make_input):
-    result, actions = generate(make_input(hand=("exchange", "spiritual-staff"), learned=("fireball",), mp=0),
+    result, actions = generate(make_input(hand=("exchange", "spiritual-staff"), learned=("fireball", "aura", "mirage"), mp=0),
                                max_sequence_length=128, count_states=1, max_expansions=1000, max_candidates=30)
     assert result.report.attempts <= 1000
-    assert max(len(action.get("ordered_elements", [])) for action in actions) == 128
+    assert max(len(action.get("ordered_elements", [])) for action in actions) == 4
     assert sum(action["type"] == "exchange" for action in actions) > 1
     assert not result.report.traversal_complete
 
@@ -500,7 +502,7 @@ def test_head_tail_costs_cover_small_first_width_and_large_later_layers(make_inp
     assert not estimate.fits(replace(costs, max_scoring_operations=operations - 1))
     frame, bank = frame_for(make_input(hand=("bronze-club",)))
     with pytest.raises(ContractError, match="mandatory.*numeric_costs"):
-        PublicCandidateGeneratorV2(ActionConfigV2(), clock=lambda: 0.).generate(
+        PublicCandidateGeneratorV2(ActionConfigV2(action_contract=engineering_contract()), clock=lambda: 0.).generate(
             frame, bank.view(), random.Random(3), replace(costs, max_scoring_operations=operations - 1))
     for changes in ({"tail_operations_per_candidate": 0}, {"tail_working_bytes_per_candidate": 0},
                     {"tail_tensor_bytes_per_candidate": 0},
@@ -526,23 +528,22 @@ def test_refresh_potential_includes_miracle_opportunities_without_freeing_held_s
             value = make_input(hand=("fireball",) + ("steel-armor",) * (possession - 1))
             miracle_slot = 0
         frame, _ = frame_for(value)
-        summary = _summary(_Space(frame, ActionConfigV2()), _Proposal("play_sequence", refs=(miracle_slot,)))
+        summary = _summary(_Space(frame, ActionConfigV2(action_contract=engineering_contract())), _Proposal("play_sequence", refs=(miracle_slot,)))
         assert summary.refresh == expected
 
 
-def test_refresh_potential_staff_repetitions_capacity_sacrifice_and_self_sell(make_input):
+def test_refresh_potential_staff_distinct_copies_capacity_sacrifice_and_self_sell(make_input):
     from gf_common.diverse_actions import _Proposal, _Space, _summary
-    for possession, expected in ((2, 4), (18, 1)):
-        value = make_input(hand=("spiritual-staff",) + ("steel-armor",) * (possession - 2), learned=("fireball",), mp=0)
+    for possession, expected in ((4, 4), (18, 1)):
+        value = make_input(hand=("spiritual-staff", "fireball", "fireball", "fireball") + ("steel-armor",) * (possession - 4), mp=0)
         frame, _ = frame_for(value)
-        space = _Space(frame, ActionConfigV2())
-        miracle_slot = possession - 1
-        # One ordinary replacement +3miracle acquisitions, limited by capacity
-        # freed by Staff; learned occurrences do not free additional slots.
-        summary = _summary(space, _Proposal("play_sequence", refs=(0, miracle_slot, miracle_slot, miracle_slot)))
+        space = _Space(frame, ActionConfigV2(action_contract=engineering_contract()))
+        # One ordinary replacement +3distinct miracle acquisitions, capped by
+        # capacity freed by Staff; held miracles move to learned, freeing no slots.
+        summary = _summary(space, _Proposal("play_sequence", refs=(0, 1, 2, 3)))
         assert summary.refresh == expected
     frame, _ = frame_for(make_input(hand=("sell", "steel-armor") + ("steel-armor",) * 16))
-    space = _Space(frame, ActionConfigV2())
+    space = _Space(frame, ActionConfigV2(action_contract=engineering_contract()))
     own_sale = _summary(space, _Proposal("sell", "self", (0, 1)))
     assert own_sale.refresh == 1 and 1 in own_sale.remaining and 0 not in own_sale.remaining
     other_sale = _summary(space, _Proposal("sell", "opponent", (0, 1)))

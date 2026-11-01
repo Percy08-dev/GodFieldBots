@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from gf_cli.config import LoadedConfig, load_config
+from gf_common.action_contract import require_qualified_contract
 from gf_common.domain import (
     CATALOG_META,
     END_PROJECTION_VERSION,
@@ -168,8 +169,14 @@ def _minimal_report(episodes: list[Any], planned_games: int, started: float, rea
 
 
 def _result_provenance(episode: Any) -> Json:
-    return {key: getattr(episode, key) for key in ("episode_id", "pair_id", "seed", "policies", "game_id",
+    from gf_simulator_client.structured_environment import StructuredEpisodeResult
+    result = {key: getattr(episode, key) for key in ("episode_id", "pair_id", "seed", "policies", "game_id",
             "outcome", "end_kind", "simulator_abort_reason", "failure", "health", "replay_reconciled", "first_player", "decisions", "elapsed_seconds")}
+
+    if isinstance(episode, StructuredEpisodeResult):
+        result.update(action_contract=asdict(episode.action_contract), purpose=episode.purpose,
+                      synthetic_capacity=episode.synthetic_capacity)
+    return result
 
 
 async def _join_owned_groups(tasks: list[asyncio.Task[Any]], wall_deadline: float, diagnostics: Json) -> list[GroupResult]:
@@ -213,6 +220,8 @@ async def _join_owned_groups(tasks: list[asyncio.Task[Any]], wall_deadline: floa
 
 async def run_experiment(loaded: LoadedConfig, command: str, *, collection: CollectionPlan | None = None) -> tuple[Path, Json]:
     config = loaded.config
+    if isinstance(config.actions, ActionConfigV2):
+        require_qualified_contract(config.actions.action_contract)
     started = collection.started_monotonic if collection is not None and collection.started_monotonic is not None else time.monotonic()
     from gf_cli.bindings import bindings, native_preflight
     wall_deadline = collection.wall_deadline if collection is not None else started + min(config.run.wall_seconds, config.run.execution_seconds + config.run.finalization_seconds)
@@ -283,7 +292,9 @@ async def run_experiment(loaded: LoadedConfig, command: str, *, collection: Coll
                                    "synchronous local filesystem operations cannot provide a hard realtime wall guarantee"],
     }
     if structured:
-        manifest.update(journal_schema_version=5, feature_version="participant-structured-v1",
+        from gf_models.structured_binding import input_binding
+        assert isinstance(config.actions, ActionConfigV2)
+        manifest.update(**input_binding(config.actions.action_contract, "component", False), journal_schema_version=5, feature_version="participant-structured-v1",
                         input_recipe="participant-structured-v1", participant_runtime="python-reference-v2",
                         preprocessing_implementation=structured_preprocessing)
     if collection is not None:
@@ -519,6 +530,8 @@ def main(argv: list[str] | None = None) -> int:
             print(canonical({"valid": True, "config_sha256": loaded.sha256, "effective_config": loaded.effective,
                              "inputs": loaded.inputs}))
             return 0
+        if isinstance(loaded.config.actions, ActionConfigV2):
+            require_qualified_contract(loaded.config.actions.action_contract)
         if args.command == "validate-policy":
             from gf_training.fixed_data import validate_policy
             config = replace(loaded.config, run=replace(loaded.config.run, split="validation"))

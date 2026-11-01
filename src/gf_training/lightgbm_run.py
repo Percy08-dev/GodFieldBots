@@ -311,6 +311,10 @@ async def run_numeric(directory: Path, x: Array, y: Array, validation_x: Array, 
 
 async def train_experiments(loaded: LoadedConfig, mode: str = "fresh", *,
                             code_provenance_provider: Callable[[float], Json] | None = None) -> Json:
+    from gf_common.action_contract import require_qualified_contract
+    from gf_common.structured import ActionConfigV2
+    if isinstance(loaded.config.actions, ActionConfigV2):
+        require_qualified_contract(loaded.config.actions.action_contract)
     if mode != "fresh":
         raise ContractError("resume is unsupported; no work performed")
     config = loaded.config
@@ -319,6 +323,9 @@ async def train_experiments(loaded: LoadedConfig, mode: str = "fresh", *,
     training = config.training
     if not isinstance(training, TrainingConfig) or not isinstance(config.model, ModelConfig):
         raise ContractError("LightGBM training requires closed LightGBM recipe")
+    model, actions = config.model, config.actions
+    if not isinstance(actions, ActionConfig):
+        raise ContractError("legacy LightGBM training requires actions1")
     if training.cost_mode == "fixed_data":
         return await train_fixed_data(loaded, code_provenance_provider=code_provenance_provider)
     if config.preprocessing.backend != 'python':
@@ -356,7 +363,7 @@ async def train_experiments(loaded: LoadedConfig, mode: str = "fresh", *,
         vectors = []
         for sample in samples:
             check_deadline(ingestion_deadline)
-            vectors.append(encode(sample.value, sample.action, config.model.encoder))
+            vectors.append(encode(sample.value, sample.action, model.encoder))
         check_deadline(ingestion_deadline)
         return np.stack(vectors)
     x = features(train_samples)
@@ -391,7 +398,7 @@ async def train_experiments(loaded: LoadedConfig, mode: str = "fresh", *,
     results = []
     for seed in training.seeds:
         path = Path(config.run.output_dir) / f"{config.run.name}-training-{seed}-{uuid.uuid4().hex[:12]}"
-        result = await _run_numeric(path, x, y, validation_x, validation_y, model=config.model, actions=config.actions,
+        result = await _run_numeric(path, x, y, validation_x, validation_y, model=model, actions=actions,
                                    training=training, seed=seed, purpose="trained", charged_seconds=charged, provenance_data=source,
                                    fit_code_provenance=fit_code, fit_code_measurement_seconds=code_seconds)
         results.append({"directory": str(path), "status": result["status"], "seed": seed})
@@ -399,8 +406,15 @@ async def train_experiments(loaded: LoadedConfig, mode: str = "fresh", *,
 
 
 async def train_fixed_data(loaded: LoadedConfig, *, code_provenance_provider: Callable[[float], Json] | None = None) -> Json:
+    from gf_common.action_contract import require_qualified_contract
+    from gf_common.structured import ActionConfigV2
+    if isinstance(loaded.config.actions, ActionConfigV2):
+        require_qualified_contract(loaded.config.actions.action_contract)
     from gf_training.fixed_data import prepare_fixed_inputs
     config = loaded.config
+    actions = config.actions
+    if not isinstance(actions, ActionConfig):
+        raise ContractError("legacy fixed-data LightGBM requires actions1")
     training, model = config.training, config.model
     if not isinstance(training, TrainingConfig) or not isinstance(model, ModelConfig) or model.model_id != "lightgbm" or model.checkpoint is not None or training.cost_mode != "fixed_data" or training.dataset_manifest is None:
         raise ContractError("fixed-data LightGBM requires an explicit frozen dataset manifest")
@@ -447,7 +461,7 @@ async def train_fixed_data(loaded: LoadedConfig, *, code_provenance_provider: Ca
                       "preprocessing": prepared.diagnostics}
             prep_seconds = time.monotonic() - started
             path = Path(config.run.output_dir) / f"{config.run.name}-fixed-training-{seed}-{uuid.uuid4().hex[:12]}"
-            result = await _run_numeric(path, None, None, None, None, model=model, actions=config.actions,
+            result = await _run_numeric(path, None, None, None, None, model=model, actions=actions,
                                         training=training, seed=seed, purpose="trained", charged_seconds=prep_seconds,
                                         provenance_data=source, fit_code_provenance=fit_code,
                                         fit_code_measurement_seconds=code_seconds, prepared_inputs=prepared)

@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from gf_cli.config import ExperimentConfig, RunConfigV2, load_config
+from gf_common.action_contract import engineering_contract
 from gf_common.domain import ContractError, digest
 from gf_common.structured import ActionConfigV2, Selection
 from gf_models.config import PPOTrainingConfig, SequencePPOTrainingConfig, model_config
@@ -18,6 +19,7 @@ from gf_models.structured_binding import (
     child_cuda_visibility,
     configured_model_v2,
     execution_digest,
+    input_binding,
     model_defaults_v2,
     policy_label,
     safe_options_v2,
@@ -26,8 +28,9 @@ from gf_models.structured_binding import (
 from gf_models.structured_config import ModelConfigV2
 
 ROOT = Path(__file__).resolve().parents[1]
+CONTRACT_TOML = "[actions.action_contract]\n" + "\n".join(f'{key}="{value}"' for key, value in asdict(engineering_contract()).items()) + "\n"
 HEADER = ('schema_version=1\nkind="experiment"\n[server]\nfixed_seed_experiment=true\n'
-          '[actions]\nversion="2"\n[preprocessing]\nbackend="python"\nreader="structured-v1"\n')
+          '[actions]\nversion="2"\n' + CONTRACT_TOML + '[preprocessing]\nbackend="python"\nreader="structured-v1"\n')
 
 
 def configuration(tmp_path, model="mlp", extra=""):
@@ -125,10 +128,11 @@ def test_execution_identity_includes_actual_resources_device_and_visibility():
     label = policy_label(model, binding, "a" * 64, cuda_visible_devices="")
     assert "a" * 64 in label and execution_digest(model, binding, cuda_visible_devices="") in label
     own = {"version": "2", "checkpoint": "/own/checkpoint", "expected_manifest_digest": "a" * 64,
-           "model": asdict(model), "inference": asdict(binding), "cuda_visible_devices": ""}
-    assert safe_options_v2(own) == json.loads(json.dumps(own))
+           "model": asdict(model), "inference": asdict(binding), "cuda_visible_devices": "",
+           **input_binding(engineering_contract(), "component", False)}
+    assert safe_options_v2(own, action_contract=engineering_contract(), purpose="component", synthetic_capacity=False) == json.loads(json.dumps(own))
     with pytest.raises(ContractError):
-        safe_options_v2({**own, "game_seed": "forbidden"})
+        safe_options_v2({**own, "game_seed": "forbidden", **input_binding(engineering_contract(), "component", False)}, action_contract=engineering_contract(), purpose="component", synthetic_capacity=False)
 
 
 def test_baseline_null_selection_roundtrip_and_neural_finite_rules():
@@ -156,12 +160,12 @@ def test_ppodata_rejects_baseline_null_before_tokenization(make_input, monkeypat
     learner = learner_for()
     record = records_for(make_input, learner, count=1)
     selection = replace(record.selections[0], logprob=None, value=None)
-    baseline = module.EpisodeRecords(record.bank, record.frames, record.tables, (selection,), record.end_kind, record.outcome)
+    baseline = module.EpisodeRecords(record.bank, record.frames, record.tables, (selection,), record.end_kind, record.outcome, action_contract=engineering_contract(), purpose="component", synthetic_capacity=True)
     def forbidden(*args, **kwargs):
         pytest.fail("PPO null-value row reached deterministic token allocation")
     monkeypatch.setattr(module, "tokenize_frame", forbidden)
     with pytest.raises(ContractError, match="finite logprob and value"):
-        module.StructuredRollout((baseline,), learner.model, ACTION_HASH)
+        module.StructuredRollout((baseline,), learner.model, ACTION_HASH, action_contract=engineering_contract(), purpose="component", synthetic_capacity=True)
 
 
 @pytest.mark.parametrize("seed", [0, 2**63, 2**64 - 1])
@@ -169,7 +173,7 @@ def test_structured_sampling_preserves_existing_uint64_domain(seed):
     from gf_models.structured_policy import StructuredPolicy
     from tests.test_structured_learning import learner_for
     learner = learner_for()
-    policy = StructuredPolicy(learner.network, learner.model, learner.binding, "a" * 64)
+    policy = StructuredPolicy(learner.network, learner.model, learner.binding, "a" * 64, action_contract=engineering_contract(), purpose="component", synthetic_capacity=True)
     probabilities = learner.torch.tensor([.2, .3, .5])
     policy.reset(seed)
     expected = learner.torch.multinomial(probabilities, 12, replacement=True, generator=policy.rng)
@@ -183,6 +187,6 @@ def test_structured_sampling_rejects_invalid_uint64_values(seed):
     from gf_models.structured_policy import StructuredPolicy
     from tests.test_structured_learning import learner_for
     learner = learner_for()
-    policy = StructuredPolicy(learner.network, learner.model, learner.binding, "a" * 64)
+    policy = StructuredPolicy(learner.network, learner.model, learner.binding, "a" * 64, action_contract=engineering_contract(), purpose="component", synthetic_capacity=True)
     with pytest.raises(ContractError):
         policy.reset(seed)

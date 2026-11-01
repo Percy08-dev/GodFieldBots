@@ -373,11 +373,83 @@ acceptance stays blocked; component/FakeHTTP/offline/synthetic work continues.
 New pre-adoption v2 artifacts missing contract fields must reject current use;
 v1 configurations/readers/pins and protected data remain untouched.
 
+## Owner-contract implementation and current full regression
+
+The engineering profile is implemented across current Config, generator/report/
+table/codec/wire, runtime/safe-options/J5, artifact/resume3 and rollout/Learner
+boundaries. Every metadata reader requires explicit expected contract/purpose/
+synthetic classification; no missing-field upgrade. Unique physical proposals
+are bounded18, aliasing learned IDs rejects at new Frame creation, distinct
+physical copies/sources remain distinct.128fixtures explicitly mark synthetic
+capacity and cannot enter game-proposal or qualified-source paths. V1 semantics,
+global simulator/spec/catalog declarations and original artifacts remain frozen.
+
+Both independent core and metadata reviews are READY. The one metadata finding
+was normal-API True-artifact→loaded-network→False Policy/resave relabeling. The
+immutable private network input-binding tag now persists loaded/trained/staged
+provenance and rejects incompatible wrapping/save/update/restore before relevant
+allocation or mutation. This is not tensor taint tracking and changes no feature,
+weight shape or state_dict/layout signature. Central Source qualification remains
+mandatory future work; profile/purpose/producer flags are not authority.
+
+Scoped engineering command before the tag fix was623PASS/13opt-in SKIPPED; final
+affected tag/resume/runtime regressions278PASS/7SKIPPED plus metadata60PASS.
+Independent core review267PASS/architecture85PASS and final metadata60PASS/
+8selected numerical+10architecture tag cases are overlapping evidence, not totals.
+Root final GPU command:
+
+```sh
+CUBLAS_WORKSPACE_CONFIG=:4096:8 GFB_RUN_STRUCTURED_CUDA=1 GFB_RUN_STRUCTURED_LEARNING_CUDA=1 GFB_RUN_STRUCTURED_PROTOCOL_CUDA=1 UV_CACHE_DIR=/tmp/gf-structured-uv uv run --no-sync pytest -q tests/test_structured_cuda.py tests/test_structured_learning_cuda.py tests/test_structured_protocol_cuda.py
+```
+
+Final post-tag result13PASS25.77s/reaped exit0; earlier13PASS33.39s was pre-tag
+and remains historical. No controlled performance inference follows.
+
+Full-project validation exposed two environment/fixture boundaries, not weakened
+contracts. Default-sandbox full pytest was interrupted(exit130) after failures
+and a long native case; it is NOT a passed full run. First fail-fast result was
+374PASS+1ERROR: synthetic fixed-data tests inherited a real source_dir whose
+external public specs now differ from frozen v1 hashes. Test-only
+`tests/ppo_support.py` supplies inert non-executable temporary binary identity and
+source_dir=None only to synthetic collectors. Six affected test sites share it;
+model/settings/counts/update/resume budgets are unchanged. A controlled temporary
+spec drift test still exercises the unchanged production hash rejection.
+Independent test-isolation review is READY.
+
+The next fail-fast result419PASS/8SKIP/1FAIL confirmed the same inline synthetic
+coupling. A bounded native probe then timed out while FFI was idle: async future
+callbacks progressed only on25s timer wakeups. A minimal same-process test showed
+sandbox self-pipe send PermissionError(errno1)/future timeout0.704s, while identical
+code with local-IPC permission returned in0.051s. NativeExecution was NOT changed
+to hide this environment limitation. Owned diagnostic process groups were reaped;
+one root duplicate probe was promptly stopped, then diagnostics remained single.
+
+With test-only isolation and appropriate local-IPC permission, the original4
+GRU/Transformer/native coordinator two-update/resume cases plus drift guard pass
+5/5 in24.31s. Root full check, in that supported environment:
+
+```sh
+timeout --signal=INT --kill-after=15s 600s env UV_CACHE_DIR=/tmp/gf-structured-uv uv run --no-sync pytest -q --tb=short
+UV_CACHE_DIR=/tmp/gf-structured-uv uv run --no-sync ruff check .
+UV_CACHE_DIR=/tmp/gf-structured-uv uv run --no-sync mypy src
+```
+
+Results:1460PASS/46SKIP in350.21s; full Ruff PASS; mypy PASS(100source files).
+GPU13cases above were separately enabled; skipped cases retain their original
+opt-in/environment scopes. No blanket claim that every skipped check passed.
+Post-run all24protected original fit hashes and frozen dataset manifest hash
+remain equal to the recorded baseline. New explicit-profile draft6graphs and
+old12Config/effective/input identities pass without Torch import.
+
+These checks establish current engineering implementation/regression scope.
+They do not satisfy real feasibility, qualified Source, Generation2/PPO orchestration,
+new native differential, LightGBM2 or final performance/full-plan acceptance.
+
 ## Remaining full acceptance
 
 Currently NOT RUN: Environment/CLI/qualified collection E2E PPO integration,
 journal5/native differential,192-game baseline, attention3models×2inference devices×
 continuous/pause-resume real2updates, other hand-mode MLP games, fixed512train
-decision CPU p95<=3s panel and separate stress/GPU attribution, pytest/Ruff/mypy/
-Rust, old-data proofs, isolated wheel and optional-dependency-free startup.
+decision CPU p95<=3s panel and separate stress/GPU attribution, new Rust/native
+checks, old-data full proofs, isolated wheel and optional-dependency-free startup.
 Do not turn these entries into PASS without exact commands and actual evidence.

@@ -20,7 +20,7 @@ pytestmark = pytest.mark.skipif(os.environ.get("GFB_RUN_STRUCTURED_CUDA") != "1"
 
 @pytest.mark.parametrize("temporal", ["mlp", "gru", "transformer"])
 @pytest.mark.parametrize("positions", [18, 128])
-def test_cuda_default_attention_cpu_full_split_cache_and_dense_chunk_gradients(make_input, temporal, positions):
+def test_synthetic_cuda_default_attention_cpu_full_split_cache_and_dense_chunk_gradients(make_input, temporal, positions):
     assert os.environ.get("CUBLAS_WORKSPACE_CONFIG") == ":4096:8"
     model = replace(ModelConfigV2(), model_id=temporal, max_positions=positions,
                     temporal=TemporalConfigV2(kind=temporal, num_layers=2 if temporal == "transformer" else 1))

@@ -10,6 +10,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from gf_common.action_contract import engineering_contract
 from gf_common.diverse_actions import NumericCosts, PublicCandidateGeneratorV2
 from gf_common.domain import ContractError, digest
 from gf_common.structured import ActionConfigV2, DecisionFrame, EventBank, EventDelta
@@ -21,6 +22,7 @@ from gf_common.structured_wire import (
 )
 from gf_common.validation import decision_input
 from gf_models.structured_baselines import make_structured_policy
+from gf_models.structured_binding import input_binding
 from gf_models.structured_runtime import own_worker_settings
 from gf_simulator_client.structured_resources import ReservationLedger
 from gf_simulator_client.structured_worker import StructuredParticipantWorker
@@ -29,7 +31,7 @@ from tests.structured_worker_fixtures import bad_hash, clean_probe, slow
 
 
 def action_settings():
-    return ActionConfigV2(max_sequence_length=2, max_candidates=30, max_expansions=2000)
+    return ActionConfigV2(max_sequence_length=2, max_candidates=30, max_expansions=2000, action_contract=engineering_contract())
 
 
 def own_frame(value, bank, revision, events=()):
@@ -69,7 +71,8 @@ def test_protocol2_real_clean_process_two_frames_null_values_and_reap(make_input
                 assert ledger.workers[worker.lease.key].decisions == {}
                 assert len(ledger.workers) == 1  # reply never releases process residency/slot.
                 assert worker.last_timings["parent_request_ms"] >= worker.last_timings["worker_decision_ms"]
-            assert set(worker.initial) == {"protocol_version", "factory", "model_id", "sampling_seed", "actions", "policy_options", "caps", "numeric_costs"}
+            assert set(worker.initial) == {"protocol_version", "factory", "model_id", "sampling_seed", "actions", "policy_options", "caps", "numeric_costs",
+                                           "action_contract", "purpose", "synthetic_capacity"}
         finally:
             await worker.close()
         assert worker.process.poll() is not None and not ledger.workers
@@ -166,7 +169,7 @@ def journal_setup(make_input, tmp_path, seed=17, caps_override=None, model_id="r
                              bank, 0, [{"type": "turn_started", "turn": 1, "active_player": 1}] if events is None else events)
     search_seed = int(digest({"recipe": "structured-search-stream-v1", "sampling_seed": seed})[:16], 16)
     generated = PublicCandidateGeneratorV2(settings, clock=lambda: 0.).generate(frame, bank.view(), random.Random(search_seed), costs)
-    policy = make_structured_policy("random")
+    policy = make_structured_policy("random", action_contract=engineering_contract(), purpose="component", synthetic_capacity=False)
     policy.reset(seed)
     selection = policy.select_frame(frame, bank.view(), generated.table)
     declared_caps = asdict(caps)
@@ -174,7 +177,7 @@ def journal_setup(make_input, tmp_path, seed=17, caps_override=None, model_id="r
         declared_caps.update(caps_override)
     writer = StructuredJournal(tmp_path, "episode", 1, policy.version, run_id="run", game_id="game",
         action_config_hash=digest(asdict(settings)), bank_episode=bank.episode, caps=declared_caps, numeric_costs=asdict(costs),
-        model_id=model_id, model_version=model_version, sampling_seed=seed, aggregate_window=aggregate_window)
+        model_id=model_id, model_version=model_version, sampling_seed=seed, aggregate_window=aggregate_window, action_contract=engineering_contract(), purpose="component", synthetic_capacity=False)
     command = {"command_id": str(uuid.uuid4()), "expected_revision": frame.revision,
                "action": selection.validate(generated.table, frame)}
     return writer, frame, delta, generated, selection, command
@@ -193,7 +196,7 @@ def test_journal5_sidecar_reference_append_ack_natural_source_inventory(make_inp
     final.update(state_revision=1, actionable=False, typed_action_schema=[], required_choice=None,
                  current_player=None, phase="terminal", result=acknowledgement["result"])
     writer.finish("natural", acknowledgement["result"], final)
-    data = read_structured_journal(writer.final_path)
+    data = read_structured_journal(writer.final_path, action_contract=engineering_contract(), purpose="component", synthetic_capacity=False)
     assert data.accepted == (0,) and data.end["terminal_reward"] == 1
     assert data.decisions[0].generated.table == generated.table
     assert data.decisions[0].selection.logprob is data.decisions[0].selection.value is None
@@ -233,16 +236,16 @@ def test_journal5_rejects_mutated_sidecar_and_interrupted_reward_invention(make_
     writer.acknowledge(index, {"command_id": command["command_id"], "previous_revision": 0, "state_revision": 1,
                               "status": "active", "result": None})
     writer.finish("truncated", None)
-    source = read_structured_journal(writer.final_path)
+    source = read_structured_journal(writer.final_path, action_contract=engineering_contract(), purpose="component", synthetic_capacity=False)
     assert source.end["outcome"] is source.end["terminal_reward"] is None
     rows = copy.deepcopy(list(source.records))
     rows[-1]["terminal_reward"] = -1
     with pytest.raises(ContractError, match="invented"):
-        read_structured_journal(writer.final_path, records=rows)
+        read_structured_journal(writer.final_path, records=rows, action_contract=engineering_contract(), purpose="component", synthetic_capacity=False)
     sidecar = tmp_path / rows[2]["table"]["file"]
     sidecar.write_bytes(sidecar.read_bytes() + b"corrupt")
     with pytest.raises(ContractError):
-        read_structured_journal(writer.final_path)
+        read_structured_journal(writer.final_path, action_contract=engineering_contract(), purpose="component", synthetic_capacity=False)
 
 
 def neural_component(tmp_path, kind="gru", actions=None):
@@ -251,11 +254,11 @@ def neural_component(tmp_path, kind="gru", actions=None):
     from tests.test_structured_learning import learner_for
     settings = action_settings() if actions is None else actions
     base = learner_for(kind)
-    learner = Learner(base.model, 17, base.binding, digest(asdict(settings)), digest({"component": "protocol2-only"}))
+    learner = Learner(base.model, 17, base.binding, digest(asdict(settings)), digest({"component": "protocol2-only"}), action_contract=engineering_contract(), purpose="component", synthetic_capacity=False)
     identity = learner.save(tmp_path / "component-checkpoint")
     options = safe_options_v2({"version": "2", "checkpoint": str(tmp_path / "component-checkpoint"),
         "expected_manifest_digest": identity["inference_digest"], "model": asdict(learner.model),
-        "inference": asdict(learner.binding), "cuda_visible_devices": "", "allow_toy": True})
+        "inference": asdict(learner.binding), "cuda_visible_devices": "", "allow_toy": True, **input_binding(engineering_contract(), "component", False)}, action_contract=engineering_contract(), purpose="component", synthetic_capacity=False)
     return learner, options
 
 
@@ -330,10 +333,10 @@ def test_malformed_reply_reaps_child_and_releases_only_confirmed_owned_reservati
         rng = random.Random(0)
         rng.setstate(worker._search_state)
         generated = PublicCandidateGeneratorV2(action_settings(), clock=lambda: 0.).generate(frame, bank.view(), rng, worker.costs)
-        policy = make_structured_policy("random")
+        policy = make_structured_policy("random", action_contract=engineering_contract(), purpose="component", synthetic_capacity=False)
         selection = policy.select_frame(frame, bank.view(), generated.table)
         reply = json.loads(json.dumps({"protocol_version": 2, "kind": "selection", "generated": generated_dict(generated),
-            "selection": asdict(selection), "timings": {"generation_ms": 0., "policy_ms": 0., "worker_decision_ms": 0.}}))
+            "selection": asdict(selection), "timings": {"generation_ms": 0., "policy_ms": 0., "worker_decision_ms": 0.}, **input_binding(engineering_contract(), "component", False)}))
         if mutation == "table_hash":
             reply["selection"]["table_hash"] = "0" * 64
         elif mutation == "policy":
@@ -370,7 +373,7 @@ def test_global_startup_residency_fails_before_popen_and_spawn_error_rolls_back(
     binding = InferenceBindingV2(device="cuda:0")
     options = safe_options_v2({"version": "2", "checkpoint": str(tmp_path / "never-read"),
         "expected_manifest_digest": "a" * 64, "model": asdict(model), "inference": asdict(binding),
-        "cuda_visible_devices": "0", "allow_toy": True})
+        "cuda_visible_devices": "0", "allow_toy": True, **input_binding(engineering_contract(), "component", False)}, action_contract=engineering_contract(), purpose="component", synthetic_capacity=False)
     ledger = ReservationLedger(global_cuda_bytes=1)
     def forbidden(*args, **kwargs):
         pytest.fail("Popen ran before shared startup residency admission")
@@ -394,7 +397,7 @@ def test_inference_timing_counter_resets_disables_and_does_not_change_sampling(m
     learner = learner_for()
     record = records_for(make_input, learner, count=1)
     frame, table = record.frames[0], record.tables[0]
-    policy = StructuredPolicy(learner.network, learner.model, learner.binding, "a" * 64)
+    policy = StructuredPolicy(learner.network, learner.model, learner.binding, "a" * 64, action_contract=engineering_contract(), purpose="component", synthetic_capacity=True)
     policy.reset(17)
     expected = policy.select_frame(frame, record.bank, table)
     policy.reset(17)
@@ -408,7 +411,7 @@ def test_inference_timing_counter_resets_disables_and_does_not_change_sampling(m
         pytest.fail("training/gradient recomputation accumulated inference packing timers")
     monkeypatch.setattr(module.time, "perf_counter", forbidden)
     tokens, candidates = __import__("gf_training.structured_rollout", fromlist=["StructuredRollout"]).StructuredRollout(
-        (record,), learner.model, learner.action_config_hash).endpoint(0)
+        (record,), learner.model, learner.action_config_hash, action_contract=engineering_contract(), purpose="component", synthetic_capacity=True).endpoint(0)
     result = learner.network(tokens, candidates)
     (-result[0][0] + result[1].square()).backward()
     assert learner.network._input_packing_seconds == counter
@@ -464,7 +467,7 @@ def test_inference_failure_disables_timing_and_preserves_sampling_rng(make_input
     from tests.test_structured_learning import learner_for, records_for
     learner = learner_for()
     record = records_for(make_input, learner, count=1)
-    policy = StructuredPolicy(learner.network, learner.model, learner.binding, "a" * 64)
+    policy = StructuredPolicy(learner.network, learner.model, learner.binding, "a" * 64, action_contract=engineering_contract(), purpose="component", synthetic_capacity=True)
     policy.reset(17)
     before = policy.rng.get_state().clone()
     def failed_score(*args, **kwargs):
@@ -498,7 +501,7 @@ def test_neural_reply_with_missing_values_is_rejected_before_use(make_input, tmp
         invalid = Selection(generated.table.table_hash, 0, worker.expected_policy)
         async def null_reply(payload):
             return {"protocol_version": 2, "kind": "selection", "generated": generated_dict(generated),
-                    "selection": asdict(invalid), "timings": {"generation_ms": 0., "policy_ms": 0., "worker_decision_ms": 0.}}
+                    "selection": asdict(invalid), "timings": {"generation_ms": 0., "policy_ms": 0., "worker_decision_ms": 0.}, **input_binding(engineering_contract(), "component", False)}
         monkeypatch.setattr(worker, "_roundtrip", null_reply)
         with pytest.raises(ContractError, match="finite logprob/value"):
             await worker.select_frame(frame, delta)
@@ -571,7 +574,7 @@ def two_decision_journal(make_input, tmp_path, **settings):
     rng.setstate(generated.report.rng_after)
     costs = NumericCosts(**writer.header["numeric_costs"])
     next_generated = PublicCandidateGeneratorV2(action_settings(), clock=lambda: 0.).generate(second, bank.view(), rng, costs)
-    policy = make_structured_policy("random")
+    policy = make_structured_policy("random", action_contract=engineering_contract(), purpose="component", synthetic_capacity=False)
     policy.reset(17)
     policy.select_frame(first, bank.view(first.boundary), generated.table)
     next_selection = policy.select_frame(second, bank.view(), next_generated.table)
@@ -605,7 +608,7 @@ def test_reader_caps_reject_before_frame_or_sidecar_decode(make_input, tmp_path,
     writer.acknowledge(index, {"command_id": command["command_id"], "previous_revision": 1, "state_revision": 2,
                               "status": "active", "result": None})
     writer.finish("incomplete", None)
-    data = read_structured_journal(writer.final_path)
+    data = read_structured_journal(writer.final_path, action_contract=engineering_contract(), purpose="component", synthetic_capacity=False)
     rows = copy.deepcopy(list(data.records))
     if cap == "candidates":
         rows[0]["caps"]["max_candidates"] = 1
@@ -624,7 +627,7 @@ def test_reader_caps_reject_before_frame_or_sidecar_decode(make_input, tmp_path,
             return actual(*args, **kwargs)
         monkeypatch.setattr(module, "parse_frame", first_only)
     with pytest.raises(ContractError):
-        read_structured_journal(writer.final_path, records=rows)
+        read_structured_journal(writer.final_path, records=rows, action_contract=engineering_contract(), purpose="component", synthetic_capacity=False)
 
 
 @pytest.mark.parametrize("kind", ["unknown", "unsupported", "infrastructure_failure", "", None])
@@ -638,7 +641,7 @@ def test_journal_unknown_end_kinds_rejected_by_writer_and_reader(make_input, tmp
     rows = [json.loads(line) for line in writer.final_path.read_text().splitlines()]
     rows[-1]["end_kind"] = kind
     with pytest.raises(ContractError, match="end kind"):
-        read_structured_journal(writer.final_path, records=rows)
+        read_structured_journal(writer.final_path, records=rows, action_contract=engineering_contract(), purpose="component", synthetic_capacity=False)
 
 
 @pytest.mark.parametrize("version,model_id,value", [("2", "mlp", 2.), ("2", "mlp", True), ("2", "mlp", None),
@@ -651,7 +654,7 @@ def test_generation_schema_is_exact_typed_role_value(make_input, tmp_path, versi
     assert rows[0]["generation_schema"] == (2 if version == "2" else None)
     rows[0]["generation_schema"] = value
     with pytest.raises(ContractError, match="generation schema"):
-        read_structured_journal(writer.final_path, records=rows)
+        read_structured_journal(writer.final_path, records=rows, action_contract=engineering_contract(), purpose="component", synthetic_capacity=False)
 
 
 def test_journal_neural_null_rejects_before_write_and_before_reader_sidecar_decode(make_input, tmp_path, monkeypatch):
@@ -671,14 +674,14 @@ def test_journal_neural_null_rejects_before_write_and_before_reader_sidecar_deco
     baseline, frame, delta, generated, selection, command = journal_setup(make_input, other)
     baseline.begin_frame(frame, delta, generated, selection, command, {})
     baseline.finish("incomplete", None)
-    data = read_structured_journal(baseline.final_path)
+    data = read_structured_journal(baseline.final_path, action_contract=engineering_contract(), purpose="component", synthetic_capacity=False)
     assert data.decisions[0].selection.logprob is data.decisions[0].selection.value is None
     rows = copy.deepcopy(list(data.records))
     rows[0].update(model_id="mlp", model_version="2", generation_schema=2)
     monkeypatch.setattr(module, "parse_frame", forbidden)
     monkeypatch.setattr(module, "read_candidates", forbidden)
     with pytest.raises(ContractError, match="finite logprob/value"):
-        read_structured_journal(baseline.final_path, records=rows)
+        read_structured_journal(baseline.final_path, records=rows, action_contract=engineering_contract(), purpose="component", synthetic_capacity=False)
 
 
 @pytest.mark.parametrize("failure", ["huge_timing", "cancel_validation", "cancel_ready"])
@@ -691,7 +694,7 @@ def test_initialize_validation_failures_reap_real_child_and_preserve_error(monke
             if failure == "cancel_ready":
                 raise asyncio.CancelledError("explicit ready cancellation")
             return {"protocol_version": 2, "kind": "ready", "policy_version": worker.expected_policy,
-                    "model_load_ms": 10**400 if failure == "huge_timing" else 0.}
+                    "model_load_ms": 10**400 if failure == "huge_timing" else 0., **input_binding(engineering_contract(), "component", False)}
         def cancelled(*args, **kwargs):
             raise asyncio.CancelledError("explicit validation cancellation")
         monkeypatch.setattr(worker, "_roundtrip", injected)
@@ -735,7 +738,7 @@ def test_reader_rejects_bad_command_even_with_matching_positive_ack(make_input, 
     writer.acknowledge(index, {"command_id": command["command_id"], "previous_revision": 0, "state_revision": 1,
                                "status": "active", "result": None})
     writer.finish("truncated", None)
-    data = read_structured_journal(writer.final_path)
+    data = read_structured_journal(writer.final_path, action_contract=engineering_contract(), purpose="component", synthetic_capacity=False)
     rows = copy.deepcopy(list(data.records))
     decision = next(row for row in rows if row["kind"] == "decision")
     acknowledgement = next(row for row in rows if row["kind"] == "acknowledgement")
@@ -743,7 +746,7 @@ def test_reader_rejects_bad_command_even_with_matching_positive_ack(make_input, 
     if field == "command_id":
         acknowledgement["response"][field] = value
     with pytest.raises(ContractError):
-        read_structured_journal(writer.final_path, records=rows)
+        read_structured_journal(writer.final_path, records=rows, action_contract=engineering_contract(), purpose="component", synthetic_capacity=False)
 
 
 def test_journal_finish_preserves_final_created_during_end_write(make_input, tmp_path, monkeypatch):
@@ -841,11 +844,11 @@ def test_journal_exact_event_cap_boundaries_roundtrip_and_reader_rejects_lower_c
     writer.acknowledge(index, {"command_id": command["command_id"], "previous_revision": 0, "state_revision": 1,
                                "status": "active", "result": None})
     writer.finish("truncated", None)
-    data = read_structured_journal(writer.final_path)
+    data = read_structured_journal(writer.final_path, action_contract=engineering_contract(), purpose="component", synthetic_capacity=False)
     assert data.bank.boundary.end == event_count and data.accepted == (0,)
     assert data.decisions[0].generated.table == generated.table
     if event_count == 2:
         rows = copy.deepcopy(list(data.records))
         rows[0]["caps"]["max_interval_events"] = 1
         with pytest.raises(ContractError, match="interval cap"):
-            read_structured_journal(writer.final_path, records=rows)
+            read_structured_journal(writer.final_path, records=rows, action_contract=engineering_contract(), purpose="component", synthetic_capacity=False)
