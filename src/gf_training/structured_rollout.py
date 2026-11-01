@@ -111,7 +111,7 @@ class EpisodeRecords:
         if not (type(self.frames) is type(self.tables) is type(self.selections) is tuple
                 and len(self.frames) == len(self.tables) == len(self.selections)):
             raise ContractError("episode frame/table/selection ownership mismatch")
-        if self.end_kind not in ("natural", "truncated", "aborted", "unsupported", "infrastructure_failure"):
+        if self.end_kind not in ("natural", "truncated", "aborted", "cancelled", "incomplete", "unsupported", "infrastructure_failure"):
             raise ContractError("unknown structured episode closure")
         if self.end_kind == "natural":
             validate_result(self.outcome)

@@ -7,7 +7,8 @@ model/actions-v2 path. Accepted engineering components include immutable own-vie
 frames/event banks, compact diverse candidates, exact deterministic tokens,
 configurable state/hand/interval-event encoders, all three PPO numerical learners,
 factorized chunked scoring, sharded inference/resume artifacts, protocol2
-participant workers, Journal5 transactions and Environment/CLI composition.
+participant workers, Journal5 transactions, Environment/CLI composition and
+original-file-validated structural component Source projection.
 PyTorch owns the learned encoders and runs on the configured CPU or CUDA device.
 Legacy configuration, records and model paths retain their original meanings.
 
@@ -22,10 +23,13 @@ Unresolved public rules and normative/binary adoption are tracked in
 [issue0005](issues/0005-public-utility-action-semantics.md).
 
 The accepted b31043e milestone has1460Python PASS/46SKIPPED,13separate CUDA PASS,
-full Ruff/mypy PASS, exact old configuration/data checks and an isolated Python
-wheel baseline-worker smoke without optional dependencies. These results precede
-the in-progress structural Source integration. Source/Generation2/coordinator,
-new native processing and deterministic LightGBM2 integration remain pending;
+exact old configuration/data checks and an isolated Python wheel baseline-worker
+smoke without optional dependencies. The later structural Source/startup-ownership
+increment passes306related CPU tests,3separate CUDA worker checks and independent
+correctness/conformance reviews. Full Ruff and mypy pass for101source files.
+Whole-project/wheel results above precede that increment. Qualified Source
+authority, Generation2/coordinator, new native processing and deterministic
+LightGBM2 integration remain pending;
 their bounded design is accepted in ADR0023. No real v2 experiment or full-plan
 acceptance is claimed. Milestone scopes, overlapping historical counts and
 remaining performance/experiment checks are in the

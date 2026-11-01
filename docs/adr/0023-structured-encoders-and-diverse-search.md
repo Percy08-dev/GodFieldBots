@@ -1061,8 +1061,12 @@ contract and original whole-parent/Replay/split qualification. No producer,
 completed status, purpose flag or structural reader supplies that authority.
 Current engineering profile always fails qualified use.
 
-Natural collection projection requires matching original Replays and a successful
-linked report. Interrupted component diagnostics may omit a Replay only when the
+All-natural cohort projection requires matching original Replays and a successful
+linked report independently of the manifest status. Mixed incomplete diagnostics
+may retain known natural outcomes beside interrupted None outcomes, but preserve
+every original learner episode, including zero-endpoint interrupted ones, so
+healthy-row salvage cannot authorize a cohort update. Interrupted component
+diagnostics may omit a Replay only when the
 original episode health explicitly records replay/finalization failure. Preserve
 accepted endpoints, exact closure reason, absent outcome and diagnostics; do not
 infer rewards, bootstrap values or qualification from the missing Replay. Every
@@ -1072,6 +1076,29 @@ parent_qualification=not_performed even for a collection4 envelope.
 Compare closures from present Replays against each other and the original known
 cause. An allowed missing view is absent evidence, not a contradictory closure;
 it does not authorize reconstructing that participant's missing history.
+
+Before candidate decoding, reject duplicate original game/participant identities
+and compare each journal's own sampling seed and capacities with the original
+schedule and saved policy/action scalar limits. These are internal consistency
+checks, requiring no Torch, current hardware or current resource-estimator cost
+formula. Generation2 separately reconstructs the parent-authorized schedule.
+The Source work deadline is bounded by both the caller deadline and the configured
+preprocessing wall allowance with its cleanup reserve; an infinite caller value
+does not disable the configured budget.
+
+Failed startup must retain a process owner as well as its budget reservation when
+the first kill/wait cannot confirm reap. A private strong owner reference in the
+existing WorkerReservation is registered before Popen and cleared only on confirmed
+reap or a no-process rollback. The ledger retains references and checks release
+conditions; it does not orchestrate process shutdown.
+A narrow private exception-owner handoff preserves the initiating exception type
+and lets StructuredEnvironment register the failed actor in its existing workers
+cleanup set. Type/ledger identity is checked. Existing bounded finalization retries
+close; an unregistered PID may roll back only after that owned Popen is confirmed
+reaped. If retry still fails, retain both owner and reservation and report
+infrastructure failure. No generic process registry or lifecycle framework is
+introduced. Architecture review accepted this bounded ownership amendment before
+implementation; failure-injection and conformance review are required for acceptance.
 
 Generation2 enumerates exact owned inference/resume manifests/shards and hashes,
 model/version/input/action-contract/classification identity, counters and chain
@@ -1124,3 +1151,11 @@ native implementation; explicit Python reference stays truthful, no fallback.
 
 After this path stabilizes, both reviews and old-format/data proofs are required.
 These components do not fulfill blocked real192-game/PPO/performance acceptance.
+
+S1 accepts one bounded dependency debt: the legacy qualified predispatch guard
+currently lazily imports the component Source reader, whose Journal5 dependency
+also uses the legacy journal module. No observed import failure or eager Torch
+import results, but the guard loads more parsing code and carries circular
+coupling. Revisit a shallow guard in the existing common contract module when
+Source/Generation2 dispatch stabilizes, or immediately if optional-free/legacy
+guard import checks fail. Do not add a framework or a new layer for this guard.

@@ -852,3 +852,97 @@ def test_journal_exact_event_cap_boundaries_roundtrip_and_reader_rejects_lower_c
         rows[0]["caps"]["max_interval_events"] = 1
         with pytest.raises(ContractError, match="interval cap"):
             read_structured_journal(writer.final_path, records=rows, action_contract=engineering_contract(), purpose="component", synthetic_capacity=False)
+
+
+@pytest.mark.parametrize('error_type', [MemoryError, asyncio.CancelledError])
+def test_ctor_preparation_clock_failure_precedes_reservation_and_spawn(monkeypatch, error_type):
+    import gf_simulator_client.structured_worker as module
+    ledger = ReservationLedger()
+    original = error_type('injected synchronous clock failure')
+    def failed_clock():
+        raise original
+    def forbidden(*args, **kwargs):
+        pytest.fail('preparation error reached Popen')
+    monkeypatch.setattr(module.time, 'monotonic', failed_clock)
+    monkeypatch.setattr(module.subprocess, 'Popen', forbidden)
+    with pytest.raises(error_type) as caught:
+        StructuredParticipantWorker(clean_probe, 'random', 0, action_settings(), ledger=ledger)
+    assert caught.value is original and not ledger.workers and ledger.serial == 0
+
+
+@pytest.mark.parametrize('registered', [False, True])
+@pytest.mark.parametrize('error_type', [MemoryError, asyncio.CancelledError])
+def test_ctor_registration_failure_reaps_real_child_before_reservation_release(monkeypatch, registered, error_type):
+    import gf_simulator_client.structured_worker as module
+    from gf_simulator_client.structured_resources import WorkerReservation
+    ledger = ReservationLedger()
+    processes = []
+    original = error_type('injected synchronous registration failure')
+    actual_popen, actual_spawned = module.subprocess.Popen, WorkerReservation.spawned
+    actual_cancel, actual_reaped = WorkerReservation.cancel_before_spawn, WorkerReservation.reaped
+    def popen(*args, **kwargs):
+        process = actual_popen(*args, **kwargs)
+        processes.append(process)
+        actual_wait = process.wait
+        def wait(*args, **kwargs):
+            assert ledger.workers and not next(iter(ledger.workers.values())).released
+            return actual_wait(*args, **kwargs)
+        monkeypatch.setattr(process, 'wait', wait)
+        return process
+    def spawned(lease, process):
+        assert process.poll() is None and ledger.workers
+        if registered:
+            actual_spawned(lease, process)
+        raise original
+    def cancel(lease):
+        assert processes[0].poll() is not None and processes[0].stdin.closed and processes[0].stdout.closed
+        return actual_cancel(lease)
+    def reaped(lease, process):
+        assert process.poll() is not None and process.stdin.closed and process.stdout.closed
+        return actual_reaped(lease, process)
+    monkeypatch.setattr(module.subprocess, 'Popen', popen)
+    monkeypatch.setattr(WorkerReservation, 'spawned', spawned)
+    monkeypatch.setattr(WorkerReservation, 'cancel_before_spawn', cancel)
+    monkeypatch.setattr(WorkerReservation, 'reaped', reaped)
+    with pytest.raises(error_type) as caught:
+        StructuredParticipantWorker(clean_probe, 'random', 0, action_settings(), ledger=ledger)
+    assert caught.value is original and len(processes) == 1
+    assert processes[0].poll() is not None and not ledger.workers
+
+
+def test_ctor_unconfirmed_reap_keeps_reservation_until_real_test_cleanup(monkeypatch):
+    import gf_simulator_client.structured_worker as module
+    from gf_simulator_client.structured_resources import WorkerReservation
+    ledger, processes = ReservationLedger(), []
+    actual_popen = module.subprocess.Popen
+    original = MemoryError('injected registration failure')
+    def popen(*args, **kwargs):
+        process = actual_popen(*args, **kwargs)
+        processes.append((process, process.wait))
+        def unconfirmed(*args, **kwargs):
+            raise module.subprocess.TimeoutExpired('owned-child', 2)
+        monkeypatch.setattr(process, 'wait', unconfirmed)
+        return process
+    def fail(*args, **kwargs):
+        raise original
+    monkeypatch.setattr(module.subprocess, 'Popen', popen)
+    monkeypatch.setattr(WorkerReservation, 'spawned', fail)
+    try:
+        with pytest.raises(MemoryError) as caught:
+            StructuredParticipantWorker(clean_probe, 'random', 0, action_settings(), ledger=ledger)
+        assert caught.value is original and len(ledger.workers) == 1
+        lease = next(iter(ledger.workers.values()))
+        assert not lease.released and lease.pid is None
+        process, wait = processes[0]
+        assert process.stdin.closed and process.stdout.closed
+        assert any('startup reap failed' in note for note in original.__notes__)
+    finally:
+        # Confirm the actual killed child's reap; only then retire this test's
+        # deliberately unconfirmed startup reservation. No fake child cleanup.
+        if processes:
+            process, wait = processes[0]
+            wait(timeout=2)
+            assert process.poll() is not None
+            for lease in tuple(ledger.workers.values()):
+                lease.cancel_before_spawn()
+    assert not ledger.workers

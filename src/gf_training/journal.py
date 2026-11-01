@@ -479,6 +479,14 @@ def _project_journals(sources: list[Path], *, deadline: float = float("inf"), on
     """Shared original-source validation/projection for export and training."""
     if not sources:
         raise ContractError("at least one linked participant journal required")
+    from gf_models.sharded_arrays import read_json as bounded_source_json
+    from gf_training.structured_source import reject_engineering_source
+    for manifest_path in {source.parent.parent / "manifest.json" for source in sources}:
+        try:
+            original = session.read_json(manifest_path) if session is not None else bounded_source_json(manifest_path)
+        except (OSError, ValueError) as exc:
+            raise ContractError("journal requires its finalized linked run manifest") from exc
+        reject_engineering_source(original)
     rows = []
     source_metadata = []
     manifest_metadata: dict[str, Json] = {}
@@ -633,9 +641,9 @@ def project_journals(sources: list[Path], *, deadline: float = float("inf"), onl
 
 def export_parquet(sources: list[Path], destination: Path) -> Json:
     """Write exact validated participant projection and diagnostic sidecar."""
+    rows, metadata = project_journals(sources)
     import pyarrow as pa
     import pyarrow.parquet as pq
-    rows, metadata = project_journals(sources)
     schema = pa.schema([*[(name, pa.string()) for name in ("run_id", "game_id", "episode_id")],
                         ("viewer", pa.int64()), ("decision", pa.int64()), ("split", pa.string()), ("eligible", pa.bool_()),
                         *[(name, pa.string()) for name in ("input_json", "candidate_set_json", "selection_json", "command_json", "acknowledgement_json", "transition_json")]])

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sys
 import time
 from dataclasses import asdict, replace
 from pathlib import Path
@@ -251,3 +252,86 @@ def test_two_concurrent_games_share_one_four_worker_ledger_and_reap_before_retur
     assert max(worker.seen_worker_count for worker in workers) == 4
     assert all(worker.lease.ledger is ledgers[0] and worker.closed and worker.process.poll() is not None for worker in workers)
     assert len(scripts) == 2 and all(script.deleted and len(script.attempts) == 4 for script in scripts)
+
+
+@pytest.mark.parametrize('registered', [False, True])
+@pytest.mark.parametrize('error_type', [MemoryError, asyncio.CancelledError])
+@pytest.mark.parametrize('retry_fails', [False, True])
+def test_failed_ctor_owner_handoff_uses_same_real_process_in_environment_finally(tmp_path, monkeypatch, registered, error_type, retry_fails):
+    import gf_simulator_client.structured_worker as module
+    from gf_common.domain import EpisodeGroup, EpisodeSpec, RuntimePolicyBinding
+    from gf_models.structured_baselines import make_structured_policy
+    from gf_simulator_client import environment as base
+    from gf_simulator_client.environment import EnvironmentSettings
+    from gf_simulator_client.structured_environment import StructuredSimulatorEnvironment
+    from gf_simulator_client.structured_resources import ReservationLedger, WorkerReservation
+    from gf_training.structured_journal import StructuredJournal
+    from tests.test_structured_protocol import action_settings
+    ledger, created = ReservationLedger(), []
+    original = error_type('injected startup registration failure')
+    actual_popen, actual_spawned = module.subprocess.Popen, WorkerReservation.spawned
+    def popen(*args, **kwargs):
+        # A real idle child which survives stdin close, as a blocked factory may.
+        process = actual_popen([sys.executable, '-c', 'import time; time.sleep(60)'], **kwargs)
+        kill, wait = process.kill, process.wait
+        created.append((process, kill, wait))
+        def failed_kill():
+            raise OSError('first synchronous kill unavailable')
+        def failed_wait(*args, **kwargs):
+            raise module.subprocess.TimeoutExpired('owned-startup', 2)
+        monkeypatch.setattr(process, 'kill', failed_kill)
+        monkeypatch.setattr(process, 'wait', failed_wait)
+        if retry_fails:
+            def failed_terminate():
+                raise OSError('retry terminate unavailable')
+            monkeypatch.setattr(process, 'terminate', failed_terminate)
+        return process
+    def spawned(lease, process):
+        if registered:
+            actual_spawned(lease, process)
+        raise original
+    monkeypatch.setattr(module.subprocess, 'Popen', popen)
+    monkeypatch.setattr(WorkerReservation, 'spawned', spawned)
+    monkeypatch.setattr(base, 'require_qualified_contract', lambda contract: None)  # private component double only.
+    label = 'random-structured-v1'
+    settings = EnvironmentSettings('unused', 'unused', tmp_path, 'component', action_settings(),
+                                  policy_bindings={label: RuntimePolicyBinding('random')})
+    owner_env = StructuredSimulatorEnvironment(settings, make_structured_policy, StructuredJournal, ledger=ledger)
+    spec = EpisodeSpec('component', (label, label), (17, 19), 'pair')
+    result = owner_env._new_result(EpisodeGroup('unused-management', (spec,)), spec)
+    workers, journals, contexts = {}, {}, {}
+    try:
+        with pytest.raises(error_type) as caught:
+            owner_env._create_actor(tmp_path, spec, 1, 'unused', journals, workers, contexts, result)
+        assert caught.value is original
+        owner = module._startup_cleanup_owner(original, ledger)
+        assert owner is not None and workers[1] is owner and owner.process is created[0][0]
+        lease = owner.lease
+        assert lease._cleanup_owner is owner and not lease.released and owner.process.poll() is None
+        assert module._startup_cleanup_owner(original, ReservationLedger()) is None
+        with pytest.raises(ContractError):
+            lease.cancel_before_spawn()
+        asyncio.run(owner_env._finalize_episode(SimpleNamespace(), None, tmp_path, result, journals, workers,
+                                                {1: [], 2: []}, {}))
+        if retry_fails:
+            assert result.health['worker_cleanup_failure']
+            assert ledger.workers[lease.key] is lease and lease._cleanup_owner is owner
+            assert not lease.released and owner.process.poll() is None
+            with pytest.raises(ContractError):
+                lease.reaped(owner.process)
+        else:
+            assert owner.process.poll() is not None and owner.process.stdin.closed and owner.process.stdout.closed
+            assert lease.released and lease._cleanup_owner is None and not ledger.workers
+            assert module._startup_cleanup_owner(original, ledger) is None
+    finally:
+        # Only leak-prevention backup: success is asserted above through Env's
+        # own finally path. A deliberate second failure retains the real handle.
+        for process, kill, wait in created:
+            kill()
+            wait(timeout=2)
+        for lease in tuple(ledger.workers.values()):
+            assert lease._cleanup_owner.process.poll() is not None
+            if lease.pid is None:
+                lease.cancel_before_spawn()
+            else:
+                lease.reaped(lease._cleanup_owner.process)

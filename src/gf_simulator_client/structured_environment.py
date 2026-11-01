@@ -29,7 +29,10 @@ from gf_simulator_client.environment import (
     _DecisionReceipt,
 )
 from gf_simulator_client.structured_resources import ReservationLedger
-from gf_simulator_client.structured_worker import StructuredParticipantWorker
+from gf_simulator_client.structured_worker import (
+    StructuredParticipantWorker,
+    _startup_cleanup_owner,
+)
 from gf_simulator_client.workers import ParticipantWorker
 
 
@@ -74,8 +77,14 @@ class StructuredSimulatorEnvironment(SimulatorEnvironment):
         assert isinstance(self.settings.actions, ActionConfigV2)
         label = spec.policies[viewer - 1]
         binding = self.settings.policy_bindings.get(label, RuntimePolicyBinding(label))
-        worker = StructuredParticipantWorker(self.policy_factory, binding.model_id, spec.sampling_seeds[viewer - 1],
-            self.settings.actions, self.settings.worker_seconds, ledger=self.ledger, policy_options=binding.policy_options)
+        try:
+            worker = StructuredParticipantWorker(self.policy_factory, binding.model_id, spec.sampling_seeds[viewer - 1],
+                self.settings.actions, self.settings.worker_seconds, ledger=self.ledger, policy_options=binding.policy_options)
+        except BaseException as error:
+            owner = _startup_cleanup_owner(error, self.ledger)
+            if owner is not None:
+                workers[viewer] = owner
+            raise
         workers[viewer] = worker  # retain ownership before journal creation can fail.
         if label != worker.expected_policy:
             raise ContractError("structured schedule label differs from owned policy execution identity")

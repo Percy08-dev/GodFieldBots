@@ -12,7 +12,7 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import asdict
-from typing import Any
+from typing import Any, cast
 
 from gf_common.diverse_actions import GeneratedCandidates
 from gf_common.domain import ContractError, Json, closed, digest, integer
@@ -27,7 +27,7 @@ from gf_models.structured_binding import (
 from gf_models.structured_config import InferenceBindingV2, model_config_v2
 from gf_models.structured_runtime import own_worker_settings
 from gf_simulator_client.framing import read_frame, write_frame
-from gf_simulator_client.structured_resources import ReservationLedger
+from gf_simulator_client.structured_resources import ReservationLedger, WorkerReservation
 from gf_simulator_client.workers import ParticipantWorker, factory_descriptor
 
 
@@ -63,17 +63,27 @@ class StructuredParticipantWorker(ParticipantWorker):
         self.last_timings: Json = {}
         self._parent_bank: EventBank | None = None
         self._last_frame: DecisionFrame | None = None
-        self.lease = ledger.reserve_worker(residency)  # before Popen/initialize, including preflight.
         self._spawn_started = time.monotonic()
         environment = {"PATH": os.defpath, "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8", "PYTHONHASHSEED": "0",
                        "OPENBLAS_NUM_THREADS": "1", "OMP_NUM_THREADS": "1", "MKL_NUM_THREADS": "1"}
+        arguments = [sys.executable, "-E", "-m", "gf_simulator_client.structured_bootstrap"]
+        # A failed constructor remains a complete close owner, even before a
+        # returned Popen has been registered with its reservation.
+        self.process = cast("subprocess.Popen[bytes]", None)
+        lease = ledger.reserve_worker(residency)  # before Popen/initialize, including preflight.
+        process: subprocess.Popen[bytes] | None = None
         try:
-            self.process = subprocess.Popen([sys.executable, "-E", "-m", "gf_simulator_client.structured_bootstrap"],
+            self.lease = lease
+            lease._cleanup_owner = self
+            process = subprocess.Popen(arguments,
                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=environment, bufsize=0)
-        except BaseException:
-            self.lease.cancel_before_spawn()
+            self.process = process
+            lease.spawned(process)
+        except BaseException as error:
+            _failed_spawn(process, lease, error)
+            if not lease.released:
+                error._structured_startup_owner = self  # type: ignore[attr-defined]
             raise
-        self.lease.spawned(self.process)
 
     async def _roundtrip(self, payload: Json) -> Json:
         if self.closed:
@@ -175,14 +185,64 @@ class StructuredParticipantWorker(ParticipantWorker):
 
     async def _close_owned(self, timeout: float, started: float) -> None:
         try:
+            if self.process is None:
+                return
             # A constructor/start failure can leave an unstarted Thread object.
             # Never join it; the original setup error survives real child reap.
             if self.io_thread is not None and self.io_thread.ident is None:
                 self.io_thread = None
             await super()._close_owned(timeout, started)
         finally:
-            if self.process.poll() is not None:
-                self.lease.reaped(self.process)
+            if self.process is None or self.process.poll() is not None:
+                if self.lease.pid is None:
+                    self.lease.cancel_before_spawn()
+                else:
+                    self.lease.reaped(self.process)
+
+
+def _startup_cleanup_owner(error: BaseException, ledger: ReservationLedger) -> StructuredParticipantWorker | None:
+    """Accept only this ledger's still-owned failed constructor for finalization."""
+    owner = getattr(error, '_structured_startup_owner', None)
+    if not isinstance(owner, StructuredParticipantWorker):
+        return None
+    lease = getattr(owner, 'lease', None)
+    if (not isinstance(lease, WorkerReservation) or lease.ledger is not ledger or lease.released
+            or lease._cleanup_owner is not owner or ledger.workers.get(lease.key) is not lease):
+        return None
+    return owner
+
+
+def _failed_spawn(process: subprocess.Popen[bytes] | None, lease: WorkerReservation, original: BaseException) -> None:
+    """Never release a returned Popen owner's reservation before confirmed reap."""
+    reaped = process is None
+    if process is not None:
+        try:
+            process.kill()
+        except ProcessLookupError:
+            pass
+        except BaseException as error:  # noqa: BLE001 - still attempt wait/pipe cleanup
+            original.add_note(f"startup kill failed: {type(error).__name__}")
+        try:
+            process.wait(timeout=2)
+            reaped = process.poll() is not None
+        except BaseException as error:  # noqa: BLE001 - unconfirmed child keeps its reservation
+            original.add_note(f"startup reap failed: {type(error).__name__}")
+        finally:
+            for pipe in (process.stdin, process.stdout, process.stderr):
+                if pipe is not None:
+                    try:
+                        pipe.close()
+                    except BaseException as error:  # noqa: BLE001 - retain original failure
+                        original.add_note(f"startup pipe close failed: {type(error).__name__}")
+    if reaped:
+        try:
+            if lease.pid is None:
+                lease.cancel_before_spawn()  # No process, or returned child was reaped before registration.
+            else:
+                assert process is not None
+                lease.reaped(process)
+        except BaseException as error:  # noqa: BLE001 - never replace the initiating failure
+            original.add_note(f"startup reservation cleanup failed: {type(error).__name__}")
 
 
 def _timings(values: Json, *, ready: bool = False) -> None:

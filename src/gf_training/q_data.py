@@ -39,6 +39,8 @@ def load_run(directory: Path, expected_split: str | None = None, *, deadline: fl
     check_deadline(deadline)
     directory = directory.resolve()
     manifest = session.read_json(directory / "manifest.json") if session is not None else json.loads((directory / "manifest.json").read_text())
+    from gf_training.structured_source import reject_engineering_source
+    reject_engineering_source(manifest)
     if manifest.get("schema_version") not in (3, 4) or type(manifest.get("schema_version")) is not int or manifest.get("status") != "complete":
         raise ContractError("training requires a finalized complete healthy run")
     if manifest["schema_version"] == 4:

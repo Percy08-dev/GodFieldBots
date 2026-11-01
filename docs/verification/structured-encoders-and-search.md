@@ -520,17 +520,89 @@ Result SHA-256 values are MLP
 `d8a7b2710ac20baf238a5c8f55c864a048c246dd9a277443edb1534ccd986d78`,
 Transformer `870b6ccbf4229b08921fd484869e0e3df6e37e68da427c08ba5d47deb4ad53d4`.
 Independent read-only evidence/arithmetic audit PASS: all17evidence file hashes,
-37inference/worker source hashes, exact512panel/512supplemental identities and all
-reported quantiles match. The successful-run empty-ledger gate implies confirmed
+37inference/worker source hashes at capture, exact512panel/512supplemental identities
+and all reported quantiles match. These37files are separately preserved from
+their exact b31043e Git blobs under the assessment's `source-snapshot`; subsequent
+constructor fixes are outside the measured snapshot. The successful-run
+empty-ledger gate implies confirmed
 worker reap before result publication. The audit ran no tests, Torch, Simulator,
 GPU or repeated timings. A separate correctness assessment reproduced a P1
 constructor-exception cleanup gap: exceptions after reservation/before Popen leave
 a lease, and exceptions between returned Popen and registration leave a child
 and lease. Four bounded MemoryError/CancelledError probes were explicitly
 killed/reaped/closed and reservations recovered. This violates agreed failure
-ownership and must be fixed before accepting the next runtime milestone. It is
-not evidence of a leak in these successful measured runs. No new GPU attribution
-result.
+ownership. The implementer moved fallible preparation before reservation and
+put Popen/registration in one ownership transaction, with kill/wait/pipe-close
+before confirmed reservation recovery. Independent correctness re-review marks
+the P1 resolved:7selected constructor tests PASS(79deselected), plus6independent
+real-child/preparation fault probes PASS and scoped diff check PASS. Unconfirmed
+reap retains the reservation and original error; no lease API changed. Actual
+OOM, GPU and whole Source review were outside that check. This is not evidence
+of a leak in the successful measured runs. No new GPU attribution result.
+
+## S1 structural Source and startup ownership acceptance
+
+The structural component reader now verifies original collection3/4 manifests,
+Journal5 records, linked reports, both own-view Replays, candidate sidecars,
+cohort/actor identities, own sampling seeds, saved scalar capacities and original
+inventories/hashes before returning immutable actor-local EpisodeRecords. Only
+positive acknowledgements become endpoints. Natural, zero-decision, mixed and
+interrupted diagnostics retain their original outcomes/reasons; every explicit
+learner role remains in the batch so interrupted rows cannot be discarded to
+salvage a learning update. Missing interrupted Replays require original health
+evidence, and every present closure must agree. Public QData/projection/export
+reject the engineering profile before legacy decoding or optional Arrow import.
+
+All-natural cohorts require successful reports independently of a producer status;
+completion/success claims also require all original episodes to be natural.
+Duplicate games, changed original seeds or advertised capacities, and additions or
+earlier-file changes during final hash sweeps are rejected. Both caller and
+configured preprocessing wall/cleanup allowances constrain Source work. No active
+Torch, current hardware, producer equality or resource-cost formula authorizes a
+historical Source. Proofs remain component/False-capacity, qualified=false,
+parent_qualification=not_performed. This implements no Generation2 authority.
+
+Startup failure ownership now also survives an unconfirmed first reap: a private
+lease strong reference and validated exception handoff retain the SAME failed
+worker in Environment's existing finalizer. An unregistered child cannot release
+its lease merely because pid=None. Successful reap clears owner/reservation;
+failed retries retain both and report cleanup health. Eight real-child cases cover
+registration before/after, MemoryError/CancelledError and retry success/failure.
+The test fallback process list is not the evidence for successful finalization.
+
+Implementer HOST command:
+
+```sh
+UV_CACHE_DIR=/tmp/gf-structured-uv uv run --no-sync pytest -q tests/test_structured_source.py tests/test_structured_protocol.py tests/test_structured_environment.py tests/test_journal.py tests/test_lightgbm_data.py tests/test_structured_learning.py
+```
+
+PASS306in38.38s. Independent final correctness recheck PASS5Source+7constructor+
+8real-child handoff cases; conformance recheck PASS23selected cases. Earlier
+scoped reviews established reward perspective, privacy, whole-batch interruption
+rejection and the remaining structural checks; these overlapping counts are not
+added to306. Both final reviews are READY with no blocking findings. The accepted
+lazy guard-import debt and revisit condition are recorded in ADR0023§18.
+
+Root full Ruff PASS and mypy PASS(101source files), plus diff/link checks PASS.
+After ownership changes, root separately ran:
+
+```sh
+timeout --signal=INT --kill-after=15s 120s env CUBLAS_WORKSPACE_CONFIG=:4096:8 GFB_RUN_STRUCTURED_PROTOCOL_CUDA=1 UV_CACHE_DIR=/tmp/gf-structured-uv uv run --no-sync pytest -q tests/test_structured_protocol_cuda.py
+```
+
+PASS3in16.69s with actual CUDA/local-IPC permission, isolated own-participant
+children, CPU reference and confirmed reap. No Simulator requests or learning.
+The earlier13CUDA numerical cases were not repeated because their math did not
+change. A new full-project pytest, native differential and final rebuilt wheel
+remain for later changed integration scope.
+
+All24protected original fit hashes still match their baseline; the dataset,
+Python/Rust lock/config identities and Simulator binary also match. The original
+Simulator07document remains the previously observed external dirty hash
+`66d18191c596a7e371d963c0fa66a8e040cbef7b60433a2ede8acf9bccff650f`,
+not its old baseline value. HEAD is still ffcffa; no normative adoption or
+Simulator change is made by this Bots work. Real actions2 experiments remain
+blocked on the unresolved contract/conformance requirements.
 
 ## Remaining integrated acceptance
 

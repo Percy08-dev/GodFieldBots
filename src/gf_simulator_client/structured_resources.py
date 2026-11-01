@@ -1,7 +1,7 @@
 """Parent-owned process/decision CUDA reservations, released only at owned boundaries."""
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from gf_common.domain import ContractError, integer
@@ -54,6 +54,7 @@ class WorkerReservation:
     pid: int | None = None
     serial: int = 0
     released: bool = False
+    _cleanup_owner: Any = field(default=None, repr=False, compare=False)
 
     def spawned(self, process: Any) -> None:
         if self.pid is not None or self.released:
@@ -64,8 +65,12 @@ class WorkerReservation:
     def cancel_before_spawn(self) -> None:
         if self.pid is not None or self.released:
             raise ContractError("spawned worker requires confirmed reap")
+        process = getattr(self._cleanup_owner, 'process', None)
+        if process is not None and process.poll() is None:
+            raise ContractError("owned startup process requires confirmed reap")
         del self.ledger.workers[self.key]
         self.released = True
+        self._cleanup_owner = None
 
     def reserve_decision(self, temporary_bytes: int) -> int:
         integer(temporary_bytes, 0, self.ledger.global_cuda_bytes)
@@ -91,3 +96,4 @@ class WorkerReservation:
         self.decisions.clear()
         del self.ledger.workers[self.key]
         self.released = True
+        self._cleanup_owner = None
