@@ -12,13 +12,21 @@ import sys
 import time
 import uuid
 from collections.abc import Awaitable, Callable
+from contextlib import ExitStack
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 
-from gf_common.domain import REVIEWED_SPEC_HASHES, ContractError, Json, RuntimePolicyBinding, digest
+from gf_common.domain import (
+    REVIEWED_SPEC_HASHES,
+    ContractError,
+    Json,
+    RuntimePolicyBinding,
+    canonical,
+    digest,
+)
 from gf_models.arrays import sha256
 from gf_models.config import (
     GRUModelConfig,
@@ -272,13 +280,22 @@ async def train_ppo(loaded: Any, collector: Collector, directory: Path, *, mode:
     from gf_common.structured import ActionConfigV2
     if isinstance(loaded.config.actions, ActionConfigV2):
         require_qualified_contract(loaded.config.actions.action_contract)
+    return await _run_ppo(loaded, collector, directory, mode=mode, pause_after_update=pause_after_update)
+
+
+async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 'fresh',
+                   pause_after_update: int | None = None, _structured_component: bool = False) -> Json:
     operation_started = time.monotonic()
     operation_unix = time.time()
     config = loaded.config
-    model, training = config.model, config.training
-    if not isinstance(model, (MLPModelConfig, GRUModelConfig, TransformerModelConfig)) or not isinstance(training, PPOTrainingConfig) or model.checkpoint is not None or config.run.split != 'train':
+    ops: Any = None
+    if _structured_component:
+        from gf_training import structured_ppo
+        ops = structured_ppo
+    model, training = ops.validate_config(config) if ops else config.model, config.training
+    if not ops and (not isinstance(model, (MLPModelConfig, GRUModelConfig, TransformerModelConfig)) or not isinstance(training, PPOTrainingConfig) or model.checkpoint is not None or config.run.split != 'train'):
         raise ContractError('PPO requires fresh supported model recipe and train split')
-    if isinstance(model, (GRUModelConfig, TransformerModelConfig)) != isinstance(training, SequencePPOTrainingConfig):
+    if not ops and isinstance(model, (GRUModelConfig, TransformerModelConfig)) != isinstance(training, SequencePPOTrainingConfig):
         raise ContractError("PPO model/sequence training mismatch")
     if config.server.external_url is not None:
         raise ContractError('PPO requires owned distinct-seed Simulator groups')
@@ -289,17 +306,26 @@ async def train_ppo(loaded: Any, collector: Collector, directory: Path, *, mode:
     if mode == 'fresh' and pause_after_update is not None and (type(pause_after_update) is not int or not 0 < pause_after_update <= training.max_updates):
         raise ContractError('invalid absolute pause target')
     preprocessing_options: Json = {'model_id': model.model_id} if isinstance(model, (GRUModelConfig, TransformerModelConfig)) else {}
-    preprocessing = (preprocessing_identity(config.preprocessing, deadline=operation_started + config.run.execution_seconds, **preprocessing_options)
+    preprocessing = ((ops.preprocessing_identity(config, deadline=operation_started + config.run.execution_seconds) if ops else preprocessing_identity(config.preprocessing, deadline=operation_started + config.run.execution_seconds, **preprocessing_options))
                      if mode == 'fresh' else None)
     directory = directory.resolve()
     with run_lock(directory, create=mode == 'fresh') as ownership:
-        identity_deadline = operation_started + config.run.execution_seconds if mode == 'fresh' else operation_started + read_json(directory / 'run.json')['execution_deadline_unix'] - operation_unix
+        initial_scan = None
+        if ops and mode == 'resume':
+            initial_state, initial_scan = ops.read_control(directory / 'run.json', config,
+                deadline=operation_started + config.run.execution_seconds)
+            identity_deadline = operation_started + ops.saved_deadline(initial_state) - operation_unix
+            del initial_state
+        else:
+            identity_deadline = operation_started + config.run.execution_seconds if mode == 'fresh' else operation_started + read_json(directory / 'run.json')['execution_deadline_unix'] - operation_unix
         if preprocessing is None:
-            preprocessing = preprocessing_identity(config.preprocessing, deadline=identity_deadline, **preprocessing_options)
+            preprocessing = (ops.preprocessing_identity(config, deadline=identity_deadline) if ops else preprocessing_identity(config.preprocessing, deadline=identity_deadline, **preprocessing_options))
         identity = source_identity(identity_deadline)
         identity["integration"] = integration_identity(config, identity_deadline)
         identity["configuration_inputs_sha256"] = digest(loaded.inputs)
         identity["preprocessing"] = preprocessing
+        if ops:
+            ops.decorate_identity(identity)
         invocation_started = operation_started
         now = operation_unix
         if mode == 'fresh':
@@ -313,16 +339,28 @@ async def train_ppo(loaded: Any, collector: Collector, directory: Path, *, mode:
                      'execution_deadline_unix': now + config.run.execution_seconds,
                      'updates': 0, 'accepted_decisions': 0, 'optimizer_steps': 0, 'generation_sha256': None,
                      'collection_seconds': 0., 'update_seconds': 0., 'invocations': [], 'completed_updates': None}
-            atomic_json(directory / 'artifact-registry.json', {})
-            atomic_json(directory / 'run.json', state)
+            if ops:
+                ops.initialize_state(state, config)
+            if ops:
+                ops.persist_control(directory / 'artifact-registry.json', {'schema_version': 2, 'generations': {}}, config, deadline=identity_deadline)
+                ops.persist_control(directory / 'run.json', state, config, deadline=identity_deadline)
+            else:
+                atomic_json(directory / 'artifact-registry.json', {})
+                atomic_json(directory / 'run.json', state)
             rng = np.random.Generator(np.random.PCG64(training.seeds[0]))
             pool = [0]
         else:
-            state, records = validate_chain(directory, require_complete=False, deadline=identity_deadline)
+            state, records = (ops.validate_parent(directory, config, identity_deadline,
+                extra_owned_bytes=initial_scan.retained if initial_scan is not None else 0)
+                if ops else validate_chain(directory, require_complete=False, deadline=identity_deadline))
+            if initial_scan is not None:
+                initial_scan.finalize()
             if state['status'] != 'paused' or state['updates'] == 0:
                 raise ContractError('resume requires an explicitly paused committed PPO run')
             if state['config_sha256'] != loaded.sha256 or state['identity'] != identity or state['device'] != training.device:
                 raise ContractError('resume code/runtime/config/device mismatch')
+            if ops and canonical(state['execution']) != canonical(ops.execution(config)):
+                raise ContractError('resume execution binding differs from current Config')
             if now < state['last_unix'] or now >= state['wall_deadline_unix'] or now >= state['execution_deadline_unix']:
                 raise ContractError('resume clock rollback or original deadline expired')
             controls = records[-1]['parent_controls']
@@ -339,8 +377,16 @@ async def train_ppo(loaded: Any, collector: Collector, directory: Path, *, mode:
         admission = invocation_started + state['admission_deadline_unix'] - now
         # Even initialization and source-identity work consume the original clock.
         state['status'] = 'running'
-        atomic_json(directory / 'run.json', state)
-        child = LearningProcess(directory, training.max_log_bytes)
+        if ops:
+            ops.persist_control(directory / 'run.json', state, config, deadline=execution, original=initial_scan)
+            initial_scan = None
+        else:
+            atomic_json(directory / 'run.json', state)
+        ledger = None
+        if ops:
+            child, ledger = ops.make_child(directory, config, state, deadline=execution)
+        else:
+            child = LearningProcess(directory, training.max_log_bytes)
         error: BaseException | None = None
         final_status = 'complete'
         try:
@@ -351,10 +397,15 @@ async def train_ppo(loaded: Any, collector: Collector, directory: Path, *, mode:
                 request['sequence_length'] = training.sequence_length
             if mode == 'resume':
                 request['restore'] = str(checkpoint_path(directory, state['updates']))
-            initial = await child.request(request, execution)
+            initial = (await child.initialize(training.seeds[0], checkpoint_path(directory, 0),
+                restore=checkpoint_path(directory, state['updates']) if mode == 'resume' else None, deadline=execution)
+                if ops else await child.request(request, execution))
             if mode == 'fresh':
                 state['hardware'] = initial['hardware']
-                commit_generation(directory, state, generation=0, update=None, controls=_controls(rng, pool, 0), deadline=execution)
+                if ops:
+                    ops.commit(directory, state, config, generation=0, update=None, controls=_controls(rng, pool, 0), acknowledgement=initial, deadline=execution)
+                else:
+                    commit_generation(directory, state, generation=0, update=None, controls=_controls(rng, pool, 0), deadline=execution)
             elif initial['hardware'] != state['hardware']:
                 raise ContractError('resume hardware identity mismatch')
             def check_clock() -> None:
@@ -370,58 +421,93 @@ async def train_ppo(loaded: Any, collector: Collector, directory: Path, *, mode:
                         raise ContractError('zero-update PPO run ineligible')
                     break
                 generation = state['updates']
-                registry = {'random': RuntimePolicyBinding('random'), 'heuristic': RuntimePolicyBinding('heuristic')}
-                learner_label, learner_binding = owned_binding(directory, generation)
+                registry = ({'random-structured-v1': RuntimePolicyBinding('random'), 'heuristic-structured-v1': RuntimePolicyBinding('heuristic')}
+                            if ops else {'random': RuntimePolicyBinding('random'), 'heuristic': RuntimePolicyBinding('heuristic')})
+                learner_label, learner_binding = ops.binding(directory, generation, config, execution) if ops else owned_binding(directory, generation)
                 registry[learner_label] = learner_binding
                 snapshots = []
                 for snapshot in pool:
-                    label, binding = owned_binding(directory, snapshot)
+                    label, binding = ops.binding(directory, snapshot, config, execution) if ops else owned_binding(directory, snapshot)
                     registry[label] = binding
                     snapshots.append(label)
-                groups = training_groups(training.seeds[0], generation, learner_label, tuple(snapshots), rng)
+                groups = (training_groups(training.seeds[0], generation, learner_label, tuple(snapshots), rng, actions_version=2)
+                          if ops else training_groups(training.seeds[0], generation, learner_label, tuple(snapshots), rng))
                 batch_id = f'batch-{generation:06}'
                 linkage = {'parent_run_id': state['run_id'], 'parent_run_path': str(directory), 'batch_id': batch_id,
                            'collection_generation': generation,
                            'learner_seats': {spec.episode_id: spec.learner_viewer for group in groups for spec in group.episodes}}
                 collection_started = time.monotonic()
-                collection = await collector(CollectionPlan(groups, registry, directory / 'collections' / batch_id, linkage, execution, wall))
+                plan = CollectionPlan(groups, registry, directory / 'collections' / batch_id, linkage, execution, wall)
+                if ops:
+                    assert ledger is not None
+                    ops.validate_owned_collection(plan, ledger, config=config, deadline=execution)
+                    collection = await collector(plan, ledger)
+                    if ledger.workers or ledger.updating:
+                        raise ContractError('structured collection returned unreaped participants or active update')
+                else:
+                    collection = await collector(plan)
                 if collection.directory.resolve() != (directory / 'collections' / batch_id).resolve() or collection.report.get('comparison_valid') is not True:
                     raise ContractError('collection callback did not finalize requested original batch')
                 check_clock()
                 from gf_common.schedule import serialize_schedule
-                collection_manifest = read_json(collection.directory / 'manifest.json')
-                if collection_manifest.get('schedule') != serialize_schedule(groups, 4) or collection_manifest.get('policy_bindings') != {key: asdict(value) for key, value in registry.items()}:
+                collection_scan = None
+                if ops:
+                    collection_manifest, collection_scan = ops.read_control(collection.directory / 'manifest.json', config, deadline=execution)
+                else:
+                    collection_manifest = read_json(collection.directory / 'manifest.json')
+                expected_bindings = {key: asdict(value) for key, value in registry.items()}
+                bindings_match = (canonical(collection_manifest.get('policy_bindings')) == canonical(expected_bindings)
+                                  if ops else collection_manifest.get('policy_bindings') == expected_bindings)
+                if collection_manifest.get('schedule') != serialize_schedule(groups, 4) or not bindings_match:
                     raise ContractError('collection callback changed frozen schedule/policies')
                 collection_seconds = time.monotonic() - collection_started
                 numeric = directory / 'numeric' / batch_id
-                online_context = OnlinePPOContext(directory, state["run_id"], batch_id, generation, ownership.token)
-                if config.preprocessing.backend == 'rust':
-                    decision_count, proof = await stage_rollout(collection.directory, numeric, model, linkage,
-                                                         config.preprocessing, deadline=execution,
-                                                         online_context=online_context,
-                                                         expected_identity=preprocessing, wall_deadline=wall)
-                else:
-                    decisions, proof = ingest_collection(collection.directory, model, linkage, deadline=execution,
-                                                         online_context=online_context)
-                    if isinstance(model, (GRUModelConfig, TransformerModelConfig)):
-                        from gf_training.sequence_rollout import write_rollout as write_sequence
-                        write_sequence(numeric, decisions, model, deadline=execution)
+                numeric_files = None
+                with ExitStack() as source_scope:
+                    if ops:
+                        assert collection_scan is not None
+                        decision_count, proof, numeric_files = source_scope.enter_context(
+                            ops.project(plan, numeric, config, learner_label, generation, execution,
+                                expected_manifest_sha256=collection_scan.files[collection.directory / 'manifest.json'][1],
+                                extra_owned_bytes=collection_scan.retained))
                     else:
-                        write_rollout(numeric, decisions, deadline=execution)
-                    decision_count = len(decisions)
-                    del decisions
-                numeric_hash = sha256(numeric / 'rollout.json', execution)
-                if owned_bytes(directory, execution) > training.max_owned_bytes or time.monotonic() >= execution:
-                    raise RuntimeError('PPO collection/encoding exceeded execution/storage limits')
-                next_generation = generation + 1
-                await asyncio.sleep(0)  # Serve pending cancellation before optimizer side effects.
-                update_started = time.monotonic()
-                metrics = await child.request({'command': 'update', 'batch': str(numeric), 'batch_hash': numeric_hash,
-                                               'output': str(checkpoint_path(directory, next_generation)), 'action_hash': digest(asdict(config.actions))}, execution)
-                check_clock()
-                update_seconds = time.monotonic() - update_started
-                if time.monotonic() >= execution or owned_bytes(directory, execution) > training.max_owned_bytes:
-                    raise RuntimeError('PPO update/save execution/storage overrun')
+                        online_context = OnlinePPOContext(directory, state["run_id"], batch_id, generation, ownership.token)
+                        if config.preprocessing.backend == 'rust':
+                            decision_count, proof = await stage_rollout(collection.directory, numeric, model, linkage,
+                                                                 config.preprocessing, deadline=execution,
+                                                                 online_context=online_context,
+                                                                 expected_identity=preprocessing, wall_deadline=wall)
+                        else:
+                            decisions, proof = ingest_collection(collection.directory, model, linkage, deadline=execution,
+                                                                 online_context=online_context)
+                            if isinstance(model, (GRUModelConfig, TransformerModelConfig)):
+                                from gf_training.sequence_rollout import (
+                                    write_rollout as write_sequence,
+                                )
+                                write_sequence(numeric, decisions, model, deadline=execution)
+                            else:
+                                write_rollout(numeric, decisions, deadline=execution)
+                            decision_count = len(decisions)
+                            del decisions
+                    numeric_hash = sha256(numeric / 'rollout.json', execution)
+                    if owned_bytes(directory, execution) > training.max_owned_bytes or time.monotonic() >= execution:
+                        raise RuntimeError('PPO collection/encoding exceeded execution/storage limits')
+                    next_generation = generation + 1
+                    await asyncio.sleep(0)  # Serve pending cancellation before optimizer side effects.
+                    update_started = time.monotonic()
+                    if ops:
+                        acknowledgement = await child.update(numeric, numeric_hash, learner_label,
+                            checkpoint_path(directory, next_generation), deadline=execution)
+                        metrics = {**acknowledgement['metrics'], **acknowledgement['timings']}
+                    else:
+                        metrics = await child.request({'command': 'update', 'batch': str(numeric), 'batch_hash': numeric_hash,
+                                                       'output': str(checkpoint_path(directory, next_generation)), 'action_hash': digest(asdict(config.actions))}, execution)
+                    check_clock()
+                    update_seconds = time.monotonic() - update_started
+                    if time.monotonic() >= execution or owned_bytes(directory, execution) > training.max_owned_bytes:
+                        raise RuntimeError('PPO update/save execution/storage overrun')
+                if collection_scan is not None:
+                    collection_scan.finalize()
                 state['accepted_decisions'] += decision_count
                 state['optimizer_steps'] = metrics['optimizer_steps']
                 state['collection_seconds'] += collection_seconds
@@ -436,8 +522,16 @@ async def train_ppo(loaded: Any, collector: Collector, directory: Path, *, mode:
                           'planned_games': 16, 'actual_games': proof['games'], 'health': {},
                           'policy_bindings': {key: asdict(value) for key, value in registry.items()},
                           'learner_seats': linkage['learner_seats'], 'collection_seconds': collection_seconds, 'update_seconds': update_seconds}
-                commit_generation(directory, state, generation=next_generation, update=update, controls=_controls(rng, pool, next_generation), deadline=execution)
-                retain(directory, next_generation, deadline=execution)
+                if ops:
+                    update.update(schema_version=2, model_id=state['model_id'], model_version='2', input_recipe=state['input_recipe'],
+                                  action_contract=state['action_contract'], purpose='component', synthetic_capacity=False,
+                                  numeric_files=numeric_files)
+                    ops.commit(directory, state, config, generation=next_generation, update=update,
+                        controls=_controls(rng, pool, next_generation), acknowledgement=acknowledgement, deadline=execution)
+                    ops.retain(directory, next_generation, config, execution)
+                else:
+                    commit_generation(directory, state, generation=next_generation, update=update, controls=_controls(rng, pool, next_generation), deadline=execution)
+                    retain(directory, next_generation, deadline=execution)
                 check_clock()
                 if time.monotonic() >= execution or owned_bytes(directory, execution) > training.max_owned_bytes:
                     raise RuntimeError('PPO commit/retention execution/storage overrun')
@@ -475,16 +569,28 @@ async def train_ppo(loaded: Any, collector: Collector, directory: Path, *, mode:
             state['status'] = final_status
             state['completed_updates'] = state['updates'] if final_status == 'complete' else None
         try:
-            atomic_json(directory / 'run.json', state)
+            if ops:
+                ops.persist_control(directory / 'run.json', state, config, deadline=wall)
+            else:
+                atomic_json(directory / 'run.json', state)
             if time.monotonic() >= wall or owned_bytes(directory, wall) > training.max_owned_bytes:
                 state.update(status='failed', failure='FinalPersistenceOverrun', quarantine=True)
-                atomic_json(directory / 'run.json', state)
+                if ops:
+                    ops.persist_control(directory / 'run.json', state, config, deadline=wall)
+                else:
+                    atomic_json(directory / 'run.json', state)
         except BaseException as failure:  # noqa: BLE001 - persist failure after owned cleanup
             state.update(status='failed', failure=type(failure).__name__, quarantine=True)
-            try:
-                atomic_json(directory / 'run.json', state)
-            except OSError:
-                pass
+            if ops:
+                try:
+                    ops.persist_control(directory / 'run.json', state, config, deadline=wall)
+                except BaseException as correction:  # noqa: BLE001 - initiating failure survives best-effort correction
+                    failure.add_note('structured state correction failed: ' + type(correction).__name__)
+            else:
+                try:
+                    atomic_json(directory / 'run.json', state)
+                except OSError:
+                    pass
             error = error or failure
         if error is not None:
             raise error

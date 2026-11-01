@@ -94,9 +94,16 @@ def _name(value: Any) -> str:
 
 
 class _SourceOwner:
-    def __init__(self, directory: Path, settings: PreparationConfig, deadline: float) -> None:
+    def __init__(self, directory: Path, settings: PreparationConfig, deadline: float, *, extra_owned_bytes: int = 0,
+                 max_owned_bytes: int | None = None) -> None:
         self.root, self.settings, self.deadline = directory.absolute(), settings, deadline
-        self.used = 0
+        self.limit = settings.memory_budget_mib * 1024**2
+        if max_owned_bytes is not None:
+            integer(max_owned_bytes, 1, 12 * 1024**3)
+            self.limit = min(self.limit, max_owned_bytes)
+        integer(extra_owned_bytes, 0, self.limit)
+        self.extra_owned_bytes = extra_owned_bytes
+        self.used = extra_owned_bytes
         self.files: Json = {}
         self.inventories: list[tuple[str, tuple[str, ...]]] = []
         self._safe(self.root)
@@ -108,7 +115,7 @@ class _SourceOwner:
     def charge(self, size: int) -> None:
         self.check()
         integer(size, 0)
-        if self.used + size > self.settings.memory_budget_mib * 1024**2:
+        if self.used + size > self.limit:
             raise ResourceLimit('structured original-source reservation exhausted before decoding')
         self.used += size
 
@@ -158,7 +165,7 @@ class _SourceOwner:
 
     def _temporary(self, amount: int) -> None:
         self.check()
-        if self.used + amount > self.settings.memory_budget_mib * 1024**2:
+        if self.used + amount > self.limit:
             raise ResourceLimit('structured inventory comparison reservation exhausted')
 
     def _inventory_names(self, pattern: str, *, retain: bool) -> tuple[str, ...]:
@@ -340,12 +347,14 @@ def _header_identity(header: Json, manifest: Json, episode: Json, spec: Json, ac
         raise ContractError('original journal caps differ from declared actions/policy')
 
 
-def _source_owner(directory: Path, settings: PreparationConfig, deadline: float) -> _SourceOwner:
+def _source_owner(directory: Path, settings: PreparationConfig, deadline: float, *, extra_owned_bytes: int = 0,
+                  max_owned_bytes: int | None = None) -> _SourceOwner:
     settings = preparation_config(asdict(settings))
     if settings.backend != 'python' or settings.reader != 'structured-v1':
         raise ContractError('explicit Python structured source reader required; no native fallback')
     deadline = min(deadline, time.monotonic() + settings.wall_seconds - settings.cleanup_seconds)
-    return _SourceOwner(directory, settings, deadline)
+    return (_SourceOwner(directory, settings, deadline, extra_owned_bytes=extra_owned_bytes, max_owned_bytes=max_owned_bytes)
+            if extra_owned_bytes or max_owned_bytes is not None else _SourceOwner(directory, settings, deadline))
 
 
 def inspect_component_collection(directory: Path, *, actions: ActionConfigV2, settings: PreparationConfig,
@@ -363,11 +372,11 @@ class _SourceSnapshot:
 
     @property
     def resident_bytes(self) -> int:
-        return self._retained_bytes
+        return self._retained_bytes + self._owner.extra_owned_bytes
 
     @property
     def max_owned_bytes(self) -> int:
-        return self._owner.settings.memory_budget_mib * 1024**2
+        return self._owner.limit
 
     def check(self) -> None:
         self._owner.check()
@@ -391,8 +400,8 @@ class _SourceSnapshot:
         """Deduct only references to the exact same retained Python objects."""
         seen: set[int] = set()
         _owned_bytes(shared, seen)
-        return _owned_bytes((self.collection.episodes, self.collection._manifest, self.collection._proof,
-                             self._owner.files, self._owner.inventories), seen)
+        return (self._owner.extra_owned_bytes + _owned_bytes((self.collection.episodes, self.collection._manifest, self.collection._proof,
+                             self._owner.files, self._owner.inventories), seen))
 
     def additional_bytes(self, value: Any) -> int:
         """External union minus actual retained Source identities."""
@@ -409,8 +418,9 @@ class _SourceSnapshot:
 
 @contextmanager
 def _component_source_snapshot(directory: Path, *, actions: ActionConfigV2, settings: PreparationConfig,
-                               expected_split: str | None = None, deadline: float = float('inf')) -> Iterator[_SourceSnapshot]:
-    owner = _source_owner(directory, settings, deadline)
+                               expected_split: str | None = None, deadline: float = float('inf'),
+                               extra_owned_bytes: int = 0, max_owned_bytes: int | None = None) -> Iterator[_SourceSnapshot]:
+    owner = _source_owner(directory, settings, deadline, extra_owned_bytes=extra_owned_bytes, max_owned_bytes=max_owned_bytes)
     collection = _inspect_component_collection(owner, actions, expected_split)
     retained = _owned_bytes((collection.episodes, collection._manifest, collection._proof, owner.files, owner.inventories))
     snapshot = _SourceSnapshot(collection, owner, retained)

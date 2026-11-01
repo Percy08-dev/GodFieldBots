@@ -218,10 +218,18 @@ async def _join_owned_groups(tasks: list[asyncio.Task[Any]], wall_deadline: floa
             detect_threshold = False
 
 
-async def run_experiment(loaded: LoadedConfig, command: str, *, collection: CollectionPlan | None = None) -> tuple[Path, Json]:
+async def run_experiment(loaded: LoadedConfig, command: str, *, collection: CollectionPlan | None = None,
+                         ledger: Any = None) -> tuple[Path, Json]:
     config = loaded.config
     if isinstance(config.actions, ActionConfigV2):
         require_qualified_contract(config.actions.action_contract)
+    return await _run_experiment(loaded, command, collection=collection, ledger=ledger)
+
+
+async def _run_experiment(loaded: LoadedConfig, command: str, *, collection: CollectionPlan | None = None,
+                          ledger: Any = None, _structured_factory: Any = None) -> tuple[Path, Json]:
+    """Private composition body; the normal environment factory remains guarded."""
+    config = loaded.config
     started = collection.started_monotonic if collection is not None and collection.started_monotonic is not None else time.monotonic()
     from gf_cli.bindings import bindings, native_preflight
     wall_deadline = collection.wall_deadline if collection is not None else started + min(config.run.wall_seconds, config.run.execution_seconds + config.run.finalization_seconds)
@@ -230,7 +238,7 @@ async def run_experiment(loaded: LoadedConfig, command: str, *, collection: Coll
     execution_deadline = collection.execution_deadline if collection is not None else started + config.run.execution_seconds
     preflight_deadline = min(execution_deadline, replay_deadline)
     structured = isinstance(config.actions, ActionConfigV2)
-    ledger = None
+    supplied_ledger = ledger
     structured_preprocessing = None
     if structured:
         from gf_cli.config import RunConfigV2
@@ -238,7 +246,11 @@ async def run_experiment(loaded: LoadedConfig, command: str, *, collection: Coll
         from gf_simulator_client.structured_resources import ReservationLedger
         structured_preprocessing = structured_backend(config.preprocessing)
         assert isinstance(config.run, RunConfigV2)
-        ledger = ReservationLedger(config.run.global_cuda_budget_bytes, config.run.max_participant_workers)
+        ledger = supplied_ledger if supplied_ledger is not None else ReservationLedger(config.run.global_cuda_budget_bytes, config.run.max_participant_workers)
+        if not isinstance(ledger, ReservationLedger):
+            raise ContractError('structured runtime ledger type mismatch')
+    elif supplied_ledger is not None:
+        raise ContractError('legacy collection cannot consume a structured ledger')
     if collection is None and structured:
         registry, labels = structured_bindings(config.model, config.opponent)
     elif collection is None:
@@ -250,11 +262,13 @@ async def run_experiment(loaded: LoadedConfig, command: str, *, collection: Coll
     else:
         registry, labels = collection.bindings, ("owned", "owned")
     if structured:
-        # Generation2 owned/formal neural contexts are qualified by the next
-        # integration stage, never by accepting bare component artifacts here.
-        if any(binding.model_id not in ("random", "heuristic") or binding.policy_options is not None for binding in registry.values()):
-            raise ContractError("structured neural collection requires Generation2 qualification")
-        if any(label != binding.model_id + "-structured-v1" for label, binding in registry.items()):
+        neural = any(binding.model_id not in ("random", "heuristic") or binding.policy_options is not None for binding in registry.values())
+        if neural:
+            if collection is None or supplied_ledger is None:
+                raise ContractError('structured neural collection requires owned Generation2 context and SAME ledger')
+            from gf_cli.structured import validate_owned_collection
+            validate_owned_collection(collection, ledger, config, deadline=preflight_deadline)
+        elif any(label != binding.model_id + "-structured-v1" for label, binding in registry.items()):
             raise ContractError("structured baseline registry label/role mismatch")
         if collection is not None and any(label not in registry for group in collection.groups for spec in group.episodes for label in spec.policies):
             raise ContractError("structured collection schedule lacks an owned policy binding")
@@ -344,7 +358,7 @@ async def run_experiment(loaded: LoadedConfig, command: str, *, collection: Coll
         if structured:
             from gf_cli.structured import structured_environment
             assert ledger is not None
-            environment = structured_environment(settings, ledger)
+            environment = (structured_environment if _structured_factory is None else _structured_factory)(settings, ledger)
         else:
             environment = SimulatorEnvironment(settings, make_policy, ParticipantJournal)
         semaphore = asyncio.Semaphore(config.run.concurrency)

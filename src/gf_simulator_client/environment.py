@@ -126,6 +126,11 @@ class SimulatorEnvironment:
                  journal_factory: Callable[..., Journal]) -> None:
         if isinstance(settings.actions, ActionConfigV2):
             require_qualified_contract(settings.actions.action_contract)
+        self._initialize(settings, policy_factory, journal_factory)
+
+    def _initialize(self, settings: EnvironmentSettings, policy_factory: Callable[[str], Policy],
+                    journal_factory: Callable[..., Journal]) -> None:
+        """Private implementation seam; normal entry points retain their guards."""
         self.settings = settings
         self.policy_factory = policy_factory
         self.journal_factory = journal_factory
@@ -174,6 +179,10 @@ class SimulatorEnvironment:
                        spec: EpisodeSpec) -> EpisodeResult:
         if isinstance(self.settings.actions, ActionConfigV2):
             require_qualified_contract(self.settings.actions.action_contract)
+        return await self._episode_body(client, definitions, group, spec)
+
+    async def _episode_body(self, client: AttestedClient, definitions: Json, group: EpisodeGroup,
+                            spec: EpisodeSpec) -> EpisodeResult:
         started = time.monotonic()
         result = self._new_result(group, spec)
         directory = self.settings.output_dir / spec.episode_id
@@ -377,6 +386,15 @@ class SimulatorEnvironment:
     async def run_group(self, group: EpisodeGroup) -> GroupResult:
         if isinstance(self.settings.actions, ActionConfigV2):
             require_qualified_contract(self.settings.actions.action_contract)
+        return await self._run_group_body(group)
+
+    def _new_server(self, *args: Any, **kwargs: Any) -> ManagedServer:
+        return ManagedServer(*args, **kwargs)
+
+    def _new_client(self, *args: Any, **kwargs: Any) -> AttestedClient:
+        return AttestedClient(*args, **kwargs)
+
+    async def _run_group_body(self, group: EpisodeGroup) -> GroupResult:
         results: list[EpisodeResult] = []
         health: Json = {}
         server: ManagedServer | None = None
@@ -386,7 +404,7 @@ class SimulatorEnvironment:
                 raise TimeoutError("group admission deadline")
             startup = None
             if self.settings.external_url is None:
-                server = ManagedServer(self.settings.binary, self.settings.server_config, group.seed,
+                server = self._new_server(self.settings.binary, self.settings.server_config, group.seed,
                                        len(group.episodes), self.settings.output_dir / f"server-{group.episodes[0].episode_id}",
                                        self.settings.startup_seconds, self.settings.shutdown_seconds,
                                        cleanup_deadline=min(self.settings.wall_deadline, self.settings.work_deadline))
@@ -399,7 +417,7 @@ class SimulatorEnvironment:
                 url = self.settings.external_url
                 expected = server_effective(self.settings.server_config, None)
             health["expected_effective"] = expected
-            client = AttestedClient(url, expected_fingerprint=self.settings.expected_fingerprint or seed_fingerprint(group.seed),
+            client = self._new_client(url, expected_fingerprint=self.settings.expected_fingerprint or seed_fingerprint(group.seed),
                                     fixed_seed_experiment=self.settings.fixed_seed_experiment,
                                     expected_effective=expected, startup_info=startup["test_server_info"] if startup else None,
                                     request_seconds=self.settings.request_seconds, retries=self.settings.transport_retries,

@@ -1,6 +1,8 @@
 """Actions2 composition and precollection guards; no eager Torch imports."""
 from __future__ import annotations
 
+from typing import Any
+
 from gf_common.domain import ContractError, RuntimePolicyBinding
 from gf_common.preprocessing import PreparationConfig
 from gf_models.config import ModelConfig
@@ -9,6 +11,7 @@ from gf_models.structured_binding import ConfiguredNeuralModelV2
 from gf_simulator_client.environment import EnvironmentSettings
 from gf_simulator_client.structured_environment import StructuredSimulatorEnvironment
 from gf_simulator_client.structured_resources import ReservationLedger
+from gf_training.collection import CollectionPlan
 from gf_training.structured_journal import StructuredJournal
 
 
@@ -40,3 +43,9 @@ def structured_backend(config: PreparationConfig) -> str:
 
 def structured_environment(settings: EnvironmentSettings, ledger: ReservationLedger) -> StructuredSimulatorEnvironment:
     return StructuredSimulatorEnvironment(settings, make_structured_policy, StructuredJournal, ledger=ledger)
+
+
+def validate_owned_collection(plan: CollectionPlan, ledger: ReservationLedger, config: Any, *, deadline: float) -> None:
+    from gf_training.structured_ppo import cap
+    from gf_training.structured_ppo_source import validate_owned_collection as validate
+    validate(plan, ledger, max_owned_bytes=cap(config), deadline=deadline)

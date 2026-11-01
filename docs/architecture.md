@@ -36,8 +36,12 @@ and versioned labels also pass both reviews,154related CPU tests/3skips and3actu
 CUDA model lifecycle/resume checks; current full Ruff/mypy pass for105source
 files. S3b1 recorded Source↔numeric correspondence, retained snapshot context and
 joint I/O admission pass329selected regressions and both reviews; current full
-Ruff/mypy cover106source files. Qualified Source authority, PPO2 coordinator, new native
-processing and deterministic LightGBM2 integration remain pending;
+Ruff/mypy cover106source files. S3b2 connects the common PPO coordinator to
+Generation2 and wire3 using unpatched public guards and a private FakeHTTP
+component seam. Both independent reviews are READY; its complete CPU module
+passes35tests and its actual CUDA learner/CPU-or-CUDA inference resume matrix
+passes6conditions. Full Ruff/mypy cover107source files. Qualified Source authority,
+new native processing and deterministic LightGBM2 integration remain pending;
 their bounded design is accepted in ADR0023. No real v2 experiment or full-plan
 acceptance is claimed. Milestone scopes, overlapping historical counts and
 remaining performance/experiment checks are in the

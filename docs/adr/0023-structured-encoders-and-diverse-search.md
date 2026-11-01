@@ -1495,3 +1495,21 @@ Reject missing/mismatched ownership before collection and pass that exact ledger
 through CLI composition. CollectionPlan remains a pure serializable value; no
 ownership token or runtime object reaches participant settings. Common-loop
 composition starts only after this correspondence checkpoint stabilizes.
+When the composing historical validator already retains sealed parent metadata,
+pass its ownership as private extra_owned_bytes (default0) into Source snapshot
+admission BEFORE the first Source JSON parse. Apply the one caller cap/deadline
+without relabeling resources or double-counting shared objects. For live updates,
+check originals before Adam and retain/recheck Source through update completion
+before Generation2 commit; a later mismatch invalidates the whole parent and
+leaves the new generation uncommitted, never salvaged as a healthy resume point.
+Component collection evidence must never patch central qualification guards to
+no-ops. Keep public run_experiment and public/direct Environment constructors
+unchanged and guarded, including the existing run_group and _episode wrappers.
+Factor only private initialization/episode/group/common collection bodies
+and private server/client construction hooks; a test-owned subclass initializes
+through that private path and supplies fixed FakeHTTP/scripted doubles. The
+private test collector injects that subclass into the shared private collection
+runner. Injecting a normal Environment still invokes its ordinary guarded
+constructor. No public component flag, authority token or real-I/O bypass is added.
+Fresh integration runs under this unpatched setup replace earlier patched-gate
+functional smokes as acceptance evidence.

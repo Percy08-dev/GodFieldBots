@@ -63,8 +63,19 @@ class StructuredSimulatorEnvironment(SimulatorEnvironment):
         if not isinstance(settings.actions, ActionConfigV2):
             raise ContractError("structured environment requires actions2")
         super().__init__(settings, policy_factory, journal_factory)
+        self._initialize_structured_fields(ledger)
+
+    def _initialize_structured_fields(self, ledger: ReservationLedger) -> None:
         self.ledger = ledger
         self._include_input_time = True
+
+    def _initialize_structured(self, settings: EnvironmentSettings, policy_factory: Callable[..., Any],
+                               journal_factory: Callable[..., Journal], *, ledger: ReservationLedger) -> None:
+        """Private fixed-I/O component seam; public constructor stays guarded."""
+        if not isinstance(settings.actions, ActionConfigV2):
+            raise ContractError('structured environment requires actions2')
+        self._initialize(settings, policy_factory, journal_factory)
+        self._initialize_structured_fields(ledger)
 
     def _new_result(self, group: EpisodeGroup, spec: EpisodeSpec) -> EpisodeResult:
         assert isinstance(self.settings.actions, ActionConfigV2)

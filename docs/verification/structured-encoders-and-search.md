@@ -852,9 +852,75 @@ observed OOM/leak or GPU speed conclusion follows. Current standalone collection
 correctly has no learner process; the pending PPO2 composition must add its
 learner charge before Popen and retain it through collection.
 
+## S3b2 common PPO coordinator component acceptance
+
+Root accepts the scoped engineering component composition after both independent
+FULL correctness/conformance reviews report READY with no remaining blocking
+findings. One existing coordinator loop dispatches concrete version2 initialization,
+Source projection, wire3 learner updates and Generation2 publication/retention.
+It preserves16games per batch, schedule draws/roles, snapshot cadence, normal
+pause/resume boundaries and the original7200/5400/7140-second limits with10GiB
+owned storage and1GiB admission reserve. The collector receives the SAME ledger
+with its live learner owner; the run validates the ledger's actual limits.
+Source remains unqualified and its proof says parent_qualification=not_performed.
+
+Original Source snapshots remain owned through whole-batch parity and Adam,
+then recheck before counters/Generation2 publication. The historical component
+validator checks complete frozen configuration, recorded provenance and schedule
+bindings, anchors generation0 to PCG64(frozen seed), and retains all original
+Source inventories through its final parent sweep. It retires raw batch aliases
+between cohorts and admits already-owned parent metadata before the first Source
+JSON parse. Recorded inspection does not require current Torch/hardware/code;
+active ordinary resume remains strict, including an exact derived execution
+comparison before child construction/reservation. Late mutation, interrupted
+cohorts, malformed acknowledgements and publication failures quarantine the whole
+parent rather than salvage rows or commit a new generation.
+
+An early functional fixture patched qualification guards. Root rejected that
+fixture as acceptance evidence. The accepted fixture uses a test-owned FakeHTTP
+Environment through extracted private bodies; public run_experiment and direct
+Environment construction/group/episode wrappers keep their actual guards.
+Tests verify that a normal Environment through the private runner still rejects
+before activity. No CLI switch or authority token bypasses qualification.
+
+Final frozen-source HOST commands (separate concurrent processes):
+
+```sh
+timeout --signal=INT --kill-after=20s 900s env UV_CACHE_DIR=/tmp/gf-structured-uv uv run --no-sync pytest -q tests/test_structured_ppo.py
+timeout --signal=INT --kill-after=20s 1200s env GFB_RUN_STRUCTURED_PPO_CUDA=1 CUBLAS_WORKSPACE_CONFIG=:4096:8 UV_CACHE_DIR=/tmp/gf-structured-uv uv run --no-sync pytest -q tests/test_structured_ppo_cuda.py
+```
+
+CPU PASS35in523.13s; CUDA PASS6in667.25s (both exit0). Each model kind uses its
+configured defaults, including2Transformer layers, and compares two continuous
+updates against one update plus pause/resume with actual16-game scripted batches.
+The CUDA matrix covers all3kinds with CPU/CUDA participant inference and a CUDA
+learner. It checks exact final parameters, individual Adam/RNG state, schedules,
+artifact/Source links and process reaping within each same-device comparison.
+CPU tests also cover direct/DeepSets MLP collection, unavailable CUDA rejection,
+missing native capability, public/direct gates, historical inspection without
+Torch/current-version equality, budget admission and failure/quarantine paths.
+These run real participant/numerical child processes against fixed FakeHTTP
+responses; they are not Simulator game or strength evidence. CPU/CUDA action
+identity is not claimed.
+
+Additional final-scope selected evidence:72legacy/Environment/Source regressions
+PASS59.05s;9Source-mutation/budget cases PASS55.62s;5whole-cohort/acknowledgement/
+publication/historical cases PASS121.70s;4alternate-hand/device/capability cases
+PASS44.60s;3post-execution-guard/resume cases PASS107.93s. These overlapping
+selections are not added to the35/6counts. Correctness independently reruns8guard/
+I/O cases and historical mutation/PCG probes; conformance reruns11targeted guard/
+domain/ledger/provenance cases. Neither reviewer claims the long matrices as
+independently executed evidence. Root full Ruff/mypy PASS(107source files), diff
+and relative-document links PASS. Full-project/native/wheel checks remain later.
+
+This milestone adds no dependency, real-I/O qualification, normative rule adoption
+or LightGBM2/native completion. Actual allocator high-water, transfer/forward/
+synchronization timing and complete qualified performance acceptance remain
+unmeasured. Earlier prototype latency evidence retains its stated scope.
+
 ## Remaining integrated acceptance
 
-Currently NOT RUN: Environment/CLI/qualified collection E2E PPO integration,
+Currently NOT RUN: qualified collection E2E PPO integration,
 journal5/native differential,192-game baseline, attention3models×2inference devices×
 continuous/pause-resume real2updates, other hand-mode MLP games, fixed512train
 decision CPU p95<=3s acceptance under the complete qualified contract, separate
