@@ -20,7 +20,11 @@ approved a separately identified engineering-only profile; its implementation
 and current-boundary metadata propagation are now reviewed READY. Real-I/O and
 qualified-source gates remain closed.1460Python/13separate CUDA cases and full
 Ruff/mypy pass in the supported test environment. No real v2 source/fit/experiment
-has run; remaining Source/Gen2/native/tree integration is not accepted yet.
+has run. Later engineering Source/Generation2, numerical wire3 and common PPO
+coordinator increments are now accepted after separate reviews (through83c51e1);
+their full scopes and exact checks are in the verification ledger. Native/tree
+integration and qualified real-game acceptance remain incomplete. The following
+initial slice counts/statuses are historical milestones, superseded by that ledger.
 
 The first pure records/token/config/network slice is implemented in
 `gf_common.structured`, `structured_tokens`, `structured_vocab` and
@@ -1513,3 +1517,99 @@ runner. Injecting a normal Environment still invokes its ordinary guarded
 constructor. No public component flag, authority token or real-I/O bypass is added.
 Fresh integration runs under this unpatched setup replace earlier patched-gate
 functional smokes as acceptance evidence.
+
+## 21. Native structured controls and staging increments
+
+This is the bounded implementation decomposition of §§14–15, following S3b2.
+Independent architecture design review: READY for C2a and the C2b direction
+(2026-11-02). The concrete C2b batch ABI still requires its shape/dtype/owner review.
+It preserves the existing parser, reader and recipe identities and all legacy
+NativeSession/NativeBatch payloads. No candidate-rule port, new crate, Torch
+dependency or Simulator access enters either increment. The full structured
+build markers stay ABSENT until controls, Journal5 tokens and actual export
+work end to end; merely parsing a model2 record cannot activate the Rust reader.
+
+C2a implements original Run2/Generation2/Update2/Registry2 validation in additive
+structured_controls/structured_session Rust modules, with a small Python owner in
+native_structured. Rooted nonsymlink inputs, original file/inventory snapshots,
+bounded parser/scratch ownership, cancellation and final rechecks follow the
+existing Sources/Budget/Control/NativeExecution patterns. Retain snapshots across
+Python authorization and every later batch; close/cancel joins native work before
+releasing locks. Cross-version validation dispatches before legacy code and does
+not weaken legacy equality or fingerprints. V2 requires exact integer JSON types,
+closed maps and explicit classification, not Python-style bool/float equivalence.
+
+Rust checks the original full Config/hash, recorded provenance, model/resource/
+execution/semantic declarations, healthy run state/clocks, generation/update chain,
+counters, complete explicit artifact maps and exact retention intent/receipt.
+It compares extracted values with their frozen Config originals. Do not serialize
+effective_config into IPC or have Python reopen it. The diagnostic C2a owner
+exposes only an explicitly named structured-parent-controls result and final
+recheck; it does not claim J5 projection, source-set verification or qualification.
+Do not add placeholder authorization/export methods or advertise the final reader.
+
+C2b completes the separate StructuredSession/structured batch path. One bounded
+original Source scan validates Journal5 append banks, frames, tables, positive
+acknowledgements, closures and sidecar inventories, then retains typed scratch for
+summary→authorization→export. It produces exact raw category/numeric/presence
+banks and ordered compact references, reusing IntegerOwner/ByteOwner and bounded
+little-endian numeric I/O. It never calls a Python model or stores learned latents.
+Existing FloatOwner is f64; an FP32 bank requires an additive correctly typed
+owner, never reinterpretation of that owner or legacy NativeBatch.
+Python retains GAE/targets and rollout3 publication; factor only the necessary
+existing C1 publication primitive to avoid reconstructing/retokenizing a second
+complete Source copy. Source roles/outcomes and baseline-null versus neural-finite
+policy values remain explicit and are not inferred from syntax.
+
+The final closed summary2 contains schema/kind/reader/scope, explicit action
+contract/purpose/capacity and qualified=False/parent_qualification=not_performed,
+domain-separated control fingerprint, bounded authorization-wire size and parent/
+collection arrays. Each parent contains its directory; compact state/counters/
+absolute clocks/config and resume digests; one bounded pure model/resource
+descriptor; recorded learner/inference binding and visibility; actual semantic
+declarations/action hash; and generation summaries with original record/link/
+artifact-map hashes, retention status, counters and parent_controls. A pruned
+generation additionally carries its bounded original_files map and exact deletion
+intent/receipt, sufficient for S2's existing pruned inspector; their ownership and
+wire sizes count toward the same control cap. Each collection
+contains its directory/parent index, split/kind/generation/batch/run identity,
+explicit model/input/journal/feature/generation/rollout versions, actual window/
+token signature, original schedule/binding/source-set hashes and episode/both-view/
+learner counts. No full Config or unbounded row arrays cross that control boundary.
+Derive token signatures and counts from validated originals, not request labels.
+
+Rust does not acquire a ZIP/NPY implementation to duplicate C1's sealed artifact
+inspector. Before authorization, Python runs existing NumPy-only S2 validation on
+referenced artifact directories, checking exact declarations/file maps against
+the compact Rust result. Admit the Rust session's retained owned bytes, Python
+summary/control ownership and S2 parse/encoded/decoded scratch under ONE caller
+cap/deadline. Expose a concrete retained-owned-byte observation on the paused
+session if needed; a separate full allowance for each owner is invalid. Both
+owners retain/recheck their original identities through final export. When native
+work resumes, keep Python summary/sealed-snapshot ownership charged by the existing
+retained_python/ControlMemory/StagingLease mechanism (or an equivalent concrete
+retained-byte argument to authorize/export/finalize). An observation of paused
+used_bytes alone cannot release Python ownership or create a second full allowance.
+The closed
+authorization binds successful sealed results and schedule decisions to the
+exact original control fingerprint. This is an explicit division of validation:
+Rust checks metadata/maps/bytes, Python's existing S2 checks NPZ layout/finite/
+Adam details. No check is skipped or represented as a native numeric check.
+
+Python authorization also uses validated seed/model/controls for PCG64 seed
+anchoring, snapshot-pool evolution and unchanged schedule reconstruction; Rust
+checks that extracted seed equals frozen Config. No Rust RNG/SeedSequence port or
+callback from a native per-record loop is introduced. Neither authorization nor
+successful numerical validation upgrades engineering data eligibility. Public
+real-I/O/qualified-source gates remain unchanged throughout.
+
+Before activating markers, verify native/Python original metadata, raw tokens,
+presence/order/hash/counts and rollout3 differentials on owned component inputs.
+Cover changed original inventories across batches, broken chains/config/provenance/
+PCG, retained/pruned/partial artifacts, malformed sidecars, padded JSON/NPZ,
+deadlines, symlinks/FIFOs/replacements and cancellation/lease cleanup. Keep actual
+18-reference records separate from synthetic128-capacity tests. Run old Rust/
+corpus/index/saved-PPO proofs in fresh directories and build an offline locked
+wheel, preserving and identifying the previous loaded binary. Source HEAD alone
+is not evidence that the tested wheel contains it. Final design and conformance
+reviews apply to each concrete increment; C2a alone is not native completion.

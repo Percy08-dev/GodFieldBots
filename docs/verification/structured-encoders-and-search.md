@@ -918,6 +918,43 @@ or LightGBM2/native completion. Actual allocator high-water, transfer/forward/
 synchronization timing and complete qualified performance acceptance remain
 unmeasured. Earlier prototype latency evidence retains its stated scope.
 
+## Configured Transformer CUDA offline latency panel
+
+An independent read-only audit passes the new measurement's exact512TRAIN panel
+and512peer/tail identities, all quantiles, configured2-layer Transformer defaults,
+CPU-created seed17 weights/CUDA execution separation, empty failures and successful
+worker cleanup. This is a single offline engineering pass, not qualified game
+performance acceptance. It uses the same frozen input bytes as the earlier CPU
+panel; the two recorded weight-shard hashes also match exactly.
+
+```sh
+timeout --signal=INT --kill-after=20s 600s env CUDA_VISIBLE_DEVICES=0 CUBLAS_WORKSPACE_CONFIG=:4096:8 UV_CACHE_DIR=/tmp/gf-structured-uv uv run --no-sync python /tmp/gfb-structured-latency-gpu-configured-20261102.py --kind transformer --device cuda:0 --input /tmp/gfb-structured-performance-dual-view-20261102.jsonl --output runs/assessments/structured-latency-transformer-cuda-defaults-20261102
+```
+
+The successful command completes49games/1024rows with2concurrent games and4peak
+workers in100.907s. All98worker startup measurements are separate. Panel latency
+p50/p95/max is24.755/656.126/1219.710ms; startup p95 is1794.468ms. The end-to-end
+interval includes own-input/frame validation, generation, tokenization, scoring,
+CPU sampling and worker communication, but no Simulator I/O or journal publication.
+Panel maxima are2809candidates/8positions/240events; supplemental maxima are
+27976candidates/13positions/238events. These are observed numerical workloads,
+not coverage of18/128positions,1024decisions or arbitrary combinations.
+
+Host phase p95 values: input packing/transfer submission3.964ms, forward enqueue
+with implicit waits603.350ms, explicit synchronization0.499ms, CPU return0.378ms.
+These are NOT isolated DMA/kernel durations; internal finite checks may synchronize.
+No warmup/repeat campaign was performed, and no generalized CPU/GPU speed ordering
+follows from this GPU p95 and the prior separate CPU p95 of90.090ms.
+
+Evidence is retained under the output directory: result SHA256
+`10fab6a30c8b8b4c8fcb905ac0bc4b1028f6785b6bbfda74a7ece8479037b1de`,
+harness `a1b8a2bcb42b7603084b5311ad32290eeb5347b92d782a461ef7c9787b5d104a`,
+evidence manifest `9dc47719b131c38ab5b865a71f94629e259e721d95f087a835774c641ff6614b`.
+Its6measured-file and97Python-source hashes are preserved and audited. The first
+attempt failed before measurement on a harness import name; the successful harness
+uses model_defaults_v2('transformer').architecture(). No production fix, source
+qualification, native or LightGBM acceptance follows from the measurement.
+
 ## Remaining integrated acceptance
 
 Currently NOT RUN: qualified collection E2E PPO integration,
