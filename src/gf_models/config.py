@@ -6,6 +6,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Any
 
 from gf_common.domain import ContractError, Json, closed, integer
+from gf_models.structured_binding import ConfiguredNeuralModelV2, configured_model_v2
 
 
 @dataclass(frozen=True)
@@ -68,7 +69,9 @@ def encoder_config(value: Json) -> EncoderConfig:
     return config
 
 
-def model_config(value: Json) -> ModelConfig | MLPModelConfig | SequenceModelConfig:
+def model_config(value: Json) -> ModelConfig | MLPModelConfig | SequenceModelConfig | ConfiguredNeuralModelV2:
+    if value.get("version") == "2":
+        return configured_model_v2(value)
     if value.get("model_id") == "transformer":
         return transformer_model_config(value)
     if value.get("model_id") == "gru":
@@ -128,7 +131,11 @@ def training_config(value: Json) -> TrainingConfig | PPOTrainingConfig:
     return TrainingConfig(**converted)
 
 
-def validate_capacity(model: ModelConfig | MLPModelConfig | SequenceModelConfig, max_sequence_length: int) -> None:
+def validate_capacity(model: ModelConfig | MLPModelConfig | SequenceModelConfig | ConfiguredNeuralModelV2, max_sequence_length: int) -> None:
+    if isinstance(model, ConfiguredNeuralModelV2):
+        if not 1 <= max_sequence_length <= model.max_positions:
+            raise ContractError("generator exceeds structured model position capacity")
+        return
     if model.model_id in ("lightgbm", "mlp", "gru", "transformer") and (not max_sequence_length or max_sequence_length > model.encoder.max_elements):
         raise ContractError("generator exceeds encoder element capacity")
 

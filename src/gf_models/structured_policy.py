@@ -1,14 +1,16 @@
 """Participant-only structured inference, bounded cache and CPU sampling."""
 from __future__ import annotations
 
+import os
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-from gf_common.domain import ContractError, canonical, digest, integer
+from gf_common.domain import ContractError, canonical, integer
 from gf_common.structured import CandidateTable, DecisionFrame, EventBankView, Selection
 from gf_common.structured_tokens import tokenize_frame, tokenize_table, validate_candidate_tokens
 from gf_models.structured_artifacts import load_inference
+from gf_models.structured_binding import policy_label, validate_cuda_visibility
 from gf_models.structured_config import (
     InferenceBindingV2,
     ModelConfigV2,
@@ -36,7 +38,8 @@ class StructuredPolicy:
         import torch
         self.torch, self.network, self.model, self.binding = torch, network, model, binding
         self.reserved_bytes = resource_estimate(model, binding)["total_bytes"]
-        self.version = f"{model.model_id}-ppo-v2-{manifest_digest}-{digest(asdict(binding))}"
+        self.cuda_visible_devices = validate_cuda_visibility(os.environ.get("CUDA_VISIBLE_DEVICES"))
+        self.version = policy_label(model, binding, manifest_digest, cuda_visible_devices=self.cuda_visible_devices)
         self.cache = network.new_cache()
         self.rng = torch.Generator(device="cpu")
         self.reset(0)
@@ -49,7 +52,7 @@ class StructuredPolicy:
         return cls(network, model, binding, expected_digest)
 
     def reset(self, sampling_seed: int) -> None:
-        integer(sampling_seed, 0, 2**63 - 1)
+        integer(sampling_seed, 0, 2**64 - 1)
         self.cache.reset()
         self.rng.manual_seed(sampling_seed)
 

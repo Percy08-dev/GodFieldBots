@@ -15,8 +15,10 @@ and166affected Python checks. It is not yet connected to the application workers
 The pure artifact3/rollout3/E2E numeric learner/inference API slice is accepted
 after independent reviews,168affected CPU/4separate CUDA checks and scoped
 Ruff/mypy. It includes1024-frame persistence and exact synthetic two-update/resume
-with partial Adam state; these are component results. Config/worker/journal/
-native application integration and full acceptance are pending; the
+with partial Adam state; these are component results. Version2 Config/binding
+dispatch is also accepted after independent reviews and112scoped checks, exact
+old12config identities and6new graph loads. Worker/journal/native application
+integration and full acceptance are pending; the
 public utility completion/target dependency is tracked in
 [issue0005](issues/0005-public-utility-action-semantics.md). It is not resolved by
 atomic hints or successful play. See the

@@ -139,6 +139,8 @@ class StructuredRollout:
             raise ContractError("rollout action hash required")
         integer(_reserved_bytes, 0, model.resources.max_owned_bytes)
         for record in records:
+            if any(selection.logprob is None or selection.value is None for selection in record.selections):
+                raise ContractError("PPO learner rows require finite logprob and value before ingestion")
             integer(len(record.frames), 0, model.temporal.max_decisions)
             integer(record.bank.boundary.end, 0, model.event.max_episode)
             for frame, table in zip(record.frames, record.tables, strict=True):
@@ -227,6 +229,8 @@ class StructuredRollout:
         if episode.advantage is None or episode.target is None:
             raise ContractError("interrupted endpoint has no learning targets")
         selection = episode.records.selections[position]
+        if selection.logprob is None or selection.value is None:
+            raise ContractError("PPO learner row lacks logprob/value")
         return selection.index, float(selection.logprob), float(selection.value), float(episode.advantage[position]), float(episode.target[position])
 
 

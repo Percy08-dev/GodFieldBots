@@ -199,7 +199,54 @@ state/token/manifest cases and actual1024-frame sharded roundtrip/1025early
 rejection. Independent P2-loss/P1-win/P2-draw probes verify target perspective
 and whole-batch normalization. Synthetic data is not a feasibility/quality gate.
 
-## Remaining integrated acceptance evidence
+## C2 configuration baseline and pending integration
+
+Read-only protected-artifact check PASS at this checkpoint: authoritative
+`runs/assessments/sequence-ppo-20261031/baseline.json` (SHA-256
+`d09ba36c3f5310ce4b90c4a0913b74c650efd81ced3dd85c237e5af45fe5a2c9`)
+lists24original fit files; all24current file hashes match. Frozen old dataset
+manifest file SHA remains
+`1bfe1607dc80ee3def7ce4ab4ae24a807164dce8d09e67a8b5f2a9a75f3ece55`.
+This bounded hash verification reads no model values and is not the later full
+corpus/index/numeric proof. Recheck after integration/build milestones.
+
+Before new Config dispatch, a read-only verifier loaded all12git-tracked v1
+experiment TOMLs using committed cfcb068 code from an isolated `/tmp` snapshot,
+while retaining original workspace input paths. All28unique raw input/preset
+files matched commit bytes;65ordered input entries, effective/LoadedConfig hashes
+were captured, and Torch was not imported. Proof:
+`/tmp/gfb-legacy-config-cfcb068/proof.json`, SHA-256
+`cb6ee02993282fd7508087745a4d17e2c0c52863a9b3a036b463705013148db8`.
+Root's new-parser comparison PASS: all12LoadedConfig/effective hashes and ordered
+input path/kind/sha256 entries match exactly. The first root comparison mistakenly
+included proof-only commit_sha256/matches_commit fields in the input equality;
+after comparing the original three config fields, all identities match. No parser
+or old preset change was needed. Six new draft experiment graphs covering11new
+TOMLs load semantically, preserving worker10s and7200/5400/7140run budgets, exact
+pure architecture conversion and only the model TBPTT setting. No Torch import
+or Simulator I/O occurs. Draft files remain in `/tmp` until runtime wiring works.
+
+Independent correctness and conformance reviews of this Config/binding slice are
+READY. The existing full uint64 sampling contract is restored in Policy.reset,
+including2**64-1, without changing parent derivation or initialization seeds.
+Actual execution identity binds active resources/inference/visibility; baseline
+None values remain explicit and PPO missing values reject before tokenization.
+
+Root scoped checks PASS:
+
+```sh
+UV_CACHE_DIR=/tmp/gf-structured-uv uv run --no-sync pytest -q tests/test_structured_application_config.py tests/test_config.py tests/test_preprocessing_config.py tests/test_lightgbm_config.py tests/test_structured_records.py
+UV_CACHE_DIR=/tmp/gf-structured-uv uv run --no-sync ruff check src/gf_cli/config.py src/gf_common/preprocessing.py src/gf_common/structured.py src/gf_models/config.py src/gf_models/structured_binding.py src/gf_models/structured_policy.py src/gf_training/structured_rollout.py tests/test_structured_application_config.py tests/test_structured_learning.py
+UV_CACHE_DIR=/tmp/gf-structured-uv uv run --no-sync mypy src/gf_cli/config.py src/gf_common/preprocessing.py src/gf_common/structured.py src/gf_models/config.py src/gf_models/structured_binding.py src/gf_models/structured_policy.py src/gf_training/structured_rollout.py
+```
+
+Results:112PASS in5.45s; Ruff PASS; mypy PASS(7modules). Correctness independently
+ran82application/legacy/preprocessing cases and2affected inference-label cases;
+architecture checked40application cases plus7uint64boundaries. These overlapping
+counts are not a full-project test total. No bootstrap/protocol/codec/source/
+lineage/native implementation or real-game acceptance follows from this slice.
+
+## Remaining full integrated evidence
 
 Currently NOT RUN: actual worker/collection E2E PPO integration, worker2/journal5/
 native differential,192-game baseline, attention3models×2inference devices×

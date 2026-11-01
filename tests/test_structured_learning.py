@@ -2,7 +2,8 @@
 from __future__ import annotations
 
 import copy
-from dataclasses import asdict, replace
+import os
+from dataclasses import replace
 
 import numpy as np
 import pytest
@@ -14,6 +15,7 @@ from gf_common.validation import decision_input
 from gf_models.arrays import atomic_json, sha256
 from gf_models.sharded_arrays import inspect_bundle, read_bundle, read_json, write_bundle
 from gf_models.structured_artifacts import inspect_inference, load_inference
+from gf_models.structured_binding import execution_digest
 from gf_models.structured_config import InferenceBindingV2, architecture_identity
 from gf_models.structured_policy import StructuredPolicy
 from gf_training.structured_numeric import Learner
@@ -241,7 +243,7 @@ def test_inference_cache_full_sampling_reset_and_ten_thousand_candidates(make_in
     policy.reset(71)
     assert policy.select_frame(frame, record.bank, table) == first
     assert identity["inference_digest"] in first.policy_version
-    assert digest(asdict(learner.binding)) in first.policy_version
+    assert execution_digest(learner.model, learner.binding, cuda_visible_devices=os.environ.get("CUDA_VISIBLE_DEVICES")) in first.policy_version
 
 
 @pytest.mark.parametrize("kind", ["truncated", "aborted", "unsupported", "infrastructure_failure"])
@@ -589,7 +591,7 @@ def test_matching_policy_binding_labels_actual_envelope_and_fresh_artifact_overr
     policy = StructuredPolicy(learner.network, learner.model, learner.binding, "a" * 64)
     assert policy.reserved_bytes == resource_estimate(learner.model, learner.network.binding)["total_bytes"]
     assert policy.binding == learner.network.binding
-    assert digest(asdict(learner.network.binding)) in policy.version
+    assert execution_digest(learner.model, learner.network.binding, cuda_visible_devices=os.environ.get("CUDA_VISIBLE_DEVICES")) in policy.version
     identity = learner.save(tmp_path / "generation")
     active = replace(learner.model, resources=replace(learner.model.resources, max_owned_bytes=2 * 1024**3))
     binding = replace(learner.binding, candidate_chunk=1, max_candidates=1000, managed_budget_bytes=2 * 1024**3)
@@ -597,7 +599,7 @@ def test_matching_policy_binding_labels_actual_envelope_and_fresh_artifact_overr
     assert fresh.network.config == fresh.model == active
     assert fresh.network.binding == fresh.binding == binding
     assert fresh.reserved_bytes == resource_estimate(active, binding)["total_bytes"]
-    assert digest(asdict(binding)) in fresh.version
+    assert execution_digest(active, binding, cuda_visible_devices=os.environ.get("CUDA_VISIBLE_DEVICES")) in fresh.version
 
 
 @pytest.mark.parametrize("admit_metadata", [False, True])

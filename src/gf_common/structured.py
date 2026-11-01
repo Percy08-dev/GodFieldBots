@@ -511,8 +511,8 @@ class Selection:
     table_hash: str
     index: int
     policy_version: str
-    logprob: float
-    value: float
+    logprob: float | None = None
+    value: float | None = None
 
     def __post_init__(self) -> None:
         _hash(self.table_hash)
@@ -520,9 +520,11 @@ class Selection:
         if not isinstance(self.policy_version, str) or not self.policy_version:
             raise ContractError("policy identity required")
         for number in (self.logprob, self.value):
+            if number is None:
+                continue
             if type(number) not in (int, float) or not math.isfinite(number):
                 raise ContractError("nonfinite selection output")
-        if self.logprob > 0:
+        if self.logprob is not None and self.logprob > 0:
             raise ContractError("positive log probability")
 
     def validate(self, table: CandidateTable, frame: DecisionFrame) -> Json:

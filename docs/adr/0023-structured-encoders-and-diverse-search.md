@@ -20,8 +20,10 @@ The pure v4 generator slice is also implemented/accepted after independent
 correctness/conformance review and166affected checks. The pure artifact3/resume3/
 rollout3 and E2E PPO numeric/inference API slice is implemented/accepted after
 both reviews,168affected CPU/4separate CUDA checks and scoped Ruff/mypy, including
-1024 persistence and synthetic exact two-update/resume. Worker/application
-routing, source journal/native/generation integration, LightGBM integration and
+1024 persistence and synthetic exact two-update/resume. Config/binding dispatch
+is accepted after both scoped reviews,112checks, old12exact identities and6new
+draft graph loads. Worker/application routing, source journal/native/generation
+integration, LightGBM integration and
 required real-game/performance acceptance remain incomplete.
 Issue0005 still blocks full completion. See the verification ledger for scope.
 
@@ -539,6 +541,26 @@ Torch reports unavailable and must fail without silently choosing CPU.
 
 ## 13. Application integration design (review before dependent implementation)
 
+Initial protocol2 private timing counters label host wall scopes accurately:
+input packing/transfer host time, forward enqueue host time, explicit sync host
+time, CPU return and CPU sampling separately, plus tokenization/search/IPC/startup
+and storage/Simulator scopes outside policy math. Tensor-constructor timing can
+include waiting for prior stream work; do not call it pure H2D or GPU kernel time.
+Counters are per-select diagnostics only, never features or critic input. Final
+GPU performance acceptance still needs CUDA-event/isolated transfer and forward
+evidence; host counters alone do not establish a CPU/GPU bottleneck or speedup.
+
+ConfiguredNeuralModelV2 also has a sibling `cuda_visible_devices: str|None`,
+removed by exact architecture conversion. None means unset in a clean CUDA
+child, without implicit coordinator-environment inheritance; a validated explicit
+index/GPU-UUID selector is forwarded as the sole visibility setting. CPU children
+always use empty visibility. The selector also applies to a CUDA learner when
+inference is CPU. Record actual visibility in execution/resume identity and hash
+active resources, pure inference binding and actual visibility consistently in
+policy/CLI/source labels. A direct C1 host API records its actual environment;
+production guarantees use the clean child. No coordinator mutation or service
+sharing is introduced.
+
 Pinned Torch2.14 Adam's accelerator graph-health check may query CUDA availability
 and current stream even for CPU parameters. Keep standard Adam. Production CPU
 numerical/policy workers set `CUDA_VISIBLE_DEVICES=""` inside their clean child
@@ -793,3 +815,68 @@ source-inventory mutation; default2GiB/16MiB preprocessing presets remain. Size
 calculation is only design evidence; build, differential, real-game and512-panel
 performance acceptance are still required. This new storage detail needs focused
 architecture review before dependent implementation.
+
+## 16. Structured LightGBM and fixed-data2 design (review required)
+
+Focused independent architecture design review: READY (2026-11-01). Preserve
+installed audited LightGBM4.7.0; the4.6 primary documentation below establishes
+the supported API shape, and installed4.7.0 code confirms its implementation.
+No dependency downgrade/update is authorized or required. Categorical values
+must exactly roundtrip FP32 as integers in their closed vocabulary (current
+codes<300), not merely fit int32. Keep category columns out of signed-log numeric
+transforms and set zero-as-missing false so PAD0 is not merged with missing1.
+Implementation/fits/builds and final conformance remain pending.
+
+LightGBM2 uses its own closed configured model/encoder/native-tree/resource/CPU
+binding types, not inactive neural Hand/State/Temporal settings. Default position
+capacity18, aggregate window128, chunk256 and existing tree/fit hyperparameters
+remain implementation baselines. Inference/training schema3 binds structured
+input/feature signatures, exact ordered feature names, categorical column indices,
+catalog/spec/reward/generator identities, native library/model digest and actual
+execution resource settings. V1 LightGBM configs/features/artifacts remain intact.
+
+The deterministic tree recipe consumes current detailed state, every own held/
+learned card and learned order/usability, ordered candidate references/arguments,
+opponent's public learned IDs, and the fixed visible history aggregate. It has
+no learned encoder or decision-series hidden state. Exact category codes have
+distinct pad/missing meanings and are explicitly passed as categorical columns;
+instance ID magnitudes, source/control metadata and training labels never become
+features. Own card values use observation-time perceived definitions only;
+opponent/past public IDs do not trigger extra catalog lookups or possession claims.
+Candidate permutation only permutes scores. Record the tree's bounded history
+scope separately from neural own-decision history.
+
+Produce contiguous FP32 feature-row blocks whose individual arrays and decoded
+shards fit64MiB, preserving exact integer category codes (all below int32 max).
+Training passes a list of equally shaped-column NumPy matrices to the supported
+LightGBM Dataset API rather than concatenating a giant tensor. Admit aggregate
+resident blocks, native Dataset/model/workspace and validation data before work;
+native internals remain a measured soft estimate. Inference creates only admitted
+candidate chunks. Native Dataset construction may retain/release raw blocks only
+under explicit ownership; no pickle or frozen Torch encoder is added.
+Primary evidence: [LightGBM4.6 Dataset](https://lightgbm.readthedocs.io/en/v4.6.0/pythonapi/lightgbm.Dataset.html)
+and installed `basic.py` list-matrix/LGBM_DatasetCreateFromMats implementation.
+
+Fixed manifest2 requires ordered seeds17/29/43 in one homogeneous model2 PPO
+cohort and prescribed final-policy validation, as§12. It binds actual action/
+feature/runtime conditions and original source sidecar hashes. Revalidate all
+parents/closures/ancestry/splits/generation2 file maps and reject failed or partial
+parents as a whole. Dataset1/model1 cannot be silently retokenized as2. Export/
+index flags are not fit authority. Source qualification reads sealed metadata and
+declared supported semantics without executing neural policies or requiring Torch
+in a LightGBM-only environment. Active inference/resume checks remain separate.
+
+Legacy inclusive mode retains its original pilot/source/decision-budget gate.
+Any model2 inclusive source must be explicitly schema5/new-recipe with its own
+validated pilot/conditions; old data never acquires new semantics by dispatch.
+Fixed-data2 fitting needs all three complete prescribed parents and validation.
+Both costs/recipes remain distinct, generation cost deduplicated as before.
+Fresh fits only, no LightGBM resume. Real model2 fits/formal parent campaigns are
+not run as part of component acceptance. Tiny explicit synthetic fits validate
+categorical interpretation/roundtrip/chunking/gates only, not quality or feasibility.
+
+Required checks include exact deterministic feature/categorical signatures,
+all held/learned/target/order/missingness/public-history cases, large position/chunk
+admission, native categorical fit/inference and safe schema3 publication, old
+dataset/artifact regressions and complete-parent/split/seed/budget negative cases.
+No production preset advertises LightGBM2 before these paths are implemented.

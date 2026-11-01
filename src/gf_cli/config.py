@@ -20,6 +20,7 @@ from gf_common.domain import (
     integer,
 )
 from gf_common.preprocessing import PreparationConfig, preparation_config
+from gf_common.structured import ActionConfigV2, action_config_v2
 from gf_models.config import (
     GRUModelConfig,
     MLPModelConfig,
@@ -32,6 +33,7 @@ from gf_models.config import (
     training_config,
     validate_capacity,
 )
+from gf_models.structured_binding import ConfiguredNeuralModelV2, model_defaults_v2
 
 
 @dataclass(frozen=True)
@@ -49,6 +51,12 @@ class RunConfig:
     finalization_seconds: float = 60
     report_reserve_seconds: float = 1
     max_decisions: int = 20000
+
+
+@dataclass(frozen=True)
+class RunConfigV2(RunConfig):
+    global_cuda_budget_bytes: int = 12884901888
+    max_participant_workers: int = 4
 
 
 @dataclass(frozen=True)
@@ -78,11 +86,11 @@ class EvaluationConfig:
 class ExperimentConfig:
     schema_version: int = 1
     kind: str = "experiment"
-    run: RunConfig = field(default_factory=RunConfig)
+    run: RunConfig | RunConfigV2 = field(default_factory=RunConfig)
     server: ServerConfig = field(default_factory=ServerConfig)
-    actions: ActionConfig = field(default_factory=ActionConfig)
-    model: ModelConfig | MLPModelConfig | GRUModelConfig | TransformerModelConfig = field(default_factory=ModelConfig)
-    opponent: ModelConfig | MLPModelConfig | GRUModelConfig | TransformerModelConfig = field(default_factory=ModelConfig)
+    actions: ActionConfig | ActionConfigV2 = field(default_factory=ActionConfig)
+    model: ModelConfig | MLPModelConfig | GRUModelConfig | TransformerModelConfig | ConfiguredNeuralModelV2 = field(default_factory=ModelConfig)
+    opponent: ModelConfig | MLPModelConfig | GRUModelConfig | TransformerModelConfig | ConfiguredNeuralModelV2 = field(default_factory=ModelConfig)
     evaluation: EvaluationConfig = field(default_factory=EvaluationConfig)
     training: TrainingConfig | PPOTrainingConfig = field(default_factory=TrainingConfig)
     preprocessing: PreparationConfig = field(default_factory=PreparationConfig)
@@ -97,10 +105,15 @@ class LoadedConfig:
 
 
 def _merge(base: Json, override: Json) -> Json:
-    result = clone(base)
-    for key, value in override.items():
-        result[key] = _merge(result[key], value) if isinstance(value, dict) and isinstance(result.get(key), dict) else clone(value)
-    return result
+    try:
+        result = clone(base)
+        for key, value in override.items():
+            result[key] = _merge(result[key], value) if isinstance(value, dict) and isinstance(result.get(key), dict) else clone(value)
+        return result
+    except ContractError:
+        raise
+    except (TypeError, ValueError) as exc:
+        raise ContractError("configuration contains invalid/nonfinite values") from exc
 
 
 _TABLES: dict[str, type[Any]] = {"run": RunConfig, "server": ServerConfig, "actions": ActionConfig,
@@ -108,7 +121,9 @@ _TABLES: dict[str, type[Any]] = {"run": RunConfig, "server": ServerConfig, "acti
 _PATHS = {("run", "output_dir"), ("server", "binary"), ("server", "config"), ("server", "source_dir"), ("model", "checkpoint"), ("opponent", "checkpoint"), ("training", "pilot_run"), ("training", "dataset_manifest")}
 
 
-def _validate_table(name: str, values: Json) -> None:
+def _validate_table(name: str, values: Json, *, context: Json | None = None) -> None:
+    context = {} if context is None else context
+    values = _merge(context.get(name, {}), values)
     def check(values: Json, defaults: Json) -> None:
         closed(values, set(), set(defaults))
         for key, value in values.items():
@@ -119,6 +134,8 @@ def _validate_table(name: str, values: Json) -> None:
                 if value is not None:
                     if name == "training" and key == "accepted_decision_target":
                         integer(value, 1)
+                    elif name in ("model", "opponent") and key == "cuda_visible_devices" and type(value) is str:
+                        pass
                     elif not isinstance(value, str) or not value:
                         raise ContractError(f"{name}.{key}: expected nonempty string")
             elif type(default) is bool:
@@ -140,7 +157,14 @@ def _validate_table(name: str, values: Json) -> None:
     cls = TransformerModelConfig if name in ("model", "opponent") and values.get("model_id") == "transformer" else GRUModelConfig if name in ("model", "opponent") and values.get("model_id") == "gru" else SequencePPOTrainingConfig if name == "training" and "sequence_length" in values else MLPModelConfig if name in ("model", "opponent") and values.get("model_id") == "mlp" else PPOTrainingConfig if name == "training" and values.get("algorithm") == "ppo" else _TABLES[name]
     # Partial model presets may specify closed structural keys before dispatch.
     defaults = asdict(cls())
-    if name in ("model", "opponent") and "model_id" not in values:
+    structured_model = name in ("model", "opponent") and values.get("version") == "2"
+    if structured_model:
+        defaults = asdict(model_defaults_v2(values.get("model_id", "mlp")))
+    elif name == "actions" and values.get("version") == "2":
+        defaults = asdict(ActionConfigV2())
+    elif name == "run" and context.get("actions", {}).get("version") == "2":
+        defaults = asdict(RunConfigV2())
+    if name in ("model", "opponent") and "model_id" not in values and not structured_model:
         defaults["inference"] = asdict(MLPModelConfig().inference)
         defaults["network"].update(asdict(MLPModelConfig().network))
         defaults["network"].update(asdict(GRUModelConfig().network))
@@ -192,7 +216,8 @@ def load_config(path: str | Path, overrides: Json | None = None) -> LoadedConfig
                 merged["training"] = _merge(merged.get("training", {}), inherited["training"])
         for name in _TABLES:
             if name in data:
-                _validate_table(name, data[name])
+                table_context = _merge(merged, {"actions": data.get("actions", merged.get("actions", {}))})
+                _validate_table(name, data[name], context=table_context)
                 table = clone(data[name])
                 for table_name, key in _PATHS:
                     if name == table_name and key in table and table[key] is not None:
@@ -214,8 +239,9 @@ def load_config(path: str | Path, overrides: Json | None = None) -> LoadedConfig
             base[table][key] = str((source.parent / base[table][key]).resolve())
     if overrides:
         closed(overrides, set(), set(_TABLES))
+        validation_context = _merge(data, {"actions": _merge(data.get("actions", {}), overrides.get("actions", {}))})
         for name, values in overrides.items():
-            _validate_table(name, values)
+            _validate_table(name, values, context=validation_context)
             for table, key in _PATHS:
                 if name == table and key in values and values[key] is not None:
                     values[key] = str(Path(values[key]).resolve())
@@ -224,7 +250,14 @@ def load_config(path: str | Path, overrides: Json | None = None) -> LoadedConfig
                     if key in values:
                         values[key] = [str(Path(item).resolve()) for item in values[key]]
         data = _merge(data, overrides)
+    structured_actions = data.get("actions", {}).get("version") == "2"
+    if structured_actions:
+        base["actions"] = asdict(ActionConfigV2())
+        base["run"] = asdict(RunConfigV2())
     for name in ("model", "opponent"):
+        if data.get(name, {}).get("version") == "2":
+            base[name] = asdict(model_defaults_v2(data[name].get("model_id", "mlp")))
+            continue
         if data.get(name, {}).get("model_id") == "transformer":
             base[name] = asdict(TransformerModelConfig())
         if data.get(name, {}).get("model_id") == "gru":
@@ -232,10 +265,10 @@ def load_config(path: str | Path, overrides: Json | None = None) -> LoadedConfig
         if data.get(name, {}).get("model_id") == "mlp":
             base[name] = asdict(MLPModelConfig())
     if data.get("training", {}).get("algorithm") == "ppo":
-        base["training"] = asdict(SequencePPOTrainingConfig() if data.get("model", {}).get("model_id") in ("gru", "transformer") else PPOTrainingConfig())
+        base["training"] = asdict(SequencePPOTrainingConfig() if data.get("model", {}).get("model_id") in ("gru", "transformer") and data.get("model", {}).get("version", "1") == "1" else PPOTrainingConfig())
     effective = _merge(base, data)
     for name in _TABLES:
-        _validate_table(name, effective[name])
+        _validate_table(name, effective[name], context=effective)
     run = effective["run"]
     if run["split"] not in ("train", "validation", "test"):
         raise ContractError("invalid split")
@@ -253,6 +286,12 @@ def load_config(path: str | Path, overrides: Json | None = None) -> LoadedConfig
         integer(seed)
     if run["admission_seconds"] > run["execution_seconds"] or run["execution_seconds"] + run["finalization_seconds"] > run["wall_seconds"]:
         raise ContractError("run deadlines inconsistent")
+    if structured_actions:
+        integer(run["concurrency"], 1, 2)
+        integer(run["max_participant_workers"], 1, 4)
+        integer(run["global_cuda_budget_bytes"], 1, 12884901888)
+        if run["max_participant_workers"] < 2 * run["concurrency"]:
+            raise ContractError("participant capacity must cover both players of every concurrent game")
     models = {name: model_config(effective[name]) for name in ("model", "opponent")}
     training = training_config(effective["training"])
     preprocessing = preparation_config(effective["preprocessing"])
@@ -260,20 +299,32 @@ def load_config(path: str | Path, overrides: Json | None = None) -> LoadedConfig
         raise ContractError("training/model mismatch")
     if (isinstance(training, PPOTrainingConfig)) != (models["model"].model_id in ("mlp", "gru", "transformer")) and "training" in data:
         raise ContractError("training algorithm/model mismatch")
-    if isinstance(training, SequencePPOTrainingConfig) != (models["model"].model_id in ("gru", "transformer")) and isinstance(training, PPOTrainingConfig):
+    legacy_sequence = models["model"].model_id in ("gru", "transformer") and models["model"].version == "1"
+    if isinstance(training, SequencePPOTrainingConfig) != legacy_sequence and isinstance(training, PPOTrainingConfig):
         raise ContractError("sequence training/model mismatch")
     for model in models.values():
         validate_capacity(model, effective["actions"]["max_sequence_length"])
-    actions = effective["actions"]
-    if actions["scorer"] != "public_heuristic_v1":
-        raise ContractError("unsupported search scorer")
-    if actions["strategy"] not in ("beam", "enumerate"):
-        raise ContractError("unsupported candidate strategy")
-    for key in ("beam_width", "max_candidates", "max_expansions"):
-        integer(actions[key], 1)
-    integer(actions["max_sequence_length"])
-    if set(actions["exchange_allocations"]) - {"balanced", "hp", "mp", "money"} or set(actions["targets"]) - {"self", "opponent"}:
-        raise ContractError("unknown allocation or target")
+    if structured_actions:
+        actions_v2 = action_config_v2(effective["actions"])
+        if preprocessing.reader != "structured-v1":
+            raise ContractError("actions2 requires explicit preprocessing.reader='structured-v1'")
+        if any(not isinstance(model, ConfiguredNeuralModelV2) and model.model_id not in ("random", "heuristic") for model in models.values()):
+            raise ContractError("actions2 cannot consume legacy neural/tree model artifacts")
+        if any(isinstance(model, ConfiguredNeuralModelV2) and actions_v2.max_candidates > model.inference.max_candidates for model in models.values()):
+            raise ContractError("action presentation limit exceeds configured model admission")
+    else:
+        if preprocessing.reader == "structured-v1" or any(isinstance(model, ConfiguredNeuralModelV2) for model in models.values()):
+            raise ContractError("structured model/reader requires actions2")
+        actions = effective["actions"]
+        if actions["scorer"] != "public_heuristic_v1":
+            raise ContractError("unsupported search scorer")
+        if actions["strategy"] not in ("beam", "enumerate"):
+            raise ContractError("unsupported candidate strategy")
+        for key in ("beam_width", "max_candidates", "max_expansions"):
+            integer(actions[key], 1)
+        integer(actions["max_sequence_length"])
+        if set(actions["exchange_allocations"]) - {"balanced", "hp", "mp", "money"} or set(actions["targets"]) - {"self", "opponent"}:
+            raise ContractError("unknown allocation or target")
     server = effective["server"]
     if run["report_reserve_seconds"] + server["cleanup_reserve_seconds"] >= run["finalization_seconds"]:
         raise ContractError("cleanup/report reserves must fit inside finalization allowance")
@@ -307,6 +358,11 @@ def load_config(path: str | Path, overrides: Json | None = None) -> LoadedConfig
         if name == "preprocessing":
             converted[name] = preprocessing
             continue
+        if name == "actions" and structured_actions:
+            converted[name] = actions_v2
+            continue
+        if name == "run" and structured_actions:
+            cls = RunConfigV2
         values = effective[name]
         defaults = asdict(cls())
         values = {k: tuple(v) if isinstance(defaults[k], tuple) else v for k, v in values.items()}
