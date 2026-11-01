@@ -24,7 +24,7 @@ actions to fill that gap would violate the Bots information/rule boundary.
 | Song/Tone/Heart Shell/Smile Shell | Catalog curse scope; Smile Shell normal refill confirmed | Direct target/completion/branch and sequence/repetition |
 | Goddess's Soap / Nocturnal Broom | Catalog removal counts; Earth God automatic targets in §19.3 | Normal Player Action target/completion/sequence/repetition; automatic-source rules are not a general Player contract |
 | Guardian Pot / Release | Catalog summons; guardian lifecycle in §19.1 | Normal Player Action target/default/completion/sequence/repetition |
-| Spiritual Doll / nonweapon CutCost | Pure utility needs a simultaneous miracle (spec03 §16.1) | Eligible sequence placement and nonattack miracle compatibility |
+| Spiritual Doll / pure CutCost without intrinsic attack/defense | Pure utility needs a simultaneous miracle (spec03 §16.1) | Eligible sequence placement and nonattack miracle compatibility; positive-defense spiritual armor retains its separate ordinary numeric defense role |
 
 Named AddCurse miracles Wind/Heaven Wind/Fog/Dream/Dark Cloud have explicit
 self/hostile response semantics in spec09 §16.4. Attack/additional/Aura/Mirage,

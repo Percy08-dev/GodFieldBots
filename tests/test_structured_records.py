@@ -154,3 +154,30 @@ def test_all_18_own_slots_and_overflow_are_explicit(make_input):
     assert table.slots == tuple(range(18))
     with pytest.raises(ContractError, match="shape"):
         frame_for(make_input(hand=("bronze-club",) * 19))
+
+
+def test_many_rows_reuse_only_one_call_local_owned_decode(make_input, monkeypatch):
+    import gf_common.structured as module
+    frame, _ = frame_for(make_input(hand=("bronze-club",), learned=("fireball",)))
+    sequence = [frame.references[0], frame.references[1]]
+    actions = [{"type": "play_sequence", "target": 2, "ordered_elements": sequence} for _ in range(200)]
+    loads = module.json.loads
+    decodes = []
+    def counted_loads(*args, **kwargs):
+        decodes.append(1)
+        return loads(*args, **kwargs)
+    monkeypatch.setattr(module.json, "loads", counted_loads)
+    table = CandidateTable.from_actions(frame, actions)
+    assert len(decodes) == 1
+    decodes.clear()
+    table.validate(frame)
+    assert len(decodes) == 1
+    assert table.to_action(199, frame) == actions[199]
+    exposed = table.to_action(0, frame)
+    exposed["ordered_elements"][0]["instance_id"] = 999
+    assert table.to_action(1, frame) == actions[1]
+    # Ownership/type validation still applies to the final row, rather than
+    # merely checking a representative action after a shared context is built.
+    with pytest.raises(ContractError):
+        CandidateTable.from_actions(frame, [*actions[:-1], {"type": "play_sequence", "target": True,
+                                                          "ordered_elements": sequence}])

@@ -119,9 +119,41 @@ with3.14.9. No interpreter/package change was made. Default uv cache is read-onl
 so commands use the disposable writable cache path and `--no-sync` to preserve
 the installed environment. Old normal-resume environment guards remain intact.
 
-## Remaining required acceptance evidence
+## Pure candidate generator slice B
 
-Currently NOT RUN: v4 reference enumeration, integrated E2E PPO numerics/gradients,
+Implemented `gf_common.diverse_actions` with compact proposals/table, saturating
+pre-count/cost admission, fair bounded family/start/length exploration, mandatory
+coverage and seven-channel distinct selection. Reports bind table/config/cost/RNG
+and separate traversal from presentation completion. Supported scope is the
+confirmed ADR0023 matrix; issue0005 omissions remain explicit. No application
+factory/worker/journal/training path uses this generator yet.
+
+Both independent correctness and architecture-conformance reviews are READY after
+one review/fix cycle. Resolved: positive additional armor/sundry coverage; fixed
+Sell length capacity; zero-mandatory Sell-only domains; channel minimums before
+skewed weights; Exchange/Sell fair scheduling alongside long sequences; attempt
+checks before proposal work; padded19-row projection/transient and configurable
+head-tail costs. Refresh is a visible potential-acquisition proxy including
+miracles/capacity, not a future draw claim. Call-local table validation decodes
+one immutable frame context and preserves original row/hash/ownership semantics.
+
+Root final-source checks PASS:
+
+```sh
+UV_CACHE_DIR=/tmp/gf-structured-uv uv run --no-sync pytest -q tests/test_diverse_actions.py tests/test_structured_records.py tests/test_structured_tokens.py tests/test_structured_config.py tests/test_structured_network.py
+UV_CACHE_DIR=/tmp/gf-structured-uv uv run --no-sync ruff check src/gf_common/diverse_actions.py src/gf_common/structured.py src/gf_models/structured_config.py tests/test_diverse_actions.py tests/test_structured_records.py tests/test_structured_config.py
+UV_CACHE_DIR=/tmp/gf-structured-uv uv run --no-sync mypy src/gf_common/diverse_actions.py src/gf_common/structured.py src/gf_models/structured_config.py
+```
+
+Results:166PASS in8.32s, Ruff PASS, mypy PASS(3modules). This overlaps the pure A
+suite and must not be added to102as distinct cases. Correctness reviewer ran the
+same166cases and original edge repros; architecture reviewer ran22targeted
+generator/record and5refresh/preallocation checks. No fresh GPU/native/wheel/
+real-game/performance result follows; no numeric Torch path changed in this slice.
+
+## Remaining full-unit acceptance evidence
+
+Currently NOT RUN: integrated E2E PPO numerics/gradients,
 sharded artifacts/optimizer/RNG resume, worker2/journal5/
 native differential,192-game baseline, attention3models×2inference devices×
 continuous/pause-resume real2updates, other hand-mode MLP games, fixed512train

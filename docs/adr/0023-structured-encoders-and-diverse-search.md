@@ -16,8 +16,10 @@ The first pure records/token/config/network slice is implemented in
 conformance reviews are READY after fixing joint endpoint admission, event/cache
 bounds, inherited initialization and fixed KV storage. Root accepts only this
 slice:102CPU/6separateCUDA and110selected legacy checks pass, scoped Ruff/mypy pass.
-Candidate generation, transport, persistence, native, PPO/LightGBM application
-integration and required real-game/performance acceptance remain incomplete.
+The pure v4 generator slice is also implemented/accepted after independent
+correctness/conformance review and166affected checks. Worker/application routing,
+transport, persistence, native, PPO/LightGBM application integration and required
+real-game/performance acceptance remain incomplete.
 Issue0005 still blocks full completion. See the verification ledger for scope.
 
 ## 1. Context and completion boundary
@@ -181,6 +183,26 @@ authoritative rollout input or reused across optimizer updates. The value branch
 receives no current candidate content/count/order, search cutoff or selection tags.
 
 ## 6. Candidate space, pre-count and selection
+
+The hand-refresh axis is a public potential acquisition/refill proxy, including
+miracle-use acquisition opportunities (§12.4/16.1) and ordinary eligible refill/
+Sacrifice. Cap it using visible possession headroom after known removals; a hand
+miracle's transfer into learned storage does not itself free a possession slot,
+and self-Sell retains the sold item. Normal Discard has no refill. This strategy
+summary is not an assertion of future RNG draws, exact post-action state or a
+learning target; no hidden/future result refines it.
+
+The configured usage-reference length applies to every action, including fixed
+two-reference Sell. With max_sequence_length1, Sell is excluded by configured
+capacity (not declared publicly illegal); it is not a mandatory singleton. The
+counter/admission domain and table position capacity must apply the same bound.
+
+Implementation stage allocation reserves25% of the same configured search/
+selection wall budget for selection/preparation and uses75% for discovery; it
+adds no budget or ignored Config setting. Record actual stage and table-finalize
+costs and check deadlines cooperatively. Channel minimum opportunities apply to
+discovered nonempty channels within remaining distinct-action capacity; no
+requirement allocates a separate slot to every overlapping tag or mask.
 
 The public coverage matrix in section10 must be independently reviewed before
 generator implementation. Completion is separate from extensibility: a support
@@ -371,6 +393,16 @@ its explicit opponent contract. The engine remains final validation authority.
 
 ## 11. Alternatives, consequences and open questions
 
+Additional defense-role review (READY): positive-defense Spiritual Hood/Sash/
+Socks remain ordinary numeric singleton/armor/ring proposals without miracle
+companions; pure Doll remains issue0005. Fever Mask/Dreaming Hat preserve numeric
+composition and ordered response effects (§14/18.4.1). Rainbow Curtain supports a
+hinted filter singleton and filter-plus-ordinary-armor/ring composition (§15.1),
+without deriving hidden incoming kind. Reflect/bounce armor remains exclusive
+despite printed defense (§14.2); Wall/Turbulence are singleton-only here. Every
+component is inside same-revision actor hints. This does not establish CutCost
+plus miracle placement or other special combinations.
+
 Retaining hashed aggregate inputs would lose exact card identity and interaction
 information requested here. Frozen neural features would not provide E2E updates.
 A decoder or engine legality oracle is unnecessary and outside the information
@@ -490,3 +522,113 @@ with workers. Available physical memory and managed12GiB admission are distinct;
 no outside process is preempted. Root runtime check2026-11-01 confirms pinned
 Torch2.14.1+cu132 sees RTX5070Ti when GPU permission is available; sandbox-only
 Torch reports unavailable and must fail without silently choosing CPU.
+
+## 13. Application integration design (review before dependent implementation)
+
+V2 Selection logprob/value become optional to preserve baseline `None` values;
+validate finite/nonpositive values when present. Do not invent baseline critic
+values. PPO source authorization/ingestion explicitly requires both finite fields
+on every learner row before parity/update, rejecting missing values without zero
+imputation. This v2-only clarification is independently design-reviewed READY;
+require baseline-null roundtrip and PPO-null rejection tests.
+
+Independent design review of this section is READY (2026-11-01). Implementation
+and final conformance remain pending. Partial Config validation/default merging
+must dispatch by version before old field checking, not just at final model parse.
+Collection run-manifest schemas stay3(non-PPO)/4(PPO); actions2 uses
+journal_schema_version5 and feature identity participant-structured-v1. Preserve
+schema4's whole-PPO-parent authorization path when reading journal5—new journal
+format alone never bypasses failed/incomplete-parent exclusion.
+
+Participant residency (weights, CUDA context and full cache) is reserved before
+spawn/initialize and held through confirmed worker reap, including startup and
+preflight workers. A reply releases only scoped decision temporaries. The same
+four-worker/global budget includes startup workers and resident learner weights/
+Adam throughout collection; no separate uncharged preflight pool exists.
+
+V2 policy/binding labels include model kind/version, full inference-manifest
+digest and full runtime-binding digest. The same checkpoint on CPU and CUDA can
+therefore coexist as distinct evaluation labels without overwriting/rejecting
+one binding. Selection/source/native authorization checks that complete identity;
+artifact/network identity remains independent of device. Do not change legacy
+label syntax. Ordinary resume still requires the exact original binding.
+
+Saved artifact3 `model.resources` records creation-time admission defaults and
+provenance. Active configured resource limits govern preallocation/construction;
+network compatibility compares `architecture_identity` (which excludes resources
+and runtime binding), not full dataclass equality. With no explicit override,
+use and validate saved defaults. A changed resource limit is permitted for a new
+inference binding only when all active checks pass; ordinary resume rejects it
+through full Config/binding identity. No weakened shape/tensor/runtime validation.
+
+The pure `ModelConfigV2` is network configuration and contains no checkpoint or
+inference binding. For application Config use a distinct closed
+`ConfiguredNeuralModelV2` dataclass extending those flattened fields with optional
+checkpoint and `InferenceBindingV2`. Its explicit `architecture()` conversion
+returns the exact pure base type for network/token/resource APIs; never weaken
+their exact-type validation to accept arbitrary subclasses. `model.version="2"`
+still appears at the existing Config model level. Artifact3 stores the pure
+network recipe, while actual safe runtime binding is separately recorded/hashed.
+No new runtime fields are inserted into v1 dataclass serialization.
+
+LightGBM2 has a separate closed configured model type: deterministic structured
+encoder recipe/max positions/aggregate window, native tree parameters,
+initialization and CPU chunk/resource binding. It has no trainable Hand encoder
+settings. `model_config` dispatches on version and model kind before old parsing.
+Actions2 can accompany v1 Random/heuristic through explicit structured baseline
+policies; old neural/LightGBM feature artifacts cannot bind to actions2.
+
+Model2 uses its one existing `model.temporal.sequence_length` setting for TBPTT
+(default32). Do not duplicate it as a second training setting. New PPO training
+presets use the base PPO settings for all three kinds; legacy sequence-model
+training.sequence_length serialization retains its original behavior. A mismatched
+old training preset on model2 rejects before I/O. Ordinary resume binds all model,
+action, window, resource and actual inference-device settings unchanged.
+
+An actions2-specific run Config adds global CUDA managed admission budget12GiB
+without changing legacy RunConfig fields/hashes. New runtime supports at most
+two simultaneous games/four participant workers and retains resident-learner
+reservation. Each endpoint reserves its computed envelope, not the entire global
+ceiling. Resource failures do not trigger automatic candidate/window/device edits.
+
+CLI chooses the protocol2 factory/worker explicitly for actions2. Startup has a
+separate initialize/ready exchange so model load is timed outside decision latency.
+Worker initial messages carry only factory/model ID, sampling seed, action settings
+and closed checkpoint/runtime binding; no effective_config, URL or GameSeed.
+Protocol2 request carries actor-local EventDelta plus bound raw frame. Worker
+validates/appends once, generates and selects; response contains compact table,
+search report, bound Selection and scoped timings. Parent validates hashes and
+references, reconstructs the Action against its original frame, then journals and
+submits. CPU probabilities are sampled only after CUDA synchronization/finite
+checks. Baseline policies do not materialize all candidates as legacy Action JSON.
+
+Schema5 journal writes append events once and immutable frame/table/search/
+selection references, preserving existing positive-acknowledgement and closure
+semantics. Explicit reader dispatch validates5 independently from4; no input
+history or semantic version is inferred. New run/source summaries carry model
+version/input recipe/generation schema. Native capability checks require schema5
+and participant-structured-v1 tokenization before a native collection starts;
+model-ID-only capability cannot authorize model2. Existing v1 source/preprocessing
+recipes and all old proof bytes remain unchanged.
+
+PPO numeric rollout3 stores deterministic state/card/event tokens and compact
+candidate references, episode/decision offsets and original frozen policy values,
+with train-only GAE targets separate. Raw event tokens are banked once per episode;
+frames reference intervals and own-card state at observation time. Sharded typed
+arrays are enumerated in the manifest, decoded total<=64MiB per shard. Training
+packs only admitted endpoints and computes encoder outputs with current weights;
+it never persists learned latents. Existing PPO math, 128 logical endpoints,
+minibatch shuffle, clip/Adam and four-epoch semantics are reused, with all-candidate
+checkpoint chunks rather than the old4096 total-candidate cap.
+
+Artifact3 named optimizer state distinguishes uninitialized parameters from
+initialized moments, persists each parameter's step, and restores identical
+optimizer membership/order. This matters for empty interval GRU or direct-hand
+unused branches. Generation2's explicit file map governs hash checks and
+retention, including all shard sidecars and deletion receipts; schema1 keeps its
+old fixed-file contract. Native authorization/projection and fixed dataset2
+validate these new identities rather than accepting an old model solely by ID.
+
+These are application-level extensions of the accepted ownership, not a new
+trainer, engine, serving service or generic dispatch framework. Required gate
+evidence remains in §§7–9/12; real fitting/campaigns remain separately gated.

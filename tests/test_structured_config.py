@@ -80,3 +80,38 @@ def test_admission_and_runtime_binding_are_separate():
 def test_action_config_strict(settings):
     with pytest.raises(ContractError):
         ActionConfigV2(**settings)
+
+
+def test_position_projection_counts_18_slots_plus_padding_and_transient_storage():
+    from gf_models.structured_config import HeadConfigV2
+    model = replace(ModelConfigV2(), max_positions=128,
+                    card=CardConfigV2(output_size=4), heads=HeadConfigV2(actor_hidden_sizes=(1024,)),
+                    temporal=TemporalConfigV2(max_decisions=3, sequence_length=3),
+                    event=EventConfigV2(max_interval=8))
+    binding = InferenceBindingV2(candidate_chunk=1, max_candidates=1)
+    result = resource_estimate(model, binding)
+    tensors = result["tensor_bytes"]
+    assert tensors["position_card_projection"] == 128 * 19 * 1024 * 4
+    assert tensors["position_card_projection_unpadded"] == 128 * 18 * 1024 * 4
+    assert tensors["position_card_projection_padding"] == 128 * 1024 * 4
+    bound = (tensors["position_card_projection"] + tensors["position_card_projection_unpadded"]) // 2
+    limited = replace(model, resources=replace(model.resources, max_tensor_bytes=bound))
+    validate_config(limited)  # all parameter tensors fit; padded activation does not.
+    with pytest.raises(ContractError, match="tensor"):
+        resource_estimate(limited, binding)
+
+
+def test_padded_projection_limit_rejects_before_optional_torch_construction(monkeypatch):
+    import gf_models.torch_runtime as runtime
+    from gf_models.structured_config import HeadConfigV2
+    from gf_models.structured_network import make_network
+    model = replace(ModelConfigV2(), max_positions=128,
+                    card=CardConfigV2(output_size=4), heads=HeadConfigV2(actor_hidden_sizes=(1024,)),
+                    temporal=TemporalConfigV2(max_decisions=3, sequence_length=3),
+                    event=EventConfigV2(max_interval=8),
+                    resources=ResourceConfigV2(max_tensor_bytes=9_800_000))
+    def forbidden_allocation(*args, **kwargs):
+        pytest.fail("Torch construction started before padded projection admission")
+    monkeypatch.setattr(runtime, "torch_runtime", forbidden_allocation)
+    with pytest.raises(ContractError, match="tensor"):
+        make_network(model, 1, InferenceBindingV2(candidate_chunk=1, max_candidates=1))

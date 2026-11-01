@@ -357,7 +357,8 @@ class CandidateTable:
     def from_actions(cls, frame: DecisionFrame, actions: tuple[Json, ...] | list[Json],
                      max_positions: int = 128) -> CandidateTable:
         integer(max_positions, 1, 128)
-        refs = {canonical(ref): i for i, ref in enumerate(frame.references)}
+        context = _ActionContext.from_frame(frame)
+        refs = {canonical(ref): i for i, ref in enumerate(context.references)}
         kinds: list[str] = []
         targets: list[str] = []
         numerics: list[tuple[int, ...]] = []
@@ -365,7 +366,7 @@ class CandidateTable:
         offsets = [0]
         slots: list[int] = []
         for action in actions:
-            _validate_action(action, frame)
+            _validate_action_context(action, context)
             kind = action["type"]
             elements = _action_refs(action)
             if len(elements) > max_positions:
@@ -385,26 +386,35 @@ class CandidateTable:
                    "numerics": tuple(numerics), "presence": tuple(presence),
                    "offsets": tuple(offsets), "slots": tuple(slots)}
         result = cls(**content, table_hash=digest(content))
-        result.validate(frame)
+        result._validate_context(context)
         return result
 
     def validate(self, frame: DecisionFrame) -> None:
         if self.frame_hash != frame.frame_hash:
             raise ContractError("candidate frame mismatch")
-        if any(slot >= len(frame.references) for slot in self.slots):
+        self._validate_context(_ActionContext.from_frame(frame))
+
+    def _validate_context(self, context: _ActionContext) -> None:
+        if any(slot >= len(context.references) for slot in self.slots):
             raise ContractError("candidate slot not in original own view")
         for index in range(len(self.kinds)):
-            action = self.to_action(index, frame, validate=False)
-            _validate_action(action, frame)
+            action = self._to_action(index, context.actor, context.references)
+            _validate_action_context(action, context)
             if (tuple(int(action.get(key, 0)) for key in NUMERIC_FIELDS) != self.numerics[index]
                     or tuple(key in action for key in NUMERIC_FIELDS) != self.presence[index]):
                 raise ContractError("noncanonical candidate numeric encoding")
 
     def to_action(self, index: int, original_frame: DecisionFrame, *, validate: bool = True) -> Json:
-        integer(index, 0, len(self.kinds) - 1)
         if original_frame.frame_hash != self.frame_hash:
             raise ContractError("selection original frame mismatch")
-        refs = original_frame.references
+        context = _ActionContext.from_frame(original_frame)
+        action = self._to_action(index, context.actor, context.references)
+        if validate:
+            _validate_action_context(action, context)
+        return action
+
+    def _to_action(self, index: int, actor: int, refs: tuple[Json, ...]) -> Json:
+        integer(index, 0, len(self.kinds) - 1)
         row = self.slots[self.offsets[index]:self.offsets[index + 1]]
         if any(slot >= len(refs) for slot in row):
             raise ContractError("foreign candidate reference")
@@ -427,14 +437,12 @@ class CandidateTable:
             raise ContractError("unexpected action references")
         target = self.targets[index]
         if target != "omitted":
-            action["target"] = None if target == "null" else original_frame.actor if target == "self" else 3 - original_frame.actor
+            action["target"] = None if target == "null" else actor if target == "self" else 3 - actor
         for key, number, present in zip(NUMERIC_FIELDS, self.numerics[index], self.presence[index], strict=True):
             if present:
                 if key == "accept" and number not in (0, 1):
                     raise ContractError("noncanonical buy acceptance encoding")
                 action[key] = bool(number) if key == "accept" else number
-        if validate:
-            _validate_action(action, original_frame)
         return action
 
 
@@ -453,8 +461,29 @@ def _action_refs(action: Json) -> list[Json]:
     return [{"source": "hand_artifact", "instance_id": item} for item in ids]
 
 
-def _validate_action(action: Json, frame: DecisionFrame) -> None:
-    descriptors = {item["type"]: item for item in frame.raw["typed_metadata"]}
+@dataclass(frozen=True)
+class _ActionContext:
+    actor: int
+    references: tuple[Json, ...]
+    owned: frozenset[str]
+    descriptors: Json
+
+    @classmethod
+    def from_frame(cls, frame: DecisionFrame) -> _ActionContext:
+        # One call-local owned decode. Never retained across participants or
+        # frames, and never exposed as mutable policy/global cache state.
+        raw = frame.raw
+        own = raw["observation"]["own"]
+        references = tuple([{"source": "hand_artifact", "instance_id": card["instance_id"]}
+                            for card in own["hand"]]
+                           + [{"source": "learned_miracle", "definition_id": name}
+                              for name in own["learned_miracles"]])
+        return cls(frame.actor, references, frozenset(canonical(ref) for ref in references),
+                   {item["type"]: item for item in raw["typed_metadata"]})
+
+
+def _validate_action_context(action: Json, context: _ActionContext) -> None:
+    descriptors = context.descriptors
     if not isinstance(action, dict) or action.get("type") not in descriptors:
         raise ContractError("action kind not in typed metadata")
     desc = descriptors[action["type"]]
@@ -462,9 +491,8 @@ def _validate_action(action: Json, frame: DecisionFrame) -> None:
     for field_name in ("ordered_elements", "ordered_defenses", "instance_ids"):
         if field_name in action and not isinstance(action[field_name], list):
             raise ContractError("ordered action array required")
-    refs = {canonical(ref) for ref in frame.references}
     for ref in _action_refs(action):
-        if canonical(ref) not in refs:
+        if canonical(ref) not in context.owned:
             raise ContractError("action reference not owned")
     if "target" in action and action["target"] is not None:
         integer(action["target"], 1, 2)

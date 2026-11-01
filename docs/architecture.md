@@ -10,7 +10,9 @@ retain their exact semantics. Independent design reviews authorize the core and
 confirmed candidate rows. The first pure records/token/config/network slice is
 implemented and accepted after independent correctness/conformance reviews:
 102CPU/6separateCUDA tests,110selected legacy tests and scoped Ruff/mypy pass.
-Generator/integration and full acceptance are pending; the
+The pure v4 candidate generator is also accepted after both independent reviews
+and166affected Python checks. It is not yet connected to the application workers.
+Application integration and full acceptance are pending; the
 public utility completion/target dependency is tracked in
 [issue0005](issues/0005-public-utility-action-semantics.md). It is not resolved by
 atomic hints or successful play. See the

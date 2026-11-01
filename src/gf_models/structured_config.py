@@ -324,7 +324,9 @@ def resource_estimate(model: ModelConfigV2, binding: InferenceBindingV2, *,
         "chunk_dense_reference": chunk * d["actor"] * 4,
         "chunk_position_gather": chunk * model.max_positions * model.heads.actor_hidden_sizes[0] * 4,
         "chunk_checkpoint_replay": chunk * sum(model.heads.actor_hidden_sizes) * 4 * 8,
-        "position_card_projection": model.max_positions * 18 * model.heads.actor_hidden_sizes[0] * 4,
+        "position_card_projection": model.max_positions * 19 * model.heads.actor_hidden_sizes[0] * 4,
+        "position_card_projection_unpadded": model.max_positions * 18 * model.heads.actor_hidden_sizes[0] * 4,
+        "position_card_projection_padding": model.max_positions * model.heads.actor_hidden_sizes[0] * 4,
         "global_logits_probability_gradient": candidates * 4 * 5,
     }
     if any(size > model.resources.max_tensor_bytes for size in tensors.values()):
