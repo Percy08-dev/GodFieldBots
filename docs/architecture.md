@@ -7,7 +7,10 @@ model/actions-v2 route for detailed participant frames, event banks, compact
 diverse candidates and configurable E2E state/hand/event encoders across the three
 PPO models, plus deterministic LightGBM and CPU/CUDA inference. The legacy paths
 retain their exact semantics. Independent design reviews authorize the core and
-confirmed candidate rows. Implementation and acceptance are pending; the
+confirmed candidate rows. The first pure records/token/config/network slice is
+implemented and accepted after independent correctness/conformance reviews:
+102CPU/6separateCUDA tests,110selected legacy tests and scoped Ruff/mypy pass.
+Generator/integration and full acceptance are pending; the
 public utility completion/target dependency is tracked in
 [issue0005](issues/0005-public-utility-action-semantics.md). It is not resolved by
 atomic hints or successful play. See the

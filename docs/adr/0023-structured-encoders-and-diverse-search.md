@@ -8,6 +8,18 @@
   boundary; BLOCKED only for issue0005/full completion. No tests were run by that
   design review. Final correctness/conformance and implementation acceptance pending.
 
+## Implementation status
+
+The first pure records/token/config/network slice is implemented in
+`gf_common.structured`, `structured_tokens`, `structured_vocab` and
+`gf_models.structured_config`, `structured_network`. Independent correctness and
+conformance reviews are READY after fixing joint endpoint admission, event/cache
+bounds, inherited initialization and fixed KV storage. Root accepts only this
+slice:102CPU/6separateCUDA and110selected legacy checks pass, scoped Ruff/mypy pass.
+Candidate generation, transport, persistence, native, PPO/LightGBM application
+integration and required real-game/performance acceptance remain incomplete.
+Issue0005 still blocks full completion. See the verification ledger for scope.
+
 ## 1. Context and completion boundary
 
 ADR0022's MLP/GRU/Transformer PPO and normal-boundary resume are implemented.
@@ -136,6 +148,15 @@ per-tensor/shard limits, complete model/optimizer/runtime envelopes before netwo
 construction. Activation initially ReLU; dropout0, IEEE FP32, AMP/TF32 disabled,
 deterministic backends and orthogonal initialization. Preserve established1e-5
 parity tolerances; do not relax them to make a route pass.
+
+Initialization retains ADR0022's numerical conventions: initialize each temporal
+and interval-GRU gate independently orthogonal with gain1; hand/temporal attention
+Q/K/V/output and category embeddings gain1; ReLU linear stages gain√2; actor output
+gain.01 and value output1; bias0, LayerNorm weight1/bias0, independent draws per
+layer. The dense/factorized actor shares the same initialized matrix. Transformer
+inference appends KV into preallocated bounded participant storage; differentiable
+full/split execution may concatenate prefix/suffix KV. Do not grow inference cache
+by torch.cat on every decision.
 
 Direct hand input is a fixed visible-order concatenation of exact one-hot
 categories, numerics, missingness, membership and learned order; no learned hand
@@ -373,14 +394,35 @@ EventBank.append(EventDelta(actor, episode, start, previous_hash, events))
     -> EventBoundary(end, prefix_hash)
 DecisionFrame.from_input(complete DecisionInput, EventBank, interval_start)
     -> immutable frame bound to actor/episode/revision/event boundaries
-PublicCandidateGeneratorV2.generate(frame, bank_view, search_rng)
-    -> CandidateTable
+PublicCandidateGeneratorV2.generate(frame, bank_view, search_rng, numeric_costs)
+    -> GeneratedCandidates(table: CandidateTable, report: SearchReport)
 CandidateTable.to_action(index, original_frame) -> typed Action
 PolicyV2.reset(sampling_seed)
 PolicyV2.select_frame(frame, bank_view, table) -> Selection
 tokenize_frame(frame, bank_view, recipe) -> deterministic FrameTokens
 tokenize_table(table, frame, recipe) -> deterministic CandidateTokens
 ```
+
+`GeneratedCandidates` separates the immutable semantic table from closed search
+diagnostics. `SearchReport` records generator/config identity, pre-count exact/
+upper-bound/unknown and saturation, estimated complete/prefix/attempt/element and
+preparation/scoring/storage costs, admission decision, actual attempts/prunes/
+discovered/selected counts, stage timings, independent search RNG before/after,
+completion flags and cutoff reasons. Traversal completion and presentation
+completeness are separate; presenting a subset is never called a full candidate
+set. The report never enters encoder/policy/critic features. Parent journals it
+alongside the table binding and selection.
+Report identity binds the returned table digest and exact numeric-cost descriptor
+hash. Independent design review of this addition is READY (2026-11-01); executable
+checks and final implementation conformance remain required.
+
+`numeric_costs` is a small closed model-neutral numeric cost descriptor derived
+by the worker from the active model/binding's already admitted resource envelope;
+baseline scoring has zero neural costs. It contains dimensions/byte limits, not
+model objects, hidden values or callbacks into upper packages. Common saturating
+counting combines these costs with proposal/element counts before constructing
+Actions. The exact descriptor and report schemas are frozen with generator
+implementation; do not add a generic plugin cost framework.
 
 V2 runtime policy options are a distinct closed safe binding of checkpoint path,
 expected manifest digest and inference device/chunk/reservation settings (plus

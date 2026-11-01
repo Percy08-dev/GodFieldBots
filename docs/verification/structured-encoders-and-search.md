@@ -77,10 +77,52 @@ New-recipe benchmark tokenization is ephemeral; it does not rewrite or relabel
 old dataset/journals/index. Retained dataset manifest file hash is
 `1bfe1607dc80ee3def7ce4ab4ae24a807164dce8d09e67a8b5f2a9a75f3ece55`.
 
-## Required acceptance evidence
+## First pure implementation slice
 
-All currently NOT RUN: v2 behavior/reference enumeration,3 hand modes×3 PPO
-numerics/gradients, sharded artifacts/optimizer/RNG resume, worker2/journal5/
+Source: five new modules `gf_common/{structured,structured_tokens,structured_vocab}`
+and `gf_models/{structured_config,structured_network}`. Legacy production source,
+Simulator, dependencies and historical datasets/artifacts are unchanged.
+These APIs are not yet connected to CLI/transport/learning or inference artifacts.
+
+Independent `bot_reviewer` correctness and `bot_architecture_reviewer` conformance
+reviews are READY. Concrete findings were fixed and rechecked: oversized dense/
+chunk override admission; actual suffix events and jointly admitted history plus
+effective scoring chunk; first/contiguous/episode-bounded cache intervals;
+per-gate/attention initialization; preallocated reusable KV. Root accepts this
+bounded slice only. No advisor escalation was needed; no unresolved disagreement
+or twice-surviving fix remained.
+
+Root final-source commands:
+
+```sh
+UV_CACHE_DIR=/tmp/gf-structured-uv uv run --no-sync pytest -q tests/test_structured_records.py tests/test_structured_config.py tests/test_structured_tokens.py tests/test_structured_network.py tests/test_structured_cuda.py
+CUBLAS_WORKSPACE_CONFIG=:4096:8 GFB_RUN_STRUCTURED_CUDA=1 UV_CACHE_DIR=/tmp/gf-structured-uv uv run --no-sync pytest -q tests/test_structured_cuda.py
+UV_CACHE_DIR=/tmp/gf-structured-uv uv run --no-sync ruff check src/gf_common/structured.py src/gf_common/structured_tokens.py src/gf_common/structured_vocab.py src/gf_models/structured_config.py src/gf_models/structured_network.py tests/test_structured_records.py tests/test_structured_config.py tests/test_structured_tokens.py tests/test_structured_network.py tests/test_structured_cuda.py
+UV_CACHE_DIR=/tmp/gf-structured-uv uv run --no-sync mypy src/gf_common/structured.py src/gf_common/structured_tokens.py src/gf_common/structured_vocab.py src/gf_models/structured_config.py src/gf_models/structured_network.py
+```
+
+Results:102PASS/6opt-in SKIPPED in4.43s; separate GPU-permission6PASS in9.14s;
+Ruff PASS; mypy PASS(5modules). GPU suite covers default attention×3temporal
+models×18/128positions, CPU/CUDA full/split/cache and dense/chunk encoder/all
+parameter gradients at unchanged1e-5, plus fixed-buffer reset/reuse. It does not
+measure latency/peaks or demonstrate gameplay/training quality.
+
+Implementer selected-legacy command PASS110 in17.67s:
+`.venv/bin/pytest -q tests/test_actions.py tests/test_action_options.py tests/test_catalog_v2_models.py tests/test_gru_ppo.py tests/test_transformer_ppo.py`.
+An earlier command named nonexistent `tests/test_encoder.py` and ran0tests; the
+corrected command above is the evidence. Reviewer's full targeted95PASS preceded
+final localized changes; later network57PASS and focused admission7PASS covered
+fixes; root's102-case sweep is the final combined evidence.
+
+uv warned that the interpreter is3.14.10 whereas this existing .venv was created
+with3.14.9. No interpreter/package change was made. Default uv cache is read-only,
+so commands use the disposable writable cache path and `--no-sync` to preserve
+the installed environment. Old normal-resume environment guards remain intact.
+
+## Remaining required acceptance evidence
+
+Currently NOT RUN: v4 reference enumeration, integrated E2E PPO numerics/gradients,
+sharded artifacts/optimizer/RNG resume, worker2/journal5/
 native differential,192-game baseline, attention3models×2inference devices×
 continuous/pause-resume real2updates, other hand-mode MLP games, fixed512train
 decision CPU p95<=3s panel and separate stress/GPU attribution, pytest/Ruff/mypy/
