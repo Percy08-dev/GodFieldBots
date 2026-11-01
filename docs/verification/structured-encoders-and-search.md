@@ -955,12 +955,67 @@ attempt failed before measurement on a harness import name; the successful harne
 uses model_defaults_v2('transformer').architecture(). No production fix, source
 qualification, native or LightGBM acceptance follows from the measurement.
 
+## Synthetic five-process CUDA allocator stress
+
+Root runs independent PyTorch processes for one resident learner and four
+participant-shaped numerical workloads, with collection/update phases kept
+sequential. These use raw synthetic tokens and simple numerical losses, not
+Simulator Actions, real participant worker IPC, Source or runtime lease admission.
+Default2-layer Transformer/attention is exercised at18positions, then explicit
+synthetic128capacity. Each first run has5ready/30shape/5closed events, all children
+exit0 and are reaped. Independent correctness audit reproduces every proof/hash,
+count and memory summary without importing Torch or rerunning the GPU.
+
+| Capacity | Managed five-endpoint estimate | Sum final Torch reserved | Sum final allocated |
+| --- | ---: | ---: | ---: |
+| 18 | 8,140,588,544B | 572,522,496B | 247,443,968B |
+| 128 | 9,324,434,944B | 612,368,384B | 278,983,168B |
+
+Reserved memory persists after temporary outputs are deleted and subsequent small
+shapes complete. It includes live allocations and workspaces as well as unused
+cache. These per-process Torch counters exclude CUDA context/other native
+allocations, external device use and host memory. Their sum is not a measured
+simultaneous global physical VRAM high-water or a proof of all12GiB accounting.
+First two harness attempts stop on import/history fixture errors, before a full
+cohort; their failed results are preserved. They are not production failures.
+
+The reviewer identifies that Adam was initially lazy until participant stress
+ended. A separate follow-up explicitly warms Adam with32decisions/32768candidates/
+one interval event before collection, then tests a joint32768candidate/1024decision/
+4096event/128position shape in both phases. All four participant caches stay live
+during learner updates. Assertions cover finite outputs/gradients and post-step
+parameters/all Adam values. Five ready/36shape/five closed, all exit0/reaped.
+Observed final allocated/reserved totals are278,983,168/624,951,296B; per-process
+peak allocated is186,079,232B for the learner and96,453,632B for a participant.
+This resolves the warm-Adam and separate-axis limitations only for that synthetic
+follow-up. The independent follow-up audit is PASS with the same exclusions.
+
+```sh
+timeout --signal=INT --kill-after=20s 900s env CUDA_VISIBLE_DEVICES=0 CUBLAS_WORKSPACE_CONFIG=:4096:8 UV_CACHE_DIR=/tmp/gf-structured-uv uv run --no-sync python /tmp/gfb-structured-five-process-cuda-joint128-20261102.py --output runs/assessments/structured-five-process-cuda-joint128-20261102
+```
+
+The instrumented joint full-history workload takes at most11.482s for a participant
+and4.156s for the learner; finite checks, synchronization and memory queries are
+included. This is neither cold startup nor normal cached-policy latency. It does
+not establish the10second worker timeout or3second ordinary-panel target for this
+stress condition. The prior512ordinary-panel results retain their separate scope.
+
+Evidence manifests:18capacity
+`c4484520f2ce22de9ee4b0016889911cffa58e3c3689bb799a567ed632a8a58e`,128capacity
+`83dfa19c85998641be1904ebe39834b91cd7770ad995401d0ff0c26d145808a3`,joint128
+`6df585a4b15b92bcd2399f8f3b8bd1f0918b3bc330ee7b68562505732f5cc8c6`.
+The corresponding output directories preserve harness/results/fixture or source
+anchors. The joint result is
+`3f39dc5c85934663774583a93808d7d8cd02252707c03a08986acf5e3fa5cc57`.
+No strength, qualified source, actual worker-cache or physical allocator-sandbox
+acceptance follows from these numerical checks.
+
 ## Remaining integrated acceptance
 
 Currently NOT RUN: qualified collection E2E PPO integration,
 journal5/native differential,192-game baseline, attention3models×2inference devices×
 continuous/pause-resume real2updates, other hand-mode MLP games, fixed512train
 decision CPU p95<=3s acceptance under the complete qualified contract, separate
-stress/GPU attribution and new Rust/native checks. Repeat old-data proofs, wheel
+actual-worker stress/physical GPU accounting and new Rust/native checks. Repeat old-data proofs, wheel
 and optional-dependency-free startup after the remaining implementation.
 Do not turn these entries into PASS without exact commands and actual evidence.

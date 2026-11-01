@@ -1539,6 +1539,20 @@ releasing locks. Cross-version validation dispatches before legacy code and does
 not weaken legacy equality or fingerprints. V2 requires exact integer JSON types,
 closed maps and explicit classification, not Python-style bool/float equivalence.
 
+Concrete C2a API: StructuredParentControls(directory, settings, deadline,
+cancel_handle), with summary(retained_python_bytes=0), recheck with the same
+argument, used_bytes/peak_bytes and terminal close. Diagnostic settings are only
+closed positive memory_bytes/max_json_bytes, both used; Python derives them from
+PreparationConfig. No unused preprocessing settings cross this boundary, and
+this diagnostic entry does not bypass runtime reader capability preflight.
+The embedded ordered token recipe is generated at default window128 under
+native/assets/structured-token-recipe-v1.json; derive other admitted signatures
+by replacing only history_window. Include that asset in build rerun triggers,
+native_source_sha256 and source-distribution/wheel build inputs. Differential
+windows1/128/1024/65536 and a golden digest guard its full layout/vocabulary.
+Named parameter/Adam array descriptor shape checks are metadata checks; actual
+NPZ layout/finite/moment values remain with the existing S2 inspector.
+
 Rust checks the original full Config/hash, recorded provenance, model/resource/
 execution/semantic declarations, healthy run state/clocks, generation/update chain,
 counters, complete explicit artifact maps and exact retention intent/receipt.
@@ -1613,3 +1627,139 @@ corpus/index/saved-PPO proofs in fresh directories and build an offline locked
 wheel, preserving and identifying the previous loaded binary. Source HEAD alone
 is not evidence that the tested wheel contains it. Final design and conformance
 reviews apply to each concrete increment; C2a alone is not native completion.
+
+## 22. Tree2 concrete configuration and deterministic rows
+
+This refines §16 before Tree2 implementation. Independent C3a design review is
+READY (2026-11-02); tests/implementation conformance and C3b interfaces remain
+separate gates. It is separate from native C2 controls/token work. No production preset
+or real fitting is enabled by this design or a successful synthetic fit.
+
+Introduce a separate stdlib ConfiguredTreeModelV2, selected by the joint
+model_id=lightgbm/version2 identity. Its closed fields are model_id/version,
+checkpoint, encoder, network, initialization, inference and resources. Encoder
+contains only recipe=participant-structured-tree-v1, max_positions(default18,
+1..128) and aggregate_window(default128). Network retains num_leaves31 and the
+seed-derived-v1 initialization. Inference is explicitly CPU with candidate_chunk
+256, max_candidates32768 and num_threads1. Resources admit total owned host bytes
+and individual FP32 array bytes (hard64MiB maximum); baseline owned allowance is
+2GiB, matching the current bounded preparation presets, and never silently raised.
+Use existing fit hyperparameter defaults (500rounds,50early stopping, learning
+rate0.05,min_data_in_leaf20); fresh fit only. Do not introduce unused neural
+state/hand/temporal settings, CUDA bindings or Torch into this model's graph.
+
+Tree architecture identity includes only model/version, encoder, network,
+initialization and the deterministic feature recipe. Checkpoint path, inference
+and resources are execution properties. A full execution digest binds the actual
+CPU/chunk/thread/resource settings and validated tree-size/depth descriptor;
+policy labels bind BOTH that digest and the exact inference manifest digest.
+The same artifact under different execution bindings cannot collide in a label.
+
+Version dispatch in config/factory/worker bindings selects this concrete type
+before existing neural2 validation. Preserve every v1 LightGBM/encoder/dataset/
+artifact meaning and legacy policy label. Tree2 gets a distinct binding label
+including the exact manifest digest. Client metadata/cost validation stays lazy,
+stdlib-only and acyclic; actual LightGBM loads only in the participant/fit child.
+An explicit safe_tree_options_v2 contract binds configured Tree2, action/input
+classification and execution resources. It cannot accept a neural2 binding or
+relabel a toy/component artifact as qualified. Existing public real-I/O and fit
+gates run before loading/collection, and baseline version1/actions2 remains valid.
+Include minimal Journal5 Tree2 role support in C3a: it is a non-PPO model with
+generation_schema=None and null policy logprob/value, using the existing optional
+Selection fields. Never invent critic values or Generation2 ancestry because
+model_version is2. Full Source/fixed-data authority remains C3b.
+
+Use validated immutable FrameTokens/CandidateTokens as the deterministic input,
+never a learned latent or a second catalog lookup. The fixed context row contains
+all detailed state numeric/presence/categories/category-presence fields;18own
+card slots with numeric/presence/category/mask values;18opponent public learned-ID
+slots; and the current fixed history aggregate. Interval sequences and prior
+decision frames are not additional Tree2 inputs; record that bounded scope.
+Candidate columns contain kind/relative-target categories, four numeric arguments
+and presence, sequence length,18used-slot counts, then ordered card features for
+each configured position. Resolve each candidate reference to the same current
+card row and pad unused positions explicitly. The used-slot counts distinguish
+which observed copy is chosen without inputting instance-ID magnitude. No hand
+index derived from hidden/canonical ordering, opponent private hand/count, source
+metadata, labels or future event information becomes a column.
+
+Numeric transform is explicitly numpy-fp32-signed-log1p-v1: for each integer v,
+evaluate sign(float32(v))*log1p(abs(float32(v))) with NumPy FP32 ufunc/output
+semantics, rejecting nonfinite output. Transform state/card numeric values, history
+aggregate values, candidate numeric arguments, sequence length and used-slot
+counts. Leave presence/category-presence/card masks as exact0/1, and all categorical
+codes as exact unchanged integers. This is a separate recipe name from Torch's
+operation sequence; do not claim cross-library bit identity.
+
+Exact categorical scalar codes use the shared closed vocabularies with PAD0 and
+MISSING1; they must roundtrip FP32 as integers and remain outside signed-log
+numeric transforms. Numeric/presence/mask/usage/count columns have explicit ordered
+names and transforms. Define the full ordered feature names and categorical
+indices from the pure recipe and bind both into its versioned signature, together
+with actual position capacity/window/catalog/spec/token identities. Categories
+are passed explicitly to LightGBM Dataset with zero_as_missing=False. Unknown
+categories, invalid references and nonfinite/out-of-range arrays reject before
+native fitting/inference. Candidate permutation only permutes scores.
+
+Require configured chunk×feature width×4 to fit the individual array cap before
+model construction; reject an oversized setting rather than reduce it. Create
+contiguous FP32 inference blocks of at most that configured chunk (the last block
+can be shorter); do not duplicate card dictionaries or build all candidate rows
+before admission. For fitting, retain an admitted list of equal-width FP32 blocks
+and pass that list to installed LightGBM4.7.0 Dataset, with explicit categorical
+columns, rather than concatenate a giant feature tensor. Labels remain separate.
+Admit all train/validation raw blocks, native Dataset/model/workspace estimates
+and artifact publication scratch jointly before fit. Native allocations remain
+measured soft estimates, not a hard malloc sandbox. Preserve cancellation/deadline/
+child cleanup and finite score checks. Resource failure does not auto-change the
+candidate count, dataset population, threads or model hyperparameters.
+
+Pre-search costs use the existing NumericCosts with ALL neural dimensions0 and
+explicit positive Tree2 tail coefficients. For feature width F, tree count T and
+validated maximum depth D, use tail_tensor_bytes=4F, tail_working_bytes=12F+32
+and tail_operations=10F+2T(D+1) per candidate, together with the configured chunk and
+position capacity. Fixed ownership covers current context/bank, model and native
+thread workspace estimates; tree metadata/actual Booster checks must agree before
+the first decision. Preserve generic compact proposal/prefix/storage costs. Do
+not fake neural hidden widths or zero the actual tree scoring cost. Native heap
+estimates remain soft and require measurement; these coefficients are admission
+accounting, not a prediction of milliseconds.
+The descriptor keeps actual depth0 for a constant tree; its leaf contribution
+still counts in D+1. Keep simultaneous packing/prediction scratch within12F+32
+using bounded/in-place filling and explicit ownership. Uncharged full gather
+matrices violate this contract; a different algorithm needs a revised admitted
+bound before dependent work, not an understated coefficient.
+
+Schema3 inference/training artifacts bind exact configured tree architecture,
+feature names/category indices/signatures, original action/input classification,
+catalog/spec/reward/generator versions, native library/model bytes and actual
+CPU/resource execution. Use bounded nonsymlink owned no-overwrite publication;
+metadata inspection must not execute a Booster or require Torch. Active loading
+checks installed LightGBM/NumPy identity and actual model text digest/feature count.
+Toy artifacts stay explicitly toy/component, unready for qualified inference.
+Preserve an immutable contract/purpose/synthetic-capacity origin on the actual
+loaded tree wrapper through load→policy→resave, just as §17 protects neural origin.
+Toy/trained origin is a separate field from input purpose=component|qualified_game.
+Game factories reject synthetic_capacity=True; capacity128 alone neither marks
+an artifact synthetic nor grants eligibility. Pure synthetic row/fit tests may
+exercise128positions explicitly, while game tables keep actual unique refs<=18.
+
+Implementation is split into C3a pure config/feature/chunk/inference/artifact and
+explicit synthetic categorical fits, followed by C3b Source/fixed Dataset2/training
+composition. C3b validates the original three ordered seed17/29/43 complete PPO2
+parents of one homogeneous model kind and their prescribed final-policy validation
+sources, full Generation2 ancestry/maps and original Journal5 sidecar inventories.
+Its immutable manifest2 cannot reinterpret Dataset1 or upgrade component Source
+proofs. Real source qualification is an additional gate; neither S2 metadata nor
+S3 component-parent validation grants it. Inclusive mode retains its separate
+pilot/accepted-decision/source gate with explicit new-recipe inputs. Qualified
+engineering-profile collection/fitting continues to fail before activity.
+
+Verify every row/category order, PAD/missing distinction, held/learned/order/
+usability/opponent-public/history cases, reference-copy choices, permutation,
+empty/padded cases and per-array/joint admission. Synthetic native categorical
+fit/save/load/chunk checks establish API/roundtrip behavior only. Cover old
+LightGBM/dataset regression, homogeneous complete-parent/seed/split/provenance/
+budget negative cases, no-optional-dependency baseline startup and new wheel
+provenance. Exact training completion/manifest2 interfaces receive their bounded
+review before C3b implementation; do not replace them with placeholder success.
