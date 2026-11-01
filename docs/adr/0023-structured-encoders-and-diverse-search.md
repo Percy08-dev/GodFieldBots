@@ -1159,3 +1159,120 @@ import results, but the guard loads more parsing code and carries circular
 coupling. Revisit a shallow guard in the existing common contract module when
 Source/Generation2 dispatch stabilizes, or immediately if optional-free/legacy
 guard import checks fail. Do not add a framework or a new layer for this guard.
+
+## 19. Bounded Generation2 metadata increment
+
+Architecture review accepted this bounded design before implementation, including
+the exact current Resume3 inference-link semantics. This is design readiness;
+implementation/conformance and later Source authority remain separate gates.
+
+Implement sealed retained/pruned artifact inspection and component generation
+chains before coordinator integration. Own two additive modules:
+`gf_models.structured_sealed` and `gf_training.structured_lineage`, plus their
+focused tests. Extract only pure bundle-metadata validation from the existing
+sharded-array inspector; its retained-file behavior, outputs and legacy callers
+must remain unchanged. Do not edit Generation1, Source or coordinator dispatch in
+this increment. Do not claim original whole-parent/source qualification from a
+structurally valid component chain.
+
+Sealed inspection validates artifact3/resume3 declarations, exact named tensor
+and Adam-state descriptors, paired metadata identities, full bounded file maps
+and regular owned inventories. Process shards individually, each decoded at
+most64MiB. It needs only stdlib/NumPy: no Torch import, installed-runtime metadata
+lookup, `semantics()`, current hardware or current producer equality. Validate
+recorded runtime/numerics/producer shapes and mutual consistency instead. Active
+C1 inference/resume remains strict. Pruned inspection uses the preserved
+inference's inline bundle metadata, original file map and completed deletion
+receipt; it never reconstructs deleted arrays or provides an active binding.
+Full paired resume/Adam declaration validation applies only to retained artifacts.
+Resume3 references network parameters through its inference_digest and the
+inference's weights bundle; it does not duplicate parameter arrays. Verify that
+exact link, paired model/classification/semantics, named Adam ownership/shapes and
+generation counters. Pruned inspection validates preserved inference and the
+exact recorded hashes/deletion receipt; it cannot revalidate deleted resume
+contents.
+Account cumulative retained JSON/maps/descriptors and one decoded shard/scratch
+under a single caller-owned budget and deadline. A per-document cap or64MiBshard
+cap does not authorize an unbounded collection of metadata. Verify regular-file
+snapshots and final inventories/hashes across the scan before returning results
+or deleting, without importing training code into models.
+
+Run2 has the legacy run1 core fields unchanged in name:
+`schema_version, algorithm, run_id, status, config_sha256, effective_config,
+config_inputs, identity, seed, device, created_unix, last_unix,
+wall_deadline_unix, admission_deadline_unix, execution_deadline_unix, updates,
+accepted_decisions, optimizer_steps, generation_sha256, collection_seconds,
+update_seconds, invocations, completed_updates`.
+Add required `model_id, model_version, input_recipe, action_contract, purpose,
+synthetic_capacity, resume_identity, execution`. Schema is2; the model is2;
+component purpose and False-capacity are mandatory. Enumerate only the existing
+closing diagnostics as optional fields: `hardware, elapsed_seconds,
+artifact_bytes, peak_coordinator_memory_bytes, coordinator_memory_scope,
+timing_scope, failure, quarantine, cleanup_failure, budget_overrun_seconds`.
+Committed states require recorded hardware; it is historical metadata, not a
+comparison to the inspecting machine. Running/paused/complete states retain the
+original health, counters,7200/5400/7140deadline and storage limits.
+Use the existing `torch_runtime.hardware()` declaration shape: exactly `device,
+name, cuda_runtime, device_count, cuda_driver_api_version, exact_driver_build`.
+Validate recorded types, finite values and declared-device consistency; do not
+query the inspecting machine or infer an attested driver build from API version.
+The C1 learner needs no new hardware method; S3's child can reuse the existing
+runtime helper for its active acknowledgement.
+
+`execution` has exactly `learner` and `inference`; each contains a closed
+InferenceBindingV2 under `binding` and the actual `cuda_visible_devices` value.
+Resume identity is the domain-separated digest of original Config hash, recorded
+code/runtime/input identity, these execution bindings and input classification.
+Pin the exact digest object to `{recipe: "structured-ppo-resume-identity-v1",
+config_sha256, identity, execution, input_binding}`; identity is the entire
+recorded identity object, and input_binding is the existing closed3field record.
+Actual hardware equality is checked by the active child acknowledgement at normal
+resume, separately from sealed historical inspection. No active hardware query
+is moved into the coordinator.
+
+Generation2's exact fields are `schema_version, run_id, generation,
+parent_sha256, model_id, model_version, input_recipe, action_contract, purpose,
+synthetic_capacity, inference_sha256, resume_sha256, artifact_files,
+accepted_decisions, optimizer_steps, update_sha256, parent_controls`.
+`artifact_files` is the exact full original inference/resume manifests and every
+NPZ/JSON sidecar returned by C1, not a single weights.npz shortcut. Controls keep
+the closed PCG64 schedule RNG, snapshot_pool and collection_position contract.
+
+Update2 keeps the existing update1 fields and meanings: `schema_version, status,
+run_id, generation, parent_sha256, batch_id, collection,
+collection_manifest_sha256, numeric, numeric_sha256, accepted_decisions,
+source_proof, metrics, planned_games, actual_games, health, policy_bindings,
+learner_seats, collection_seconds, update_seconds`.
+Add required `model_id, model_version, input_recipe, action_contract, purpose,
+synthetic_capacity, numeric_files`. The exact numeric3 file map includes
+rollout.json and every declared NPZ/JSON sidecar; verify its original inventory.
+Update accepted_decisions is the learner-only numeric decision_count, not S1's
+both-view accepted count. Keep16planned/actual original games and every learner
+role, including zero-endpoint games. S2 verifies structural count/hash/model/
+classification links; S3 separately reconstructs authorized schedules and original
+Source-to-rollout correspondence. Component proofs remain explicitly unqualified.
+
+`require_retained=true` means every generation must retain its full original
+artifacts. Default historical chain inspection permits only verified completed
+pruning receipts. An owned component binding requires the existing run lock and
+the specifically requested retained generation with exact file map; it cannot
+bind a pruned artifact or authorize formal use. No new public qualification
+helper that merely wraps an unconditional failure is needed in this increment.
+Derive owned binding model, resources, inference binding and visibility solely
+from the frozen run Config/execution; accept no caller overrides. Actual active
+policy construction still performs C1 admission in the selected runtime.
+
+Keep Generation1's retention cadence:0, multiples of10 and the current generation
+remain retained; policy selection uses the existing last5snapshot pool. Before
+deletion, verify exact live inventory/hashes and publish an intent listing every
+owned original file except inference.json. Delete only those verified listed
+files; publish a completed receipt only after all targets are absent. Preserve
+immutable generation/update records and original maps. Partial pruning remains
+an explicit incomplete intent and is rejected by healthy chain validation;
+never call it completed. Foreign files, symlinks and mixed versions reject.
+
+Verify all3model kinds with real C1 sharded component artifacts, no-Torch/no-
+installed-version inspection, retained/pruned exact maps, corruption/extra files,
+broken chains/counters/controls/clocks/health, lock ownership and failed deletion.
+Retain all legacy checks. This bounded increment adds no numeric protocol,
+coordinator loop, native session, LightGBM or real experiment.
