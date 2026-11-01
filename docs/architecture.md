@@ -27,9 +27,12 @@ exact old configuration/data checks and an isolated Python wheel baseline-worker
 smoke without optional dependencies. The later structural Source/startup-ownership
 increment passes306related CPU tests,3separate CUDA worker checks and independent
 correctness/conformance reviews. Full Ruff and mypy pass for101source files.
-Whole-project/wheel results above precede that increment. Qualified Source
-authority, Generation2/coordinator, new native processing and deterministic
-LightGBM2 integration remain pending;
+Whole-project/wheel results above precede that increment. The later S2 sealed
+artifact/Generation2 metadata and owned-retention increment passes177selected
+tests and both independent reviews; its Source inventory follow-up passes186
+selected regressions and10NumPy-only metadata checks. Full Ruff/mypy pass for
+103source files. Qualified Source authority, PPO2 coordinator, new native
+processing and deterministic LightGBM2 integration remain pending;
 their bounded design is accepted in ADR0023. No real v2 experiment or full-plan
 acceptance is claimed. Milestone scopes, overlapping historical counts and
 remaining performance/experiment checks are in the

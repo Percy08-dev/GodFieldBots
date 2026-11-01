@@ -1271,8 +1271,133 @@ immutable generation/update records and original maps. Partial pruning remains
 an explicit incomplete intent and is rejected by healthy chain validation;
 never call it completed. Foreign files, symlinks and mixed versions reject.
 
+Full S2 review found a verify-to-unlink replacement race. Root adopts the advisor's
+bounded staging protocol, accepted by architecture review before implementation:
+public artifact basenames are untrusted; retention exclusively owns its new,
+unpredictable mode0700staging namespace. Committed files have no concurrent content
+writer through an existing FD/hard-link alias. Detect observed changes and fail
+closed, without claiming isolation from an arbitrary same-UID actor that can also
+mutate private staging entries. The run lock, parent-directory guards and held
+directory FDs preserve this ownership; no generic deletion framework is added.
+
+Create staging under the fixed owned `artifacts` parent and retain its dirfd.
+Registry2's deletion_intent is exactly `{files, staging_basename}`; basename is a
+validated unpredictable local name, never a supplied path. Publish status=deleting
+and this intent before moving any target. Keep a verified original FD open (a
+local dup may outlive SealedScan.file's unchanged-path context), atomically rename
+the public entry to an unused name inside staging, and compare the moved regular
+object's device/inode and expected hash against that FD. Verify stable metadata
+during that check, accounting for legitimate rename ctime changes. Identical
+bytes on a different inode still reject. Unlink ONLY the private staged basename
+relative to its held dirfd; never unlink the public artifact pathname.
+
+On mismatch, interruption or failed cleanup, stop and preserve the staged entry,
+including any captured foreign file/symlink/directory, with incomplete intent and
+failure diagnostics. Do not recursively clean it or automatically restore a public
+name; restoration could overwrite a replacement. No automatic incomplete-intent
+recovery is added. Earlier verified deletions may remain deleted. Healthy chain
+inspection/binding rejects the incomplete state.
+
+Publish the completed receipt only after every listed target has been verified
+and privately unlinked, the artifact directory contains exactly hash-verified
+inference.json, and the empty owned staging directory is identity-checked and
+removed through the held parent dirfd. A replacement inserted at the public name
+before private unlink survives and prevents completion. Receipt remains exactly
+`{files: original_deletion_map}`; preserved intent names the now-absent staging
+directory. Keep immutable maps and generation/update records unchanged. This adds
+no power-loss durability claim beyond the repository's existing publication scope.
+
+Required regressions cover pre-rename replacement (different and identical bytes/
+different inode), post-rename public replacement, captured symlink/directory,
+interruption after rename/one deletion, staging collision/substitution and ordinary
+success/cadence. Retained model/resources/binding/RNG declarations must also match
+the frozen run at commit and inspection. Carry a caller-owned snapshot scanner
+through binding and pre-deletion/pre-publication validation; do not discard its
+verified parent records. Required persisted digests are64hex before I/O. Publication
+guards every generated parent as an owned nonsymlink directory before temp creation.
+
 Verify all3model kinds with real C1 sharded component artifacts, no-Torch/no-
 installed-version inspection, retained/pruned exact maps, corruption/extra files,
 broken chains/counters/controls/clocks/health, lock ownership and failed deletion.
 Retain all legacy checks. This bounded increment adds no numeric protocol,
 coordinator loop, native session, LightGBM or real experiment.
+
+## 20. PPO2 composition and process envelopes
+
+Architecture design review accepted this bounded composition before implementation.
+S2 conformance and later physical resource/experiment acceptance remain separate.
+
+After S2 metadata stabilizes, connect its formats to the existing coordinator's
+single commit/update loop. Keep public actions2 real-I/O/qualified-profile gates
+before Simulator activity. A dedicated private component entry supplies only a
+synthetic/FakeHTTP collector and fixes component/False-capacity classification;
+it cannot authorize formal Source or expose a CLI bypass. Normal Environment
+guards still apply if a caller attempts real I/O through that entry.
+
+Use version-selected concrete helpers for model binding, numerical initialization,
+collection projection, rollout publication and generation commit/retention inside
+the common loop. Do not duplicate its schedules, clocks, storage admission, locks,
+cleanup or pause/resume logic into another trainer. Preserve model1 default paths
+and CollectionPlan serialization. A v2 collector receives `(plan, ledger)` and
+passes that SAME runtime ledger to run_experiment/StructuredEnvironment; an owned
+collection rejects an absent/mismatched ledger. Test actual object identity and
+charge lifetime, not a producer flag. Standalone collect still has no learner.
+
+Numerical worker wire3 dispatches before legacy decoding. Its closed initialize,
+update/save and acknowledgement records carry model2 architecture, input binding,
+action hash, resume identity and actual execution identity; parent validates them
+before publication. Actor wire2 remains separate. Select child CPU/CUDA visibility
+before importing Torch. Reuse C1 Learner/rollout3 and existing hardware() helper;
+ordinary active resume retains strict Config/code/runtime/execution/hardware
+equality. W comes only from model.temporal.sequence_length. No new latent cache is
+stored in source or rollout, and the whole-batch frozen-policy parity check remains
+before the first Adam step.
+
+Each batch keeps16games, explicit learner roles, structured Random/heuristic
+labels, existing seed namespace and schedule RNG,10update snapshot cadence and
+last5selection pool. Check original schedule/policy bindings/parent generation
+and every Source role against the coordinator's frozen plan. Keep zero-endpoint
+episodes and reject whole interrupted cohorts; do not salvage healthy rows.
+Build C1 raw EpisodeRecords/rollout3 from original component Source frames,
+tables and values. Historical component-parent inspection reconstructs these
+links rather than treating S2 scalar/hash validation as Source authority.
+S1's own proof still says parent_qualification=not_performed; the composing
+validator performs the extra checks itself. Engineering purpose remains
+unqualified even for a complete healthy component run.
+Historical correspondence checks retain the no-Torch/no-current-runtime boundary:
+validate recorded declarations and original raw frame/bank/table links. Do not use
+the active C1 `semantics()`/resume environment checks as historical Source authority;
+keep active worker decoding strict and factor only the needed deterministic reader
+validation if reuse requires it.
+
+CUDA allocator caches can survive logical temporary-scope release. Use the full
+configured managed endpoint envelope as a conservative process-lifetime charge:
+worker `resource_estimate(..., suffix_decisions=1)` and learner full configured W
+envelope. Reserve before Popen, keep through collection/replies and release only
+after confirmed reap/no-process rollback. CPU contributes0CUDA bytes. Keep scoped
+decision/update ownership even when its additional CUDA charge is0. The update
+must begin with no participant leases. Do not force empty_cache after each action,
+auto-change W/candidates/device, or interpret the conservative bytes as measured
+GPU allocation. Record `structured-process-envelope-v1` in parent identity.
+Ordinary v2 resume requires that exact recorded recipe; do not default-upgrade a
+missing recipe. Model1's identity remains unchanged.
+Default derived totals for4workers plus learner are about7.22/7.23/7.58GiB for
+MLP/GRU/2-layer Transformer, under the unchanged12GiBbudget. Measure actual cached
+allocator/context behavior and persistent reserved high-water across repeated
+shapes and collection/update phases during later resource/stress verification; retain
+explicit failure/cleanup for unavailable capacity and asynchronous errors.
+
+Preserve7200wall/5400admission/7140execution seconds, max1000updates,10GiBowned
+storage and1GiBadmission reserve, existing normal-boundary pause and no collection/
+update overlap. New native capabilities remain a separate prerequisite: explicit
+Python reference is truthful; missing Rust v2 support fails before collection.
+No fallback or real-rule coverage reduction follows.
+
+Verify same-binding two continuous updates against1+pause/resume for all3kinds,
+including parameter arrays, individual Adam/RNG, schedules, artifacts and Source
+links. Use actual configured defaults (Transformer2layers), original16-game
+component batches and unchanged original limits. Cover CPU/CUDA inference,
+cache/full/split tolerance, whole-cohort failures, mismatched config/visibility/
+bindings, worker/learner cleanup, shared ledger/no-overlap, publication failures
+and old model1 coordinator regression. These components establish integration and
+resume behavior, not game feasibility, learning strength or final-test acceptance.

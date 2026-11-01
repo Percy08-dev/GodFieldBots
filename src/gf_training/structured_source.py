@@ -5,6 +5,7 @@ Generation2 authorization remains a separate required stage for owned ingestion.
 """
 from __future__ import annotations
 
+import fnmatch
 import hashlib
 import json
 import math
@@ -153,17 +154,69 @@ class _SourceOwner:
             raise ContractError('original source object required')
         return value
 
+    def _temporary(self, amount: int) -> None:
+        self.check()
+        if self.used + amount > self.settings.memory_budget_mib * 1024**2:
+            raise ResourceLimit('structured inventory comparison reservation exhausted')
+
+    def _inventory_names(self, pattern: str, *, retain: bool) -> tuple[str, ...]:
+        self.check()
+        if pattern not in ('*/player-*.jsonl', '*/player-*.partial.jsonl', '*/*.columns', '*/replay-player-*.json', '*/result.json'):
+            raise ContractError('unsupported private source inventory pattern')
+        storage = 1024
+        self._temporary(storage)
+        seen: set[str] = set()
+        leaf = pattern.split('/')[1]
+        with os.scandir(self.root) as directories:
+            while True:
+                self.check()
+                self._temporary(storage + 1024)
+                try:
+                    directory = next(directories)
+                except StopIteration:
+                    break
+                if directory.is_symlink():
+                    raise ContractError('symlink in original source inventory')
+                if not directory.is_dir(follow_symlinks=False):
+                    continue
+                self._temporary(storage + 1024 + 4 * len(directory.name))
+                with os.scandir(directory.path) as entries:
+                    while True:
+                        self.check()
+                        self._temporary(storage + 1024 + 4 * len(directory.name))
+                        try:
+                            entry = next(entries)
+                        except StopIteration:
+                            break
+                        if not fnmatch.fnmatchcase(entry.name, leaf):
+                            continue
+                        if not entry.is_file(follow_symlinks=False):
+                            raise ContractError('nonregular original inventory entry')
+                        cost = 512 + 4 * (len(directory.name) + len(entry.name) + 1)
+                        if retain:
+                            self.charge(cost)
+                        else:
+                            storage += cost
+                            self._temporary(storage)
+                        name = directory.name + '/' + entry.name
+                        if name in seen:
+                            raise ContractError('duplicate original inventory entry')
+                        seen.add(name)
+        self._temporary(storage + 512 * len(seen))
+        names = tuple(sorted(seen))
+        self.check()
+        return names
+
     def inventory(self, pattern: str) -> tuple[str, ...]:
-        names = tuple(sorted(path.relative_to(self.root).as_posix() for path in self.root.glob(pattern)))
-        for name in names:
-            self._safe(self.root / name)
+        self.charge(512)
+        names = self._inventory_names(pattern, retain=True)
         self.inventories.append((pattern, names))
         return names
 
     def finalize(self) -> None:
         for pattern, names in self.inventories:
             self.check()
-            if tuple(sorted(path.relative_to(self.root).as_posix() for path in self.root.glob(pattern))) != names:
+            if self._inventory_names(pattern, retain=False) != names:
                 raise ContractError('original source inventory changed')
         for name, entry in self.files.items():
             self.check()
@@ -180,7 +233,7 @@ class _SourceOwner:
         # as current evidence after a late addition or an earlier file mutation.
         for pattern, names in self.inventories:
             self.check()
-            if tuple(sorted(path.relative_to(self.root).as_posix() for path in self.root.glob(pattern))) != names:
+            if self._inventory_names(pattern, retain=False) != names:
                 raise ContractError('original source inventory changed after hash sweep')
         for name, entry in self.files.items():
             self.check()

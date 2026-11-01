@@ -481,8 +481,9 @@ remains `ca0a1e76c80ec7876815e38b15786607819d646c4baf907a55250edce350813c`;
 dual-view JSONL SHA-256 is
 `619c6b707ad4c29b8409da5c5b4f97050cf3d1060824ae34ec1a8837b601d98c`.
 
-The retained harness uses full default attention architectures and action budgets,
-fixed seed17 untrained component weights, CPU inference,2concurrent games and
+The retained harness uses explicit ModelConfigV2 architectures with default hand
+attention and action budgets, fixed seed17 untrained component weights, CPU
+inference,2concurrent games and
 at most4independent participant workers. Startup is outside the decision clock.
 The decision clock includes original-input validation, frame/event construction,
 candidate generation, tokenization, scoring, CPU sampling, worker communication,
@@ -501,6 +502,9 @@ length8 and240visible events; it does not cover the separate tens-of-thousands,
 18/128-position or1024-decision stress conditions. Each model is a single run;
 small differences are not evidence of a model speed ordering. The action profile
 is the explicit engineering-only subset, not a qualified complete game contract.
+All three initial prototype temporal configurations have1layer. The configured
+Transformer default/preset uses2layers; that setting has the separate follow-up
+below. The original prototype is not evidence for unmeasured configurations.
 These measurements are below3seconds within their measured component scope;
 they do not complete full-plan performance or real-game acceptance.
 
@@ -539,6 +543,26 @@ real-child/preparation fault probes PASS and scoped diff check PASS. Unconfirmed
 reap retains the reservation and original error; no lease API changed. Actual
 OOM, GPU and whole Source review were outside that check. This is not evidence
 of a leak in the successful measured runs. No new GPU attribution result.
+
+Root also measured the actual configured Transformer default through
+`model_defaults_v2('transformer').architecture()`, with temporal2layers, on the
+same exact512panel+512peer/tail workload. This single CPU pass completes49games,
+peak4workers,98separate startups and the successful empty-ledger/reap gate.
+Panel p50=14.46ms, p95=90.09ms, p99=245.55ms, max=581.49ms; startup p95=1557.58ms.
+Maximum candidates2809/sequence8/events240. Heavy implementer checks paused;
+Gen2 source writing continued outside this stable inference/worker measurement.
+
+The retained follow-up is
+`runs/assessments/structured-latency-transformer-defaults-20261102`.
+Proof SHA-256 `ff4110099356145235812f2be7a887764d57ce17468956ec3b9c92ede2379e5f`,
+harness `9a05d7cdffd0d1b554f139ceefcdf7824e5a1eb018d2282b6ac2b2dd2ed6e549`,
+result `a0c3fb3c173464076a7c9da855f59cbf413ae68bcd8b05c59dbae8553fb67993`.
+Independent audit verifies all46listed files, configured-default canonical
+equality, exact panel membership, quantiles and successful-run cleanup. The
+original proof's phrase 'newGen2workheld' is corrected by its separate immutable
+`scope-annotation.json`: heavy checks paused, Gen2 writing did not. This is an
+inference/worker snapshot, not a complete training-code snapshot. Metrics/files
+are unchanged; no causal speed comparison to1layer or full acceptance follows.
 
 ## S1 structural Source and startup ownership acceptance
 
@@ -603,6 +627,129 @@ Simulator07document remains the previously observed external dirty hash
 not its old baseline value. HEAD is still ffcffa; no normative adoption or
 Simulator change is made by this Bots work. Real actions2 experiments remain
 blocked on the unresolved contract/conformance requirements.
+
+Later bounded S2a review found that inventory admission needs a follow-up in
+both new scanners: directory names were materialized before per-entry budget/
+deadline checks. A fake1000path Source probe consumed/retained all names with an
+expired deadline and no remaining budget, without creating files. This is a
+concrete admission gap, not an observed OOM. The Source follow-up preserves its
+existing five patterns, sorted inventory/proof format and information boundary.
+The corrected bounded enumeration, per-entry deadline/admission and charged final
+comparison storage now pass both focused reviews. The earlier306checks do not
+claim coverage of the newly identified case; later follow-up results are below.
+
+## S2a sealed metadata and Source inventory checkpoint
+
+The initial retained/pruned artifact3 scanner and pure bundle-metadata factoring
+passed101selected tests (14new sealed cases+87C1 regressions) in16.46s. Both
+independent reviews found blocking P2 cases: unadmitted directory enumeration,
+missing terminal/per-tensor deadline checks, null required inference/link digests,
+and null/missing JSON-sidecar hashes in pruned maps. The grouped fix includes the
+Source inventory follow-up above. Both scoped final reviews are now READY with
+no remaining blocking finding. Correctness reran16metadata/Source boundary cases
+and15sealed C1-shaped selections plus the independently altered missing-sidecar
+probe; conformance reran16targeted cases. No Source qualification is implied.
+
+The frozen-source HOST regression command was:
+
+```sh
+UV_CACHE_DIR=/tmp/gf-structured-uv uv run --no-sync pytest -q tests/test_structured_learning.py tests/test_structured_source.py tests/test_structured_sealed_metadata.py tests/test_structured_lineage.py -k 'not generation2 and not retention and not component_chain'
+```
+
+PASS186/15deselected in22.76s. The15Generation2 cases remain explicitly untested
+at this checkpoint; new lineage implementation resumes only after the scanner
+rechecks. A separate NumPy-only metadata run under a Torch import blocker passes
+10cases in0.21s with no Torch import. Scoped Ruff/mypy/diff checks pass.
+C1 save/restore checks must run on frozen source because producer digests
+intentionally bind source bytes. The combined coherent S2 commit/review remains
+pending its new Generation2 implementation and all-case tests.
+
+The first complete Gen2 implementation passes152selected tests in64.24s, including
+all35cases in its test file; previous15deselected cases are covered in that run.
+Full S2 reviews nevertheless find blocking mutation/declaration cases: null
+required link hashes, mismatched retained learner binding/full model/resources,
+discarded caller snapshots in binding/pruning composition, a final-directory-scan
+tail after snapshot checks, symlink publication parents, and replacement between
+verified read and public-path unlink. These are assigned as one fix batch.
+
+The deletion race was escalated to the advisor. Root and architecture accept
+private-directory staging with held original/parent/stage FDs, same-inode/hash
+verification and only private-name unlink; the exact intent records its validated
+staging basename. Mismatches preserve evidence and incomplete intent; no automatic
+restoration/recovery or stronger power-loss guarantee is claimed. ADR0023§19
+records alternatives, boundaries and required mutations. FULL S2 acceptance is
+not granted by the initial passing tests alone. The full fix and independent
+acceptance are recorded next. Source authority/S3 are still unimplemented.
+
+## S2 sealed artifacts and Generation2 component acceptance
+
+Both final reviews are READY with no blocking findings. The closed Run2/Gen2/
+Update2 records validate full original C1 artifact and numeric3 file maps, exact
+recorded model/resources/learner binding/RNG count, counters, clocks, PCG controls,
+existing lock ownership and frozen inference execution. Retained/pruned metadata
+inspection is independent of installed Torch/current hardware/producer equality;
+active C1 loading remains strict. Historical pruned checks do not reconstruct
+deleted resume contents or provide an active binding. No parent Source authority
+is inferred from scalar/hash validation.
+
+Owned bindings and pruning keep the original scanner snapshots through their
+final boundaries. Controlled publication compares the final pathname to the
+still-held output FD after temporary-link removal; controlled staging preserves
+the original artifacts parent dev/inode through timestamp changes. Required
+digests and parent-directory ownership are checked before dependent I/O. Private
+staging, identity/hash verification, preserved mismatch evidence and incomplete
+intent satisfy the scoped deletion contract without deleting public replacements.
+Staging-name failure occurs before opening a parent FD.
+
+Exact final frozen-source HOST regression:
+
+```sh
+UV_CACHE_DIR=/tmp/gf-structured-uv uv run --no-sync pytest -q tests/test_structured_lineage.py tests/test_structured_sealed_metadata.py tests/test_structured_learning.py tests/test_ppo_lineage.py
+```
+
+PASS177in82.52s(exit0). This includes all60tests in the lineage file, the separate
+NumPy-only metadata tests, C1 and legacy Generation1 regressions; it supersedes
+the earlier152/172results for the changed Gen2 scope. Independent final reviews
+each rerun8targeted race/cleanup cases; correctness also reruns its mutable and
+immutable replacement probes, both now reject without adopting foreign objects.
+Earlier resolved null-hash, binding and captured/public replacement probes are
+reused, not added to177. Root full Ruff PASS, mypy PASS(103source files), diff and
+relative-document links PASS.
+
+This accepts component metadata, retained owned bindings and scoped retention,
+including the bounded Source inventory follow-up. No new dependency, Generation1
+format, C1 artifact3/resume3 meaning, model math or public rule changes. S3 has
+design readiness only; no coordinator/numeric-wire3 execution, new native/tree,
+real game, final GPU stress or learning-quality acceptance follows from S2.
+
+## S3 resource-accounting preparation: derived facts only
+
+A bounded read-only calculation confirms that `own_worker_settings` separates
+each CUDA worker's resident estimate from an inference temporary estimate with
+suffix1, whereas the full `resource_estimate` uses configured suffix32. Default
+MLP/GRU and the configured2-layer Transformer estimates are respectively:
+
+| Estimate | MLP | GRU | Transformer2layers |
+| --- | ---: | ---: | ---: |
+| Resident | 772.69MiB | 773.07MiB | 775.70MiB |
+| Scoped inference temporary | 402.50MiB | 404.39MiB | 473.56MiB |
+| Full suffix32 envelope | 2.629GiB | 2.631GiB | 2.702GiB |
+
+These include conservative CPU-reference/optimizer/copy terms; they are not
+measured GPU allocation or process RSS. Four full worker inference envelopes plus
+one full learner suffix32 envelope total about7.22/7.23/7.58GiB under the12GiB
+default, arithmetically. No GPU, Torch import, training or Simulator ran in this
+calculation. The installed primary Torch `cuda/memory.py` describes retained
+caching-allocator memory and `empty_cache`; deleting a logical ledger temporary
+charge does not prove that a child's cached reserved memory shrank.
+
+S3 must resolve cached-memory coverage when implementing its persistent learner
+charge and shared ledger. A process-lifetime full-envelope charge is a possible
+conservative choice, pending design/measurement; existing workspace coverage of
+cached/fragmented allocations is not established by these calculations. No
+observed OOM/leak or GPU speed conclusion follows. Current standalone collection
+correctly has no learner process; the pending PPO2 composition must add its
+learner charge before Popen and retain it through collection.
 
 ## Remaining integrated acceptance
 

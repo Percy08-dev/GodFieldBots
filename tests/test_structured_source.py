@@ -475,3 +475,43 @@ def test_final_hash_sweep_cannot_hide_late_inventory_or_earlier_file_mutation(tm
     monkeypatch.setattr(module, '_bounded_hash', hash_with_mutation)
     with pytest.raises(ContractError, match='after hash sweep'):
         inspect(directory, actions)
+
+
+@pytest.mark.parametrize('final', [False, True])
+@pytest.mark.parametrize('case', ['one_byte', 'expired', 'few_fit'])
+def test_source_inventory_budget_and_deadline_stop_scandir_before_thousand(tmp_path, monkeypatch, final, case):
+    from types import SimpleNamespace
+
+    import gf_training.structured_source as module
+    owner = module._SourceOwner(tmp_path, SETTINGS, float('inf'))
+    consumed = []
+    class Entries:
+        def __init__(self, directory): self.directory = directory
+        def __enter__(self): return self
+        def __exit__(self, *args): return None
+        def __iter__(self): return self
+        def __next__(self):
+            if self.directory:
+                if hasattr(self, 'done'): raise StopIteration
+                self.done = True
+                return SimpleNamespace(name='episode', path=str(tmp_path / 'episode'), is_symlink=lambda: False,
+                                       is_dir=lambda **kwargs: True)
+            index = len(consumed)
+            if index >= 1000: raise StopIteration
+            consumed.append(index)
+            return SimpleNamespace(name=f'e{index:04}.columns', is_file=lambda **kwargs: True)
+    monkeypatch.setattr(module.os, 'scandir', lambda path: Entries(str(path) == str(tmp_path)))
+    owner.used = SETTINGS.memory_budget_mib * 1024**2 - (1 if case == 'one_byte' else 6000)
+    if case == 'expired':
+        owner.deadline = -1.
+    with pytest.raises((ResourceLimit, TimeoutError)):
+        if final:
+            owner.inventories = [('*/*.columns', ())]
+            owner.finalize()
+        else:
+            owner.inventory('*/*.columns')
+    assert len(consumed) < 1000
+    if case != 'few_fit':
+        assert not consumed
+    else:
+        assert consumed

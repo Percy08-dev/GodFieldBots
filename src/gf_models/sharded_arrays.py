@@ -156,7 +156,8 @@ def write_owned_json(path: Path, value: Any) -> None:
     atomic_json(path, value)
 
 
-def inspect_bundle(directory: Path, manifest: Json, *, max_decoded_bytes: int = 12 * 1024**3) -> Json:
+def validate_bundle_metadata(manifest: Json, *, max_decoded_bytes: int = 12 * 1024**3) -> Json:
+    """Pure closed bundle descriptors/totals; performs no filesystem access."""
     closed(manifest, {"schema_version", "prefix", "shards", "files", "tensor_count", "decoded_bytes"})
     if type(manifest["schema_version"]) is not int or manifest["schema_version"] != 1:
         raise ContractError("unsupported typed bundle schema")
@@ -207,6 +208,14 @@ def inspect_bundle(directory: Path, manifest: Json, *, max_decoded_bytes: int = 
             raise ContractError("shard/file hash binding mismatch")
     if set(files) != expected_files or total != manifest["decoded_bytes"] or len(tensors) != manifest["tensor_count"]:
         raise ContractError("bundle tensor totals/file ownership mismatch")
+    for expected in files.values():
+        _hash(expected)
+    return tensors
+
+
+def inspect_bundle(directory: Path, manifest: Json, *, max_decoded_bytes: int = 12 * 1024**3) -> Json:
+    tensors = validate_bundle_metadata(manifest, max_decoded_bytes=max_decoded_bytes)
+    files, shards = manifest["files"], manifest["shards"]
     # Validate the entire closed inventory before decoding any tensor.
     for name, expected in files.items():
         _hash(expected)
