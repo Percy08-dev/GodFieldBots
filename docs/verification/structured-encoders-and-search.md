@@ -246,7 +246,42 @@ architecture checked40application cases plus7uint64boundaries. These overlapping
 counts are not a full-project test total. No bootstrap/protocol/codec/source/
 lineage/native implementation or real-game acceptance follows from this slice.
 
-## Remaining full integrated evidence
+## C2 candidate-column codec and owned sidecar I/O
+
+The pure common `candidate_columns` codec and parent-side training
+`candidate_storage` implement ADR0023 §15. The maximum65536×128layout is
+11,403,272bytes. Decoding checks exact six-column layout,0-based raw codes,
+little-endian integers/alignment/zero padding, lengths/missingness/hashes and
+original frame/own references. Publication uses exclusive owned temporary files
+and links; only validated descriptors can be returned. Journal/Act/source/native
+integration is not yet connected.
+
+Both independent reviews are READY. Three concrete I/O issues were fixed:
+inventory digest/identity from different snapshots; temp/link object substitution;
+and blocking non-regular reads. A residual final-hash EOF mutation was fixed in
+the next bounded cycle, then its original reproduction rejected; the same issue
+did not survive two fix/recheck cycles, so advisor escalation was not triggered.
+The implementation retains verified FDs, rehashes/checks the same snapshot, and
+uses nonblocking/no-follow regular-file checks. The related new C1 JSON reader
+uses actual-FD checks too; legacy writers/formats remain unchanged. Existing soft
+OS/filesystem wall guarantees are not upgraded to hard quotas.
+
+Root final-source checks PASS:
+
+```sh
+UV_CACHE_DIR=/tmp/gf-structured-uv uv run --no-sync pytest -q tests/test_candidate_columns.py
+UV_CACHE_DIR=/tmp/gf-structured-uv uv run --no-sync ruff check src/gf_common/candidate_columns.py src/gf_training/candidate_storage.py src/gf_models/sharded_arrays.py tests/test_candidate_columns.py
+UV_CACHE_DIR=/tmp/gf-structured-uv uv run --no-sync mypy src/gf_common/candidate_columns.py src/gf_training/candidate_storage.py src/gf_models/sharded_arrays.py
+```
+
+Results:33PASS in0.60s; Ruff PASS; mypy PASS(3modules). Independent correctness
+ran33cases plus original/normal snapshot reproductions; architecture ran11focused
+cases after the residual fix. Child FIFO/symlink probes were bounded and reaped.
+Earlier32-case evidence preceded the final EOF guard and is superseded. The
+implementer also ran66affected C1/codec I/O checks,53deselected, in14.88s before
+that final localized publisher fix. No GPU math, native or performance claim.
+
+## Remaining application acceptance
 
 Currently NOT RUN: actual worker/collection E2E PPO integration, worker2/journal5/
 native differential,192-game baseline, attention3models×2inference devices×

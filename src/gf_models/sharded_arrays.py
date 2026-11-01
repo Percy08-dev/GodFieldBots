@@ -4,7 +4,9 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
 import re
+import stat
 from pathlib import Path
 from typing import Any
 
@@ -29,12 +31,18 @@ def _pairs(pairs: list[tuple[str, Any]]) -> Json:
 def read_json(path: Path, *, expected_digest: str | None = None,
               max_owned_bytes: int = 12 * 1024**3) -> Json:
     try:
-        if path.is_symlink() or not path.is_file():
-            raise ContractError("manifest must be an owned regular file")
         integer(max_owned_bytes, 1, 12 * 1024**3)
         document_limit = min(MAX_MANIFEST_BYTES, max(0, (max_owned_bytes - 65536) // 32))
-        with path.open("rb") as source:
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(descriptor, "rb") as source:
+            before = os.fstat(source.fileno())
+            if not stat.S_ISREG(before.st_mode):
+                raise ContractError("manifest must be an owned regular file")
             raw = source.read(document_limit + 1)
+            after = os.fstat(source.fileno())
+            if any(getattr(before, key) != getattr(after, key) for key in
+                   ("st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns")):
+                raise ContractError("manifest changed while reading")
         if len(raw) > document_limit:
             raise ContractError("JSON document reservation exceeded before parse")
         if len(raw) > MAX_MANIFEST_BYTES:

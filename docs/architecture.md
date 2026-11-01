@@ -18,7 +18,9 @@ Ruff/mypy. It includes1024-frame persistence and exact synthetic two-update/resu
 with partial Adam state; these are component results. Version2 Config/binding
 dispatch is also accepted after independent reviews and112scoped checks, exact
 old12config identities and6new graph loads. Worker/journal/native application
-integration and full acceptance are pending; the
+integration and full acceptance are pending. The standalone candidate-column
+codec and owned sidecar I/O are accepted after33checks and independent reviews,
+but are not yet journal/Act/source-qualified paths; the
 public utility completion/target dependency is tracked in
 [issue0005](issues/0005-public-utility-action-semantics.md). It is not resolved by
 atomic hints or successful play. See the

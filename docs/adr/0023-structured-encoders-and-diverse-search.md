@@ -24,7 +24,9 @@ both reviews,168affected CPU/4separate CUDA checks and scoped Ruff/mypy, includi
 is accepted after both scoped reviews,112checks, old12exact identities and6new
 draft graph loads. Worker/application routing, source journal/native/generation
 integration, LightGBM integration and
-required real-game/performance acceptance remain incomplete.
+required real-game/performance acceptance remain incomplete. The standalone
+candidate-columns-v1 codec/sidecar I/O is accepted after33checks and both reviews;
+journal/Act/source qualification and native decoding remain pending.
 Issue0005 still blocks full completion. See the verification ledger for scope.
 
 ## 1. Context and completion boundary
