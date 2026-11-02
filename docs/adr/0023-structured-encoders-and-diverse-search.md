@@ -2578,6 +2578,10 @@ and schema_version,model_envelope. model is architecture-only; execution is the
 pre-fit CPU inference/resources binding and cannot require an unknown actual
 tree descriptor. Persist/validate model_envelope's recipe,feature_width,rounds,
 num_leaves,node_bound,text_bytes, then compare the actual descriptor after fit.
+Concrete literals are request schema3/kind=structured-tree-fit-request,
+completion schema3/kind=structured-tree-training, and trained provenance
+schema3/kind=structured-fixed-dataset2-fit. Dataset manifest2 and the existing
+typed bundle descriptor1 retain their own versions.
 Input files are the exact privately owned FP32 block/label
 shards and sidecars, decoded total<=64MiB per shard, with counts/shapes/dtypes and
 hashes checked. The native child receives only this own numeric request/input
@@ -2586,6 +2590,19 @@ canonical content digest and all original Source conditions are revalidated,
 never inferred from its flags. An arbitrary array/provenance dictionary cannot
 enter the private source-backed entry; it requires the concrete verified Dataset2
 owner and keeps it through final checks.
+request.input_files is the exact relative SHA map of inputs/manifest.json and
+ALL typed NPZ/JSON shard/sidecar files. The typed descriptor owns shape/dtype/
+shard/count declarations; its own hash occurs only in the request, never inside
+itself. Validate exact membership, row counts, feature/category layout and labels
+before native fitting. fit_settings has exactly num_boost_round,
+early_stopping_rounds,learning_rate,min_data_in_leaf,num_threads, preserving the
+existing safe TrainingConfig knobs/defaults. num_leaves stays in architecture.
+Fit and inference threads may differ explicitly: use fit_settings.num_threads
+for fitting and execution.inference.num_threads for inference, preserve their
+distinct native/creation evidence, and reserve64MiB times their MAX in joint fit
+admission. Do not coerce or ignore either setting. Default1/1 is unchanged;
+require an asymmetric-thread regression. This file-map/thread pin has focused
+independent DESIGN READY.
 
 Use Dataset2+numeric inputs→request hash→inference provenance. The final
 training.json3 binds that request hash and exact output inference/model hashes;
@@ -2658,7 +2675,8 @@ CPU threads remain explicit and unchanged. Admit all train+validation blocks,
 labels, retained Source/control owners, known copies, native Dataset/workspace
 and a pre-admitted model bound jointly before native construction. Initial
 conservative Dataset allowance is5times raw blocks+labels, plus the C3a fixed/
-thread allowance and model envelope. This is a soft estimate, not an RSS quota;
+thread allowance using max(fit_threads,inference_threads) and model envelope.
+This is a soft estimate, not an RSS quota;
 do not auto-change rows, features, threads, rounds or resources to fit.
 Record configured round cap, consumed callback iterations, best iteration and
 retained model tree count separately. Count the final early-stop callback before
