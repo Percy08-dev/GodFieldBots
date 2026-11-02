@@ -2618,6 +2618,13 @@ explicit set before active native loading and include it in trained binding
 identity. Preserve the historical exact toy DTO shape and require toy origin for
 that shape; absence of training_binding never upgrades it to trained. No implicit
 ancestor search or unversioned readiness default is allowed.
+The native RAW Tree2 reader accepts those two exact closed DTO variants and binds
+the full trained training_binding into execution/header/policy-label identity;
+the toy shape and digest remain unchanged. RAW validates only syntax and
+self-consistency, opens no training/checkpoint paths and grants no completed
+Training3/Source authority. Models/bootstrap verify the complete paired bundle
+before Ready. Tree2 remains non-PPO with null statistics. This focused extension
+of the existing shared DTO boundary has independent DESIGN READY.
 Implement the stdlib metadata pairing validator in the models metadata layer,
 using an explicit owned training-directory argument; never search arbitrary
 ancestors or import training orchestration. Ordinary trained artifact load,
@@ -2627,7 +2634,18 @@ construct a bindable policy. Resave to a new location without paired evidence
 rejects; a separate exact-bundle copy may preserve unchanged request/run/artifact
 bytes and the same origin. Toy raw-array entry points cannot accept a trained
 origin/provenance argument to bypass the concrete Dataset2 owner.
-Pair request.execution with artifact.creation_execution. Validate any allowed
+Keep ConfiguredTreeModelV2 and old toy Config hashes unchanged: checkpoint may
+explicitly name either the old toy artifact root or the complete versioned
+Training3 bundle root. A stdlib metadata resolver inspects ONLY that supplied
+root's known closed container kind/layout, rejects ambiguity/incompleteness, and
+for the trained root passes artifact=root/artifact and explicit
+training_directory=root. The DTO contains those resolved artifact/training paths.
+Bare trained artifacts cannot bind without an explicit paired root; never search
+ancestors. Direct artifact APIs continue to require an explicit training-directory
+argument for trained binding. Independent focused root-routing DESIGN is READY.
+Pair pre-fit request.execution with the inference/resources projection of
+artifact.creation_execution; the latter's actual tree_descriptor is checked
+separately against the admitted envelope and artifact descriptor. Validate any allowed
 active execution override separately; a trained resave cannot rewrite the
 creation bytes under that later binding. completion_sha256 is only a
 post-completion training_binding/policy-identity field. It must never occur in
@@ -2642,6 +2660,10 @@ and a pre-admitted model bound jointly before native construction. Initial
 conservative Dataset allowance is5times raw blocks+labels, plus the C3a fixed/
 thread allowance and model envelope. This is a soft estimate, not an RSS quota;
 do not auto-change rows, features, threads, rounds or resources to fit.
+Record configured round cap, consumed callback iterations, best iteration and
+retained model tree count separately. Count the final early-stop callback before
+the native stopper; returned Booster.current_iteration/num_trees may describe
+only a compacted best model and cannot establish consumed training rounds.
 
 Bounded20-round component measurements support that starting coefficient:
 30k+1krows consume204,352,000raw bytes and346,501,120peak RSS, versus a1.364GB
