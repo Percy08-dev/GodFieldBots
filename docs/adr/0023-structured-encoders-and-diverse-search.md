@@ -1997,3 +1997,150 @@ closed state format/version and compare against Python random.Random(seed).getst
 for0/1/17/2^32/2^63−1/uint64max plus malformed/range negatives. Only C2b2's Python
 authorization binds the recorded header seed to the frozen original plan; matching
 an initial state here supplies no parent or Source authority.
+
+## 26. Concrete native cohort composition
+
+This refines §23 for C2b2. Independent exact interface design review is READY
+(2026-11-02); implementation conformance and activation remain separate gates.
+Add StructuredNativeSession(plan,settings,deadline,cancel_handle). Plan is closed
+version2 with explicit mode=live_cohort|historical_parent, parents(directory,
+require_complete), collections(directory,parent_index), and a cohort index only
+for live_cohort. Requested paths/indices select work; original Run2/Update2/
+manifest/FrozenPlan equality validates authority. Historical mode has no fake
+cohort index or export. Baseline Collection3 may be structurally inspected but
+does not become PPO payload; general Tree2 raw export is a later C3 boundary.
+
+Settings contain only consumed memory_bytes,scratch_bytes,max_source_file_bytes,
+max_record_bytes,chunk_target_bytes. Python fixes the configured work deadline
+minus cleanup as in C2a. Native arrays/banks/decoded shards are individually at
+most64MiB. Admit the whole selected cohort before export; never shrink decisions,
+candidates,W or episode population to fit. An array can occupy its own admitted
+bank; chunk_target is a packing target, not permission to split/reinterpret arrays.
+
+Methods are control_summary, authorize(encoded,retained_python_bytes),
+export_cohort(retained_python_bytes), retire_payload(retained_python_bytes),
+recheck(retained_python_bytes), begin_update(retained_python_bytes),
+finalize(retained_python_bytes) and close, plus
+existing cancel/ownership observations. Persistent control leases may supply the
+equivalent admission, updated BEFORE new Python allocation; no resumed operation
+gets an independent full allowance or forgets a remaining Python owner.
+States are scanned→authorized→exported→payload_retired→updating→finalized/closed for live
+mode; historical mode performs authorized/cohort validation→finalized/closed with
+no export. Reject repeated export, reading retired payload, rebaseline/rescan,
+premature finalize and work after terminal close. NativeExecution joins work
+before locks/source handles/leases end, including cancellation and failed close.
+In historical_parent mode, the Python owner completes sealed/schedule AND recorded
+numeric correspondence for ALL original cohorts before its ONE authorize call,
+then finalizes without export. In live_cohort, authorize sealed/schedule first,
+export/publish/retire, then perform recorded decoder correspondence before wrapper
+begin_update and finalize. Native enforces its concrete lifecycle state;
+the Python wrapper enforces actual correspondence completion, not a caller-supplied
+true/ready flag. No new framework or placeholder authority token is introduced.
+
+Control summary2 uses §21's bounded parents/generations/collections and additionally
+originally validated Update2 collection/numeric references and manifest/file-map
+hashes, schedule/binding/source-set hashes, explicit roles/counts and expected
+episode correspondence digests. Bind all to its domain-separated fingerprint and
+recorded semantics. Never return full effective_config to Python. Selected live
+NN rows require finite policy values; baseline/null metadata remains exact and
+does not acquire critic values, GAE or Generation2 ancestry.
+
+Python authorization checks retained/pruned artifacts through existing NumPy-only
+S2 scans, exact original file maps/declarations, seed anchor, snapshot cadence/pool
+and schedule/binding reconstruction. Feed closed fingerprint-bound expected
+authorization records to the paused native owner; do not rely on a producer's
+true/ready flag. Header seeds match frozen schedules here, beyond §25's limited
+search-state self-consistency. No native PCG/SeedSequence port or callback occurs.
+The concrete closed authorization2 record contains schema_version,mode,
+control_fingerprint,parents,collections. Each parent acknowledgement contains
+parent_index,config_sha256,resume_identity,sealed,controls_sha256; each sealed
+entry contains generation,inference_sha256,resume_sha256,
+artifact_files_sha256,retained. Each collection acknowledgement contains
+collection_index,manifest_sha256,expected_schedule_sha256,
+expected_bindings_sha256,source_set_sha256,correspondence_sha256,numeric_sha256.
+The last field is the exact original recorded numeric manifest hash for historical
+PPO cohorts and null for the uncommitted live cohort or structurally inspected
+non-PPO baseline collections, which acquire no PPO ancestry. The live
+correspondence_sha256 binds the original expected ordered digest list and count;
+the later actual numeric comparison remains mandatory. Historical correspondence
+is acknowledged only after that comparison. All lists preserve original index
+and generation order with exact membership; no omitted parent/cohort or duplicate
+acknowledgement is accepted. Native compares these records to its original-derived
+summary. Python derives them from actual S2 results and independently reconstructed
+schedule/bindings, after all historical numeric comparisons, rather than copying
+unverified success claims.
+Native retained ownership, control serialization/Python copies, S2 snapshots and
+encoded/decoded NPZ scratch share ONE caller cap/deadline. Retained Python owners
+remain charged on every resumed native operation, not merely while it is paused.
+
+Factor C2b1's private journal walker into concrete diagnostic and typed staging
+destinations, with no Python per-record callback. Retire per-frame parse scratch
+after bounded staging. Save each original bank once; retain source file/inventory
+snapshots through the final parent sweep. Only selected live cohort token/data
+spool persists. Unselected historical cohorts validate/digest then retire data,
+retaining bounded original snapshots and summary. Historical old62 journals may
+be validated as ORIGINAL RAW SOURCE without active token projection; the Python
+recorded decoder privately reproduces old tokens. Active NN export is corrected
+public-exact-v2 only, and all recorded generations must match their original model.
+
+export_cohort returns closed metadata bytes and readonly owned bank tuples: uint8,
+int64 and additive Float32Owner/float32. Existing FloatOwner/f64 stays unchanged.
+Named descriptors are key,dtype,shape,bank_index,element_offset,element_count;
+validate alignment/ranges/disjointness/ownership before views. Preserve every C1
+array key and original byte/payload/Selection metadata; raw event blocks contain
+at most1024events, card slots pad18 and candidate slots/offsets are int64. Empty
+interval arrays retain C1's actual shape[0], rather than inventing[0,width]. Reject
+FP32 conversion overflow/nonfinite values. Preserve full original Selection JSON
+numbers separately for correspondence and Python GAE. Leases survive C1 NPZ
+serialization; retire payload owners before the decoder's single reconstruction.
+
+The common PPO loop selects the concrete native or Python Source helper; no
+second trainer, alternate schedules, reward rules or ledger are introduced.
+The private C1 payload publisher accepts validated metadata/arrays/semantics and
+caller budget/check. Existing public writers/readers keep their signatures and
+active strictness. Python attaches unchanged full-precision GAE and whole original
+cohort normalization. Expected digests come only from original native Source,
+never from the rollout being checked; expected_records and expected-digest modes
+remain exclusive. Bind classification/actor/bank/final prefix/ordered frame and
+table bindings/FULL Selection/closure, including zero-frame records, per §23.
+
+Historical whole-parent validation uses the native original Source summaries and
+numeric references. Python checks recorded numerical correspondence one cohort
+at a time under the same cap and retires each before the next; both source and
+sealed owners recheck original snapshots at finalization. Do not secretly run the
+entire Python Source reader underneath and claim native authorization. Preserve
+recorded-only/no-current-Torch/hardware inspection, active resume identity, whole
+cohort failure/quarantine, before-Adam parity and same-ledger/no-overlap ownership.
+
+The live common-loop source context encloses child.update and its next-generation
+save. A concrete begin_update(retained_python_bytes) phase is therefore required
+after authorization, payload retirement, actual Python numeric correspondence
+and all original-source/S2 rechecks, immediately before the context yields to Adam.
+Native derives the sole permitted new directory as artifacts/{g+1:06} from the
+original owning parent generation; a caller cannot choose a whitelist. Initial
+inventory is exact and this path must be absent. After begin_update, only that
+one real nonsymlink directory append is allowed under the same artifacts-root
+device/inode. Every original child directory/file identity/hash and every other
+inventory/root identity remains exact, with stable enumeration and the final
+snapshot sweep. Do not replace original baselines with a fresh inventory. This
+output is not Source authority: the existing child acknowledgement and Generation2
+commit still validate its complete file map before publication. Finalize/close
+source owners after child.update/save and before Generation2 control-record commit.
+Live finalize requires the update phase; an absent/partial output on failure
+grants no success and preserves whole-parent quarantine/cleanup.
+C2a diagnostics and historical sessions retain exact inventories with no exception.
+Python should use the existing NumPy-only SealedScan on the original native-
+referenced artifact directories, retaining original sealed-file snapshots, rather
+than duplicate the entire native-owned chain with a second _ChainScan. If a full
+chain owner is retained, its artifacts-root check must apply this same narrow
+live rule. Independent review accepts these exact auth/output pins (2026-11-02);
+implementation conformance remains pending.
+
+Verify identical original16-game cohorts' raw arrays/manifests/digests against the
+Python reference, negative-zero/full-precision values, zero/interrupted/baseline
+roles, all-history late mutation, pruned/sealed/PCG/config mismatches, joint memory/
+scratch/wire/deadline admission, leases/cancellation/second-export rejection and
+common-loop two-update/resume. Activate full capability markers only after this
+bridge, unchanged old corpus/index/saved-PPO outputs, fresh offline wheel/loaded
+binary checks and final independent reviews. Public real-I/O/qualified Source/
+fit gates remain unchanged and no model strength or final-test claim is added.

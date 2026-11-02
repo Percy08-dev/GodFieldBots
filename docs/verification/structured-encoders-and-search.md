@@ -1217,12 +1217,35 @@ ABSENT. This milestone does not implement typed export, Python GAE/publication,
 common-loop native staging, Tree2 or qualified Source eligibility. C2b2 remains
 the next interface/integration milestone under ADR0023§23.
 
+## C2b2 integration checkpoint (not final acceptance)
+
+The shared private C1 publisher passes16bounded cases, plus87existing learning/
+rollout cases. The independent early correctness review reruns all16and checks
+zero-frame natural and interrupted roles separately. Prepared native-style
+metadata/readonly arrays produce byte-identical rollout manifests, NPZ shards and
+raw sidecars to the existing public writer, without reconstructing Source records
+or retokenizing inside publication. Original Source digests reject fully rehashed
+Selection changes below FP32 resolution. The original public writer/reader API
+remains unchanged. This is publication-seam evidence, not native authorization.
+
+The first Rust staging differential also passes:16original learner Journal5
+roles,368C1-named arrays, every dtype/shape/raw-byte SHA, all16episode metadata
+records and original Source correspondence digests match the frozen Python
+reference. Five typed-spool cases cover true FP32/int64/uint8 ownership, empty
+arrays, signed zero, admission/refusal and retirement. Historical62journals can
+be validated as raw records without active token projection. Shared-walker final
+review, full Session/parent authorization and common-loop integration are pending;
+the diagnostic and low-level tests alone do not activate reader capabilities.
+
 ## Remaining integrated acceptance
 
-Currently NOT RUN: qualified collection E2E PPO integration,
-journal5/native differential,192-game baseline, attention3models×2inference devices×
+Currently NOT RUN: native Session authorization/publication/common-loop acceptance,
+deterministic Tree2 and Dataset2 integration, and qualified collection E2E PPO
+integration. The latter includes192-game baseline, attention3models×2inference devices×
 continuous/pause-resume real2updates, other hand-mode MLP games, fixed512train
-decision CPU p95<=3s acceptance under the complete qualified contract, separate
-actual-worker stress/physical GPU accounting and new Rust/native checks. Repeat old-data proofs, wheel
+decision CPU p95<=3s acceptance under the complete qualified contract. Completed
+component panels and separate actual-worker/allocator stress above retain their
+stated limits; they do not establish physical global GPU high-water or qualified
+Source eligibility. Repeat old-data proofs, final Rust/native checks, wheel
 and optional-dependency-free startup after the remaining implementation.
 Do not turn these entries into PASS without exact commands and actual evidence.
