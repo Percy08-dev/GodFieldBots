@@ -2314,11 +2314,11 @@ Tiny categorical fit/roundtrip, row/category/reference/permutation oracles,
 18/128 synthetic capacity, resource refusal, worker/Journal5/FakeHTTP and
 optional-free startup checks remain engineering evidence only.
 
-## 28. TreeDataset2 source lifetime (bounded design draft)
+## 28. TreeDataset2 source lifetime
 
 Root adopts the advisor's separate concrete TreeDatasetSession direction for
-C3b. This section is a bounded design draft; exact wire/manifest/training
-interfaces still need review before dependent implementation. C2b2 Plan2's
+C3b. The exact reviewed wire/manifest and training interfaces are recorded in
+§§29–30; implementation acceptance remains separate. C2b2 Plan2's
 historical-no-export/live-one-export behavior is preserved.
 
 Dataset2 freezes exactly three ordered complete healthy current376PPO2 parents
@@ -2343,7 +2343,8 @@ defines the new projection; legacy validation's weaker enforcement is unchanged.
 The separate Dataset session freezes parent controls/worklist once, reuses the
 existing parent/collection/journal/S2 validators, and processes one collection at
 a time: control_summary→authorize_controls, then stage_next→collection_summary→
-authorize_collection→export_current→retire_current, finally finalize→close.
+authorize_collection→export_current→retire_current, followed by verify_complete
+and terminal finalize→close.
 Do not first call the eager all-source OriginalInputs.open and then rewalk every
 parent per collection. Python checks each training collection's recorded numeric
 correspondence against original native Source digests before its export is
@@ -2380,7 +2381,7 @@ Current engineering-profile results remain component evidence with qualified=Fal
 public real-I/O, dataset qualification and real fitting continue to reject before
 activity under issue0005. C3b must supply concrete fixed-manifest2, safe
 training-schema3/provenance, fresh native fit and cost-accounting interfaces;
-this draft neither invents a future normative contract nor authorizes placeholder
+this design neither invents a future normative contract nor authorizes placeholder
 qualified success. Full HPO, strength comparison and final-test evaluation remain
 outside this task's implementation acceptance.
 
@@ -2441,13 +2442,15 @@ and original natural closures, not a fabricated training numeric artifact.
 Closed fields, index/order, population and fingerprints must match exactly.
 
 Methods are control_summary,authorize_controls,stage_next,collection_summary,
-authorize_collection,export_current,retire_current,finalize,recheck,close and
+authorize_collection,export_current,retire_current,verify_complete,finalize,recheck,close and
 cancel_handle. All native work resumes with the additional retained-Python byte
 count. At most one full collection and payload is staged; no advance before
 retirement, no second export/rescan/rebaseline, and no finalization before exact
 worklist exhaustion and final original sweep. stage_next admits the full16/64
-population. export_current returns the existing readonly owned U8/I64 bank ABI
-with a distinct selected-inputs metadata kind; no PPO labels/GAE/latents. Preserve
+population. export_current returns exactly (metadata_bytes,uint8_banks,int64_banks),
+using existing readonly ByteOwner/IntegerOwner leases and a distinct selected-inputs
+metadata kind. Validate descriptor bounds, alignment and disjointness; no dummy
+FP32 tuple or PPO labels/GAE/latents. Preserve
 full original Selection/raw digests separately. Tree history is projected from
 raw immutable facts using the requested window, independently of original NN
 header/numeric semantics.
@@ -2461,8 +2464,16 @@ disk spool BEFORE payload exposure or provisional sink writes. Exported state is
 set only after cleanup succeeds; failure exposes no payload and retains the owner.
 RAM/control/original-source leases persist until logical retirement. Additional
 retained-Python/sink-buffer bytes remain charged on EVERY resumed call, including
-retire_current/finalize, and are updated before allocation; provisional disk
+retire_current/verify_complete/finalize, and are updated before allocation; provisional disk
 output has its own explicit remaining-storage allowance.
+
+After exact worklist exhaustion and current-payload retirement, verify_complete
+performs the full native/sealed original sweep without closing or rebaselining
+owners. The SAME owners remain open and recheckable through fit and child reap;
+finalize performs the final post-fit original sweep and is terminal. A build-only
+job may finalize before publishing its source-only manifest. A later fit opens
+and revalidates originals once, then retains those owners through completion;
+never close/reopen a fresh source baseline between row preparation and fitting.
 
 FinalValidationContext holds completed-parent/original-source/sealed ownership,
 final inference and execution binding, original/projected Config hashes,
@@ -2473,6 +2484,11 @@ normal public contract/native preflight/Environment guards remain independent.
 Do not relax the live training-owner path, add a Config bypass or fabricate
 learner state. Both backends preserve source semantics; native uses this original
 Source path rather than a hidden complete Python Source pass.
+This context validates returned collection metadata and retains/rechecks the
+completed parent's originals; it does not grant whole-validation Source authority.
+TreeDatasetSession subsequently freezes and fully audits the new validation
+journals, sidecars, both views and closure before manifest2 publication or fitting.
+No duplicate full raw scan is required inside the actor-only context.
 
 Manifest2 is closed schema_version,kind,selection,label_recipe,input_binding,
 input_recipe,tree_projection,neural_cohort,parents,collections,counts,
@@ -2495,3 +2511,125 @@ They are not a new persisted cached-feature authority. Public engineering-profil
 dataset qualification/fitting rejects before activity; private component records
 and manifests remain explicitly unqualified. Trained schema3 emission/provenance
 and full fresh-fit/cost ownership remain C3b2's next required gate.
+
+## 30. C3b2 fresh fitting and acyclic trained provenance
+
+Root adopts the advisor's independent-axis meaning of fit_origin=trained:
+completion of the verified Dataset2-backed fit workflow. It does NOT imply model
+quality, qualified Source or permission for real games. A component Dataset2 may
+produce trained provenance while retaining its immutable engineering contract,
+purpose=component and synthetic_capacity=false. The existing public qualification/
+real-I/O/fit guards still reject. C3a arbitrary synthetic-row fits remain toy/null.
+Independent exact C3b2 DESIGN review is READY (2026-11-02), including the retained
+source lifetime, creation-execution pairing and post-completion hash pins below.
+Implementation and final conformance/acceptance remain separate gates.
+
+Inference trained provenance is closed schema_version,kind,training_run_id,
+request_sha256,dataset_manifest_sha256,input_binding; kind is
+structured-fixed-dataset2-fit. Classification must equal artifact, request and
+Dataset2. Do not add a readiness/eligibility override or invent a future profile.
+Store that closed provenance as an immutable value/canonical owned bytes on the
+loaded wrapper, not a caller-mutable dictionary that can alter origin after load.
+
+The immutable request3 binds kind,run_id,model,execution,fit_settings,seed,
+input_binding,feature_signature,label_recipe,dataset_manifest_sha256,
+dataset_content_sha256,source_set_sha256,input_files,row_counts,producer,runtime
+and schema_version,model_envelope. model is architecture-only; execution is the
+pre-fit CPU inference/resources binding and cannot require an unknown actual
+tree descriptor. Persist/validate model_envelope's recipe,feature_width,rounds,
+num_leaves,node_bound,text_bytes, then compare the actual descriptor after fit.
+Input files are the exact privately owned FP32 block/label
+shards and sidecars, decoded total<=64MiB per shard, with counts/shapes/dtypes and
+hashes checked. The native child receives only this own numeric request/input
+set, not parent Config/Source paths, GameSeeds or other policy views. Dataset2's
+canonical content digest and all original Source conditions are revalidated,
+never inferred from its flags. An arbitrary array/provenance dictionary cannot
+enter the private source-backed entry; it requires the concrete verified Dataset2
+owner and keeps it through final checks.
+
+Use Dataset2+numeric inputs→request hash→inference provenance. The final
+training.json3 binds that request hash and exact output inference/model hashes;
+inference never references the mutable final training-record hash. Training3
+records schema_version,kind,run_id,status,request_sha256,input_binding,seed,
+dataset_manifest_sha256,dataset_content_sha256,source_set_sha256,
+feature_signature,label_recipe,producer,runtime,health,metrics,costs,outputs.
+outputs is the exact relative file map plus inference_sha256/model_sha256.
+That map excludes training.json itself. Keep inputs/ in the exact owned bindable
+bundle for C3b2; no implicit deletion/retirement receipt or reconstruction.
+Request-bound consumed-input evidence is not Dataset2 Source authority.
+Status transitions running→complete|failed; timeout/cancel/
+cleanup/source failure cannot produce complete. All outputs before healthy
+completion remain diagnostic and unbindable.
+
+The owned training directory contains request.json, training.json, inputs/ and
+artifact/{inference.json,model.txt}. Before a trained binding is created, inspect
+the exact expected set without Booster/Torch and verify complete/healthy/reaped
+Training3, request bytes/hash, run/dataset/classification/architecture/features/
+execution agreement, and exact output digests. Artifact-only inspection may
+report structurally valid provenance, not completed-training or qualified-use
+authority. Keep this metadata format validation below training orchestration;
+do not introduce a models→training import. Immutable origin remains attached to
+the actual wrapper. Resave cannot relabel toy/trained/component or carry a stale
+pairing onto changed artifact bytes; an unchanged valid byte set may be copied
+only with its exact paired owned request/completion evidence.
+The trained safe DTO has the existing common fields plus a distinct closed
+training_binding={directory,request_sha256,completion_sha256}. Validate that
+explicit set before active native loading and include it in trained binding
+identity. Preserve the historical exact toy DTO shape and require toy origin for
+that shape; absence of training_binding never upgrades it to trained. No implicit
+ancestor search or unversioned readiness default is allowed.
+Implement the stdlib metadata pairing validator in the models metadata layer,
+using an explicit owned training-directory argument; never search arbitrary
+ancestors or import training orchestration. Ordinary trained artifact load,
+policy binding and resave require that complete paired set. Provisional output
+inspection during an active fit reports structural provenance only and cannot
+construct a bindable policy. Resave to a new location without paired evidence
+rejects; a separate exact-bundle copy may preserve unchanged request/run/artifact
+bytes and the same origin. Toy raw-array entry points cannot accept a trained
+origin/provenance argument to bypass the concrete Dataset2 owner.
+Pair request.execution with artifact.creation_execution. Validate any allowed
+active execution override separately; a trained resave cannot rewrite the
+creation bytes under that later binding. completion_sha256 is only a
+post-completion training_binding/policy-identity field. It must never occur in
+the request, inference provenance or creation_execution, avoiding a hash cycle.
+
+Fresh fitting uses the installed native list-of-equally-wide-FP32-matrices API,
+never one giant concatenation. Labels are separate natural selected-actor±1/0.
+Default rounds500/early-stop50/rate0.05/min-leaf20, seed-derived native seeds and
+CPU threads remain explicit and unchanged. Admit all train+validation blocks,
+labels, retained Source/control owners, known copies, native Dataset/workspace
+and a pre-admitted model bound jointly before native construction. Initial
+conservative Dataset allowance is5times raw blocks+labels, plus the C3a fixed/
+thread allowance and model envelope. This is a soft estimate, not an RSS quota;
+do not auto-change rows, features, threads, rounds or resources to fit.
+
+Bounded20-round component measurements support that starting coefficient:
+30k+1krows consume204,352,000raw bytes and346,501,120peak RSS, versus a1.364GB
+estimate;81,523+2,260rows consume552,297,536raw bytes and844,922,880peak RSS,
+versus3.104GB under an explicitly experimental4GiB allowance. Production defaults
+stay2GiB. Records/harness/producer hashes are under
+runs/assessments/structured-tree2-fit-resource-20261102; proof SHA
+e6f76faa1f520df8d705c5b55579c9d574ee9e4cb61190bfa866f2bcd8b923c1.
+The small subprocess result is retained/reaped but its controller exit code was
+not captured; the large HOST command exits0. These are neither formal fits nor
+acceptance of500round/default workloads. The concrete model-bound formula and
+actual configured-workload measurement remain explicit review/evidence gates.
+
+The reviewed conservative model envelope is versioned
+tree-fit-model-envelope-v1: node_bound=rounds*(2*num_leaves-1), then
+model_text_bound=65536+512*feature_width+1024*node_bound bytes. Reserve the C3a
+16times-model component against this bound before Dataset/Booster construction,
+along with the5times-raw term and retained Source/control/packing owners. This is
+an explicitly conservative soft estimate, not a proof of native malloc behavior.
+After fitting, exact validated text bytes must not exceed the admitted bound;
+otherwise the fit fails without automatic envelope expansion or healthy output.
+Measure the actual configured/default500-round workload as well as admission
+refusal for oversized leaves/rounds/populations before C3b2 acceptance.
+
+Parent owns the original7200-second per-fit budget covering preparation, native
+fit, validation, save/load and cleanup. Shared parent/validation generation cost
+is reported separately and deduplicated by manifest2's original source key.
+Require child success/confirmed reap, exact requested/consumed input and native
+semantics, final original Dataset2/source rechecks and no incomplete publication
+before complete. Keep legacy inclusive-generation cost/source/pilot gates exact;
+no Dataset1 or legacy model1 artifact acquires model2 meaning by dispatch.
