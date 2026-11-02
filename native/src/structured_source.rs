@@ -316,11 +316,11 @@ fn require(value: bool, message: &str) -> Result<()> {
         Err(Error::contract(message))
     }
 }
-fn doc(value: &Value, budget: &Arc<Budget>, control: &Control) -> Result<Document> {
+pub(crate) fn doc(value: &Value, budget: &Arc<Budget>, control: &Control) -> Result<Document> {
     let bytes = json::canonical(value, budget, control)?;
     json::parse(&bytes, budget, control)
 }
-fn input_classification(value: &Value, contract: &Value) -> Result<()> {
+pub(crate) fn input_classification(value: &Value, contract: &Value) -> Result<()> {
     crate::structured_controls::contract(contract)?;
     require(
         value.require("action_contract")? == contract
@@ -593,9 +593,45 @@ pub(crate) fn inspect_collection(
     directory: &Path,
     parent: Option<(&Path, &Value)>,
     limits: &CollectionLimits,
+    stage: Option<&mut Stage>,
+    budget: Arc<Budget>,
+    control: Control,
+) -> Result<CollectionScan> {
+    inspect_collection_inner(directory, parent, limits, stage, budget, control, None)
+}
+#[derive(Clone, Copy)]
+pub(crate) enum TreeSourceKind {
+    Train,
+    FinalValidation,
+}
+pub(crate) fn inspect_tree_collection(
+    directory: &Path,
+    parent: (&Path, &Value),
+    limits: &CollectionLimits,
+    stage: &mut Stage,
+    budget: Arc<Budget>,
+    control: Control,
+    kind: TreeSourceKind,
+    window: usize,
+) -> Result<CollectionScan> {
+    inspect_collection_inner(
+        directory,
+        Some(parent),
+        limits,
+        Some(stage),
+        budget,
+        control,
+        Some((kind, window)),
+    )
+}
+fn inspect_collection_inner(
+    directory: &Path,
+    parent: Option<(&Path, &Value)>,
+    limits: &CollectionLimits,
     mut stage: Option<&mut Stage>,
     budget: Arc<Budget>,
     control: Control,
+    tree: Option<(TreeSourceKind, usize)>,
 ) -> Result<CollectionScan> {
     control.check()?;
     let mut sources = Sources::new(
@@ -612,6 +648,24 @@ pub(crate) fn inspect_collection(
         ["complete", "incomplete", "interrupted"].contains(&field(m, "status")?),
         "finalized original collection required",
     )?;
+    if let Some((kind, window)) = tree {
+        require(
+            (1..=65536).contains(&window),
+            "TreeDataset projection window invalid",
+        )?;
+        require(
+            schema == 4 && field(m, "status")? == "complete",
+            "TreeDataset requires complete original Collection4",
+        )?;
+        let (expected_kind, expected_split) = match kind {
+            TreeSourceKind::Train => ("ppo_batch", "train"),
+            TreeSourceKind::FinalValidation => ("ppo_validation", "validation"),
+        };
+        require(
+            field(m, "collection_kind")? == expected_kind && field(m, "split")? == expected_split,
+            "TreeDataset collection kind/split mismatch",
+        )?;
+    }
     let cfg = m.require("effective_config")?;
     crate::structured_controls::actions(cfg)?;
     let actions = cfg.require("actions")?;
@@ -662,9 +716,25 @@ pub(crate) fn inspect_collection(
         "original collection clock provenance invalid",
     )?;
     if let Some((parent_directory, state)) = parent {
+        let projected;
+        let expected_config = if matches!(tree, Some((TreeSourceKind::FinalValidation, _))) {
+            projected = {
+                let mut value = json::copy(state.require("effective_config")?, &control)?;
+                value
+                    .get_mut("run")
+                    .unwrap()
+                    .as_object_mut()
+                    .unwrap()
+                    .insert("split".into(), json::text("validation"));
+                value
+            };
+            &projected
+        } else {
+            state.require("effective_config")?
+        };
         require(
-            m.require("config_sha256")? == state.require("config_sha256")?
-                && cfg == state.require("effective_config")?
+            m.require("config_sha256")?.string()? == digest(expected_config, &budget, &control)?
+                && cfg == expected_config
                 && m.require("config_inputs")? == state.require("config_inputs")?,
             "original collection full frozen Config/input origins differ",
         )?;
@@ -777,6 +847,12 @@ pub(crate) fn inspect_collection(
                 "PPO batch requires all eight original swapped pairs",
             )?;
         }
+        if matches!(tree, Some((TreeSourceKind::FinalValidation, _))) {
+            require(
+                specs.len() == 64 && m.require("schedule")?.array()?.len() == 32,
+                "TreeDataset final validation requires all32 swapped pairs/64 games",
+            )?;
+        }
         let mut seats = json::object([]);
         for (_, spec) in &specs {
             spec.require("learner_viewer")?.integer(1, 2)?;
@@ -886,6 +962,14 @@ pub(crate) fn inspect_collection(
     let mut learner_model = None;
     let mut accepted_learner = 0;
     let mut accepted_total = 0;
+    if tree.is_some() {
+        require(
+            episodes
+                .iter()
+                .all(|ep| ep.get("end_kind").and_then(Value::as_str) == Some("natural")),
+            "TreeDataset rejects the whole interrupted cohort",
+        )?;
+    }
     let mut closure_counts = json::object([]);
     let mut missing_replays = Vec::new();
     for (group, spec) in specs {
@@ -953,20 +1037,48 @@ pub(crate) fn inspect_collection(
             let (identity, model) = role_identity(&h.root, m, ep, spec, viewer, &budget, &control)?;
             let declaration = OriginalHeader::new(model, &identity, &budget, &control)?;
             let selected = schema == 4 && spec.require("learner_viewer")?.integer(1, 2)? == viewer;
-            let input = Journal::original(
-                &dir,
-                &file,
-                budget.clone(),
-                control.clone(),
-                limits.source_bytes,
-                limits.record_bytes,
-                &declaration,
+            let selected_stage = if selected {
+                stage.as_deref_mut().map(|s| (s, digests.len()))
+            } else {
+                None
+            };
+            let input = if let Some((_, window)) = tree {
                 if selected {
-                    stage.as_deref_mut().map(|s| (s, digests.len()))
+                    Journal::original_tree(
+                        &dir,
+                        &file,
+                        budget.clone(),
+                        control.clone(),
+                        limits.source_bytes,
+                        limits.record_bytes,
+                        &declaration,
+                        selected_stage,
+                        window,
+                    )?
                 } else {
-                    None
-                },
-            )?;
+                    Journal::original(
+                        &dir,
+                        &file,
+                        budget.clone(),
+                        control.clone(),
+                        limits.source_bytes,
+                        limits.record_bytes,
+                        &declaration,
+                        None,
+                    )?
+                }
+            } else {
+                Journal::original(
+                    &dir,
+                    &file,
+                    budget.clone(),
+                    control.clone(),
+                    limits.source_bytes,
+                    limits.record_bytes,
+                    &declaration,
+                    selected_stage,
+                )?
+            };
             let end = input.end_value();
             require(
                 end.require("end_kind")? == ep.require("end_kind")?
@@ -1062,7 +1174,11 @@ pub(crate) fn inspect_collection(
                 )?);
                 accepted_learner += input.accepted_count();
                 if let Some(stage) = stage.as_deref_mut() {
-                    staged.push(input.staged_episode(stage, digests.len() - 1, &reason)?);
+                    staged.push(if tree.is_some() {
+                        input.staged_tree_episode(stage, digests.len() - 1, &reason)?
+                    } else {
+                        input.staged_episode(stage, digests.len() - 1, &reason)?
+                    });
                 }
             }
             original_sources.push(input.into_sources())?;
@@ -1113,8 +1229,18 @@ pub(crate) fn inspect_collection(
     )?;
     if stage.is_some() {
         require(
-            digests.len() == 16 && field(m, "collection_kind")? == "ppo_batch" && split == "train",
-            "selected live cohort must preserve all16 original neural roles",
+            if let Some((kind, _)) = tree {
+                digests.len()
+                    == match kind {
+                        TreeSourceKind::Train => 16,
+                        TreeSourceKind::FinalValidation => 64,
+                    }
+            } else {
+                digests.len() == 16
+                    && field(m, "collection_kind")? == "ppo_batch"
+                    && split == "train"
+            },
+            "selected cohort must preserve its full original16/64 neural-role population",
         )?;
     }
     let mut file_owner = sources.proof_files(&root)?;
@@ -1553,7 +1679,7 @@ pub(crate) struct OriginalInputs {
     _plan: Document,
     _metadata: BudgetVec<Lease>,
 }
-fn owned_relative(root: &Path, value: &Value) -> Result<PathBuf> {
+pub(crate) fn owned_relative(root: &Path, value: &Value) -> Result<PathBuf> {
     let text = value.string()?;
     let path = Path::new(text);
     require(
@@ -1870,7 +1996,7 @@ impl OriginalInputs {
     }
 }
 
-fn semantic_declaration(value: &Value, control: &Control) -> Result<Value> {
+pub(crate) fn semantic_declaration(value: &Value, control: &Control) -> Result<Value> {
     let mut result = json::object([]);
     for key in [
         "input_recipe",
@@ -1893,7 +2019,7 @@ fn semantic_declaration(value: &Value, control: &Control) -> Result<Value> {
     }
     Ok(result)
 }
-fn cohort_binding(
+pub(crate) fn cohort_binding(
     fingerprint: &str,
     declaration: &Value,
     digests: &[String],
@@ -1983,86 +2109,9 @@ impl OriginalInputs {
         let mut parent_ack = Vec::new();
         for (index, parent) in self.parents.iter().enumerate() {
             c.check()?;
-            let p = &parent.summary.root;
-            let mut item = json::copy(p, c)?;
-            item.as_object_mut()
-                .unwrap()
-                .insert("parent_index".into(), json::integer(index as i128));
-            item.as_object_mut().unwrap().insert(
-                "run_sha256".into(),
-                json::text(
-                    parent
-                        .sources
-                        .verified_sha(&parent.directory.join("run.json"))?,
-                ),
-            );
-            let run = parent
-                .state
-                .root
-                .require("effective_config")?
-                .require("run")?;
-            item.as_object_mut().unwrap().insert(
-                "run_limits".into(),
-                json::object([
-                    (
-                        "global_cuda_budget_bytes",
-                        json::copy(run.require("global_cuda_budget_bytes")?, c)?,
-                    ),
-                    (
-                        "max_participant_workers",
-                        json::copy(run.require("max_participant_workers")?, c)?,
-                    ),
-                ]),
-            );
-            item.as_object_mut().unwrap().insert(
-                "hardware".into(),
-                json::copy(parent.state.root.require("hardware")?, c)?,
-            );
+            let (item, ack) = compact_parent(index, parent, b, c)?;
             parents.push(item);
-            let mut sealed = Vec::new();
-            let mut controls = Vec::new();
-            for generation in p.require("generations")?.array()? {
-                c.check()?;
-                controls.push(json::copy(generation.require("parent_controls")?, c)?);
-                sealed.push(json::object([
-                    (
-                        "generation",
-                        json::copy(generation.require("generation")?, c)?,
-                    ),
-                    (
-                        "inference_sha256",
-                        json::copy(generation.require("inference_sha256")?, c)?,
-                    ),
-                    (
-                        "resume_sha256",
-                        json::copy(generation.require("resume_sha256")?, c)?,
-                    ),
-                    (
-                        "artifact_files_sha256",
-                        json::copy(generation.require("artifact_files_sha256")?, c)?,
-                    ),
-                    (
-                        "retained",
-                        Value::Bool(field(generation, "artifact_status")? == "retained"),
-                    ),
-                ]));
-            }
-            parent_ack.push(json::object([
-                ("parent_index", json::integer(index as i128)),
-                (
-                    "config_sha256",
-                    json::copy(p.require("state")?.require("config_sha256")?, c)?,
-                ),
-                (
-                    "resume_identity",
-                    json::copy(p.require("state")?.require("resume_identity")?, c)?,
-                ),
-                ("sealed", json::array(sealed)),
-                (
-                    "controls_sha256",
-                    json::text(&digest(&json::array(controls), b, c)?),
-                ),
-            ]));
+            parent_ack.push(ack);
         }
         let mut collections = Vec::new();
         let mut collection_ack = Vec::new();
@@ -2418,4 +2467,93 @@ mod tree_role_tests {
             assert!(check(&value, &budget, &control).is_err(), "case{case}");
         }
     }
+}
+
+pub(crate) fn compact_parent(
+    index: usize,
+    parent: &ParentScan,
+    b: &Arc<Budget>,
+    c: &Control,
+) -> Result<(Value, Value)> {
+    let p = &parent.summary.root;
+    let mut item = json::copy(p, c)?;
+    item.as_object_mut()
+        .unwrap()
+        .insert("parent_index".into(), json::integer(index as i128));
+    item.as_object_mut().unwrap().insert(
+        "run_sha256".into(),
+        json::text(
+            parent
+                .sources
+                .verified_sha(&parent.directory.join("run.json"))?,
+        ),
+    );
+    let run = parent
+        .state
+        .root
+        .require("effective_config")?
+        .require("run")?;
+    item.as_object_mut().unwrap().insert(
+        "run_limits".into(),
+        json::object([
+            (
+                "global_cuda_budget_bytes",
+                json::copy(run.require("global_cuda_budget_bytes")?, c)?,
+            ),
+            (
+                "max_participant_workers",
+                json::copy(run.require("max_participant_workers")?, c)?,
+            ),
+        ]),
+    );
+    item.as_object_mut().unwrap().insert(
+        "hardware".into(),
+        json::copy(parent.state.root.require("hardware")?, c)?,
+    );
+
+    let mut sealed = Vec::new();
+    let mut controls = Vec::new();
+    for generation in p.require("generations")?.array()? {
+        c.check()?;
+        controls.push(json::copy(generation.require("parent_controls")?, c)?);
+        sealed.push(json::object([
+            (
+                "generation",
+                json::copy(generation.require("generation")?, c)?,
+            ),
+            (
+                "inference_sha256",
+                json::copy(generation.require("inference_sha256")?, c)?,
+            ),
+            (
+                "resume_sha256",
+                json::copy(generation.require("resume_sha256")?, c)?,
+            ),
+            (
+                "artifact_files_sha256",
+                json::copy(generation.require("artifact_files_sha256")?, c)?,
+            ),
+            (
+                "retained",
+                Value::Bool(field(generation, "artifact_status")? == "retained"),
+            ),
+        ]));
+    }
+    let ack = json::object([
+        ("parent_index", json::integer(index as i128)),
+        (
+            "config_sha256",
+            json::copy(p.require("state")?.require("config_sha256")?, c)?,
+        ),
+        (
+            "resume_identity",
+            json::copy(p.require("state")?.require("resume_identity")?, c)?,
+        ),
+        ("sealed", json::array(sealed)),
+        (
+            "controls_sha256",
+            json::text(&digest(&json::array(controls), b, c)?),
+        ),
+    ]);
+    Ok((item, ack))
 }

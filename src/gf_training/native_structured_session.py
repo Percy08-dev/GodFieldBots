@@ -13,7 +13,7 @@ from typing import Any, Self
 
 import numpy as np
 
-from gf_common.action_contract import parse_action_contract
+from gf_common.action_contract import ActionContract, parse_action_contract
 from gf_common.domain import ContractError, Json, RuntimePolicyBinding, canonical, closed, digest
 from gf_common.schedule import serialize_schedule
 from gf_models.structured_binding import recorded_policy_label
@@ -26,30 +26,10 @@ from gf_models.structured_sealed import (
 from gf_training.collection import training_groups
 
 
-def _authorize_controls(summary: Json, native: Any, *, max_owned_bytes: int, deadline: float,
-                        extra_owned_bytes: int = 0) -> tuple[Json, SealedScan, dict[int, Any]]:
-    """Actual NumPy-only sealed checks and existing schedule algorithm, no flags.
-
-    The native session is paused and retains its original control/Python-summary
-    leases. S2's one cumulative budget is only the REMAINING caller allowance.
-    Keep the returned scan alive and charged until final source rechecks.
-    """
-    closed(summary, {'schema_version', 'kind', 'reader_contract', 'scope', 'mode', 'qualified',
-        'parent_qualification', 'action_contract', 'purpose', 'synthetic_capacity', 'control_fingerprint',
-        'authorization_max_bytes', 'parents', 'collections'})
-    if (type(summary['schema_version']) is not int or summary['schema_version'] != 2
-            or summary['kind'] != 'structured-source-controls' or summary['reader_contract'] != 'structured-v1'
-            or summary['scope'] != 'engineering-component-originals' or summary['qualified'] is not False
-            or summary['parent_qualification'] != 'not_performed' or summary['purpose'] != 'component'
-            or summary['synthetic_capacity'] is not False):
-        raise ContractError('closed engineering original Source summary2 required')
-    contract = parse_action_contract(summary['action_contract'])
-    remaining = max_owned_bytes - native.used_bytes() - extra_owned_bytes
-    if remaining <= 0:
-        raise ContractError('joint native/sealed ownership exhausted before inspection')
-    scan = SealedScan(max_owned_bytes=remaining, deadline=deadline)
+def _verify_parent_controls(original_parents: list[Json], contract: ActionContract, scan: SealedScan) -> tuple[list[Json], dict[int, Any], dict[tuple[int, int], str], dict[tuple[int, int], str]]:
+    """Shared recorded-only seals/PCG/cadence checks; no collection authority."""
     parents, models, schedules, registries = [], {}, {}, {}
-    for pi, parent in enumerate(summary['parents']):
+    for pi, parent in enumerate(original_parents):
         scan.check()
         if parent['parent_index'] != pi:
             raise ContractError('ordered original parent index mismatch')
@@ -123,6 +103,32 @@ def _authorize_controls(summary: Json, native: Any, *, max_owned_bytes: int, dea
         parents.append({'parent_index': pi, 'config_sha256': parent['state']['config_sha256'],
             'resume_identity': parent['state']['resume_identity'], 'sealed': sealed,
             'controls_sha256': digest([generation['parent_controls'] for generation in generations])})
+    return parents, models, schedules, registries
+
+
+def _authorize_controls(summary: Json, native: Any, *, max_owned_bytes: int, deadline: float,
+                        extra_owned_bytes: int = 0) -> tuple[Json, SealedScan, dict[int, Any]]:
+    """Actual NumPy-only sealed checks and existing schedule algorithm, no flags.
+
+    The native session is paused and retains its original control/Python-summary
+    leases. S2's one cumulative budget is only the REMAINING caller allowance.
+    Keep the returned scan alive and charged until final source rechecks.
+    """
+    closed(summary, {'schema_version', 'kind', 'reader_contract', 'scope', 'mode', 'qualified',
+        'parent_qualification', 'action_contract', 'purpose', 'synthetic_capacity', 'control_fingerprint',
+        'authorization_max_bytes', 'parents', 'collections'})
+    if (type(summary['schema_version']) is not int or summary['schema_version'] != 2
+            or summary['kind'] != 'structured-source-controls' or summary['reader_contract'] != 'structured-v1'
+            or summary['scope'] != 'engineering-component-originals' or summary['qualified'] is not False
+            or summary['parent_qualification'] != 'not_performed' or summary['purpose'] != 'component'
+            or summary['synthetic_capacity'] is not False):
+        raise ContractError('closed engineering original Source summary2 required')
+    contract = parse_action_contract(summary['action_contract'])
+    remaining = max_owned_bytes - native.used_bytes() - extra_owned_bytes
+    if remaining <= 0:
+        raise ContractError('joint native/sealed ownership exhausted before inspection')
+    scan = SealedScan(max_owned_bytes=remaining, deadline=deadline)
+    parents, models, schedules, registries = _verify_parent_controls(summary['parents'], contract, scan)
     collections = []
     for ci, collection in enumerate(summary['collections']):
         scan.check()
@@ -281,6 +287,26 @@ class NativeStructuredSource:
         if self.sealed is not None:
             self.sealed.finalize()
         self._executor.call(self._session.recheck, self._held(additional))
+
+    def original_config_inputs(self, parent_index: int, additional: int = 0) -> list[Json]:
+        """One bounded management query from this SAME retained original Run2."""
+        from gf_common.domain import integer
+        self._check()
+        assert self.summary is not None
+        integer(parent_index, 0, len(self.summary['parents'])-1)
+        getter=getattr(self._session,'original_config_inputs',None)
+        if not callable(getter):
+            raise ContractError('native source lacks original input-origin query before actor preflight')
+        raw=__import__('json').loads(self._executor.call(getter,parent_index,self._held(additional)))
+        closed(raw,{'schema_version','kind','control_fingerprint','parent_index','run_sha256','config_inputs'})
+        parent=self.summary['parents'][parent_index]
+        if (type(raw['schema_version']) is not int or raw['schema_version']!=2
+                or raw['kind']!='structured-original-config-inputs'
+                or type(raw['parent_index']) is not int or raw['parent_index']!=parent_index
+                or raw['control_fingerprint']!=self.summary['control_fingerprint']
+                or raw['run_sha256']!=parent['run_sha256'] or type(raw['config_inputs']) is not list):
+            raise ContractError('original input-origin query binding differs from retained source')
+        return raw['config_inputs']
 
     def begin_update(self) -> None:
         self._check()

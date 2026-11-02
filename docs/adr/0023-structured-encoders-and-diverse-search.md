@@ -29,8 +29,11 @@ all five original compatibility proofs and package/activation verification.
 Root accepts that engineering-component increment; installed native is unchanged.
 The later C3a deterministic Tree2 inference/RAW-role increment is accepted after
 both source reviews, numerical/worker/native regressions and the512decision
-component performance panel. C3b Dataset2/trained fitting/final validation remain
-pending (§28); qualified real-game acceptance remains
+component performance panel. C3b1 Dataset2/original sources/actor-only final
+validation is accepted after both SOURCE reviews,226affected Python cases,
+113Rust tests/2ignored,50-file package/current-source proof and original-data
+preservation. C3b2 trained fitting/pairing has a reviewed exact design (§30) and
+remains required implementation. Qualified real-game acceptance remains
 blocked by issue0005. The following
 initial slice counts/statuses are historical milestones, superseded by that ledger.
 
@@ -2478,17 +2481,54 @@ never close/reopen a fresh source baseline between row preparation and fitting.
 FinalValidationContext holds completed-parent/original-source/sealed ownership,
 final inference and execution binding, original/projected Config hashes,
 expected64-game schedule/registry and the SAME actor-only ledger. Construction,
-precollection and retirement recheck these actual originals. The existing
-private fixed-I/O CLI composition accepts only the concrete validation context;
+precollection and retirement recheck these actual originals. Require caller
+LoadedConfig.inputs to canonically equal the verified original parent's
+config_inputs before actor preflight/collection; equal effective Config hashes
+alone do not permit a different input origin. Preserve that original input list
+in the split-only projection and reject mismatches early.
+The accepted C2 compact state omits this input list. Preserve its exact summary
+and control-fingerprint ABI: additive StructuredNativeSession.original_config_inputs
+(parent_index,retained_python_bytes) returns closed schema_version=2,
+kind=structured-original-config-inputs,control_fingerprint,parent_index,
+run_sha256,config_inputs. Derive it only from the SAME validated retained Run2,
+recheck originals and bind the original run hash/index/fingerprint before caller
+comparison. No full Config IPC or Python control reread is introduced. Enforce
+active-owner/deadline/cancel/singleflight and caller admission; unsupported
+binaries fail before actor preflight. Permit one delivery per parent and retain
+a separately bounded wire/decoded-query lease until confirmed source close;
+repeated delivery cannot replace a lease while earlier Python results survive.
+These are management origins, never policy features. Focused DESIGN review is
+READY; existing C2 summary/authorization/diagnostic interfaces remain unchanged.
+The existing private fixed-I/O CLI composition accepts only the concrete validation context;
 normal public contract/native preflight/Environment guards remain independent.
 Do not relax the live training-owner path, add a Config bypass or fabricate
 learner state. Both backends preserve source semantics; native uses this original
 Source path rather than a hidden complete Python Source pass.
+Clean-child actor runtime preflight and probe process cleanup belong to the
+existing CLI composition. The training context imports no worker transport and
+checks its SAME Source/ledger/plan before and after preflight. Unconfirmed actor
+cleanup retains reachable probe/context owners; the context cannot retire Source
+ownership while its ledger still contains an unreaped worker.
+For a Python-recorded parent, CLI supplies a separate explicit source_settings
+PreparationConfig to the context's native inspection. At the context boundary,
+require exactly the validated original preprocessing settings with only
+backend="rust" and reader="structured-v1" replaced; budgets, deadlines and other
+limits remain equal. Record the actual native inspection identity separately.
+Never change or relabel frozen parent preprocessing/numeric semantics or the
+split-only projected collection Config. Independent focused DESIGN review is
+READY; require a Python-parent positive proving those unchanged identities.
 This context validates returned collection metadata and retains/rechecks the
 completed parent's originals; it does not grant whole-validation Source authority.
 TreeDatasetSession subsequently freezes and fully audits the new validation
 journals, sidecars, both views and closure before manifest2 publication or fitting.
 No duplicate full raw scan is required inside the actor-only context.
+The existing CLI updates only returned report.wall_seconds after persisting its
+report and manifest. Context acceptance therefore requires identical field sets
+and canonical values for every other report field, plus finite non-bool numeric
+times satisfying 0<=persisted report wall<=manifest elapsed<=returned wall<=the
+frozen run wall. The original persisted report SHA and manifest elapsed remain
+Source/cost authority; never rewrite originals or change legacy CLI behavior.
+Independent focused timing-contract DESIGN review is READY.
 
 Manifest2 is closed schema_version,kind,selection,label_recipe,input_binding,
 input_recipe,tree_projection,neural_cohort,parents,collections,counts,

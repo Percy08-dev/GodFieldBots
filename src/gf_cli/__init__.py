@@ -228,7 +228,7 @@ async def run_experiment(loaded: LoadedConfig, command: str, *, collection: Coll
 
 async def _run_experiment(loaded: LoadedConfig, command: str, *, collection: CollectionPlan | None = None,
                           ledger: Any = None, _structured_factory: Any = None,
-                          _structured_source_ops: Any = None) -> tuple[Path, Json]:
+                          _structured_source_ops: Any = None, _structured_validation_context: Any = None) -> tuple[Path, Json]:
     """Private composition body; the normal environment factory remains guarded."""
     config = loaded.config
     started = collection.started_monotonic if collection is not None and collection.started_monotonic is not None else time.monotonic()
@@ -247,6 +247,12 @@ async def _run_experiment(loaded: LoadedConfig, command: str, *, collection: Col
             raise ContractError('concrete native source composition requires private factory and owned collection/ledger')
         _structured_source_ops.validate_config(config)
         _structured_source_ops.require_live_owner(supplied_ledger)
+    if _structured_validation_context is not None:
+        from gf_training.structured_tree_validation import FinalValidationContext
+        if (type(_structured_validation_context) is not FinalValidationContext or not structured or collection is None
+                or collection.kind!='ppo_validation' or supplied_ledger is None or _structured_source_ops is not None):
+            raise ContractError('concrete actor-only final validation context/plan/SAME ledger required')
+        _structured_validation_context.validate_collection(collection,supplied_ledger,config,deadline=preflight_deadline)
     structured_preprocessing = None
     if structured:
         from gf_cli.config import RunConfigV2
@@ -277,7 +283,11 @@ async def _run_experiment(loaded: LoadedConfig, command: str, *, collection: Col
             if collection is None or supplied_ledger is None:
                 raise ContractError('structured neural collection requires owned Generation2 context and SAME ledger')
             from gf_cli.structured import validate_owned_collection
-            if _structured_source_ops is not None:
+            if _structured_validation_context is not None:
+                _structured_validation_context.validate_collection(collection,ledger,config,deadline=preflight_deadline)
+                from gf_cli.structured import preflight_final_validation_actor
+                await preflight_final_validation_actor(_structured_validation_context,config,deadline=preflight_deadline)
+            elif _structured_source_ops is not None:
                 _structured_source_ops.validate_owned_collection(collection, ledger, config=config, deadline=preflight_deadline)
             else:
                 validate_owned_collection(collection, ledger, config, deadline=preflight_deadline)
@@ -563,6 +573,10 @@ def main(argv: list[str] | None = None) -> int:
             from gf_training.fixed_data import validate_policy
             config = replace(loaded.config, run=replace(loaded.config.run, split="validation"))
             validation_loaded = LoadedConfig(config, asdict(config), digest(asdict(config)), loaded.inputs)
+            if isinstance(loaded.config.actions,ActionConfigV2):
+                from gf_cli.structured import collect_final_validation
+                print(canonical(asyncio.run(collect_final_validation(loaded,args.parent_run,args.output))))
+                return 0
             async def collect_validation(plan: CollectionPlan) -> FinalizedCollection:
                 return await collect_ppo(validation_loaded, plan)
             print(canonical(asyncio.run(validate_policy(validation_loaded, args.parent_run, args.output, collect_validation))))

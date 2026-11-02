@@ -35,7 +35,7 @@ def configuration(tmp_path, *, kind='mlp', learning_device='cpu', inference_devi
     return LoadedConfig(config, asdict(config), digest(asdict(config)), ())
 
 
-def component_http(monkeypatch, loaded, *, mode='natural', source_ops=None):
+def component_http(monkeypatch, loaded, *, mode='natural', source_ops=None, validation_context=None, outcome='draw', actors=(2,1,2,1)):
     import gf_cli
     from gf_models.structured_baselines import make_structured_policy
     from gf_simulator_client import structured_environment
@@ -47,7 +47,7 @@ def component_http(monkeypatch, loaded, *, mode='natural', source_ops=None):
     class Server:
         def __init__(self, binary, config, seed, count, directory, *args, **kwargs):
             self.expected = server_effective(config, count)
-            self.script = PublicScript(mode=mode)
+            self.script = PublicScript(mode=mode,outcome=outcome,actors=actors)
             self.script.info.update(self.expected, seed_fingerprint=seed_fingerprint(seed))
             self.url = f'http://component-{next(serial)}'
             by_url[self.url] = self.script
@@ -65,7 +65,10 @@ def component_http(monkeypatch, loaded, *, mode='natural', source_ops=None):
             workers.append(self)
     class FakeEnvironment(structured_environment.StructuredSimulatorEnvironment):
         def __init__(self, settings, ledger):
-            assert ledger.learner is not None and ledger.learner._cleanup_owner.process.returncode is None
+            if validation_context is None:
+                assert ledger.learner is not None and ledger.learner._cleanup_owner.process.returncode is None
+            else:
+                assert ledger is validation_context.ledger and ledger.learner is None and not ledger.updating
             seen_ledgers.append(ledger)
             self._initialize_structured(settings, make_structured_policy, StructuredJournal, ledger=ledger)
         def _new_server(self, *args, **kwargs):
@@ -80,8 +83,10 @@ def component_http(monkeypatch, loaded, *, mode='natural', source_ops=None):
     async def collector(plan, ledger):
         before = time.monotonic()
         directory, report = await gf_cli._run_experiment(loaded, 'collect', collection=plan, ledger=ledger,
-                                                      _structured_factory=FakeEnvironment, _structured_source_ops=source_ops)
-        assert time.monotonic() >= before and not ledger.workers and ledger.learner is not None
+                                                      _structured_factory=FakeEnvironment, _structured_source_ops=source_ops,
+                                                      _structured_validation_context=validation_context)
+        assert time.monotonic() >= before and not ledger.workers
+        assert (ledger.learner is not None) == (validation_context is None)
         return FinalizedCollection(directory, report)
     return collector, scripts, workers, seen_ledgers
 

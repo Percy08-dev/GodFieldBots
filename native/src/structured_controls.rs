@@ -2060,7 +2060,30 @@ pub(crate) fn tree_feature_signature(
     control: &Control,
 ) -> Result<String> {
     tree_model(model)?;
-    let encoder = model.require("encoder")?;
+    let layout = tree_layout(model.require("encoder")?, budget, control)?;
+    Ok(layout
+        .root
+        .require("feature_signature")?
+        .string()?
+        .to_owned())
+}
+pub(crate) fn tree_layout(
+    encoder: &Value,
+    budget: &Arc<Budget>,
+    control: &Control,
+) -> Result<Document> {
+    encoder.closed(
+        &[
+            "recipe",
+            "max_positions",
+            "aggregate_window",
+            "aggregate_recipe",
+        ],
+        &[],
+    )?;
+    is(encoder, "recipe", "participant-structured-tree-v1")?;
+    is(encoder, "aggregate_recipe", "public-exact-v2")?;
+    n(encoder, "aggregate_window", 1, 65536)?;
     let positions = n(encoder, "max_positions", 1, 128)? as usize;
     let width = 1071 + 32 * positions;
     let _layout = budget.reserve(1024 * width + 65536)?;
@@ -2172,45 +2195,48 @@ pub(crate) fn tree_feature_signature(
         return Err(Error::contract("Tree2 pinned layout width mismatch"));
     }
     control.check()?;
-    digest(
-        &json::object([
-            ("recipe", json::text("participant-structured-tree-v1")),
-            (
-                "numeric_transform",
-                json::text("numpy-fp32-signed-log1p-v1"),
+    let mut value = json::object([
+        ("recipe", json::text("participant-structured-tree-v1")),
+        (
+            "numeric_transform",
+            json::text("numpy-fp32-signed-log1p-v1"),
+        ),
+        ("encoder", json::copy(encoder, control)?),
+        (
+            "token_signature",
+            json::text(&token_signature(
+                n(encoder, "aggregate_window", 1, 65536)?,
+                false,
+                budget,
+                control,
+            )?),
+        ),
+        (
+            "feature_names",
+            json::array(fields.iter().map(|(name, _)| json::text(name))),
+        ),
+        (
+            "categorical_indices",
+            json::array(
+                fields
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, (_, kind))| *kind == "category")
+                    .map(|(index, _)| json::integer(index as i128)),
             ),
-            ("encoder", json::copy(encoder, control)?),
-            (
-                "token_signature",
-                json::text(&token_signature(
-                    n(encoder, "aggregate_window", 1, 65536)?,
-                    false,
-                    budget,
-                    control,
-                )?),
-            ),
-            (
-                "feature_names",
-                json::array(fields.iter().map(|(name, _)| json::text(name))),
-            ),
-            (
-                "categorical_indices",
-                json::array(
-                    fields
-                        .iter()
-                        .enumerate()
-                        .filter(|(_, (_, kind))| *kind == "category")
-                        .map(|(index, _)| json::integer(index as i128)),
-                ),
-            ),
-            (
-                "transforms",
-                json::array(fields.iter().map(|(_, kind)| json::text(kind))),
-            ),
-        ]),
-        budget,
-        control,
-    )
+        ),
+        (
+            "transforms",
+            json::array(fields.iter().map(|(_, kind)| json::text(kind))),
+        ),
+    ]);
+    let signature = digest(&value, budget, control)?;
+    value
+        .as_object_mut()
+        .unwrap()
+        .insert("feature_signature".into(), json::text(&signature));
+    let bytes = json::canonical(&value, budget, control)?;
+    json::parse(&bytes, budget, control)
 }
 
 #[cfg(test)]

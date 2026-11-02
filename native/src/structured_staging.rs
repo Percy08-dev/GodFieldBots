@@ -910,12 +910,67 @@ impl Stage {
         }
         Ok(result)
     }
-    pub(crate) fn finish_episode_arrays(
+    pub(crate) fn selected_frame(
         &mut self,
+        episode: usize,
+        position: usize,
+        frame: &Value,
+        original: &Value,
         index: usize,
         events: &[Value],
-        selections: &[Value],
+        recipe: &crate::structured_tokens::Recipe,
     ) -> Result<Value> {
+        self.work()?;
+        let offsets = original.require("offsets")?.array()?;
+        let first = offsets[index].integer(0, i64::MAX as i128)? as usize;
+        let end = offsets[index + 1].integer(first as i128, i64::MAX as i128)? as usize;
+        let _copy = self.budget.reserve(65536)?;
+        let mut selected = json::object([]);
+        for key in [
+            "frame_hash",
+            "table_hash",
+            "action_contract",
+            "purpose",
+            "synthetic_capacity",
+        ] {
+            selected.as_object_mut().unwrap().insert(
+                key.into(),
+                json::copy(original.require(key)?, &self.control)?,
+            );
+        }
+        for key in ["kinds", "targets", "numerics", "presence"] {
+            selected.as_object_mut().unwrap().insert(
+                key.into(),
+                json::array([json::copy(
+                    &original.require(key)?.array()?[index],
+                    &self.control,
+                )?]),
+            );
+        }
+        selected.as_object_mut().unwrap().insert(
+            "offsets".into(),
+            json::array([json::integer(0), json::integer((end - first) as i128)]),
+        );
+        selected.as_object_mut().unwrap().insert(
+            "slots".into(),
+            json::array(
+                original.require("slots")?.array()?[first..end]
+                    .iter()
+                    .map(|v| json::copy(v, &self.control))
+                    .collect::<Result<Vec<_>>>()?,
+            ),
+        );
+        let mut meta = self.frame(episode, position, frame, &selected, events, recipe)?;
+        meta.as_object_mut().unwrap().insert(
+            "original_selection_index".into(),
+            json::integer(index as i128),
+        );
+        meta.as_object_mut()
+            .unwrap()
+            .insert("selected_index".into(), json::integer(0));
+        Ok(meta)
+    }
+    pub(crate) fn finish_episode_raw(&mut self, index: usize, events: &[Value]) -> Result<Value> {
         self.work()?;
         let prefix = format!("e.{index}");
         let mut blocks = Vec::new();
@@ -954,6 +1009,16 @@ impl Stage {
                 ("key", json::text(&key)),
             ]));
         }
+        Ok(json::array(blocks))
+    }
+    pub(crate) fn finish_episode_arrays(
+        &mut self,
+        index: usize,
+        events: &[Value],
+        selections: &[Value],
+    ) -> Result<Value> {
+        let blocks = self.finish_episode_raw(index, events)?;
+        let prefix = format!("e.{index}");
         for (name, field, dtype) in [
             ("selected", "index", Dtype::I64),
             ("old_logprob", "logprob", Dtype::F32),
@@ -967,6 +1032,6 @@ impl Stage {
             );
             self.array(&(prefix.clone() + "." + name), dtype, &values)?;
         }
-        Ok(json::array(blocks))
+        Ok(blocks)
     }
 }

@@ -22,6 +22,7 @@ pub mod structured_session;
 pub mod structured_source;
 pub mod structured_staging;
 pub mod structured_tokens;
+mod structured_tree_dataset;
 pub mod telemetry;
 pub(crate) mod typed_journal;
 pub mod validation;
@@ -396,6 +397,7 @@ struct StructuredNativeSession {
     budget: Arc<Budget>,
     control: Control,
     python: Mutex<control_memory::ControlMemory>,
+    input_queries: Mutex<std::collections::BTreeMap<usize, budget::Lease>>,
     caller: Mutex<budget::Lease>,
     payload: Mutex<Option<Arc<ExportLease>>>,
 }
@@ -467,6 +469,7 @@ impl StructuredNativeSession {
             budget,
             control,
             python: Mutex::new(control_memory::ControlMemory::default()),
+            input_queries: Mutex::new(std::collections::BTreeMap::new()),
             caller: Mutex::new(caller),
             payload: Mutex::new(None),
         })
@@ -498,6 +501,37 @@ impl StructuredNativeSession {
                     bytes.len(),
                     auth,
                 )?;
+                Ok(bytes)
+            })
+            .map_err(python_error)?;
+        Ok(PyBytes::new(py, &bytes))
+    }
+    #[pyo3(signature=(parent_index,retained_python_bytes=0))]
+    fn original_config_inputs<'py>(
+        &self,
+        py: Python<'py>,
+        parent_index: usize,
+        retained_python_bytes: usize,
+    ) -> PyResult<Bound<'py, PyBytes>> {
+        let bytes = py
+            .detach(|| {
+                self.caller
+                    .lock()
+                    .map_err(|_| Error::Closed)?
+                    .resize(retained_python_bytes)?;
+                let core = self.core.lock().map_err(|_| Error::Closed)?;
+                let core = core.as_ref().ok_or(Error::Closed)?;
+                let mut queries = self.input_queries.lock().map_err(|_| Error::Closed)?;
+                if queries.contains_key(&parent_index) {
+                    return Err(Error::contract(
+                        "original input query already delivered for parent",
+                    ));
+                }
+                let bytes = core.original_config_inputs(parent_index)?;
+                let lease = self
+                    .budget
+                    .reserve(control_memory::reservation_bytes(bytes.len(), 512)?)?;
+                queries.insert(parent_index, lease);
                 Ok(bytes)
             })
             .map_err(python_error)?;
@@ -697,6 +731,11 @@ impl StructuredNativeSession {
     }
     fn control_reserved_bytes(&self) -> usize {
         self.python.lock().map(|v| v.reserved()).unwrap_or(0)
+            + self
+                .input_queries
+                .lock()
+                .map(|v| v.values().map(|lease| lease.bytes()).sum::<usize>())
+                .unwrap_or(0)
     }
     fn cancel_handle(&self) -> CancelHandle {
         CancelHandle {
@@ -724,6 +763,10 @@ impl StructuredNativeSession {
             let retired = retirement.retire(Some(owned));
             self.payload.lock().map_err(|_| Error::Closed)?.take();
             self.python.lock().map_err(|_| Error::Closed)?.release();
+            self.input_queries
+                .lock()
+                .map_err(|_| Error::Closed)?
+                .clear();
             self.caller.lock().map_err(|_| Error::Closed)?.resize(0)?;
             result.and(retired)
         })
@@ -731,6 +774,449 @@ impl StructuredNativeSession {
     }
 }
 impl Drop for StructuredNativeSession {
+    fn drop(&mut self) {
+        if let Ok(core) = self.core.get_mut() {
+            if let Some(owned) = core.take() {
+                if let Ok(retirement) = self.retirement.get_mut() {
+                    if let Some(retirement) = retirement.take() {
+                        let _ = retirement.retire(Some(owned));
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// One frozen TreeDataset2 worklist; raw selected inputs only, never fitting authority.
+#[pyclass]
+struct TreeDatasetSession {
+    core: Mutex<Option<structured_tree_dataset::TreeDataset>>,
+    retirement: Mutex<Option<retirement::Retirement<structured_tree_dataset::TreeDataset>>>,
+    budget: Arc<Budget>,
+    control: Control,
+    python: Mutex<control_memory::ControlMemory>,
+    current_python: Mutex<control_memory::ControlMemory>,
+    caller: Mutex<budget::Lease>,
+    payload: Mutex<Option<Arc<ExportLease>>>,
+}
+fn retire_tree_dataset(core: structured_tree_dataset::TreeDataset) -> error::Result<()> {
+    drop(core);
+    Ok(())
+}
+#[pymethods]
+impl TreeDatasetSession {
+    #[new]
+    #[pyo3(signature=(plan,settings,deadline,cancel_handle=None))]
+    fn new(
+        py: Python<'_>,
+        plan: &[u8],
+        settings: &[u8],
+        deadline: f64,
+        cancel_handle: Option<PyRef<'_, CancelHandle>>,
+    ) -> PyResult<Self> {
+        stack::ensure_minimum_stack().map_err(python_error)?;
+        if settings.len() > 65536 || plan.len() > 65536 {
+            return Err(python_error(Error::resource("structured request wire cap")));
+        }
+        let control = match cancel_handle {
+            Some(c) => c.control.at_deadline(deadline),
+            None => Control::new(deadline),
+        }
+        .map_err(python_error)?;
+        let (core, retirement, budget) = py
+            .detach(|| {
+                control.check()?;
+                let initial = Budget::new(1048576);
+                let settings = json::parse(settings, &initial, &control)?;
+                let v = &settings.root;
+                v.closed(
+                    &[
+                        "memory_bytes",
+                        "scratch_bytes",
+                        "max_source_file_bytes",
+                        "max_record_bytes",
+                        "chunk_target_bytes",
+                    ],
+                    &[],
+                )?;
+                let memory = v.require("memory_bytes")?.integer(1, 12i128 << 30)? as usize;
+                let scratch = v.require("scratch_bytes")?.integer(1, 12i128 << 30)? as usize;
+                let source = v
+                    .require("max_source_file_bytes")?
+                    .integer(1, 64i128 << 20)? as usize;
+                let record = v.require("max_record_bytes")?.integer(1, source as i128)? as usize;
+                let chunk = v.require("chunk_target_bytes")?.integer(1, 64i128 << 20)? as usize;
+                let budget = Budget::new(memory);
+                let retirement = retirement::Retirement::start(&budget, retire_tree_dataset)?;
+                let core = structured_tree_dataset::TreeDataset::open(
+                    plan,
+                    budget.clone(),
+                    control.clone(),
+                    source,
+                    record,
+                    scratch,
+                    chunk,
+                )?;
+                Ok((core, retirement, budget))
+            })
+            .map_err(python_error)?;
+        let caller = budget.reserve(0).map_err(python_error)?;
+        Ok(Self {
+            core: Mutex::new(Some(core)),
+            retirement: Mutex::new(Some(retirement)),
+            budget,
+            control,
+            python: Mutex::new(control_memory::ControlMemory::default()),
+            current_python: Mutex::new(control_memory::ControlMemory::default()),
+            caller: Mutex::new(caller),
+            payload: Mutex::new(None),
+        })
+    }
+    #[pyo3(signature=(retained_python_bytes=0))]
+    fn control_summary<'py>(
+        &self,
+        py: Python<'py>,
+        retained_python_bytes: usize,
+    ) -> PyResult<Bound<'py, PyBytes>> {
+        let bytes = py
+            .detach(|| {
+                self.control.check()?;
+                self.caller
+                    .lock()
+                    .map_err(|_| Error::Closed)?
+                    .resize(retained_python_bytes)?;
+                let core = self.core.lock().map_err(|_| Error::Closed)?;
+                let core = core.as_ref().ok_or(Error::Closed)?;
+                let bytes = core.control_summary()?;
+                let auth = core.control_authorization_limit()?;
+                self.python.lock().map_err(|_| Error::Closed)?.summary(
+                    &self.budget,
+                    bytes.len(),
+                    auth,
+                )?;
+                Ok(bytes)
+            })
+            .map_err(python_error)?;
+        Ok(PyBytes::new(py, &bytes))
+    }
+    #[pyo3(signature=(encoded,retained_python_bytes=0))]
+    fn authorize_controls(
+        &self,
+        py: Python<'_>,
+        encoded: &[u8],
+        retained_python_bytes: usize,
+    ) -> PyResult<()> {
+        py.detach(|| {
+            self.caller
+                .lock()
+                .map_err(|_| Error::Closed)?
+                .resize(retained_python_bytes)?;
+            self.python
+                .lock()
+                .map_err(|_| Error::Closed)?
+                .authorization(encoded.len())?;
+            self.core
+                .lock()
+                .map_err(|_| Error::Closed)?
+                .as_mut()
+                .ok_or(Error::Closed)?
+                .authorize_controls(encoded)
+        })
+        .map_err(python_error)
+    }
+    #[pyo3(signature=(retained_python_bytes=0))]
+    fn export_current<'py>(
+        &self,
+        py: Python<'py>,
+        retained_python_bytes: usize,
+    ) -> PyResult<(Py<PyBytes>, Py<PyTuple>, Py<PyTuple>)> {
+        let (metadata, banks) = py
+            .detach(|| {
+                self.caller
+                    .lock()
+                    .map_err(|_| Error::Closed)?
+                    .resize(retained_python_bytes)?;
+                self.core
+                    .lock()
+                    .map_err(|_| Error::Closed)?
+                    .as_mut()
+                    .ok_or(Error::Closed)?
+                    .export_current()
+            })
+            .map_err(python_error)?;
+        let result = (|| {
+            let structured_staging::Banks {
+                bytes,
+                integers,
+                floats,
+                _metadata,
+            } = banks;
+            let consumer = Arc::new(ExportLease {
+                _consumer: self.budget.reserve(0).map_err(python_error)?,
+                _metadata: self
+                    .budget
+                    .reserve(
+                        control_memory::reservation_bytes(
+                            metadata.len(),
+                            1024 * (bytes.len() + integers.len()),
+                        )
+                        .map_err(python_error)?,
+                    )
+                    .map_err(python_error)?,
+                _index: Some(_metadata),
+                stats: Arc::new(telemetry::Telemetry::default()),
+            });
+            let bytes = bytes
+                .into_iter()
+                .map(|v| byte_array(py, v, &consumer))
+                .collect::<PyResult<Vec<_>>>()?;
+            let integers = integers
+                .into_iter()
+                .map(|v| integer_array(py, v, &consumer))
+                .collect::<PyResult<Vec<_>>>()?;
+            if !floats.is_empty() {
+                return Err(python_error(Error::contract(
+                    "TreeDataset raw inputs must have no float bank",
+                )));
+            }
+            *self
+                .payload
+                .lock()
+                .map_err(|_| python_error(Error::Closed))? = Some(consumer);
+            Ok((
+                PyBytes::new(py, &metadata).unbind(),
+                PyTuple::new(py, bytes)?.unbind(),
+                PyTuple::new(py, integers)?.unbind(),
+            ))
+        })();
+        if result.is_err() {
+            if let Ok(mut core) = self.core.lock() {
+                if let Some(core) = core.as_mut() {
+                    core.fail_export();
+                }
+            }
+        }
+        result
+    }
+    #[pyo3(signature=(retained_python_bytes=0))]
+    fn retire_current(&self, py: Python<'_>, retained_python_bytes: usize) -> PyResult<()> {
+        py.detach(|| {
+            self.caller
+                .lock()
+                .map_err(|_| Error::Closed)?
+                .resize(retained_python_bytes)?;
+            let mut payload = self.payload.lock().map_err(|_| Error::Closed)?;
+            let consumer = payload
+                .as_ref()
+                .ok_or_else(|| Error::contract("no exported payload ownership"))?;
+            if Arc::strong_count(consumer) != 1 {
+                return Err(Error::contract(
+                    "raw payload views must retire before decoder reconstruction",
+                ));
+            }
+            self.core
+                .lock()
+                .map_err(|_| Error::Closed)?
+                .as_mut()
+                .ok_or(Error::Closed)?
+                .retire_current()?;
+            payload.take();
+            let mut current = self.current_python.lock().map_err(|_| Error::Closed)?;
+            current.release();
+            *current = control_memory::ControlMemory::default();
+            Ok(())
+        })
+        .map_err(python_error)
+    }
+    #[pyo3(signature=(retained_python_bytes=0))]
+    fn stage_next(&self, py: Python<'_>, retained_python_bytes: usize) -> PyResult<bool> {
+        py.detach(|| {
+            self.caller
+                .lock()
+                .map_err(|_| Error::Closed)?
+                .resize(retained_python_bytes)?;
+            self.core
+                .lock()
+                .map_err(|_| Error::Closed)?
+                .as_mut()
+                .ok_or(Error::Closed)?
+                .stage_next()
+        })
+        .map_err(python_error)
+    }
+    #[pyo3(signature=(retained_python_bytes=0))]
+    fn collection_summary<'py>(
+        &self,
+        py: Python<'py>,
+        retained_python_bytes: usize,
+    ) -> PyResult<Bound<'py, PyBytes>> {
+        let bytes = py
+            .detach(|| {
+                self.caller
+                    .lock()
+                    .map_err(|_| Error::Closed)?
+                    .resize(retained_python_bytes)?;
+                let mut core = self.core.lock().map_err(|_| Error::Closed)?;
+                let core = core.as_mut().ok_or(Error::Closed)?;
+                let bytes = core.collection_summary()?;
+                let auth = core.collection_authorization_limit()?;
+                self.current_python
+                    .lock()
+                    .map_err(|_| Error::Closed)?
+                    .summary(&self.budget, bytes.len(), auth)?;
+                Ok(bytes)
+            })
+            .map_err(python_error)?;
+        Ok(PyBytes::new(py, &bytes))
+    }
+    #[pyo3(signature=(encoded,retained_python_bytes=0))]
+    fn authorize_collection(
+        &self,
+        py: Python<'_>,
+        encoded: &[u8],
+        retained_python_bytes: usize,
+    ) -> PyResult<()> {
+        py.detach(|| {
+            self.caller
+                .lock()
+                .map_err(|_| Error::Closed)?
+                .resize(retained_python_bytes)?;
+            self.current_python
+                .lock()
+                .map_err(|_| Error::Closed)?
+                .authorization(encoded.len())?;
+            self.core
+                .lock()
+                .map_err(|_| Error::Closed)?
+                .as_mut()
+                .ok_or(Error::Closed)?
+                .authorize_collection(encoded)
+        })
+        .map_err(python_error)
+    }
+    #[pyo3(signature=(retained_python_bytes=0))]
+    fn verify_complete<'py>(
+        &self,
+        py: Python<'py>,
+        retained_python_bytes: usize,
+    ) -> PyResult<Bound<'py, PyBytes>> {
+        let bytes = py
+            .detach(|| {
+                self.caller
+                    .lock()
+                    .map_err(|_| Error::Closed)?
+                    .resize(retained_python_bytes)?;
+                let bytes = self
+                    .core
+                    .lock()
+                    .map_err(|_| Error::Closed)?
+                    .as_mut()
+                    .ok_or(Error::Closed)?
+                    .verify_complete()?;
+                self.python
+                    .lock()
+                    .map_err(|_| Error::Closed)?
+                    .proof(bytes.len(), true)?;
+                Ok(bytes)
+            })
+            .map_err(python_error)?;
+        Ok(PyBytes::new(py, &bytes))
+    }
+    #[pyo3(signature=(retained_python_bytes=0))]
+    fn recheck(&self, py: Python<'_>, retained_python_bytes: usize) -> PyResult<()> {
+        py.detach(|| {
+            self.caller
+                .lock()
+                .map_err(|_| Error::Closed)?
+                .resize(retained_python_bytes)?;
+            self.core
+                .lock()
+                .map_err(|_| Error::Closed)?
+                .as_mut()
+                .ok_or(Error::Closed)?
+                .recheck()
+        })
+        .map_err(python_error)
+    }
+    #[pyo3(signature=(retained_python_bytes=0))]
+    fn finalize<'py>(
+        &self,
+        py: Python<'py>,
+        retained_python_bytes: usize,
+    ) -> PyResult<Bound<'py, PyBytes>> {
+        let bytes = py
+            .detach(|| {
+                self.caller
+                    .lock()
+                    .map_err(|_| Error::Closed)?
+                    .resize(retained_python_bytes)?;
+                let bytes = self
+                    .core
+                    .lock()
+                    .map_err(|_| Error::Closed)?
+                    .as_mut()
+                    .ok_or(Error::Closed)?
+                    .finalize()?;
+                self.python
+                    .lock()
+                    .map_err(|_| Error::Closed)?
+                    .proof(bytes.len(), true)?;
+                Ok(bytes)
+            })
+            .map_err(python_error)?;
+        Ok(PyBytes::new(py, &bytes))
+    }
+    fn used_bytes(&self) -> usize {
+        self.budget.used()
+    }
+    fn peak_bytes(&self) -> usize {
+        self.budget.peak()
+    }
+    fn control_reserved_bytes(&self) -> usize {
+        self.python.lock().map(|v| v.reserved()).unwrap_or(0)
+            + self
+                .current_python
+                .lock()
+                .map(|v| v.reserved())
+                .unwrap_or(0)
+    }
+    fn cancel_handle(&self) -> CancelHandle {
+        CancelHandle {
+            control: self.control.clone(),
+            stats: Arc::new(telemetry::Telemetry::default()),
+        }
+    }
+    fn close(&self, py: Python<'_>) -> PyResult<()> {
+        py.detach(|| {
+            let mut core = self.core.lock().map_err(|_| Error::Closed)?;
+            let Some(owned) = core.as_mut() else {
+                return Ok(());
+            };
+            let result = owned.close();
+            if !owned.is_closed() {
+                return result;
+            }
+            let owned = core.take().ok_or(Error::Closed)?;
+            let retirement = self
+                .retirement
+                .lock()
+                .map_err(|_| Error::Closed)?
+                .take()
+                .ok_or(Error::Closed)?;
+            let retired = retirement.retire(Some(owned));
+            self.payload.lock().map_err(|_| Error::Closed)?.take();
+            self.python.lock().map_err(|_| Error::Closed)?.release();
+            self.current_python
+                .lock()
+                .map_err(|_| Error::Closed)?
+                .release();
+            self.caller.lock().map_err(|_| Error::Closed)?.resize(0)?;
+            result.and(retired)
+        })
+        .map_err(python_error)
+    }
+}
+impl Drop for TreeDatasetSession {
     fn drop(&mut self) {
         if let Ok(core) = self.core.get_mut() {
             if let Some(owned) = core.take() {
@@ -1811,6 +2297,7 @@ fn gf_native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<StructuredParentControls>()?;
     module.add_class::<StructuredJournalTokens>()?;
     module.add_class::<StructuredNativeSession>()?;
+    module.add_class::<TreeDatasetSession>()?;
     Ok(())
 }
 

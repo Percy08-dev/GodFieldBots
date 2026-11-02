@@ -817,6 +817,45 @@ impl CohortSession {
         self.check()?;
         self.inputs.recheck()
     }
+    pub(crate) fn original_config_inputs(&self, parent_index: usize) -> Result<BudgetVec<u8>> {
+        self.recheck()?;
+        let parent = self
+            .inputs
+            .parents
+            .get(parent_index)
+            .ok_or_else(|| Error::contract("original input parent index out of range"))?;
+        let b = &self.inputs.budget;
+        let c = &self.inputs.control;
+        let original = parent.state.root.require("config_inputs")?;
+        let _copy = crate::json::admit(crate::json::canonical(original, b, c)?.len() + 65536, b)?;
+        let value = crate::json::object([
+            ("schema_version", crate::json::integer(2)),
+            (
+                "kind",
+                crate::json::text("structured-original-config-inputs"),
+            ),
+            (
+                "control_fingerprint",
+                crate::json::text(&self.controls.fingerprint),
+            ),
+            ("parent_index", crate::json::integer(parent_index as i128)),
+            (
+                "run_sha256",
+                crate::json::text(
+                    parent
+                        .sources
+                        .verified_sha(&parent.directory.join("run.json"))?,
+                ),
+            ),
+            ("config_inputs", crate::json::copy(original, c)?),
+        ]);
+        let bytes = crate::json::canonical(&value, b, c)?;
+        if bytes.len() > 64 * 1024 * 1024 {
+            return Err(Error::resource("original input query wire exceeds64MiB"));
+        }
+        self.recheck()?;
+        Ok(bytes)
+    }
     pub(crate) fn summary(&self) -> Result<BudgetVec<u8>> {
         self.recheck()?;
         let bytes = json::canonical(

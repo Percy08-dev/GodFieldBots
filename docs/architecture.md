@@ -73,8 +73,19 @@ native RAW-role increment is also accepted after both final SOURCE reviews,
 old12config proofs. Its fixed512decision CPU panel with an explicit synthetic
 500-tree model has p95=99.066ms; package/source and independent input/quantile
 audits pass. Component origin stays immutable and no trained/Source authority is
-implied. Dataset2, actor-only final validation, guarded trained fitting and
-qualified Source remain C3b work under ADR0023§28. No real v2 experiment or full-plan
+implied. C3b's exact design is reviewed under ADR0023§§28–30: a separate native
+TreeDatasetSession owns complete original parents and final validation sources;
+actor-only validation uses the same participant ledger without a resident learner.
+Selected Tree rows are reconstructed from raw facts, and those source owners stay
+open through fitting and final rechecks. Trained provenance requires a healthy
+paired request/completion/artifact bundle independently of input qualification.
+C3b1 original-source Dataset2 and actor-only validation are accepted after both
+final SOURCE reviews,226affected Python tests/113Rust tests(2ignored), Ruff/mypy117
+and Root's50-file native package proof. All9cohorts and512selected facts/features/
+natural labels match the Python reference; all192validation games, including
+32zero-endpoint games, remain in the population. The durable component archive
+retains2572unchanged original files. C3b2 source-backed fitting/trained pairing
+and qualified real-game acceptance remain pending. No real v2 experiment or full-plan
 acceptance is claimed. Milestone scopes, overlapping historical counts and
 remaining performance/experiment checks are in the
 [verification ledger](verification/structured-encoders-and-search.md).

@@ -1427,9 +1427,113 @@ Dataset2, guarded fresh fitting and actor-only final-policy validation remain
 C3b work. Issue0005still blocks qualified real-I/O/source/fit acceptance. No real
 data fit, HPO, model-strength comparison or final-test evaluation is claimed.
 
+## C3b design and implementation checkpoint
+
+Exact independent design review is READY for ADR0023§§28–30, recorded in
+b16df40. C3b1 implements a separate native TreeDatasetSession, original numeric/
+sealed authorization, actor-only final-policy validation and source-only
+manifest2. A nonterminal verify_complete retains the SAME source owners for
+subsequent fitting; terminal finalization follows the final original sweep.
+The selected-input export is exactly metadata/U8/I64, with one selected candidate
+per row and original full-table selection correspondence retained separately.
+
+C3b2 remains required implementation: original-source-backed fresh fitting,
+acyclic request→inference→completion provenance, explicit paired trained binding,
+retained consumed inputs and joint pre-admission of the configured workload.
+Component-trained provenance does not grant qualified Source or real-game use.
+Design readiness is not execution or final implementation acceptance.
+
+The first complete C3b1 original-source roundtrip passes1test in92.81s (HOST
+session47765, exit0), using native source e9618368aff3f416a3c05b48f5acf9bced2682dc50ba8f98c2f77ed765794d32.
+Three real two-update Python-recorded component parents17/29/43 contribute ALL
+six committed train cohorts/96games/192selected decisions. Their three complete
+final validations contribute ALL192games/384participants/320selected decisions,
+including32zero-endpoint games. Native audits all9cohorts and builds/inspects
+manifest2. Both reused original sets retain all1796file hashes/stat identities.
+
+Original17and its64validation games come unchanged from the earlier -b attempt;
+29and its64games come unchanged from -c;43and its64games are created by -d.
+The earlier tests remain ERROR: -a found an actor-control Path budget seam,
+-b incorrectly unpacked FinalizedCollection, and -c exposed the existing CLI's
+post-save returned-wall-time convention. No originals are repaired/resealed, no
+acceptance receipt is invented, and the final audit revalidates all historical
+sources. This is not a fresh-all-three single-run claim. Fixture evidence and
+manifest are under `/tmp/gfb-tree-dataset-originals-20261102-d/tree-dataset-originals0`.
+Manifest content SHA is3e9a8619c8dbb5531886f5730cec4c53aeaf511d2f34012dbcfdd49e7710b4a4;
+source-set SHA ee4f9f22dc439baa61cb754656400f6bd00dc9f6beba8a44573d5db749876df3.
+
+Both final SOURCE reviews are READY, including the additive original-input query.
+Its actual43-parent lifetime/quota/repeat/closed/mismatch matrix passes35cases;
+independent reviewers pass2origin cases and31bounded conformance cases. The
+old/new C2control-summary bytes match exactly:20335bytes/SHA
+5f9b6f8bb18574c29971d6a649483aebc8092f7740b971f8cc90d9229d38612b.
+Post-fix readonly all9manifest build/inspect and ALL512selected-fact/FP32-row/
+natural-label comparisons PASS2in11.30s, including±1/0labels, nonzero original
+indices/local0 and actual TreeW1versus original NN128history differences.
+
+The final scoped command passes226tests in33.54s (HOST session48217; no separate
+pytest log file). The list includes origin/actor/bounds/frozen Dataset2 and C2
+controller/owner/payload/Journal5/Source regressions. Bounded negatives cover
+worklist omission/order/subsets, partial consumption, premature finalize/advance,
+actual cancellation/confirmed cleanup, retained-owner recovery after unconfirmed
+close, active old62refusal and late changes after current retirement. Only an
+explicit disposable derived validation directory is altered by the late-change
+case; the healthy originals are unchanged. One test initially expected the wrong
+cancel exception; the corrected target passes separately.
+
+```sh
+CUDA_VISIBLE_DEVICES='' GFB_TREE_DATASET_FROZEN_FIXTURE=/tmp/gfb-tree-dataset-originals-20261102-d/tree-dataset-originals0 GFB_TREE_DATASET_EXISTING_SOURCE43=/tmp/gfb-tree-dataset-originals-20261102-d/tree-dataset-originals0 PYTHONPATH=/tmp/gfb-tree-dataset-origin-module-20261102 UV_CACHE_DIR=/tmp/gf-structured-uv uv run --no-sync pytest -q tests/test_structured_original_inputs.py tests/test_structured_tree_data_bounds.py tests/test_structured_tree_dataset_frozen.py tests/test_native_structured_controller.py tests/test_native_structured_owner.py tests/test_native_structured_payload.py tests/test_native_structured_journal.py tests/test_structured_source.py -x --basetemp=/tmp/gfb-tree-dataset-final-scope-20261102-a
+```
+
+Offline Cargo passes113tests/2ignored; full Ruff and mypy117pass. Its exact Cargo
+command is `env CARGO_HOME=/tmp/gfb-opt-cargo CARGO_NET_OFFLINE=true PYO3_PYTHON=/home/percy/develop/GodFieldBots/.venv/bin/python cargo test --manifest-path native/Cargo.toml --locked --offline`;
+log `/tmp/gfb-tree-dataset-final-cargo-20261102.log`. A final formatting-only edit
+removes one terminal LF from structured_tree_validation.py:
+cd8f3dfe041a30acc64ccaaf1923c356b96511ee1f17e08cb0c819a7e5e1e161→
+58b82c29d03ae7ffd033f678a83fd6813a435f27d7ad7ba0b1d626778a02fb3a;
+all preceding bytes are identical, with no semantic/test-condition change.
+
+Root preserves all2572original files/90,210,687bytes under
+`runs/assessments/structured-tree-dataset-c3b1-20261102`; copy hashes and original
+post-copy hashes/stat identities match under all six source-root locks. Evidence
+SHA1bf9aaa39ac5d1fe1160f3998cb5c075dcea912621ef9ee60295fd44d347cfd8.
+The archive does not rebase absolute references or claim portable healthy Source;
+the original -b/-c/-d paths remain required for future full Source revalidation.
+After all tests, the writer rechecks all2572original hashes/stat identities again.
+
+Final origin-query candidate native source8471660b646d7987788d7c01b7623923324b1f52fd8040391d2a89f042115935;
+ELF1c1e1117357a76529ec3ecfc9433d529aeaa305d573941cab81c2b89a818eed7;
+wheel09621b8ef51b7e86caf661e52c1ceb15d176b42fb06210276a3d10c8a12b2818;
+sdist c3be27ccb072c4ba388b161cc9fab7c29fe9f93988af1b34ce9653c695a5ba74.
+Root independently matches50sdist/current native files, both immutable embedded/
+wheel assets, Cargo.lock, wheel stub and loaded ELF. Package proof SHA
+9eadbbcdd2e231e744ef7c61bea4c2625cff996325baa3a4376d8f20fab48a4f is
+`package-proof.json` in the same assessment directory. The first Root proof
+harness assumed the wrong packaged stub filename; its assertion failed and the
+preserved corrected harness matches actual __init__.pyi bytes. Installed native
+is unchanged. Root accepts C3b1 only. Final full original legacy proofs will use
+the post-C3b2 candidate, avoiding duplicate unrelated campaigns between milestones.
+No fitting, qualified Source, real Simulator or policy-strength acceptance is
+implied by this fixed-I/O component result.
+
+A separate synthetic default-configured500-round/early50 native fit exits0 and
+completes save/load/prediction/cleanup under unchanged2GiB admission. Its
+30k/1krows,1647features and282categories use204,352,000raw matrix/label bytes;
+the reviewed pre-admission is1,876,910,105bytes and measured peak RSS348,442,624.
+Evidence is PARTIAL: returned Booster best_iteration/current_iteration=2describe
+the retained model, because native training compacts to the best iteration.
+The actual consumed callback iterations were not captured. Do not label the
+retained tree count as consumed rounds or claim a full500-iteration measurement.
+The result was not rerun; production fitting must record those counts separately.
+Harness, command, exit0, producer/runtime hashes and limitations are retained at
+`runs/assessments/structured-tree2-fit-resource-v2-20261102/verification.json`,
+SHA d994871699f93ef8f34bf1d631539d338e59678aaece625d16b4ae11fbc94c4b.
+This supports the soft estimate for that synthetic workload only; it establishes
+neither original Source, trained provenance nor learning quality.
+
 ## Remaining integrated acceptance
 
-Currently NOT RUN: Dataset2/guarded trained Tree2 integration and qualified collection E2E PPO
+Currently NOT RUN: guarded trained Tree2 fitting/pairing integration and qualified collection E2E PPO
 integration. The latter includes192-game baseline, attention3models×2inference devices×
 continuous/pause-resume real2updates, other hand-mode MLP games, fixed512train
 decision CPU p95<=3s acceptance under the complete qualified contract. Completed

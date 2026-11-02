@@ -1075,6 +1075,7 @@ enum Destination<'a, 'm> {
     Original {
         declaration: &'a OriginalHeader<'m>,
         stage: Option<(&'a mut crate::structured_staging::Stage, usize)>,
+        tree_window: Option<usize>,
     },
 }
 
@@ -1316,7 +1317,49 @@ impl Journal {
             control,
             max_json,
             max_record,
-            Destination::Original { declaration, stage },
+            Destination::Original {
+                declaration,
+                stage,
+                tree_window: None,
+            },
+        )
+    }
+    pub(crate) fn original_tree(
+        directory: &std::path::Path,
+        journal_file: &str,
+        budget: Arc<Budget>,
+        control: Control,
+        max_json: usize,
+        max_record: usize,
+        declaration: &OriginalHeader<'_>,
+        stage: Option<(&mut crate::structured_staging::Stage, usize)>,
+        window: usize,
+    ) -> Result<Self> {
+        if let Some(model) = declaration.model {
+            if model.require("model_id")?.string()? == "lightgbm"
+                || model
+                    .require("event")?
+                    .require("aggregate_recipe")?
+                    .string()?
+                    != "public-exact-v2"
+            {
+                return fail("TreeDataset selected source must be current376 neural2");
+            }
+        } else {
+            return fail("TreeDataset selected source requires its original neural header");
+        }
+        Self::open_destination(
+            directory,
+            journal_file,
+            budget,
+            control,
+            max_json,
+            max_record,
+            Destination::Original {
+                declaration,
+                stage,
+                tree_window: Some(window),
+            },
         )
     }
     fn open_destination(
@@ -1385,7 +1428,13 @@ impl Journal {
         let recipe =
             if diagnostic || matches!(&destination, Destination::Original { stage: Some(_), .. }) {
                 Some(crate::structured_tokens::Recipe::new(
-                    n(&documents[0].root, "aggregate_window", 1, 65536)?,
+                    match &destination {
+                        Destination::Original {
+                            tree_window: Some(window),
+                            ..
+                        } => *window,
+                        _ => n(&documents[0].root, "aggregate_window", 1, 65536)?,
+                    },
                     &budget,
                     &control,
                 )?)
@@ -1698,18 +1747,38 @@ impl Journal {
                     if !diagnostic {
                         if let Destination::Original {
                             stage: Some((stage, episode_index)),
+                            tree_window,
                             ..
                         } = &mut destination
                         {
                             let d = &decisions[decision];
-                            let meta = stage.frame(
-                                *episode_index,
-                                accepted.len(),
-                                documents[d.document].root.require("frame")?,
-                                &d.table.as_ref().unwrap().value,
-                                &bank,
-                                recipe.as_ref().unwrap(),
-                            )?;
+                            let meta = if tree_window.is_some() {
+                                stage.selected_frame(
+                                    *episode_index,
+                                    accepted.len(),
+                                    documents[d.document].root.require("frame")?,
+                                    &d.table.as_ref().unwrap().value,
+                                    d.binding
+                                        .as_ref()
+                                        .unwrap()
+                                        .root
+                                        .require("selection")?
+                                        .require("index")?
+                                        .integer(0, i64::MAX as i128)?
+                                        as usize,
+                                    &bank,
+                                    recipe.as_ref().unwrap(),
+                                )?
+                            } else {
+                                stage.frame(
+                                    *episode_index,
+                                    accepted.len(),
+                                    documents[d.document].root.require("frame")?,
+                                    &d.table.as_ref().unwrap().value,
+                                    &bank,
+                                    recipe.as_ref().unwrap(),
+                                )?
+                            };
                             decisions[decision].staged_frame = Some(meta);
                         }
                         decisions[decision].table.take();
@@ -2014,6 +2083,63 @@ impl Journal {
                 .insert(key.into(), json::copy(header.require(key)?, &s.control)?);
         }
         Ok(result)
+    }
+    pub(crate) fn staged_tree_episode(
+        &self,
+        stage: &mut crate::structured_staging::Stage,
+        index: usize,
+        reason: &Value,
+    ) -> Result<Value> {
+        let s = &self.sources;
+        s.control.check()?;
+        let _copy = s.budget.reserve(65536 + self.accepted.len() * 16384)?;
+        let mut frames = Vec::new();
+        let mut selections = Vec::new();
+        for &i in self.accepted.iter() {
+            s.control.check()?;
+            frames.push(json::copy(
+                self.decisions[i]
+                    .staged_frame
+                    .as_ref()
+                    .ok_or(Error::Closed)?,
+                &s.control,
+            )?);
+            selections.push(json::copy(
+                self.decisions[i]
+                    .binding
+                    .as_ref()
+                    .ok_or(Error::Closed)?
+                    .root
+                    .require("selection")?,
+                &s.control,
+            )?);
+        }
+        let header = self.header_value();
+        let end = self.end_value();
+        let mut value = json::object([
+            ("actor", json::copy(header.require("viewer")?, &s.control)?),
+            (
+                "episode",
+                json::copy(header.require("bank_episode")?, &s.control)?,
+            ),
+            ("boundary", self.boundary_value()),
+            ("raw_blocks", stage.finish_episode_raw(index, &self.bank)?),
+            ("frames", json::array(frames)),
+            ("original_selections", json::array(selections)),
+            (
+                "end_kind",
+                json::copy(end.require("end_kind")?, &s.control)?,
+            ),
+            ("outcome", json::copy(end.require("outcome")?, &s.control)?),
+            ("reason", json::copy(reason, &s.control)?),
+        ]);
+        for key in ["action_contract", "purpose", "synthetic_capacity"] {
+            value
+                .as_object_mut()
+                .unwrap()
+                .insert(key.into(), json::copy(header.require(key)?, &s.control)?);
+        }
+        Ok(value)
     }
     pub(crate) fn into_sources(self) -> crate::structured_session::Sources {
         self.sources
