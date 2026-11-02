@@ -35,7 +35,7 @@ def configuration(tmp_path, *, kind='mlp', learning_device='cpu', inference_devi
     return LoadedConfig(config, asdict(config), digest(asdict(config)), ())
 
 
-def component_http(monkeypatch, loaded, *, mode='natural'):
+def component_http(monkeypatch, loaded, *, mode='natural', source_ops=None):
     import gf_cli
     from gf_models.structured_baselines import make_structured_policy
     from gf_simulator_client import structured_environment
@@ -80,7 +80,7 @@ def component_http(monkeypatch, loaded, *, mode='natural'):
     async def collector(plan, ledger):
         before = time.monotonic()
         directory, report = await gf_cli._run_experiment(loaded, 'collect', collection=plan, ledger=ledger,
-                                                      _structured_factory=FakeEnvironment)
+                                                      _structured_factory=FakeEnvironment, _structured_source_ops=source_ops)
         assert time.monotonic() >= before and not ledger.workers and ledger.learner is not None
         return FinalizedCollection(directory, report)
     return collector, scripts, workers, seen_ledgers

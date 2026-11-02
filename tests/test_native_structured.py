@@ -47,14 +47,15 @@ def test_embedded_actual_window_signature(tmp_path, window):
         assert owner.result['semantics']['token_signature'] == inference['token_signature']
 
 
-def test_summary_original_inventory_rechecked_and_no_final_markers(tmp_path):
+def test_summary_original_inventory_rechecked_and_diagnostic_scope_preserved(tmp_path):
     metadata_parent(tmp_path / 'parent', model_defaults_v2().architecture())
     with pytest.raises(ValueError, match='inventory|snapshot|changed'), NativeStructuredControls(
             tmp_path / 'parent', SETTINGS, deadline=time.monotonic() + 60) as owner:
         atomic_json(tmp_path / 'parent/generations/foreign.json', {})
         owner.recheck()
     info = dict(native.build_info())
-    assert 'structured_preprocessing_contract' not in info and 'structured_default_signature' not in info
+    assert not hasattr(native.StructuredParentControls, 'authorize')
+    assert not hasattr(native.StructuredParentControls, 'export_cohort')
     assert info['recipe_identity'] == 'native-preprocessing-v1'
     assert info['encoder_version'] == 'participant-action-v1'
 

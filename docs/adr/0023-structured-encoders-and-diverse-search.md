@@ -22,8 +22,13 @@ qualified-source gates remain closed.1460Python/13separate CUDA cases and full
 Ruff/mypy pass in the supported test environment. No real v2 source/fit/experiment
 has run. Later engineering Source/Generation2, numerical wire3 and common PPO
 coordinator increments are now accepted after separate reviews (through83c51e1);
-their full scopes and exact checks are in the verification ledger. Native/tree
-integration and qualified real-game acceptance remain incomplete. The following
+their full scopes and exact checks are in the verification ledger. The later
+C2b2 native original-Source authorization/typed staging/publication/common-loop
+increment now passes both final source reviews, two-update/exact-resume checks,
+all five original compatibility proofs and package/activation verification.
+Root accepts that engineering-component increment; installed native is unchanged.
+Tree2 and C3b are still pending (§§22/27); qualified real-game acceptance remains
+blocked by issue0005. The following
 initial slice counts/statuses are historical milestones, superseded by that ledger.
 
 The first pure records/token/config/network slice is implemented in
@@ -2009,6 +2014,17 @@ for live_cohort. Requested paths/indices select work; original Run2/Update2/
 manifest/FrozenPlan equality validates authority. Historical mode has no fake
 cohort index or export. Baseline Collection3 may be structurally inspected but
 does not become PPO payload; general Tree2 raw export is a later C3 boundary.
+An unowned raw Collection3 uses parent_index=null; it does not acquire a fabricated
+parent. Historical mode may inspect such a real collection without parent inputs,
+but an entirely empty parents/collections plan rejects. Schema4 owned train
+composition requires its actual matching parent.
+C2b2 parent composition covers committed historical train batches and the live
+train batch. External schema4 ppo_validation composition belongs to C3b's reviewed
+final-policy validation projection: its run/path Config may differ from the
+training parent's, and C2b2 must not guess overrides or weaken exact train-batch
+Config/provenance equality. Raw diagnostics may retain their existing validation
+linkage checks, but the C2b2 parent Session rejects external validation requests
+before authorization/export rather than invent numeric cohorts or ancestry.
 
 Settings contain only consumed memory_bytes,scratch_bytes,max_source_file_bytes,
 max_record_bytes,chunk_target_bytes. Python fixes the configured work deadline
@@ -2016,6 +2032,21 @@ minus cleanup as in C2a. Native arrays/banks/decoded shards are individually at
 most64MiB. Admit the whole selected cohort before export; never shrink decisions,
 candidates,W or episode population to fit. An array can occupy its own admitted
 bank; chunk_target is a packing target, not permission to split/reinterpret arrays.
+
+Keep disk storage separate from host-memory accounting and the existing1GiB
+collection-admission headroom. At native live projection, the coordinator computes
+remaining training-owned storage from the actual parent directory and passes that
+allowance; staging uses min(configured preparation scratch, remaining storage),
+without changing either Config meaning. Export first serializes descriptors and
+copies/hash-verifies all banks into independently budget-owned RAM. It then closes
+only the private disk spool before exposing payload or starting C1 publication.
+The current Stage exporter owns RAM buffers rather than mmap views, so these
+arrays and their memory leases remain valid. Keep original Source/control owners
+and the later logical payload-retirement phase. Failed spool cleanup aborts export
+with recoverable ownership. This prevents an uncounted spool/output overlap while
+the original soft run-storage sweep continues to see publication growth. Do not
+use admission_reservation_bytes as a scratch limit or add a reverse dependency
+from Source helpers to the coordinator merely to count files.
 
 Methods are control_summary, authorize(encoded,retained_python_bytes),
 export_cohort(retained_python_bytes), retire_payload(retained_python_bytes),
@@ -2025,8 +2056,9 @@ existing cancel/ownership observations. Persistent control leases may supply the
 equivalent admission, updated BEFORE new Python allocation; no resumed operation
 gets an independent full allowance or forgets a remaining Python owner.
 States are scanned→authorized→exported→payload_retired→updating→finalized/closed for live
-mode; historical mode performs authorized/cohort validation→finalized/closed with
-no export. Reject repeated export, reading retired payload, rebaseline/rescan,
+mode; historical mode validates all recorded numeric cohorts before its
+scanned→authorized→finalized/closed transition, with no export. Reject repeated
+export, reading retired payload, rebaseline/rescan,
 premature finalize and work after terminal close. NativeExecution joins work
 before locks/source handles/leases end, including cancellation and failed close.
 In historical_parent mode, the Python owner completes sealed/schedule AND recorded
@@ -2062,13 +2094,18 @@ The last field is the exact original recorded numeric manifest hash for historic
 PPO cohorts and null for the uncommitted live cohort or structurally inspected
 non-PPO baseline collections, which acquire no PPO ancestry. The live
 correspondence_sha256 binds the original expected ordered digest list and count;
-the later actual numeric comparison remains mandatory. Historical correspondence
+the later actual numeric comparison remains mandatory. Historical neural correspondence
 is acknowledged only after that comparison. All lists preserve original index
 and generation order with exact membership; no omitted parent/cohort or duplicate
 acknowledgement is accepted. Native compares these records to its original-derived
 summary. Python derives them from actual S2 results and independently reconstructed
 schedule/bindings, after all historical numeric comparisons, rather than copying
 unverified success claims.
+Raw baseline/non-PPO Collection3 has no selected neural cohort or recorded C1
+declaration: correspondence_sha256 is explicitly null as well as numeric_sha256.
+Its original manifest/schedule/binding/source-set hashes and both-view raw checks
+remain mandatory. Reject nonnull fake neural correspondence for that kind, and
+reject null correspondence for any neural live/historical train entry.
 Native retained ownership, control serialization/Python copies, S2 snapshots and
 encoded/decoded NPZ scratch share ONE caller cap/deadline. Retained Python owners
 remain charged on every resumed native operation, not merely while it is paused.
@@ -2096,6 +2133,42 @@ serialization; retire payload owners before the decoder's single reconstruction.
 
 The common PPO loop selects the concrete native or Python Source helper; no
 second trainer, alternate schedules, reward rules or ledger are introduced.
+Normal model2/rust dispatch selects native operations only after the real existing
+reader_settings/full-capability preflight. Python/default legacy selection retains
+its existing path; no unavailable-integration placeholder remains after activation.
+Before final capability activation, a private test composition may call
+_run_ppo(...,_structured_ops=None), whose default preserves existing version
+selection. Only the validated model2/actions2 engineering-component path may
+provide the one concrete native operations object through the private
+_train_native_component_ppo helper. It delegates existing operations except
+preprocessing identity, Source projection and historical Source validation.
+It also replaces pre-collection validate_owned_collection's Source validation:
+the existing Python helper directly enters full Python validate_component_parent
+and cannot be delegated unchanged by native ops. Preserve all existing parent
+lock, SAME ledger, concrete learner/process/lease, wire identity, hardware,
+optimizer-step, frozen plan/schedule/binding and run-limit checks. Supply native-
+validated compact originals to a shared closed metadata-only check, or perform
+those exact checks directly; never invoke a second full Python Source scan.
+Require explicit preprocessing backend=rust/reader=structured-v1 and record the
+candidate's actual binary identity. Do not relabel Python configuration, fake a
+build capability, monkeypatch global state or introduce a second loop. Public
+training/CLI continue to require the existing full capability and engineering
+eligibility guards. This private composition supplies test evidence without a
+Config flag, public bypass, new schedule, changed budget or qualified Source claim.
+Root releases only this small private hook in ppo_run.py to the same implementer;
+its concrete design pin is independently READY (2026-11-02).
+The existing private CLI composition also accepts _structured_source_ops=None
+alongside its _structured_factory seam. Only the same exact concrete native-ops
+object shared by private trainer, test-owned collector and _run_experiment is
+accepted; arbitrary callbacks/duck typing reject. Require the private component
+model2/actions2/rust/structured-v1 path, owned collection, SAME ledger/concrete
+learner and full frozen execution identity checks. Do not attach a mutable
+preparation service to the learner. Default/public calls retain engineering and
+full-marker preflight; normal owned rust validation selects native Source only
+after that normal preflight. Neither the injected path nor native selection skips
+parent/learner metadata validation or the independently guarded normal Environment
+constructor. Root releases only the minimal gf_cli/__init__.py, gf_cli/structured.py
+and test-collector wiring; this concrete pin is independently READY (2026-11-02).
 The private C1 payload publisher accepts validated metadata/arrays/semantics and
 caller budget/check. Existing public writers/readers keep their signatures and
 active strictness. Python attaches unchanged full-precision GAE and whole original
@@ -2144,3 +2217,81 @@ common-loop two-update/resume. Activate full capability markers only after this
 bridge, unchanged old corpus/index/saved-PPO outputs, fresh offline wheel/loaded
 binary checks and final independent reviews. Public real-I/O/qualified Source/
 fit gates remain unchanged and no model strength or final-test claim is added.
+
+## 27. Concrete Tree2 artifact and runtime boundary
+
+This refines the accepted C3a design in §22 before dependent implementation;
+independent exact interface DESIGN review is READY (2026-11-02).
+C3b Source/Dataset2/training composition is
+still a separate required design and implementation phase.
+
+Use independent structured_tree_config, structured_tree_encoder,
+structured_tree_artifacts and structured_tree_policy modules under gf_models.
+ConfiguredTreeModelV2 retains §22's closed configuration. Tree resource fields
+are max_owned_bytes (default2GiB) and max_array_bytes (default/hard maximum64MiB),
+without neural-only settings. Architecture excludes checkpoint/execution;
+execution includes CPU/candidate chunk/count/threads and these resource limits.
+
+Inference schema3 is closed with fields schema_version,kind,model,
+architecture_identity,input_recipe,token_signature,feature_recipe,
+feature_signature,feature_names,categorical_indices,semantics,action_config_hash,
+action_contract,purpose,synthetic_capacity,fit_origin,provenance,native_parameters,runtime,
+model_file,tree_descriptor,creation_execution. kind is structured-tree-inference;
+model is the exact Tree2 architecture; input/feature recipes and signatures follow
+§22. semantics is closed catalog,simulator_contract_revision,
+reviewed_simulator_spec_sha256,policy_input_version,generator_version,
+reward_policy_version,end_projection_version. runtime is closed numpy_version,
+lightgbm_version,native_library_sha256. model_file is closed file=model.txt,
+sha256,bytes; tree_descriptor is closed tree_count,max_depth,model_sha256, whose
+hash must equal model_file.sha256. creation_execution records the actual CPU
+binding/resources used at creation, independently of a later validated binding.
+All names/categories/descriptors/semantics are derived and checked, never trusted
+as free-form model instructions. Metadata inspection executes no Booster/Torch.
+
+fit_origin is independent of input purpose and synthetic_capacity. C3a's explicit
+tiny fitting helper emits only fit_origin=toy,provenance=null,component inputs.
+Until C3b supplies its closed trained-provenance parser, C3a inspection/loading
+also accepts only this toy/null form and rejects trained/unknown origins as
+unsupported. Arbitrary nonnull provenance never grants readiness or authority.
+The actual loaded wrapper carries an immutable origin through load→policy→resave;
+save does not accept caller overrides to relabel it. Trained provenance/emission
+receives C3b's exact review, rather than a placeholder successful qualification.
+Synthetic-capacity artifacts are rejected by game factories; capacity128 alone
+does not imply synthetic origin. Qualified inference additionally requires the
+qualified input contract and trained provenance; current engineering gates stay.
+
+safe_tree_options_v2 is closed version,checkpoint,expected_manifest_digest,model,
+inference,resources,tree_descriptor,action_contract,purpose,synthetic_capacity.
+version is the string"2"; model is architecture-only and inference/resources are actual CPU
+execution. Resolve descriptor and origin from the exact inspected manifest, bind
+both its hash and execution digest in the policy label, and compare actual
+Booster feature names/count/categories/tree count/depth before participant ready.
+native_parameters is closed objective,num_class,zero_as_missing,linear_tree,
+boosting, with recipe values regression,1,false,false,gbdt respectively. Validate
+these semantic values against the actual native model, including scalar output
+and constant leaves; self-consistently resealing a model with different missing-
+value, objective or linear-leaf semantics is insufficient. Keep mutable execution
+thread count separate from these semantic parameters.
+Confirm categorical declaration recovery, including unused category columns,
+against the installed native model format in a bounded experiment; return any
+missing native metadata contract to Root rather than silently trusting a mismatch.
+Read/hash bounded regular model bytes before native loading from the owned text,
+so reopening an unguarded path cannot change the model after inspection.
+
+The initial conservative fixed native residency estimate is256MiB plus64MiB per
+configured native thread plus16times model text bytes, together with actual owned
+frame/context/metadata and §22's per-candidate chunk costs. This is a declared soft
+estimate, not a malloc/RSS quota. Measure import/load/warm prediction in isolated
+component tests, including the tested large chunk/model descriptors, before C3a
+acceptance; adjust the coefficient if those measurements exceed the estimate.
+Revisit it for a native-library change or measured excess. Do not alter configured
+threads, population or chunk size to fit an underestimated envelope.
+
+Include minimal native RAW Tree2 role support in C3a: concrete model-kind dispatch,
+exact own header/options/CPU execution/category-feature signature, no PPO ancestry,
+generation_schema=None and null Selection statistics. Preserve neural2 staging
+and all legacy schemas. No Tree2 PPO export, native learned encoder, Source
+qualification or broad future capability is advertised by this addition.
+Tiny categorical fit/roundtrip, row/category/reference/permutation oracles,
+18/128 synthetic capacity, resource refusal, worker/Journal5/FakeHTTP and
+optional-free startup checks remain engineering evidence only.

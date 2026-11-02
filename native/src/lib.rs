@@ -19,6 +19,8 @@ pub mod stack;
 pub mod structured_controls;
 pub mod structured_journal;
 pub mod structured_session;
+pub mod structured_source;
+pub mod structured_staging;
 pub mod structured_tokens;
 pub mod telemetry;
 pub(crate) mod typed_journal;
@@ -386,6 +388,362 @@ impl Drop for StructuredJournalTokens {
     }
 }
 
+/// Candidate structured Source/typed-bank path; markers remain disabled until acceptance.
+#[pyclass]
+struct StructuredNativeSession {
+    core: Mutex<Option<structured_session::CohortSession>>,
+    retirement: Mutex<Option<retirement::Retirement<structured_session::CohortSession>>>,
+    budget: Arc<Budget>,
+    control: Control,
+    python: Mutex<control_memory::ControlMemory>,
+    caller: Mutex<budget::Lease>,
+    payload: Mutex<Option<Arc<ExportLease>>>,
+}
+fn retire_structured_session(core: structured_session::CohortSession) -> error::Result<()> {
+    drop(core);
+    Ok(())
+}
+#[pymethods]
+impl StructuredNativeSession {
+    #[new]
+    #[pyo3(signature=(plan,settings,deadline,cancel_handle=None))]
+    fn new(
+        py: Python<'_>,
+        plan: &[u8],
+        settings: &[u8],
+        deadline: f64,
+        cancel_handle: Option<PyRef<'_, CancelHandle>>,
+    ) -> PyResult<Self> {
+        stack::ensure_minimum_stack().map_err(python_error)?;
+        if settings.len() > 65536 || plan.len() > 65536 {
+            return Err(python_error(Error::resource("structured request wire cap")));
+        }
+        let control = match cancel_handle {
+            Some(c) => c.control.at_deadline(deadline),
+            None => Control::new(deadline),
+        }
+        .map_err(python_error)?;
+        let (core, retirement, budget) = py
+            .detach(|| {
+                control.check()?;
+                let initial = Budget::new(1048576);
+                let settings = json::parse(settings, &initial, &control)?;
+                let v = &settings.root;
+                v.closed(
+                    &[
+                        "memory_bytes",
+                        "scratch_bytes",
+                        "max_source_file_bytes",
+                        "max_record_bytes",
+                        "chunk_target_bytes",
+                    ],
+                    &[],
+                )?;
+                let memory = v.require("memory_bytes")?.integer(1, 12i128 << 30)? as usize;
+                let scratch = v.require("scratch_bytes")?.integer(1, 12i128 << 30)? as usize;
+                let source = v
+                    .require("max_source_file_bytes")?
+                    .integer(1, 64i128 << 20)? as usize;
+                let record = v.require("max_record_bytes")?.integer(1, source as i128)? as usize;
+                let chunk = v.require("chunk_target_bytes")?.integer(1, 64i128 << 20)? as usize;
+                let budget = Budget::new(memory);
+                let retirement = retirement::Retirement::start(&budget, retire_structured_session)?;
+                let core = structured_session::CohortSession::open(
+                    plan,
+                    budget.clone(),
+                    control.clone(),
+                    source,
+                    record,
+                    scratch,
+                    chunk,
+                )?;
+                Ok((core, retirement, budget))
+            })
+            .map_err(python_error)?;
+        let caller = budget.reserve(0).map_err(python_error)?;
+        Ok(Self {
+            core: Mutex::new(Some(core)),
+            retirement: Mutex::new(Some(retirement)),
+            budget,
+            control,
+            python: Mutex::new(control_memory::ControlMemory::default()),
+            caller: Mutex::new(caller),
+            payload: Mutex::new(None),
+        })
+    }
+    #[pyo3(signature=(retained_python_bytes=0))]
+    fn control_summary<'py>(
+        &self,
+        py: Python<'py>,
+        retained_python_bytes: usize,
+    ) -> PyResult<Bound<'py, PyBytes>> {
+        let bytes = py
+            .detach(|| {
+                self.control.check()?;
+                self.caller
+                    .lock()
+                    .map_err(|_| Error::Closed)?
+                    .resize(retained_python_bytes)?;
+                let core = self.core.lock().map_err(|_| Error::Closed)?;
+                let core = core.as_ref().ok_or(Error::Closed)?;
+                let bytes = core.summary()?;
+                let auth = core
+                    .controls
+                    .summary
+                    .root
+                    .require("authorization_max_bytes")?
+                    .integer(1, 64i128 << 20)? as usize;
+                self.python.lock().map_err(|_| Error::Closed)?.summary(
+                    &self.budget,
+                    bytes.len(),
+                    auth,
+                )?;
+                Ok(bytes)
+            })
+            .map_err(python_error)?;
+        Ok(PyBytes::new(py, &bytes))
+    }
+    #[pyo3(signature=(encoded,retained_python_bytes=0))]
+    fn authorize(
+        &self,
+        py: Python<'_>,
+        encoded: &[u8],
+        retained_python_bytes: usize,
+    ) -> PyResult<()> {
+        py.detach(|| {
+            self.caller
+                .lock()
+                .map_err(|_| Error::Closed)?
+                .resize(retained_python_bytes)?;
+            self.python
+                .lock()
+                .map_err(|_| Error::Closed)?
+                .authorization(encoded.len())?;
+            self.core
+                .lock()
+                .map_err(|_| Error::Closed)?
+                .as_mut()
+                .ok_or(Error::Closed)?
+                .authorize(encoded)
+        })
+        .map_err(python_error)
+    }
+    #[pyo3(signature=(retained_python_bytes=0))]
+    fn export_cohort<'py>(
+        &self,
+        py: Python<'py>,
+        retained_python_bytes: usize,
+    ) -> PyResult<(Py<PyBytes>, Py<PyTuple>, Py<PyTuple>, Py<PyTuple>)> {
+        let (metadata, banks) = py
+            .detach(|| {
+                self.caller
+                    .lock()
+                    .map_err(|_| Error::Closed)?
+                    .resize(retained_python_bytes)?;
+                self.core
+                    .lock()
+                    .map_err(|_| Error::Closed)?
+                    .as_mut()
+                    .ok_or(Error::Closed)?
+                    .export()
+            })
+            .map_err(python_error)?;
+        let result = (|| {
+            let structured_staging::Banks {
+                bytes,
+                integers,
+                floats,
+                _metadata,
+            } = banks;
+            let consumer = Arc::new(ExportLease {
+                _consumer: self.budget.reserve(0).map_err(python_error)?,
+                _metadata: self
+                    .budget
+                    .reserve(
+                        control_memory::reservation_bytes(
+                            metadata.len(),
+                            1024 * (bytes.len() + integers.len() + floats.len()),
+                        )
+                        .map_err(python_error)?,
+                    )
+                    .map_err(python_error)?,
+                _index: Some(_metadata),
+                stats: Arc::new(telemetry::Telemetry::default()),
+            });
+            let bytes = bytes
+                .into_iter()
+                .map(|v| byte_array(py, v, &consumer))
+                .collect::<PyResult<Vec<_>>>()?;
+            let integers = integers
+                .into_iter()
+                .map(|v| integer_array(py, v, &consumer))
+                .collect::<PyResult<Vec<_>>>()?;
+            let floats = floats
+                .into_iter()
+                .map(|v| float32_array(py, v, &consumer))
+                .collect::<PyResult<Vec<_>>>()?;
+            *self
+                .payload
+                .lock()
+                .map_err(|_| python_error(Error::Closed))? = Some(consumer);
+            Ok((
+                PyBytes::new(py, &metadata).unbind(),
+                PyTuple::new(py, bytes)?.unbind(),
+                PyTuple::new(py, integers)?.unbind(),
+                PyTuple::new(py, floats)?.unbind(),
+            ))
+        })();
+        if result.is_err() {
+            if let Ok(mut core) = self.core.lock() {
+                if let Some(core) = core.as_mut() {
+                    core.fail_export();
+                }
+            }
+        }
+        result
+    }
+    #[pyo3(signature=(retained_python_bytes=0))]
+    fn retire_payload(&self, py: Python<'_>, retained_python_bytes: usize) -> PyResult<()> {
+        py.detach(|| {
+            self.caller
+                .lock()
+                .map_err(|_| Error::Closed)?
+                .resize(retained_python_bytes)?;
+            let mut payload = self.payload.lock().map_err(|_| Error::Closed)?;
+            let consumer = payload
+                .as_ref()
+                .ok_or_else(|| Error::contract("no exported payload ownership"))?;
+            if Arc::strong_count(consumer) != 1 {
+                return Err(Error::contract(
+                    "raw payload views must retire before decoder reconstruction",
+                ));
+            }
+            self.core
+                .lock()
+                .map_err(|_| Error::Closed)?
+                .as_mut()
+                .ok_or(Error::Closed)?
+                .retire_payload()?;
+            payload.take();
+            Ok(())
+        })
+        .map_err(python_error)
+    }
+    #[pyo3(signature=(retained_python_bytes=0))]
+    fn begin_update(&self, py: Python<'_>, retained_python_bytes: usize) -> PyResult<()> {
+        py.detach(|| {
+            self.caller
+                .lock()
+                .map_err(|_| Error::Closed)?
+                .resize(retained_python_bytes)?;
+            self.core
+                .lock()
+                .map_err(|_| Error::Closed)?
+                .as_mut()
+                .ok_or(Error::Closed)?
+                .begin_update()
+        })
+        .map_err(python_error)
+    }
+    #[pyo3(signature=(retained_python_bytes=0))]
+    fn recheck(&self, py: Python<'_>, retained_python_bytes: usize) -> PyResult<()> {
+        py.detach(|| {
+            self.caller
+                .lock()
+                .map_err(|_| Error::Closed)?
+                .resize(retained_python_bytes)?;
+            self.core
+                .lock()
+                .map_err(|_| Error::Closed)?
+                .as_ref()
+                .ok_or(Error::Closed)?
+                .recheck()
+        })
+        .map_err(python_error)
+    }
+    #[pyo3(signature=(retained_python_bytes=0))]
+    fn finalize<'py>(
+        &self,
+        py: Python<'py>,
+        retained_python_bytes: usize,
+    ) -> PyResult<Bound<'py, PyBytes>> {
+        let bytes = py
+            .detach(|| {
+                self.caller
+                    .lock()
+                    .map_err(|_| Error::Closed)?
+                    .resize(retained_python_bytes)?;
+                let bytes = self
+                    .core
+                    .lock()
+                    .map_err(|_| Error::Closed)?
+                    .as_mut()
+                    .ok_or(Error::Closed)?
+                    .finalize()?;
+                self.python
+                    .lock()
+                    .map_err(|_| Error::Closed)?
+                    .proof(bytes.len(), true)?;
+                Ok(bytes)
+            })
+            .map_err(python_error)?;
+        Ok(PyBytes::new(py, &bytes))
+    }
+    fn used_bytes(&self) -> usize {
+        self.budget.used()
+    }
+    fn peak_bytes(&self) -> usize {
+        self.budget.peak()
+    }
+    fn control_reserved_bytes(&self) -> usize {
+        self.python.lock().map(|v| v.reserved()).unwrap_or(0)
+    }
+    fn cancel_handle(&self) -> CancelHandle {
+        CancelHandle {
+            control: self.control.clone(),
+            stats: Arc::new(telemetry::Telemetry::default()),
+        }
+    }
+    fn close(&self, py: Python<'_>) -> PyResult<()> {
+        py.detach(|| {
+            let mut core = self.core.lock().map_err(|_| Error::Closed)?;
+            let Some(owned) = core.as_mut() else {
+                return Ok(());
+            };
+            let result = owned.close();
+            if !owned.is_closed() {
+                return result;
+            }
+            let owned = core.take().ok_or(Error::Closed)?;
+            let retirement = self
+                .retirement
+                .lock()
+                .map_err(|_| Error::Closed)?
+                .take()
+                .ok_or(Error::Closed)?;
+            let retired = retirement.retire(Some(owned));
+            self.payload.lock().map_err(|_| Error::Closed)?.take();
+            self.python.lock().map_err(|_| Error::Closed)?.release();
+            self.caller.lock().map_err(|_| Error::Closed)?.resize(0)?;
+            result.and(retired)
+        })
+        .map_err(python_error)
+    }
+}
+impl Drop for StructuredNativeSession {
+    fn drop(&mut self) {
+        if let Ok(core) = self.core.get_mut() {
+            if let Some(owned) = core.take() {
+                if let Ok(retirement) = self.retirement.get_mut() {
+                    if let Some(retirement) = retirement.take() {
+                        let _ = retirement.retire(Some(owned));
+                    }
+                }
+            }
+        }
+    }
+}
+
 #[cfg(feature = "allocator-mimalloc")]
 #[global_allocator]
 static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
@@ -453,6 +811,12 @@ fn publish_float<'py>(
 #[pyclass(frozen)]
 struct ScalarOwner {
     data: Array1<f64>,
+    _lease: crate::budget::Lease,
+    _consumer: Arc<ExportLease>,
+}
+#[pyclass(frozen)]
+struct Float32Owner {
+    data: Array1<f32>,
     _lease: crate::budget::Lease,
     _consumer: Arc<ExportLease>,
 }
@@ -536,6 +900,34 @@ fn scalar_array<'py>(
             owner.borrow().data.as_ptr() as usize,
             array.data() as usize,
             owner.borrow().data.len() * 8,
+        )
+        .map_err(python_error)?;
+    Ok(array.unbind())
+}
+fn float32_array<'py>(
+    py: Python<'py>,
+    values: budget::BudgetVec<f32>,
+    consumer: &Arc<ExportLease>,
+) -> PyResult<Py<PyArray1<f32>>> {
+    let (values, lease) = values.into_parts();
+    let owner = Bound::new(
+        py,
+        Float32Owner {
+            data: Array1::from_vec(values),
+            _lease: lease,
+            _consumer: consumer.clone(),
+        },
+    )?;
+    // SAFETY: the actual immutable base owns FP32 storage and both leases.
+    let array =
+        unsafe { PyArray1::borrow_from_array(&owner.borrow().data, owner.clone().into_any()) };
+    array.readwrite().make_nonwriteable();
+    consumer
+        .stats
+        .export(
+            owner.borrow().data.as_ptr() as usize,
+            array.data() as usize,
+            owner.borrow().data.len() * 4,
         )
         .map_err(python_error)?;
     Ok(array.unbind())
@@ -1389,6 +1781,14 @@ fn build_info() -> Vec<(&'static str, &'static str)> {
         ("typed_reader_contract", "typed-borrowed-v1"),
         ("episode_pipeline_contract", "owned-complete-episode-v1"),
         ("ppo_policy_models", "mlp,gru,transformer"),
+        (
+            "structured_preprocessing_contract",
+            "participant-structured-v1;journal=5;rollout=3;generation=2;model=2",
+        ),
+        (
+            "structured_default_signature",
+            "4b4ae064f08192a322de83e24e4a93ef4191c7d73396997d59cd7710cd05cb04",
+        ),
     ]
 }
 
@@ -1402,6 +1802,7 @@ fn gf_native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<FloatOwner>()?;
     module.add_class::<ScalarOwner>()?;
     module.add_class::<IntegerOwner>()?;
+    module.add_class::<Float32Owner>()?;
     module.add_class::<ByteOwner>()?;
     module.add_class::<OffsetOwner>()?;
     module.add_class::<CancelHandle>()?;
@@ -1409,6 +1810,7 @@ fn gf_native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<NativeSession>()?;
     module.add_class::<StructuredParentControls>()?;
     module.add_class::<StructuredJournalTokens>()?;
+    module.add_class::<StructuredNativeSession>()?;
     Ok(())
 }
 

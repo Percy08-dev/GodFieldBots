@@ -954,7 +954,111 @@ fn acknowledgement(response: &Value, command: &Value) -> Result<()> {
     }
     Ok(())
 }
-fn header(value: &Value, budget: &Arc<Budget>, control: &Control) -> Result<()> {
+/// Original role declaration checked by the Source composer, not a public
+/// "allow historical" flag. It never authorizes Source or a checkpoint.
+pub(crate) struct OriginalHeader<'a> {
+    pub(crate) model: Option<&'a Value>,
+    identity: &'a Value,
+}
+impl<'a> OriginalHeader<'a> {
+    pub(crate) fn new(
+        model: Option<&'a Value>,
+        identity: &'a Value,
+        budget: &Arc<Budget>,
+        control: &Control,
+    ) -> Result<Self> {
+        identity.closed(
+            &[
+                "run_id",
+                "game_id",
+                "episode_id",
+                "viewer",
+                "policy",
+                "model_id",
+                "model_version",
+                "generation_schema",
+                "action_config_hash",
+                "sampling_seed",
+                "caps",
+                "aggregate_window",
+                "token_signature",
+                "action_contract",
+                "purpose",
+                "synthetic_capacity",
+            ],
+            &[],
+        )?;
+        if let Some(model) = model {
+            crate::structured_controls::model(model, budget, control)?;
+            let window = model
+                .require("event")?
+                .require("aggregate_window")?
+                .integer(1, 65536)?;
+            let old = model.require("event")?.get("aggregate_recipe").is_none();
+            if identity.require("model_version")?.string()? != "2"
+                || identity.require("model_id")? != model.require("model_id")?
+                || identity.require("aggregate_window")?.integer(1, 65536)? != window
+                || identity.require("token_signature")?.string()?
+                    != crate::structured_controls::token_signature(window, old, budget, control)?
+            {
+                return fail("recorded original neural role descriptor mismatch");
+            }
+            let caps = identity.require("caps")?;
+            for (cap, field) in [
+                ("max_interval_events", "max_interval"),
+                ("max_episode_events", "max_episode"),
+            ] {
+                if caps.require(cap)? != model.require("event")?.require(field)? {
+                    return fail("original neural event caps differ");
+                }
+            }
+            if caps.require("max_decisions")?
+                != model.require("temporal")?.require("max_decisions")?
+                || caps.require("max_positions")?.integer(1, 128)?
+                    > model.require("max_positions")?.integer(1, 128)?
+            {
+                return fail("original neural history/position caps differ");
+            }
+        } else {
+            if identity.require("model_version")?.string()? != "1"
+                || !["random", "heuristic"].contains(&identity.require("model_id")?.string()?)
+            {
+                return fail("original baseline role descriptor required");
+            }
+            let window = identity.require("aggregate_window")?.integer(1, 65536)?;
+            let sig = identity.require("token_signature")?.string()?;
+            if sig != crate::structured_controls::token_signature(window, false, budget, control)?
+                && sig
+                    != crate::structured_controls::token_signature(window, true, budget, control)?
+            {
+                return fail("unknown original baseline token descriptor");
+            }
+        }
+        Ok(Self { model, identity })
+    }
+    fn check(&self, header: &Value, _budget: &Arc<Budget>, _control: &Control) -> Result<()> {
+        for (key, value) in self.identity.object()? {
+            if header.require(key)? != value {
+                return fail("original journal role declaration differs from frozen Source");
+            }
+        }
+        Ok(())
+    }
+}
+enum Destination<'a, 'm> {
+    Diagnostic,
+    Original {
+        declaration: &'a OriginalHeader<'m>,
+        stage: Option<(&'a mut crate::structured_staging::Stage, usize)>,
+    },
+}
+
+fn header(
+    value: &Value,
+    budget: &Arc<Budget>,
+    control: &Control,
+    original: Option<&OriginalHeader<'_>>,
+) -> Result<()> {
     value.closed(
         &[
             "kind",
@@ -1085,14 +1189,16 @@ fn header(value: &Value, budget: &Arc<Budget>, control: &Control) -> Result<()> 
         "1" => {
             if !["random", "heuristic"].contains(&model)
                 || !value.require("generation_schema")?.is_null()
-                || window != 128
+                || original.is_none() && window != 128
             {
                 return fail("baseline diagnostic requires corrected128 header");
             }
         }
         _ => return fail("unknown journal5 policy version"),
     }
-    if crate::structured_controls::token_signature(window as i128, false, budget, control)?
+    if let Some(declaration) = original {
+        declaration.check(value, budget, control)?;
+    } else if crate::structured_controls::token_signature(window as i128, false, budget, control)?
         != value.require("token_signature")?.string()?
     {
         return fail("journal5 active corrected token signature required");
@@ -1101,9 +1207,11 @@ fn header(value: &Value, budget: &Arc<Budget>, control: &Control) -> Result<()> 
 }
 struct Decision {
     document: usize,
-    table: Table,
-    frame_tokens: crate::structured_tokens::OwnedTokens,
-    candidate_tokens: crate::structured_tokens::OwnedTokens,
+    table: Option<Table>,
+    frame_tokens: Option<crate::structured_tokens::OwnedTokens>,
+    candidate_tokens: Option<crate::structured_tokens::OwnedTokens>,
+    binding: Option<json::Document>,
+    staged_frame: Option<Value>,
 }
 pub struct Journal {
     pub sources: crate::structured_session::Sources,
@@ -1138,6 +1246,58 @@ impl Journal {
         max_json: usize,
         max_record: usize,
     ) -> Result<Self> {
+        Self::open_destination(
+            directory,
+            journal_file,
+            budget,
+            control,
+            max_json,
+            max_record,
+            Destination::Diagnostic,
+        )
+    }
+    pub(crate) fn original(
+        directory: &std::path::Path,
+        journal_file: &str,
+        budget: Arc<Budget>,
+        control: Control,
+        max_json: usize,
+        max_record: usize,
+        declaration: &OriginalHeader<'_>,
+        stage: Option<(&mut crate::structured_staging::Stage, usize)>,
+    ) -> Result<Self> {
+        if stage.is_some()
+            && (declaration.model.is_none()
+                || declaration
+                    .model
+                    .unwrap()
+                    .require("event")?
+                    .get("aggregate_recipe")
+                    .and_then(Value::as_str)
+                    != Some("public-exact-v2"))
+        {
+            return fail("historical/baseline raw Source cannot produce active neural arrays");
+        }
+        Self::open_destination(
+            directory,
+            journal_file,
+            budget,
+            control,
+            max_json,
+            max_record,
+            Destination::Original { declaration, stage },
+        )
+    }
+    fn open_destination(
+        directory: &std::path::Path,
+        journal_file: &str,
+        budget: Arc<Budget>,
+        control: Control,
+        max_json: usize,
+        max_record: usize,
+        mut destination: Destination<'_, '_>,
+    ) -> Result<Self> {
+        let diagnostic = matches!(&destination, Destination::Diagnostic);
         crate::structured_controls::basename(journal_file)?;
         if max_record == 0 || max_record > max_json {
             return fail("journal5 record bound invalid");
@@ -1161,7 +1321,15 @@ impl Journal {
         if documents.is_empty() {
             return fail("journal5 header required");
         }
-        header(&documents[0].root, &budget, &control)?;
+        header(
+            &documents[0].root,
+            &budget,
+            &control,
+            match &destination {
+                Destination::Diagnostic => None,
+                Destination::Original { declaration, .. } => Some(declaration),
+            },
+        )?;
         let viewer = documents[0].root.require("viewer")?.integer(1, 2)?;
         if journal_file != format!("player-{viewer}.jsonl") {
             return fail("journal filename/viewer mismatch");
@@ -1183,11 +1351,17 @@ impl Journal {
             .require("sampling_seed")?
             .integer(0, u64::MAX as i128)? as u64;
         let mut expected_rng = initial_rng(seed, &budget, &control)?;
-        let recipe = crate::structured_tokens::Recipe::new(
-            n(&documents[0].root, "aggregate_window", 1, 65536)?,
-            &budget,
-            &control,
-        )?;
+        let recipe =
+            if diagnostic || matches!(&destination, Destination::Original { stage: Some(_), .. }) {
+                Some(crate::structured_tokens::Recipe::new(
+                    n(&documents[0].root, "aggregate_window", 1, 65536)?,
+                    &budget,
+                    &control,
+                )?)
+            } else {
+                None
+            };
+        let _rng_metadata = budget.reserve(65536)?;
         let mut bank = crate::budget::BudgetVec::new(&budget);
         let mut decisions: crate::budget::BudgetVec<Decision> =
             crate::budget::BudgetVec::new(&budget);
@@ -1311,7 +1485,13 @@ impl Journal {
                     let start = n(f, "interval_start", 0, bank.len() as i128)?;
                     let previous = decisions
                         .last()
-                        .map(|d| documents[d.document].root.require("frame"))
+                        .map(|d| {
+                            if let Some(binding) = &d.binding {
+                                binding.root.require("frame")
+                            } else {
+                                documents[d.document].root.require("frame")
+                            }
+                        })
                         .transpose()?;
                     let previous_end = previous
                         .map(|v| n(v.require("boundary")?, "end", 0, bank.len() as i128))
@@ -1399,20 +1579,62 @@ impl Journal {
                     let selected = selected_action(&table.value, selected, f, &control)?;
                     command(row.require("command")?, f, &selected, &budget, &control)?;
                     timings(row.require("timings")?)?;
-                    let frame_tokens = crate::structured_tokens::frame_tokens(
-                        f, &bank, &recipe, &budget, &control,
-                    )?;
-                    let candidate_tokens = crate::structured_tokens::candidate_tokens(
-                        &table.value,
-                        &recipe,
-                        &budget,
-                        &control,
-                    )?;
+                    let (frame_tokens, candidate_tokens) = if diagnostic {
+                        let recipe = recipe.as_ref().unwrap();
+                        (
+                            Some(crate::structured_tokens::frame_tokens(
+                                f, &bank, recipe, &budget, &control,
+                            )?),
+                            Some(crate::structured_tokens::candidate_tokens(
+                                &table.value,
+                                recipe,
+                                &budget,
+                                &control,
+                            )?),
+                        )
+                    } else {
+                        (None, None)
+                    };
+                    let binding = if diagnostic {
+                        None
+                    } else {
+                        let frame_meta = copy_fields(
+                            f,
+                            &[
+                                "actor",
+                                "episode",
+                                "revision",
+                                "interval_start",
+                                "boundary",
+                                "interval_start_hash",
+                                "frame_hash",
+                            ],
+                            &control,
+                        )?;
+                        let payload = json::canonical(f.require("payload")?, &budget, &control)?;
+                        let value = json::object([
+                            ("frame", frame_meta),
+                            (
+                                "payload_sha256",
+                                json::text(&format!("{:x}", Sha256::digest(&*payload))),
+                            ),
+                            (
+                                "table_hash",
+                                json::copy(table.value.require("table_hash")?, &control)?,
+                            ),
+                            ("selection", json::copy(selection, &control)?),
+                            ("command", json::copy(row.require("command")?, &control)?),
+                        ]);
+                        let encoded = json::canonical(&value, &budget, &control)?;
+                        Some(json::parse(&encoded, &budget, &control)?)
+                    };
                     decisions.push(Decision {
                         document: index,
-                        table,
+                        table: Some(table),
                         frame_tokens,
                         candidate_tokens,
+                        binding,
+                        staged_frame: None,
                     })?;
                     pending = Some(decision);
                     delta_pending = false;
@@ -1425,14 +1647,41 @@ impl Journal {
                     }
                     acknowledgement(
                         row.require("response")?,
-                        documents[decisions[decision].document]
-                            .root
-                            .require("command")?,
+                        if let Some(binding) = &decisions[decision].binding {
+                            binding.root.require("command")?
+                        } else {
+                            documents[decisions[decision].document]
+                                .root
+                                .require("command")?
+                        },
                     )?;
+                    let lifecycle_ack =
+                        row.require("response")?.require("status")?.string()? != "active";
+                    if !diagnostic {
+                        if let Destination::Original {
+                            stage: Some((stage, episode_index)),
+                            ..
+                        } = &mut destination
+                        {
+                            let d = &decisions[decision];
+                            let meta = stage.frame(
+                                *episode_index,
+                                accepted.len(),
+                                documents[d.document].root.require("frame")?,
+                                &d.table.as_ref().unwrap().value,
+                                &bank,
+                                recipe.as_ref().unwrap(),
+                            )?;
+                            decisions[decision].staged_frame = Some(meta);
+                        }
+                        decisions[decision].table.take();
+                        let document = decisions[decision].document;
+                        documents[document] = json::parse(b"null", &budget, &control)?;
+                    }
                     accepted.push(decision)?;
                     last_accepted = Some(decision);
                     pending = None;
-                    if row.require("response")?.require("status")?.string()? != "active" {
+                    if lifecycle_ack {
                         lifecycle = Some(index);
                     }
                 }
@@ -1580,6 +1829,155 @@ impl Journal {
             max_json,
         })
     }
+    pub(crate) fn header_value(&self) -> &Value {
+        &self.documents[0].root
+    }
+    pub(crate) fn end_value(&self) -> &Value {
+        &self.documents[self.end].root
+    }
+    pub(crate) fn accepted_count(&self) -> usize {
+        self.accepted.len()
+    }
+    pub(crate) fn boundary_value(&self) -> Value {
+        json::object([
+            ("end", json::integer(self.bank.len() as i128)),
+            (
+                "prefix_hash",
+                json::text(&hash_text(self.prefixes.last().unwrap())),
+            ),
+        ])
+    }
+    pub(crate) fn accepted_actions(&self) -> Result<Vec<&Value>> {
+        self.accepted
+            .iter()
+            .map(|&i| {
+                self.decisions[i]
+                    .binding
+                    .as_ref()
+                    .ok_or(Error::Closed)?
+                    .root
+                    .require("command")?
+                    .require("action")
+            })
+            .collect()
+    }
+    pub(crate) fn correspondence_frames(&self) -> Result<json::Document> {
+        let s = &self.sources;
+        s.control.check()?;
+        let mut raw = 65536usize;
+        for &i in self.accepted.iter() {
+            raw = raw
+                .checked_add(
+                    json::canonical(
+                        &self.decisions[i]
+                            .binding
+                            .as_ref()
+                            .ok_or(Error::Closed)?
+                            .root,
+                        &s.budget,
+                        &s.control,
+                    )?
+                    .len(),
+                )
+                .ok_or_else(|| Error::resource("raw correspondence size overflow"))?;
+        }
+        let _copy = json::admit(raw, &s.budget)?;
+        let mut result = Vec::with_capacity(self.accepted.len());
+        for &i in self.accepted.iter() {
+            s.control.check()?;
+            let binding = &self.decisions[i]
+                .binding
+                .as_ref()
+                .ok_or(Error::Closed)?
+                .root;
+            let mut entry = copy_fields(
+                binding.require("frame")?,
+                &[
+                    "frame_hash",
+                    "revision",
+                    "interval_start",
+                    "interval_start_hash",
+                    "boundary",
+                ],
+                &s.control,
+            )?;
+            for key in ["payload_sha256", "table_hash", "selection"] {
+                entry
+                    .as_object_mut()
+                    .unwrap()
+                    .insert(key.into(), json::copy(binding.require(key)?, &s.control)?);
+            }
+            result.push(entry);
+        }
+        let bytes = json::canonical(&json::array(result), &s.budget, &s.control)?;
+        json::parse(&bytes, &s.budget, &s.control)
+    }
+    pub(crate) fn staged_episode(
+        &self,
+        stage: &mut crate::structured_staging::Stage,
+        index: usize,
+        reason: &Value,
+    ) -> Result<Value> {
+        let s = &self.sources;
+        s.control.check()?;
+        if self.header_value().require("model_version")?.string()? != "2" {
+            return fail("baseline raw role cannot be a PPO payload");
+        }
+        let mut selections = Vec::with_capacity(self.accepted.len());
+        let mut frames = Vec::with_capacity(self.accepted.len());
+        let raw = self
+            .accepted
+            .len()
+            .checked_mul(16384)
+            .and_then(|n| n.checked_add(65536))
+            .ok_or_else(|| Error::resource("episode metadata size overflow"))?;
+        let _copy = s.budget.reserve(raw)?;
+        for &i in self.accepted.iter() {
+            let d = &self.decisions[i];
+            frames.push(json::copy(
+                d.staged_frame.as_ref().ok_or(Error::Closed)?,
+                &s.control,
+            )?);
+            selections.push(json::copy(
+                d.binding
+                    .as_ref()
+                    .ok_or(Error::Closed)?
+                    .root
+                    .require("selection")?,
+                &s.control,
+            )?);
+        }
+        let blocks = stage.finish_episode_arrays(index, &self.bank, &selections)?;
+        let header = self.header_value();
+        let end = self.end_value();
+        let mut result = json::object([
+            ("actor", json::copy(header.require("viewer")?, &s.control)?),
+            (
+                "episode",
+                json::copy(header.require("bank_episode")?, &s.control)?,
+            ),
+            ("boundary", self.boundary_value()),
+            ("raw_blocks", blocks),
+            ("frames", json::array(frames)),
+            ("selections", json::array(selections)),
+            (
+                "end_kind",
+                json::copy(end.require("end_kind")?, &s.control)?,
+            ),
+            ("outcome", json::copy(end.require("outcome")?, &s.control)?),
+            ("reason", json::copy(reason, &s.control)?),
+        ]);
+        for key in ["action_contract", "purpose", "synthetic_capacity"] {
+            result
+                .as_object_mut()
+                .unwrap()
+                .insert(key.into(), json::copy(header.require(key)?, &s.control)?);
+        }
+        Ok(result)
+    }
+    pub(crate) fn into_sources(self) -> crate::structured_session::Sources {
+        self.sources
+    }
     pub fn diagnostic(&self) -> Result<crate::budget::BudgetVec<u8>> {
         let s = &self.sources;
         s.control.check()?;
@@ -1598,7 +1996,17 @@ impl Journal {
             decisions.push(json::object([
                 ("decision", json::integer(index as i128)),
                 ("frame", json::copy(row.require("frame")?, &s.control)?),
-                ("table", json::copy(&decision.table.value, &s.control)?),
+                (
+                    "table",
+                    json::copy(
+                        &decision
+                            .table
+                            .as_ref()
+                            .ok_or(crate::error::Error::Closed)?
+                            .value,
+                        &s.control,
+                    )?,
+                ),
                 (
                     "selection",
                     json::copy(row.require("selection")?, &s.control)?,
@@ -1609,11 +2017,25 @@ impl Journal {
                 ),
                 (
                     "frame_tokens",
-                    json::copy(&decision.frame_tokens.value, &s.control)?,
+                    json::copy(
+                        &decision
+                            .frame_tokens
+                            .as_ref()
+                            .ok_or(crate::error::Error::Closed)?
+                            .value,
+                        &s.control,
+                    )?,
                 ),
                 (
                     "candidate_tokens",
-                    json::copy(&decision.candidate_tokens.value, &s.control)?,
+                    json::copy(
+                        &decision
+                            .candidate_tokens
+                            .as_ref()
+                            .ok_or(crate::error::Error::Closed)?
+                            .value,
+                        &s.control,
+                    )?,
                 ),
             ]));
         }
@@ -1722,5 +2144,143 @@ mod tests {
             );
             rng_state(&actual).unwrap();
         }
+    }
+}
+
+#[cfg(test)]
+mod original_source_tests {
+    use super::*;
+    #[test]
+    fn historical62_original_raw_walk_never_activates_token_projection() {
+        let budget = Budget::new(128 * 1024 * 1024);
+        let control = Control::new(crate::budget::monotonic() + 30.0).unwrap();
+        let fixture = json::parse(
+            include_bytes!("../tests/fixtures/structured_cohort16_inputs.json"),
+            &budget,
+            &control,
+        )
+        .unwrap();
+        let episode = &fixture.root.require("episodes").unwrap().array().unwrap()[0];
+        let mut model = fixture.root.require("model").unwrap().clone();
+        model
+            .get_mut("event")
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .remove("aggregate_recipe");
+        let raw = episode.require("journal").unwrap().string().unwrap();
+        let mut h = json::parse(raw.lines().next().unwrap().as_bytes(), &budget, &control).unwrap();
+        let window = h
+            .root
+            .require("aggregate_window")
+            .unwrap()
+            .integer(1, 65536)
+            .unwrap();
+        let old =
+            crate::structured_controls::token_signature(window, true, &budget, &control).unwrap();
+        h.root
+            .as_object_mut()
+            .unwrap()
+            .insert("token_signature".into(), json::text(&old));
+        let mut encoded = json::canonical(&h.root, &budget, &control)
+            .unwrap()
+            .to_vec();
+        encoded.push(b'\n');
+        encoded.extend_from_slice(raw.split_once('\n').unwrap().1.as_bytes());
+        let root = std::env::temp_dir().join(format!(
+            "gf-historical-raw-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&root).unwrap();
+        let file = episode.require("journal_file").unwrap().string().unwrap();
+        std::fs::write(root.join(file), encoded).unwrap();
+        for (name, hex) in episode.require("columns").unwrap().object().unwrap() {
+            let hex = hex.string().unwrap();
+            let bytes = (0..hex.len())
+                .step_by(2)
+                .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
+                .collect::<Vec<_>>();
+            std::fs::write(root.join(name), bytes).unwrap();
+        }
+        let mut identity = json::object([]);
+        for key in [
+            "run_id",
+            "game_id",
+            "episode_id",
+            "viewer",
+            "policy",
+            "model_id",
+            "model_version",
+            "generation_schema",
+            "action_config_hash",
+            "sampling_seed",
+            "caps",
+            "aggregate_window",
+            "token_signature",
+            "action_contract",
+            "purpose",
+            "synthetic_capacity",
+        ] {
+            identity
+                .as_object_mut()
+                .unwrap()
+                .insert(key.into(), h.root.require(key).unwrap().clone());
+        }
+        let declaration = OriginalHeader::new(Some(&model), &identity, &budget, &control).unwrap();
+        let journal = Journal::original(
+            &root,
+            file,
+            budget.clone(),
+            control.clone(),
+            64 * 1024 * 1024,
+            8 * 1024 * 1024,
+            &declaration,
+            None,
+        )
+        .unwrap();
+        assert_eq!(journal.accepted_count(), 1);
+        assert!(journal.decisions.iter().all(|d| d.frame_tokens.is_none()
+            && d.candidate_tokens.is_none()
+            && d.table.is_none()));
+        assert!(
+            Journal::open(
+                &root,
+                file,
+                budget.clone(),
+                control.clone(),
+                64 * 1024 * 1024,
+                8 * 1024 * 1024
+            )
+            .is_err()
+        );
+        let mut stage = crate::structured_staging::Stage::new(
+            budget.clone(),
+            1024 * 1024,
+            65536,
+            control.clone(),
+        )
+        .unwrap();
+        assert!(
+            Journal::original(
+                &root,
+                file,
+                budget.clone(),
+                control.clone(),
+                64 * 1024 * 1024,
+                8 * 1024 * 1024,
+                &declaration,
+                Some((&mut stage, 0))
+            )
+            .is_err()
+        );
+        assert!(stage.descriptors().unwrap().array().unwrap().is_empty());
+        stage.close().unwrap();
+        journal.sources.recheck().unwrap();
+        drop(journal);
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

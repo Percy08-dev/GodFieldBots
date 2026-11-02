@@ -284,14 +284,30 @@ async def train_ppo(loaded: Any, collector: Collector, directory: Path, *, mode:
 
 
 async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 'fresh',
-                   pause_after_update: int | None = None, _structured_component: bool = False) -> Json:
+                   pause_after_update: int | None = None, _structured_component: bool = False,
+                   _structured_ops: Any = None) -> Json:
     operation_started = time.monotonic()
     operation_unix = time.time()
     config = loaded.config
     ops: Any = None
+    if _structured_ops is not None and not _structured_component:
+        raise ContractError('private native operations require structured component composition')
     if _structured_component:
         from gf_training import structured_ppo
-        ops = structured_ppo
+        if _structured_ops is not None:
+            if type(_structured_ops) is not structured_ppo._NativeComponentOps:
+                raise ContractError('concrete native structured operations required')
+            if config.preprocessing.backend != 'rust' or config.preprocessing.reader != 'structured-v1':
+                raise ContractError('native component operations require explicit rust/structured-v1')
+        if _structured_ops is None and config.preprocessing.backend == 'rust':
+            structured_ppo.validate_config(config)
+            from gf_training.native_backend import load_native, reader_settings
+            selected_native = load_native()
+            reader_settings(config.preprocessing, selected_native)  # Real accepted marker/signature only.
+            ops = structured_ppo._NativeComponentOps(selected_native)
+            ops._implementation = 'native-structured-v2'
+        else:
+            ops = _structured_ops if _structured_ops is not None else structured_ppo
     model, training = ops.validate_config(config) if ops else config.model, config.training
     if not ops and (not isinstance(model, (MLPModelConfig, GRUModelConfig, TransformerModelConfig)) or not isinstance(training, PPOTrainingConfig) or model.checkpoint is not None or config.run.split != 'train'):
         raise ContractError('PPO requires fresh supported model recipe and train split')
@@ -466,10 +482,18 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
                 with ExitStack() as source_scope:
                     if ops:
                         assert collection_scan is not None
+                        projection_options: dict[str, Any] = {
+                            'expected_manifest_sha256': collection_scan.files[collection.directory / 'manifest.json'][1],
+                            'extra_owned_bytes': collection_scan.retained,
+                        }
+                        if type(ops) is structured_ppo._NativeComponentOps:
+                            # Actual remaining owned storage bounds the private
+                            # spool. The collection-admission reserve is separate.
+                            projection_options['scratch_allowance_bytes'] = max(
+                                0, training.max_owned_bytes - owned_bytes(directory, execution))
                         decision_count, proof, numeric_files = source_scope.enter_context(
                             ops.project(plan, numeric, config, learner_label, generation, execution,
-                                expected_manifest_sha256=collection_scan.files[collection.directory / 'manifest.json'][1],
-                                extra_owned_bytes=collection_scan.retained))
+                                **projection_options))
                     else:
                         online_context = OnlinePPOContext(directory, state["run_id"], batch_id, generation, ownership.token)
                         if config.preprocessing.backend == 'rust':

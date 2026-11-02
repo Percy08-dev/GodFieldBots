@@ -5,6 +5,22 @@
 - Scope: public contract only. No Simulator code change or rejection probe was made.
 - Related: [ADR0023](../adr/0023-structured-encoders-and-diverse-search.md).
 
+Update2026-11-02: ADR0023§17 adopts the owner-confirmed subset through the explicit
+engineering-only profile `owner-proposal-engineering-20261101-v1`; the assertions
+are no longer awaiting Bots component adoption. Public real-I/O and qualified
+Source/fit entry points still reject this profile. The sibling working-tree
+spec07§21.1 and spec09§17.5 now record the public utility table and remaining
+uncertainties, but this textual addition does not establish Engine conformance or
+completed normative/binary adoption. Root's read-only recheck retains HEAD
+`ffcffa0966dbf6d7ce1d982f4ee6444e291d42d6`, spec07 SHA256
+`66d18191c596a7e371d963c0fa66a8e040cbef7b60433a2ede8acf9bccff650f`
+and spec09 SHA256
+`dc363d47bb27f145e7dd7fbc95f75c8bd9f705fc229766fc56ad35b8c797f18b`.
+These working-tree identities are diagnostic evidence, not a silent replacement
+for recorded runtime/dataset identities. Utility defaults/mixes/response edges
+and conflicting repetition/defense rules remain the separate adoption dependency;
+unaffected native/encoder/Tree2 work continues.
+
 Update2026-11-01: the user supplied explicit
 [owner assertions](../contracts/owner-20261101-utility-and-repetition.md) on
 singleton utility use/explicit targets and physical miracle references. They

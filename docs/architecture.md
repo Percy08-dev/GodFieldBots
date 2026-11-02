@@ -58,7 +58,16 @@ structured markers are absent pending C2b staging.
 The later C2b1 owned Journal5/column/raw-token diagnostic also passes both reviews,
 76new cases,133root native cases and97Rust tests/2ignored; full markers still stay
 absent until C2b2 typed staging/authorization/publication is accepted.
-Qualified Source authority, complete native staging and deterministic LightGBM2
+The frozen C2b2 bridge now passes both independent SOURCE reviews,31bounded
+Python cases,110Rust tests/2ignored and Root's two current-candidate native
+common-loop/update/resume cases in124.00s. All five original legacy corpus/index/
+saved-PPO proofs and the46-file wheel/sdist/source check pass. Storage admission,
+early private spool retirement and recoverable shutdown ownership are verified.
+Capability/default-dispatch and real late-Source-mutation checks pass2cases,
+with77diagnostic regressions and a verified metadata-only activation rebuild.
+Root accepts C2b2; installed native is unchanged. These are FakeHTTP/component checks with
+qualified=False, not real Simulator or model-strength evidence.
+Qualified Source authority and deterministic LightGBM2
 integration remain pending;
 their bounded design is accepted in ADR0023. No real v2 experiment or full-plan
 acceptance is claimed. Milestone scopes, overlapping historical counts and

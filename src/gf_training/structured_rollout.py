@@ -5,6 +5,7 @@ format, not a formal source/parent eligibility or journal authorization shortcut
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import stat
@@ -18,7 +19,7 @@ from typing import Any
 import numpy as np
 
 from gf_common.action_contract import ActionContract
-from gf_common.domain import ContractError, Json, canonical, closed, integer
+from gf_common.domain import ContractError, Json, canonical, closed, digest, integer
 from gf_common.structured import (
     ACTION_KINDS,
     TARGETS,
@@ -300,6 +301,55 @@ def _shape(value: Any) -> tuple[int, ...]:
     return (len(value), *shape)
 
 
+def _episode_correspondence_digest(record: EpisodeRecords) -> str:
+    """Exact original raw-record binding; supplies no Source/parent authority."""
+    return digest({"recipe": "structured-source-episode-correspondence-v1",
+        **input_binding(record.action_contract, record.purpose, record.synthetic_capacity),
+        "actor": record.bank.actor, "episode": record.bank.episode, "boundary": asdict(record.bank.boundary),
+        "frames": [{"frame_hash": frame.frame_hash, "payload_sha256": hashlib.sha256(frame.payload).hexdigest(),
+                    "revision": frame.revision, "interval_start": frame.interval_start,
+                    "interval_start_hash": frame.interval_start_hash, "boundary": asdict(frame.boundary),
+                    "table_hash": table.table_hash, "selection": asdict(selection)}
+                   for frame, table, selection in zip(record.frames, record.tables, record.selections, strict=True)],
+        "end_kind": record.end_kind, "outcome": record.outcome, "reason": record.reason})
+
+
+def _source_correspondence(control_fingerprint: str, declaration: Json, episode_digests: tuple[str, ...]) -> Json:
+    """Build a bounded ephemeral cohort binding from an ORIGINAL native owner.
+
+    Callers must obtain the digests/fingerprint from their validated original
+    Source owner. This value is not persisted and cannot authorize an input.
+    """
+    from gf_models.structured_sealed import checksum
+    checksum(control_fingerprint)
+    closed(declaration, SEMANTIC_KEYS)
+    if type(episode_digests) is not tuple:
+        raise ContractError('ordered original episode digest tuple required')
+    for value in episode_digests:
+        checksum(value)
+    content = {"recipe": "structured-source-cohort-correspondence-v1", "control_fingerprint": control_fingerprint,
+               "semantics_sha256": digest(declaration), "episode_count": len(episode_digests),
+               "episode_digests": episode_digests}
+    return {**content, "binding_sha256": digest(content)}
+
+
+def _check_source_correspondence(value: Json, declaration: Json) -> tuple[str, ...]:
+    from gf_models.structured_sealed import checksum
+    closed(value, {'recipe', 'control_fingerprint', 'semantics_sha256', 'episode_count', 'episode_digests', 'binding_sha256'})
+    if value['recipe'] != 'structured-source-cohort-correspondence-v1' or value['semantics_sha256'] != digest(declaration):
+        raise ContractError('original Source correspondence semantic recipe mismatch')
+    for key in ('control_fingerprint', 'semantics_sha256', 'binding_sha256'):
+        checksum(value[key])
+    integer(value['episode_count'], 0)
+    if not isinstance(value['episode_digests'], (tuple, list)) or len(value['episode_digests']) != value['episode_count']:
+        raise ContractError('original Source correspondence count/order required')
+    for item in value['episode_digests']:
+        checksum(item)
+    if digest({key: item for key, item in value.items() if key != 'binding_sha256'}) != value['binding_sha256']:
+        raise ContractError('original Source correspondence fingerprint binding mismatch')
+    return tuple(value['episode_digests'])
+
+
 def write_rollout(directory: Path, rollout: StructuredRollout, *, shard_bytes: int = MAX_ARRAY_BYTES) -> Json:
     return _write_rollout(directory, rollout, shard_bytes=shard_bytes)
 
@@ -388,16 +438,34 @@ def _write_rollout(directory: Path, rollout: StructuredRollout, *, shard_bytes: 
     if not planned:
         # Zero-decision episode closure is preserved without synthetic transition.
         plan("empty", (), np.uint8)
+    return _publish_payload(directory, model=rollout.model, classification=rollout.input_binding,
+        declaration=semantics(rollout.model), action_config_hash=rollout.action_config_hash,
+        policy_version=rollout.policy_version, decision_count=len(rollout), episodes=episodes,
+        planned=planned, resident_bytes=rollout.resident_bytes, planning_bytes=planning_bytes,
+        planned_bytes=planned_bytes, shard_bytes=shard_bytes, admit=admit, poll=poll, check=check)
+
+
+def _publish_payload(directory: Path, *, model: ModelConfigV2, classification: Json, declaration: Json,
+                     action_config_hash: str, policy_version: str | None, decision_count: int,
+                     episodes: list[Json], planned: dict[str, tuple[Any, Any, bool]],
+                     resident_bytes: int, planning_bytes: int, planned_bytes: int, shard_bytes: int,
+                     admit: Callable[[int], None], poll: Callable[[], None],
+                     check: Callable[[], None] | None) -> Json:
+    """Publish one admitted raw payload; callers own validation and input leases.
+
+    This private seam neither authorizes Source nor constructs/retokenizes it.
+    The active public wrapper and native adapter share the exact same file codec.
+    """
     descriptors = {key: {"dtype": str(np.dtype(dtype)), "shape": [len(value)] if blob else list(_shape(value)),
                          "bytes": len(value) if blob else _scalar_count(value) * np.dtype(dtype).itemsize}
                    for key, (value, dtype, blob) in planned.items()}
     bundle_plan = plan_bundle("rollout", descriptors, shard_bytes=shard_bytes)
-    manifest = {"schema_version": 3, "kind": "structured-rollout", **rollout.input_binding, **semantics(rollout.model),
-                "architecture_identity": recorded_architecture_identity(rollout.model),
-                "action_config_hash": rollout.action_config_hash, "policy_version": rollout.policy_version,
-                "decision_count": len(rollout), "episodes": episodes, "data": bundle_plan}
+    manifest = {"schema_version": 3, "kind": "structured-rollout", **classification, **declaration,
+                "architecture_identity": recorded_architecture_identity(model),
+                "action_config_hash": action_config_hash, "policy_version": policy_version,
+                "decision_count": decision_count, "episodes": episodes, "data": bundle_plan}
     metadata_bytes = json_bytes(manifest, limit=MAX_MANIFEST_BYTES)
-    admit(rollout.resident_bytes + planning_bytes + 2 * planned_bytes + 32 * metadata_bytes + 65536)
+    admit(resident_bytes + planning_bytes + 2 * planned_bytes + 32 * metadata_bytes + 65536)
     arrays = {}
     for key, (value, dtype, blob) in planned.items():
         poll()
@@ -410,6 +478,195 @@ def _write_rollout(directory: Path, rollout: StructuredRollout, *, shard_bytes: 
     poll()
     return manifest
 
+
+
+def _write_prepared_payload(directory: Path, metadata: Json, arrays: dict[str, Any], model: ModelConfigV2, *,
+                            resident_bytes: int, extra_owned_bytes: int, max_owned_bytes: int,
+                            shard_bytes: int = MAX_ARRAY_BYTES, check: Callable[[], None],
+                            reserve: Callable[[int], None]) -> Json:
+    """Private native payload publication, never a Source authority boundary.
+
+    Input buffers stay owned by the caller's live leases through publication.
+    resident_bytes covers additional Python ownership; extra_owned_bytes includes
+    persistent native/sealed/control owners already admitted by that caller.
+    The original-source decoder comparison remains mandatory after publication.
+    """
+    from gf_models.structured_sealed import checksum
+    validate_config(model)
+    poll = check
+    poll()
+    limit = min(max_owned_bytes, model.resources.max_owned_bytes)
+    integer(resident_bytes, 0, limit)
+    integer(extra_owned_bytes, 0, limit)
+    integer(shard_bytes, 1, MAX_ARRAY_BYTES)
+    def admit(size: int) -> None:
+        poll()
+        if size + extra_owned_bytes > limit:
+            raise ContractError('joint prepared payload planning/packing/publication reservation exceeded')
+        reserve(size)
+    admit(resident_bytes + 65536)
+    closed(metadata, {'architecture_identity', 'action_config_hash', 'policy_version', 'decision_count', 'episodes',
+                     'action_contract', 'purpose', 'synthetic_capacity'} | set(SEMANTIC_KEYS))
+    classification: Json = {
+        key: metadata[key] for key in ('action_contract', 'purpose', 'synthetic_capacity')}
+    from gf_common.action_contract import parse_action_contract
+    contract = parse_action_contract(classification['action_contract'])
+    check_input_binding(classification, action_contract=contract, purpose='component', synthetic_capacity=False)
+    declaration = {key: metadata[key] for key in SEMANTIC_KEYS}
+    validate_recorded_semantics(declaration, model)
+    if (canonical(declaration) != canonical(semantics(model))
+            or metadata['architecture_identity'] != recorded_architecture_identity(model)):
+        raise ContractError('prepared active payload semantics/architecture mismatch')
+    checksum(metadata['action_config_hash'])
+    integer(metadata['decision_count'], 0)
+    if metadata['policy_version'] is not None and (type(metadata['policy_version']) is not str or not metadata['policy_version']):
+        raise ContractError('prepared policy identity required')
+    if type(arrays) is not dict or type(metadata['episodes']) is not list:
+        raise ContractError('owned prepared array map and episode list required')
+    planned: dict[str, tuple[Any, Any, bool]] = {}
+    planning_bytes = 65536
+    planned_bytes = 0
+    def take(key: str, dtype: Any, shape: tuple[int, ...] | None) -> Any:
+        nonlocal planning_bytes, planned_bytes
+        poll()
+        planning_bytes += 1024 + len(key.encode())
+        admit(resident_bytes + planning_bytes + 2 * planned_bytes)
+        if key in planned or key not in arrays:
+            raise ContractError('prepared named-array key ownership mismatch')
+        value = arrays[key]
+        if (type(value) is not np.ndarray or value.dtype != np.dtype(dtype) or not value.flags.c_contiguous
+                or value.flags.writeable or value.nbytes > shard_bytes
+                or shape is not None and value.shape != shape or shape is None and value.ndim != 1):
+            raise ContractError('prepared readonly array dtype/shape/size mismatch')
+        prospective = planned_bytes + value.nbytes
+        finite_scratch = min(value.size, 32768) if value.dtype == np.float32 else 0
+        admit(resident_bytes + planning_bytes + 2 * prospective + finite_scratch)
+        # Integer/u8 values are finite by construction. Bound the temporary
+        # Boolean buffer for FP32 checks instead of scanning a whole bank.
+        if value.dtype == np.float32:
+            flat = value.reshape(-1)
+            for start in range(0, len(flat), 32768):
+                poll()
+                if not np.isfinite(flat[start:start + 32768]).all():
+                    raise ContractError('prepared nonfinite tensor')
+        planned_bytes = prospective
+        planned[key] = (value, dtype, False)
+        return value
+    owners = set()
+    total = 0
+    frame_shapes = {'state_numerics': (26,), 'state_present': (26,), 'state_categories': (10,),
+        'state_category_present': (10,), 'card_numerics': (18, 12), 'card_present': (18, 12),
+        'card_categories': (18, 7), 'card_mask': (18,), 'opponent_learned': (18,), 'history': (376,)}
+    for ei, episode in enumerate(metadata['episodes']):
+        poll()
+        closed(episode, {'actor', 'episode', 'boundary', 'raw_blocks', 'frames', 'end_kind', 'outcome', 'reason',
+                        'selections', 'has_targets'} | set(classification))
+        check_input_binding({key: episode[key] for key in classification}, action_contract=contract,
+                            purpose='component', synthetic_capacity=False)
+        integer(episode['actor'], 1, 2)
+        if type(episode['episode']) is not str or not episode['episode'] or (episode['actor'], episode['episode']) in owners:
+            raise ContractError('prepared participant bank identity missing/duplicated')
+        owners.add((episode['actor'], episode['episode']))
+        boundary = EventBoundary(**closed(episode['boundary'], {'end', 'prefix_hash'}))
+        integer(boundary.end, 0, model.event.max_episode)
+        if type(episode['frames']) is not list or type(episode['selections']) is not list:
+            raise ContractError('prepared ordered frame/selection metadata required')
+        count = len(episode['frames'])
+        integer(count, 0, model.temporal.max_decisions)
+        if len(episode['selections']) != count:
+            raise ContractError('prepared frame/selection count mismatch')
+        total += count
+        prefix = f'e.{ei}'
+        end = 0
+        if type(episode['raw_blocks']) is not list:
+            raise ContractError('prepared ordered event blocks required')
+        for block in episode['raw_blocks']:
+            closed(block, {'start', 'end', 'key'})
+            integer(block['start'], end, end)
+            integer(block['end'], end + 1, min(end + 1024, boundary.end))
+            key = prefix + f".raw-events.{end}"
+            if block['key'] != key:
+                raise ContractError('prepared raw event block path mismatch')
+            take(key, np.uint8, None)
+            end = block['end']
+        if end != boundary.end:
+            raise ContractError('prepared complete bank block boundary mismatch')
+        previous_end, previous_revision = 0, -1
+        selections = []
+        for fi, (frame, saved) in enumerate(zip(episode['frames'], episode['selections'], strict=True)):
+            closed(frame, {'actor', 'episode', 'revision', 'interval_start', 'boundary', 'interval_start_hash',
+                           'frame_hash', 'payload_key', 'token_prefix', 'event_token_prefix', 'table_hash'} | set(classification))
+            check_input_binding({key: frame[key] for key in classification}, action_contract=contract,
+                                purpose='component', synthetic_capacity=False)
+            b = EventBoundary(**closed(frame['boundary'], {'end', 'prefix_hash'}))
+            integer(frame['revision'], previous_revision + 1)
+            integer(frame['interval_start'], previous_end, previous_end)
+            integer(b.end, previous_end, min(boundary.end, previous_end + model.event.max_interval))
+            if frame['actor'] != episode['actor'] or frame['episode'] != episode['episode']:
+                raise ContractError('prepared frame bank owner mismatch')
+            for key in ('interval_start_hash', 'frame_hash', 'table_hash'):
+                checksum(frame[key])
+            fp, ep = prefix + f'.f.{fi}', prefix + f'.event-tokens.{fi}'
+            if (frame['payload_key'] != fp + '.payload' or frame['token_prefix'] != fp
+                    or frame['event_token_prefix'] != ep):
+                raise ContractError('prepared frame/token path mismatch')
+            take(fp + '.payload', np.uint8, None)
+            for name in FRAME_FIELDS:
+                take(fp + '.' + name, _token_dtype(name), frame_shapes[name])
+            interval = b.end - previous_end
+            for name, width in (('interval_numerics', 11), ('interval_present', 11), ('interval_categories', 12)):
+                take(ep + '.' + name, _token_dtype(name), (interval, width) if interval else (0,))
+            kinds = take(fp + '.candidate.kinds', np.int64, None)
+            candidates = len(kinds)
+            integer(candidates, 1, 65536)
+            take(fp + '.candidate.targets', np.int64, (candidates,))
+            take(fp + '.candidate.numerics', np.int64, (candidates, 4))
+            take(fp + '.candidate.present', np.uint8, (candidates, 4))
+            offsets = take(fp + '.candidate.offsets', np.int64, (candidates + 1,))
+            slots = take(fp + '.candidate.slots', np.int64, None)
+            if offsets[0] != 0 or offsets[-1] != len(slots) or np.any(np.diff(offsets) < 0) or np.any(np.diff(offsets) > model.max_positions):
+                raise ContractError('prepared candidate offsets/capacity mismatch')
+            selected = Selection(**closed(saved, set(Selection.__dataclass_fields__)))
+            integer(selected.index, 0, candidates - 1)
+            if (selected.logprob is None or selected.value is None or selected.policy_version != metadata['policy_version']
+                    or selected.table_hash != frame['table_hash']):
+                raise ContractError('prepared neural Selection identity/statistics mismatch')
+            selections.append(selected)
+            previous_end, previous_revision = b.end, frame['revision']
+        for name, dtype, full in (('selected', np.int64, [s.index for s in selections]),
+                                  ('old_logprob', np.float32, [s.logprob for s in selections]),
+                                  ('old_value', np.float32, [s.value for s in selections])):
+            value = take(prefix + '.' + name, dtype, (count,))
+            with np.errstate(over='ignore', invalid='ignore'):
+                expected = np.asarray(full, dtype=dtype)
+            if not np.isfinite(expected).all() or value.tobytes() != expected.tobytes():
+                raise ContractError('prepared Selection/scalar precision binding mismatch')
+        kind = episode['end_kind']
+        if kind not in ('natural', 'truncated', 'aborted', 'cancelled', 'incomplete', 'unsupported', 'infrastructure_failure'):
+            raise ContractError('prepared unknown episode closure')
+        if kind == 'natural':
+            validate_result(episode['outcome'])
+            if episode['outcome'] is None or episode['reason'] is not None:
+                raise ContractError('prepared natural outcome missing')
+        elif episode['outcome'] is not None or type(episode['reason']) is not str or not episode['reason']:
+            raise ContractError('prepared interrupted outcome/reason mismatch')
+        if type(episode['has_targets']) is not bool or episode['has_targets'] != (kind == 'natural' and count > 0):
+            raise ContractError('prepared natural target presence mismatch')
+        if episode['has_targets']:
+            take(prefix + '.advantage', np.float32, (count,))
+            take(prefix + '.target', np.float32, (count,))
+    if total != metadata['decision_count'] or total and metadata['policy_version'] is None:
+        raise ContractError('prepared decision count/policy identity mismatch')
+    if not planned:
+        take('empty', np.uint8, (0,))
+    if set(planned) != set(arrays):
+        raise ContractError('prepared unknown or missing array')
+    create_output_directory(directory, 'rollout.json')
+    return _publish_payload(directory, model=model, classification=classification, declaration=declaration,
+        action_config_hash=metadata['action_config_hash'], policy_version=metadata['policy_version'],
+        decision_count=total, episodes=metadata['episodes'], planned=planned, resident_bytes=resident_bytes,
+        planning_bytes=planning_bytes, planned_bytes=planned_bytes, shard_bytes=shard_bytes,
+        admit=admit, poll=poll, check=check)
 
 def _read_reservation(manifest: Json, descriptors: Json) -> int:
     """Conservative verified-input reconstruction envelope, not an RSS bound.
@@ -441,7 +698,7 @@ def _read_recorded_rollout(directory: Path, expected_digest: str, model: Recorde
                            action_contract: ActionContract, declaration: Json,
                            expected_records: tuple[EpisodeRecords, ...] | None, max_owned_bytes: int,
                            extra_owned_bytes: int, check: Callable[[], None],
-                           reserve: Callable[[int], None]) -> StructuredRollout:
+                           reserve: Callable[[int], None], expected_correspondence: Json | None = None) -> StructuredRollout:
     """Historical component correspondence, never current runtime/Source authority.
 
     The caller binds declaration to its validated original generation inference.
@@ -449,6 +706,10 @@ def _read_recorded_rollout(directory: Path, expected_digest: str, model: Recorde
     """
     closed(declaration, SEMANTIC_KEYS)
     validate_recorded_semantics(declaration, model)
+    if expected_correspondence is not None:
+        if expected_records is not None:
+            raise ContractError('original record and digest correspondence modes are exclusive')
+        _check_source_correspondence(expected_correspondence, declaration)
     if expected_records is not None and (type(expected_records) is not tuple or any(type(item) is not EpisodeRecords for item in expected_records)):
         raise ContractError('ordered original participant records required')
     check()
@@ -495,7 +756,7 @@ def _read_recorded_rollout(directory: Path, expected_digest: str, model: Recorde
     reserve(reservation)
     result = _read_rollout(directory, expected_digest, model, action_contract=action_contract,
         purpose='component', synthetic_capacity=False, expected_semantics=declaration,
-        expected_records=expected_records, max_owned_bytes=max_owned_bytes,
+        expected_records=expected_records, expected_correspondence=expected_correspondence, max_owned_bytes=max_owned_bytes,
         extra_owned_bytes=extra_owned_bytes, check=check, reserve=reserve,
         original_manifest=manifest, snapshots=snapshots,
         encoded_scratch=manifest_extra + 32 * encoded + 512 * len(snapshots) + sidecar_parse,
@@ -512,6 +773,7 @@ def _read_recorded_rollout(directory: Path, expected_digest: str, model: Recorde
 def _read_rollout(directory: Path, expected_digest: str, model: RecordedModelConfigV2, *,
                   action_contract: ActionContract, purpose: str, synthetic_capacity: bool,
                   expected_semantics: Json, expected_records: tuple[EpisodeRecords, ...] | None = None,
+                  expected_correspondence: Json | None = None,
                   max_owned_bytes: int | None = None, extra_owned_bytes: int = 0,
                   check: Callable[[], None] | None = None,
                   reserve: Callable[[int], None] = lambda _: None,
@@ -537,6 +799,13 @@ def _read_rollout(directory: Path, expected_digest: str, model: RecordedModelCon
     integer(manifest["decision_count"], 0, 2**31 - 1)
     if not isinstance(manifest["episodes"], list):
         raise ContractError("episode records required")
+    expected_digests = None
+    if expected_correspondence is not None:
+        if expected_records is not None:
+            raise ContractError('original record and digest correspondence modes are exclusive')
+        expected_digests = _check_source_correspondence(expected_correspondence, expected_semantics)
+        if len(manifest['episodes']) != len(expected_digests):
+            raise ContractError('numeric episode count differs from ORIGINAL Source digest order')
     if expected_records is not None and len(manifest['episodes']) != len(expected_records):
         raise ContractError('numeric/original Source episode count differs')
     for episode in manifest["episodes"]:
@@ -635,6 +904,8 @@ def _read_rollout(directory: Path, expected_digest: str, model: RecordedModelCon
         selections = tuple(Selection(**value) for value in metadata["selections"])
         record = EpisodeRecords(bank.view(), tuple(frames), tuple(tables), selections, metadata["end_kind"], metadata["outcome"], metadata["reason"],
                                 action_contract=action_contract, purpose=purpose, synthetic_capacity=synthetic_capacity)
+        if expected_digests is not None and _episode_correspondence_digest(record) != expected_digests[episode_index]:
+            raise ContractError('numeric raw record differs from ORIGINAL native Source correspondence')
         if expected_records is not None:
             original = expected_records[episode_index]
             if (record != original or any(canonical(asdict(a)) != canonical(asdict(b))

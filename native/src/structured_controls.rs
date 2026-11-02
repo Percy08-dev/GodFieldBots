@@ -199,7 +199,7 @@ fn controls(value: &Value, generation: usize) -> Result<()> {
         "structured snapshot pool mismatch",
     )
 }
-fn binding(value: &Value) -> Result<()> {
+pub(crate) fn binding(value: &Value) -> Result<()> {
     value.closed(
         &[
             "device",
@@ -217,7 +217,7 @@ fn binding(value: &Value) -> Result<()> {
     n(value, "managed_budget_bytes", 1, 12i128 << 30)?;
     Ok(())
 }
-fn visibility(value: &Value) -> Result<()> {
+pub(crate) fn visibility(value: &Value) -> Result<()> {
     if value.is_null() {
         return Ok(());
     }
@@ -305,7 +305,7 @@ fn attention(shapes: &mut BTreeMap<String, Vec<i128>>, name: &str, width: i128, 
     }
 }
 
-fn model(
+pub(crate) fn model(
     value: &Value,
     budget: &Arc<Budget>,
     control: &Control,
@@ -776,7 +776,11 @@ fn pure_model(config: &Value, control: &Control) -> Result<Value> {
     control.check()?;
     Ok(Value::Object(output))
 }
-fn architecture(model: &Value, budget: &Arc<Budget>, control: &Control) -> Result<String> {
+pub(crate) fn architecture(
+    model: &Value,
+    budget: &Arc<Budget>,
+    control: &Control,
+) -> Result<String> {
     let mut fields = model.object()?.clone();
     fields.remove("resources");
     digest(
@@ -796,7 +800,7 @@ fn architecture(model: &Value, budget: &Arc<Budget>, control: &Control) -> Resul
         control,
     )
 }
-fn actions(config: &Value) -> Result<()> {
+pub(crate) fn actions(config: &Value) -> Result<()> {
     let action = config.require("actions")?;
     action.closed(
         &[

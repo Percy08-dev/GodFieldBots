@@ -227,7 +227,8 @@ async def run_experiment(loaded: LoadedConfig, command: str, *, collection: Coll
 
 
 async def _run_experiment(loaded: LoadedConfig, command: str, *, collection: CollectionPlan | None = None,
-                          ledger: Any = None, _structured_factory: Any = None) -> tuple[Path, Json]:
+                          ledger: Any = None, _structured_factory: Any = None,
+                          _structured_source_ops: Any = None) -> tuple[Path, Json]:
     """Private composition body; the normal environment factory remains guarded."""
     config = loaded.config
     started = collection.started_monotonic if collection is not None and collection.started_monotonic is not None else time.monotonic()
@@ -239,12 +240,20 @@ async def _run_experiment(loaded: LoadedConfig, command: str, *, collection: Col
     preflight_deadline = min(execution_deadline, replay_deadline)
     structured = isinstance(config.actions, ActionConfigV2)
     supplied_ledger = ledger
+    if _structured_source_ops is not None:
+        from gf_training.structured_ppo import _NativeComponentOps
+        if (type(_structured_source_ops) is not _NativeComponentOps or _structured_factory is None
+                or not structured or collection is None or supplied_ledger is None):
+            raise ContractError('concrete native source composition requires private factory and owned collection/ledger')
+        _structured_source_ops.validate_config(config)
+        _structured_source_ops.require_live_owner(supplied_ledger)
     structured_preprocessing = None
     if structured:
         from gf_cli.config import RunConfigV2
         from gf_cli.structured import structured_backend, structured_bindings
         from gf_simulator_client.structured_resources import ReservationLedger
-        structured_preprocessing = structured_backend(config.preprocessing)
+        structured_preprocessing = (_structured_source_ops.preprocessing_identity(config, deadline=preflight_deadline)['implementation']
+                                    if _structured_source_ops is not None else structured_backend(config.preprocessing))
         assert isinstance(config.run, RunConfigV2)
         ledger = supplied_ledger if supplied_ledger is not None else ReservationLedger(config.run.global_cuda_budget_bytes, config.run.max_participant_workers)
         if not isinstance(ledger, ReservationLedger):
@@ -267,7 +276,10 @@ async def _run_experiment(loaded: LoadedConfig, command: str, *, collection: Col
             if collection is None or supplied_ledger is None:
                 raise ContractError('structured neural collection requires owned Generation2 context and SAME ledger')
             from gf_cli.structured import validate_owned_collection
-            validate_owned_collection(collection, ledger, config, deadline=preflight_deadline)
+            if _structured_source_ops is not None:
+                _structured_source_ops.validate_owned_collection(collection, ledger, config=config, deadline=preflight_deadline)
+            else:
+                validate_owned_collection(collection, ledger, config, deadline=preflight_deadline)
         elif any(label != binding.model_id + "-structured-v1" for label, binding in registry.items()):
             raise ContractError("structured baseline registry label/role mismatch")
         if collection is not None and any(label not in registry for group in collection.groups for spec in group.episodes for label in spec.policies):

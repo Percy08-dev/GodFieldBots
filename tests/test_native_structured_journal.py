@@ -74,7 +74,8 @@ def test_original_j5_every_raw_token_and_full_precision_selection_matches_python
     assert core.used_bytes() == 0
     with pytest.raises(RuntimeError):
         core.diagnostic()
-    assert 'structured_preprocessing_contract' not in dict(native.build_info())
+    assert not hasattr(native.StructuredJournalTokens, 'authorize')
+    assert not hasattr(native.StructuredJournalTokens, 'export_cohort')
 
 
 @pytest.mark.parametrize('accepted', [False, True])

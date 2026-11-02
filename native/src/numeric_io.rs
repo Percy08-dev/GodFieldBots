@@ -8,6 +8,46 @@ use std::io::{Read, Write};
 const BLOCK_BYTES: usize = 32 * 1024;
 const BLOCK_VALUES: usize = BLOCK_BYTES / 8;
 
+pub(crate) fn read_f32(
+    input: &mut impl Read,
+    values: &mut BudgetVec<f32>,
+    count: usize,
+    control: &Control,
+) -> Result<()> {
+    control.check()?;
+    let start = values.len();
+    let end = start
+        .checked_add(count)
+        .ok_or_else(|| Error::resource("FP32 array length overflow"))?;
+    values.reserve(count)?;
+    let result = (|| {
+        let mut next = start;
+        while next < end {
+            control.check()?;
+            let stop = next + (end - next).min(BLOCK_BYTES / 4);
+            values.resize(stop, 0.0)?;
+            let chunk = &mut values[next..stop];
+            if cfg!(target_endian = "little") {
+                input.read_exact(bytemuck::cast_slice_mut(chunk))?;
+            } else {
+                let mut bytes = [0u8; BLOCK_BYTES];
+                let bytes = &mut bytes[..chunk.len() * 4];
+                input.read_exact(bytes)?;
+                for (value, raw) in chunk.iter_mut().zip(bytes.chunks_exact(4)) {
+                    *value = f32::from_le_bytes(raw.try_into().unwrap());
+                }
+            }
+            control.check()?;
+            next = stop;
+        }
+        control.check()
+    })();
+    if result.is_err() {
+        values.truncate(start);
+    }
+    result
+}
+
 pub(crate) fn read_f64(
     input: &mut impl Read,
     values: &mut BudgetVec<f64>,

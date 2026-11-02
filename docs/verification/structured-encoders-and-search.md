@@ -1237,10 +1237,126 @@ be validated as raw records without active token projection. Shared-walker final
 review, full Session/parent authorization and common-loop integration are pending;
 the diagnostic and low-level tests alone do not activate reader capabilities.
 
+The later isolated Session candidate reaches an actual16-game FakeHTTP cohort
+through32independent participant worker processes and the real generation0
+learner. Its typed-export probe passes1case in18.84s; the concrete Python owner/
+publication probe passes1case in22.85s. The original Python Source oracle counts
+16learner episodes/32learner endpoints/64both-view accepted endpoints. The latter
+probe uses configured preparation limits, actual sealed/PCG/schedule checks,
+unchanged full-precision GAE/whole-cohort normalization, private C1 publication,
+payload retirement before decoding, original Source digests and the before-Adam
+recheck/begin_update phase. Both intentionally stop before Adam: their parents
+remain failed/quarantined with updates0 and no Generation1, never learning-run
+acceptance or reusable healthy parents. An earlier23.53s test fails because it
+incorrectly expects16endpoints; the corrected test preserves all32.
+
+Root additionally checks9field-specific closed-ABI rejection branches against
+extension3208e61d2e043bc5e7a7cc599f0006da3e1beaa6b60245967d7af5435e47e6d8,
+without Source I/O, workers or leaked scratch. Evidence is
+`/tmp/gfb-c2b2-abi-smoke.json`; the first draft's empty-work-masked checks are
+preserved separately and do not supply distinct field coverage. Candidate wheel
+3059884e280361b65775d0adc5ba57aeaa5807b576b355549af948584de866d0,
+native source25e8cd98a73a51907e71e90d19a4817b3d73c7a5522c1dcdd3492615f2bb6104.
+Installed native and full capability markers remain unchanged. The two independent
+bridge findings are fixed: finite-scan scratch is admitted before allocation,
+and initiating entry/body errors retain the exact unconfirmed cleanup owner.
+Root's bounded host regression passes4cases in3.39s; correctness separately runs
+the3overlapping ownership cases (PASS), and both narrow code rechecks are READY.
+These counts overlap and do not supply common-loop acceptance.
+Common-loop two-update/resume, final negative matrix and final reviews remain
+pending. This paragraph records a checkpoint, not C2b2 acceptance.
+
+A bounded read-only search finds no remaining original old62model2 whole-PPO
+parent with complete original collection/Journal5/sidecar files. The two38-file
+archives retain recorded metadata/artifacts/numeric and manifest-only collections;
+they remain metadata/numeric compatibility fixtures, not whole-Source positives.
+Do not reconstruct their missing Source from rollout or promote their component
+status. Raw old62journal/recorded decoding checks and rejection of inadequate
+whole-Source evidence remain applicable. The five original legacy1 corpus/index/
+saved-PPO proofs remain available for the final candidate.
+
+## C2b2 frozen integration and compatibility verification
+
+Both independent final SOURCE reviews are READY with no remaining blocking
+finding. They cover the one shared PPO loop and four native Source seams,
+explicit SAME-object private CLI composition, closed authorization, original
+Source/sealed ownership through update/save, payload/descriptor leases, and
+unchanged public engineering/Environment guards. The final storage change passes
+the actual remaining training-owned allowance from the coordinator and deletes
+only verified private disk staging after RAM export, before payload exposure and
+numeric publication. It preserves Prep scratch and the separate1GiB admission
+headroom. Confirmed/unconfirmed executor shutdown and preserved initiating
+cancellation have targeted recovery tests; no detached cleanup owner is dropped.
+
+Frozen pre-activation Python producer:
+6e988b21bb61cc441a3ed2bcf661c246085d598d756a92bb5469cc0aeb7e8bfb.
+Native source0135744d3f8af632ce6a47c107c26bb9d7180cb13d88c7811affab51d302b413;
+ELF172bc33eb11abb42587d899f1effbc692f89915d8922ceaf9aabe15313724b2c;
+wheel5e557425cfd50c2078f8e59be134cb443d22edb8aadf52cc7167b1db2cd2312b;
+sdist eafd312b876316285c2ac066999acc30eeaf427a5366a76a0cb145899a35c9d2.
+
+The current candidate passes31bounded owner/controller/publisher cases,
+110Rust tests/2ignored, full Ruff and mypy110files. Both controller findings have
+runtime negatives, and no-staging16-episode/eight-group cardinality is checked
+before participant lookup. These counts overlap previous checkpoints.
+
+Root's final HOST command passes2tests in124.00s: the measured-storage original
+two-update common-loop target and exact continuous2versus pause1/resume2. The
+three resulting parents each finish2updates/64learner endpoints/8Adam steps;
+network/Adam/RNG bytes, schedules, inference identities and generation controls
+match across the resume comparison. All worker/learner cleanup assertions pass.
+This is96FakeHTTP games across the three parents, with original16-game cohorts,
+budgets and192participant worker processes, not real Simulator evidence.
+
+```sh
+timeout --signal=INT --kill-after=20s 300s env PYTHONPATH=/tmp/gfb-c2b2-final-module-20261102 CUDA_VISIBLE_DEVICES= PYTHONDONTWRITEBYTECODE=1 UV_CACHE_DIR=/tmp/gf-structured-uv uv run --no-sync pytest -q tests/test_native_structured_session.py::test_native_existing_common_loop_two_original16_batches_and_control_commit tests/test_native_structured_session.py::test_native_exact_continuous_two_vs_one_boundary_pause_resume --basetemp=/home/percy/develop/GodFieldBots/runs/assessments/structured-native-c2b2-final-loop-20261102
+```
+
+The stable evidence hashes964parent files:
+`runs/assessments/structured-native-c2b2-final-loop-20261102/evidence.json`,
+a08cd2f1dd8e1b62a03b6226f8e15c6d8cab36c797254ede81aa4cbf388c8328.
+Root independently matches46sdist/source files, both embedded assets, wheel stub,
+loaded extension and unchanged Cargo.lock. Package proof:
+7b44ceb2d02d87c777ee4c8ae169d216b2371a4d264fb30dd4d479bbca700c15.
+
+All five actual original legacy proofs PASS: history and observation83783-action
+arrays/sample/archive/dataset identities and complete pipeline counts; exact
+83783-row Parquet/sidecar; saved-PPO1/4worker reader agreement for16episodes/
+224decisions/all8arrays. Both PPO probes rehash/stat-match72original files, and
+the24protected fit files remain unchanged. Aggregate:
+`runs/assessments/structured-native-c2b2-legacy-20261102/verification.json`,
+99da88d95145c579a94ca5cbf8e277302fdaf12cc57c3260fe38fcc3e76d15a0.
+The verifier's two default-sandbox PPO attempts are preserved separately as
+interrupted partials (one unknown exit, one130); Root's fresh HOST runs exit0.
+The known sandbox asyncio limitation required no product change. Earlier missing-
+import/count-assertion failures are likewise preserved, with successful actual
+current-candidate execution recorded separately.
+
+Root accepts C2b2 after the capability/default-dispatch/failure receipt. The
+activation rebuild changes only the two approved build_info fields in lib.rs;
+all parser/staging code, assets and stub match the tested pre-activation sdist.
+Actual reader_settings/default-native selection and a real original16-game late
+Source mutation pass2cases in22.77s. The mutated report is detected after numeric
+publication/retirement/decoding but before Adam; counters stay0, no Generation1/
+update1/artifact1 exists, the parent is failed/quarantined and all32participant
+workers plus learner are reaped. Diagnostic boundary regressions pass77cases;
+their classes still expose no authorize/export methods. Ruff/mypy110/fmt pass.
+
+Activated candidate ELF81106d4c368fc45419a25f52e23d8b4f6a16cdcd8fe86ee627026e7572142bc3;
+native sourcea923e6898467f0e7a4b224213668e5a8da55cfb9f723d1b67f617eb5dba47260;
+wheel fc64d2850e6ea929f8505aca938af052e57becfc3b9ae3b4c355f67e030d8a52;
+sdist e7cabdf4b74d7e2e0da8a7a2f623ddb4f93d16cabb1bb1697cf2679cf2263a9f.
+Root's actual-package/capability proof is
+`runs/assessments/structured-native-c2b2-activation-20261102/package-and-capability-proof.json`,
+ad11449e94d253b78767d96093fc0906637b60509296c16636be9f5547d6f962.
+Original late-mutation evidence remains under
+`/tmp/gfb-c2b2-marker-failure-20261102-a` and is ineligible for reuse.
+Installed native is unchanged. Tree2/C3b,
+qualified Source, real-game acceptance and final test remain outside this scope.
+
 ## Remaining integrated acceptance
 
-Currently NOT RUN: native Session authorization/publication/common-loop acceptance,
-deterministic Tree2 and Dataset2 integration, and qualified collection E2E PPO
+Currently NOT RUN: deterministic Tree2 and Dataset2 integration, and qualified collection E2E PPO
 integration. The latter includes192-game baseline, attention3models×2inference devices×
 continuous/pause-resume real2updates, other hand-mode MLP games, fixed512train
 decision CPU p95<=3s acceptance under the complete qualified contract. Completed

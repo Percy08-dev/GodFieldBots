@@ -46,6 +46,12 @@ def structured_environment(settings: EnvironmentSettings, ledger: ReservationLed
 
 
 def validate_owned_collection(plan: CollectionPlan, ledger: ReservationLedger, config: Any, *, deadline: float) -> None:
+    if config.preprocessing.backend == 'rust':
+        structured_backend(config.preprocessing)  # Normal/public path always requires real markers first.
+        from gf_training.native_backend import load_native
+        from gf_training.structured_ppo import _NativeComponentOps
+        _NativeComponentOps(load_native()).validate_owned_collection(plan, ledger, config=config, deadline=deadline)
+        return
     from gf_training.structured_ppo import cap
     from gf_training.structured_ppo_source import validate_owned_collection as validate
     validate(plan, ledger, max_owned_bytes=cap(config), deadline=deadline)
