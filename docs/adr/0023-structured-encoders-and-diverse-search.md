@@ -2383,3 +2383,115 @@ training-schema3/provenance, fresh native fit and cost-accounting interfaces;
 this draft neither invents a future normative contract nor authorizes placeholder
 qualified success. Full HPO, strength comparison and final-test evaluation remain
 outside this task's implementation acceptance.
+
+## 29. C3b1 concrete validation and source-only manifest interfaces
+
+Root's first two C3b pins are: retain Collection4's existing closed ppo linkage
+keys (including learner_seats and EpisodeSpec.learner_viewer, meaning the selected
+policy's data seats), and publish a SOURCE/RECIPE manifest2 rather than cached
+feature matrices. Runtime actor-only ownership is expressed by the distinct
+FinalValidationContext; a learner_seats field never implies a resident learner.
+C3b1 implements validation/source/manifest preparation. C3b2's trained-provenance
+pairing and full fit-workspace envelope receive their separate exact gate before
+fitting code. They are required remaining work, not removed from the plan.
+Independent exact C3b1 DESIGN review is READY (2026-11-02); implementation and
+final conformance/acceptance remain separate gates.
+
+Use NEW native structured_tree_dataset.rs/TreeDatasetSession and Python
+native_tree_dataset, structured_tree_data, structured_tree_validation modules.
+Reuse concrete parent controls, collection/J5 walkers, typed staging and S2/numeric
+validators, with no eager OriginalInputs.open followed by repeated Source scans.
+Keep old APIs/datasets unchanged and C2b2's Plan2 lifecycle exact.
+
+The new native plan is closed schema_version,kind,parents,encoder,action_contract,
+purpose,synthetic_capacity; kind=structured-tree-dataset-plan, version2,
+parents=[{directory,validation_directory}] in17/29/43order, encoder is the exact
+closed Tree2 encoder, and synthetic_capacity=false. It derives ALL committed
+training work items, then the three final validation items in fixed parent order.
+Require encoder.max_positions>=the homogeneous original actions.max_sequence_length
+before staging; window selection remains independent of the original NNwindow.
+Settings are the five consumed C2b2 Source limits. Never interpret a caller's
+subset, success flag or cached index as source membership/eligibility.
+
+control_summary2 is closed schema_version,kind,scope,qualified,
+parent_qualification,control_fingerprint,input_binding,tree_projection,parents,
+worklist. Current input_binding is the engineering component/false-capacity
+classification, qualified=false and parent_qualification=not_performed. Compact
+parent/sealed descriptors follow C2b2; no full Config IPC. Each work item is closed
+work_index,parent_index,collection_kind,generation,directory,manifest_sha256,
+numeric; persisted collection_kind literals are exactly ppo_batch/ppo_validation.
+Numeric is the original directory/sha256/files map for ppo_batch and null only for
+explicit ppo_validation. authorize_controls2 is closed schema_version,
+kind,control_fingerprint,tree_projection_sha256,parents,worklist_sha256; parent
+acks are parent_index,config_sha256,resume_identity,sealed_sha256,controls_sha256.
+Actual NumPy-only seals and original PCG/pool/cadence checks precede this ack.
+
+collection_summary2 is closed schema_version,kind,control_fingerprint,work_index,
+parent_index,split,collection_kind,generation,manifest_sha256,source_set_sha256,
+schedule_sha256,bindings_sha256,original_correspondence,numeric,selected_roles,
+counts,tree_projection,elapsed_seconds. The last field is original finite
+nonnegative collection time bound by the original manifest/source fingerprint;
+shared generation adds it only for ppo_validation, never train collection time
+on top of its parent elapsed. Every episode/selected viewer/accepted count/closure is
+present, including zero endpoints. authorize_collection2 binds those original
+hashes/index plus selected_roles_sha256,correspondence_sha256,numeric_sha256,
+tree_projection_sha256. Python first verifies the actual recorded numeric cohort
+for train; validation instead verifies its exact final-policy schedule/bindings
+and original natural closures, not a fabricated training numeric artifact.
+Closed fields, index/order, population and fingerprints must match exactly.
+
+Methods are control_summary,authorize_controls,stage_next,collection_summary,
+authorize_collection,export_current,retire_current,finalize,recheck,close and
+cancel_handle. All native work resumes with the additional retained-Python byte
+count. At most one full collection and payload is staged; no advance before
+retirement, no second export/rescan/rebaseline, and no finalization before exact
+worklist exhaustion and final original sweep. stage_next admits the full16/64
+population. export_current returns the existing readonly owned U8/I64 bank ABI
+with a distinct selected-inputs metadata kind; no PPO labels/GAE/latents. Preserve
+full original Selection/raw digests separately. Tree history is projected from
+raw immutable facts using the requested window, independently of original NN
+header/numeric semantics.
+Each accepted decision stages ONLY its selected candidate: candidate arrays have
+one row and local selection0; immutable correspondence separately retains the
+original Selection.index and full original table hash. Native validates the entire
+original candidate table/accepted action first, but never stages the NNfull-table
+candidate arrays or gives every candidate the observed label.
+Export uses C2b2's hash-verified independent RAM banks, then closes only the native
+disk spool BEFORE payload exposure or provisional sink writes. Exported state is
+set only after cleanup succeeds; failure exposes no payload and retains the owner.
+RAM/control/original-source leases persist until logical retirement. Additional
+retained-Python/sink-buffer bytes remain charged on EVERY resumed call, including
+retire_current/finalize, and are updated before allocation; provisional disk
+output has its own explicit remaining-storage allowance.
+
+FinalValidationContext holds completed-parent/original-source/sealed ownership,
+final inference and execution binding, original/projected Config hashes,
+expected64-game schedule/registry and the SAME actor-only ledger. Construction,
+precollection and retirement recheck these actual originals. The existing
+private fixed-I/O CLI composition accepts only the concrete validation context;
+normal public contract/native preflight/Environment guards remain independent.
+Do not relax the live training-owner path, add a Config bypass or fabricate
+learner state. Both backends preserve source semantics; native uses this original
+Source path rather than a hidden complete Python Source pass.
+
+Manifest2 is closed schema_version,kind,selection,label_recipe,input_binding,
+input_recipe,tree_projection,neural_cohort,parents,collections,counts,
+source_set_sha256,shared_generation,content_sha256. Kind identifies structured
+fixed sources; selection is all-explicit-learner-accepted-natural-return-v2 and
+labels use behavior-selected-natural-return-gamma1-v1. Parents bind original Run2,
+registry and every generation/update/final inference hash. Collections bind the
+above role/kind/split/manifest/source/numeric/correspondence/schedule/binding/count
+evidence. tree_projection binds encoder/raw token/feature recipe and signatures,
+names/categories; neural_cohort binds homogeneous original model/action/input/
+execution conditions. Shared generation records seconds,cost_key,scope, counting
+each PPO elapsed time and each final validation once, not train collections again.
+Its key excludes Tree window and fit seed. content_sha256 hashes the canonical
+closed content without itself. Inspect/build revalidate originals; an index or
+manifest flag cannot grant fit authority.
+
+Per-fit FP32 blocks are private, reconstructed from originals under these exact
+conditions, individually/shard decoded<=64MiB and jointly admitted with controls.
+They are not a new persisted cached-feature authority. Public engineering-profile
+dataset qualification/fitting rejects before activity; private component records
+and manifests remain explicitly unqualified. Trained schema3 emission/provenance
+and full fresh-fit/cost ownership remain C3b2's next required gate.
