@@ -1947,3 +1947,53 @@ measurements with unchanged original budgets/coverage. Earlier ownership/deletio
 candidate/raw-storage evidence remains valid for its original scope; earlier
 62-field numerics are not corrected-model evidence. Real-I/O/specification and
 fitting gates remain independently closed.
+
+## 25. Bounded Journal5 token diagnostic before typed staging
+
+C2b1 implements §23's validation/token foundation without advertising the final
+reader. Independent §25 interface design review is READY (2026-11-02); concrete
+implementation/conformance remains separate. The diagnostic interface is additive
+StructuredJournalTokens(directory,journal_file,settings,deadline,cancel_handle),
+where journal_file is a strict nonempty owned basename and settings are closed
+memory_bytes/max_json_bytes/max_record_bytes, all consumed. Reuse the existing
+verified Sources/Budget/Control/retirement machinery and last-sweep identity fixes.
+Every work/deadline/cancellation path retains original ownership until joined.
+
+The class exposes diagnostic(retained_python_bytes=0), recheck, used/peak/control
+reservation observations, existing cancel handle and terminal close. It has no
+authorize/export/NumPy/PPO placeholder methods. Diagnostic bytes have an explicit
+kind=structured-journal-tokens, validation_scope=journal5-columns-rawtokens-only,
+qualified=False and parent_qualification=not_performed. They contain bounded
+original header/bank/frame/table/Selection/closure data and exact raw token columns
+for differentials only. Management header data is never a policy feature.
+
+Derive the actual aggregate window/corrected descriptor from the validated own
+neural header/model declaration; reject old62 active projection. Baseline1/actions2
+uses the explicit corrected128default for this diagnostic and reports that scope;
+its recorded header window/signature must match corrected128, otherwise reject
+the unsupported diagnostic window rather than silently overwrite it. A neural
+header is validated as its OWN declaration; this class alone does not establish
+that it matches a checkpoint or an original parent model.
+arbitrary consumer/window projection belongs to the later reviewed typed session.
+No extra catalog lookup or request-echoed signature can stand in for derivation.
+This journal/column check grants no parent/snapshot/source authorization.
+
+Pre-admit serialization and its retained Python copy under the same budget and
+bounded control-wire allowance, preserving leases until retirement. Large
+diagnostics may explicitly fail their cap; do not truncate rows/events/columns.
+This JSON surface is not the production candidate transport or C1 data ABI.
+C2b2 retains the separate readonly typed-array/one-shot payload/authorization gate.
+Full capability markers stay absent until that complete bridge and old proofs
+pass. C2b1 begins with pure exact frame/event/history/card token and sidecar
+differentials, then the complete append/frame/positive-ack/closure state machine;
+only completed validated stages are reported as such.
+
+Root accepts one narrow exception to §21's no-RNG-port statement, whose scope was
+PCG64/SeedSequence schedule authorization: reproduce the CPython3.14/GIL MT19937
+integer-seed INITIAL state solely to validate recorded search-report consistency.
+It never draws randomness, searches/orders candidates, executes game RNG, ports
+PCG64/SeedSequence, authorizes schedules or becomes a policy feature. Bind the
+closed state format/version and compare against Python random.Random(seed).getstate
+for0/1/17/2^32/2^63−1/uint64max plus malformed/range negatives. Only C2b2's Python
+authorization binds the recorded header seed to the frozen original plan; matching
+an initial state here supplies no parent or Source authority.

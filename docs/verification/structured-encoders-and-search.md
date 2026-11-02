@@ -1145,7 +1145,77 @@ has no Simulator/Source authority or CPU/GPU ordering claim. Evidence
 750ab41fec0d842d0eb0f3d4b56d767d22dfd0690bed3489e6bef8370862386c under
 runs/assessments/structured-actual-worker-history376-evidence-20261102 preserves
 harnesses/results/artifacts. Earlier failed revision fixtures remain failed.
-Corrected CUDA phase/physical allocator results still require separate evidence.
+Corrected CUDA phase/allocator supplements are recorded next; physical context/
+global high-water and qualified-path acceptance remain outside their scope.
+
+The corrected default Transformer2 GPU panel repeats the same512TRAIN+512peer
+workload:49games/2concurrent/4workers/98startups, no failures. Decision p95 is
+667.134ms and startup p951724.556ms. Host input pack/transfer p953.946ms,
+forward enqueue/implicit waits606.335ms, explicit sync0.516ms, CPU return0.402ms;
+these are not isolated DMA/kernel durations. Evidence
+f4f10a05e6ddcc5824508c3b5e43bcc9878bcc8bce13c7f81069422a3a559b82 under
+runs/assessments/structured-latency-history376-transformer-cuda-20261102 is audited
+with exact membership/quantiles/hash maps. No CPU/GPU speed ordering is inferred.
+
+The corrected376five-process joint128raw-token stress also repeats with warm Adam
+before four participant-shaped workloads, then learner updates while their caches
+remain resident. All5exit0/reap;5ready/36shape/5closed events. Managed estimate
+9,354,980,864B; final Torch allocated280,269,312B/reserved633,339,904B; per-process
+peak allocated learner186,594,304B/participant96,614,400B. Joint full-history
+instrumented maximum is11.176s for participants,4.723s for learner. It is not
+cached-policy latency, action legality, IPC/lease or Source evidence; Torch counters
+exclude context/native/external allocations/host and are not simultaneous physical
+global high-water. Evidence
+259fbf009cf2d8cf97add6446ea96bbd37eb5bafa3d07b6fc59b0f175c726b77 under
+runs/assessments/structured-history376-five-process-cuda-joint128-20261102 is
+independently audited, alongside the actual-worker stress above. All three
+supplementary inventories/finite values/counts/reap boundaries match their scope.
+
+Additional corrected376 CUDA cross-numeric evidence:
+
+```sh
+timeout --signal=INT --kill-after=20s 300s env CUDA_VISIBLE_DEVICES=0 CUBLAS_WORKSPACE_CONFIG=:4096:8 GFB_RUN_STRUCTURED_CUDA=1 GFB_RUN_STRUCTURED_LEARNING_CUDA=1 GFB_RUN_STRUCTURED_NUMERIC_CUDA=1 GFB_RUN_STRUCTURED_PROTOCOL_CUDA=1 UV_CACHE_DIR=/tmp/gf-structured-uv uv run --no-sync pytest -q tests/test_structured_cuda.py tests/test_structured_learning_cuda.py tests/test_structured_numeric_worker_cuda.py tests/test_structured_protocol_cuda.py
+```
+
+PASS16in44.98s, exit0. CPU/CUDA full/split/cache, dense/chunk logits/gradients,
+encoder/partial-Adam gradients and resume, numeric child and participant protocol
+checks use the existing tolerances unchanged. This is the corrected376recipe;
+old62CUDA evidence is not substituted. No Simulator/Source-quality claim.
+
+## C2b1 Journal5/raw-token diagnostic acceptance
+
+Both independent final reviews are READY with no blocking finding. The bounded
+StructuredJournalTokens diagnostic validates original actor-local Journal5 event
+appends/prefixes, immutable frames, six-column sidecars, exact Selection metadata,
+positive acknowledgements and natural/interrupted/zero-frame closure. It derives
+corrected376tokens from the own declared window/signature; baseline1/actions2
+requires corrected128. It preserves perceived definitions, observed event-time
+facts and viewer/future isolation. Header self-consistency supplies no checkpoint,
+parent or Source authorization. Raw integer/mask columns are not learned latents.
+
+Final J5 suite PASS76in1.22s; root HOST combined J5+C2a PASS133in19.19s; full Rust
+PASS97/2ignored, Ruff/mypy109/fmt/diff checks PASS. The earlier195-case combined
+native regression passes140.39s before the tiny unchanged MT initialization loop
+is factored privately. Six direct CPython3.14initial-state goldens and header/range
+negatives cover that documented search-report-only exception. No random draws,
+game RNG, PCG64/SeedSequence or schedule authorization is ported.
+Correctness independently reruns76final cases plus three fully rehashed viewer/
+revision/Fog information-boundary corruptions, all rejecting as the Python
+reference does. Conformance independently runs76on the final binary.
+
+```sh
+timeout --signal=INT --kill-after=10s 180s env PYTHONPATH=/tmp/gfb-c2b1-module CUDA_VISIBLE_DEVICES= UV_CACHE_DIR=/tmp/gf-structured-uv uv run --no-sync pytest -q tests/test_native_structured_journal.py tests/test_native_structured.py
+```
+
+Final extension3b376f1896aab52283d78f9cac5529955dde47887444188c8569d28182fbae88;
+native sourcebc71730e17ee2eddf78387f42caa3774f542ff834dd15cb293700077e610e292;
+wheelbb13b72f433511021b72cf41ed0393e0b8c6a5a786230886869d66d2776eb9c1;
+sdist5309f34f74f81e7ae5affa5c0d24a9ee4119da8c54bf357c7b76538ac70c802f.
+Both recipe assets, stub and differential/golden fixtures are included and match
+source. Installed native stays unchanged; full reader capability markers remain
+ABSENT. This milestone does not implement typed export, Python GAE/publication,
+common-loop native staging, Tree2 or qualified Source eligibility. C2b2 remains
+the next interface/integration milestone under ADR0023§23.
 
 ## Remaining integrated acceptance
 

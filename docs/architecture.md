@@ -54,8 +54,12 @@ passes35tests and its actual CUDA learner/CPU-or-CUDA inference resume matrix
 passes6conditions. Full Ruff/mypy cover107source files. Later corrected history
 and metadata-only Native C2a acceptance covers109source files,94Rust tests/2ignored
 and57native diagnostic cases. Installed native remains unchanged and full
-structured markers are absent pending C2b staging. Qualified Source authority,
-new native processing and deterministic LightGBM2 integration remain pending;
+structured markers are absent pending C2b staging.
+The later C2b1 owned Journal5/column/raw-token diagnostic also passes both reviews,
+76new cases,133root native cases and97Rust tests/2ignored; full markers still stay
+absent until C2b2 typed staging/authorization/publication is accepted.
+Qualified Source authority, complete native staging and deterministic LightGBM2
+integration remain pending;
 their bounded design is accepted in ADR0023. No real v2 experiment or full-plan
 acceptance is claimed. Milestone scopes, overlapping historical counts and
 remaining performance/experiment checks are in the

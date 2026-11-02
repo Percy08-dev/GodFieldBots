@@ -168,6 +168,42 @@ impl Sources {
         self.remember(path, identity, digest.clone())?;
         Ok(digest)
     }
+    pub fn bytes(&mut self, path: &Path, max_bytes: usize) -> Result<BudgetVec<u8>> {
+        let (mut file, identity) = self.open(path)?;
+        let length =
+            usize::try_from(identity.2).map_err(|_| Error::resource("input size overflow"))?;
+        if length > max_bytes {
+            return Err(Error::resource("structured raw file cap exceeded"));
+        }
+        let mut bytes = BudgetVec::with_capacity(
+            &self.budget,
+            length
+                .checked_add(1)
+                .ok_or_else(|| Error::resource("input size overflow"))?,
+        )?;
+        let _scratch = self.budget.reserve(32768)?;
+        let mut block = [0u8; 32768];
+        let mut hasher = Sha256::new();
+        loop {
+            self.control.check()?;
+            let left = length.saturating_sub(bytes.len()) + 1;
+            let count = file.read(&mut block[..left.min(32768)])?;
+            if count == 0 {
+                break;
+            }
+            if bytes.len() + count > length {
+                return Err(Error::contract("structured raw input grew"));
+            }
+            bytes.extend_from_slice(&block[..count])?;
+            hasher.update(&block[..count]);
+        }
+        self.current(path, &file, &identity)?;
+        if bytes.len() != length {
+            return Err(Error::contract("structured raw input size changed"));
+        }
+        self.remember(path, identity, format!("{:x}", hasher.finalize()))?;
+        Ok(bytes)
+    }
     pub fn json(&mut self, path: &Path) -> Result<Document> {
         let (mut file, identity) = self.open(path)?;
         let length =

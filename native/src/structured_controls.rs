@@ -115,7 +115,7 @@ fn classification(value: &Value, contract: &Value) -> Result<()> {
     }
     Ok(())
 }
-fn contract(value: &Value) -> Result<()> {
+pub(crate) fn contract(value: &Value) -> Result<()> {
     value.closed(
         &[
             "profile_id",
