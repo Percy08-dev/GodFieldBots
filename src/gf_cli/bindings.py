@@ -109,3 +109,25 @@ async def native_preflight(registry: dict[str, RuntimePolicyBinding], actions: A
             raise original_error
         if worker.health or time.monotonic() >= deadline:
             raise RuntimeError("native preflight cleanup/deadline failure")
+
+
+def tree2_binding(config: object, actions: object, *, deadline: float=float('inf')) -> tuple[str, RuntimePolicyBinding]:
+    """Resolve ONLY the explicit toy/Training3 root into the closed own DTO.
+
+    Metadata composition grants no qualified Source or real-I/O permission;
+    public composition keeps its independent profile guard before this helper.
+    """
+    from gf_common.structured import ActionConfigV2
+    from gf_models.structured_runtime import own_worker_settings
+    from gf_models.structured_tree_artifacts import binding_options
+    from gf_models.structured_tree_config import ConfiguredTreeModelV2, TreeDescriptor, policy_label
+    from gf_models.structured_tree_pairing import TrainingBinding, resolve_checkpoint
+    if type(config) is not ConfiguredTreeModelV2 or type(actions) is not ActionConfigV2 or config.checkpoint is None:
+        raise ContractError('Tree2 explicit checkpoint and own actions2 required')
+    _,sha,_=resolve_checkpoint(Path(config.checkpoint),max_owned_bytes=config.resources.max_owned_bytes,deadline=deadline)
+    options=binding_options(Path(config.checkpoint),expected_digest=sha,model=config,action_config_hash=digest(asdict(actions)),
+        action_contract=actions.action_contract,purpose='component',synthetic_capacity=False,deadline=deadline)
+    own_worker_settings('lightgbm',actions,options)
+    training=None if 'training_binding' not in options else TrainingBinding(**options['training_binding'])
+    label=policy_label(config,TreeDescriptor(**options['tree_descriptor']),sha,training)
+    return label,RuntimePolicyBinding('lightgbm',options)

@@ -2007,8 +2007,18 @@ pub(crate) fn tree_execution(options: &Value) -> Result<()> {
             "purpose",
             "synthetic_capacity",
         ],
-        &[],
+        &["training_binding"],
     )?;
+    if let Some(binding) = options.get("training_binding") {
+        binding.closed(&["directory", "request_sha256", "completion_sha256"], &[])?;
+        if text(binding, "directory")?.is_empty() {
+            return Err(Error::contract(
+                "Tree2 explicit owned training directory required",
+            ));
+        }
+        checksum(binding.require("request_sha256")?)?;
+        checksum(binding.require("completion_sha256")?)?;
+    }
     is(options, "version", "2")?;
     if text(options, "checkpoint")?.is_empty() {
         return Err(Error::contract("Tree2 own checkpoint required"));

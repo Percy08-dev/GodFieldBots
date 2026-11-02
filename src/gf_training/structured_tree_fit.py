@@ -1,0 +1,484 @@
+"""Concrete Dataset2-backed fresh Tree2 fitting; no arbitrary row/proof entry."""
+from __future__ import annotations
+
+from dataclasses import asdict
+from typing import Any
+
+import numpy as np
+
+from gf_common.domain import ContractError, Json, canonical
+from gf_models.structured_tree_config import ConfiguredTreeModelV2, feature_width
+from gf_models.structured_tree_encoder import PreparedTreeFrame, feature_layout
+from gf_models.structured_tree_pairing import fit_admission, validate_fit_settings
+from gf_training.structured_tree_data import VerifiedTreeDataset
+
+
+class _PreparedTreeFit:
+    """Only this concrete active Source owner can create its private fit rows."""
+    def __init__(self,dataset:VerifiedTreeDataset,model:ConfiguredTreeModelV2,fit_settings:Json)->None:
+        if type(dataset) is not VerifiedTreeDataset or not dataset._active or dataset.source is None or dataset.manifest is None:
+            raise ContractError('actual active verified Dataset2 owner required; arbitrary arrays/provenance cannot enter')
+        if type(model) is not ConfiguredTreeModelV2 or model.checkpoint is not None:
+            raise ContractError('fresh configured Tree2 architecture required')
+        if canonical(dataset.manifest['tree_projection']['encoder'])!=canonical(asdict(model.encoder)):
+            raise ContractError('Tree2 fit encoder differs from verified Dataset2 raw projection')
+        if dataset.manifest['tree_projection']['feature_signature']!=feature_layout(model.encoder)['feature_signature']:
+            raise ContractError('Tree2 fit feature signature differs from verified Dataset2')
+        self.dataset,self.model,self.fit=dataset,model,validate_fit_settings(fit_settings)
+        self.rows={split:dataset.manifest['counts'][split]['selected_decisions'] for split in ('train','validation')}
+        self.admission=fit_admission(model,self.fit,self.rows,retained_bytes=dataset.retained_without_sink())
+        self.blocks:dict[str,list[np.ndarray[Any,Any]]]={split:[] for split in self.rows}
+        self.labels:dict[str,list[np.ndarray[Any,Any]]]={split:[] for split in self.rows}
+        self.counts={split:0 for split in self.rows};self._complete=False
+
+    def prepare(self)->None:
+        if self._complete:raise ContractError('Tree2 private Source rows prepare exactly once')
+        dataset=self.dataset;assert dataset.source is not None
+        width=feature_width(self.model.encoder.max_positions)
+        # Reserve the entire known selected population and Dataset copy allowance
+        # before allocation. Never trim rows/chunk/threads to satisfy admission.
+        dataset.reserve_sink(5*self.admission['raw_bytes'])
+        for split,sample in dataset.selected_inputs():
+            self.admission=fit_admission(self.model,self.fit,self.rows,retained_bytes=dataset.retained_without_sink())
+            index=self.counts[split]
+            if index>=self.rows[split]:raise ContractError('Source produced more selected rows than immutable Dataset2')
+            chunk=self.model.inference.candidate_chunk
+            if index%chunk==0:
+                size=min(chunk,self.rows[split]-index)
+                if size*(width*4+4)>64*1024**2:raise ContractError('private feature+label shard decoded size exceeds64MiB')
+                dataset.reserve_sink(5*self.admission['raw_bytes'])
+                self.blocks[split].append(np.empty((size,width),dtype=np.float32))
+                self.labels[split].append(np.empty(size,dtype=np.float32))
+            source_owned=dataset.source.base+dataset.source.extra+dataset.source._session.used_bytes()
+            frame=PreparedTreeFrame.create(sample.frame,self.model,extra_owned_bytes=source_owned)
+            parts=frame.iter_chunks(sample.candidate)
+            start,row=next(parts)
+            if start!=0 or row.shape!=(1,width):raise ContractError('Tree2 fit consumes only one actually selected candidate')
+            self.blocks[split][-1][index%chunk]=row[0]
+            self.labels[split][-1][index%chunk]=sample.label
+            self.counts[split]+=1
+            del parts,row,frame,sample
+        if self.counts!=self.rows:raise ContractError('Tree2 private preparation omitted original selected rows')
+        dataset.verify_complete()
+        self.admission=fit_admission(self.model,self.fit,self.rows,retained_bytes=dataset.retained_without_sink())
+        self._complete=True
+
+
+def _prepare_request(prepared:_PreparedTreeFit,directory:Any,*,seed:int,deadline:float)->tuple[Json,str,Any]:
+    """Persist only this concrete owner's actual private numeric blocks."""
+    import hashlib
+    import uuid
+    from pathlib import Path
+
+    from gf_common.domain import integer
+    from gf_models.sharded_arrays import write_bundle
+    from gf_models.structured_tree_artifacts import runtime_metadata
+    from gf_models.structured_tree_pairing import (
+        tree_fit_producer,
+        validate_input_envelope,
+        validate_request,
+    )
+    from gf_training.structured_lineage import _ChainScan, _write
+    from gf_training.structured_tree_data import _check_output_ancestors, _outside_output
+    if type(prepared) is not _PreparedTreeFit or not prepared._complete:raise ContractError('actual fully prepared verified Source rows required')
+    integer(seed,0,2**31-1)
+    dataset=prepared.dataset;assert dataset.manifest is not None and dataset.source is not None
+    source_paths=[dataset.path.parent]+[Path(c['directory']) for c in dataset.manifest['collections']]+[Path(p['directory']) for p in dataset.manifest['parents']]
+    directory,ancestors=_outside_output(Path(directory),source_paths)
+    model=prepared.model
+    arrays={f'{split}.{kind}.{index:06}':block for split in ('train','validation')
+        for kind,values in (('x',prepared.blocks[split]),('y',prepared.labels[split])) for index,block in enumerate(values)}
+    # Existing bundle writer may hold a shard/packing temporary. Reserve its
+    # conservative encoded scratch plus metadata while all Source owners remain.
+    scratch=32*(prepared.admission['raw_bytes']+4096*len(arrays))+65536+4096*len(arrays)
+    fit_admission(model,prepared.fit,prepared.rows,retained_bytes=dataset.retained_without_sink()+scratch)
+    dataset.reserve_sink(5*prepared.admission['raw_bytes']+scratch)
+    directory.mkdir(mode=0o700)
+    directory_identity=directory.stat()
+    publisher:Any=_ChainScan(directory=directory,max_owned_bytes=model.resources.max_owned_bytes-dataset.retained_without_sink()-5*prepared.admission['raw_bytes']-scratch,deadline=deadline)
+    publisher._tree_fit_directory_identity=(directory_identity.st_dev,directory_identity.st_ino)
+    publisher._tree_fit_ancestors=ancestors
+    def check()->None:
+        publisher.check();_check_output_ancestors(ancestors)
+        fit_admission(model,prepared.fit,prepared.rows,retained_bytes=dataset.retained_without_sink()+scratch+publisher.retained)
+        dataset.reserve_sink(5*prepared.admission['raw_bytes']+scratch+publisher.retained)
+    check()
+    data=write_bundle(directory/'inputs','features',arrays,_check=check)
+    envelope={'schema_version':3,'kind':'structured-tree-fit-inputs',
+        'action_config_hash':dataset.manifest['neural_cohort']['actions_sha256'],
+        'feature_signature':dataset.manifest['tree_projection']['feature_signature'],'label_recipe':dataset.manifest['label_recipe'],
+        'input_binding':dataset.manifest['input_binding'],'row_counts':prepared.rows,'data':data}
+    check();envelope_sha=_write(directory/'inputs'/'manifest.json',envelope,scan=publisher,immutable=True)
+    files={'inputs/'+name:sha for name,sha in data['files'].items()};files['inputs/manifest.json']=envelope_sha
+    request={'schema_version':3,'kind':'structured-tree-fit-request','run_id':uuid.uuid4().hex,
+        'model':asdict(model.architecture()),'execution':{'inference':asdict(model.inference),'resources':asdict(model.resources)},
+        'fit_settings':prepared.fit,'seed':seed,'input_binding':envelope['input_binding'],'feature_signature':envelope['feature_signature'],
+        'label_recipe':envelope['label_recipe'],'dataset_manifest_sha256':dataset.expected_digest,
+        'dataset_content_sha256':dataset.manifest['content_sha256'],'source_set_sha256':dataset.manifest['source_set_sha256'],
+        'input_files':files,'row_counts':prepared.rows,'producer':tree_fit_producer(),
+        'runtime':runtime_metadata(deadline=deadline),'model_envelope':prepared.admission['model_envelope']}
+    validate_request(request);validate_input_envelope(envelope,request)
+    check();request_sha=_write(directory/'request.json',request,scan=publisher,immutable=True)
+    for name,sha in files.items():
+        check()
+        with publisher.file(directory/name,sha):pass
+    dataset.verify_complete();publisher.finalize();check()
+    # Packing scratch is released; retain original numeric blocks and immutable
+    # request/file metadata throughout the child and final Source verification.
+    dataset.reserve_sink(5*prepared.admission['raw_bytes']+publisher.retained)
+    assert hashlib.sha256((canonical(request)+'\n').encode()).hexdigest()==request_sha
+    return request,request_sha,publisher
+
+
+class _OwnedTreeFitChild:
+    """Reachable pending creation/process/drainers; confirmed reap precedes release."""
+    def __init__(self,directory:Any,deadline:float,log_bytes:int)->None:
+        self.directory,self.deadline,self.log_bytes=directory,deadline,log_bytes
+        self.creation:Any=None;self.process:Any=None;self.drainers:list[Any]=[];self.health:Json={}
+        self.closed=False
+
+    async def start(self,request_sha:str)->None:
+        import asyncio
+        import os
+        import sys
+
+        from gf_training.lightgbm_run import _drain
+        environment={'PATH':os.defpath,'LANG':'C.UTF-8','LC_ALL':'C.UTF-8','CUDA_VISIBLE_DEVICES':'',
+            'OMP_NUM_THREADS':'1','OPENBLAS_NUM_THREADS':'1'}
+        self.creation=asyncio.create_task(asyncio.create_subprocess_exec(sys.executable,'-E','-m','gf_training.structured_tree_worker',
+            str(self.directory),request_sha,str(self.deadline),env=environment,stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.PIPE))
+        initiating:BaseException|None=None
+        try:
+            while not self.creation.done():
+                try:
+                    async with asyncio.timeout_at(self.deadline):await asyncio.shield(self.creation)
+                except asyncio.CancelledError as error:initiating=initiating or error
+            self.process=self.creation.result()
+            assert self.process.stdout is not None and self.process.stderr is not None
+            self.drainers=[asyncio.create_task(_drain(self.process.stdout,self.directory/'stdout.log',self.log_bytes,self.health)),
+                asyncio.create_task(_drain(self.process.stderr,self.directory/'stderr.log',self.log_bytes,self.health))]
+        except BaseException as error:
+            if not self.creation.done() or self.process is not None:
+                vars(error)['_structured_tree_fit_child_cleanup_owner']=self
+            if initiating is not None:
+                initiating.add_note('Tree2 startup after cancellation: '+type(error).__name__+': '+str(error))
+                if not self.creation.done() or self.process is not None:
+                    vars(initiating)['_structured_tree_fit_child_cleanup_owner']=self
+                raise initiating
+            raise
+        if initiating is not None:
+            vars(initiating)['_structured_tree_fit_child_cleanup_owner']=self
+            raise initiating
+
+    async def wait(self)->None:
+        import asyncio
+        async with asyncio.timeout_at(self.deadline):
+            while self.process.returncode is None:
+                if self.health.get('log_limit_exceeded'):raise ContractError('Tree2 native logs exceeded bounded allowance')
+                await asyncio.sleep(.01)
+            await self.process.wait()
+            await asyncio.gather(*self.drainers)
+        if self.process.returncode!=0 or self.health.get('log_limit_exceeded'):raise ContractError('Tree2 fresh numeric child failed')
+
+    async def close(self,deadline:float)->None:
+        import asyncio
+        import time
+
+        from gf_training.lightgbm_run import _stop
+        if self.closed:return
+        if self.creation is not None and self.process is None:
+            if self.creation.done() and (self.creation.cancelled() or self.creation.exception() is not None):
+                # Resolved failed creation proves no returned child. Retire its
+                # task without replaying the already-preserved initiating error.
+                self.closed=True
+                return
+            try:
+                async with asyncio.timeout_at(deadline):self.process=await asyncio.shield(self.creation)
+            except BaseException:
+                if self.creation.done() and (self.creation.cancelled() or self.creation.exception() is not None):
+                    self.closed=True
+                    return
+                raise
+            # Spawn may have completed after start's timeout. Own its pipes now.
+            if not self.drainers:
+                from gf_training.lightgbm_run import _drain
+                self.drainers=[asyncio.create_task(_drain(self.process.stdout,self.directory/'stdout.log',self.log_bytes,self.health)),
+                    asyncio.create_task(_drain(self.process.stderr,self.directory/'stderr.log',self.log_bytes,self.health))]
+        if self.process is not None:
+            try:await _stop(self.process,self.drainers,max(0,deadline-time.monotonic()),self.health)
+            except BaseException as error:
+                if self.process.returncode is not None and all(task.done() for task in self.drainers):
+                    self.health['exit_code']=self.process.returncode;self.health['reaped']=True
+                    self.health['cleanup_failure']=type(error).__name__;self.closed=True
+                raise
+            if self.process.returncode is None or any(not task.done() for task in self.drainers):
+                raise ContractError('Tree2 child cleanup not confirmed')
+            self.health['reaped']=True
+        self.closed=True
+
+
+class _TreeFitRun:
+    """Concrete per-fit owner, retaining Dataset2 originals until child cleanup."""
+    def __init__(self,dataset:VerifiedTreeDataset,directory:Any,model:ConfiguredTreeModelV2,training:Any,seed:int)->None:
+        import time
+        self.dataset,self.directory,self.model,self.training,self.seed=dataset,directory,model,training,seed
+        self.started=time.monotonic();self.deadline=min(dataset.deadline,self.started+training.wall_seconds)
+        self.work_deadline=self.deadline-max(training.cleanup_seconds,dataset.settings.cleanup_seconds)
+        self.child:_OwnedTreeFitChild|None=None;self.publisher:Any=None;self.publication:Any=None;self.request:Json|None=None
+        self.request_sha:str|None=None;self.completion:Json|None=None;self.prepared:Any=None;self.closed=False
+
+    async def _cleanup_child(self)->None:
+        import asyncio
+        if self.child is None:return
+        cleanup=asyncio.create_task(self.child.close(self.deadline))
+        initiating:BaseException|None=None
+        while not cleanup.done():
+            try:await asyncio.shield(cleanup)
+            except asyncio.CancelledError as error:initiating=initiating or error
+        try:cleanup.result()
+        except BaseException as error:
+            if not self.child.closed:vars(error)['_structured_tree_fit_cleanup_owner']=self
+            if initiating is not None:
+                initiating.add_note('Tree2 cleanup error: '+str(error))
+                if not self.child.closed:vars(initiating)['_structured_tree_fit_cleanup_owner']=self
+                raise initiating
+            raise
+        if initiating is not None:raise initiating
+
+    async def close(self)->None:
+        if self.closed:return
+        if self.publication is not None and not self.publication.committed:self.publication.revoke()
+        terminal_error:BaseException|None=None
+        try:await self._cleanup_child()
+        except BaseException as error:
+            if self.child is not None and not self.child.closed:raise
+            terminal_error=error
+        initiating=terminal_error or RuntimeError('failed fit retirement')
+        if self.dataset._active:self.dataset.__exit__(type(initiating),initiating,None)
+        self.closed=not self.dataset._active
+        if terminal_error is not None:raise terminal_error
+
+    async def execute(self)->Json:
+        import time
+
+        from gf_common.action_contract import engineering_contract, parse_action_contract
+        from gf_models.structured_tree_artifacts import inspect_artifact
+        from gf_models.structured_tree_pairing import (
+            inspect_fit_inputs,
+            validate_pair_records,
+        )
+        from gf_training.structured_lineage import _write
+        dataset=self.dataset;entered=False;original:BaseException|None=None
+        prep_seconds=child_seconds=validation_seconds=cleanup_seconds=0.
+        try:
+            dataset.__enter__();entered=True
+            assert dataset.manifest is not None and dataset.source is not None
+            classification=dataset.manifest['input_binding']
+            if classification!={'action_contract':asdict(engineering_contract()),'purpose':'component','synthetic_capacity':False}:
+                raise ContractError('private Tree2 component fit requires known engineering/false-capacity Dataset2')
+            self.prepared=_PreparedTreeFit(dataset,self.model,{key:getattr(self.training,key) for key in
+                ('num_boost_round','early_stopping_rounds','learning_rate','min_data_in_leaf','num_threads')})
+            self.prepared.prepare()
+            self.request,self.request_sha,self.publisher=_prepare_request(self.prepared,self.directory,seed=self.seed,deadline=self.work_deadline)
+            request=self.request;publisher=self.publisher
+            base={key:request[key] for key in ('run_id','input_binding','seed','dataset_manifest_sha256','dataset_content_sha256',
+                'source_set_sha256','feature_signature','label_recipe','producer','runtime')}
+            self.completion={'schema_version':3,'kind':'structured-tree-training',**base,'status':'running','request_sha256':self.request_sha,
+                'health':{},'metrics':{},'costs':{},'outputs':{}}
+            _write(self.directory/'training.json',self.completion,scan=publisher)
+            dataset.verify_complete();publisher.finalize()
+            prep_seconds=time.monotonic()-self.started
+            self.child=_OwnedTreeFitChild(self.directory,self.work_deadline,self.training.max_log_bytes)
+            child_started=time.monotonic()
+            await self.child.start(self.request_sha);await self.child.wait()
+            cleanup_started=time.monotonic();await self._cleanup_child();cleanup_seconds=time.monotonic()-cleanup_started
+            child_seconds=time.monotonic()-child_started-cleanup_seconds
+            # Same native + Dataset2 index + numeric snapshots through validation.
+            validation_started=time.monotonic()
+            proof=publisher.object(self.directory/'child-result.json')
+            from gf_common.domain import closed
+            closed(proof,{'schema_version','kind','request_sha256','input_files','metrics','inference_sha256','model_sha256'})
+            if (type(proof['schema_version']) is not int or proof['schema_version']!=3 or proof['kind']!='structured-tree-fit-result'
+                    or proof['request_sha256']!=self.request_sha or proof['input_files']!=request['input_files']):
+                raise ContractError('Tree2 own child request/input receipt mismatch')
+            envelope,_,_=inspect_fit_inputs(self.directory,request,publisher)
+            inference,text=inspect_artifact(self.directory/'artifact',expected_digest=proof['inference_sha256'],model=self.model,
+                action_config_hash=envelope['action_config_hash'],action_contract=parse_action_contract(classification['action_contract']),
+                purpose=classification['purpose'],synthetic_capacity=classification['synthetic_capacity'],deadline=self.work_deadline)
+            from gf_models.structured_tree_pairing import validate_fitted_parameters
+            validate_fitted_parameters(text,request,self.model)
+            files={**request['input_files'],'request.json':self.request_sha,'artifact/inference.json':proof['inference_sha256'],
+                'artifact/model.txt':proof['model_sha256']}
+            for name in ('stdout.log','stderr.log','child-result.json'):
+                with publisher.file(self.directory/name):pass
+                files[name]=publisher.files[self.directory/name][1]
+            for name,sha in files.items():
+                with publisher.file(self.directory/name,sha):pass
+            publisher.finalize();dataset.verify_complete()
+            # Terminal native sweep + post-native original-index verification and
+            # confirmed Source cleanup MUST finish before complete is published.
+            dataset.__exit__(None,None,None);entered=False
+            validation_seconds=time.monotonic()-validation_started
+            health={'exit_code':self.child.health['exit_code'],'reaped':self.child.health['reaped'],
+                'stdout_bytes':self.child.health['stdout.log_bytes'],'stderr_bytes':self.child.health['stderr.log_bytes']}
+            self.completion.update(status='complete',health=health,metrics=proof['metrics'],
+                costs={'preparation_seconds':prep_seconds,'child_seconds':child_seconds,'final_validation_seconds':validation_seconds,
+                    'cleanup_seconds':cleanup_seconds,'elapsed_seconds':time.monotonic()-self.started,
+                    'shared_generation':dataset.manifest['shared_generation']},
+                outputs={'files':files,'inference_sha256':proof['inference_sha256'],'model_sha256':proof['model_sha256']})
+            validate_pair_records(request,self.completion,inference,request_sha256=self.request_sha,
+                inference_sha256=proof['inference_sha256'],model_sha256=proof['model_sha256'])
+            publisher.finalize()
+            self.publication=_CompletionPublication(self.directory,publisher,self.deadline,self.model.resources.max_owned_bytes)
+            try:self.publication.commit(self.completion)
+            except BaseException as error:
+                if self.publication.fd is not None:vars(error)['_structured_tree_fit_cleanup_owner']=self
+                raise
+            # FD release is the commit point. No later fallible work/deadline
+            # check may turn this already-committed return into a failed fit.
+            self.closed=True
+            return self.completion
+        except BaseException as error:
+            original=error
+            try:await self._cleanup_child()
+            except BaseException as cleanup:  # noqa: BLE001 - keep exact owner and initiating cancellation
+                original.add_note('Tree2 fit cleanup: '+str(cleanup))
+                if self.child is not None and not self.child.closed:
+                    vars(original)['_structured_tree_fit_cleanup_owner']=self
+                    raise original
+            if entered:
+                dataset.__exit__(type(original),original,original.__traceback__)
+                if dataset._active:vars(original)['_structured_tree_fit_cleanup_owner']=self
+            if self.publisher is not None and self.completion is not None and not (self.publication is not None and self.publication.exposed):
+                self.completion['status']='failed'
+                try:_write(self.directory/'training.json',self.completion,scan=self.publisher)
+                except BaseException as publication:  # noqa: BLE001 - preserve initiating fit failure
+                    original.add_note('Tree2 failed record publication: '+type(publication).__name__)
+            raise
+
+
+async def _fit_component_dataset(manifest:Any,*,expected_digest:str,directory:Any,model:ConfiguredTreeModelV2,
+                                 settings:Any,training:Any,seed:int,native:Any=None)->Json:
+    """Private concrete component workflow; no qualified Source/public fit gate."""
+    import time
+    from pathlib import Path
+
+    from gf_common.domain import integer
+    from gf_models.config import TrainingConfig, training_config
+    if type(training) is not TrainingConfig:raise ContractError('existing closed fresh-fit training settings required')
+    training_config(asdict(training));integer(seed,0,2**31-1)
+    if model.checkpoint is not None:raise ContractError('Tree2 Source fitting always initializes fresh')
+    if training.wall_seconds>7200:raise ContractError('original Tree2 per-fit wall budget cannot extend7200seconds')
+    dataset=VerifiedTreeDataset(Path(manifest),expected_digest,settings,max_owned_bytes=model.resources.max_owned_bytes,
+        deadline=time.monotonic()+training.wall_seconds,native=native)
+    return await _TreeFitRun(dataset,Path(directory).absolute(),model,training,seed).execute()
+
+
+async def fit_dataset(manifest:Any,*,action_contract:Any,**options:Any)->Json:
+    from gf_common.action_contract import require_qualified_contract
+    require_qualified_contract(action_contract)
+    return await _fit_component_dataset(manifest,**options)
+
+
+class _CompletionPublication:
+    """One owned completion inode; late failure invalidates only its held FD.
+
+    A foreign current-path replacement is preserved and reported. This owner
+    cannot revoke authority of an independently supplied coherent foreign copy.
+    """
+    def __init__(self,directory:Any,publisher:Any,cleanup_deadline:float,max_owned_bytes:int)->None:
+        self.directory,self.publisher,self.cleanup_deadline=directory,publisher,cleanup_deadline
+        self.limit=min(max_owned_bytes,publisher.limit-publisher.retained)
+        self.fd:int|None=None;self.directory_fd:int|None=None;self.snapshot:Any=None
+        self.exposed=False;self.committed=False;self.revoked=False
+
+    def _namespace(self)->None:
+        import os
+        import stat
+        info=self.directory.lstat()
+        if (not stat.S_ISDIR(info.st_mode) or (info.st_dev,info.st_ino)!=self.publisher._tree_fit_directory_identity
+                or self.directory_fd is not None and (os.fstat(self.directory_fd).st_dev,os.fstat(self.directory_fd).st_ino)!=(info.st_dev,info.st_ino)):
+            raise ContractError('Tree2 completion owned directory namespace changed')
+        from gf_training.structured_tree_data import _check_output_ancestors
+        _check_output_ancestors(self.publisher._tree_fit_ancestors)
+
+    def _postcheck(self)->None:
+        from gf_models.structured_tree_pairing import inspect_training
+        self.publisher.finalize()
+        remaining=min(self.limit,self.publisher.limit-self.publisher.retained)
+        if remaining<=0:raise ContractError('completion joint retained metadata ownership exhausted')
+        pair=inspect_training(self.directory,max_owned_bytes=remaining,deadline=self.publisher.deadline)
+        pair.finalize()
+        self._namespace()
+
+    def _release(self)->None:
+        import os
+        if self.fd is not None:os.close(self.fd);self.fd=None
+        if self.directory_fd is not None:os.close(self.directory_fd);self.directory_fd=None
+
+    def revoke(self)->None:
+        import os
+        import time
+        if self.fd is None or self.revoked:return
+        if time.monotonic()>=self.cleanup_deadline:raise ContractError('completion revocation unconfirmed: original cleanup deadline exhausted')
+        current=os.fstat(self.fd)
+        if (current.st_dev,current.st_ino)!=(self.snapshot[0],self.snapshot[1]):
+            raise ContractError('completion revocation unconfirmed: held output identity differs')
+        if os.pwrite(self.fd,b'!',0)!=1 or os.pread(self.fd,1,0)!=b'!':
+            raise ContractError('completion revocation unconfirmed: owned FD invalidation failed')
+        self.revoked=True
+        # Existing C3a writes flush to the owned FD; no extra durability/powerloss
+        # claim is made here. Never unlink or rewrite a current foreign path.
+        self._release()
+
+    def commit(self,completion:Json)->None:
+        import hashlib
+        import os
+
+        from gf_models.structured_tree_artifacts import _identity, _publish, _written
+        self.publisher.check();self._namespace()
+        raw=(canonical(completion)+'\n').encode();self.publisher.charge(32*len(raw)+65536)
+        self.directory_fd=os.open(self.directory,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
+        try:
+            self._namespace()
+            original=self.publisher.files[self.directory/'training.json'][0]
+            if _identity((self.directory/'training.json').lstat())!=original:
+                raise ContractError('Tree2 original running completion path changed')
+            # _publish can close its FD on failure, but this name has NO complete
+            # authority. Transfer the returned FD to this owner BEFORE rename.
+            self.fd,self.snapshot,sha=_publish(self.directory,self.directory_fd,'training.json.complete.tmp',raw,self.publisher.deadline)
+            self.publisher.check();self._namespace()
+            if _identity((self.directory/'training.json').lstat())!=original:
+                raise ContractError('Tree2 running completion replaced before commit')
+            self.exposed=True
+            os.replace('training.json.complete.tmp','training.json',src_dir_fd=self.directory_fd,dst_dir_fd=self.directory_fd)
+            renamed=os.fstat(self.fd)
+            if (renamed.st_dev,renamed.st_ino,renamed.st_size,renamed.st_mtime_ns)!=self.snapshot[:4]:
+                raise ContractError('Tree2 held completion changed across rename')
+            self.snapshot=_identity(renamed)
+            _written(self.directory,self.directory_fd,'training.json',self.fd,self.snapshot,sha,self.publisher.deadline)
+            self.publisher.files[self.directory/'training.json']=(self.snapshot,hashlib.sha256(raw).hexdigest())
+            self._postcheck()
+            _written(self.directory,self.directory_fd,'training.json',self.fd,self.snapshot,sha,self.publisher.deadline)
+            self._namespace()
+        except BaseException as original:
+            if self.exposed and self.fd is not None:
+                # The first failure-path operation is OWNED-FD invalidation.
+                # Namespace diagnostics/formatting must never delay revocation.
+                try:self.revoke()
+                except BaseException as cleanup:  # noqa: BLE001 - unconfirmed authority retirement stays reachable
+                    vars(original)['_structured_completion_cleanup_owner']=self
+                    try:original.add_note('completion revocation unconfirmed: '+type(cleanup).__name__+': '+str(cleanup))
+                    except BaseException:pass  # noqa: BLE001, S110 - diagnostic allocation cannot replace the initiating error
+                try:
+                    current=(self.directory/'training.json').lstat()
+                    if (current.st_dev,current.st_ino)!=(self.snapshot[0],self.snapshot[1]):
+                        original.add_note('completion namespace changed; foreign current path preserved')
+                except BaseException:  # noqa: BLE001 - namespace/diagnostic failures preserve the original exception
+                    try:original.add_note('completion namespace diagnostic unavailable; only held inode is owned')
+                    except BaseException:pass  # noqa: BLE001, S110 - diagnostics are best effort after revocation
+            else:self._release()
+            raise
+        # Release is the final commit point; there are no fallible validation or
+        # work-deadline checks after it. The caller must return directly.
+        self._release();self.committed=True

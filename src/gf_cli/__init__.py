@@ -267,7 +267,7 @@ async def _run_experiment(loaded: LoadedConfig, command: str, *, collection: Col
     elif supplied_ledger is not None:
         raise ContractError('legacy collection cannot consume a structured ledger')
     if collection is None and structured:
-        registry, labels = structured_bindings(config.model, config.opponent)
+        registry, labels = structured_bindings(config.model, config.opponent,actions=config.actions,deadline=preflight_deadline)
     elif collection is None:
         from gf_models.structured_binding import ConfiguredNeuralModelV2
         from gf_models.structured_tree_config import ConfiguredTreeModelV2
@@ -584,7 +584,9 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "train":
             from gf_models.structured_tree_config import ConfiguredTreeModelV2
             if isinstance(loaded.config.model, ConfiguredTreeModelV2):
-                raise ContractError('Tree2 Source/Dataset2 training composition is not implemented; C3a supports explicit toy components only')
+                if not isinstance(loaded.config.actions,ActionConfigV2):raise ContractError('Tree2 training requires actions2')
+                require_qualified_contract(loaded.config.actions.action_contract)
+                raise ContractError('no qualified Tree2 fitting recipe is adopted; use the explicit private component workflow only for component evidence')
             if loaded.config.model.model_id in ("mlp", "gru", "transformer"):
                 from gf_training.ppo_run import train_ppo
                 if args.run_dir is None:

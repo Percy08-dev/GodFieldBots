@@ -66,6 +66,29 @@ def test_actual_categorical_native_text_roundtrip_all_unused_declarations(toy, t
         LoadedTree(__import__('lightgbm').Booster(model_str=(directory / 'model.txt').read_text()), tree.model, tree.origin, tree.descriptor)
 
 
+def test_toy_active_thread_and_resource_override_resaves_current_creation(toy,tmp_path):
+    from dataclasses import asdict
+
+    from gf_models.structured_tree_config import execution_binding
+    tree,_=toy
+    original_dir=tmp_path/'original'
+    original=save_artifact(original_dir,tree)
+    active=replace(tree.model,inference=replace(tree.model.inference,candidate_chunk=2,num_threads=2),
+        resources=replace(tree.model.resources,max_owned_bytes=3*1024**3,max_array_bytes=32*1024**2))
+    loaded=load_artifact(original_dir,**{**options(original_dir,tree),'model':active})
+    assert loaded.origin==tree.origin and loaded.training_binding is None and loaded.creation_execution is None
+    destination=tmp_path/'resaved'
+    resaved=save_artifact(destination,loaded)
+    assert resaved['creation_execution']==execution_binding(active,loaded.descriptor)
+    assert resaved['creation_execution']!=original['creation_execution']
+    assert resaved['creation_execution']['inference']==asdict(active.inference)
+    assert resaved['creation_execution']['resources']==asdict(active.resources)
+    assert resaved['model']==original['model'] and resaved['provenance'] is None and resaved['fit_origin']=='toy'
+    assert (destination/'model.txt').read_bytes()==(original_dir/'model.txt').read_bytes()
+    reloaded=load_artifact(destination,**options(destination,loaded))
+    assert reloaded.model==active and reloaded.creation_execution is None
+
+
 @pytest.mark.parametrize('field,value', [('fit_origin','trained'), ('fit_origin','unknown'), ('provenance',{}), ('schema_version',True)])
 def test_resealed_unsupported_origin_and_schema_reject(toy, tmp_path, field, value):
     tree, _ = toy

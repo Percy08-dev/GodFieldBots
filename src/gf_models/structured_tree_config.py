@@ -158,9 +158,13 @@ def architecture_identity(model: TreeArchitectureV2) -> str:
                    'token_signature': signature(model.encoder.aggregate_window)})
 
 
-def execution_binding(model: ConfiguredTreeModelV2, descriptor: TreeDescriptor) -> Json:
-    return {'inference': asdict(model.inference), 'resources': asdict(model.resources),
-            'tree_descriptor': asdict(descriptor)}
+def execution_binding(model: ConfiguredTreeModelV2, descriptor: TreeDescriptor, training_binding: Any=None) -> Json:
+    value={'inference': asdict(model.inference), 'resources': asdict(model.resources), 'tree_descriptor': asdict(descriptor)}
+    if training_binding is not None:
+        from gf_models.structured_tree_pairing import TrainingBinding
+        if type(training_binding) is not TrainingBinding:raise ContractError('closed trained Tree2 execution binding required')
+        value['training_binding']=asdict(training_binding)
+    return value
 
 
 def resource_estimate(model: ConfiguredTreeModelV2, *, model_bytes: int = 0, extra_bytes: int = 0) -> Json:
@@ -178,10 +182,10 @@ def resource_estimate(model: ConfiguredTreeModelV2, *, model_bytes: int = 0, ext
             'context_bytes': context, 'working_bytes': working, 'total_bytes': total}
 
 
-def policy_label(model: ConfiguredTreeModelV2, descriptor: TreeDescriptor, manifest_digest: str) -> str:
+def policy_label(model: ConfiguredTreeModelV2, descriptor: TreeDescriptor, manifest_digest: str, training_binding: Any=None) -> str:
     if type(manifest_digest) is not str or re.fullmatch('[0-9a-f]{64}', manifest_digest) is None:
         raise ContractError('Tree2 full manifest identity required')
-    return 'lightgbm-tree-v2-' + manifest_digest + '-' + digest(execution_binding(model, descriptor))
+    return 'lightgbm-tree-v2-' + manifest_digest + '-' + digest(execution_binding(model, descriptor, training_binding))
 
 
 def numeric_costs(model: ConfiguredTreeModelV2, descriptor: TreeDescriptor) -> Any:

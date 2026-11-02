@@ -6,7 +6,7 @@ import stat
 import time
 from dataclasses import asdict
 from pathlib import Path
-from typing import Any
+from typing import Any, Self
 
 from gf_common.action_contract import (
     engineering_contract,
@@ -152,8 +152,7 @@ def build_dataset(plan:Json,output:Path,settings:PreparationConfig,*,max_owned_b
     return build_component_dataset(plan,output,settings,max_owned_bytes=max_owned_bytes,deadline=deadline)
 
 
-def inspect_component_dataset(path:Path,*,expected_digest:str,settings:PreparationConfig,max_owned_bytes:int,
-                              deadline:float,native:Any=None)->Json:
+def _open_dataset_manifest(path:Path,expected_digest:str,settings:PreparationConfig,max_owned_bytes:int,deadline:float)->tuple[Json,SealedScan,Json,PreparationConfig,int,float]:
     settings=preparation_config(asdict(settings))
     max_owned_bytes=min(max_owned_bytes,settings.memory_budget_mib*1024**2)
     deadline=min(deadline,time.monotonic()+settings.wall_seconds-settings.cleanup_seconds)
@@ -171,9 +170,106 @@ def inspect_component_dataset(path:Path,*,expected_digest:str,settings:Preparati
         parents.append({'directory':parent['directory'],'validation_directory':validations[0]['directory']})
     plan={'schema_version':2,'kind':'structured-tree-dataset-plan','parents':parents,
         'encoder':manifest['tree_projection']['encoder'],**manifest['input_binding']}
+    return manifest,scan,plan,settings,max_owned_bytes,deadline
+
+
+def inspect_component_dataset(path:Path,*,expected_digest:str,settings:PreparationConfig,max_owned_bytes:int,
+                              deadline:float,native:Any=None)->Json:
+    manifest,scan,plan,settings,max_owned_bytes,deadline=_open_dataset_manifest(path,expected_digest,settings,max_owned_bytes,deadline)
     with NativeTreeDataset(plan,settings,max_owned_bytes=max_owned_bytes,deadline=deadline,
                            extra_owned_bytes=scan.retained,native=native) as owner:
         _consume(owner);actual=_content(owner)
         if canonical(actual)!=canonical(manifest):raise ContractError('Dataset2 original sources/recipe/membership changed')
         scan.finalize();owner.finalize()
     return manifest
+
+class VerifiedTreeDataset:
+    """Concrete SAME-owner Dataset2 preparation lifetime, retained through fit.
+
+    Construction requires the immutable manifest path+exact digest; arbitrary
+    rows/provenance dictionaries cannot substitute for this Source owner.
+    """
+    def __init__(self,path:Path,expected_digest:str,settings:PreparationConfig,*,max_owned_bytes:int,deadline:float,native:Any=None)->None:
+        self.path=Path(path);self.expected_digest=expected_digest;self.settings=settings
+        self.limit=max_owned_bytes;self.deadline=deadline;self.native=native
+        self.manifest:Json|None=None;self.index:SealedScan|None=None;self.source:NativeTreeDataset|None=None
+        self._active=False;self._completed=False;self._finalized=False
+
+    def __enter__(self)->Self:
+        manifest,index,plan,settings,limit,deadline=_open_dataset_manifest(self.path,self.expected_digest,self.settings,self.limit,self.deadline)
+        self.manifest,self.index,self.settings,self.limit,self.deadline=manifest,index,settings,limit,deadline
+        self.source=NativeTreeDataset(plan,settings,max_owned_bytes=limit,deadline=deadline,extra_owned_bytes=index.retained,native=self.native)
+        try:self.source.__enter__()
+        except BaseException as error:
+            if not self.source._closed:
+                vars(error)['_structured_dataset_cleanup_owner']=self
+            raise
+        self._active=True
+        return self
+
+    def selected_inputs(self)->Any:
+        if not self._active or self.source is None or self._completed:raise ContractError('one active verified Dataset2 worklist required')
+        while self.source.stage_next():
+            assert self.source.current is not None
+            split=self.source.current['split']
+            for sample in self.source.selected_inputs():
+                yield split,sample
+                del sample
+            self.source.retire_current()
+        self.verify_complete()
+        self._completed=True
+
+    def reserve_sink(self,total_bytes:int)->None:
+        if not self._active or self.source is None:raise ContractError('active concrete Dataset2 owner required before sink allocation')
+        self.source.reserve_sink(total_bytes)
+
+    def retained_without_sink(self)->int:
+        if not self._active or self.source is None:raise ContractError('active concrete Dataset2 owner required')
+        return self.source.base+self.source.extra+self.source._session.used_bytes()-self.source._sink_bytes
+
+    def verify_complete(self)->None:
+        if not self._active or self.source is None or self.manifest is None or self.index is None:
+            raise ContractError('active concrete verified Dataset2 owner required')
+        actual=_content(self.source)
+        if canonical(actual)!=canonical(self.manifest):raise ContractError('fit Dataset2 original sources/content differ')
+        self.index.finalize()
+
+    def finalize(self)->None:
+        if self._finalized:
+            assert self.index is not None
+            self.index.finalize()
+            return
+        self.verify_complete()
+        assert self.source is not None and self.index is not None
+        self.source.finalize()
+        # Native terminal finalization sweeps parents/collections. The original
+        # Dataset2 index remains a separate retained snapshot through that sweep.
+        self.index.finalize()
+        self._finalized=True
+
+    def __exit__(self,kind:object,value:object,traceback:object)->None:
+        original=value if isinstance(value,BaseException) else None
+        failure:BaseException|None=None
+        try:
+            if original is None:self.finalize()
+            elif self.index is not None:self.index.finalize()
+        except BaseException as error:  # noqa: BLE001 - preserve initiating cancellation/error
+            if original is None:failure=error
+            else:original.add_note('Dataset2 final original-index check: '+type(error).__name__+': '+str(error))
+        initiating=original if original is not None else failure
+        try:
+            if self.source is not None:
+                self.source.__exit__(type(initiating) if initiating else None,initiating,traceback)
+        except BaseException as error:  # noqa: BLE001 - retain the same cleanup owner
+            if initiating is None:failure=error;initiating=error
+            else:initiating.add_note('Dataset2 source close: '+type(error).__name__+': '+str(error))
+        try:
+            if self.index is not None:self.index.finalize()
+        except BaseException as error:  # noqa: BLE001 - source retirement cannot hide index mutation
+            if initiating is None:failure=error;initiating=error
+            else:initiating.add_note('Dataset2 post-close original-index check: '+type(error).__name__+': '+str(error))
+        closed_source=self.source is None or self.source._closed
+        if closed_source:self._active=False
+        elif initiating is not None:
+            vars(initiating)['_structured_dataset_cleanup_owner']=self
+        if original is None and failure is not None:raise failure

@@ -16,6 +16,7 @@ from gf_models.structured_binding import check_input_binding
 from gf_models.structured_tree_artifacts import (
     LoadedTree,
     _bind_origin,
+    _check,
     _validate_booster,
     load_artifact,
 )
@@ -24,21 +25,32 @@ from gf_models.structured_tree_encoder import PreparedTreeFrame, _owned
 
 
 class StructuredTreePolicy:
-    def __init__(self, tree: LoadedTree, manifest_digest: str) -> None:
+    def __init__(self, tree: LoadedTree, manifest_digest: str, *, deadline:float=float('inf')) -> None:
+        _check(deadline)
         if type(tree) is not LoadedTree:
             raise ContractError('actual loaded Tree2 wrapper required')
         _bind_origin(tree.booster, tree.origin)
-        _, descriptor = _validate_booster(tree.booster, tree.model)
+        pair=None
+        if tree.origin.fit_origin=='trained':
+            if tree.training_binding is None or tree.origin.provenance is None:raise ContractError('trained Tree2 policy requires complete explicit paired evidence')
+            from gf_models.structured_tree_pairing import inspect_training
+            pair=inspect_training(Path(tree.training_binding.directory),expected_binding=tree.training_binding,max_owned_bytes=tree.model.resources.max_owned_bytes,deadline=deadline)
+            if pair.inference['tree_descriptor']!=asdict(tree.descriptor) or pair.inference['provenance']!=tree.origin.provenance.to_dict():
+                raise ContractError('actual trained Tree2 wrapper differs from paired evidence')
+        elif tree.training_binding is not None:raise ContractError('toy Tree2 cannot carry trained evidence')
+        _, descriptor = _validate_booster(tree.booster, tree.model,deadline=deadline)
+        if pair is not None:pair.finalize()
         if descriptor != tree.descriptor:
             raise ContractError('Tree2 runtime descriptor differs from actual native model')
         self.tree, self.model = tree, tree.model
-        self.version = policy_label(tree.model, tree.descriptor, manifest_digest)
+        self.version = policy_label(tree.model, tree.descriptor, manifest_digest, tree.training_binding)
         self.reserved_bytes = resource_estimate(tree.model, model_bytes=descriptor.model_bytes)['total_bytes']
         self.last_timing: dict[str, float] = {}
+        _check(deadline)
 
     @classmethod
     def from_artifact(cls, directory: Path, **options: Any) -> StructuredTreePolicy:
-        return cls(load_artifact(directory, **options), options['expected_digest'])
+        return cls(load_artifact(directory, **options), options['expected_digest'],deadline=options.get('deadline',float('inf')))
 
     def reset(self, sampling_seed: int) -> None:
         integer(sampling_seed, 0, 2**64-1)

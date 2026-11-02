@@ -1531,14 +1531,120 @@ SHA d994871699f93ef8f34bf1d631539d338e59678aaece625d16b4ae11fbc94c4b.
 This supports the soft estimate for that synthetic workload only; it establishes
 neither original Source, trained provenance nor learning quality.
 
+## C3b2 fitting, pairing and final implementation acceptance
+
+Root accepts C3b2 after both final SOURCE reviews and the focused final toy
+compatibility recheck. This implements Source-backed fresh CPU LightGBM fitting,
+typed private numeric inputs, immutable request/provenance, healthy paired
+Training3 completion, explicit checkpoint-root routing, active execution binding,
+participant/Journal5/RAW and exact-bundle copies. Model2/inference3/request3/
+completion3/input-envelope3/array-descriptor1 retain distinct meanings. The
+engineering component classification is never promoted to qualified Source.
+
+The same verified Dataset2/index/native/S2 owners survive all512selected rows,
+native fit/reap and original/input checks. Terminal Source/index retirement
+precedes healthy completion. Failure publication and bundle copy retain the
+exact completion FD, revoke owned bytes before diagnostics and preserve foreign
+replacements. Invalidation uncertainty retains its exact owner/FD; coherent
+foreign copies remain outside this operation's revocation authority (§30).
+Other reviewed fixes cover logical feature/label block pairing across shards,
+original cancellation through delayed startup/failure, failed-drainer cleanup,
+retained ancestors, canonical copy containment and root/child-FD writes, caller
+deadline and same-pair recheck after additional native policy validation.
+
+Final affected actual workflow tests PASS5in20.51s: default/asymmetric fitting,
+actual numeric/index mutations and unconfirmed cancellation cleanup. Both fits
+use ALL512rows(train192/validation320), cap500/early50 and independently record
+95consumed callbacks, best45 and45retained trees. Text bytes78,322stay below the
+pre-admitted32,140,800bound. Managed soft estimates are965,154,744(default) and
+1,032,263,568(asymmetric)bytes under unchanged2GiB; measured child-only peak RSS
+is121,716,736bytes each. This is not joint concurrent RSS or a physical quota.
+The failed/interrupted first final run(-a) remains exit130with19partial passes
+and4failures: its test helper put output beneath the immutable copied-index
+directory, correctly refused before child startup. Only the five affected cases
+are rerun with sibling index/output directories(-b); populations/budgets stay
+unchanged and no earlier success is relabeled.
+
+Final consumers PASS81in5.77s against the NEW post-publication-fix completed
+default bundle and final native candidate: trained paired root/load/override/
+copy/revocation/deadline checks, actual Ready→two frames→Journal5/null statistics→
+Python/native RAW full binding identity→confirmed reap, plus old toy regression.
+Earlier pre-publication-fix95-iteration fits remain preliminary evidence only.
+Source originals are never recollected or repaired during this increment.
+
+Root's whole HOST CPU/native suite exits0:2026PASS/89SKIP in1257.33s. It enables
+the native Tree RAW branch and reuses original17/29 with one fresh43creation
+where the central creation/cleanup fixture requires it. Real Simulator/CUDA
+opt-ins remain off. Root mistakenly names GFB_TREE_TRAINED_BUNDLE instead of
+GFB_TREE_TRAINED_FIXTURE for this command, so fixture-dependent paired cases
+skip here; the separate final81-case run above uses the correct NEW fixture.
+Do not count those skipped cases as whole-suite passes. Full log and condition
+receipt are in `runs/assessments/structured-tree-fit-c3b2-20261102`:
+whole-pytest.log SHA4fe1a5341fc6646a2a34f5a4d92e621f8de3814361cff46382355ef47c4c1da4,
+whole-pytest-proof.json SHAc6ef755bb7d4bed32c4cd93e24bdd9c35a5b17dc9c671b48b78d12744dc34bd1.
+
+A final compatibility audit restores old toy active-override→resave creation
+settings; only trained loads preserve immutable original creation bytes.
+Named regressions PASS2, artifact/pair/encoder PASS73(2deliberate deselections),
+config PASS53; a final independent code/test inspection is READY. These cover
+the only production Python change after the whole run, so unrelated Source/fit/
+whole cases are not repeated. Final artifact module SHA is
+f6ba259af10e4d6ac2177a86ed976100f186bbaa928c5b9162cd405f856ed9da;
+Python producer digest d1b4f63f3b4a87bc6666312862fd11164a179b320e5a79f5fd4ef4adbe2d0b0a.
+Whole Ruff/mypy120/diff checks pass. Cargo114PASS/2ignored is retained in
+`/tmp/gfb-tree-fit-native-candidate-20261102/cargo-test.log`.
+
+All five final HOST old-data proofs exit0 under the same frozen native:
+history/observation83783accepted actions/13568journals/534640records/6784completed
+episodes, exact dataset/sample/archive/arrays and joined pipelines; exact
+83783-row Parquet/sidecar; saved-PPO1/4workers16episodes/224decisions/all8arrays.
+Each PPO probe rechecks72original file hashes/stat identities. The24protected
+fit hashes match before/after, but their frozen manifest has no stat identities,
+so no24-file stat comparison is claimed. Aggregate
+`runs/assessments/structured-final-legacy-20261102/verification.json`, SHA
+5be101905c64d381b65546681091a8faac94361ea48fd7c590563afd282ea898.
+No source repair, real-data fit, strength or performance comparison is implied.
+
+Final native source b29d025b2f547440cced90ecdd5448e19e29ea311b3b5d3fe196847ec5185206;
+ELFd093ccaa68e8359b9f1a9619754a65dc733747aa31a8a1578c9a299f051b1e5e;
+wheelf1cfad182bcffdba818015a95449fe838db97d7b46ac8a9779571f4df8f02c55;
+sdist d5601729bba6916ba53203ef474ff066464421f65cf76d27d9c13195271de38d.
+Root verifies50sdist/current native sources, immutable assets/Cargo.lock, wheel
+stub/loaded ELF. package-proof.json SHA
+595db54429b980ee3f8fe4a0c1e327ccecb9f1656273f36835ffbb0d672c22a7.
+The final native is installed offline in the workspace and fresh import matches
+that ELF/source exactly. Installed proof SHA
+321a7dabe8b8fc71fb466694b00a84b40119e28a3b797b21c47aa8e1385810e7;
+old package/dist-info/ELF4ca8dfd2e1c43bd2cdcc665d066c86be329bef37349e6bcdb90992a21f9eaf18
+are retained at `/tmp/gfb-native-final-rollback-20261102`.
+
+Final Python wheel SHA1d6255d1cc32819d3e0a99fcdad09fb8399f26d267741bad08626a912f496f31
+matches all120current package Python files. Compared with the whole-suite wheel,
+only the separately tested artifact compatibility branch differs. A fresh
+Python3.14.10venv installs it with only mandatory dependencies; isolated CLI and
+two actual Random/heuristic workers initialize and reap, with no Torch/LightGBM/
+PyArrow/native installed and no Simulator I/O. Offline registry resolution first
+fails because the temporary cache lacks NumPy; exact8mandatory distributions/
+1110files are instead copied/hash-checked from the preserved earlier isolated
+environment, and pip dependency checking passes. The old environment is unchanged.
+Optional-free result/harness/dependency-copy receipts and wheel proof are in the
+same assessment directory, along with exact-byte, independently inspected
+default/asymmetric completed bundles and measurement.json files.
+
+Final normative recheck remains Simulator ffcffa0966dbf6d7ce1d982f4ee6444e291d42d6,
+spec07SHA66d18191c596a7e371d963c0fa66a8e040cbef7b60433a2ede8acf9bccff650f and
+spec09SHAdc363d47bb27f145e7dd7fbc95f75c8bd9f705fc229766fc56ad35b8c797f18b.
+The Simulator is not modified. Engineering-only implementation acceptance does
+not establish normative/binary adoption or real-game eligibility.
+
 ## Remaining integrated acceptance
 
-Currently NOT RUN: guarded trained Tree2 fitting/pairing integration and qualified collection E2E PPO
-integration. The latter includes192-game baseline, attention3models×2inference devices×
+Currently externally BLOCKED by issue0005/NOT RUN: qualified collection E2E PPO
+and qualified real-data Tree2 fitting. This includes192-game baseline, attention3models×2inference devices×
 continuous/pause-resume real2updates, other hand-mode MLP games, fixed512train
 decision CPU p95<=3s acceptance under the complete qualified contract. Completed
 component panels and separate actual-worker/allocator stress above retain their
 stated limits; they do not establish physical global GPU high-water or qualified
-Source eligibility. Repeat old-data proofs, final Rust/native checks, wheel
-and optional-dependency-free startup after the remaining implementation.
+Source eligibility. The implementation, final old-data/Rust/native/wheel and
+optional-dependency-free startup checks above are complete at component scope.
 Do not turn these entries into PASS without exact commands and actual evidence.

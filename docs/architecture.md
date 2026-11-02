@@ -84,8 +84,18 @@ final SOURCE reviews,226affected Python tests/113Rust tests(2ignored), Ruff/mypy
 and Root's50-file native package proof. All9cohorts and512selected facts/features/
 natural labels match the Python reference; all192validation games, including
 32zero-endpoint games, remain in the population. The durable component archive
-retains2572unchanged original files. C3b2 source-backed fitting/trained pairing
-and qualified real-game acceptance remain pending. No real v2 experiment or full-plan
+retains2572unchanged original files. C3b2 source-backed CPU LightGBM fitting,
+immutable trained provenance, explicit paired bundle/root routing, trained
+participant/Journal5/RAW metadata and owned completion/copy rollback are also
+accepted after both SOURCE reviews and actual512-row/default/asymmetric fits.
+The final whole CPU/native run passes2026tests/89skips, with a separate81-case
+trained-consumer run; the final toy-compatibility delta passes73affected cases
+and53config checks. Rust114tests/2ignored, Ruff/mypy120, all five old-data proofs,
+native/Python wheel checks and an optional-dependency-free installed baseline
+smoke pass. The verified native wheel is installed with an exact rollback copy;
+the separate baseline environment contains no optional learning/native packages.
+All v2 experiment artifacts retain their engineering-only classification.
+Qualified real-game acceptance remains blocked by issue0005. No real v2 experiment or full-plan
 acceptance is claimed. Milestone scopes, overlapping historical counts and
 remaining performance/experiment checks are in the
 [verification ledger](verification/structured-encoders-and-search.md).

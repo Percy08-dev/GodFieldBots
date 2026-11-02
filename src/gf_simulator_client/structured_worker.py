@@ -50,7 +50,9 @@ class StructuredParticipantWorker(ParticipantWorker):
             from gf_models.structured_tree_config import policy_label as tree_label
             tree = configured_tree_v2({**options['model'], 'checkpoint': options['checkpoint'],
                 'inference': options['inference'], 'resources': options['resources']})
-            self.expected_policy = tree_label(tree, TreeDescriptor(**options['tree_descriptor']), options['expected_manifest_digest'])
+            from gf_models.structured_tree_pairing import TrainingBinding
+            training=None if 'training_binding' not in options else TrainingBinding(**options['training_binding'])
+            self.expected_policy = tree_label(tree, TreeDescriptor(**options['tree_descriptor']), options['expected_manifest_digest'],training)
         else:
             self.expected_policy = policy_label(model_config_v2(options["model"]), InferenceBindingV2(**options["inference"]),
                                                 options["expected_manifest_digest"], cuda_visible_devices=options["cuda_visible_devices"])

@@ -18,8 +18,14 @@ and spec09 SHA256
 `dc363d47bb27f145e7dd7fbc95f75c8bd9f705fc229766fc56ad35b8c797f18b`.
 These working-tree identities are diagnostic evidence, not a silent replacement
 for recorded runtime/dataset identities. Utility defaults/mixes/response edges
-and conflicting repetition/defense rules remain the separate adoption dependency;
-unaffected native/encoder/Tree2 work continues.
+and conflicting repetition/defense rules remain the separate adoption dependency.
+The independent structured encoder/native/PPO/Tree2 Dataset2/fitting implementation
+and final component acceptance are now complete; see the
+[verification ledger](../verification/structured-encoders-and-search.md).
+The final read-only revision/spec hashes above are unchanged. The outstanding
+work is qualified real-I/O/source/fit adoption and its required real-game tests,
+including the192-game new-generator baseline; component-trained provenance does
+not satisfy this dependency. No Simulator file was modified.
 
 Update2026-11-01: the user supplied explicit
 [owner assertions](../contracts/owner-20261101-utility-and-repetition.md) on

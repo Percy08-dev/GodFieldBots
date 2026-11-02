@@ -1,9 +1,10 @@
-"""Toy-only Tree2 schema3 artifacts; native code is loaded only by active calls."""
+"""Tree2 schema3 artifacts; trained binding requires an explicit healthy pair."""
 from __future__ import annotations
 
 import hashlib
 import importlib
 import importlib.metadata
+import json
 import math
 import os
 import re
@@ -13,7 +14,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
-from gf_common.action_contract import ActionContract
+from gf_common.action_contract import ActionContract, parse_action_contract
 from gf_common.domain import (
     CATALOG_META,
     END_PROJECTION_VERSION,
@@ -42,6 +43,12 @@ from gf_models.structured_tree_config import (
     resource_estimate,
 )
 from gf_models.structured_tree_encoder import categorical_limits, feature_layout
+from gf_models.structured_tree_pairing import (
+    TrainedProvenance,
+    TrainingBinding,
+    provenance_for_request,
+    validate_request,
+)
 
 NATIVE_PARAMETERS = {'objective': 'regression', 'num_class': 1, 'zero_as_missing': False,
                      'linear_tree': False, 'boosting': 'gbdt'}
@@ -205,13 +212,22 @@ class TreeOrigin:
     purpose: str
     synthetic_capacity: bool
     fit_origin: str = 'toy'
-    provenance: None = None
+    provenance: TrainedProvenance | None = None
 
     def __post_init__(self) -> None:
         checksum(self.action_config_hash)
         input_binding(self.action_contract, self.purpose, self.synthetic_capacity)
-        if self.fit_origin != 'toy' or self.provenance is not None or self.purpose != 'component':
-            raise ContractError('C3a accepts explicit toy/null/component origins only')
+        if self.fit_origin=='toy':
+            if self.provenance is not None or self.purpose!='component':raise ContractError('toy Tree2 requires null/component origin')
+        elif self.fit_origin=='trained':
+            if type(self.provenance) is not TrainedProvenance:raise ContractError('immutable trained Tree2 provenance required')
+            if canonical(self.provenance.to_dict()['input_binding'])!=canonical(input_binding(self.action_contract,self.purpose,self.synthetic_capacity)):
+                raise ContractError('trained Tree2 input provenance cannot be relabeled')
+        else:raise ContractError('unsupported Tree2 fit origin')
+
+    def fields(self)->Json:
+        return {'action_config_hash':self.action_config_hash,**input_binding(self.action_contract,self.purpose,self.synthetic_capacity),
+                'fit_origin':self.fit_origin,'provenance':None if self.provenance is None else self.provenance.to_dict()}
 
 
 @dataclass(frozen=True)
@@ -220,6 +236,8 @@ class LoadedTree:
     model: ConfiguredTreeModelV2
     origin: TreeOrigin
     descriptor: TreeDescriptor
+    training_binding: TrainingBinding | None = None
+    creation_execution: bytes | None = None
 
     def __post_init__(self) -> None:
         _bind_origin(self.booster, self.origin)
@@ -242,14 +260,16 @@ def inspect_artifact(directory: Path, *, expected_digest: str, model: Configured
                      action_config_hash: str, action_contract: ActionContract,
                      purpose: str, synthetic_capacity: bool, deadline: float = float('inf'),
                      expected_tree_descriptor: TreeDescriptor | None = None,
-                     expected_feature_signature: str | None = None) -> tuple[Json, str]:
+                     expected_feature_signature: str | None = None,
+                     _scan: SealedScan | None = None) -> tuple[Json, str]:
     checksum(expected_digest)
     checksum(action_config_hash)
     if expected_tree_descriptor is not None and type(expected_tree_descriptor) is not TreeDescriptor:
         raise ContractError('closed expected Tree2 descriptor required')
     if expected_feature_signature is not None:
         checksum(expected_feature_signature)
-    scan = SealedScan(max_owned_bytes=model.resources.max_owned_bytes, deadline=deadline)
+    scan = _scan if _scan is not None else SealedScan(max_owned_bytes=model.resources.max_owned_bytes, deadline=deadline)
+    scan.check()
     scan.inventory(directory, {'inference.json', 'model.txt'})
     manifest = scan.object(directory / 'inference.json', expected_digest)
     closed(manifest, FIELDS)
@@ -258,7 +278,8 @@ def inspect_artifact(directory: Path, *, expected_digest: str, model: Configured
     classification = input_binding(action_contract, purpose, synthetic_capacity)
     check_input_binding({key: manifest[key] for key in classification}, action_contract=action_contract,
                         purpose=purpose, synthetic_capacity=synthetic_capacity)
-    TreeOrigin(action_config_hash, action_contract, purpose, synthetic_capacity, manifest['fit_origin'], manifest['provenance'])
+    TreeOrigin(action_config_hash, action_contract, purpose, synthetic_capacity, manifest['fit_origin'],
+               None if manifest['provenance'] is None else TrainedProvenance.parse(manifest['provenance']))
     layout = feature_layout(model.encoder)
     if expected_feature_signature is not None and manifest['feature_signature'] != expected_feature_signature:
         raise ContractError('Tree2 inspected feature signature differs from own admitted binding')
@@ -345,20 +366,36 @@ def _validate_booster(booster: Any, model: ConfiguredTreeModelV2, *, deadline: f
 
 
 def load_artifact(directory: Path, **options: Any) -> LoadedTree:
+    training_directory=options.pop('training_directory',None)
+    training_binding=options.pop('training_binding',None)
     manifest, text = inspect_artifact(directory, **options)
     deadline = options.get('deadline', float('inf'))
+    pair=None
+    if manifest['fit_origin']=='trained':
+        if training_directory is None:raise ContractError('trained Tree2 requires explicit complete paired training directory')
+        from gf_models.structured_tree_pairing import inspect_training
+        pair=inspect_training(training_directory,expected_binding=training_binding,
+            max_owned_bytes=options['model'].resources.max_owned_bytes,deadline=deadline)
+        if Path(training_directory).absolute()/'artifact'!=Path(directory).absolute() or canonical(pair.inference)!=canonical(manifest):
+            raise ContractError('Tree2 explicit training/artifact pair differs')
+    elif training_directory is not None or training_binding is not None:
+        raise ContractError('toy Tree2 cannot claim a trained binding')
     if manifest['runtime'] != runtime_metadata(deadline=deadline):
         raise ContractError('actual Tree2 native runtime differs from recorded identity')
     model = options['model']
+    resource_estimate(model,model_bytes=manifest['tree_descriptor']['model_bytes'],extra_bytes=0 if pair is None else pair.scan.retained)
     booster = _native(deadline=deadline).Booster(model_str=text)
     _check(deadline)
     _, actual = _validate_booster(booster, model, deadline=deadline)
     if actual != TreeDescriptor(**manifest['tree_descriptor']):
         raise ContractError('loaded Tree2 Booster descriptor mismatch')
-    origin = TreeOrigin(options['action_config_hash'], options['action_contract'], options['purpose'], options['synthetic_capacity'])
+    origin = TreeOrigin(options['action_config_hash'], options['action_contract'], options['purpose'], options['synthetic_capacity'],
+        manifest['fit_origin'],None if manifest['provenance'] is None else TrainedProvenance.parse(manifest['provenance']))
     _bind_origin(booster, origin, fresh=True)
     _check(deadline)
-    return LoadedTree(booster, model, origin, actual)
+    if pair is not None:pair.finalize()
+    return LoadedTree(booster, model, origin, actual,None if pair is None else pair.binding,
+        None if pair is None else canonical(manifest['creation_execution']).encode())
 
 
 def _check(deadline: float) -> None:
@@ -411,6 +448,12 @@ def _publish(directory: Path, directory_fd: int, name: str, payload: bytes,
 
 
 def save_artifact(directory: Path, tree: LoadedTree, *, deadline: float = float('inf')) -> Json:
+    if type(tree) is LoadedTree and tree.origin.fit_origin=='trained':
+        raise ContractError('trained Tree2 resave requires exact paired-bundle copy; creation/completion cannot be rewritten')
+    return _save_inference(directory,tree,deadline=deadline)
+
+
+def _save_inference(directory: Path, tree: LoadedTree, *, deadline: float = float('inf')) -> Json:
     if type(tree) is not LoadedTree or type(tree.origin) is not TreeOrigin:
         raise ContractError('Tree2 immutable actual loaded origin required')
     _bind_origin(tree.booster, tree.origin)
@@ -427,9 +470,9 @@ def save_artifact(directory: Path, tree: LoadedTree, *, deadline: float = float(
         'token_signature': signature(tree.model.encoder.aggregate_window), 'feature_recipe': TREE_RECIPE,
         'feature_signature': layout['feature_signature'], 'feature_names': layout['feature_names'],
         'categorical_indices': layout['categorical_indices'], 'semantics': semantics(),
-        **asdict(tree.origin), 'native_parameters': NATIVE_PARAMETERS, 'runtime': runtime_metadata(deadline=deadline),
+        **tree.origin.fields(), 'native_parameters': NATIVE_PARAMETERS, 'runtime': runtime_metadata(deadline=deadline),
         'model_file': {'file': 'model.txt', 'sha256': descriptor.model_sha256, 'bytes': len(encoded)},
-        'tree_descriptor': asdict(descriptor), 'creation_execution': execution_binding(tree.model, descriptor)}
+        'tree_descriptor': asdict(descriptor), 'creation_execution': execution_binding(tree.model, descriptor) if tree.creation_execution is None else json.loads(tree.creation_execution)}
     metadata = (canonical(manifest)+'\n').encode()
     resource_estimate(tree.model, model_bytes=len(encoded), extra_bytes=32 * len(metadata) + 65536)
     parents = {}
@@ -481,7 +524,7 @@ def fit_toy(blocks: list[Any], labels: Any, validation_blocks: list[Any], valida
     integer(rounds, 1, 500)
     integer(early_stopping, 1, 2**31-1)
     integer(min_data_in_leaf, 1, 2**31-1)
-    if type(origin) is not TreeOrigin or type(learning_rate) not in (int, float) or not 0 < learning_rate <= 1:
+    if type(origin) is not TreeOrigin or origin.fit_origin!='toy' or origin.provenance is not None or type(learning_rate) not in (int, float) or not 0 < learning_rate <= 1:
         raise ContractError('explicit toy Tree2 fit origin/settings required')
     if not blocks or not validation_blocks:
         raise ContractError('nonempty admitted Tree2 matrix lists required')
@@ -542,6 +585,9 @@ def binding_options(directory: Path, *, expected_digest: str, model: ConfiguredT
                     action_config_hash: str, action_contract: ActionContract, purpose: str,
                     synthetic_capacity: bool, deadline: float = float('inf')) -> Json:
     """Parent-owned exact metadata → closed own-policy DTO, without native load."""
+    from gf_models.structured_tree_pairing import resolve_checkpoint
+    directory,resolved_digest,training=resolve_checkpoint(directory,max_owned_bytes=model.resources.max_owned_bytes,deadline=deadline)
+    if expected_digest!=resolved_digest:raise ContractError('Tree2 resolved checkpoint manifest differs from expected identity')
     manifest, _ = inspect_artifact(directory, expected_digest=expected_digest, model=model,
         action_config_hash=action_config_hash, action_contract=action_contract, purpose=purpose,
         synthetic_capacity=synthetic_capacity, deadline=deadline)
@@ -550,4 +596,20 @@ def binding_options(directory: Path, *, expected_digest: str, model: ConfiguredT
         'model': manifest['model'], 'inference': asdict(model.inference), 'resources': asdict(model.resources),
         'tree_descriptor': manifest['tree_descriptor'], 'feature_signature': manifest['feature_signature'],
         **input_binding(action_contract, purpose, synthetic_capacity)}
+    if training is not None:value['training_binding']=asdict(training)
     return safe_tree_options_v2(value, action_contract=action_contract, purpose=purpose, synthetic_capacity=synthetic_capacity)
+
+
+def save_provisional_trained(directory:Path,booster:Any,model:ConfiguredTreeModelV2,request:Json,request_sha256:str,
+                             action_config_hash:str,*,deadline:float)->Json:
+    """Worker-only structural stage; never a bindable completed training pair."""
+    validate_request(request);checksum(request_sha256);checksum(action_config_hash)
+    if canonical(request['model'])!=canonical(asdict(model.architecture())) or canonical(request['execution'])!=canonical({'inference':asdict(model.inference),'resources':asdict(model.resources)}):
+        raise ContractError('provisional Tree2 actual request/model execution mismatch')
+    classification=request['input_binding'];contract=parse_action_contract(classification['action_contract'])
+    origin=TreeOrigin(action_config_hash,contract,classification['purpose'],classification['synthetic_capacity'],'trained',provenance_for_request(request,request_sha256))
+    _,descriptor=_validate_booster(booster,model,deadline=deadline)
+    if descriptor.model_bytes>request['model_envelope']['text_bytes']:raise ContractError('actual native Tree2 exceeds pre-admitted model envelope')
+    _bind_origin(booster,origin,fresh=True)
+    tree=LoadedTree(booster,model,origin,descriptor,creation_execution=canonical({**request['execution'],'tree_descriptor':asdict(descriptor)}).encode())
+    return _save_inference(directory,tree,deadline=deadline)

@@ -337,13 +337,15 @@ def _header_identity(header: Json, manifest: Json, episode: Json, spec: Json, ac
             policy_label,
         )
         from gf_models.structured_tree_encoder import safe_tree_options_v2
+        from gf_models.structured_tree_pairing import TrainingBinding
         options = safe_tree_options_v2(binding.get('policy_options'), action_contract=actions.action_contract,
                                       purpose='component', synthetic_capacity=False)
         tree = configured_tree_v2({**options['model'], 'checkpoint': options['checkpoint'],
             'inference': options['inference'], 'resources': options['resources']})
         if (tree.encoder.max_positions < actions.max_sequence_length or tree.inference.max_candidates < actions.max_candidates
                 or header['aggregate_window'] != tree.encoder.aggregate_window
-                or header['policy'] != policy_label(tree, TreeDescriptor(**options['tree_descriptor']), options['expected_manifest_digest'])):
+                or header['policy'] != policy_label(tree, TreeDescriptor(**options['tree_descriptor']), options['expected_manifest_digest'],
+                    None if 'training_binding' not in options else TrainingBinding(**options['training_binding']))):
             raise ContractError('original Tree2 CPU execution/capacity/window mismatch')
     else:
         options = recorded_options_v2(binding.get('policy_options'), action_contract=actions.action_contract,

@@ -99,6 +99,7 @@ def make_structured_policy(model_id: str, options: Json | None = None, action_co
             configured_tree_v2,
         )
         from gf_models.structured_tree_encoder import safe_tree_options_v2
+        from gf_models.structured_tree_pairing import TrainingBinding
         from gf_models.structured_tree_policy import StructuredTreePolicy
         safe = safe_tree_options_v2(options, action_contract=action_contract, purpose=purpose, synthetic_capacity=synthetic_capacity)
         if type(action_config_hash) is not str or re.fullmatch(r'[0-9a-f]{64}', action_config_hash) is None:
@@ -109,7 +110,9 @@ def make_structured_policy(model_id: str, options: Json | None = None, action_co
             model=tree_model, action_config_hash=action_config_hash, action_contract=action_contract,
             purpose=purpose, synthetic_capacity=synthetic_capacity,
             expected_tree_descriptor=TreeDescriptor(**safe['tree_descriptor']),
-            expected_feature_signature=safe['feature_signature'])
+            expected_feature_signature=safe['feature_signature'],
+            **({} if 'training_binding' not in safe else {'training_directory':safe['training_binding']['directory'],
+                'training_binding':TrainingBinding(**safe['training_binding'])}))
         return policy
     if model_id not in ("mlp", "gru", "transformer") or options is None:
         raise ContractError("model2 neural checkpoint binding required; LightGBM2 is not implemented")

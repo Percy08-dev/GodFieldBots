@@ -16,12 +16,19 @@ from gf_training.collection import CollectionPlan
 from gf_training.structured_journal import StructuredJournal
 
 
-def structured_bindings(model: object, opponent: object) -> tuple[dict[str, RuntimePolicyBinding], tuple[str, str]]:
+def structured_bindings(model: object, opponent: object, *, actions: Any=None, deadline: float=float('inf')) -> tuple[dict[str, RuntimePolicyBinding], tuple[str, str]]:
     registry = {}
     labels = []
     for config in (model, opponent):
         if isinstance(config, ConfiguredTreeModelV2):
-            raise ContractError("formal Tree2 inference requires C3b trained provenance; toy components have no Source authority")
+            from gf_cli.bindings import tree2_binding
+            from gf_common.action_contract import require_qualified_contract
+            from gf_common.structured import ActionConfigV2
+            if type(actions) is not ActionConfigV2:raise ContractError('formal Tree2 binding requires explicit own actions2')
+            require_qualified_contract(actions.action_contract)
+            label,binding=tree2_binding(config,actions,deadline=deadline)
+            registry[label]=binding;labels.append(label)
+            continue
         if isinstance(config, ConfiguredNeuralModelV2):
             raise ContractError("formal model2 inference requires completed healthy Generation2 parent qualification; integration pending")
         if not isinstance(config, ModelConfig) or config.model_id not in ("random", "heuristic"):

@@ -32,8 +32,13 @@ both source reviews, numerical/worker/native regressions and the512decision
 component performance panel. C3b1 Dataset2/original sources/actor-only final
 validation is accepted after both SOURCE reviews,226affected Python cases,
 113Rust tests/2ignored,50-file package/current-source proof and original-data
-preservation. C3b2 trained fitting/pairing has a reviewed exact design (§30) and
-remains required implementation. Qualified real-game acceptance remains
+preservation. C3b2 trained fitting/pairing/worker/RAW integration is now accepted
+after both SOURCE reviews, actual512-row/default/asymmetric/failed-fit tests,
+2026whole-suite cases/89skips plus separate81trained-consumer cases, Rust114/2ignored,
+full static and five original-data/package checks. The final toy-compatibility
+delta has73affected/53config passes; the verified native is installed with a
+rollback copy. Exact scopes and limits are in the verification ledger.
+Qualified real-game acceptance remains
 blocked by issue0005. The following
 initial slice counts/statuses are historical milestones, superseded by that ledger.
 

@@ -190,7 +190,8 @@ class PreparedTreeFrame:
 
 def safe_tree_options_v2(value: Any, *, action_contract: Any, purpose: str, synthetic_capacity: bool) -> Json:
     from gf_models.structured_binding import check_input_binding
-    raw = closed(value, {'version', 'checkpoint', 'expected_manifest_digest', 'model', 'inference', 'resources',
+    training_fields={'training_binding'} if type(value) is dict and 'training_binding' in value else set()
+    raw = closed(value, training_fields|{'version', 'checkpoint', 'expected_manifest_digest', 'model', 'inference', 'resources',
                          'tree_descriptor', 'feature_signature', 'action_contract', 'purpose', 'synthetic_capacity'})
     check_input_binding({key: raw[key] for key in ('action_contract', 'purpose', 'synthetic_capacity')},
                         action_contract=action_contract, purpose=purpose, synthetic_capacity=synthetic_capacity)
@@ -203,6 +204,9 @@ def safe_tree_options_v2(value: Any, *, action_contract: Any, purpose: str, synt
         raise ContractError('Tree2 exact feature signature differs from active ordered recipe')
     model = configured_tree_v2({**asdict(pure), 'checkpoint': raw['checkpoint'],
                                'inference': raw['inference'], 'resources': raw['resources']})
+    if training_fields:
+        from gf_models.structured_tree_pairing import TrainingBinding
+        TrainingBinding(**closed(raw['training_binding'],{'directory','request_sha256','completion_sha256'}))
     descriptor = TreeDescriptor(**closed(raw['tree_descriptor'], set(TreeDescriptor.__dataclass_fields__)))
     resource_estimate(model, model_bytes=descriptor.model_bytes)
     return {**raw, 'model': asdict(pure), 'inference': asdict(model.inference), 'resources': asdict(model.resources),

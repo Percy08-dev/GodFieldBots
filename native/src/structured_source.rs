@@ -427,7 +427,7 @@ fn role_identity<'a>(
                 == crate::structured_controls::tree_feature_signature(model, budget, control)?,
             "original Tree2 exact feature/category signature mismatch",
         )?;
-        let execution = json::object([
+        let mut execution = json::object([
             (
                 "inference",
                 json::copy(options.require("inference")?, control)?,
@@ -441,6 +441,12 @@ fn role_identity<'a>(
                 json::copy(options.require("tree_descriptor")?, control)?,
             ),
         ]);
+        if let Some(binding) = options.get("training_binding") {
+            execution
+                .as_object_mut()
+                .ok_or_else(|| Error::contract("Tree2 execution object required"))?
+                .insert("training_binding".into(), json::copy(binding, control)?);
+        }
         let label = format!(
             "lightgbm-tree-v2-{}-{}",
             field(options, "expected_manifest_digest")?,
@@ -2466,6 +2472,93 @@ mod tree_role_tests {
             }
             assert!(check(&value, &budget, &control).is_err(), "case{case}");
         }
+    }
+    #[test]
+    fn trained_tree_raw_binding_is_closed_identity_only_and_preserves_toy_variant() {
+        let budget = Budget::new(64 << 20);
+        let control = Control::new(crate::budget::monotonic() + 30.0).unwrap();
+        let fixture = json::parse(
+            include_bytes!("../tests/fixtures/structured_tree_role.json"),
+            &budget,
+            &control,
+        )
+        .unwrap();
+        let mut value = json::copy(&fixture.root, &control).unwrap();
+        let old = field(value.require("header").unwrap(), "policy")
+            .unwrap()
+            .to_owned();
+        let mut binding = value["manifest"]["policy_bindings"][&old].clone();
+        let options = &mut binding["policy_options"];
+        crate::structured_controls::tree_execution(options).unwrap();
+        options["training_binding"] = json::object([
+            ("directory", json::text("/nonexistent/owned-training-no-io")),
+            ("request_sha256", json::text(&"b".repeat(64))),
+            ("completion_sha256", json::text(&"c".repeat(64))),
+        ]);
+        crate::structured_controls::tree_execution(options).unwrap();
+        let execution = json::object([
+            ("inference", options["inference"].clone()),
+            ("resources", options["resources"].clone()),
+            ("tree_descriptor", options["tree_descriptor"].clone()),
+            ("training_binding", options["training_binding"].clone()),
+        ]);
+        let label = format!(
+            "lightgbm-tree-v2-{}-{}",
+            field(options, "expected_manifest_digest").unwrap(),
+            digest(&execution, &budget, &control).unwrap()
+        );
+        assert_ne!(old, label);
+        value["header"]["policy"] = json::text(&label);
+        value["spec"]["policies"][0] = json::text(&label);
+        value["manifest"]["policy_bindings"]
+            .as_object_mut()
+            .unwrap()
+            .remove(&old);
+        value["manifest"]["policy_bindings"][&label] = binding;
+        let checked = role_identity(
+            value.require("header").unwrap(),
+            value.require("manifest").unwrap(),
+            value.require("episode").unwrap(),
+            value.require("spec").unwrap(),
+            1,
+            &budget,
+            &control,
+        )
+        .unwrap();
+        OriginalHeader::new(checked.1, &checked.0, &budget, &control).unwrap();
+        let original_options =
+            value["manifest"]["policy_bindings"][&label]["policy_options"].clone();
+        for broken in [
+            Value::Null,
+            json::object([
+                ("directory", json::text("")),
+                ("request_sha256", json::text(&"b".repeat(64))),
+                ("completion_sha256", json::text(&"c".repeat(64))),
+            ]),
+            json::object([
+                ("directory", json::text("/unused")),
+                ("request_sha256", json::text("bad")),
+                ("completion_sha256", json::text(&"c".repeat(64))),
+            ]),
+        ] {
+            let mut options = original_options.clone();
+            options["training_binding"] = broken;
+            assert!(crate::structured_controls::tree_execution(&options).is_err());
+        }
+        value["manifest"]["policy_bindings"][&label]["policy_options"]["training_binding"]["completion_sha256"] =
+            json::text(&"d".repeat(64));
+        assert!(
+            role_identity(
+                value.require("header").unwrap(),
+                value.require("manifest").unwrap(),
+                value.require("episode").unwrap(),
+                value.require("spec").unwrap(),
+                1,
+                &budget,
+                &control
+            )
+            .is_err()
+        );
     }
 }
 
