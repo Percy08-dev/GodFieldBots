@@ -27,7 +27,7 @@ from gf_common.domain import (
     integer,
 )
 from gf_common.structured import DecisionFrame, EventBank, EventBankView, EventDelta, Selection
-from gf_common.structured_tokens import signature
+from gf_common.structured_tokens import recorded_aggregate_recipe, signature
 from gf_common.structured_wire import (
     delta_dict,
     frame_dict,
@@ -318,9 +318,9 @@ def read_structured_journal(path: Path, *, deadline: float = float("inf"),
             or header["feature_version"] != STRUCTURED_FEATURE_VERSION or header["input_recipe"] != STRUCTURED_FEATURE_VERSION
             or header["reward_version"] != REWARD_VERSION or header["policy_input_version"] != POLICY_INPUT_VERSION
             or header["end_projection_version"] != END_PROJECTION_VERSION or canonical(header["catalog"]) != canonical(CATALOG_META)
-            or header["generator_version"] != GENERATOR_V2 or header["use_action_options"] is not True
-            or header["token_signature"] != signature(header["aggregate_window"])):
+            or header["generator_version"] != GENERATOR_V2 or header["use_action_options"] is not True):
         raise ContractError("journal5 semantic identity mismatch")
+    recorded_aggregate_recipe(header['token_signature'], header['aggregate_window'])
     integer(header["viewer"], 1, 2)
     integer(header["sampling_seed"])
     for key in ("episode_id", "policy", "run_id", "game_id", "action_config_hash", "bank_episode"):

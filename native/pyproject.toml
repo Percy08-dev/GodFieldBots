@@ -13,3 +13,4 @@ dependencies = ["numpy==2.5.4"]
 bindings = "pyo3"
 module-name = "gf_native"
 features = ["pyo3/extension-module"]
+include = ["assets/structured-token-recipe-v1.json", "assets/structured-token-recipe-public-exact-v2.json"]

@@ -24,8 +24,17 @@ from gf_common.domain import (
 from gf_common.preprocessing import PreparationConfig, preparation_config
 from gf_common.schedule import serialize_schedule
 from gf_common.structured import ActionConfigV2
-from gf_models.structured_binding import check_input_binding, policy_label, safe_options_v2
-from gf_models.structured_config import InferenceBindingV2, ModelConfigV2
+from gf_models.structured_binding import (
+    check_input_binding,
+    recorded_options_v2,
+    recorded_policy_label,
+)
+from gf_models.structured_config import (
+    InferenceBindingV2,
+    ModelConfigV2,
+    RecordedModelConfigV2,
+    recorded_token_signature,
+)
 from gf_models.structured_sealed import SEMANTIC_KEYS, checksum, validate_recorded_semantics
 from gf_training.collection import CollectionPlan
 from gf_training.structured_rollout import (
@@ -44,7 +53,7 @@ from gf_training.structured_source import (
 
 
 def _frozen_batch(snapshot: _SourceSnapshot, plan: CollectionPlan, actions: ActionConfigV2,
-                  model: ModelConfigV2, learner_label: str, inference_digest: str) -> tuple[EpisodeRecords, ...]:
+                  model: RecordedModelConfigV2, learner_label: str, inference_digest: str) -> tuple[EpisodeRecords, ...]:
     checksum(inference_digest)
     if snapshot.collection.directory != plan.output.absolute():
         raise ContractError('original component collection differs from frozen output')
@@ -68,12 +77,13 @@ def _frozen_batch(snapshot: _SourceSnapshot, plan: CollectionPlan, actions: Acti
         raise ContractError('original collection differs from frozen plan/parent/bindings')
     if learner_label not in plan.bindings or plan.bindings[learner_label].model_id != model.model_id:
         raise ContractError('original learner model identity mismatch')
-    options = safe_options_v2(plan.bindings[learner_label].policy_options,
-        action_contract=actions.action_contract, purpose='component', synthetic_capacity=False)
+    options = recorded_options_v2(plan.bindings[learner_label].policy_options,
+        action_contract=actions.action_contract, purpose='component', synthetic_capacity=False,
+        token_signature=recorded_token_signature(model))
     binding = InferenceBindingV2(**options['inference'])
     if (canonical(options['model']) != canonical(asdict(model))
             or options['expected_manifest_digest'] != inference_digest
-            or learner_label != policy_label(model, binding, inference_digest,
+            or learner_label != recorded_policy_label(model, binding, inference_digest,
                                               cuda_visible_devices=options['cuda_visible_devices'])):
         raise ContractError('original learner differs from frozen generation inference')
     records = component_episode_records(snapshot.collection, learner_seats=seats)
@@ -87,7 +97,7 @@ def _frozen_batch(snapshot: _SourceSnapshot, plan: CollectionPlan, actions: Acti
 class _ComponentBatchSource:
     _snapshot: _SourceSnapshot
     records: tuple[EpisodeRecords, ...]
-    model: ModelConfigV2
+    model: RecordedModelConfigV2
     actions: ActionConfigV2
     declaration: Json
     learner_label: str
@@ -136,7 +146,7 @@ class _ComponentBatchSource:
 
 
 @contextmanager
-def component_batch_source(plan: CollectionPlan, *, actions: ActionConfigV2, model: ModelConfigV2,
+def component_batch_source(plan: CollectionPlan, *, actions: ActionConfigV2, model: RecordedModelConfigV2,
                            learner_label: str, inference_digest: str, declaration: Json,
                            settings: PreparationConfig, deadline: float, extra_owned_bytes: int = 0,
                            max_owned_bytes: int | None = None) -> Iterator[_ComponentBatchSource]:
@@ -159,19 +169,19 @@ def component_batch_source(plan: CollectionPlan, *, actions: ActionConfigV2, mod
 
 
 def _recorded_plan(directory: Path, state: Json, records: list[Json], generation: int,
-                   deadline: float) -> tuple[CollectionPlan, str, Json]:
+                   deadline: float, *, descriptor_model: RecordedModelConfigV2 | None = None) -> tuple[CollectionPlan, str, Json]:
     """Recompute original16roles/streams/pool from immutable previous controls."""
     import numpy as np
 
     from gf_training.collection import training_groups
     from gf_training.lineage import checkpoint_path
     from gf_training.structured_lineage import _state
-    actions, model = _state(state)
+    actions, model = _state(state, recorded_signature=recorded_token_signature(descriptor_model) if descriptor_model is not None else None)
     inference = InferenceBindingV2(**state['execution']['inference']['binding'])
     visibility = state['execution']['inference']['cuda_visible_devices']
     def binding(number: int) -> tuple[str, RuntimePolicyBinding]:
         record = records[number]
-        label = policy_label(model, inference, record['inference_sha256'], cuda_visible_devices=visibility)
+        label = recorded_policy_label(model, inference, record['inference_sha256'], cuda_visible_devices=visibility)
         return label, RuntimePolicyBinding(model.model_id, {'version': '2',
             'checkpoint': str(checkpoint_path(directory, number)), 'expected_manifest_digest': record['inference_sha256'],
             'model': asdict(model), 'inference': asdict(inference), 'cuda_visible_devices': visibility,
@@ -240,7 +250,8 @@ def validate_component_parent(directory: Path, *, require_complete: bool = True,
     state, records = _validate_component_chain(directory, require_complete=require_complete, require_retained=False, scan=scan)
     if state['identity'].get('process_envelope_recipe') != PROCESS_ENVELOPE_RECIPE:
         raise ContractError('component process-envelope recipe missing/mismatched; no default upgrade')
-    actions, model = _state(state)
+    bootstrap = scan.object(checkpoint_path(directory, 0) / 'inference.json', records[0]['inference_sha256'])
+    actions, model = _state(state, recorded_signature=bootstrap['token_signature'])
     import numpy as np
     initial_rng = np.random.Generator(np.random.PCG64(state['seed']))
     if canonical(records[0]['parent_controls']) != canonical({'schedule_opponent_rng': dict(initial_rng.bit_generator.state),
@@ -250,7 +261,7 @@ def validate_component_parent(directory: Path, *, require_complete: bool = True,
     source_inventories = []
     for number in range(1, len(records)):
         scan.check()
-        plan, label, after_rng = _recorded_plan(directory, state, records, number - 1, deadline)
+        plan, label, after_rng = _recorded_plan(directory, state, records, number - 1, deadline, descriptor_model=model)
         if canonical(after_rng) != canonical(records[number]['parent_controls']['schedule_opponent_rng']):
             raise ContractError('original component schedule/opponent RNG advance mismatch')
         update = scan.object(directory / 'updates' / f'{number:06}.json', records[number]['update_sha256'])
@@ -332,6 +343,8 @@ def validate_owned_collection(plan: CollectionPlan, ledger: Any, *, max_owned_by
     maximum = min(max_owned_bytes, owner.model.resources.max_owned_bytes)
     state, records = validate_component_parent(directory, require_complete=False, max_owned_bytes=maximum, deadline=deadline)
     actions, model = _state(state)
+    if type(model) is not ModelConfigV2:
+        raise ContractError('historical descriptor cannot authorize an active participant')
     run = state['effective_config']['run']
     if (ledger.global_cuda_bytes != run['global_cuda_budget_bytes'] or ledger.max_workers != run['max_participant_workers']
             or ledger.learner_bytes != 0):

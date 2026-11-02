@@ -47,7 +47,13 @@ from gf_models.sharded_arrays import (
 )
 from gf_models.structured_artifacts import semantics
 from gf_models.structured_binding import check_input_binding, input_binding
-from gf_models.structured_config import ModelConfigV2, architecture_identity
+from gf_models.structured_config import (
+    ModelConfigV2,
+    RecordedModelConfigV2,
+    aggregate_recipe,
+    recorded_architecture_identity,
+    validate_config,
+)
 from gf_models.structured_sealed import SEMANTIC_KEYS, validate_recorded_semantics
 from gf_training.ppo import gae, normalize_advantages
 
@@ -153,8 +159,11 @@ def _predicted_token_bytes(records: tuple[EpisodeRecords, ...]) -> int:
 
 
 class StructuredRollout:
-    def __init__(self, records: tuple[EpisodeRecords, ...], model: ModelConfigV2, action_config_hash: str, *,
-                 action_contract: ActionContract, purpose: str, synthetic_capacity: bool, _reserved_bytes: int = 0) -> None:
+    def __init__(self, records: tuple[EpisodeRecords, ...], model: RecordedModelConfigV2, action_config_hash: str, *,
+                 action_contract: ActionContract, purpose: str, synthetic_capacity: bool, _reserved_bytes: int = 0,
+                 _historical: bool = False) -> None:
+        if not _historical:
+            validate_config(model)
         self.input_binding = input_binding(action_contract, purpose, synthetic_capacity)
         self.action_contract, self.purpose, self.synthetic_capacity = action_contract, purpose, synthetic_capacity
         if type(records) is not tuple or any(type(record) is not EpisodeRecords for record in records):
@@ -197,8 +206,10 @@ class StructuredRollout:
             integer(len(record.frames), 0, model.temporal.max_decisions)
             if record.bank.boundary.end > model.event.max_episode:
                 raise ContractError("rollout episode event cap exceeded")
-            frame_tokens = tuple(tokenize_frame(frame, record.bank, aggregate_window=model.event.aggregate_window) for frame in record.frames)
-            candidates = tuple(tokenize_table(table, frame, model.max_positions, aggregate_window=model.event.aggregate_window)
+            frame_tokens = tuple(tokenize_frame(frame, record.bank, aggregate_window=model.event.aggregate_window,
+                                                aggregate_recipe=aggregate_recipe(model)) for frame in record.frames)
+            candidates = tuple(tokenize_table(table, frame, model.max_positions, aggregate_window=model.event.aggregate_window,
+                                              aggregate_recipe=aggregate_recipe(model))
                                for frame, table in zip(record.frames, record.tables, strict=True))
             for selection in record.selections:
                 labels.add(selection.policy_version)
@@ -298,6 +309,8 @@ def _write_rollout(directory: Path, rollout: StructuredRollout, *, shard_bytes: 
                    check: Callable[[], None] | None = None,
                    reserve: Callable[[int], None] = lambda _: None) -> Json:
     poll = check or (lambda: None)
+    validate_config(rollout.model)
+    assert type(rollout.model) is ModelConfigV2
     poll()
     limit = rollout.model.resources.max_owned_bytes if max_owned_bytes is None else min(max_owned_bytes, rollout.model.resources.max_owned_bytes)
     integer(extra_owned_bytes, 0, limit)
@@ -380,7 +393,7 @@ def _write_rollout(directory: Path, rollout: StructuredRollout, *, shard_bytes: 
                    for key, (value, dtype, blob) in planned.items()}
     bundle_plan = plan_bundle("rollout", descriptors, shard_bytes=shard_bytes)
     manifest = {"schema_version": 3, "kind": "structured-rollout", **rollout.input_binding, **semantics(rollout.model),
-                "architecture_identity": architecture_identity(rollout.model),
+                "architecture_identity": recorded_architecture_identity(rollout.model),
                 "action_config_hash": rollout.action_config_hash, "policy_version": rollout.policy_version,
                 "decision_count": len(rollout), "episodes": episodes, "data": bundle_plan}
     metadata_bytes = json_bytes(manifest, limit=MAX_MANIFEST_BYTES)
@@ -419,13 +432,14 @@ def _read_reservation(manifest: Json, descriptors: Json) -> int:
 def read_rollout(directory: Path, expected_digest: str, model: ModelConfigV2, *,
                  action_contract: ActionContract, purpose: str, synthetic_capacity: bool) -> StructuredRollout:
     input_binding(action_contract, purpose, synthetic_capacity)
+    validate_config(model)
     return _read_rollout(directory, expected_digest, model, action_contract=action_contract,
         purpose=purpose, synthetic_capacity=synthetic_capacity, expected_semantics=semantics(model))
 
 
-def _read_recorded_rollout(directory: Path, expected_digest: str, model: ModelConfigV2, *,
+def _read_recorded_rollout(directory: Path, expected_digest: str, model: RecordedModelConfigV2, *,
                            action_contract: ActionContract, declaration: Json,
-                           expected_records: tuple[EpisodeRecords, ...], max_owned_bytes: int,
+                           expected_records: tuple[EpisodeRecords, ...] | None, max_owned_bytes: int,
                            extra_owned_bytes: int, check: Callable[[], None],
                            reserve: Callable[[int], None]) -> StructuredRollout:
     """Historical component correspondence, never current runtime/Source authority.
@@ -435,7 +449,7 @@ def _read_recorded_rollout(directory: Path, expected_digest: str, model: ModelCo
     """
     closed(declaration, SEMANTIC_KEYS)
     validate_recorded_semantics(declaration, model)
-    if type(expected_records) is not tuple or any(type(item) is not EpisodeRecords for item in expected_records):
+    if expected_records is not None and (type(expected_records) is not tuple or any(type(item) is not EpisodeRecords for item in expected_records)):
         raise ContractError('ordered original participant records required')
     check()
     limit = min(max_owned_bytes, model.resources.max_owned_bytes)
@@ -485,7 +499,7 @@ def _read_recorded_rollout(directory: Path, expected_digest: str, model: ModelCo
         extra_owned_bytes=extra_owned_bytes, check=check, reserve=reserve,
         original_manifest=manifest, snapshots=snapshots,
         encoded_scratch=manifest_extra + 32 * encoded + 512 * len(snapshots) + sidecar_parse,
-        json_budget=limit - extra_owned_bytes - base - 32 * encoded)
+        json_budget=limit - extra_owned_bytes - base - 32 * encoded, historical=True)
     for name, identity in chain(snapshots.items(), (('rollout.json', manifest_identity),)):
         check()
         fd = os.open(directory / name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
@@ -495,14 +509,14 @@ def _read_recorded_rollout(directory: Path, expected_digest: str, model: ModelCo
     return result
 
 
-def _read_rollout(directory: Path, expected_digest: str, model: ModelConfigV2, *,
+def _read_rollout(directory: Path, expected_digest: str, model: RecordedModelConfigV2, *,
                   action_contract: ActionContract, purpose: str, synthetic_capacity: bool,
                   expected_semantics: Json, expected_records: tuple[EpisodeRecords, ...] | None = None,
                   max_owned_bytes: int | None = None, extra_owned_bytes: int = 0,
                   check: Callable[[], None] | None = None,
                   reserve: Callable[[int], None] = lambda _: None,
                   original_manifest: Json | None = None, snapshots: dict[str, tuple[int, ...]] | None = None,
-                  encoded_scratch: int = 0, json_budget: int | None = None) -> StructuredRollout:
+                  encoded_scratch: int = 0, json_budget: int | None = None, historical: bool = False) -> StructuredRollout:
     poll = check or (lambda: None)
     poll()
     limit = model.resources.max_owned_bytes if max_owned_bytes is None else min(max_owned_bytes, model.resources.max_owned_bytes)
@@ -517,7 +531,7 @@ def _read_rollout(directory: Path, expected_digest: str, model: ModelConfigV2, *
                         purpose=purpose, synthetic_capacity=synthetic_capacity)
     if (type(manifest["schema_version"]) is not int or manifest["schema_version"] != 3
             or manifest["kind"] != "structured-rollout"
-            or manifest["architecture_identity"] != architecture_identity(model)
+            or manifest["architecture_identity"] != recorded_architecture_identity(model)
             or any(canonical(manifest[key]) != canonical(value) for key, value in expected_semantics.items())):
         raise ContractError("rollout recipe/architecture/runtime mismatch")
     integer(manifest["decision_count"], 0, 2**31 - 1)
@@ -644,7 +658,7 @@ def _read_rollout(directory: Path, expected_digest: str, model: ModelConfigV2, *
         train_vectors.append(scalar)
     rollout = StructuredRollout(tuple(records), model, manifest["action_config_hash"],
                                 _reserved_bytes=manifest["data"]["decoded_bytes"] + extra_owned_bytes, action_contract=action_contract,
-                                purpose=purpose, synthetic_capacity=synthetic_capacity)
+                                purpose=purpose, synthetic_capacity=synthetic_capacity, _historical=historical)
     if manifest["decision_count"] != len(rollout) or manifest["policy_version"] != rollout.policy_version:
         raise ContractError("rollout endpoint/policy identity mismatch")
     for episode, scalars in zip(rollout.episodes, train_vectors, strict=True):

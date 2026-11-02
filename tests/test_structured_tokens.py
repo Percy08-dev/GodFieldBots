@@ -123,4 +123,6 @@ def test_exact_public_vocab_categories_and_nondefault_window(make_input, definit
 def test_model_neutral_layout_signature_is_pinned():
     # Native reproduction must bind the exact ordered categorical and numeric
     # recipe, including distinct darkcloud/dark_cloud status codes.
-    assert signature() == "c08f6301b4feae6f8c63d1f278874a3ddfac40cb94f9981479733ba02d63f798"
+    assert signature() == "4b4ae064f08192a322de83e24e4a93ef4191c7d73396997d59cd7710cd05cb04"
+    from gf_common.structured_history import HISTORICAL_AGGREGATE
+    assert signature(aggregate_recipe=HISTORICAL_AGGREGATE) == "c08f6301b4feae6f8c63d1f278874a3ddfac40cb94f9981479733ba02d63f798"

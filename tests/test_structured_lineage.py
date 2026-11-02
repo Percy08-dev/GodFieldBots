@@ -449,7 +449,7 @@ def test_owned_binding_keeps_original_parent_snapshots_through_final_return(tmp_
     def late(*args, **kwargs):
         value = original(*args, **kwargs)
         calls.append(1)
-        if len(calls) == 2:  # first is numeric-link validation, second is binding publication.
+        if len(calls) == 1:  # recorded numeric links use their historical helper; this is active publication.
             state = json.loads((directory / 'run.json').read_text())
             state['hardware']['name'] = 'changed after chain validation'
             atomic_json(directory / 'run.json', state)

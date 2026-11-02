@@ -31,13 +31,16 @@ from gf_models.structured_binding import (
     child_cuda_visibility,
     input_binding,
     policy_label,
+    recorded_policy_label,
     validate_cuda_visibility,
 )
 from gf_models.structured_config import (
     InferenceBindingV2,
     ModelConfigV2,
-    architecture_identity,
+    RecordedModelConfigV2,
     model_config_v2,
+    recorded_architecture_identity,
+    recorded_model_config_v2,
 )
 from gf_models.structured_sealed import (
     CLASSIFICATION,
@@ -92,7 +95,7 @@ def _filemap(value: Any, required: set[str]) -> Json:
     return value
 
 
-def _retained_declaration(artifact: Any, state: Json, model: ModelConfigV2) -> None:
+def _retained_declaration(artifact: Any, state: Json, model: RecordedModelConfigV2) -> None:
     if (canonical(artifact.inference['model']) != canonical(asdict(model)) or artifact.resume is None
             or canonical(artifact.resume['binding']) != canonical(state['execution']['learner']['binding'])
             or artifact.resume['cuda_rng_count'] != (state['hardware']['device_count'] if state['device'] != 'cpu' else 0)):
@@ -146,12 +149,13 @@ def _owned(directory: Path) -> Path:
     return directory
 
 
-def _model(config: Json) -> ModelConfigV2:
+def _model(config: Json, recorded_signature: str | None = None) -> RecordedModelConfigV2:
     raw = config.get('model', {})
     closed(raw, set(ModelConfigV2.__dataclass_fields__) | {'checkpoint', 'inference', 'cuda_visible_devices'})
     if raw['checkpoint'] is not None:
         raise ContractError('component PPO Config must be fresh model2')
-    return model_config_v2({key: value for key, value in raw.items() if key in ModelConfigV2.__dataclass_fields__})
+    pure = {key: value for key, value in raw.items() if key in ModelConfigV2.__dataclass_fields__}
+    return model_config_v2(pure) if recorded_signature is None else recorded_model_config_v2(pure, recorded_signature)
 
 
 def resume_identity(config_sha256: str, identity: Json, execution: Json, classification: Json) -> str:
@@ -167,7 +171,7 @@ def _classification(record: Json, state: Json) -> None:
         raise ContractError('component lineage model/input identity mismatch')
 
 
-def _state(state: Json) -> tuple[Any, ModelConfigV2]:
+def _state(state: Json, *, recorded_signature: str | None = None) -> tuple[Any, RecordedModelConfigV2]:
     closed(state, RUN_REQUIRED, RUN_OPTIONAL)
     if (type(state['schema_version']) is not int or state['schema_version'] != 2 or state['algorithm'] != 'ppo'
             or state['status'] not in ('running', 'paused', 'complete') or state['model_version'] != '2'
@@ -185,7 +189,7 @@ def _state(state: Json) -> tuple[Any, ModelConfigV2]:
         raise ContractError('recorded component identity object required')
     if any(canonical(state[key]) != canonical(value) for key, value in expected.items()):
         raise ContractError('component run Config classification mismatch')
-    model = _model(config)
+    model = _model(config, recorded_signature)
     if model.model_id != state['model_id']:
         raise ContractError('component model kind differs from Config')
     training = training_config(config['training'])
@@ -279,7 +283,7 @@ def _relative(directory: Path, value: Any) -> Path:
     return target
 
 
-def _update(directory: Path, update: Json, state: Json, previous: Json, scan: SealedScan, model: ModelConfigV2,
+def _update(directory: Path, update: Json, state: Json, previous: Json, scan: SealedScan, model: RecordedModelConfigV2,
             inference_declaration: Json) -> int:
     closed(update, UPDATE_FIELDS)
     integer(update['generation'], 1, 1000)
@@ -314,13 +318,13 @@ def _update(directory: Path, update: Json, state: Json, previous: Json, scan: Se
     numeric = _relative(directory, update['numeric'])
     rollout = scan.object(numeric / 'rollout.json', update['numeric_sha256'])
     if (type(rollout.get('schema_version')) is not int or rollout['schema_version'] != 3 or rollout.get('kind') != 'structured-rollout'
-            or rollout.get('architecture_identity') != architecture_identity(model)
+            or rollout.get('architecture_identity') != recorded_architecture_identity(model)
             or rollout.get('action_config_hash') != digest(state['effective_config']['actions'])
             or any(canonical(rollout.get(key)) != canonical(state[key]) for key in CLASSIFICATION)):
         raise ContractError('component numeric3 model/input links mismatch')
     if any(canonical(rollout.get(key)) != canonical(inference_declaration[key]) for key in SEMANTIC_KEYS):
         raise ContractError('numeric recorded semantic declarations differ from inference')
-    expected_label = policy_label(model, InferenceBindingV2(**state['execution']['inference']['binding']), previous['inference_sha256'],
+    expected_label = recorded_policy_label(model, InferenceBindingV2(**state['execution']['inference']['binding']), previous['inference_sha256'],
                                  cuda_visible_devices=state['execution']['inference']['cuda_visible_devices'])
     if rollout.get('policy_version') != expected_label:
         raise ContractError('numeric frozen learner inference identity mismatch')
@@ -375,7 +379,18 @@ def validate_component_chain(directory: Path, *, require_complete: bool = True, 
 
 def _validate_component_chain(directory: Path, *, require_complete: bool, require_retained: bool, scan: _ChainScan) -> tuple[Json, list[Json]]:
     state = scan.object(directory / 'run.json')
-    actions, model = _state(state)
+    # Descriptor bootstrap is bound to the original protected generation0 and
+    # its mandatory manifest map/hash before a missing event field is interpreted.
+    bootstrap = closed(scan.object(generation_path(directory, 0)), GEN_FIELDS)
+    integer(bootstrap['generation'], 0, 0)
+    _filemap(bootstrap['artifact_files'], {'inference.json', 'resume.json'})
+    checksum(bootstrap['inference_sha256'])
+    if bootstrap['artifact_files']['inference.json'] != bootstrap['inference_sha256']:
+        raise ContractError('generation0 bootstrap inference/map mismatch')
+    first_inference = scan.object(checkpoint_path(directory, 0) / 'inference.json', bootstrap['inference_sha256'])
+    actions, model = _state(state, recorded_signature=first_inference['token_signature'])
+    if canonical(first_inference['model']) != canonical(asdict(model)):
+        raise ContractError('generation0 bootstrap model differs from original frozen Config')
     if require_complete and (state['status'] != 'complete' or state['updates'] == 0 or state['completed_updates'] != state['updates']):
         raise ContractError('complete nonzero component chain required')
     latest = closed(scan.object(directory / 'latest.json'), {'generation', 'sha256'})
@@ -435,7 +450,7 @@ def _validate_component_chain(directory: Path, *, require_complete: bool, requir
                 purpose='component', synthetic_capacity=False, scan=scan)
         else:
             raise ContractError('required retained generation or completed pruning receipt missing')
-        if (artifact.inference['architecture_identity'] != architecture_identity(model)
+        if (artifact.inference['architecture_identity'] != recorded_architecture_identity(model)
                 or artifact.inference['action_config_hash'] != digest(state['effective_config']['actions'])
                 or receipt['inference_sha256'] != record['inference_sha256']):
             raise ContractError('component artifact/model/action identity mismatch')
@@ -529,6 +544,7 @@ def commit_component_generation(directory: Path, state: Json, *, generation: int
                                 artifact_files: Json, max_owned_bytes: int, deadline: float) -> Json:
     directory = _owned(directory)
     actions, model = _state(state)
+    assert type(model) is ModelConfigV2
     if state['status'] != 'running':
         raise ContractError('only a running component parent can append a generation')
     integer(generation, 0, 1000)
@@ -763,6 +779,7 @@ def owned_component_binding(directory: Path, generation: int, *, max_owned_bytes
     state, records = _validate_component_chain(directory, require_complete=False, require_retained=False, scan=scan)
     integer(generation, 0, len(records) - 1)
     actions, model = _state(state)
+    assert type(model) is ModelConfigV2
     record = records[generation]
     registry = scan.object(directory / 'artifact-registry.json')
     if registry['generations'][str(generation)]['status'] != 'retained':

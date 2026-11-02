@@ -1,0 +1,1 @@
+{"arrays":{"state_encoder.0.weight":{"bytes":351936,"dtype":"float32","shape":[16,5499]},"state_encoder.2.bias":{"bytes":48,"dtype":"float32","shape":[12]},"state_encoder.2.weight":{"bytes":768,"dtype":"float32","shape":[12,16]}},"sha256":"f3f4585a8b8e1f74e2935f6a409a591de0d85527a9d1f6f4346919854ca7a547"}

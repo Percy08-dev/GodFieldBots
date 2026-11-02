@@ -1,6 +1,7 @@
 # 0006: Preserve the existing public history information in structured inputs
 
-Status: correction design READY; implementation/reverification pending (2026-11-02).
+Status: corrected core/consumer implementation and scoped re-verification READY
+(2026-11-02); native staging/Tree2 and real-game gates remain separate.
 
 The implementation plan requires the current interval event GRU and the existing
 recent128-event aggregate. A late root audit finds that the initial structured

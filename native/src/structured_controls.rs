@@ -1,0 +1,1951 @@
+//! Exact metadata-only model2 parent validation. ZIP/NPY values remain Python S2.
+use crate::{
+    budget::{Budget, BudgetVec, Control},
+    error::{Error, Result},
+    json::{self, Document, Value, ValueExt},
+    structured_session::Sources,
+};
+use sha2::{Digest, Sha256};
+use std::{collections::BTreeMap, path::Path, sync::Arc};
+
+pub const INPUT: &str = "participant-structured-v1";
+const CLASS: &[&str] = &["action_contract", "purpose", "synthetic_capacity"];
+const SEMANTICS: &[&str] = &[
+    "input_recipe",
+    "generator_version",
+    "policy_input_version",
+    "end_projection_version",
+    "reward_policy_version",
+    "reviewed_spec_hashes",
+    "simulator_revision",
+    "catalog",
+    "token_signature",
+    "numeric_transform",
+    "runtime",
+    "numerics",
+];
+const RECIPE: &[u8] = include_bytes!("../assets/structured-token-recipe-v1.json");
+const EXACT_RECIPE: &[u8] =
+    include_bytes!("../assets/structured-token-recipe-public-exact-v2.json");
+
+fn historical(model: &Value) -> Result<bool> {
+    match model.require("event")?.get("aggregate_recipe") {
+        None => Ok(true),
+        Some(value) if value.string()? == "public-exact-v2" => Ok(false),
+        _ => Err(Error::contract("unsupported closed aggregate recipe")),
+    }
+}
+
+pub fn checksum(value: &Value) -> Result<&str> {
+    let text = value.string()?;
+    if text.len() != 64
+        || !text
+            .bytes()
+            .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
+    {
+        return Err(Error::contract("structured required SHA256 invalid"));
+    }
+    Ok(text)
+}
+pub fn basename(name: &str) -> Result<()> {
+    if name.is_empty()
+        || name.len() > 200
+        || !name.is_ascii()
+        || !name
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || b"._-".contains(&c))
+        || matches!(name, "." | "..")
+    {
+        return Err(Error::contract("structured owned basename required"));
+    }
+    Ok(())
+}
+fn text<'a>(value: &'a Value, key: &str) -> Result<&'a str> {
+    value.require(key)?.string()
+}
+fn n(value: &Value, key: &str, low: i128, high: i128) -> Result<i128> {
+    value.require(key)?.integer(low, high)
+}
+fn eq(a: &Value, b: &Value, message: &str) -> Result<()> {
+    if a != b {
+        return Err(Error::contract(message));
+    }
+    Ok(())
+}
+fn is(value: &Value, key: &str, expected: &str) -> Result<()> {
+    if text(value, key)? != expected {
+        return Err(Error::contract(format!("structured {key} mismatch")));
+    }
+    Ok(())
+}
+pub fn digest(value: &Value, budget: &Arc<Budget>, control: &Control) -> Result<String> {
+    Ok(format!(
+        "{:x}",
+        Sha256::digest(&*json::canonical(value, budget, control)?)
+    ))
+}
+pub fn token_signature(
+    window: i128,
+    old: bool,
+    budget: &Arc<Budget>,
+    control: &Control,
+) -> Result<String> {
+    if !(1..=65536).contains(&window) {
+        return Err(Error::contract("structured aggregate window bound"));
+    }
+    let mut recipe = json::parse(if old { RECIPE } else { EXACT_RECIPE }, budget, control)?;
+    recipe
+        .root
+        .as_object_mut()
+        .expect("pinned recipe")
+        .insert("history_window".into(), json::integer(window));
+    digest(&recipe.root, budget, control)
+}
+fn classification(value: &Value, contract: &Value) -> Result<()> {
+    eq(
+        value.require("action_contract")?,
+        contract,
+        "structured action contract differs",
+    )?;
+    is(value, "purpose", "component")?;
+    if value.require("synthetic_capacity")? != &Value::Bool(false) {
+        return Err(Error::contract(
+            "structured game control rejects synthetic capacity",
+        ));
+    }
+    Ok(())
+}
+fn contract(value: &Value) -> Result<()> {
+    value.closed(
+        &[
+            "profile_id",
+            "owner_confirmation_sha256",
+            "adopted_rules_sha256",
+            "eligibility",
+        ],
+        &[],
+    )?;
+    for (key, expected) in [
+        ("profile_id", "owner-proposal-engineering-20261101-v1"),
+        (
+            "owner_confirmation_sha256",
+            "a0e6acb7fdc708ce4bd1b11f23d5dd3f0e41373cc1c1c1bef0a43a3e3efc2cb2",
+        ),
+        (
+            "adopted_rules_sha256",
+            "f4132843bb700947d51e19b57bed1b3bc9bcaf5f63c0cfa60998f1ddc3d6d978",
+        ),
+        ("eligibility", "engineering_only"),
+    ] {
+        is(value, key, expected)?;
+    }
+    Ok(())
+}
+fn uint128(value: &Value) -> Result<u128> {
+    let Value::Number(value) = value else {
+        return Err(Error::contract("PCG uint128 required"));
+    };
+    if !json::integer_token(value) {
+        return Err(Error::contract("PCG integer token required"));
+    }
+    (if value.as_str() == "-0" {
+        "0"
+    } else {
+        value.as_str()
+    })
+    .parse()
+    .map_err(|_| Error::contract("PCG uint128 range"))
+}
+fn pcg(value: &Value) -> Result<()> {
+    value.closed(&["bit_generator", "state", "has_uint32", "uinteger"], &[])?;
+    is(value, "bit_generator", "PCG64")?;
+    value.require("state")?.closed(&["state", "inc"], &[])?;
+    uint128(value.require("state")?.require("state")?)?;
+    if uint128(value.require("state")?.require("inc")?)? % 2 != 1 {
+        return Err(Error::contract("PCG increment must be odd"));
+    }
+    n(value, "has_uint32", 0, 1)?;
+    n(value, "uinteger", 0, u32::MAX as i128)?;
+    Ok(())
+}
+fn controls(value: &Value, generation: usize) -> Result<()> {
+    value.closed(
+        &[
+            "schedule_opponent_rng",
+            "snapshot_pool",
+            "collection_position",
+        ],
+        &[],
+    )?;
+    n(
+        value,
+        "collection_position",
+        generation as i128,
+        generation as i128,
+    )?;
+    pcg(value.require("schedule_opponent_rng")?)?;
+    let expected: Vec<Value> = (0..=generation)
+        .filter(|i| i % 10 == 0)
+        .rev()
+        .take(5)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .map(|n| json::integer(n as i128))
+        .collect();
+    eq(
+        value.require("snapshot_pool")?,
+        &Value::Array(expected),
+        "structured snapshot pool mismatch",
+    )
+}
+fn binding(value: &Value) -> Result<()> {
+    value.closed(
+        &[
+            "device",
+            "candidate_chunk",
+            "max_candidates",
+            "managed_budget_bytes",
+        ],
+        &[],
+    )?;
+    if !["cpu", "cuda:0"].contains(&text(value, "device")?) {
+        return Err(Error::contract("structured execution device unsupported"));
+    }
+    n(value, "candidate_chunk", 1, 65536)?;
+    n(value, "max_candidates", 1, 65536)?;
+    n(value, "managed_budget_bytes", 1, 12i128 << 30)?;
+    Ok(())
+}
+fn visibility(value: &Value) -> Result<()> {
+    if value.is_null() {
+        return Ok(());
+    }
+    let text = value.string()?;
+    if text.is_empty() {
+        return Ok(());
+    }
+    if text.len() > 1024 {
+        return Err(Error::contract("CUDA selector too long"));
+    }
+    let mut seen = Vec::new();
+    for item in text.split(',') {
+        let index = item == "0"
+            || !item.starts_with('0')
+                && item.bytes().all(|c| c.is_ascii_digit())
+                && !item.is_empty();
+        let uuid = item.strip_prefix("GPU-").is_some_and(|s| {
+            s.len() == 36
+                && s.bytes().enumerate().all(|(i, c)| {
+                    if [8, 13, 18, 23].contains(&i) {
+                        c == b'-'
+                    } else {
+                        c.is_ascii_hexdigit()
+                    }
+                })
+        });
+        if seen.len() >= 32 || seen.contains(&item) || !(index || uuid) {
+            return Err(Error::contract("CUDA selector invalid"));
+        }
+        seen.push(item);
+    }
+    Ok(())
+}
+fn widths(value: &Value) -> Result<Vec<i128>> {
+    let values = value.array()?;
+    if !(1..=4).contains(&values.len()) {
+        return Err(Error::contract("structured hidden widths bound"));
+    }
+    values.iter().map(|value| value.integer(1, 1024)).collect()
+}
+fn shape(shapes: &mut BTreeMap<String, Vec<i128>>, name: &str, dims: &[i128]) {
+    shapes.insert(name.into(), dims.to_vec());
+}
+fn linear(shapes: &mut BTreeMap<String, Vec<i128>>, name: &str, source: i128, target: i128) {
+    shape(shapes, &format!("{name}.weight"), &[target, source]);
+    shape(shapes, &format!("{name}.bias"), &[target]);
+}
+fn mlp(shapes: &mut BTreeMap<String, Vec<i128>>, name: &str, widths: &[i128]) {
+    for (i, w) in widths.windows(2).enumerate() {
+        linear(shapes, &format!("{name}.{}", i * 2), w[0], w[1]);
+    }
+}
+fn gru(
+    shapes: &mut BTreeMap<String, Vec<i128>>,
+    name: &str,
+    source: i128,
+    width: i128,
+    layers: i128,
+) {
+    for i in 0..layers {
+        shape(
+            shapes,
+            &format!("{name}.weight_ih_l{i}"),
+            &[3 * width, if i == 0 { source } else { width }],
+        );
+        shape(
+            shapes,
+            &format!("{name}.weight_hh_l{i}"),
+            &[3 * width, width],
+        );
+        for part in ["ih", "hh"] {
+            shape(shapes, &format!("{name}.bias_{part}_l{i}"), &[3 * width]);
+        }
+    }
+}
+fn attention(shapes: &mut BTreeMap<String, Vec<i128>>, name: &str, width: i128, feed: i128) {
+    for part in ["query", "key", "value", "output"] {
+        linear(shapes, &format!("{name}.{part}"), width, width);
+    }
+    linear(shapes, &format!("{name}.feedforward1"), width, feed);
+    linear(shapes, &format!("{name}.feedforward2"), feed, width);
+    for norm in ["norm1", "norm2"] {
+        shape(shapes, &format!("{name}.{norm}.weight"), &[width]);
+        shape(shapes, &format!("{name}.{norm}.bias"), &[width]);
+    }
+}
+
+fn model(
+    value: &Value,
+    budget: &Arc<Budget>,
+    control: &Control,
+) -> Result<BTreeMap<String, Vec<i128>>> {
+    value.closed(
+        &[
+            "model_id",
+            "version",
+            "input_recipe",
+            "max_positions",
+            "state",
+            "card",
+            "hand",
+            "event",
+            "temporal",
+            "heads",
+            "resources",
+            "initialization",
+            "dropout",
+            "precision",
+        ],
+        &[],
+    )?;
+    is(value, "version", "2")?;
+    is(value, "input_recipe", INPUT)?;
+    is(value, "initialization", "orthogonal-structured-v1")?;
+    n(value, "dropout", 0, 0)?;
+    is(value, "precision", "ieee-fp32")?;
+    let kind = text(value, "model_id")?;
+    if !["mlp", "gru", "transformer"].contains(&kind) {
+        return Err(Error::contract("structured model unsupported"));
+    }
+    let positions = n(value, "max_positions", 1, 128)?;
+    let state = value.require("state")?;
+    state.closed(&["kind", "hidden_sizes", "output_size", "activation"], &[])?;
+    let card = value.require("card")?;
+    card.closed(
+        &[
+            "definition_embedding",
+            "ability_embedding",
+            "output_size",
+            "activation",
+        ],
+        &[],
+    )?;
+    let hand = value.require("hand")?;
+    hand.closed(
+        &[
+            "kind",
+            "hidden_sizes",
+            "latent_size",
+            "pooling",
+            "attention_layers",
+            "attention_heads",
+            "attention_feedforward",
+            "activation",
+        ],
+        &[],
+    )?;
+    let event = value.require("event")?;
+    let old = historical(value)?;
+    let mut event_keys = vec![
+        "hidden_size",
+        "num_layers",
+        "aggregate_window",
+        "max_interval",
+        "max_episode",
+    ];
+    if !old {
+        event_keys.push("aggregate_recipe");
+    }
+    event.closed(&event_keys, &[])?;
+    let temporal = value.require("temporal")?;
+    temporal.closed(
+        &[
+            "kind",
+            "hidden_size",
+            "num_layers",
+            "num_heads",
+            "feedforward_size",
+            "max_decisions",
+            "sequence_length",
+            "activation",
+        ],
+        &[],
+    )?;
+    let heads = value.require("heads")?;
+    heads.closed(
+        &["actor_hidden_sizes", "critic_hidden_sizes", "activation"],
+        &[],
+    )?;
+    let resources = value.require("resources")?;
+    resources.closed(
+        &[
+            "max_parameters",
+            "max_owned_bytes",
+            "max_tensor_bytes",
+            "cuda_context_bytes",
+            "workspace_bytes",
+        ],
+        &[],
+    )?;
+    for item in [state, card, hand, temporal, heads] {
+        is(item, "activation", "relu")?;
+    }
+    let sw = widths(state.require("hidden_sizes")?)?;
+    let hw = widths(hand.require("hidden_sizes")?)?;
+    let aw = widths(heads.require("actor_hidden_sizes")?)?;
+    let vw = widths(heads.require("critic_hidden_sizes")?)?;
+    let so = n(state, "output_size", 1, 1024)?;
+    let ce = n(card, "definition_embedding", 1, 1024)?;
+    let ae = n(card, "ability_embedding", 1, 1024)?;
+    let co = n(card, "output_size", 1, 1024)?;
+    let hl = n(hand, "latent_size", 1, 1024)?;
+    let h_layers = n(hand, "attention_layers", 1, 4)?;
+    let h_heads = n(hand, "attention_heads", 1, 16)?;
+    let h_feed = n(hand, "attention_feedforward", 1, 1024)?;
+    let eh = n(event, "hidden_size", 1, 1024)?;
+    let el = n(event, "num_layers", 1, 4)?;
+    let ei = n(event, "max_interval", 1, 65536)?;
+    let ee = n(event, "max_episode", ei, i32::MAX as i128)?;
+    n(event, "aggregate_window", 1, 65536.min(ee))?;
+    let th = n(temporal, "hidden_size", 1, 1024)?;
+    let tl = n(temporal, "num_layers", 1, 4)?;
+    let t_heads = n(temporal, "num_heads", 1, 16)?;
+    let tf = n(temporal, "feedforward_size", 1, 1024)?;
+    let td = n(temporal, "max_decisions", 1, 1024)?;
+    n(temporal, "sequence_length", 1, td)?;
+    is(temporal, "kind", kind)?;
+    let sk = text(state, "kind")?;
+    let hk = text(hand, "kind")?;
+    if !["mlp", "identity"].contains(&sk)
+        || !["direct", "deepsets", "attention"].contains(&hk)
+        || !["sum", "mean", "max"].contains(&text(hand, "pooling")?)
+    {
+        return Err(Error::contract("structured encoder unsupported"));
+    }
+    if sk == "identity" && (sw != [128] || so != 64) {
+        return Err(Error::contract("inactive state settings"));
+    }
+    if hk != "attention" && (h_layers, h_heads, h_feed) != (2, 4, 128) {
+        return Err(Error::contract("inactive hand attention settings"));
+    }
+    if hk == "direct" && (hw != [128] || hl != 128 || text(hand, "pooling")? != "mean") {
+        return Err(Error::contract("inactive direct settings"));
+    }
+    if hk == "attention" && co % h_heads != 0 || kind == "transformer" && th % t_heads != 0 {
+        return Err(Error::contract("attention head divisibility"));
+    }
+    if kind != "transformer" && (t_heads, tf) != (4, 256) || kind == "mlp" && tl != 1 {
+        return Err(Error::contract("inactive temporal settings"));
+    }
+    let maxp = n(resources, "max_parameters", 1, 100_000_000)?;
+    let maxt = n(resources, "max_tensor_bytes", 1, 64i128 << 20)?;
+    n(resources, "max_owned_bytes", 1, 12i128 << 30)?;
+    n(resources, "cuda_context_bytes", 1, 4i128 << 30)?;
+    n(resources, "workspace_bytes", 1, 4i128 << 30)?;
+    let recipe = json::parse(if old { RECIPE } else { EXACT_RECIPE }, budget, control)?;
+    let cats = |key: &str| -> Result<Vec<i128>> {
+        recipe
+            .root
+            .require(key)?
+            .array()?
+            .iter()
+            .map(|x| Ok(x.array()?.len() as i128 + 2))
+            .collect()
+    };
+    let sc = cats("state_categories")?;
+    let cc = cats("card_categories")?;
+    let ec = cats("event_categories")?;
+    let sn = recipe.root.require("state_numeric")?.array()?.len() as i128;
+    let cn = recipe.root.require("card_numeric")?.array()?.len() as i128;
+    let en = recipe.root.require("event_numeric")?.array()?.len() as i128;
+    let state_width = 2 * sn + sc.len() as i128 + sc.iter().sum::<i128>() + 18 * cc[0];
+    let card_direct = 2 * cn + cc.iter().sum::<i128>();
+    let event_width = 2 * en + ec.iter().sum::<i128>();
+    let history = recipe.root.require("event_categories")?.array()?[0]
+        .array()?
+        .len() as i128
+        + (ec.len() as i128 - 4) * 2
+        + en * 2
+        + if old {
+            0
+        } else {
+            recipe.root.require("history_append")?.array()?.len() as i128
+        };
+    let card_in = ce + ae + cc[2..].iter().sum::<i128>() + 24;
+    let card_actor = co + 4 + 2;
+    let frame = if sk == "identity" { state_width } else { so }
+        + if hk == "direct" { 18 * card_direct } else { hl }
+        + eh
+        + history;
+    let candidate = recipe
+        .root
+        .require("candidate_categories")?
+        .array()?
+        .iter()
+        .map(|x| Ok(x.array()?.len() as i128 + 2))
+        .collect::<Result<Vec<_>>>()?
+        .iter()
+        .sum::<i128>()
+        + 8;
+    let mut shapes = BTreeMap::new();
+    if sk == "mlp" {
+        let mut w = vec![state_width];
+        w.extend(sw);
+        w.push(so);
+        mlp(&mut shapes, "state_encoder", &w);
+    }
+    shape(&mut shapes, "definition_embedding.weight", &[cc[0], ce]);
+    shape(&mut shapes, "ability_embedding.weight", &[cc[1], ae]);
+    linear(&mut shapes, "card_encoder", card_in, co);
+    if hk != "direct" {
+        let mut w = vec![co];
+        w.extend(hw);
+        w.push(hl);
+        mlp(&mut shapes, "hand_encoder", &w);
+    }
+    if hk == "attention" {
+        for i in 0..h_layers {
+            attention(&mut shapes, &format!("hand_attention.{i}"), co, h_feed);
+        }
+    }
+    gru(&mut shapes, "event_encoder", event_width, eh, el);
+    linear(&mut shapes, "frame_projection", frame, th);
+    if kind == "gru" {
+        gru(&mut shapes, "temporal", th, th, tl);
+    } else if kind == "transformer" {
+        for i in 0..tl {
+            attention(&mut shapes, &format!("temporal.{i}"), th, tf);
+        }
+    }
+    let mut w = vec![th + candidate + positions * card_actor];
+    w.extend(aw);
+    w.push(1);
+    mlp(&mut shapes, "actor", &w);
+    let mut w = vec![th];
+    w.extend(vw);
+    w.push(1);
+    mlp(&mut shapes, "critic", &w);
+    if shapes
+        .values()
+        .map(|s| s.iter().product::<i128>())
+        .sum::<i128>()
+        > maxp
+        || shapes
+            .values()
+            .any(|s| s.iter().product::<i128>() * 4 > maxt)
+    {
+        return Err(Error::resource("structured parameter/tensor cap"));
+    }
+    Ok(shapes)
+}
+
+fn bundle<'a>(value: &'a Value) -> Result<BTreeMap<String, &'a Value>> {
+    value.closed(
+        &[
+            "schema_version",
+            "prefix",
+            "shards",
+            "files",
+            "tensor_count",
+            "decoded_bytes",
+        ],
+        &[],
+    )?;
+    n(value, "schema_version", 1, 1)?;
+    let prefix = text(value, "prefix")?;
+    if prefix.is_empty()
+        || !prefix.as_bytes()[0].is_ascii_lowercase()
+        || !prefix
+            .bytes()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'-')
+    {
+        return Err(Error::contract("structured shard prefix invalid"));
+    }
+    let shards = value.require("shards")?.array()?;
+    if shards.is_empty() || shards.len() > 65536 {
+        return Err(Error::contract("structured shard count bound"));
+    }
+    let files = value.require("files")?.object()?;
+    let mut names = Vec::new();
+    let mut tensors = BTreeMap::new();
+    let mut total = 0;
+    for (index, shard) in shards.iter().enumerate() {
+        shard.closed(&["file", "metadata"], &[])?;
+        let name = format!("{prefix}-{index:06}.npz");
+        if text(shard, "file")? != name {
+            return Err(Error::contract("structured shard order/path mismatch"));
+        }
+        let meta = shard.require("metadata")?;
+        meta.closed(&["sha256", "arrays"], &[])?;
+        checksum(meta.require("sha256")?)?;
+        if files.get(&name) != Some(meta.require("sha256")?) {
+            return Err(Error::contract("structured shard hash binding"));
+        }
+        names.push(name.clone());
+        names.push(name.replace(".npz", ".json"));
+        let arrays = meta.require("arrays")?.object()?;
+        if arrays.is_empty() {
+            return Err(Error::contract("empty shard"));
+        }
+        let mut bytes = 0;
+        for (key, desc) in arrays {
+            if key.is_empty()
+                || !key
+                    .bytes()
+                    .all(|c| c.is_ascii_alphanumeric() || b"._-".contains(&c))
+                || tensors.contains_key(key)
+            {
+                return Err(Error::contract("invalid/duplicate named tensor"));
+            }
+            desc.closed(&["dtype", "shape", "bytes"], &[])?;
+            let unit = match text(desc, "dtype")? {
+                "float32" => 4,
+                "int64" => 8,
+                "uint8" => 1,
+                _ => return Err(Error::contract("unsupported typed dtype")),
+            };
+            let shape = desc.require("shape")?.array()?;
+            if shape.len() > 8 {
+                return Err(Error::contract("tensor dimensions bound"));
+            }
+            let dimensions = shape
+                .iter()
+                .map(|dim| dim.integer(0, 64i128 << 20))
+                .collect::<Result<Vec<_>>>()?;
+            let mut size = if dimensions.contains(&0) {
+                0i128
+            } else {
+                1i128
+            };
+            if size != 0 {
+                for dim in dimensions {
+                    size = size
+                        .checked_mul(dim)
+                        .ok_or_else(|| Error::resource("tensor product overflow"))?;
+                }
+            }
+            size = size
+                .checked_mul(unit)
+                .ok_or_else(|| Error::resource("tensor product overflow"))?;
+            if n(desc, "bytes", 0, 64i128 << 20)? != size {
+                return Err(Error::contract("typed tensor byte mismatch"));
+            }
+            bytes += size;
+            if bytes > 64i128 << 20 {
+                return Err(Error::resource("decoded shard exceeds64MiB"));
+            }
+            tensors.insert(key.clone(), desc);
+        }
+        total += bytes;
+    }
+    if total != n(value, "decoded_bytes", 0, 12i128 << 30)?
+        || tensors.len() as i128 != n(value, "tensor_count", 1, 1_000_000)?
+        || files.len() != names.len()
+        || names.iter().any(|name| !files.contains_key(name))
+    {
+        return Err(Error::contract("typed bundle totals/filemap mismatch"));
+    }
+    for (name, sha) in files {
+        basename(name)?;
+        checksum(sha)?;
+    }
+    Ok(tensors)
+}
+fn semantic(value: &Value, model: &Value, budget: &Arc<Budget>, control: &Control) -> Result<()> {
+    for (key, expected) in [
+        ("input_recipe", INPUT),
+        ("generator_version", "public-atomic-diverse-v4"),
+        ("policy_input_version", "player-atomic-options-v1"),
+        ("end_projection_version", "simulator-closure-v1"),
+        ("reward_policy_version", "natural-terminal-v1"),
+        (
+            "simulator_revision",
+            "ffcffa0966dbf6d7ce1d982f4ee6444e291d42d6",
+        ),
+        ("numeric_transform", "signed-log1p-fp32-v1"),
+    ] {
+        is(value, key, expected)?;
+    }
+    crate::journal::catalog_meta(value.require("catalog")?)?;
+    if digest(value.require("reviewed_spec_hashes")?, budget, control)?
+        != "17dc86ba14c8fac378e352acd5c7c55429e910b37482954f74ca3673f8b1767d"
+    {
+        return Err(Error::contract("structured reviewed spec hashes mismatch"));
+    }
+    if text(value, "token_signature")?
+        != token_signature(
+            n(model.require("event")?, "aggregate_window", 1, 65536)?,
+            historical(model)?,
+            budget,
+            control,
+        )?
+    {
+        return Err(Error::contract("structured token signature mismatch"));
+    }
+    let runtime = value.require("runtime")?;
+    runtime.closed(&["torch", "numpy", "python", "gil_enabled"], &[])?;
+    for key in ["torch", "numpy", "python"] {
+        if text(runtime, key)?.is_empty() {
+            return Err(Error::contract("empty recorded runtime"));
+        }
+    }
+    runtime.require("gil_enabled")?.boolean()?;
+    let numerics = value.require("numerics")?;
+    numerics.closed(
+        &[
+            "precision",
+            "tf32",
+            "amp",
+            "deterministic",
+            "cublas_workspace_config",
+            "threads",
+        ],
+        &[],
+    )?;
+    is(numerics, "precision", "ieee-fp32")?;
+    is(numerics, "cublas_workspace_config", ":4096:8")?;
+    n(numerics, "threads", 1, 1)?;
+    for (key, expected) in [("tf32", false), ("amp", false), ("deterministic", true)] {
+        if numerics.require(key)? != &Value::Bool(expected) {
+            return Err(Error::contract("structured numerical recipe mismatch"));
+        }
+    }
+    Ok(())
+}
+fn producer(value: &Value) -> Result<()> {
+    value.closed(&["code_revision", "source_digest"], &[])?;
+    checksum(value.require("source_digest")?)?;
+    if !value.require("code_revision")?.is_null() {
+        let text = text(value, "code_revision")?;
+        if text.len() != 40
+            || !text
+                .bytes()
+                .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
+        {
+            return Err(Error::contract("recorded code revision invalid"));
+        }
+    }
+    Ok(())
+}
+fn filemap(value: &Value) -> Result<()> {
+    for (name, sha) in value.object()? {
+        basename(name)?;
+        checksum(sha)?;
+    }
+    Ok(())
+}
+fn clone_fields(value: &Value, keys: &[&str], control: &Control) -> Result<Value> {
+    let mut output = json::Map::new();
+    for key in keys {
+        output.insert((*key).into(), json::copy(value.require(key)?, control)?);
+    }
+    Ok(Value::Object(output))
+}
+fn pure_model(config: &Value, control: &Control) -> Result<Value> {
+    let raw = config.require("model")?;
+    let mut output = raw.object()?.clone();
+    for key in ["checkpoint", "inference", "cuda_visible_devices"] {
+        if output.remove(key).is_none() {
+            return Err(Error::contract("missing configured model field"));
+        }
+    }
+    if !raw.require("checkpoint")?.is_null() {
+        return Err(Error::contract("parent Config must be fresh model2"));
+    }
+    control.check()?;
+    Ok(Value::Object(output))
+}
+fn architecture(model: &Value, budget: &Arc<Budget>, control: &Control) -> Result<String> {
+    let mut fields = model.object()?.clone();
+    fields.remove("resources");
+    digest(
+        &json::object([
+            ("model", Value::Object(fields)),
+            (
+                "token_signature",
+                json::text(&token_signature(
+                    n(model.require("event")?, "aggregate_window", 1, 65536)?,
+                    historical(model)?,
+                    budget,
+                    control,
+                )?),
+            ),
+        ]),
+        budget,
+        control,
+    )
+}
+fn actions(config: &Value) -> Result<()> {
+    let action = config.require("actions")?;
+    action.closed(
+        &[
+            "action_contract",
+            "version",
+            "generator",
+            "use_action_options",
+            "targets",
+            "max_sequence_length",
+            "max_candidates",
+            "max_expansions",
+            "max_temporary_candidates",
+            "count_states",
+            "count_milliseconds",
+            "search_milliseconds",
+            "channel_weights",
+        ],
+        &[],
+    )?;
+    is(action, "version", "2")?;
+    is(action, "generator", "public-atomic-diverse-v4")?;
+    contract(action.require("action_contract")?)?;
+    if action.require("use_action_options")? != &Value::Bool(true) {
+        return Err(Error::contract("structured actions require hints"));
+    }
+    n(action, "max_sequence_length", 1, 128)?;
+    n(action, "max_candidates", 1, 65536)?;
+    n(action, "max_expansions", 1, i32::MAX as i128)?;
+    n(action, "max_temporary_candidates", 1, i32::MAX as i128)?;
+    n(action, "count_states", 1, i32::MAX as i128)?;
+    n(action, "count_milliseconds", 1, 1000)?;
+    n(action, "search_milliseconds", 1, 10000)?;
+    let target = action.require("targets")?.array()?;
+    if target.is_empty()
+        || target.len() > 2
+        || target.iter().any(|t| {
+            !t.as_str()
+                .is_some_and(|t| ["self", "opponent"].contains(&t))
+        })
+        || target.len() == 2 && target[0] == target[1]
+    {
+        return Err(Error::contract("closed action targets required"));
+    }
+    let weights = action.require("channel_weights")?.array()?;
+    if weights.len() != 7 {
+        return Err(Error::contract("seven channels required"));
+    }
+    for w in weights {
+        w.integer(1, i32::MAX as i128)?;
+    }
+    Ok(())
+}
+fn finite(value: &Value, key: &str) -> Result<f64> {
+    let v = value.require(key)?.number()?;
+    if !v.is_finite() || v < 0. {
+        return Err(Error::contract(
+            "finite nonnegative control number required",
+        ));
+    }
+    Ok(v)
+}
+
+fn artifact(
+    s: &mut Sources,
+    path: &Path,
+    record: &Value,
+    receipt: &Value,
+    state: &Value,
+    model_value: &Value,
+    shapes: &BTreeMap<String, Vec<i128>>,
+) -> Result<Value> {
+    let budget = s.budget.clone();
+    let control = s.control.clone();
+    let contract = state.require("action_contract")?;
+    let inference = s.checked_json(
+        &path.join("inference.json"),
+        record.require("inference_sha256")?,
+    )?;
+    let inf = &inference.root;
+    let mut keys = vec![
+        "schema_version",
+        "kind",
+        "model",
+        "architecture_identity",
+        "action_config_hash",
+        "producer",
+        "weights",
+    ];
+    keys.extend(SEMANTICS);
+    keys.extend(CLASS);
+    inf.closed(&keys, &[])?;
+    n(inf, "schema_version", 3, 3)?;
+    is(inf, "kind", "structured-inference")?;
+    classification(inf, contract)?;
+    producer(inf.require("producer")?)?;
+    semantic(inf, model_value, &budget, &control)?;
+    eq(
+        inf.require("model")?,
+        model_value,
+        "artifact/full frozen model mismatch",
+    )?;
+    if text(inf, "architecture_identity")? != architecture(model_value, &budget, &control)?
+        || text(inf, "action_config_hash")?
+            != digest(
+                state.require("effective_config")?.require("actions")?,
+                &budget,
+                &control,
+            )?
+    {
+        return Err(Error::contract("artifact architecture/action mismatch"));
+    }
+    let weights = bundle(inf.require("weights")?)?;
+    is(inf.require("weights")?, "prefix", "weights")?;
+    if weights.len() != shapes.len() {
+        return Err(Error::contract("named parameter descriptor count"));
+    }
+    for (name, dims) in shapes {
+        let desc = weights
+            .get(name)
+            .ok_or_else(|| Error::contract("named parameter missing"))?;
+        is(desc, "dtype", "float32")?;
+        eq(
+            desc.require("shape")?,
+            &Value::Array(dims.iter().map(|d| json::integer(*d)).collect()),
+            "named parameter shape mismatch",
+        )?;
+    }
+    receipt.closed(
+        &[
+            "status",
+            "inference_sha256",
+            "original_files",
+            "deletion_intent",
+            "deletion_receipt",
+        ],
+        &[],
+    )?;
+    eq(
+        receipt.require("original_files")?,
+        record.require("artifact_files")?,
+        "original artifact maps mismatch",
+    )?;
+    eq(
+        receipt.require("inference_sha256")?,
+        record.require("inference_sha256")?,
+        "registry inference link mismatch",
+    )?;
+    let files = record.require("artifact_files")?;
+    filemap(files)?;
+    if files.require("inference.json")? != record.require("inference_sha256")?
+        || files.require("resume.json")? != record.require("resume_sha256")?
+    {
+        return Err(Error::contract("required manifest links mismatch"));
+    }
+    let retained = text(receipt, "status")? == "retained";
+    if retained {
+        if !receipt.require("deletion_intent")?.is_null()
+            || !receipt.require("deletion_receipt")?.is_null()
+        {
+            return Err(Error::contract("retained artifact has deletion evidence"));
+        }
+        let resume = s.checked_json(&path.join("resume.json"), record.require("resume_sha256")?)?;
+        let r = &resume.root;
+        let mut keys = vec![
+            "schema_version",
+            "kind",
+            "inference_digest",
+            "model",
+            "binding",
+            "resume_identity",
+            "producer",
+            "optimizer_steps",
+            "optimizer_recipe",
+            "parameter_states",
+            "cuda_rng_count",
+            "shuffle_rng",
+            "state",
+        ];
+        keys.extend(SEMANTICS);
+        keys.extend(CLASS);
+        r.closed(&keys, &[])?;
+        n(r, "schema_version", 3, 3)?;
+        is(r, "kind", "structured-resume")?;
+        classification(r, contract)?;
+        semantic(r, model_value, &budget, &control)?;
+        producer(r.require("producer")?)?;
+        for key in SEMANTICS {
+            eq(
+                r.require(key)?,
+                inf.require(key)?,
+                "paired semantic declarations mismatch",
+            )?;
+        }
+        eq(r.require("model")?, model_value, "paired model mismatch")?;
+        eq(
+            r.require("inference_digest")?,
+            record.require("inference_sha256")?,
+            "resume inference link mismatch",
+        )?;
+        eq(
+            r.require("binding")?,
+            state
+                .require("execution")?
+                .require("learner")?
+                .require("binding")?,
+            "resume learner binding mismatch",
+        )?;
+        binding(r.require("binding")?)?;
+        eq(
+            r.require("resume_identity")?,
+            state.require("resume_identity")?,
+            "resume identity mismatch",
+        )?;
+        eq(
+            r.require("optimizer_steps")?,
+            record.require("optimizer_steps")?,
+            "resume optimizer counter mismatch",
+        )?;
+        eq(
+            r.require("producer")?.require("source_digest")?,
+            inf.require("producer")?.require("source_digest")?,
+            "paired producer digest mismatch",
+        )?;
+        let rc = r.require("producer")?.require("code_revision")?;
+        let ic = inf.require("producer")?.require("code_revision")?;
+        if !rc.is_null() && !ic.is_null() {
+            eq(rc, ic, "paired code revision mismatch")?;
+        }
+        let recipe = r.require("optimizer_recipe")?;
+        recipe.closed(
+            &[
+                "name",
+                "lr",
+                "betas",
+                "eps",
+                "weight_decay",
+                "amsgrad",
+                "maximize",
+                "foreach",
+                "capturable",
+                "differentiable",
+                "fused",
+                "decoupled_weight_decay",
+            ],
+            &[],
+        )?;
+        is(recipe, "name", "Adam")?;
+        if finite(recipe, "lr")? != 0.0003
+            || finite(recipe, "eps")? != 1e-8
+            || finite(recipe, "weight_decay")? != 0.
+            || recipe.require("betas")?.array()?.len() != 2
+            || recipe.require("betas")?.array()?[0].number()? != 0.9
+            || recipe.require("betas")?.array()?[1].number()? != 0.999
+        {
+            return Err(Error::contract("Adam recipe mismatch"));
+        }
+        for key in [
+            "amsgrad",
+            "maximize",
+            "capturable",
+            "differentiable",
+            "decoupled_weight_decay",
+        ] {
+            if recipe.require(key)? != &Value::Bool(false) {
+                return Err(Error::contract("Adam execution option mismatch"));
+            }
+        }
+        for key in ["foreach", "fused"] {
+            if !recipe.require(key)?.is_null() {
+                return Err(Error::contract("Adam nullable option mismatch"));
+            }
+        }
+        let count = n(r, "cuda_rng_count", 0, 1024)?;
+        let expected = if text(state, "device")? == "cpu" {
+            0
+        } else {
+            n(state.require("hardware")?, "device_count", 1, 1024)?
+        };
+        if count != expected {
+            return Err(Error::contract("resume CUDA RNG count mismatch"));
+        }
+        pcg(r.require("shuffle_rng")?)?;
+        is(r.require("state")?, "prefix", "resume")?;
+        let descriptors = bundle(r.require("state")?)?;
+        let states = r.require("parameter_states")?.object()?;
+        if states.len() != shapes.len() {
+            return Err(Error::contract("Adam named ownership mismatch"));
+        }
+        let mut expected: BTreeMap<String, (&str, Option<Vec<i128>>)> = BTreeMap::new();
+        expected.insert("rng.torch_cpu".into(), ("uint8", None));
+        for i in 0..count {
+            expected.insert(format!("rng.torch_cuda.{i}"), ("uint8", None));
+        }
+        for (name, shape) in shapes {
+            let entry = states
+                .get(name)
+                .ok_or_else(|| Error::contract("Adam parameter missing"))?;
+            entry.closed(&["present"], &[])?;
+            if entry.require("present")?.boolean()? {
+                expected.insert(format!("adam.{name}.step"), ("int64", Some(vec![])));
+                for part in ["exp_avg", "exp_avg_sq"] {
+                    expected.insert(
+                        format!("adam.{name}.{part}"),
+                        ("float32", Some(shape.clone())),
+                    );
+                }
+            }
+        }
+        if descriptors.len() != expected.len() {
+            return Err(Error::contract("Adam/RNG tensor set mismatch"));
+        }
+        for (name, (dtype, shape)) in expected {
+            let desc = descriptors
+                .get(&name)
+                .ok_or_else(|| Error::contract("Adam/RNG descriptor missing"))?;
+            is(desc, "dtype", dtype)?;
+            if let Some(shape) = shape {
+                eq(
+                    desc.require("shape")?,
+                    &Value::Array(shape.into_iter().map(json::integer).collect()),
+                    "Adam tensor shape mismatch",
+                )?;
+            } else {
+                let shape = desc.require("shape")?.array()?;
+                if shape.len() != 1 || shape[0].integer(1, 64i128 << 20)? == 0 {
+                    return Err(Error::contract("RNG vector shape"));
+                }
+            }
+        }
+        let mut actual = json::Map::new();
+        for bundle_key in [inf.require("weights")?, r.require("state")?] {
+            for (name, sha) in bundle_key.require("files")?.object()? {
+                if actual.insert(name.clone(), sha.clone()).is_some() {
+                    return Err(Error::contract("mixed artifact bundle ownership"));
+                }
+            }
+        }
+        actual.insert(
+            "inference.json".into(),
+            record.require("inference_sha256")?.clone(),
+        );
+        actual.insert(
+            "resume.json".into(),
+            record.require("resume_sha256")?.clone(),
+        );
+        eq(
+            &Value::Object(actual),
+            files,
+            "exact full artifact map mismatch",
+        )?;
+        for b in [inf.require("weights")?, r.require("state")?] {
+            for shard in b.require("shards")?.array()? {
+                let name = text(shard, "file")?.replace(".npz", ".json");
+                let side =
+                    s.checked_json(&path.join(&name), b.require("files")?.require(&name)?)?;
+                eq(
+                    &side.root,
+                    shard.require("metadata")?,
+                    "inline shard sidecar mismatch",
+                )?;
+            }
+        }
+        s.file_map(path, files, true)?;
+        s.inventory(path, files.object()?.keys().cloned().collect(), false)?;
+    } else {
+        is(receipt, "status", "deleted")?;
+        let intent = receipt.require("deletion_intent")?;
+        intent.closed(&["files", "staging_basename"], &[])?;
+        let staging = text(intent, "staging_basename")?;
+        if staging.len() != 38
+            || !staging.starts_with("prune-")
+            || !staging[6..]
+                .bytes()
+                .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
+        {
+            return Err(Error::contract("pruning staging basename"));
+        }
+        match std::fs::symlink_metadata(path.parent().expect("artifact parent").join(staging)) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            _ => return Err(Error::contract("completed pruning stage must be absent")),
+        }
+        let mut deleted = files.object()?.clone();
+        deleted.remove("inference.json");
+        eq(
+            intent.require("files")?,
+            &Value::Object(deleted.clone()),
+            "prune intent exact map",
+        )?;
+        let receipt_files = receipt.require("deletion_receipt")?;
+        receipt_files.closed(&["files"], &[])?;
+        eq(
+            receipt_files.require("files")?,
+            &Value::Object(deleted),
+            "prune receipt exact map",
+        )?;
+        for (name, sha) in inf.require("weights")?.require("files")?.object()? {
+            eq(
+                files.require(name)?,
+                sha,
+                "pruned original weights map mismatch",
+            )?;
+        }
+        let required = 2 + inf.require("weights")?.require("files")?.object()?.len();
+        let rest = files
+            .object()?
+            .len()
+            .checked_sub(required)
+            .ok_or_else(|| Error::contract("pruned map missing"))?;
+        if rest == 0 || rest % 2 != 0 {
+            return Err(Error::contract("pruned resume shard pairs missing"));
+        }
+        for i in 0..rest / 2 {
+            for ext in ["npz", "json"] {
+                checksum(files.require(&format!("resume-{i:06}.{ext}"))?)?;
+            }
+        }
+        s.inventory(path, vec!["inference.json".into()], false)?;
+    }
+    clone_fields(inf, SEMANTICS, &control)
+}
+
+fn relative(root: &Path, value: &Value) -> Result<std::path::PathBuf> {
+    let path = Path::new(value.string()?);
+    if path.as_os_str().is_empty()
+        || path.is_absolute()
+        || path
+            .components()
+            .any(|p| !matches!(p, std::path::Component::Normal(_)))
+    {
+        return Err(Error::contract("relative owned path required"));
+    }
+    Ok(root.join(path))
+}
+fn update_metadata(
+    s: &mut Sources,
+    u: &Value,
+    state: &Value,
+    m: &Value,
+    sem: &Value,
+    previous: &str,
+    previous_inf: &str,
+    number: usize,
+) -> Result<i128> {
+    let budget = s.budget.clone();
+    let control = s.control.clone();
+    let root = s.root.clone();
+    u.closed(
+        &[
+            "schema_version",
+            "status",
+            "run_id",
+            "generation",
+            "parent_sha256",
+            "batch_id",
+            "collection",
+            "collection_manifest_sha256",
+            "numeric",
+            "numeric_sha256",
+            "accepted_decisions",
+            "source_proof",
+            "metrics",
+            "planned_games",
+            "actual_games",
+            "health",
+            "policy_bindings",
+            "learner_seats",
+            "collection_seconds",
+            "update_seconds",
+            "model_id",
+            "model_version",
+            "input_recipe",
+            "action_contract",
+            "purpose",
+            "synthetic_capacity",
+            "numeric_files",
+        ],
+        &[],
+    )?;
+    n(u, "schema_version", 2, 2)?;
+    is(u, "status", "complete")?;
+    is(u, "model_version", "2")?;
+    is(u, "input_recipe", INPUT)?;
+    eq(
+        u.require("model_id")?,
+        state.require("model_id")?,
+        "update model mismatch",
+    )?;
+    eq(
+        u.require("run_id")?,
+        state.require("run_id")?,
+        "update run mismatch",
+    )?;
+    n(u, "generation", number as i128, number as i128)?;
+    if checksum(u.require("parent_sha256")?)? != previous {
+        return Err(Error::contract("update parent hash mismatch"));
+    }
+    classification(u, state.require("action_contract")?)?;
+    n(u, "planned_games", 16, 16)?;
+    n(u, "actual_games", 16, 16)?;
+    if !u.require("health")?.object()?.is_empty() {
+        return Err(Error::contract("update unhealthy"));
+    }
+    let seats = u.require("learner_seats")?.object()?;
+    if seats.len() != 16 {
+        return Err(Error::contract("all16 learner roles required"));
+    }
+    for viewer in seats.values() {
+        viewer.integer(1, 2)?;
+    }
+    checksum(u.require("collection_manifest_sha256")?)?;
+    checksum(u.require("numeric_sha256")?)?;
+    let collection = s.checked_json(
+        &relative(&root, u.require("collection")?)?.join("manifest.json"),
+        u.require("collection_manifest_sha256")?,
+    )?;
+    n(&collection.root, "schema_version", 4, 4)?;
+    n(&collection.root, "journal_schema_version", 5, 5)?;
+    classification(&collection.root, state.require("action_contract")?)?;
+    let numeric = relative(&root, u.require("numeric")?)?;
+    let rollout = s.checked_json(&numeric.join("rollout.json"), u.require("numeric_sha256")?)?;
+    let r = &rollout.root;
+    n(r, "schema_version", 3, 3)?;
+    is(r, "kind", "structured-rollout")?;
+    classification(r, state.require("action_contract")?)?;
+    if text(r, "architecture_identity")? != architecture(m, &budget, &control)?
+        || text(r, "action_config_hash")?
+            != digest(
+                state.require("effective_config")?.require("actions")?,
+                &budget,
+                &control,
+            )?
+    {
+        return Err(Error::contract("numeric model/action mismatch"));
+    }
+    for key in SEMANTICS {
+        eq(
+            r.require(key)?,
+            sem.require(key)?,
+            "numeric recorded declaration mismatch",
+        )?;
+    }
+    let execution = state.require("execution")?.require("inference")?;
+    let exec = digest(
+        &json::object([
+            ("inference", execution.require("binding")?.clone()),
+            ("resources", m.require("resources")?.clone()),
+            (
+                "cuda_visible_devices",
+                execution.require("cuda_visible_devices")?.clone(),
+            ),
+        ]),
+        &budget,
+        &control,
+    )?;
+    let label = format!("{}-ppo-v2-{previous_inf}-{exec}", text(m, "model_id")?);
+    is(r, "policy_version", &label)?;
+    let episodes = r.require("episodes")?.array()?;
+    if episodes.len() != 16 {
+        return Err(Error::contract("numeric all16 episodes required"));
+    }
+    let mut count = 0;
+    let mut owners = Vec::new();
+    for episode in episodes {
+        control.check()?;
+        classification(episode, state.require("action_contract")?)?;
+        is(episode, "end_kind", "natural")?;
+        crate::validation::result(episode.require("outcome")?)?;
+        if episode.require("outcome")?.is_null() || !episode.require("reason")?.is_null() {
+            return Err(Error::contract("natural closure/outcome mismatch"));
+        }
+        let actor = n(episode, "actor", 1, 2)?;
+        let id = text(episode, "episode")?;
+        if id.is_empty() || owners.iter().any(|(a, b)| *a == actor && *b == id) {
+            return Err(Error::contract("duplicate numeric participant owner"));
+        }
+        owners.push((actor, id));
+        let frames = episode.require("frames")?.array()?;
+        if frames.len() != episode.require("selections")?.array()?.len()
+            || episode.require("has_targets")? != &Value::Bool(!frames.is_empty())
+        {
+            return Err(Error::contract("numeric frames/selections/target mismatch"));
+        }
+        for frame in frames {
+            classification(frame, state.require("action_contract")?)?;
+        }
+        count += frames.len() as i128;
+    }
+    if n(r, "decision_count", 1, u64::MAX as i128)? != count
+        || n(u, "accepted_decisions", 1, u64::MAX as i128)? != count
+    {
+        return Err(Error::contract("numeric learner-only count mismatch"));
+    }
+    let proof = u.require("source_proof")?;
+    n(proof, "schema_version", 1, 1)?;
+    is(proof, "kind", "structured-component-source-proof")?;
+    classification(proof, state.require("action_contract")?)?;
+    is(proof, "parent_qualification", "not_performed")?;
+    if proof.require("qualified")? != &Value::Bool(false) {
+        return Err(Error::contract("engineering source cannot qualify"));
+    }
+    n(proof, "games", 16, 16)?;
+    eq(
+        proof.require("manifest_sha256")?,
+        u.require("collection_manifest_sha256")?,
+        "Source manifest link mismatch",
+    )?;
+    checksum(proof.require("source_set_sha256")?)?;
+    n(proof, "accepted_decisions", count, u64::MAX as i128)?;
+    bundle(r.require("data")?)?;
+    let mut files = r.require("data")?.require("files")?.object()?.clone();
+    files.insert("rollout.json".into(), u.require("numeric_sha256")?.clone());
+    eq(
+        u.require("numeric_files")?,
+        &Value::Object(files.clone()),
+        "numeric exact file map mismatch",
+    )?;
+    s.file_map(&numeric, u.require("numeric_files")?, true)?;
+    s.inventory(&numeric, files.keys().cloned().collect(), false)?;
+    for shard in r.require("data")?.require("shards")?.array()? {
+        let name = text(shard, "file")?.replace(".npz", ".json");
+        let side = s.checked_json(
+            &numeric.join(&name),
+            r.require("data")?.require("files")?.require(&name)?,
+        )?;
+        eq(
+            &side.root,
+            shard.require("metadata")?,
+            "numeric shard sidecar mismatch",
+        )?;
+    }
+    finite(u, "collection_seconds")?;
+    finite(u, "update_seconds")?;
+    Ok(count)
+}
+
+pub fn parent(s: &mut Sources) -> Result<Document> {
+    let root = s.root.clone();
+    let budget = s.budget.clone();
+    let control = s.control.clone();
+    let state = s.json(&root.join("run.json"))?;
+    let r = &state.root;
+    let run_fields = "schema_version algorithm run_id status config_sha256 effective_config config_inputs identity seed device created_unix last_unix wall_deadline_unix admission_deadline_unix execution_deadline_unix updates accepted_decisions optimizer_steps generation_sha256 collection_seconds update_seconds invocations completed_updates model_id model_version input_recipe action_contract purpose synthetic_capacity resume_identity execution";
+    let optional = "hardware elapsed_seconds artifact_bytes peak_coordinator_memory_bytes coordinator_memory_scope timing_scope failure quarantine cleanup_failure budget_overrun_seconds";
+    r.closed(
+        &run_fields.split_whitespace().collect::<Vec<_>>(),
+        &optional.split_whitespace().collect::<Vec<_>>(),
+    )?;
+    n(r, "schema_version", 2, 2)?;
+    is(r, "algorithm", "ppo")?;
+    is(r, "model_version", "2")?;
+    is(r, "input_recipe", INPUT)?;
+    if text(r, "run_id")?.is_empty()
+        || !["running", "paused", "complete"].contains(&text(r, "status")?)
+    {
+        return Err(Error::contract("healthy component Run2 required"));
+    }
+    for key in [
+        "failure",
+        "quarantine",
+        "cleanup_failure",
+        "budget_overrun_seconds",
+    ] {
+        if r.get(key).is_some_and(crate::controls::truthy) {
+            return Err(Error::contract(
+                "structured parent contains failure evidence",
+            ));
+        }
+    }
+    let cfg = r.require("effective_config")?;
+    let action_contract = cfg.require("actions")?.require("action_contract")?;
+    actions(cfg)?;
+    classification(r, action_contract)?;
+    if digest(cfg, &budget, &control)? != checksum(r.require("config_sha256")?)? {
+        return Err(Error::contract("frozen Config checksum mismatch"));
+    }
+    if r.require("identity")?.object()?.is_empty() {
+        return Err(Error::contract("recorded identity required"));
+    }
+    r.require("config_inputs")?.array()?;
+    let pure = pure_model(cfg, &control)?;
+    // Bind the descriptor to the ORIGINAL protected generation0/map/inference,
+    // never infer a historical model solely from a missing recipe field.
+    let boot = s.json(&root.join("generations/000000.json"))?;
+    checksum(boot.root.require("inference_sha256")?)?;
+    eq(
+        boot.root
+            .require("artifact_files")?
+            .require("inference.json")?,
+        boot.root.require("inference_sha256")?,
+        "g0 descriptor bootstrap map mismatch",
+    )?;
+    let first = s.checked_json(
+        &root.join("artifacts/000000/inference.json"),
+        boot.root.require("inference_sha256")?,
+    )?;
+    eq(
+        first.root.require("model")?,
+        &pure,
+        "g0 descriptor bootstrap frozen model mismatch",
+    )?;
+    if text(&first.root, "token_signature")?
+        != token_signature(
+            n(pure.require("event")?, "aggregate_window", 1, 65536)?,
+            historical(&pure)?,
+            &budget,
+            &control,
+        )?
+    {
+        return Err(Error::contract(
+            "g0 recorded model/signature descriptor mismatch",
+        ));
+    }
+    let shapes = model(&pure, &budget, &control)?;
+    eq(
+        pure.require("model_id")?,
+        r.require("model_id")?,
+        "parent model kind mismatch",
+    )?;
+    let train = cfg.require("training")?;
+    train.closed(
+        &[
+            "algorithm",
+            "device",
+            "seeds",
+            "max_updates",
+            "max_owned_bytes",
+            "admission_reservation_bytes",
+            "cleanup_seconds",
+            "max_log_bytes",
+        ],
+        &[],
+    )?;
+    is(train, "algorithm", "ppo")?;
+    let seed = n(r, "seed", 0, i32::MAX as i128)?;
+    if train.require("seeds")?.array()?.len() != 1
+        || train.require("seeds")?.array()?[0].integer(0, i32::MAX as i128)? != seed
+    {
+        return Err(Error::contract("seed differs from frozen training seed"));
+    }
+    eq(
+        train.require("device")?,
+        r.require("device")?,
+        "learning device mismatch",
+    )?;
+    is(cfg.require("run")?, "split", "train")?;
+    let max_updates = n(train, "max_updates", 1, 1000)?;
+    let max_owned = n(train, "max_owned_bytes", 1, 10i128 << 30)?;
+    n(
+        train,
+        "admission_reservation_bytes",
+        1,
+        (1i128 << 30).min(max_owned),
+    )?;
+    n(train, "max_log_bytes", 1, i32::MAX as i128)?;
+    let cleanup = finite(train, "cleanup_seconds")?;
+    if cleanup <= 0. || cleanup > 60. {
+        return Err(Error::contract("cleanup budget invalid"));
+    }
+    let execution = r.require("execution")?;
+    execution.closed(&["learner", "inference"], &[])?;
+    for role in ["learner", "inference"] {
+        let e = execution.require(role)?;
+        e.closed(&["binding", "cuda_visible_devices"], &[])?;
+        binding(e.require("binding")?)?;
+        visibility(e.require("cuda_visible_devices")?)?;
+        let expected_device = if role == "learner" {
+            r.require("device")?
+        } else {
+            cfg.require("model")?
+                .require("inference")?
+                .require("device")?
+        };
+        eq(
+            e.require("binding")?.require("device")?,
+            expected_device,
+            "execution Config device mismatch",
+        )?;
+        let configured = cfg.require("model")?.require("cuda_visible_devices")?;
+        visibility(configured)?;
+        let expected = if expected_device.string()? == "cpu" {
+            json::text("")
+        } else {
+            configured.clone()
+        };
+        eq(
+            e.require("cuda_visible_devices")?,
+            &expected,
+            "execution visibility mismatch",
+        )?;
+    }
+    eq(
+        execution.require("inference")?.require("binding")?,
+        cfg.require("model")?.require("inference")?,
+        "frozen inference binding mismatch",
+    )?;
+    let expected_resume = json::object([
+        ("recipe", json::text("structured-ppo-resume-identity-v1")),
+        ("config_sha256", r.require("config_sha256")?.clone()),
+        ("identity", r.require("identity")?.clone()),
+        ("execution", execution.clone()),
+        ("input_binding", clone_fields(r, CLASS, &control)?),
+    ]);
+    if digest(&expected_resume, &budget, &control)? != checksum(r.require("resume_identity")?)? {
+        return Err(Error::contract("domain-separated resume identity mismatch"));
+    }
+    let created = finite(r, "created_unix")?;
+    let last = finite(r, "last_unix")?;
+    let wall = finite(r, "wall_deadline_unix")?;
+    let admission = finite(r, "admission_deadline_unix")?;
+    let execute = finite(r, "execution_deadline_unix")?;
+    if !(created <= last
+        && last <= wall
+        && created < admission
+        && admission <= execute
+        && execute < wall)
+        || wall - created > 7200.
+        || admission - created > 5400.
+        || execute - created > 7140.
+    {
+        return Err(Error::contract("original structured parent clocks invalid"));
+    }
+    for (limit, key) in [
+        (wall, "wall_seconds"),
+        (admission, "admission_seconds"),
+        (execute, "execution_seconds"),
+    ] {
+        if (limit - created - finite(cfg.require("run")?, key)?).abs() > 0.001 {
+            return Err(Error::contract("original Config deadline mismatch"));
+        }
+    }
+    let count = n(r, "updates", 0, max_updates)? as usize;
+    let total_count = n(r, "accepted_decisions", 0, u64::MAX as i128)?;
+    let total_steps = n(r, "optimizer_steps", 0, i32::MAX as i128)?;
+    finite(r, "collection_seconds")?;
+    finite(r, "update_seconds")?;
+    if !r.require("completed_updates")?.is_null() {
+        n(r, "completed_updates", 0, 1000)?;
+    }
+    if text(r, "status")? == "complete"
+        && (count == 0 || r.require("completed_updates")?.integer(0, 1000)? != count as i128)
+    {
+        return Err(Error::contract(
+            "complete component run must have finalized updates",
+        ));
+    }
+    if ["paused", "complete"].contains(&text(r, "status")?) {
+        if (finite(r, "elapsed_seconds")? - (last - created)).abs() > 0.001 {
+            return Err(Error::contract("closing elapsed mismatch"));
+        }
+        n(r, "artifact_bytes", 0, max_owned)?;
+    }
+    for inv in r.require("invocations")?.array()? {
+        control.check()?;
+        let health = inv.require("child_health")?;
+        health.closed(&["exit_code", "stderr_bytes"], &[])?;
+        n(health, "exit_code", 0, 0)?;
+        n(health, "stderr_bytes", 0, u64::MAX as i128)?;
+    }
+    let hardware = r.require("hardware")?;
+    hardware.closed(
+        &[
+            "device",
+            "name",
+            "cuda_runtime",
+            "device_count",
+            "cuda_driver_api_version",
+            "exact_driver_build",
+        ],
+        &[],
+    )?;
+    eq(
+        hardware.require("device")?,
+        r.require("device")?,
+        "hardware declared device mismatch",
+    )?;
+    if text(hardware, "name")?.is_empty() || text(hardware, "exact_driver_build")?.is_empty() {
+        return Err(Error::contract("hardware description empty"));
+    }
+    if !hardware.require("cuda_runtime")?.is_null() {
+        text(hardware, "cuda_runtime")?;
+    }
+    n(hardware, "device_count", 0, 1024)?;
+    if text(r, "device")? == "cpu" {
+        n(hardware, "device_count", 0, 0)?;
+        is(hardware, "name", "cpu")?;
+        if !hardware.require("cuda_driver_api_version")?.is_null() {
+            return Err(Error::contract("CPU hardware driver must be null"));
+        }
+    } else {
+        n(hardware, "device_count", 1, 1024)?;
+        n(hardware, "cuda_driver_api_version", 1, i32::MAX as i128)?;
+    }
+    let latest = s.json(&root.join("latest.json"))?;
+    latest.root.closed(&["generation", "sha256"], &[])?;
+    n(&latest.root, "generation", count as i128, count as i128)?;
+    checksum(latest.root.require("sha256")?)?;
+    eq(
+        latest.root.require("sha256")?,
+        r.require("generation_sha256")?,
+        "latest/run generation mismatch",
+    )?;
+    let registry = s.json(&root.join("artifact-registry.json"))?;
+    registry
+        .root
+        .closed(&["schema_version", "generations"], &[])?;
+    n(&registry.root, "schema_version", 2, 2)?;
+    let reg = registry.root.require("generations")?.object()?;
+    if reg.len() != count + 1 {
+        return Err(Error::contract("registry generation set mismatch"));
+    }
+    s.inventory(
+        &root.join("generations"),
+        (0..=count).map(|i| format!("{i:06}.json")).collect(),
+        false,
+    )?;
+    s.inventory(
+        &root.join("updates"),
+        (1..=count).map(|i| format!("{i:06}.json")).collect(),
+        false,
+    )?;
+    s.inventory(
+        &root.join("artifacts"),
+        (0..=count).map(|i| format!("{i:06}")).collect(),
+        true,
+    )?;
+    let mut summaries = BudgetVec::new(&budget);
+    let mut previous: Option<String> = None;
+    let mut previous_inference: Option<String> = None;
+    let mut accepted = 0;
+    let mut steps = 0;
+    let mut last_semantics = None;
+    for number in 0..=count {
+        control.check()?;
+        let path = root.join("generations").join(format!("{number:06}.json"));
+        let generation = s.json(&path)?;
+        let g = &generation.root;
+        g.closed(
+            &[
+                "schema_version",
+                "run_id",
+                "generation",
+                "parent_sha256",
+                "model_id",
+                "model_version",
+                "input_recipe",
+                "action_contract",
+                "purpose",
+                "synthetic_capacity",
+                "inference_sha256",
+                "resume_sha256",
+                "artifact_files",
+                "accepted_decisions",
+                "optimizer_steps",
+                "update_sha256",
+                "parent_controls",
+            ],
+            &[],
+        )?;
+        n(g, "schema_version", 2, 2)?;
+        n(g, "generation", number as i128, number as i128)?;
+        is(g, "model_version", "2")?;
+        is(g, "input_recipe", INPUT)?;
+        eq(
+            g.require("model_id")?,
+            r.require("model_id")?,
+            "generation model mismatch",
+        )?;
+        eq(
+            g.require("run_id")?,
+            r.require("run_id")?,
+            "generation run mismatch",
+        )?;
+        classification(g, action_contract)?;
+        if number == 0 {
+            if !g.require("parent_sha256")?.is_null() || !g.require("update_sha256")?.is_null() {
+                return Err(Error::contract("generation0 links must be explicitly null"));
+            }
+        } else {
+            if checksum(g.require("parent_sha256")?)? != previous.as_deref().expect("previous") {
+                return Err(Error::contract("generation parent link mismatch"));
+            }
+            checksum(g.require("update_sha256")?)?;
+        }
+        checksum(g.require("inference_sha256")?)?;
+        checksum(g.require("resume_sha256")?)?;
+        filemap(g.require("artifact_files")?)?;
+        controls(g.require("parent_controls")?, number)?;
+        let receipt = reg
+            .get(&number.to_string())
+            .ok_or_else(|| Error::contract("registry generation missing"))?;
+        let protected = number == 0 || number % 10 == 0 || number == count;
+        if protected && text(receipt, "status")? != "retained" {
+            return Err(Error::contract("required retained generation pruned"));
+        }
+        let semantics = artifact(
+            s,
+            &root.join("artifacts").join(format!("{number:06}")),
+            g,
+            receipt,
+            r,
+            &pure,
+            &shapes,
+        )?;
+        let mut summary = clone_fields(
+            g,
+            &[
+                "generation",
+                "parent_sha256",
+                "update_sha256",
+                "inference_sha256",
+                "resume_sha256",
+                "accepted_decisions",
+                "optimizer_steps",
+                "parent_controls",
+            ],
+            &control,
+        )?;
+        let fields = summary.as_object_mut().expect("summary object");
+        fields.insert("generation_sha256".into(), json::text(&s.hash(&path)?));
+        fields.insert(
+            "artifact_files_sha256".into(),
+            json::text(&digest(g.require("artifact_files")?, &budget, &control)?),
+        );
+        fields.insert("artifact_status".into(), receipt.require("status")?.clone());
+        if text(receipt, "status")? == "deleted" {
+            fields.insert(
+                "pruned_descriptor".into(),
+                clone_fields(
+                    receipt,
+                    &["original_files", "deletion_intent", "deletion_receipt"],
+                    &control,
+                )?,
+            );
+        } else {
+            fields.insert("pruned_descriptor".into(), Value::Null);
+        }
+        if number == 0 {
+            n(g, "accepted_decisions", 0, 0)?;
+            n(g, "optimizer_steps", 0, 0)?;
+        } else {
+            let update = s.checked_json(
+                &root.join("updates").join(format!("{number:06}.json")),
+                g.require("update_sha256")?,
+            )?;
+            let amount = update_metadata(
+                s,
+                &update.root,
+                r,
+                &pure,
+                &semantics,
+                previous.as_deref().expect("previous"),
+                previous_inference.as_deref().expect("previous inference"),
+                number,
+            )?;
+            accepted += amount;
+            steps += 4 * ((amount + 127) / 128);
+            n(g, "accepted_decisions", accepted, accepted)?;
+            n(g, "optimizer_steps", steps, steps)?;
+            n(
+                update.root.require("metrics")?,
+                "optimizer_steps",
+                steps,
+                steps,
+            )?;
+        }
+        let bytes = json::canonical(&summary, &budget, &control)?;
+        summaries.push(json::parse(&bytes, &budget, &control)?)?;
+        previous = Some(s.hash(&path)?);
+        previous_inference = Some(text(g, "inference_sha256")?.to_owned());
+        last_semantics = Some(semantics);
+    }
+    if previous.as_deref() != Some(text(r, "generation_sha256")?)
+        || accepted != total_count
+        || steps != total_steps
+    {
+        return Err(Error::contract("parent final counters/generation mismatch"));
+    }
+    let clocks = clone_fields(
+        r,
+        &[
+            "created_unix",
+            "last_unix",
+            "wall_deadline_unix",
+            "admission_deadline_unix",
+            "execution_deadline_unix",
+            "completed_updates",
+        ],
+        &control,
+    )?;
+    let state_summary = clone_fields(
+        r,
+        &[
+            "run_id",
+            "status",
+            "seed",
+            "updates",
+            "accepted_decisions",
+            "optimizer_steps",
+            "model_id",
+            "model_version",
+            "input_recipe",
+            "config_sha256",
+            "resume_identity",
+            "generation_sha256",
+        ],
+        &control,
+    )?;
+    let mut generation_values = Vec::new();
+    for item in summaries.iter() {
+        control.check()?;
+        generation_values.push(json::copy(&item.root, &control)?);
+    }
+    let summary = json::object([
+        ("schema_version", json::integer(2)),
+        ("kind", json::text("structured-parent-controls")),
+        (
+            "validation_scope",
+            json::text("metadata-maps-filehashes-only"),
+        ),
+        ("npz_validated", Value::Bool(false)),
+        ("journal5_validated", Value::Bool(false)),
+        ("qualified", Value::Bool(false)),
+        ("parent_qualification", json::text("not_performed")),
+        (
+            "directory",
+            json::text(
+                root.to_str()
+                    .ok_or_else(|| Error::contract("UTF8 parent directory required"))?,
+            ),
+        ),
+        ("state", state_summary),
+        ("clocks", clocks),
+        ("model", pure),
+        ("execution", execution.clone()),
+        ("semantics", last_semantics.expect("g0 semantics")),
+        (
+            "actions_sha256",
+            json::text(&digest(cfg.require("actions")?, &budget, &control)?),
+        ),
+        ("action_contract", action_contract.clone()),
+        ("purpose", json::text("component")),
+        ("synthetic_capacity", Value::Bool(false)),
+        (
+            "identity_sha256",
+            json::text(&digest(r.require("identity")?, &budget, &control)?),
+        ),
+        ("generations", Value::Array(generation_values)),
+        ("control_fingerprint", json::text(&s.fingerprint()?)),
+    ]);
+    let bytes = json::canonical(&summary, &budget, &control)?;
+    json::parse(&bytes, &budget, &control)
+}

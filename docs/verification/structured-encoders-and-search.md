@@ -1026,9 +1026,126 @@ candidate and raw-storage results retain their original scopes. Preserve actual
 old bundles/rollouts and a healthy retained/pruned actual C1 fixture with the exact
 hashes in §24. Historical inspection must continue; active old-layout use must fail
 explicitly. No model1/data semantics or real-data fit/gate changes are authorized.
-Corrected shape/resource/signature/source, numerical/resume, native and performance
-checks remain NOT RUN pending design review and implementation. Keep all original
-budgets and coverage; do not substitute previous62-field timings as new acceptance.
+Corrected core and numerical work is recorded next. Performance and final native
+conformance remain pending; keep all original budgets/coverage and do not substitute
+previous62-field timings as new acceptance.
+
+## Corrected376 core, persistence and neural matrix checkpoint
+
+The scoped core implementation receives independent correctness/conformance READY.
+Each reviewer runs10history tests. Exact definition counts, v1-feature projection
+(hashing in test code only), prioritized actor/null fallback, window/future facts
+and two closed descriptor identities pass. An independent NumPy-only probe checks
+five preserved old inference manifests' serialized configs, signatures, named
+shapes and architecture hashes; active parsing rejects all five. No old record
+receives current defaults. Later80related tests explicitly include changed Dream
+perception as well as generic old-token validation versus active pre-packing
+recipe rejection.
+
+Frozen implementation selections PASS80history/token/network/actual-archive cases
+in3.60s;177C1learning/persistence/Source cases in33.13s;188Generation2/sealed/
+protocol/Environment/Config cases in48.63s;89CLI/Config cases in2.81s. These overlap
+earlier selections and are not summed. Full Ruff PASS, mypy PASS109source files.
+The original38-file healthy fixture is copied unchanged to the test fixture,
+with its original byte inventory retained. Direct historical reconstruction
+returns the original16-endpoint/history62rollout and2-update/3-generation chain.
+
+Root final neural commands for this frozen corrected snapshot:
+
+```sh
+timeout --signal=INT --kill-after=20s 900s env UV_CACHE_DIR=/tmp/gf-structured-uv uv run --no-sync pytest -q tests/test_structured_ppo.py
+timeout --signal=INT --kill-after=20s 1200s env GFB_RUN_STRUCTURED_PPO_CUDA=1 CUBLAS_WORKSPACE_CONFIG=:4096:8 UV_CACHE_DIR=/tmp/gf-structured-uv uv run --no-sync pytest -q tests/test_structured_ppo_cuda.py
+```
+
+PASS35in533.50s and PASS6in681.23s (exit0). The latter covers all3configured models
+with CPU/CUDA participant inference and a CUDA learner;16-game FakeHTTP cohorts,
+unchanged original limits and exact continuous2versus1+pause/resume comparisons.
+This remains component integration, not real Simulator games/strength/Source
+eligibility. These results precede the separate three-fix Native C2a batch below;
+the fixes do not change history/model/network behavior, but producer identities
+must be tracked for subsequent active use.
+
+Corrected public-exact-v2 default token signature is
+4b4ae064f08192a322de83e24e4a93ef4191c7d73396997d59cd7710cd05cb04;
+frame_projection.weight has shape128×600 at defaults. Pure no-Torch calculations
+for four CUDA worker envelopes plus a learner give7,782,822,144B(MLP),
+7,794,710,944B(GRU),8,171,134,464B(Transformer2), under unchanged12GiB. These are
+managed estimates, not physical allocation measurements. Old12configuration
+effective identities,65ordered input entries/28unique input files and24protected
+fit-file bytes still match their original proofs after the correction.
+
+Native dual-descriptor candidate metadata/lifecycle tests pass54in20.41s on HOST;
+updated Rust tests pass93with2ignored, and format/check/static checks pass.
+The reviewers' Sandbox selections stop before final summaries (exit130), so no
+PASS is inferred from their progress dots. Both reviewers independently verify
+the candidate extension9893b377…c533/source9f37aa84…1505a and no full capability
+markers. Their full reviews nevertheless find three blocking P2cases: unbounded
+configured work allowance, missing final original inventory-directory identities,
+and empty owned-relative paths. Root assigns one bounded repair batch; acceptance
+awaits the replacement candidate and targeted independent rechecks. No NPZ/J5/
+qualified-source authority, Native token staging or Tree2 completion is claimed.
+
+## Corrected376 and Native C2a scoped final acceptance
+
+Both final reviewers are READY after the three-fix batch: work is bounded by
+min(caller deadline,start+configured wall−cleanup), original root/all inventory
+directory identities are rechecked after the sweep, and empty relative paths
+reject. Correctness repeats its original inotify late-directory and consistently
+rehashed empty-path probes; both now reject without adopting a fresh baseline.
+
+Fixed HOST selection:
+
+```sh
+CUDA_VISIBLE_DEVICES='' PYTHONPATH=/tmp/gfb-history376-fixed-module UV_CACHE_DIR=/tmp/gf-structured-uv uv run --no-sync pytest -q tests/test_native_structured.py tests/test_structured_history_compat.py tests/test_structured_application_config.py tests/test_cli_behavior.py -x
+```
+
+PASS127in19.77s (57native cases included); Rust PASS94/2ignored with locked offline
+no-default-features build. Independent final selections pass9correctness/10
+conformance cases. Sandbox async selections are interrupted130, not PASS or a
+demonstrated product failure; HOST covers lifecycle cases. Full Ruff/mypy PASS109
+files. After the Native-only helper change, the final producer-identity MLP
+continuous/resume check passes1case/34deselected in92.54s. Model/history/math bytes
+from the corrected35CPU/6CUDA matrix remain unchanged.
+
+Fixed wheel SHA2569a27b82c750acbd23fd9b7c2011dfd8af8c8510e2a7bd5b14a80b1803bda28be;
+extension96c5e2bbe6b239cfd48e238992a04d38f49e3e720fe3047307682ef27ab819b2;
+native source3a74fc3b532f8f17b5aa9f72678028e90dab8a52765c0fc12eead1596fcf9472;
+sdistbdf44390fabd1b048919ff68c9f2c5b4003ee33858577761a9b44cc58c62e08e.
+Both assets/stub match source, and both assets enter source hashing/build triggers.
+Installed old native is untouched; full structured markers remain absent. This
+accepts C2a metadata/maps/control ownership only, not NPZ numerical validation,
+native Journal5 tokens, Tree2 or qualified Source authority.
+
+Corrected CPU latency is remeasured sequentially with configured defaults,
+untrainedseed17 and the same512TRAIN+512peer/tail rows/49games,2concurrent games,
+4peak workers. Startup is separate; there is no Simulator/journal publication.
+
+| Corrected376 model | CPU p95 decision | Startup p95 | Decision maximum |
+| --- | ---: | ---: | ---: |
+| MLP | 87.397ms | 1544.454ms | 333.052ms |
+| GRU | 90.226ms | 1517.589ms | 334.807ms |
+| Transformer2 | 89.860ms | 1598.319ms | 1199.077ms |
+
+All complete with empty failures and worker-reap guards. The decision includes
+input/frame validation, generation, transform, scoring, CPU sampling and worker
+communication. This satisfies the3second component-panel goal, without granting
+the still-missing qualified/real-game acceptance. Independent audit recomputes
+all512+512identities, quantiles and117measured/source hashes. Evidence under
+runs/assessments/structured-latency-history376-evidence-20261102:
+a1c7fc6fe23a93bd15a359ae29b4baba4f8ae51c9aed7493cd0ddca2c3b03cd7.
+Artifacts carry corrected signature4b4ae064…05cb04; no old62timings qualify this.
+
+Separate actual participant-worker stress completes1024scripted own decisions
+on CPU/CUDA, then4096interval events (5119total),18unique references and30290/
+32377candidates. Final end-to-end times4594.798/4800.530ms and parent requests
+3997.205/4194.488ms remain under unchanged10second worker timeout. Incremental
+participant caches and CPU sampling are used; finally-close/empty-ledger passes.
+This shared-load synthetic stress is separate from ordinary-panel latency and
+has no Simulator/Source authority or CPU/GPU ordering claim. Evidence
+750ab41fec0d842d0eb0f3d4b56d767d22dfd0690bed3489e6bef8370862386c under
+runs/assessments/structured-actual-worker-history376-evidence-20261102 preserves
+harnesses/results/artifacts. Earlier failed revision fixtures remain failed.
+Corrected CUDA phase/physical allocator results still require separate evidence.
 
 ## Remaining integrated acceptance
 

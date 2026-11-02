@@ -70,6 +70,8 @@ class Learner:
             self.torch.cuda.synchronize(self.binding.device)
 
     def admit(self, rollout: StructuredRollout) -> None:
+        if type(rollout.model) is not ModelConfigV2:
+            raise ContractError('historical history descriptor cannot enter active learning')
         _bind_network_input(self.network, action_contract=self.action_contract,
                             purpose=self.purpose, synthetic_capacity=self.synthetic_capacity)
         check_input_binding(self.input_binding, action_contract=self.action_contract,

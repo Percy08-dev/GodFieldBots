@@ -10,8 +10,10 @@ from gf_common.domain import ContractError, Json, canonical, clone, closed, dige
 from gf_models.structured_config import (
     InferenceBindingV2,
     ModelConfigV2,
+    RecordedModelConfigV2,
     TemporalConfigV2,
     model_config_v2,
+    recorded_model_config_v2,
     resource_estimate,
 )
 
@@ -91,6 +93,32 @@ def policy_label(model: ModelConfigV2, inference: InferenceBindingV2, manifest_d
     if type(manifest_digest) is not str or re.fullmatch(r"[0-9a-f]{64}", manifest_digest) is None:
         raise ContractError("full model2 inference digest required")
     return f"{model.model_id}-ppo-v2-{manifest_digest}-{execution_digest(model, inference, cuda_visible_devices=cuda_visible_devices)}"
+
+
+def recorded_policy_label(model: RecordedModelConfigV2, inference: InferenceBindingV2, manifest_digest: str, *,
+                           cuda_visible_devices: str | None) -> str:
+    """Metadata-only reproduction, never permission to run a historical model."""
+    if type(manifest_digest) is not str or re.fullmatch(r'[0-9a-f]{64}', manifest_digest) is None:
+        raise ContractError('recorded full inference digest required')
+    binding = {'inference': asdict(inference), 'resources': asdict(model.resources),
+               'cuda_visible_devices': validate_cuda_visibility(cuda_visible_devices)}
+    return f'{model.model_id}-ppo-v2-{manifest_digest}-{digest(binding)}'
+
+
+def recorded_options_v2(value: Any, *, action_contract: ActionContract, purpose: str,
+                         synthetic_capacity: bool, token_signature: str) -> Json:
+    raw = closed(value, {'version', 'checkpoint', 'expected_manifest_digest', 'model', 'inference', 'cuda_visible_devices',
+                        'action_contract', 'purpose', 'synthetic_capacity'}, {'allow_toy'})
+    check_input_binding({key: raw[key] for key in ('action_contract', 'purpose', 'synthetic_capacity')},
+        action_contract=action_contract, purpose=purpose, synthetic_capacity=synthetic_capacity)
+    if raw['version'] != '2' or type(raw['checkpoint']) is not str or not raw['checkpoint']:
+        raise ContractError('recorded model2 checkpoint binding required')
+    model = recorded_model_config_v2(raw['model'], token_signature)
+    inference = InferenceBindingV2(**closed(raw['inference'], set(asdict(InferenceBindingV2()))))
+    recorded_policy_label(model, inference, raw['expected_manifest_digest'], cuda_visible_devices=raw['cuda_visible_devices'])
+    if 'allow_toy' in raw and type(raw['allow_toy']) is not bool:
+        raise ContractError('recorded toy setting must be boolean')
+    return clone(raw)  # no field insertion or historical serialization rewrite.
 
 
 def input_binding(action_contract: ActionContract, purpose: str, synthetic_capacity: bool) -> Json:

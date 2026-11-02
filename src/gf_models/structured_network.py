@@ -33,6 +33,7 @@ from gf_models.structured_config import (
     ModelConfigV2,
     dimensions,
     parameter_shapes,
+    recorded_token_signature,
     resource_estimate,
     validate_config,
 )
@@ -212,7 +213,7 @@ def make_network(model: ModelConfigV2, seed: int,
 
         def encode_frame(self, tokens: FrameTokens) -> tuple[Any, Any]:
             validate_frame_tokens(tokens)
-            if tokens.aggregate_window != model.event.aggregate_window:
+            if tokens.aggregate_window != model.event.aggregate_window or tokens.recipe_signature != recorded_token_signature(model):
                 raise ContractError("aggregate window recipe mismatch")
             if len(tokens.interval_numerics) > model.event.max_interval:
                 raise ContractError("configured interval event limit exceeded")
@@ -292,7 +293,8 @@ def make_network(model: ModelConfigV2, seed: int,
             integer(suffix_length, 1, len(frames))
             for index, frame in enumerate(frames):
                 validate_frame_tokens(frame)
-                if frame.aggregate_window != model.event.aggregate_window or len(frame.interval_numerics) > model.event.max_interval:
+                if (frame.aggregate_window != model.event.aggregate_window or frame.recipe_signature != recorded_token_signature(model)
+                        or len(frame.interval_numerics) > model.event.max_interval):
                     raise ContractError("historical frame window/interval cap mismatch")
                 if frame.event_end > model.event.max_episode:
                     raise ContractError("configured episode event cap exceeded")
@@ -335,6 +337,8 @@ def make_network(model: ModelConfigV2, seed: int,
             return cache
 
         def step(self, frame: FrameTokens, cache: TemporalCache) -> tuple[Any, Any]:
+            if frame.recipe_signature != recorded_token_signature(model):
+                raise ContractError('cache frame aggregate recipe mismatch')
             if (cache.model_identity != id(self)
                     or cache.parameter_versions != tuple(parameter._version for parameter in self.parameters())):
                 raise ContractError("stale/foreign inference cache")
@@ -375,6 +379,8 @@ def make_network(model: ModelConfigV2, seed: int,
                                 dtype=torch.long, device=self.device)
 
         def dense_logits(self, context: Any, cards: Any, tokens: CandidateTokens) -> Any:
+            if tokens.recipe_signature != recorded_token_signature(model):
+                raise ContractError('actor candidate aggregate recipe mismatch')
             # The reference materializes all rows. Its admission uses that full
             # width, never the production factorized chunk reservation.
             resource_estimate(model, replace(runtime_binding, candidate_chunk=len(tokens.kinds)),
@@ -387,6 +393,8 @@ def make_network(model: ModelConfigV2, seed: int,
 
         def factorized_logits(self, context: Any, cards: Any, tokens: CandidateTokens,
                               chunk_size: int | None = None, checkpoint: bool = True) -> Any:
+            if tokens.recipe_signature != recorded_token_signature(model):
+                raise ContractError('actor candidate aggregate recipe mismatch')
             chunk_size = runtime_binding.candidate_chunk if chunk_size is None else chunk_size
             integer(chunk_size, 1, 65536)
             resource_estimate(model, replace(runtime_binding, candidate_chunk=chunk_size),

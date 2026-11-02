@@ -35,14 +35,14 @@ from gf_common.domain import (
     integer,
 )
 from gf_common.structured import GENERATOR_V2, INPUT_RECIPE
-from gf_common.structured_tokens import signature
 from gf_models.sharded_arrays import MAX_MANIFEST_BYTES, _pairs, validate_bundle_metadata
 from gf_models.structured_binding import check_input_binding, input_binding
 from gf_models.structured_config import (
     InferenceBindingV2,
-    architecture_identity,
-    model_config_v2,
     parameter_shapes,
+    recorded_architecture_identity,
+    recorded_model_config_v2,
+    recorded_token_signature,
 )
 
 SEMANTIC_KEYS = {'input_recipe', 'generator_version', 'policy_input_version', 'end_projection_version', 'reward_policy_version',
@@ -246,7 +246,7 @@ def validate_recorded_semantics(value: Json, model: Any) -> None:
     expected = {'input_recipe': INPUT_RECIPE, 'generator_version': GENERATOR_V2, 'policy_input_version': POLICY_INPUT_VERSION,
         'end_projection_version': END_PROJECTION_VERSION, 'reward_policy_version': 'natural-terminal-v1',
         'reviewed_spec_hashes': REVIEWED_SPEC_HASHES, 'simulator_revision': SIMULATOR_REVISION, 'catalog': CATALOG_META,
-        'token_signature': signature(model.event.aggregate_window), 'numeric_transform': 'signed-log1p-fp32-v1', 'numerics': NUMERICS}
+        'token_signature': recorded_token_signature(model), 'numeric_transform': 'signed-log1p-fp32-v1', 'numerics': NUMERICS}
     if any(canonical(value[key]) != canonical(item) for key, item in expected.items()):
         raise ContractError('unsupported sealed semantic declaration')
     runtime = closed(value['runtime'], {'torch', 'numpy', 'python', 'gil_enabled'})
@@ -279,9 +279,9 @@ def _inference_metadata(directory: Path, expected_inference_digest: str, action_
     check_input_binding({key: inference[key] for key in CLASSIFICATION}, action_contract=action_contract, purpose=purpose, synthetic_capacity=synthetic_capacity)
     if type(inference['schema_version']) is not int or inference['schema_version'] != 3 or inference['kind'] != 'structured-inference':
         raise ContractError('sealed inference3 required')
-    model = model_config_v2(inference['model'])
+    model = recorded_model_config_v2(inference['model'], inference['token_signature'])
     _semantics(inference, model)
-    if inference['architecture_identity'] != architecture_identity(model):
+    if inference['architecture_identity'] != recorded_architecture_identity(model):
         raise ContractError('sealed architecture identity mismatch')
     checksum(inference['action_config_hash'])
     if inference['weights'].get('prefix') != 'weights':

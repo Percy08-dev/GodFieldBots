@@ -11,12 +11,12 @@ from math import prod
 from typing import Any
 
 from gf_common.domain import ContractError, Json, closed, digest, integer
+from gf_common.structured_history import ACTIVE_AGGREGATE, HISTORICAL_AGGREGATE, history_width
 from gf_common.structured_tokens import (
     CANDIDATE_WIDTH,
     CARD_CATEGORIES,
     CARD_DIRECT_WIDTH,
     EVENT_WIDTH,
-    HISTORY_WIDTH,
     SOURCES,
     STATE_WIDTH,
     signature,
@@ -55,6 +55,7 @@ class HandConfigV2:
 
 @dataclass(frozen=True)
 class EventConfigV2:
+    aggregate_recipe: str = ACTIVE_AGGREGATE
     hidden_size: int = 32
     num_layers: int = 1
     aggregate_window: int = 128
@@ -109,6 +110,49 @@ class ModelConfigV2:
 
 
 @dataclass(frozen=True)
+class HistoricalEventConfigV2:
+    """Exact original serialization; never an accepted active configuration."""
+    hidden_size: int = 32
+    num_layers: int = 1
+    aggregate_window: int = 128
+    max_interval: int = 4096
+    max_episode: int = 262144
+
+
+@dataclass(frozen=True)
+class HistoricalModelConfigV2:
+    model_id: str = "mlp"
+    version: str = "2"
+    input_recipe: str = "participant-structured-v1"
+    max_positions: int = 18
+    state: StateConfigV2 = field(default_factory=StateConfigV2)
+    card: CardConfigV2 = field(default_factory=CardConfigV2)
+    hand: HandConfigV2 = field(default_factory=HandConfigV2)
+    event: HistoricalEventConfigV2 = field(default_factory=HistoricalEventConfigV2)
+    temporal: TemporalConfigV2 = field(default_factory=TemporalConfigV2)
+    heads: HeadConfigV2 = field(default_factory=HeadConfigV2)
+    resources: ResourceConfigV2 = field(default_factory=ResourceConfigV2)
+    initialization: str = "orthogonal-structured-v1"
+    dropout: int = 0
+    precision: str = "ieee-fp32"
+
+
+type RecordedModelConfigV2 = ModelConfigV2 | HistoricalModelConfigV2
+
+
+def aggregate_recipe(model: RecordedModelConfigV2) -> str:
+    if type(model) is HistoricalModelConfigV2:
+        return HISTORICAL_AGGREGATE
+    if type(model.event) is not EventConfigV2:
+        raise ContractError('closed active event descriptor required')
+    return model.event.aggregate_recipe
+
+
+def recorded_token_signature(model: RecordedModelConfigV2) -> str:
+    return signature(model.event.aggregate_window, aggregate_recipe=aggregate_recipe(model))
+
+
+@dataclass(frozen=True)
 class InferenceBindingV2:
     device: str = "cpu"
     candidate_chunk: int = 256
@@ -130,18 +174,24 @@ def _widths(value: Any) -> None:
         integer(width, 1, 1024)
 
 
-def validate_config(model: ModelConfigV2) -> None:
-    if (type(model) is not ModelConfigV2 or model.version != "2"
+def validate_config(model: RecordedModelConfigV2) -> None:
+    _validate_descriptor(model, historical=False)
+
+
+def _validate_descriptor(model: RecordedModelConfigV2, *, historical: bool) -> None:
+    if (type(model) is not (HistoricalModelConfigV2 if historical else ModelConfigV2) or model.version != "2"
             or model.model_id not in ("mlp", "gru", "transformer")
             or model.input_recipe != "participant-structured-v1"
             or model.initialization != "orthogonal-structured-v1"
             or type(model.dropout) is not int or model.dropout != 0 or model.precision != "ieee-fp32"):
         raise ContractError("unsupported v2 model recipe")
     for name, expected in (("state", StateConfigV2), ("card", CardConfigV2), ("hand", HandConfigV2),
-                           ("event", EventConfigV2), ("temporal", TemporalConfigV2),
+                           ("event", HistoricalEventConfigV2 if historical else EventConfigV2), ("temporal", TemporalConfigV2),
                            ("heads", HeadConfigV2), ("resources", ResourceConfigV2)):
         if type(getattr(model, name)) is not expected:
             raise ContractError("closed typed v2 component required")
+    if not historical and aggregate_recipe(model) != ACTIVE_AGGREGATE:
+        raise ContractError('only corrected public-exact-v2 history is active')
     integer(model.max_positions, 1, 128)
     for component in (model.state, model.card, model.hand, model.temporal, model.heads):
         if component.activation != "relu":
@@ -199,10 +249,16 @@ def validate_config(model: ModelConfigV2) -> None:
 
 
 def model_config_v2(value: Json) -> ModelConfigV2:
+    result = _construct_descriptor(value, historical=False)
+    assert type(result) is ModelConfigV2
+    return result
+
+
+def _construct_descriptor(value: Json, *, historical: bool) -> RecordedModelConfigV2:
     closed(value, set(asdict(ModelConfigV2())))
     converted = dict(value)
     for name, constructor in (("state", StateConfigV2), ("card", CardConfigV2), ("hand", HandConfigV2),
-                              ("event", EventConfigV2), ("temporal", TemporalConfigV2),
+                              ("event", HistoricalEventConfigV2 if historical else EventConfigV2), ("temporal", TemporalConfigV2),
                               ("heads", HeadConfigV2), ("resources", ResourceConfigV2)):
         raw = closed(value[name], set(asdict(constructor())))
         fields = dict(raw)
@@ -212,32 +268,49 @@ def model_config_v2(value: Json) -> ModelConfigV2:
                     raise ContractError("hidden width array required")
                 fields[key] = tuple(fields[key])
         converted[name] = constructor(**fields)
-    model = ModelConfigV2(**converted)
-    validate_config(model)
+    model = (HistoricalModelConfigV2 if historical else ModelConfigV2)(**converted)
+    _validate_descriptor(model, historical=historical)
+    return model
+
+
+def recorded_model_config_v2(value: Json, recorded_signature: str) -> RecordedModelConfigV2:
+    """Exactly two closed descriptors, selected only with a matching signature."""
+    raw_event = value.get('event')
+    if not isinstance(raw_event, dict):
+        raise ContractError('recorded event descriptor required')
+    historical = 'aggregate_recipe' not in raw_event
+    model = _construct_descriptor(value, historical=historical)
+    if recorded_signature != recorded_token_signature(model):
+        raise ContractError('recorded closed model/signature descriptor mismatch')
     return model
 
 
 def architecture_identity(model: ModelConfigV2) -> str:
     validate_config(model)
+    return recorded_architecture_identity(model)
+
+
+def recorded_architecture_identity(model: RecordedModelConfigV2) -> str:
+    _validate_descriptor(model, historical=type(model) is HistoricalModelConfigV2)
     # Resource admission and runtime bindings are not network semantics.
     fields = asdict(model)
     del fields["resources"]
-    return digest({"model": fields, "token_signature": signature(model.event.aggregate_window)})
+    return digest({"model": fields, "token_signature": recorded_token_signature(model)})
 
 
-def dimensions(model: ModelConfigV2) -> dict[str, int]:
+def dimensions(model: RecordedModelConfigV2) -> dict[str, int]:
     state = STATE_WIDTH if model.state.kind == "identity" else model.state.output_size
     hand = 18 * CARD_DIRECT_WIDTH if model.hand.kind == "direct" else model.hand.latent_size
     card_input = (model.card.definition_embedding + model.card.ability_embedding
                   + sum(len(values) + 2 for values in CARD_CATEGORIES[2:])
                   + 2 * 12)
     card_actor = model.card.output_size + len(SOURCES) + 2 + 2
-    frame = state + hand + model.event.hidden_size + HISTORY_WIDTH
+    frame = state + hand + model.event.hidden_size + history_width(aggregate_recipe(model))
     return {"state": state, "hand": hand, "card_input": card_input, "card_actor": card_actor,
             "frame": frame, "actor": model.temporal.hidden_size + CANDIDATE_WIDTH + model.max_positions * card_actor}
 
 
-def parameter_shapes(model: ModelConfigV2) -> dict[str, tuple[int, ...]]:
+def parameter_shapes(model: RecordedModelConfigV2) -> dict[str, tuple[int, ...]]:
     """Exact named parameter shapes; keep differential tests against state_dict."""
     shapes: dict[str, tuple[int, ...]] = {}
     d = dimensions(model)

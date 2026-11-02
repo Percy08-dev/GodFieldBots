@@ -18,6 +18,14 @@ from gf_common.structured import (
     DecisionFrame,
     EventBankView,
 )
+from gf_common.structured_history import (
+    ACTIVE_AGGREGATE,
+    APPENDED_HISTORY_FIELDS,
+    HISTORICAL_AGGREGATE,
+    HISTORY_WIDTH,
+    LEGACY_HISTORY_WIDTH,
+    exact_history_tail,
+)
 
 PAD, MISSING = 0, 1
 EVENT_TYPES = ("turn_started", "action_accepted", "artifact_used", "artifact_drawn", "devil_appeared",
@@ -53,7 +61,6 @@ EVENT_CATEGORIES = (EVENT_TYPES, vocab.DEFINITIONS, STATUSES, RESULTS, *(RELATIV
 STATE_WIDTH = 2 * len(STATE_NUMERIC_FIELDS) + len(STATE_CATEGORIES) + sum(len(c) + 2 for c in STATE_CATEGORIES) + 18 * (len(vocab.DEFINITIONS) + 2)
 CARD_DIRECT_WIDTH = 2 * len(CARD_NUMERIC_FIELDS) + sum(len(c) + 2 for c in CARD_CATEGORIES)
 EVENT_WIDTH = 2 * len(EVENT_NUMERIC_FIELDS) + sum(len(c) + 2 for c in EVENT_CATEGORIES)
-HISTORY_WIDTH = len(EVENT_TYPES) + len(EVENT_ACTORS) * 2 + len(EVENT_NUMERIC_FIELDS) * 2
 CANDIDATE_WIDTH = len(ACTION_KINDS) + 2 + len(TARGETS) + 2 + 8
 
 
@@ -76,9 +83,9 @@ def _result(value: Any, actor: int) -> str | None:
     return "self_win" if value["win"]["winner"] == actor else "opponent_win"
 
 
-def signature(aggregate_window: int = 128) -> str:
+def signature_payload(aggregate_window: int = 128, *, aggregate_recipe: str = ACTIVE_AGGREGATE) -> dict[str, Any]:
     integer(aggregate_window, 1, 65536)
-    return digest({"recipe": INPUT_RECIPE, "revision": SIMULATOR_REVISION, "catalog": CATALOG_HASH,
+    payload = {"recipe": INPUT_RECIPE, "revision": SIMULATOR_REVISION, "catalog": CATALOG_HASH,
                    "pad": PAD, "missing": MISSING, "state_numeric": STATE_NUMERIC_FIELDS,
                    "state_categories": STATE_CATEGORIES, "state_category_presence": True, "card_numeric": CARD_NUMERIC_FIELDS,
                    "card_categories": CARD_CATEGORIES, "event_numeric": EVENT_NUMERIC_FIELDS,
@@ -86,7 +93,24 @@ def signature(aggregate_window: int = 128) -> str:
                    "history": "event-counts/actor-role-counts/numeric-sums-and-presence-v1",
                    "candidate_categories": (ACTION_KINDS, TARGETS),
                    "candidate_numeric": ("hp", "mp", "money", "accept"), "slots": 18,
-                   "numeric_transform": "signed-log1p-fp32-v1"})
+                   "numeric_transform": "signed-log1p-fp32-v1"}
+    if aggregate_recipe == ACTIVE_AGGREGATE:
+        payload.update(aggregate_recipe=ACTIVE_AGGREGATE, history_append=APPENDED_HISTORY_FIELDS,
+            history_actor_priority=('player', 'attacker', 'active_player'), history_actor_fallback='key-presence')
+    elif aggregate_recipe != HISTORICAL_AGGREGATE:
+        raise ContractError('unsupported structured aggregate recipe')
+    return payload
+
+
+def signature(aggregate_window: int = 128, *, aggregate_recipe: str = ACTIVE_AGGREGATE) -> str:
+    return digest(signature_payload(aggregate_window, aggregate_recipe=aggregate_recipe))
+
+
+def recorded_aggregate_recipe(recorded_signature: str, aggregate_window: int) -> str:
+    for recipe in (ACTIVE_AGGREGATE, HISTORICAL_AGGREGATE):
+        if recorded_signature == signature(aggregate_window, aggregate_recipe=recipe):
+            return recipe
+    raise ContractError('unknown recorded structured aggregate signature')
 
 
 @dataclass(frozen=True)
@@ -139,7 +163,8 @@ def _event(event: dict[str, Any], actor: int) -> tuple[tuple[int, ...], tuple[bo
     return numeric, present, categories
 
 
-def tokenize_frame(frame: DecisionFrame, bank_view: EventBankView, *, aggregate_window: int = 128) -> FrameTokens:
+def tokenize_frame(frame: DecisionFrame, bank_view: EventBankView, *, aggregate_window: int = 128,
+                   aggregate_recipe: str = ACTIVE_AGGREGATE) -> FrameTokens:
     integer(aggregate_window, 1, 65536)
     view = frame.bank_view(bank_view)
     obs, payload = frame.observation, frame.raw
@@ -195,8 +220,9 @@ def tokenize_frame(frame: DecisionFrame, bank_view: EventBankView, *, aggregate_
     opponent = tuple(category(name, vocab.DEFINITIONS) for name in obs["opponent"]["learned_miracles"])
     opponent += (PAD,) * (18 - len(opponent))
     interval = [_event(event, frame.actor) for event in view.events(frame.interval_start)]
-    history = [0] * HISTORY_WIDTH
-    for event in view.events(max(0, view.boundary.end - aggregate_window)):
+    history = [0] * LEGACY_HISTORY_WIDTH
+    events = view.events(max(0, view.boundary.end - aggregate_window))
+    for event in events:
         event_numbers, event_presence, categories = _event(event, frame.actor)
         history[categories[0] - 2] += 1
         for role, value in enumerate(categories[4:]):
@@ -206,7 +232,11 @@ def tokenize_frame(frame: DecisionFrame, bank_view: EventBankView, *, aggregate_
         for index, (number, event_exists) in enumerate(zip(event_numbers, event_presence, strict=True)):
             history[offset + index * 2] += number
             history[offset + index * 2 + 1] += event_exists
-    return FrameTokens(frame.frame_hash, signature(aggregate_window), aggregate_window, frame.actor, frame.episode, frame.revision,
+    if aggregate_recipe == ACTIVE_AGGREGATE:
+        history.extend(exact_history_tail(events, frame.actor, prefix_count=view.boundary.end, window=aggregate_window))
+    elif aggregate_recipe != HISTORICAL_AGGREGATE:
+        raise ContractError('unsupported structured aggregate recipe')
+    return FrameTokens(frame.frame_hash, signature(aggregate_window, aggregate_recipe=aggregate_recipe), aggregate_window, frame.actor, frame.episode, frame.revision,
                        frame.interval_start, frame.boundary.end, state, state_present, cats, category_present, tuple(card_numbers),
                        tuple(card_presence), tuple(card_cats), tuple(i < count for i in range(18)), opponent,
                        tuple(item[0] for item in interval), tuple(item[1] for item in interval),
@@ -214,12 +244,12 @@ def tokenize_frame(frame: DecisionFrame, bank_view: EventBankView, *, aggregate_
 
 
 def tokenize_table(table: CandidateTable, frame: DecisionFrame, max_positions: int = 128, *,
-                   aggregate_window: int = 128) -> CandidateTokens:
+                   aggregate_window: int = 128, aggregate_recipe: str = ACTIVE_AGGREGATE) -> CandidateTokens:
     integer(max_positions, 1, 128)
     table.validate(frame)
     if any(b - a > max_positions for a, b in zip(table.offsets[:-1], table.offsets[1:], strict=True)):
         raise ContractError("candidate token position capacity exceeded")
-    return CandidateTokens(table.table_hash, frame.frame_hash, signature(aggregate_window),
+    return CandidateTokens(table.table_hash, frame.frame_hash, signature(aggregate_window, aggregate_recipe=aggregate_recipe),
                            tuple(category(kind, ACTION_KINDS) for kind in table.kinds),
                            tuple(category(target, TARGETS) for target in table.targets), table.numerics,
                            table.presence, table.offsets, table.slots)
@@ -227,8 +257,9 @@ def tokenize_table(table: CandidateTable, frame: DecisionFrame, max_positions: i
 
 def validate_frame_tokens(tokens: FrameTokens) -> None:
     """Validate every shape/category/mask before array allocation."""
-    if type(tokens) is not FrameTokens or tokens.recipe_signature != signature(tokens.aggregate_window):
+    if type(tokens) is not FrameTokens:
         raise ContractError("structured frame token recipe mismatch")
+    recipe = recorded_aggregate_recipe(tokens.recipe_signature, tokens.aggregate_window)
 
     for name in ("state_numerics", "state_present", "state_categories", "state_category_present",
                  "card_numerics", "card_present", "card_categories", "card_mask", "opponent_learned",
@@ -286,7 +317,7 @@ def validate_frame_tokens(tokens: FrameTokens) -> None:
         categories(cats, EVENT_CATEGORIES)
         if any(value == PAD for value in cats):
             raise ContractError("event category cannot be padding")
-    if len(tokens.history) != HISTORY_WIDTH:
+    if len(tokens.history) != (HISTORY_WIDTH if recipe == ACTIVE_AGGREGATE else LEGACY_HISTORY_WIDTH):
         raise ContractError("history token shape mismatch")
     for value in tokens.history:
         integer(value, -(2**63), 2**63 - 1)

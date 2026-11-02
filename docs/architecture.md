@@ -26,8 +26,9 @@ A late information audit finds that the first62-field structured aggregate omits
 public definition counts and actor-specific sums from the plan's existing history
 aggregate. [Issue0006](issues/0006-structured-history-aggregate-preservation.md) and
 ADR0023§24 require a corrected exact aggregate with explicit current/historical
-descriptors. Its correction design is reviewed READY; implementation and
-reverification are pending. The earlier
+descriptors. Corrected376 consumers and recorded-only62 compatibility pass both
+final reviews,35CPU/6CUDA integration conditions and the final scoped checks;
+all three corrected512decision CPU panels pass the component goal. Earlier
 numerical and performance results below remain62-field component evidence and
 cannot qualify the corrected model. Original component fixtures are preserved;
 model1 semantics and the separate public-rule gate remain unchanged.
@@ -50,7 +51,10 @@ Ruff/mypy cover106source files. S3b2 connects the common PPO coordinator to
 Generation2 and wire3 using unpatched public guards and a private FakeHTTP
 component seam. Both independent reviews are READY; its complete CPU module
 passes35tests and its actual CUDA learner/CPU-or-CUDA inference resume matrix
-passes6conditions. Full Ruff/mypy cover107source files. Qualified Source authority,
+passes6conditions. Full Ruff/mypy cover107source files. Later corrected history
+and metadata-only Native C2a acceptance covers109source files,94Rust tests/2ignored
+and57native diagnostic cases. Installed native remains unchanged and full
+structured markers are absent pending C2b staging. Qualified Source authority,
 new native processing and deterministic LightGBM2 integration remain pending;
 their bounded design is accepted in ADR0023. No real v2 experiment or full-plan
 acceptance is claimed. Milestone scopes, overlapping historical counts and

@@ -42,10 +42,10 @@ from gf_models.sharded_arrays import _pairs
 from gf_models.structured_binding import (
     check_input_binding,
     input_binding,
-    policy_label,
-    safe_options_v2,
+    recorded_options_v2,
+    recorded_policy_label,
 )
-from gf_models.structured_config import InferenceBindingV2, model_config_v2
+from gf_models.structured_config import InferenceBindingV2, recorded_model_config_v2
 from gf_training.candidate_storage import (
     _bounded_hash,
     _identity,
@@ -331,16 +331,16 @@ def _header_identity(header: Json, manifest: Json, episode: Json, spec: Json, ac
         if binding.get('policy_options') is not None or header['policy'] != header['model_id'] + '-structured-v1':
             raise ContractError('original baseline execution identity mismatch')
     else:
-        options = safe_options_v2(binding.get('policy_options'), action_contract=actions.action_contract,
-                                  purpose='component', synthetic_capacity=False)
-        model = model_config_v2(options['model'])
+        options = recorded_options_v2(binding.get('policy_options'), action_contract=actions.action_contract,
+                                  purpose='component', synthetic_capacity=False, token_signature=header['token_signature'])
+        model = recorded_model_config_v2(options['model'], header['token_signature'])
         inference = InferenceBindingV2(**options['inference'])
         if model.max_positions < actions.max_sequence_length or inference.max_candidates < actions.max_candidates:
             raise ContractError('saved policy capacity does not cover original actions')
         expected_caps.update(max_interval_events=model.event.max_interval, max_episode_events=model.event.max_episode,
                              max_decisions=model.temporal.max_decisions)
         if (header['model_id'] != model.model_id or header['aggregate_window'] != model.event.aggregate_window
-                or header['policy'] != policy_label(model, inference, options['expected_manifest_digest'],
+                or header['policy'] != recorded_policy_label(model, inference, options['expected_manifest_digest'],
                                                     cuda_visible_devices=options['cuda_visible_devices'])):
             raise ContractError('original neural execution identity/window mismatch')
     if canonical(header.get('caps')) != canonical(expected_caps):

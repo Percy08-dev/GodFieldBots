@@ -16,9 +16,189 @@ pub mod retirement;
 pub mod session;
 pub mod source;
 pub mod stack;
+pub mod structured_controls;
+pub mod structured_session;
 pub mod telemetry;
 pub(crate) mod typed_journal;
 pub mod validation;
+
+/// Diagnostic controls-only owner. This deliberately does not activate reader2.
+#[pyclass]
+struct StructuredParentControls {
+    core: Mutex<Option<structured_session::ParentControls>>,
+    retirement: Mutex<Option<retirement::Retirement<structured_session::ParentControls>>>,
+    budget: Arc<budget::Budget>,
+    control: budget::Control,
+    python: Mutex<control_memory::ControlMemory>,
+    caller: Mutex<budget::Lease>,
+}
+fn retire_structured_controls(core: structured_session::ParentControls) -> error::Result<()> {
+    drop(core);
+    Ok(())
+}
+#[pymethods]
+impl StructuredParentControls {
+    #[new]
+    #[pyo3(signature=(directory,settings,deadline,cancel_handle=None))]
+    fn new(
+        py: Python<'_>,
+        directory: &str,
+        settings: &[u8],
+        deadline: f64,
+        cancel_handle: Option<PyRef<'_, CancelHandle>>,
+    ) -> PyResult<Self> {
+        stack::ensure_minimum_stack().map_err(python_error)?;
+        if settings.len() > 65536 {
+            return Err(python_error(Error::resource(
+                "oversized structured diagnostic settings",
+            )));
+        }
+        let control = match cancel_handle {
+            Some(c) => c.control.at_deadline(deadline),
+            None => budget::Control::new(deadline),
+        }
+        .map_err(python_error)?;
+        let (core, retirement, budget) = py
+            .detach(|| {
+                control.check()?;
+                let initial = budget::Budget::new(1048576);
+                let settings = json::parse(settings, &initial, &control)?;
+                settings
+                    .root
+                    .closed(&["memory_bytes", "max_json_bytes"], &[])?;
+                let memory = settings
+                    .root
+                    .require("memory_bytes")?
+                    .integer(1, 12i128 << 30)? as usize;
+                let max_json = settings
+                    .root
+                    .require("max_json_bytes")?
+                    .integer(1, 64i128 << 20)? as usize;
+                let budget = budget::Budget::new(memory);
+                let retirement =
+                    retirement::Retirement::start(&budget, retire_structured_controls)?;
+                let core = structured_session::ParentControls::open(
+                    std::path::Path::new(directory),
+                    budget.clone(),
+                    control.clone(),
+                    max_json,
+                )?;
+                Ok((core, retirement, budget))
+            })
+            .map_err(python_error)?;
+        let caller = budget.reserve(0).map_err(python_error)?;
+        Ok(Self {
+            core: Mutex::new(Some(core)),
+            retirement: Mutex::new(Some(retirement)),
+            budget,
+            control,
+            python: Mutex::new(control_memory::ControlMemory::default()),
+            caller: Mutex::new(caller),
+        })
+    }
+    #[pyo3(signature=(retained_python_bytes=0))]
+    fn summary<'py>(
+        &self,
+        py: Python<'py>,
+        retained_python_bytes: usize,
+    ) -> PyResult<Bound<'py, PyBytes>> {
+        let bytes = py
+            .detach(|| {
+                self.control.check()?;
+                self.caller
+                    .lock()
+                    .map_err(|_| Error::contract("structured caller lease poisoned"))?
+                    .resize(retained_python_bytes)?;
+                let core = self
+                    .core
+                    .lock()
+                    .map_err(|_| Error::contract("structured controls poisoned"))?;
+                let core = core.as_ref().ok_or(Error::Closed)?;
+                core.sources.recheck()?;
+                let bytes = json::canonical(&core.summary.root, &self.budget, &self.control)?;
+                self.python
+                    .lock()
+                    .map_err(|_| Error::contract("structured controls lease poisoned"))?
+                    .summary(&self.budget, bytes.len(), 0)?;
+                Ok(bytes)
+            })
+            .map_err(python_error)?;
+        Ok(PyBytes::new(py, &bytes))
+    }
+    #[pyo3(signature=(retained_python_bytes=0))]
+    fn recheck(&self, py: Python<'_>, retained_python_bytes: usize) -> PyResult<()> {
+        py.detach(|| {
+            self.control.check()?;
+            self.caller
+                .lock()
+                .map_err(|_| Error::contract("structured caller lease poisoned"))?
+                .resize(retained_python_bytes)?;
+            let core = self
+                .core
+                .lock()
+                .map_err(|_| Error::contract("structured controls poisoned"))?;
+            core.as_ref().ok_or(Error::Closed)?.sources.recheck()
+        })
+        .map_err(python_error)
+    }
+    fn used_bytes(&self) -> usize {
+        self.budget.used()
+    }
+    fn peak_bytes(&self) -> usize {
+        self.budget.peak()
+    }
+    fn control_reserved_bytes(&self) -> usize {
+        self.python.lock().map(|c| c.reserved()).unwrap_or(0)
+    }
+    fn cancel_handle(&self) -> CancelHandle {
+        CancelHandle {
+            control: self.control.clone(),
+            stats: Arc::new(telemetry::Telemetry::default()),
+        }
+    }
+    fn close(&self, py: Python<'_>) -> PyResult<()> {
+        py.detach(|| {
+            let mut core = self
+                .core
+                .lock()
+                .map_err(|_| Error::contract("structured controls poisoned"))?;
+            let Some(owned) = core.take() else {
+                return Ok(());
+            };
+            let result = owned.sources.recheck();
+            let retirement = self
+                .retirement
+                .lock()
+                .map_err(|_| Error::contract("structured retirement poisoned"))?
+                .take()
+                .ok_or(Error::Closed)?;
+            let retired = retirement.retire(Some(owned));
+            self.python
+                .lock()
+                .map_err(|_| Error::contract("structured controls lease poisoned"))?
+                .release();
+            self.caller
+                .lock()
+                .map_err(|_| Error::contract("structured caller lease poisoned"))?
+                .resize(0)?;
+            result.and(retired)
+        })
+        .map_err(python_error)
+    }
+}
+impl Drop for StructuredParentControls {
+    fn drop(&mut self) {
+        if let Ok(core) = self.core.get_mut() {
+            if let Some(owned) = core.take() {
+                if let Ok(retirement) = self.retirement.get_mut() {
+                    if let Some(retirement) = retirement.take() {
+                        let _ = retirement.retire(Some(owned));
+                    }
+                }
+            }
+        }
+    }
+}
 
 #[cfg(feature = "allocator-mimalloc")]
 #[global_allocator]
@@ -1041,6 +1221,7 @@ fn gf_native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<CancelHandle>()?;
     module.add_class::<StagingLease>()?;
     module.add_class::<NativeSession>()?;
+    module.add_class::<StructuredParentControls>()?;
     Ok(())
 }
 

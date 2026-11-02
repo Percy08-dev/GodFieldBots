@@ -1639,7 +1639,9 @@ Introduce a separate stdlib ConfiguredTreeModelV2, selected by the joint
 model_id=lightgbm/version2 identity. Its closed fields are model_id/version,
 checkpoint, encoder, network, initialization, inference and resources. Encoder
 contains only recipe=participant-structured-tree-v1, max_positions(default18,
-1..128) and aggregate_window(default128). Network retains num_leaves31 and the
+1..128), aggregate_window(default128) and aggregate_recipe=public-exact-v2 (§24).
+Tree2 never shipped the incomplete recipe and does not add a historical Tree2
+layout for it. Network retains num_leaves31 and the
 seed-derived-v1 initialization. Inference is explicitly CPU with candidate_chunk
 256, max_candidates32768 and num_threads1. Resources admit total owned host bytes
 and individual FP32 array bytes (hard64MiB maximum); baseline owned allowance is
