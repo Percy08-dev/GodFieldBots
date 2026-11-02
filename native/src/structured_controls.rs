@@ -1953,3 +1953,284 @@ pub fn parent(s: &mut Sources) -> Result<Document> {
     let bytes = json::canonical(&summary, &budget, &control)?;
     json::parse(&bytes, &budget, &control)
 }
+
+// Tree2 is a concrete non-PPO RAW role. This derives metadata only: neither
+// deterministic floating feature transforms nor a Booster runs in this module.
+pub(crate) fn tree_model(value: &Value) -> Result<()> {
+    value.closed(
+        &[
+            "model_id",
+            "version",
+            "encoder",
+            "network",
+            "initialization",
+        ],
+        &[],
+    )?;
+    is(value, "model_id", "lightgbm")?;
+    is(value, "version", "2")?;
+    let encoder = value.require("encoder")?;
+    encoder.closed(
+        &[
+            "recipe",
+            "max_positions",
+            "aggregate_window",
+            "aggregate_recipe",
+        ],
+        &[],
+    )?;
+    is(encoder, "recipe", "participant-structured-tree-v1")?;
+    is(encoder, "aggregate_recipe", "public-exact-v2")?;
+    n(encoder, "max_positions", 1, 128)?;
+    n(encoder, "aggregate_window", 1, 65536)?;
+    value.require("network")?.closed(&["num_leaves"], &[])?;
+    n(value.require("network")?, "num_leaves", 2, 65536)?;
+    value.require("initialization")?.closed(&["recipe"], &[])?;
+    is(
+        value.require("initialization")?,
+        "recipe",
+        "seed-derived-v1",
+    )
+}
+pub(crate) fn tree_execution(options: &Value) -> Result<()> {
+    options.closed(
+        &[
+            "version",
+            "checkpoint",
+            "expected_manifest_digest",
+            "model",
+            "inference",
+            "resources",
+            "tree_descriptor",
+            "feature_signature",
+            "action_contract",
+            "purpose",
+            "synthetic_capacity",
+        ],
+        &[],
+    )?;
+    is(options, "version", "2")?;
+    if text(options, "checkpoint")?.is_empty() {
+        return Err(Error::contract("Tree2 own checkpoint required"));
+    }
+    checksum(options.require("expected_manifest_digest")?)?;
+    checksum(options.require("feature_signature")?)?;
+    tree_model(options.require("model")?)?;
+    let inference = options.require("inference")?;
+    inference.closed(
+        &["device", "candidate_chunk", "max_candidates", "num_threads"],
+        &[],
+    )?;
+    is(inference, "device", "cpu")?;
+    let chunk = n(inference, "candidate_chunk", 1, 65536)?;
+    n(inference, "max_candidates", 1, 65536)?;
+    let threads = n(inference, "num_threads", 1, 64)?;
+    let resources = options.require("resources")?;
+    resources.closed(&["max_owned_bytes", "max_array_bytes"], &[])?;
+    let owned = n(resources, "max_owned_bytes", 1, i64::MAX as i128)?;
+    let array = n(resources, "max_array_bytes", 1, 64i128 << 20)?;
+    let descriptor = options.require("tree_descriptor")?;
+    descriptor.closed(
+        &["tree_count", "max_depth", "model_sha256", "model_bytes"],
+        &[],
+    )?;
+    n(descriptor, "tree_count", 1, i32::MAX as i128)?;
+    n(descriptor, "max_depth", 0, 65535)?;
+    checksum(descriptor.require("model_sha256")?)?;
+    let bytes = n(descriptor, "model_bytes", 1, 64i128 << 20)?;
+    let positions = n(
+        options.require("model")?.require("encoder")?,
+        "max_positions",
+        1,
+        128,
+    )?;
+    let width = 1071 + 32 * positions;
+    let total =
+        (256i128 << 20) + threads * (64i128 << 20) + 16 * bytes + chunk * (12 * width + 32) + 72008;
+    if chunk * width * 4 > array || total > owned {
+        return Err(Error::resource(
+            "Tree2 RAW declared array/joint resources exceeded",
+        ));
+    }
+    Ok(())
+}
+pub(crate) fn tree_feature_signature(
+    model: &Value,
+    budget: &Arc<Budget>,
+    control: &Control,
+) -> Result<String> {
+    tree_model(model)?;
+    let encoder = model.require("encoder")?;
+    let positions = n(encoder, "max_positions", 1, 128)? as usize;
+    let width = 1071 + 32 * positions;
+    let _layout = budget.reserve(1024 * width + 65536)?;
+    let recipe = json::parse(EXACT_RECIPE, budget, control)?;
+    let state = recipe.root.require("state_numeric")?.array()?;
+    let card = recipe.root.require("card_numeric")?.array()?;
+    let mut fields: Vec<(String, &'static str)> = Vec::with_capacity(width);
+    for (prefix, transform) in [("state.numeric", "numeric"), ("state.present", "presence")] {
+        for name in state {
+            fields.push((format!("{prefix}.{}", name.string()?), transform));
+        }
+    }
+    let state_categories = [
+        "phase",
+        "required_choice",
+        "first_player",
+        "active_player",
+        "current_player",
+        "result",
+        "own.disease",
+        "own.guardian",
+        "opponent.disease",
+        "opponent.guardian",
+    ];
+    for (prefix, transform) in [
+        ("state.category", "category"),
+        ("state.category_present", "presence"),
+    ] {
+        for name in state_categories {
+            fields.push((format!("{prefix}.{name}"), transform));
+        }
+    }
+    fn add_card(
+        fields: &mut Vec<(String, &'static str)>,
+        prefix: &str,
+        card: &[Value],
+    ) -> Result<()> {
+        for (part, transform) in [("numeric", "numeric"), ("present", "presence")] {
+            for name in card {
+                fields.push((format!("{prefix}.{part}.{}", name.string()?), transform));
+            }
+        }
+        for name in [
+            "definition",
+            "ability",
+            "kind",
+            "attribute",
+            "disease",
+            "guardian",
+            "source",
+        ] {
+            fields.push((format!("{prefix}.category.{name}"), "category"));
+        }
+        fields.push((format!("{prefix}.mask"), "presence"));
+        Ok(())
+    }
+    for slot in 0..18 {
+        add_card(&mut fields, &format!("own.{slot}"), card)?;
+    }
+    for slot in 0..18 {
+        fields.push((format!("opponent.learned.{slot}"), "category"));
+    }
+    for name in recipe.root.require("event_categories")?.array()?[0].array()? {
+        fields.push((format!("history.event.{}", name.string()?), "numeric"));
+    }
+    for field in [
+        "player",
+        "attacker",
+        "target",
+        "active_player",
+        "buyer",
+        "seller",
+        "from",
+        "to",
+    ] {
+        for role in ["self", "opponent"] {
+            fields.push((format!("history.actor.{field}.{role}"), "numeric"));
+        }
+    }
+    for name in recipe.root.require("event_numeric")?.array()? {
+        for stat in ["sum", "present"] {
+            fields.push((
+                format!("history.numeric.{}.{stat}", name.string()?),
+                "numeric",
+            ));
+        }
+    }
+    for name in recipe.root.require("history_append")?.array()? {
+        fields.push((format!("history.{}", name.string()?), "numeric"));
+    }
+    fields.push(("candidate.kind".into(), "category"));
+    fields.push(("candidate.target".into(), "category"));
+    for (prefix, transform) in [
+        ("candidate.numeric", "numeric"),
+        ("candidate.present", "presence"),
+    ] {
+        for name in ["hp", "mp", "money", "accept"] {
+            fields.push((format!("{prefix}.{name}"), transform));
+        }
+    }
+    fields.push(("candidate.length".into(), "numeric"));
+    for slot in 0..18 {
+        fields.push((format!("candidate.used_slot.{slot}"), "numeric"));
+    }
+    for position in 0..positions {
+        add_card(&mut fields, &format!("candidate.position.{position}"), card)?;
+    }
+    if fields.len() != width {
+        return Err(Error::contract("Tree2 pinned layout width mismatch"));
+    }
+    control.check()?;
+    digest(
+        &json::object([
+            ("recipe", json::text("participant-structured-tree-v1")),
+            (
+                "numeric_transform",
+                json::text("numpy-fp32-signed-log1p-v1"),
+            ),
+            ("encoder", json::copy(encoder, control)?),
+            (
+                "token_signature",
+                json::text(&token_signature(
+                    n(encoder, "aggregate_window", 1, 65536)?,
+                    false,
+                    budget,
+                    control,
+                )?),
+            ),
+            (
+                "feature_names",
+                json::array(fields.iter().map(|(name, _)| json::text(name))),
+            ),
+            (
+                "categorical_indices",
+                json::array(
+                    fields
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, (_, kind))| *kind == "category")
+                        .map(|(index, _)| json::integer(index as i128)),
+                ),
+            ),
+            (
+                "transforms",
+                json::array(fields.iter().map(|(_, kind)| json::text(kind))),
+            ),
+        ]),
+        budget,
+        control,
+    )
+}
+
+#[cfg(test)]
+mod tree_metadata_tests {
+    use super::*;
+    #[test]
+    fn exact_tree_feature_signatures_match_independent_python_metadata() {
+        let budget = Budget::new(256 << 20);
+        let control = Control::new(crate::budget::monotonic() + 30.0).unwrap();
+        let cases = json::parse(
+            include_bytes!("../tests/fixtures/structured_tree_metadata.json"),
+            &budget,
+            &control,
+        )
+        .unwrap();
+        for case in cases.root.array().unwrap() {
+            assert_eq!(
+                tree_feature_signature(case.require("model").unwrap(), &budget, &control).unwrap(),
+                case.require("feature_signature").unwrap().string().unwrap()
+            );
+        }
+    }
+}

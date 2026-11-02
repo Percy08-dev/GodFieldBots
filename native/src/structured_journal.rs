@@ -989,6 +989,31 @@ impl<'a> OriginalHeader<'a> {
             &[],
         )?;
         if let Some(model) = model {
+            if model.require("model_id")?.string()? == "lightgbm" {
+                crate::structured_controls::tree_model(model)?;
+                let encoder = model.require("encoder")?;
+                let window = encoder.require("aggregate_window")?.integer(1, 65536)?;
+                if identity.require("model_version")?.string()? != "2"
+                    || identity.require("model_id")?.string()? != "lightgbm"
+                    || !identity.require("generation_schema")?.is_null()
+                    || identity.require("aggregate_window")?.integer(1, 65536)? != window
+                    || identity.require("token_signature")?.string()?
+                        != crate::structured_controls::token_signature(
+                            window, false, budget, control,
+                        )?
+                    || identity
+                        .require("caps")?
+                        .require("max_positions")?
+                        .integer(1, 128)?
+                        > encoder.require("max_positions")?.integer(1, 128)?
+                {
+                    return fail("recorded original nonPPO Tree2 role descriptor mismatch");
+                }
+                return Ok(Self {
+                    model: Some(model),
+                    identity,
+                });
+            }
             crate::structured_controls::model(model, budget, control)?;
             let window = model
                 .require("event")?
@@ -1180,6 +1205,11 @@ fn header(
     )?;
     let model = value.require("model_id")?.string()?;
     match value.require("model_version")?.string()? {
+        "2" if model == "lightgbm" => {
+            if !value.require("generation_schema")?.is_null() {
+                return fail("Tree2 RAW role has no PPO generation schema");
+            }
+        }
         "2" => {
             if !["mlp", "gru", "transformer"].contains(&model) {
                 return fail("journal5 neural model mismatch");
@@ -1268,6 +1298,7 @@ impl Journal {
     ) -> Result<Self> {
         if stage.is_some()
             && (declaration.model.is_none()
+                || declaration.model.unwrap().require("model_id")?.string()? == "lightgbm"
                 || declaration
                     .model
                     .unwrap()
@@ -1564,12 +1595,19 @@ impl Journal {
                     for key in ["logprob", "value"] {
                         let v = selection.require(key)?;
                         if v.is_null() {
-                            if h.require("model_version")?.string()? == "2" {
+                            if h.require("model_version")?.string()? == "2"
+                                && h.require("model_id")?.string()? != "lightgbm"
+                            {
                                 return fail(
                                     "neural Selection requires finite BOTH policy statistics",
                                 );
                             }
                         } else {
+                            if h.require("model_id")?.string()? == "lightgbm" {
+                                return fail(
+                                    "Tree2 RAW Selection must have null policy statistics",
+                                );
+                            }
                             let number = finite(v, false)?;
                             if key == "logprob" && number > 0.0 {
                                 return fail("positive log probability");
@@ -1920,7 +1958,9 @@ impl Journal {
     ) -> Result<Value> {
         let s = &self.sources;
         s.control.check()?;
-        if self.header_value().require("model_version")?.string()? != "2" {
+        if self.header_value().require("model_version")?.string()? != "2"
+            || self.header_value().require("model_id")?.string()? == "lightgbm"
+        {
             return fail("baseline raw role cannot be a PPO payload");
         }
         let mut selections = Vec::with_capacity(self.accepted.len());
@@ -2063,6 +2103,10 @@ impl Journal {
                         json::text(
                             if self.documents[0].root.require("model_version")?.string()? == "1" {
                                 "baseline-corrected128"
+                            } else if self.documents[0].root.require("model_id")?.string()?
+                                == "lightgbm"
+                            {
+                                "tree-raw-corrected-own-header"
                             } else {
                                 "neural-own-header"
                             },

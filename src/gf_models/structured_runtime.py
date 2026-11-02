@@ -47,6 +47,19 @@ def own_worker_settings(model_id: str, actions: ActionConfigV2, options: Json | 
         if options is not None:
             raise ContractError("baseline has no checkpoint/runtime binding")
         return WorkerCaps(max_positions=actions.max_sequence_length, max_candidates=actions.max_candidates), NumericCosts(), 0, 0
+    if model_id == 'lightgbm' and options is not None:
+        from gf_models.structured_tree_config import (
+            TreeDescriptor,
+            configured_tree_v2,
+            numeric_costs,
+        )
+        from gf_models.structured_tree_encoder import safe_tree_options_v2
+        safe = safe_tree_options_v2(options, action_contract=actions.action_contract, purpose='component', synthetic_capacity=False)
+        tree = configured_tree_v2({**safe['model'], 'checkpoint': safe['checkpoint'],
+            'inference': safe['inference'], 'resources': safe['resources']})
+        if actions.max_sequence_length > tree.encoder.max_positions or actions.max_candidates > tree.inference.max_candidates:
+            raise ContractError('Tree2 own model/actions capacity mismatch')
+        return WorkerCaps(max_positions=actions.max_sequence_length, max_candidates=actions.max_candidates), numeric_costs(tree, TreeDescriptor(**safe['tree_descriptor'])), 0, 0
     if model_id not in ("mlp", "gru", "transformer") or options is None:
         raise ContractError("neural2 own settings required")
     safe = safe_options_v2(options, action_contract=actions.action_contract, purpose="component", synthetic_capacity=False)

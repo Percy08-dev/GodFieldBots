@@ -416,6 +416,46 @@ fn role_identity<'a>(
             "original baseline execution identity differs",
         )?;
         None
+    } else if field(header, "model_id")? == "lightgbm" {
+        let options = binding.require("policy_options")?;
+        input_classification(options, actions.require("action_contract")?)?;
+        crate::structured_controls::tree_execution(options)?;
+        let model = options.require("model")?;
+        let encoder = model.require("encoder")?;
+        require(
+            field(options, "feature_signature")?
+                == crate::structured_controls::tree_feature_signature(model, budget, control)?,
+            "original Tree2 exact feature/category signature mismatch",
+        )?;
+        let execution = json::object([
+            (
+                "inference",
+                json::copy(options.require("inference")?, control)?,
+            ),
+            (
+                "resources",
+                json::copy(options.require("resources")?, control)?,
+            ),
+            (
+                "tree_descriptor",
+                json::copy(options.require("tree_descriptor")?, control)?,
+            ),
+        ]);
+        let label = format!(
+            "lightgbm-tree-v2-{}-{}",
+            field(options, "expected_manifest_digest")?,
+            digest(&execution, budget, control)?
+        );
+        require(
+            policy == label
+                && header.require("aggregate_window")? == encoder.require("aggregate_window")?
+                && integer(encoder, "max_positions", 1, 128)?
+                    >= integer(actions, "max_sequence_length", 1, 128)?
+                && integer(options.require("inference")?, "max_candidates", 1, 65536)?
+                    >= integer(actions, "max_candidates", 1, 65536)?,
+            "original Tree2 CPU execution/window/capacity mismatch",
+        )?;
+        Some(model)
     } else {
         let options = binding.require("policy_options")?;
         options.closed(
@@ -994,7 +1034,9 @@ pub(crate) fn inspect_collection(
             accepted_total += input.accepted_count();
             if selected {
                 require(
-                    field(input.header_value(), "model_version")? == "2",
+                    field(input.header_value(), "model_version")? == "2"
+                        && ["mlp", "gru", "transformer"]
+                            .contains(&field(input.header_value(), "model_id")?),
                     "learner role must be a neural model2",
                 )?;
                 let label = field(input.header_value(), "policy")?;
@@ -2312,5 +2354,68 @@ impl OriginalInputs {
             correspondences,
             fingerprint,
         })
+    }
+}
+
+#[cfg(test)]
+mod tree_role_tests {
+    use super::*;
+    #[test]
+    fn original_tree_raw_role_checks_features_cpu_caps_and_null_ancestry_without_checkpoint_io() {
+        let budget = Budget::new(64 << 20);
+        let control = Control::new(crate::budget::monotonic() + 30.0).unwrap();
+        let input = json::parse(
+            include_bytes!("../tests/fixtures/structured_tree_role.json"),
+            &budget,
+            &control,
+        )
+        .unwrap();
+        fn check(value: &Value, budget: &Arc<Budget>, control: &Control) -> Result<()> {
+            let (identity, model) = role_identity(
+                value.require("header")?,
+                value.require("manifest")?,
+                value.require("episode")?,
+                value.require("spec")?,
+                1,
+                budget,
+                control,
+            )?;
+            OriginalHeader::new(model, &identity, budget, control)?;
+            Ok(())
+        }
+        check(&input.root, &budget, &control).unwrap();
+        let label = input
+            .root
+            .require("header")
+            .unwrap()
+            .require("policy")
+            .unwrap()
+            .string()
+            .unwrap()
+            .to_owned();
+        for case in 0..5 {
+            let mut value = json::copy(&input.root, &control).unwrap();
+            match case {
+                0 => {
+                    value["manifest"]["policy_bindings"][&label]["policy_options"]["feature_signature"] =
+                        json::text(&"0".repeat(64));
+                }
+                1 => {
+                    value["manifest"]["policy_bindings"][&label]["policy_options"]["inference"]["device"] =
+                        json::text("cuda:0");
+                }
+                2 => {
+                    value["manifest"]["policy_bindings"][&label]["policy_options"]["tree_descriptor"]
+                        ["model_bytes"] = Value::Bool(true);
+                }
+                3 => {
+                    value["header"]["caps"]["max_decisions"] = json::integer(1);
+                }
+                _ => {
+                    value["header"]["generation_schema"] = json::integer(2);
+                }
+            }
+            assert!(check(&value, &budget, &control).is_err(), "case{case}");
+        }
     }
 }

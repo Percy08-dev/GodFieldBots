@@ -1354,9 +1354,82 @@ Original late-mutation evidence remains under
 Installed native is unchanged. Tree2/C3b,
 qualified Source, real-game acceptance and final test remain outside this scope.
 
+## C3a deterministic Tree2 inference acceptance
+
+Both final independent SOURCE reviews are READY. Root accepts the independent
+closed Tree2 config, exact NumPy FP32 row recipe, bounded chunk scoring, toy-only
+schema3 artifact/runtime, factory/worker/Journal5 and native RAW role wiring.
+The18-position layout has1647columns; capacity128has5167. Exact categories retain
+PAD0/MISSING1 and only numeric/count/history fields use the pinned signed-log
+transform. No learned neural encoder, instance-ID magnitude or opponent-private
+state enters these rows. Tree statistics stay null and generation_schema=None.
+
+Initial10encoder and11artifact cases expand to the final47-case Tree2 suite after
+review fixes. Relevant legacy/config/structured-worker/J5/Source/native cases
+PASS351; Rust PASS112/2ignored; full Ruff/mypy114PASS; old12config/input hashes
+remain exact. These are overlapping checkpoint counts. Independent review checks
+include a separate viewer2/Fog/history/signed-argument row oracle, native-normalized
+resealed categorical/numeric split corruptions, invalid saved creation envelopes,
+DTO-before-native-load sentinels, race/deadline and resource-admission cases.
+One attempted native normalization test aborts134 due invalid fixture tree_sizes;
+its failure remains recorded. The corrected equal-width fixture and current
+positive/negative suites pass separately.
+
+Fixed and active execution/origin are separated and bound to the exact manifest.
+Actual model bytes and all current input/context/candidate owners are jointly
+admitted; creation resources are independently checked. Semantic native settings,
+every split's range/type/missing flags, exact feature/category layout, tree count/
+depth and file bytes are verified before participant ready. Metadata inspection
+uses no Booster/Torch; unsafe DTO disagreement rejects before native loading.
+Native RAW checks derive the feature signature without opening checkpoint paths
+from standalone journal metadata. They supply no Source/fit authority.
+
+Candidate module /tmp/gfb-tree2-module-20261102:
+ELF486ce066607a340c8d1209d16e7019e7c3ad566e9be52831e0f3a97f8a8ec123;
+native source422574948ec80a7a142293dd3aa26a787bc5393e7eb0cffa598b6a18dbdd3097;
+wheel66b4885198bf2ece634dc14df867f53d703c1978944ae278f30745ff1b0fcabd;
+sdist bb201d12d5984bf70a6d9442e390086b7bf2026795e399fffe851c73be096760.
+Root independently matches48sdist/current native files, both embedded recipe
+assets, Cargo.lock and wheel stub/loaded ELF. Package proof
+048e19c311f73678b0aef06188dfdebb1d2f3847f996a6e6b0ff516da47464db is under
+`runs/assessments/structured-tree2-latency-panel-20261102/package-proof.json`.
+Installed native remains unchanged; no new broad capability is advertised.
+
+The fixed512TRAIN+512peer own-view panel completes49games with2concurrent games,
+4workers/98startups and no failures/unreaped workers. It uses an explicitly
+synthetic seed17model with500trees/max depth10/model bytes1,012,435, not a qualified
+fit. End-to-end CPU decision p95=99.066139ms, p50=14.607441ms, p99=203.972781ms;
+the measured component goal p95<=3s passes. Startup is separately recorded at
+p95=490.261406ms. Raw startup samples were not retained, so only the decision
+quantiles are independently recomputed. A small3-game preflight is separate from
+the full panel. Timing includes current input conversion, generation, features,
+scoring, selection and worker communication; fitting/startup are excluded.
+
+Panel/evidence/harness/inputs and114frozen producer snapshots are under
+`runs/assessments/structured-tree2-latency-panel-20261102`; evidence SHA
+869a70aa4f8c51975bb904d481083662c541787f722c44d4538d14567f6f15e9.
+Independent audit verifies119listed artifacts, source cross-map,512input/identity
+membership and all decision quantiles. Source snapshots were taken after timing
+under the declared unchanged production freeze; the two final reviewed file
+hashes match. This is a single offline component pass, no Simulator I/O, qualified
+Source, policy strength or CPU/GPU comparison.
+
+Earlier isolated128-tree/depth3import/fit/load/warm-predict observations report
+83.1MBpeak RSS versus342.7MBestimated total (18positions/chunk256), and136.0MB
+versus467.2MB (128synthetic/chunk2048). They support the soft estimator only;
+those records lack a captured producer hash and are not retroactively attributed
+to final source. Optional-free coordinator CLI help/config and legacy baseline
+workers initialize/reap with no Simulator. The coordinator blocks Torch/LightGBM/
+PyArrow imports; workers use normal sanitized standard-library baseline routing.
+
+C3a accepts only toy/null provenance and component origin. Trained provenance,
+Dataset2, guarded fresh fitting and actor-only final-policy validation remain
+C3b work. Issue0005still blocks qualified real-I/O/source/fit acceptance. No real
+data fit, HPO, model-strength comparison or final-test evaluation is claimed.
+
 ## Remaining integrated acceptance
 
-Currently NOT RUN: deterministic Tree2 and Dataset2 integration, and qualified collection E2E PPO
+Currently NOT RUN: Dataset2/guarded trained Tree2 integration and qualified collection E2E PPO
 integration. The latter includes192-game baseline, attention3models×2inference devices×
 continuous/pause-resume real2updates, other hand-mode MLP games, fixed512train
 decision CPU p95<=3s acceptance under the complete qualified contract. Completed

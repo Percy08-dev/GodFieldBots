@@ -264,9 +264,10 @@ async def _run_experiment(loaded: LoadedConfig, command: str, *, collection: Col
         registry, labels = structured_bindings(config.model, config.opponent)
     elif collection is None:
         from gf_models.structured_binding import ConfiguredNeuralModelV2
+        from gf_models.structured_tree_config import ConfiguredTreeModelV2
         assert isinstance(config.actions, ActionConfig)
-        assert not isinstance(config.model, ConfiguredNeuralModelV2)
-        assert not isinstance(config.opponent, ConfiguredNeuralModelV2)
+        assert not isinstance(config.model, (ConfiguredNeuralModelV2, ConfiguredTreeModelV2))
+        assert not isinstance(config.opponent, (ConfiguredNeuralModelV2, ConfiguredTreeModelV2))
         registry, labels = bindings(config.model, config.opponent, config.actions, deadline=preflight_deadline)
     else:
         registry, labels = collection.bindings, ("owned", "owned")
@@ -567,6 +568,9 @@ def main(argv: list[str] | None = None) -> int:
             print(canonical(asyncio.run(validate_policy(validation_loaded, args.parent_run, args.output, collect_validation))))
             return 0
         if args.command == "train":
+            from gf_models.structured_tree_config import ConfiguredTreeModelV2
+            if isinstance(loaded.config.model, ConfiguredTreeModelV2):
+                raise ContractError('Tree2 Source/Dataset2 training composition is not implemented; C3a supports explicit toy components only')
             if loaded.config.model.model_id in ("mlp", "gru", "transformer"):
                 from gf_training.ppo_run import train_ppo
                 if args.run_dir is None:

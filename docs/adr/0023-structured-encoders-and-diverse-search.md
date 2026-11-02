@@ -27,7 +27,10 @@ C2b2 native original-Source authorization/typed staging/publication/common-loop
 increment now passes both final source reviews, two-update/exact-resume checks,
 all five original compatibility proofs and package/activation verification.
 Root accepts that engineering-component increment; installed native is unchanged.
-Tree2 and C3b are still pending (§§22/27); qualified real-game acceptance remains
+The later C3a deterministic Tree2 inference/RAW-role increment is accepted after
+both source reviews, numerical/worker/native regressions and the512decision
+component performance panel. C3b Dataset2/trained fitting/final validation remain
+pending (§28); qualified real-game acceptance remains
 blocked by issue0005. The following
 initial slice counts/statuses are historical milestones, superseded by that ledger.
 
@@ -2242,8 +2245,9 @@ model is the exact Tree2 architecture; input/feature recipes and signatures foll
 reviewed_simulator_spec_sha256,policy_input_version,generator_version,
 reward_policy_version,end_projection_version. runtime is closed numpy_version,
 lightgbm_version,native_library_sha256. model_file is closed file=model.txt,
-sha256,bytes; tree_descriptor is closed tree_count,max_depth,model_sha256, whose
-hash must equal model_file.sha256. creation_execution records the actual CPU
+sha256,bytes; tree_descriptor is closed tree_count,max_depth,model_sha256,
+model_bytes, whose hash/bytes must equal model_file.sha256/bytes respectively.
+creation_execution records the actual CPU
 binding/resources used at creation, independently of a later validated binding.
 All names/categories/descriptors/semantics are derived and checked, never trusted
 as free-form model instructions. Metadata inspection executes no Booster/Torch.
@@ -2261,11 +2265,16 @@ does not imply synthetic origin. Qualified inference additionally requires the
 qualified input contract and trained provenance; current engineering gates stay.
 
 safe_tree_options_v2 is closed version,checkpoint,expected_manifest_digest,model,
-inference,resources,tree_descriptor,action_contract,purpose,synthetic_capacity.
+inference,resources,tree_descriptor,feature_signature,action_contract,purpose,synthetic_capacity.
 version is the string"2"; model is architecture-only and inference/resources are actual CPU
 execution. Resolve descriptor and origin from the exact inspected manifest, bind
 both its hash and execution digest in the policy label, and compare actual
 Booster feature names/count/categories/tree count/depth before participant ready.
+The descriptor's exact model_bytes also supplies stdlib-only worker cost admission;
+own_worker_settings remains free of new metadata I/O/native imports. Parent
+metadata inspection derives the descriptor, and clean bootstrap checks its bytes/
+hash against the same manifest before native load. No caller-supplied fixed-byte
+estimate substitutes for this binding.
 native_parameters is closed objective,num_class,zero_as_missing,linear_tree,
 boosting, with recipe values regression,1,false,false,gbdt respectively. Validate
 these semantic values against the actual native model, including scalar output
@@ -2292,6 +2301,85 @@ exact own header/options/CPU execution/category-feature signature, no PPO ancest
 generation_schema=None and null Selection statistics. Preserve neural2 staging
 and all legacy schemas. No Tree2 PPO export, native learned encoder, Source
 qualification or broad future capability is advertised by this addition.
+The safe DTO carries feature_signature explicitly. Native RAW validation derives
+the ordered layout/category/signature from the pinned Tree2 recipe/common token
+asset and checks that declaration; it does not implement NumPy numerical feature
+transforms or open checkpoint paths solely from a standalone Journal header.
+Parent metadata inspection/clean bootstrap bind the DTO signature to the actual
+schema3 artifact. Raw diagnostics retain the existing self-consistency-only scope,
+without checkpoint/parent/Source authority; C3b separately supplies that authority
+and original-artifact ownership. This avoids silently expanding a raw walker's
+file-reference boundary.
 Tiny categorical fit/roundtrip, row/category/reference/permutation oracles,
 18/128 synthetic capacity, resource refusal, worker/Journal5/FakeHTTP and
 optional-free startup checks remain engineering evidence only.
+
+## 28. TreeDataset2 source lifetime (bounded design draft)
+
+Root adopts the advisor's separate concrete TreeDatasetSession direction for
+C3b. This section is a bounded design draft; exact wire/manifest/training
+interfaces still need review before dependent implementation. C2b2 Plan2's
+historical-no-export/live-one-export behavior is preserved.
+
+Dataset2 freezes exactly three ordered complete healthy current376PPO2 parents
+(seeds17/29/43, one homogeneous neural architecture/action/execution cohort), ALL
+their immutable committed train collections and one prescribed final-policy
+validation collection per parent. Callers cannot omit generations or select by
+outcome. Legacy Dataset1 and old62prototype sources are not reinterpreted as2.
+
+Final-policy validation has its own concrete actor-only proof context: a fully
+validated completed parent/final generation, exact final inference/runtime
+binding, action/token identities, and the SAME participant ledger with NO resident
+learner reservation. It must not masquerade as the live training owner. Derive
+validation Config from the frozen parent with only run.split="validation"
+changed, record that new digest's relationship to the original, use
+validation_groups(seed,final_label,actions_version=2), and require32swapped pairs/
+64healthy natural games with explicit selected-policy seats. The separate output
+directory lies outside immutable parent directories. Native historical parent
+validation can hold original train/numeric/sealed snapshots during this
+collection; public contract/Environment gates remain intact. This explicitly
+defines the new projection; legacy validation's weaker enforcement is unchanged.
+
+The separate Dataset session freezes parent controls/worklist once, reuses the
+existing parent/collection/journal/S2 validators, and processes one collection at
+a time: control_summary→authorize_controls, then stage_next→collection_summary→
+authorize_collection→export_current→retire_current, finally finalize→close.
+Do not first call the eager all-source OriginalInputs.open and then rewalk every
+parent per collection. Python checks each training collection's recorded numeric
+correspondence against original native Source digests before its export is
+authorized. Final validation has numeric_sha256=null only by its explicit kind;
+its original correspondence/schedule/final-binding/both-view/closure checks are
+still mandatory. Committed train numeric references cannot be null.
+
+Validate original NNheader/C1numeric semantics unchanged. Tree projection instead
+uses immutable raw frame/card/bank-prefix facts and the requested Tree encoder's
+window/recipe, which may differ from the parent NNwindow. Never reuse learned
+latents or silently substitute stored NNhistory for the chosen Tree aggregate.
+Keep original raw correspondence and Tree projection signatures distinct.
+
+Python encodes ONE actually selected candidate per explicit learner decision and
+labels it with that actor's natural terminal win/loss/draw return(+1/-1/0), not
+PPO value/advantage/return targets and not every enumerated candidate. Zero-frame
+games stay in the16/64-game qualification population while contributing zero
+rows. An interrupted/failed source invalidates the whole pending dataset.
+
+Private provisional rows/output are allowed before whole-dataset completion;
+they are neither published Dataset2 nor fitting authority. Retire current payload
+and spool before advancing, but retain ALL original snapshots and bounded
+membership/split/proof metadata. Finalization requires exact worklist exhaustion,
+counts and one full native/sealed original-file/inventory sweep before atomic
+owned publication. Never turn earlier rows into a smaller successful dataset.
+Use one joint memory/deadline allowance across controls/S2/numeric inspection/
+payload/Tree blocks, individually decoded arrays/shards<=64MiB, and separate
+explicit disk accounting. Admit the actual64-game validation population; do not
+inherit the16-game train cap. Rechecking current controls/collection per cycle
+plus a final full sweep avoids quadratic all-history rescans. Cancellation and
+unconfirmed cleanup retain reachable owners until native work is joined.
+
+Current engineering-profile results remain component evidence with qualified=False;
+public real-I/O, dataset qualification and real fitting continue to reject before
+activity under issue0005. C3b must supply concrete fixed-manifest2, safe
+training-schema3/provenance, fresh native fit and cost-accounting interfaces;
+this draft neither invents a future normative contract nor authorizes placeholder
+qualified success. Full HPO, strength comparison and final-test evaluation remain
+outside this task's implementation acceptance.

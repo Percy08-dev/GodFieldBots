@@ -39,10 +39,18 @@ class StructuredParticipantWorker(ParticipantWorker):
         integer(sampling_seed)
         if type(timeout) not in (int, float) or not math.isfinite(timeout) or timeout <= 0:
             raise ContractError("positive structured worker timeout required")
-        options = safe_options_v2(policy_options, action_contract=actions.action_contract, purpose="component", synthetic_capacity=False) if policy_options is not None else None
+        from gf_models.structured_tree_encoder import safe_tree_options_v2
+        parser = safe_tree_options_v2 if model_id == 'lightgbm' else safe_options_v2
+        options = parser(policy_options, action_contract=actions.action_contract, purpose="component", synthetic_capacity=False) if policy_options is not None else None
         self.caps, self.costs, residency, self.temporary_bytes = own_worker_settings(model_id, actions, options)
         if options is None:
             self.expected_policy = model_id + "-structured-v1"
+        elif model_id == 'lightgbm':
+            from gf_models.structured_tree_config import TreeDescriptor, configured_tree_v2
+            from gf_models.structured_tree_config import policy_label as tree_label
+            tree = configured_tree_v2({**options['model'], 'checkpoint': options['checkpoint'],
+                'inference': options['inference'], 'resources': options['resources']})
+            self.expected_policy = tree_label(tree, TreeDescriptor(**options['tree_descriptor']), options['expected_manifest_digest'])
         else:
             self.expected_policy = policy_label(model_config_v2(options["model"]), InferenceBindingV2(**options["inference"]),
                                                 options["expected_manifest_digest"], cuda_visible_devices=options["cuda_visible_devices"])
@@ -167,6 +175,8 @@ class StructuredParticipantWorker(ParticipantWorker):
                 raise ContractError("worker search report/config/cost/RNG binding mismatch")
             if self.model_id in ("mlp", "gru", "transformer") and (selected.logprob is None or selected.value is None):
                 raise ContractError("neural policy reply lacks finite logprob/value")
+            if self.model_id == "lightgbm" and (selected.logprob is not None or selected.value is not None):
+                raise ContractError("Tree2 policy has no logprob/value")
             if selected.policy_version != self.expected_policy:
                 raise ContractError("worker policy identity does not match owned execution binding")
             selected.validate(generated.table, frame)  # original parent frame, never worker-supplied reconstruction.

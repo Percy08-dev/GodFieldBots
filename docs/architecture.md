@@ -67,9 +67,14 @@ Capability/default-dispatch and real late-Source-mutation checks pass2cases,
 with77diagnostic regressions and a verified metadata-only activation rebuild.
 Root accepts C2b2; installed native is unchanged. These are FakeHTTP/component checks with
 qualified=False, not real Simulator or model-strength evidence.
-Qualified Source authority and deterministic LightGBM2
-integration remain pending;
-their bounded design is accepted in ADR0023. No real v2 experiment or full-plan
+The C3a deterministic Tree2 config/rows/toy schema3/CPU policy/worker/Journal5 and
+native RAW-role increment is also accepted after both final SOURCE reviews,
+47Tree2cases/351relevant regressions/112Rust tests(2ignored), Ruff/mypy114 and
+old12config proofs. Its fixed512decision CPU panel with an explicit synthetic
+500-tree model has p95=99.066ms; package/source and independent input/quantile
+audits pass. Component origin stays immutable and no trained/Source authority is
+implied. Dataset2, actor-only final validation, guarded trained fitting and
+qualified Source remain C3b work under ADR0023§28. No real v2 experiment or full-plan
 acceptance is claimed. Milestone scopes, overlapping historical counts and
 remaining performance/experiment checks are in the
 [verification ledger](verification/structured-encoders-and-search.md).

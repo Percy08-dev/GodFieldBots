@@ -330,6 +330,21 @@ def _header_identity(header: Json, manifest: Json, episode: Json, spec: Json, ac
     if header['model_version'] == '1':
         if binding.get('policy_options') is not None or header['policy'] != header['model_id'] + '-structured-v1':
             raise ContractError('original baseline execution identity mismatch')
+    elif header['model_id'] == 'lightgbm':
+        from gf_models.structured_tree_config import (
+            TreeDescriptor,
+            configured_tree_v2,
+            policy_label,
+        )
+        from gf_models.structured_tree_encoder import safe_tree_options_v2
+        options = safe_tree_options_v2(binding.get('policy_options'), action_contract=actions.action_contract,
+                                      purpose='component', synthetic_capacity=False)
+        tree = configured_tree_v2({**options['model'], 'checkpoint': options['checkpoint'],
+            'inference': options['inference'], 'resources': options['resources']})
+        if (tree.encoder.max_positions < actions.max_sequence_length or tree.inference.max_candidates < actions.max_candidates
+                or header['aggregate_window'] != tree.encoder.aggregate_window
+                or header['policy'] != policy_label(tree, TreeDescriptor(**options['tree_descriptor']), options['expected_manifest_digest'])):
+            raise ContractError('original Tree2 CPU execution/capacity/window mismatch')
     else:
         options = recorded_options_v2(binding.get('policy_options'), action_contract=actions.action_contract,
                                   purpose='component', synthetic_capacity=False, token_signature=header['token_signature'])
@@ -567,7 +582,7 @@ def component_episode_records(collection: ComponentCollection, *, learner_seats:
     if manifest['schema_version'] != 4 or learner_seats != manifest['ppo']['learner_seats']:
         raise ContractError('component PPO projection requires exact original learner roles')
     selected = tuple(item for item in collection.episodes if learner_seats[item.episode_id] == item.viewer)
-    if len(selected) != len(learner_seats) or any(item.model_version != '2' for item in selected):
+    if len(selected) != len(learner_seats) or any(item.model_version != '2' or item.model_id not in ('mlp','gru','transformer') for item in selected):
         raise ContractError('component PPO learner must be a neural model2 role')
     if any(selection.logprob is None or selection.value is None for item in selected for selection in item.records.selections):
         raise ContractError('component PPO rows require finite saved logprob/value')

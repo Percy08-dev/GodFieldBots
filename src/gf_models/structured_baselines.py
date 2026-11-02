@@ -91,6 +91,26 @@ def make_structured_policy(model_id: str, options: Json | None = None, action_co
         if options is not None:
             raise ContractError("structured baseline has no checkpoint binding")
         return StructuredBaseline(model_id, action_contract=action_contract, purpose=purpose, synthetic_capacity=synthetic_capacity)
+    if model_id == 'lightgbm' and options is not None:
+        from pathlib import Path
+
+        from gf_models.structured_tree_config import (
+            TreeDescriptor,
+            configured_tree_v2,
+        )
+        from gf_models.structured_tree_encoder import safe_tree_options_v2
+        from gf_models.structured_tree_policy import StructuredTreePolicy
+        safe = safe_tree_options_v2(options, action_contract=action_contract, purpose=purpose, synthetic_capacity=synthetic_capacity)
+        if type(action_config_hash) is not str or re.fullmatch(r'[0-9a-f]{64}', action_config_hash) is None:
+            raise ContractError('Tree2 own action configuration hash required')
+        tree_model = configured_tree_v2({**safe['model'], 'checkpoint': safe['checkpoint'],
+            'inference': safe['inference'], 'resources': safe['resources']})
+        policy = StructuredTreePolicy.from_artifact(Path(safe['checkpoint']), expected_digest=safe['expected_manifest_digest'],
+            model=tree_model, action_config_hash=action_config_hash, action_contract=action_contract,
+            purpose=purpose, synthetic_capacity=synthetic_capacity,
+            expected_tree_descriptor=TreeDescriptor(**safe['tree_descriptor']),
+            expected_feature_signature=safe['feature_signature'])
+        return policy
     if model_id not in ("mlp", "gru", "transformer") or options is None:
         raise ContractError("model2 neural checkpoint binding required; LightGBM2 is not implemented")
     binding = safe_options_v2(options, action_contract=action_contract, purpose=purpose, synthetic_capacity=synthetic_capacity)

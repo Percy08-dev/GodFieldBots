@@ -70,7 +70,7 @@ class StructuredJournal(ParticipantJournal):
         if type(action_config_hash) is not str or re.fullmatch(r"[0-9a-f]{64}", action_config_hash) is None:
             raise ContractError("journal5 action hash required")
         if model_version == "2":
-            if model_id not in ("mlp", "gru", "transformer"):
+            if model_id not in ("mlp", "gru", "transformer", "lightgbm"):
                 raise ContractError("journal5 model2 requires a supported neural kind")
         elif model_version != "1" or model_id not in ("random", "heuristic"):
             raise ContractError("journal5 baseline/model version mix")
@@ -100,7 +100,7 @@ class StructuredJournal(ParticipantJournal):
                        "run_id": run_id, "game_id": game_id, "action_config_hash": action_config_hash,
                        "generator_version": GENERATOR_V2, "bank_episode": bank_episode, "caps": caps,
                        "numeric_costs": numeric_costs, "model_id": model_id, "model_version": model_version,
-                       "generation_schema": 2 if model_version == "2" else None,
+                       "generation_schema": 2 if model_version == "2" and model_id != "lightgbm" else None,
                        "aggregate_window": aggregate_window, "token_signature": signature(aggregate_window),
                        "sampling_seed": sampling_seed, "use_action_options": True}
         self.write(self.header)
@@ -131,8 +131,10 @@ class StructuredJournal(ParticipantJournal):
             raise ContractError("journal5 delta count/frame interval mismatch")
         for start, end in zip(generated.table.offsets[:-1], generated.table.offsets[1:], strict=True):
             integer(end - start, 0, self.caps["max_positions"])
-        if self.header["model_version"] == "2" and (selection.logprob is None or selection.value is None):
+        if self.header["model_id"] in ("mlp", "gru", "transformer") and (selection.logprob is None or selection.value is None):
             raise ContractError("journal5 neural selection requires finite logprob/value")
+        if self.header["model_id"] == "lightgbm" and (selection.logprob is not None or selection.value is not None):
+            raise ContractError("journal5 Tree2 policy has no policy logprob/critic value")
         if self.lifecycle_ack is not None or self.pending:
             raise ContractError("journal5 decision after pending/lifecycle input")
         if frame.actor != self.viewer or frame.episode != self.bank.episode or delta.start != frame.interval_start:
@@ -328,9 +330,12 @@ def read_structured_journal(path: Path, *, deadline: float = float("inf"),
             raise ContractError("journal5 identity string required")
     caps = WorkerCaps(**closed(header["caps"], set(WorkerCaps.__dataclass_fields__)))
     NumericCosts(**closed(header["numeric_costs"], set(NumericCosts.__dataclass_fields__)))
-    if header["model_id"] not in ("random", "heuristic", "mlp", "gru", "transformer") or header["model_version"] not in ("1", "2"):
+    if header["model_id"] not in ("random", "heuristic", "mlp", "gru", "transformer", "lightgbm") or header["model_version"] not in ("1", "2"):
         raise ContractError("unknown journal5 policy model")
-    if header["model_version"] == "2":
+    if header["model_version"] == "2" and header["model_id"] == "lightgbm":
+        if header["generation_schema"] is not None:
+            raise ContractError("journal5 Tree2 is non-PPO and requires null generation schema")
+    elif header["model_version"] == "2":
         if type(header["generation_schema"]) is not int or header["generation_schema"] != 2 or header["model_id"] not in ("mlp", "gru", "transformer"):
             raise ContractError("journal5 neural generation schema must be integer2")
     elif header["generation_schema"] is not None or header["model_id"] not in ("random", "heuristic"):
@@ -378,7 +383,9 @@ def read_structured_journal(path: Path, *, deadline: float = float("inf"),
                 raise ContractError("journal5 compact table descriptor required")
             integer(row["table"].get("count"), 1, caps.max_candidates)
             selection = parse_selection(row["selection"])
-            if header["model_version"] == "2" and (selection.logprob is None or selection.value is None):
+            if header["model_id"] == "lightgbm" and (selection.logprob is not None or selection.value is not None):
+                raise ContractError("journal5 Tree2 policy has no policy logprob/critic value")
+            if header["model_id"] in ("mlp", "gru", "transformer") and (selection.logprob is None or selection.value is None):
                 raise ContractError("journal5 neural selection requires finite logprob/value")
             if index != len(decisions) or pending is not None or last_accepted is not None or terminal_transition is not None or lifecycle is not None or not delta_pending:
                 raise ContractError("journal5 decision ordering mismatch")

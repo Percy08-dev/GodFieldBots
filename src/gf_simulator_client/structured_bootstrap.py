@@ -38,8 +38,10 @@ def main() -> None:
         classification = input_binding(actions.action_contract, "component", False)
         check_input_binding({key: initial[key] for key in classification}, action_contract=actions.action_contract,
                             purpose="component", synthetic_capacity=False)
-        options = safe_options_v2(initial["policy_options"], action_contract=actions.action_contract, purpose="component", synthetic_capacity=False) if initial["policy_options"] is not None else None
-        if options is not None:
+        from gf_models.structured_tree_encoder import safe_tree_options_v2
+        parser = safe_tree_options_v2 if initial['model_id'] == 'lightgbm' else safe_options_v2
+        options = parser(initial["policy_options"], action_contract=actions.action_contract, purpose="component", synthetic_capacity=False) if initial["policy_options"] is not None else None
+        if options is not None and initial["model_id"] != "lightgbm":
             if options["inference"]["device"] == "cuda:0":
                 if options["cuda_visible_devices"] is None:
                     os.environ.pop("CUDA_VISIBLE_DEVICES", None)

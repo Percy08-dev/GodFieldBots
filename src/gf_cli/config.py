@@ -35,6 +35,7 @@ from gf_models.config import (
     validate_capacity,
 )
 from gf_models.structured_binding import ConfiguredNeuralModelV2, model_defaults_v2
+from gf_models.structured_tree_config import ConfiguredTreeModelV2
 
 
 @dataclass(frozen=True)
@@ -90,8 +91,8 @@ class ExperimentConfig:
     run: RunConfig | RunConfigV2 = field(default_factory=RunConfig)
     server: ServerConfig = field(default_factory=ServerConfig)
     actions: ActionConfig | ActionConfigV2 = field(default_factory=ActionConfig)
-    model: ModelConfig | MLPModelConfig | GRUModelConfig | TransformerModelConfig | ConfiguredNeuralModelV2 = field(default_factory=ModelConfig)
-    opponent: ModelConfig | MLPModelConfig | GRUModelConfig | TransformerModelConfig | ConfiguredNeuralModelV2 = field(default_factory=ModelConfig)
+    model: ModelConfig | MLPModelConfig | GRUModelConfig | TransformerModelConfig | ConfiguredNeuralModelV2 | ConfiguredTreeModelV2 = field(default_factory=ModelConfig)
+    opponent: ModelConfig | MLPModelConfig | GRUModelConfig | TransformerModelConfig | ConfiguredNeuralModelV2 | ConfiguredTreeModelV2 = field(default_factory=ModelConfig)
     evaluation: EvaluationConfig = field(default_factory=EvaluationConfig)
     training: TrainingConfig | PPOTrainingConfig = field(default_factory=TrainingConfig)
     preprocessing: PreparationConfig = field(default_factory=PreparationConfig)
@@ -160,7 +161,7 @@ def _validate_table(name: str, values: Json, *, context: Json | None = None) -> 
     defaults = asdict(cls())
     structured_model = name in ("model", "opponent") and values.get("version") == "2"
     if structured_model:
-        defaults = asdict(model_defaults_v2(values.get("model_id", "mlp")))
+        defaults = asdict(ConfiguredTreeModelV2() if values.get("model_id") == "lightgbm" else model_defaults_v2(values.get("model_id", "mlp")))
     elif name == "actions" and values.get("version") == "2":
         defaults = asdict(ActionConfigV2(action_contract=engineering_contract()))
     elif name == "run" and context.get("actions", {}).get("version") == "2":
@@ -262,7 +263,7 @@ def load_config(path: str | Path, overrides: Json | None = None) -> LoadedConfig
         base["run"] = asdict(RunConfigV2())
     for name in ("model", "opponent"):
         if data.get(name, {}).get("version") == "2":
-            base[name] = asdict(model_defaults_v2(data[name].get("model_id", "mlp")))
+            base[name] = asdict(ConfiguredTreeModelV2() if data[name].get("model_id") == "lightgbm" else model_defaults_v2(data[name].get("model_id", "mlp")))
             continue
         if data.get(name, {}).get("model_id") == "transformer":
             base[name] = asdict(TransformerModelConfig())
@@ -314,12 +315,12 @@ def load_config(path: str | Path, overrides: Json | None = None) -> LoadedConfig
         actions_v2 = action_config_v2(effective["actions"])
         if preprocessing.reader != "structured-v1":
             raise ContractError("actions2 requires explicit preprocessing.reader='structured-v1'")
-        if any(not isinstance(model, ConfiguredNeuralModelV2) and model.model_id not in ("random", "heuristic") for model in models.values()):
+        if any(not isinstance(model, (ConfiguredNeuralModelV2, ConfiguredTreeModelV2)) and model.model_id not in ("random", "heuristic") for model in models.values()):
             raise ContractError("actions2 cannot consume legacy neural/tree model artifacts")
-        if any(isinstance(model, ConfiguredNeuralModelV2) and actions_v2.max_candidates > model.inference.max_candidates for model in models.values()):
+        if any(isinstance(model, (ConfiguredNeuralModelV2, ConfiguredTreeModelV2)) and actions_v2.max_candidates > model.inference.max_candidates for model in models.values()):
             raise ContractError("action presentation limit exceeds configured model admission")
     else:
-        if preprocessing.reader == "structured-v1" or any(isinstance(model, ConfiguredNeuralModelV2) for model in models.values()):
+        if preprocessing.reader == "structured-v1" or any(isinstance(model, (ConfiguredNeuralModelV2, ConfiguredTreeModelV2)) for model in models.values()):
             raise ContractError("structured model/reader requires actions2")
         actions = effective["actions"]
         if actions["scorer"] != "public_heuristic_v1":

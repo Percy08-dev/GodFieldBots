@@ -101,7 +101,7 @@ class StructuredSimulatorEnvironment(SimulatorEnvironment):
             raise ContractError("structured schedule label differs from owned policy execution identity")
         bank = EventBank(viewer, str(uuid.uuid4()), worker.caps.max_episode_events)
         contexts[viewer] = bank
-        aggregate_window = 128 if binding.policy_options is None else binding.policy_options["model"]["event"]["aggregate_window"]
+        aggregate_window = (128 if binding.policy_options is None else binding.policy_options["model"]["encoder" if binding.model_id == "lightgbm" else "event"]["aggregate_window"])
         try:
             journals[viewer] = self.journal_factory(directory, spec.episode_id, viewer, label,
                 run_id=self.settings.run_id, game_id=game, action_config_hash=digest(asdict(self.settings.actions)),

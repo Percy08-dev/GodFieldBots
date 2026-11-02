@@ -8,6 +8,7 @@ from gf_common.preprocessing import PreparationConfig
 from gf_models.config import ModelConfig
 from gf_models.structured_baselines import make_structured_policy
 from gf_models.structured_binding import ConfiguredNeuralModelV2
+from gf_models.structured_tree_config import ConfiguredTreeModelV2
 from gf_simulator_client.environment import EnvironmentSettings
 from gf_simulator_client.structured_environment import StructuredSimulatorEnvironment
 from gf_simulator_client.structured_resources import ReservationLedger
@@ -19,6 +20,8 @@ def structured_bindings(model: object, opponent: object) -> tuple[dict[str, Runt
     registry = {}
     labels = []
     for config in (model, opponent):
+        if isinstance(config, ConfiguredTreeModelV2):
+            raise ContractError("formal Tree2 inference requires C3b trained provenance; toy components have no Source authority")
         if isinstance(config, ConfiguredNeuralModelV2):
             raise ContractError("formal model2 inference requires completed healthy Generation2 parent qualification; integration pending")
         if not isinstance(config, ModelConfig) or config.model_id not in ("random", "heuristic"):
