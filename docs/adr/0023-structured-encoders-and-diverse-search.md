@@ -2591,9 +2591,17 @@ never inferred from its flags. An arbitrary array/provenance dictionary cannot
 enter the private source-backed entry; it requires the concrete verified Dataset2
 owner and keeps it through final checks.
 request.input_files is the exact relative SHA map of inputs/manifest.json and
-ALL typed NPZ/JSON shard/sidecar files. The typed descriptor owns shape/dtype/
-shard/count declarations; its own hash occurs only in the request, never inside
-itself. Validate exact membership, row counts, feature/category layout and labels
+ALL typed NPZ/JSON shard/sidecar files. inputs/manifest.json is a NEW closed
+schema3/kind=structured-tree-fit-inputs envelope with exactly schema_version,kind,
+action_config_hash,feature_signature,label_recipe,input_binding,row_counts,data.
+data is the unchanged typed bundle descriptor1, which owns shape/dtype/shard/
+count declarations. Derive action_config_hash ONLY from the verified Dataset2
+neural_cohort.actions_sha256; child and models pairing cross-check the envelope's
+common fields with request/artifact before native work or binding. This supplies
+the own safe action hash without a new request field or parent Config/Source.
+The envelope's own hash occurs only in the request, never inside itself.
+This focused input-envelope extension has independent DESIGN READY.
+Validate exact membership, row counts, feature/category layout and labels
 before native fitting. fit_settings has exactly num_boost_round,
 early_stopping_rounds,learning_rate,min_data_in_leaf,num_threads, preserving the
 existing safe TrainingConfig knobs/defaults. num_leaves stays in architecture.
@@ -2617,6 +2625,36 @@ Request-bound consumed-input evidence is not Dataset2 Source authority.
 Status transitions running→complete|failed; timeout/cancel/
 cleanup/source failure cannot produce complete. All outputs before healthy
 completion remain diagnostic and unbindable.
+
+Final-publication rollback is scoped to the inode OWNED by this fit. Move child
+reap, Source/input/native/artifact checks before healthy commit where possible.
+Hold an O_RDWR FD to the exact completion object before atomic rename and through
+all remaining publication checks. On a late exception, FIRST invalidate that
+owned inode with a confirmed one-byte write/FD verification, honoring existing
+flush guarantees and the ORIGINAL reserved cleanup deadline, independently of an
+expired work deadline. Never restart/extend the total budget. Preserve the
+initiating exception; unconfirmed revocation retains the reachable fit owner/FD
+and reports completion revocation unconfirmed. After the FD is released, perform
+no further work-deadline check that can turn finalized success into fit failure.
+
+Never overwrite/unlink a substituted foreign pathname. Post-publication failure
+uses FD invalidation alone; do not attempt a readable failed-record rewrite
+without exclusive namespace ownership, since stat-then-replace is insufficient.
+A malformed owned completion is unbindable. A self-consistent independently
+copied/replaced bundle may still pass metadata inspection; this mechanism cannot
+revoke foreign copies or authenticate coherent rewrites. Namespace substitution
+is a fit failure, preserves the foreign entry and is reported separately. This
+is not evidence that the failing fit completed. Keep the existing local
+ownership/locking boundary rather than adding markers, inode-bound formats or
+quarantine. Root accepts advisor A and focused architecture DESIGN READY for
+this precise owned-publication guarantee. Test late timeout/cancel/postcheck
+failure with ordinary failed publication unavailable, unconfirmed invalidation
+ownership, foreign identical-copy substitution, and normal success/exact copies.
+Exact-bundle copy applies the SAME guarantee to its OWN target completion inode,
+using a small stdlib models-layer implementation with no models→training import.
+Preserve source bytes/origin, the caller's original deadline/cleanup allowance,
+and foreign target entries. Late copy checks cannot leave the owned target
+bindable after reported failure; no new budget, marker or schema is introduced.
 
 The owned training directory contains request.json, training.json, inputs/ and
 artifact/{inference.json,model.txt}. Before a trained binding is created, inspect
