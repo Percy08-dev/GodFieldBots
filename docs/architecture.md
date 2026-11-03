@@ -13,8 +13,11 @@ questions; the pure rule-bound generator now passes both reviews and390affected
 regressions, independent exact old-generator/small-space proofs, and an installed
 optional-free wheel smoke. Config/token identities stay unchanged; the new
 generator report/wire binds its explicit supplemental rule signature.
-Real acceptance now also needs the demonstrated learned-Discard runtime mismatch
-in [issue0008](issues/0008-learned-miracle-discard-runtime.md) corrected.
+The learned-Discard runtime mismatch in
+[issue0008](issues/0008-learned-miracle-discard-runtime.md) is verified corrected
+in Simulator91d5926 on2026-11-04. Bots still needs explicit new-revision/semantic
+adoption and the remaining runtime/model/worker/native/Source integration;
+verification of the correction alone lifts none of those gates.
 Exact conditions are in the [new ledger](verification/card-instance-v2-adoption.md).
 Legacy and ADR0023 engineering identities remain unchanged; historical evidence
 below does not qualify the new contract.

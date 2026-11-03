@@ -261,6 +261,12 @@ questions are gates for their dependent stages, not invented public rules.
   and optional-free installed smoke. Rule signature is
   `1480f832b98c0b78b894a823681848b1dc11093b3a6a2aa462dd2069ed579a36`.
   This does not constitute full migration or corrected-runtime acceptance.
+- Later server-fix verification (2026-11-04): issue0008's exact failing case now
+  passes on both corrected debug/release binaries at91d5926. Independent runtime
+  audit is READY and focused server tests pass. This resolves the external
+  runtime defect, while Bots'07e8185pin and all incomplete integration gates
+  remain unchanged. Explicit revised contract/signature compatibility adoption
+  is the next prerequisite; old rejected records remain historical/incompatible.
 
 ## 9. Stage2a: shared layout, original frames and deterministic tokens (accepted)
 

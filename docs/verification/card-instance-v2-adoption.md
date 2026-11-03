@@ -335,4 +335,65 @@ matches all125package source files exactly. A separately installed mandatory-onl
 environment passes dependency checking, starts/reaps both baseline workers, and
 reproduces the rule-bound531-row component result with no Torch/LightGBM/PyArrow/
 native package installed. Receipts/harnesses are in the owner assessment directory.
-Root accepts pure stage2b only; real acceptance remains blocked by issue0008.
+Root accepts pure stage2b only; at that milestone real acceptance was blocked by
+issue0008. The subsequent correction verification below resolves that defect.
+
+## Simulator correction verification — 2026-11-04
+
+User supplied Simulator commit
+`91d5926a7572db327eaea3751e7c24f428120996` (parent07e8185). Root verifies the
+existing corrected binaries and the formerly failing case without changing Bots
+production code, Config pins, input signatures or eligibility gates.
+
+PASS: both actual debug/release fixed-seed HTTP runs accept learned Mudflow
+Discard at revision2→3. The harness is byte-identical to the earlier conformance
+harness; all3actions/before Observations match the previous case, with fresh
+command UUIDs and output directories. Selected own ref is removed, the retained
+list/state/order is exact, resources are unchanged, no draw occurs, and both
+processes exit0/stdin_eof without log error. Independent correctness audit is
+READY. Original FAIL/422 evidence remains unchanged.
+
+PASS: prebuilt focused test binaries, with no Simulator rebuild or source writes:
+
+- debug Engine GF-DISC-003:9tests, including30miracles×2states×2operations=120cases
+  atMP0; learned-only/empty/full ActionOptions, order/state retention, atomic
+  rejection, Sacrifice refill/Devil slots and Snapshot continuation;
+- release Engine: the same9tests;
+- debug and release HTTP:1test each for exact retry and spent-ref rejection at
+  the correct actor/revision;
+- debug canonical-v2:1test for strict old-rejection incompatibility in Gameplay
+  Replay, Episode Reconstruction and Dataset, plus corrected accepted records.
+
+All5commands exit0 (11debug+10release test executions; do not count the repeated
+matrix as240distinct rule cases). No current release canonical-v2 test binary was
+available. The live witness covers normal Discard; Sacrifice evidence is from
+the focused tests. Flash status and general utility-target tests were not rerun.
+No full Simulator/Bots suite or learning acceptance is claimed in this check.
+
+The13-file normative inventory recomputes to
+`131890dfe579bc6951f5189e460971d33658339106e219a2e00b1a289a0534d0`.
+Catalog/schema/wire versions and catalog SHA remain unchanged. The nine-file
+change inventory recomputes to
+`e34b7160f956b6510243077d418a0a96f34f6e271077021641b2fd50a9870346`, matching the
+Simulator investigation record and all committed changed content. Actual debug
+SHA `b3670dac3eb099ba4363058f8d92a44976ebaaf1dfdc187df5a9fe333ec0e4a1` and release
+SHA `76aff19c2f720a572bfe422d9b1e089a1467f253038cda66de3d8c35180d0f7d` match the
+handoff artifact receipt. That record's uncommitted/base07e8185 wording is its
+historical handoff state; the reviewed bytes are now committed as91d5926. This
+establishes content/receipt correspondence and actual behavior, not a fresh
+reproducible compiler build.
+
+Evidence root: `runs/assessments/card-instance-server-fix-20261104`.
+`verification.json` SHA:
+`0e3f0c6ffc38e414d0a1906b718ceae4783c5bd443a156dd51c719f4297b73a0`.
+It includes5test-executable hashes, log hashes, before/after identity checks and
+both fresh runtime receipts. The unchanged same-wire Bots validator was used
+only for diagnostics, explicitly accompanied by the actual new revision/hash;
+these are not new-contract policy Sources.
+
+Root resolves issue0008's runtime defect. Before new collection, explicitly adopt
+91d5926, its normative inventory and semantic compatibility policy. Spec06§31.1
+requires old incompatible rejected Attempts to fail strict revalidation; rebuilt
+ActionOptions can also differ, so full old Replay JSON byte identity is not
+promised. Preserve old data/pins/signatures until that adoption is implemented.
+Worker/model/native/Source integration and planned full acceptance remain pending.

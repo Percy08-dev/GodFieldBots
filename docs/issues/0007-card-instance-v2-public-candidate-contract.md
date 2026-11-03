@@ -4,8 +4,9 @@
   Rule signature is
   `1480f832b98c0b78b894a823681848b1dc11093b3a6a2aa462dd2069ed579a36`.
   The original ambiguity below is historical.
-  A separately reproduced runtime mismatch now blocks real-game acceptance in
-  [issue0008](0008-learned-miracle-discard-runtime.md). No Simulator changes here.
+  The separately reproduced runtime mismatch in
+  [issue0008](0008-learned-miracle-discard-runtime.md) is verified corrected in
+  Simulator91d5926; explicit Bots adoption and remaining integration are pending.
 - Simulator pin: `07e8185f98c503aa41200a80ea554b4fd21088ad`.
 - Normative inventory SHA:
   `8381079eae8a68378d8419c7f7245c62358833f0dd9045667021e112a1e9bad5`.
@@ -26,7 +27,8 @@ ambiguity is superseded by these explicit owner instructions. Keep the actual
 unchanged revision/normative hashes, record the supplemental owner authority
 separately, and bind its reviewed rule signature in new generator/Source/artifact
 metadata. Do not claim the normative text changed or upgrade old records.
-The observed learned-Discard mismatch still requires separate Simulator work.
+The observed learned-Discard mismatch was separately corrected and verified;
+its new revision and compatibility policy must still be adopted explicitly.
 
 ## Historical public-contract findings
 
