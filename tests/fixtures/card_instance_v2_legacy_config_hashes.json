@@ -1,0 +1,21 @@
+{
+  "base_revision": "8283db913bb8afe822cc364951397f957226e1a8",
+  "default_sha256": "bdb2b3663397693baf9bc059e9831c17ea91cbc85a3184e30d3d2f1aa6f0fa33",
+  "experiments": {
+    "configs/experiments/baseline.toml": "71e189b3dca2cbfa16560655354950a4cf3250c40202430909467b5281ddb70b",
+    "configs/experiments/gru-ppo-cpu.toml": "9c7fee094e3ea58aabe9d03910845950e9cb93516aa43f96aa12644f4901a830",
+    "configs/experiments/gru-ppo.toml": "3cae8d42b7f983e215634ad9214f2693dd00bfbce9d2273bd1d1ac5c17ab80a8",
+    "configs/experiments/lightgbm-fixed-history.toml": "aaec03ce9e1d9905f85f49198089b1ec2a7cf968036365cbc68199fc3826fa2a",
+    "configs/experiments/lightgbm-fixed-observation.toml": "467c973d1b8f4132409639fccd2d68b4e9ce51258ca953da6ef2bc5a9d52c5a6",
+    "configs/experiments/lightgbm.toml": "397d5a92dada69d867a7b1841055948b996cbfc61da306c13bb8ab76a1becd8a",
+    "configs/experiments/pilot.toml": "1fb48a5493f0d183e326c7184018cbcb0a51cccd1e718ba9a61bf75131f32385",
+    "configs/experiments/ppo-cpu.toml": "07207648d5936705e1f0c7c8efd60ef45d0494c2ad7c69c60779a88457f676ef",
+    "configs/experiments/ppo.toml": "73a4d5326378043cf0f7421fbe06674bd7f14c8503d6f9eae39be15697ca8456",
+    "configs/experiments/smoke.toml": "5834ff038d225c98c2a0ac6ef1e219a52122e61c7fdd59b7adde13d3ec4b9eb9",
+    "configs/experiments/transformer-ppo-cpu.toml": "0e32e428cd91bb3b6c04dd90f1e7f92fdef8245ae4c39c91bcd1d1fbaa73265f",
+    "configs/experiments/transformer-ppo.toml": "60df8fdb3eba6c266a99b194b7f8a4a18e2e919b6cf9b56e0f9393bf0acefc34"
+  },
+  "original_parent": "/home/percy/develop",
+  "original_root": "/home/percy/develop/GodFieldBots",
+  "source": "runs/assessments/card-instance-v2-20261103/before-compatibility.json"
+}

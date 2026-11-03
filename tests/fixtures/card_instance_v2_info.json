@@ -1,0 +1,21 @@
+{
+  "action_options_schema_version": "2",
+  "action_schema_version": 2,
+  "api_version": "v2",
+  "card_catalog": {
+    "catalog_schema_version": 2,
+    "catalog_version": "public-ja-v3",
+    "content_sha256": "f51a3c73feb8b3f01837e65768aafb5a3aa805a33483308130244b33b16a8ad6",
+    "definition_count": 296,
+    "locale": "ja",
+    "rule_set_version": "true-match-1v1-v2"
+  },
+  "card_ref_scheme": "aes256-card-ref-v1",
+  "name": "gf-simulator",
+  "observation_schema_version": "2",
+  "public_event_schema_version": "2",
+  "random_algorithm": "xoshiro256pp",
+  "random_algorithm_version": "1",
+  "rule_set_version": "true-match-1v1-v2",
+  "version": "0.1.0"
+}

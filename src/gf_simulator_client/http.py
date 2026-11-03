@@ -10,6 +10,8 @@ from typing import Any
 
 import httpx
 
+from gf_common import card_instance_validation as card_v2
+from gf_common.card_instance import CardInstanceContract, parse_card_instance_contract
 from gf_common.domain import (
     CATALOG_META,
     RULE_SET,
@@ -90,9 +92,17 @@ class AttestedClient:
     def __init__(self, base_url: str, *, expected_fingerprint: str, fixed_seed_experiment: bool,
                  expected_effective: Json, startup_info: Json | None = None,
                  request_seconds: float = 10, retries: int = 2,
-                 transport: httpx.AsyncBaseTransport | None = None, deadline: float = float("inf")) -> None:
+                 transport: httpx.AsyncBaseTransport | None = None, deadline: float = float("inf"),
+                 contract: CardInstanceContract | None = None) -> None:
         if not fixed_seed_experiment or not expected_fingerprint or type(retries) is not int or not 0 <= retries <= 2:
             raise AttestationError("explicit fixed-seed experiment and bounded retries required")
+        if contract is not None:
+            if type(contract) is not CardInstanceContract:
+                raise ContractError("explicit pinned card-instance contract required")
+            from dataclasses import asdict
+            parse_card_instance_contract(asdict(contract))
+        self.contract = contract
+        self._gameplay_api = "v1" if contract is None else "v2"
         self.http = httpx.AsyncClient(base_url=base_url, timeout=request_seconds, transport=transport,
                                      follow_redirects=False, trust_env=False)
         self.expected_fingerprint = expected_fingerprint
@@ -165,6 +175,8 @@ class AttestedClient:
             except asyncio.CancelledError:
                 self.needs_reattest = True
                 raise
+            if self.poisoned:
+                raise AttestationError("connection was poisoned during request")
             if response.status_code < 200 or response.status_code >= 300:
                 try:
                     detail = response.json()
@@ -180,6 +192,9 @@ class AttestedClient:
         raise AssertionError("unreachable")
 
     async def public_catalog(self) -> Json:
+        if self.contract is not None:
+            card_v2.public_info(await self._request("GET", "/v2/info"))
+            return card_v2.catalog(await self._request("GET", f"/v2/card-catalogs/{self.contract.catalog_version}"))
         info = await self._request("GET", "/v1/info")
         if info.get("api_version") != "v1" or info.get("rule_set_version") != RULE_SET or info.get("card_catalog") != CATALOG_META:
             raise UnsupportedContract("server/catalog version mismatch")
@@ -187,10 +202,13 @@ class AttestedClient:
 
     async def create(self) -> Json:
         await self.attest()
-        created = await self._request("POST", "/v1/games", {"rule_set_version": RULE_SET,
+        if self.contract is not None:
+            await self.public_catalog()  # Version/catalog authority is checked before allocating a game.
+        rule_set = RULE_SET if self.contract is None else self.contract.rule_set_version
+        created = await self._request("POST", f"/{self._gameplay_api}/games", {"rule_set_version": rule_set,
                          "random_algorithm": "xoshiro256pp", "random_algorithm_version": "1"})
         closed(created, {"game_id", "status", "required_players", "joined_players", "state_revision", "rule_set_version", "random_algorithm", "random_algorithm_version"})
-        if created["status"] != "waiting_for_players" or created["required_players"] != 2 or created["joined_players"] != 0 or created["state_revision"] is not None or created["rule_set_version"] != RULE_SET or created["random_algorithm"] != "xoshiro256pp" or created["random_algorithm_version"] != "1":
+        if created["status"] != "waiting_for_players" or type(created["required_players"]) is not int or created["required_players"] != 2 or type(created["joined_players"]) is not int or created["joined_players"] != 0 or created["state_revision"] is not None or created["rule_set_version"] != rule_set or created["random_algorithm"] != "xoshiro256pp" or created["random_algorithm_version"] != "1":
             raise ContractError("unexpected create response")
         if not isinstance(created["game_id"], str) or not re.fullmatch(r"[0-9A-HJKMNP-TV-Z]{26}", created["game_id"]):
             raise ContractError("invalid game ID")
@@ -199,7 +217,11 @@ class AttestedClient:
         return created
 
     async def join(self, game: str, command_id: str) -> Json:
-        value = await self._request("POST", f"/v1/games/{game}/players", {"command_id": command_id}, retry=True)
+        if self.contract is not None:
+            card_v2.command_id(command_id)
+        value = await self._request("POST", f"/{self._gameplay_api}/games/{game}/players", {"command_id": command_id}, retry=True)
+        if self.contract is not None:
+            return card_v2.join_response(value, game)
         closed(value, {"game_id", "player_id", "status", "joined_players", "required_players", "state_revision"})
         integer(value["player_id"], 1, 2)
         if value["game_id"] != game or value["required_players"] != 2:
@@ -207,25 +229,35 @@ class AttestedClient:
         return value
 
     async def observe(self, game: str, viewer: int) -> Json:
-        return observation(await self._request("GET", f"/v1/games/{game}/observations/{viewer}"), viewer)
+        if self.contract is not None:
+            integer(viewer, 1, 2)
+        validator = observation if self.contract is None else card_v2.observation
+        return validator(await self._request("GET", f"/{self._gameplay_api}/games/{game}/observations/{viewer}"), viewer)
 
     async def actor_options(self, game: str, viewer: int, obs: Json) -> Json:
         integer(viewer, 1, 2)
-        obs = observation(obs, viewer)
+        validator = observation if self.contract is None else card_v2.observation
+        obs = validator(obs, viewer)
         if not obs["actionable"] or obs["current_player"] != viewer:
             raise ContractError("ActionOptions request requires current actor")
-        value = await self._request("GET", f"/v1/games/{game}/action-options/{viewer}")
-        return actor_action_options(value, obs, raw=True)
+        value = await self._request("GET", f"/{self._gameplay_api}/games/{game}/action-options/{viewer}")
+        options_validator = actor_action_options if self.contract is None else card_v2.actor_action_options
+        return options_validator(value, obs, raw=True)
 
     async def events(self, game: str, viewer: int, after: str | None) -> tuple[list[Json], str | None]:
         from urllib.parse import urlencode
+        if self.contract is not None:
+            integer(viewer, 1, 2)
         accumulated: list[Json] = []
         cursor = after
         while True:
             query = urlencode({"limit": 1024, **({"after": cursor} if cursor is not None else {})})
-            value = await self._request("GET", f"/v1/games/{game}/events/{viewer}?{query}")
-            closed(value, {"events", "next_cursor", "has_more"})
-            validate_events(value["events"])
+            value = await self._request("GET", f"/{self._gameplay_api}/games/{game}/events/{viewer}?{query}")
+            if self.contract is None:
+                closed(value, {"events", "next_cursor", "has_more"})
+                validate_events(value["events"])
+            else:
+                card_v2.event_feed(value)
             if type(value["has_more"]) is not bool or value["next_cursor"] is not None and not isinstance(value["next_cursor"], str):
                 raise ContractError("invalid event pagination")
             accumulated.extend(value["events"])
@@ -237,7 +269,13 @@ class AttestedClient:
                 return accumulated, cursor
 
     async def act(self, game: str, viewer: int, payload: Json) -> Json:
-        value = await self._request("POST", f"/v1/games/{game}/players/{viewer}/actions", payload, retry=True)
+        if self.contract is not None:
+            integer(viewer, 1, 2)
+            payload = card_v2.action_command(payload)
+        value = await self._request("POST", f"/{self._gameplay_api}/games/{game}/players/{viewer}/actions", payload, retry=True)
+        if self.contract is not None:
+            card_v2.act_response(value, payload, viewer)
+            return {key: clone(value[key]) for key in ("command_id", "previous_revision", "state_revision", "status", "result")}
         closed(value, {"command_id", "previous_revision", "state_revision", "status", "events", "result", "next_observation", "action_options"})
         if value["command_id"] != payload["command_id"] or value["previous_revision"] != payload["expected_revision"]:
             raise ContractError("invalid action acknowledgement identity")
@@ -249,9 +287,14 @@ class AttestedClient:
         return {key: clone(value[key]) for key in ("command_id", "previous_revision", "state_revision", "status", "result")}
 
     async def replay(self, game: str, viewer: int) -> Json:
-        value = await self._request("GET", f"/v1/games/{game}/replay/{viewer}")
-        replay_closure(value, game, viewer)
+        if self.contract is not None:
+            integer(viewer, 1, 2)
+        value = await self._request("GET", f"/{self._gameplay_api}/games/{game}/replay/{viewer}")
+        if self.contract is None:
+            replay_closure(value, game, viewer)
+        else:
+            card_v2.replay(value, game, viewer)
         return value
 
     async def delete(self, game: str) -> None:
-        await self._request("DELETE", f"/v1/games/{game}")
+        await self._request("DELETE", f"/{self._gameplay_api}/games/{game}")

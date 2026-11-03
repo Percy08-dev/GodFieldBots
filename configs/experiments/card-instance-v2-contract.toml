@@ -1,0 +1,21 @@
+# Stage1 validates configuration only. Collection opens after worker/journal adoption.
+schema_version = 1
+kind = "experiment"
+
+[references]
+actions = "../actions/card-instance-v2.toml"
+model = "../models/heuristic.toml"
+opponent = "../models/random.toml"
+
+[run]
+name = "card-instance-v2-contract"
+output_dir = "../../runs/card-instance-v2"
+sampling_seeds = [17]
+
+[server]
+gameplay_api = "v2"
+simulator_revision = "07e8185f98c503aa41200a80ea554b4fd21088ad"
+source_dir = "../../../GodFieldSimurator"
+binary = "../../../GodFieldSimurator/target/debug/gf-test-server"
+config = "../test-server.toml"
+fixed_seed_experiment = true

@@ -15,6 +15,7 @@ from typing import Any
 
 from gf_cli.config import LoadedConfig, load_config
 from gf_common.action_contract import require_qualified_contract
+from gf_common.card_instance import ActionConfigV3
 from gf_common.domain import (
     CATALOG_META,
     END_PROJECTION_VERSION,
@@ -221,6 +222,7 @@ async def _join_owned_groups(tasks: list[asyncio.Task[Any]], wall_deadline: floa
 async def run_experiment(loaded: LoadedConfig, command: str, *, collection: CollectionPlan | None = None,
                          ledger: Any = None) -> tuple[Path, Json]:
     config = loaded.config
+    _require_implemented_pipeline(config.actions)
     if isinstance(config.actions, ActionConfigV2):
         require_qualified_contract(config.actions.action_contract)
     return await _run_experiment(loaded, command, collection=collection, ledger=ledger)
@@ -231,6 +233,7 @@ async def _run_experiment(loaded: LoadedConfig, command: str, *, collection: Col
                           _structured_source_ops: Any = None, _structured_validation_context: Any = None) -> tuple[Path, Json]:
     """Private composition body; the normal environment factory remains guarded."""
     config = loaded.config
+    actions = _require_implemented_pipeline(config.actions)
     started = collection.started_monotonic if collection is not None and collection.started_monotonic is not None else time.monotonic()
     from gf_cli.bindings import bindings, native_preflight
     wall_deadline = collection.wall_deadline if collection is not None else started + min(config.run.wall_seconds, config.run.execution_seconds + config.run.finalization_seconds)
@@ -369,7 +372,7 @@ async def _run_experiment(loaded: LoadedConfig, command: str, *, collection: Col
         settings = EnvironmentSettings(
             policy_bindings=registry,
             binary=config.server.binary, server_config=config.server.config, output_dir=directory, run_id=run_id,
-            actions=config.actions, fixed_seed_experiment=config.server.fixed_seed_experiment,
+            actions=actions, fixed_seed_experiment=config.server.fixed_seed_experiment,
             expected_fingerprint=config.server.expected_fingerprint, external_url=config.server.external_url,
             startup_seconds=config.server.startup_seconds, request_seconds=config.server.request_seconds,
             worker_seconds=config.server.worker_seconds, shutdown_seconds=config.server.shutdown_seconds,
@@ -486,6 +489,12 @@ async def collect_ppo(loaded: LoadedConfig, plan: CollectionPlan) -> FinalizedCo
     return FinalizedCollection(directory, summary)
 
 
+def _require_implemented_pipeline(actions: ActionConfig | ActionConfigV2 | ActionConfigV3) -> ActionConfig | ActionConfigV2:
+    if isinstance(actions, ActionConfigV3):
+        raise ContractError("actions3 collection, workers, learning and persistence are not implemented yet; Config validation and direct v2 HTTP only")
+    return actions
+
+
 def main(argv: list[str] | None = None) -> int:
     command_started = time.monotonic()
     parser = argparse.ArgumentParser(prog="gf-bots", description="Public-information GodField baselines")
@@ -567,6 +576,7 @@ def main(argv: list[str] | None = None) -> int:
             print(canonical({"valid": True, "config_sha256": loaded.sha256, "effective_config": loaded.effective,
                              "inputs": loaded.inputs}))
             return 0
+        _require_implemented_pipeline(loaded.config.actions)
         if isinstance(loaded.config.actions, ActionConfigV2):
             require_qualified_contract(loaded.config.actions.action_contract)
         if args.command == "validate-policy":

@@ -1,0 +1,66 @@
+{
+  "action_options": {
+    "action_options_schema_version": "2",
+    "actor": 1,
+    "buy_cards": [],
+    "can_allow": false,
+    "can_discard": true,
+    "can_pray": false,
+    "can_sacrifice": false,
+    "candidate_groups": {
+      "miracle:weapon": [
+        {
+          "card_ref": "c1_3968ba525ed87b0fe20e6ae8f3b35963",
+          "definition_id": "mudflow"
+        }
+      ],
+      "utility": [
+        {
+          "card_ref": "c1_874cbe9545f4e014448d226767c49af8",
+          "definition_id": "smile-shell"
+        }
+      ],
+      "weapon": [
+        {
+          "card_ref": "c1_3901202ad394ea010efcf58bc1b5b030",
+          "definition_id": "bouncing-sword"
+        },
+        {
+          "card_ref": "c1_3968ba525ed87b0fe20e6ae8f3b35963",
+          "definition_id": "mudflow"
+        }
+      ]
+    },
+    "card_ref_scheme": "aes256-card-ref-v1",
+    "exchange_cards": [],
+    "phenomenon_cards": [],
+    "required_choice": "turn_action",
+    "rule_set_version": "true-match-1v1-v2",
+    "sell_cards": [
+      {
+        "card_ref": "c1_497ff56b2fda829d99d27e6bc5798da8",
+        "definition_id": "sell"
+      }
+    ],
+    "state_revision": 0,
+    "usable_cards": [
+      {
+        "card_ref": "c1_874cbe9545f4e014448d226767c49af8",
+        "definition_id": "smile-shell"
+      },
+      {
+        "card_ref": "c1_3901202ad394ea010efcf58bc1b5b030",
+        "definition_id": "bouncing-sword"
+      },
+      {
+        "card_ref": "c1_3968ba525ed87b0fe20e6ae8f3b35963",
+        "definition_id": "mudflow"
+      }
+    ],
+    "valid_targets": [
+      1,
+      2
+    ]
+  },
+  "state_revision": 0
+}

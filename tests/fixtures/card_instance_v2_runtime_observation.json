@@ -1,0 +1,272 @@
+{
+  "action_schema_version": 2,
+  "actionable": true,
+  "active_player": 1,
+  "card_ref_scheme": "aes256-card-ref-v1",
+  "current_player": 1,
+  "end_times": false,
+  "first_player": 1,
+  "observation_schema_version": "2",
+  "opponent": {
+    "ascended": false,
+    "hp": 40,
+    "learned_miracles": [],
+    "money": 20,
+    "mp": 10,
+    "player_id": 2,
+    "status": {
+      "dark_cloud": false,
+      "disease": null,
+      "dream": false,
+      "flash": false,
+      "fog": false
+    }
+  },
+  "own": {
+    "ascended": false,
+    "cards": [
+      {
+        "card_ref": "c1_874cbe9545f4e014448d226767c49af8",
+        "definition_id": "smile-shell",
+        "kind": "artifact"
+      },
+      {
+        "card_ref": "c1_c1f5d33c04c4ae20eaa6f20f1d6be926",
+        "definition_id": "moonlight-helm",
+        "kind": "artifact"
+      },
+      {
+        "card_ref": "c1_497ff56b2fda829d99d27e6bc5798da8",
+        "definition_id": "sell",
+        "kind": "artifact"
+      },
+      {
+        "card_ref": "c1_b31b6712e2abe289ee6cf9a2555668ec",
+        "definition_id": "steel-armor",
+        "kind": "artifact"
+      },
+      {
+        "card_ref": "c1_56ca53785201d2af31525cf192ba385d",
+        "definition_id": "energy-helm",
+        "kind": "artifact"
+      },
+      {
+        "card_ref": "c1_6050023a34e8c7160af245cd635de456",
+        "definition_id": "glittering-dress",
+        "kind": "artifact"
+      },
+      {
+        "card_ref": "c1_3901202ad394ea010efcf58bc1b5b030",
+        "definition_id": "bouncing-sword",
+        "kind": "artifact"
+      },
+      {
+        "card_ref": "c1_addfd3b5fcaa36b565d84f68958dc1e1",
+        "definition_id": "flame-mail",
+        "kind": "artifact"
+      },
+      {
+        "card_ref": "c1_3968ba525ed87b0fe20e6ae8f3b35963",
+        "definition_id": "mudflow",
+        "kind": "miracle",
+        "state": "unused"
+      }
+    ],
+    "guardian": null,
+    "hp": 40,
+    "money": 20,
+    "mp": 10,
+    "player_id": 1,
+    "status": {
+      "dark_cloud": false,
+      "disease": null,
+      "dream": false,
+      "flash": false,
+      "fog": false
+    }
+  },
+  "phase": "awaiting_action",
+  "required_choice": "turn_action",
+  "result": null,
+  "rule_set_version": "true-match-1v1-v2",
+  "state_revision": 0,
+  "turn": 1,
+  "turns_until_end_of_world": 149,
+  "typed_action_schema": [
+    {
+      "additional_fields": false,
+      "optional_fields": {},
+      "required_fields": {},
+      "type": "pray"
+    },
+    {
+      "additional_fields": false,
+      "optional_fields": {},
+      "required_fields": {
+        "ordered_card_refs": {
+          "items": {
+            "pattern": "^c1_[0-9a-f]{32}$",
+            "sources": [
+              "own.cards[].card_ref"
+            ],
+            "type": "string"
+          },
+          "ordered": true,
+          "type": "array",
+          "unique": true
+        },
+        "target": {
+          "enum": [
+            1,
+            2
+          ],
+          "sources": [
+            "own.player_id",
+            "opponent.player_id"
+          ],
+          "type": "integer"
+        }
+      },
+      "type": "play_sequence"
+    },
+    {
+      "additional_fields": false,
+      "optional_fields": {},
+      "required_fields": {
+        "card_refs": {
+          "items": {
+            "pattern": "^c1_[0-9a-f]{32}$",
+            "sources": [
+              "own.cards[].card_ref"
+            ],
+            "type": "string"
+          },
+          "ordered": true,
+          "type": "array",
+          "unique": true
+        }
+      },
+      "type": "discard"
+    },
+    {
+      "additional_fields": false,
+      "optional_fields": {},
+      "required_fields": {
+        "card_refs": {
+          "items": {
+            "pattern": "^c1_[0-9a-f]{32}$",
+            "sources": [
+              "own.cards[].card_ref"
+            ],
+            "type": "string"
+          },
+          "ordered": true,
+          "type": "array",
+          "unique": true
+        }
+      },
+      "type": "sacrifice"
+    },
+    {
+      "additional_fields": false,
+      "optional_fields": {},
+      "required_fields": {
+        "card_ref": {
+          "pattern": "^c1_[0-9a-f]{32}$",
+          "sources": [
+            "own.cards[].card_ref"
+          ],
+          "type": "string"
+        },
+        "hp": {
+          "maximum": 2147483647,
+          "minimum": -2147483648,
+          "type": "integer"
+        },
+        "money": {
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "mp": {
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "exchange"
+    },
+    {
+      "additional_fields": false,
+      "optional_fields": {},
+      "required_fields": {
+        "card_ref": {
+          "pattern": "^c1_[0-9a-f]{32}$",
+          "sources": [
+            "own.cards[].card_ref"
+          ],
+          "type": "string"
+        },
+        "sold_card_ref": {
+          "pattern": "^c1_[0-9a-f]{32}$",
+          "sources": [
+            "own.cards[].card_ref"
+          ],
+          "type": "string"
+        },
+        "target": {
+          "enum": [
+            1,
+            2
+          ],
+          "sources": [
+            "own.player_id",
+            "opponent.player_id"
+          ],
+          "type": "integer"
+        }
+      },
+      "type": "sell"
+    },
+    {
+      "additional_fields": false,
+      "optional_fields": {},
+      "required_fields": {
+        "card_ref": {
+          "pattern": "^c1_[0-9a-f]{32}$",
+          "sources": [
+            "own.cards[].card_ref"
+          ],
+          "type": "string"
+        },
+        "target": {
+          "enum": [
+            1,
+            2
+          ],
+          "sources": [
+            "own.player_id",
+            "opponent.player_id"
+          ],
+          "type": "integer"
+        }
+      },
+      "type": "buy"
+    },
+    {
+      "additional_fields": false,
+      "optional_fields": {},
+      "required_fields": {
+        "card_ref": {
+          "pattern": "^c1_[0-9a-f]{32}$",
+          "sources": [
+            "own.cards[].card_ref"
+          ],
+          "type": "string"
+        }
+      },
+      "type": "invoke_phenomenon"
+    }
+  ],
+  "viewer_player_id": 1
+}

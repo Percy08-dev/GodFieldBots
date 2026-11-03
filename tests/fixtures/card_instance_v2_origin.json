@@ -1,0 +1,17 @@
+{
+  "binary_sha256": "f2fb42e8598705a1c41a087b9210b114bdf91b732512a02d143856059cb656cc",
+  "files": {
+    "card_instance_v2_catalog.json": "fe0191defc03fced63418110bb13628c4e5669a4a5904f386b03fcecdf50e39b",
+    "card_instance_v2_info.json": "471ed2dcd6849ab9127b886de32a159391bb330ed5369cafda9122fdf5e90774",
+    "card_instance_v2_legacy_config_hashes.json": "e83b57a56b5b63885e4aa7a976471ce53251121b7868fcb953b82a8268725bb7",
+    "card_instance_v2_runtime_events.json": "0f07cbf91a16b627ed2a7d36ef01481348284e589fc200cc85286d974a61eac1",
+    "card_instance_v2_runtime_observation.json": "005dfbbd2734d9aeacef724d27cc15510c68cd1d8a3bc682c9ca62036c54f9c8",
+    "card_instance_v2_runtime_options.json": "29b03ebded2cd387063d6f493a1e70fc32173a8ec2cbc6c18e480cd7607b86fb",
+    "card_instance_v2_runtime_replay.json": "5b7fbf86c7ad76ff00f805b802ea7cc4ec8956b538618f464150cd4905b7d2c3"
+  },
+  "original_parent": "/home/percy/develop",
+  "original_root": "/home/percy/develop/GodFieldBots",
+  "runtime_source": "runs/assessments/card-instance-v2-20261103/contract-smoke-1",
+  "simulator_revision": "07e8185f98c503aa41200a80ea554b4fd21088ad",
+  "source": "runs/assessments/card-instance-v2-20261103/runtime-{catalog,info}.json"
+}

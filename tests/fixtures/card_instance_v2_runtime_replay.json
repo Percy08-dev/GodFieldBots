@@ -1,0 +1,11 @@
+{
+  "card_ref_scheme": "aes256-card-ref-v1",
+  "episode_end": null,
+  "game_id": "01M6GHHY4A7YPC7R9WH9MNCJQC",
+  "observation_schema_version": "2",
+  "public_event_schema_version": "2",
+  "requested_turn": null,
+  "rule_set_version": "true-match-1v1-v2",
+  "turns": [],
+  "viewer_player_id": 1
+}

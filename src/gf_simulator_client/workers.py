@@ -38,6 +38,8 @@ def factory_descriptor(factory: Callable[[str], Policy]) -> Json:
 class ParticipantWorker:
     def __init__(self, factory: Callable[[str], Policy], model_id: str, sampling_seed: int,
                  actions: ActionConfig, timeout: float = 10, *, policy_options: Json | None = None) -> None:
+        if type(actions) is not ActionConfig:
+            raise ContractError("legacy worker requires exact actions1; actions3 runtime is not implemented")
         descriptor = factory_descriptor(factory)
         policy_options = validated_policy_options(policy_options) if policy_options is not None else None
         environment = {"PATH": os.defpath, "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8", "PYTHONHASHSEED": "0",

@@ -10,6 +10,13 @@ from pathlib import Path
 from typing import Any
 
 from gf_common.action_contract import engineering_contract, parse_action_contract
+from gf_common.card_instance import (
+    CARD_INSTANCE_SIMULATOR_REVISION,
+    ActionConfigV3,
+    action_config_v3,
+    card_instance_contract,
+    parse_card_instance_contract,
+)
 from gf_common.domain import (
     SIMULATOR_REVISION,
     ActionConfig,
@@ -79,6 +86,12 @@ class ServerConfig:
 
 
 @dataclass(frozen=True)
+class ServerConfigV2(ServerConfig):
+    simulator_revision: str = CARD_INSTANCE_SIMULATOR_REVISION
+    gameplay_api: str = "v2"
+
+
+@dataclass(frozen=True)
 class EvaluationConfig:
     bootstrap_samples: int = 2000
     bootstrap_seed: int = 0
@@ -89,8 +102,8 @@ class ExperimentConfig:
     schema_version: int = 1
     kind: str = "experiment"
     run: RunConfig | RunConfigV2 = field(default_factory=RunConfig)
-    server: ServerConfig = field(default_factory=ServerConfig)
-    actions: ActionConfig | ActionConfigV2 = field(default_factory=ActionConfig)
+    server: ServerConfig | ServerConfigV2 = field(default_factory=ServerConfig)
+    actions: ActionConfig | ActionConfigV2 | ActionConfigV3 = field(default_factory=ActionConfig)
     model: ModelConfig | MLPModelConfig | GRUModelConfig | TransformerModelConfig | ConfiguredNeuralModelV2 | ConfiguredTreeModelV2 = field(default_factory=ModelConfig)
     opponent: ModelConfig | MLPModelConfig | GRUModelConfig | TransformerModelConfig | ConfiguredNeuralModelV2 | ConfiguredTreeModelV2 = field(default_factory=ModelConfig)
     evaluation: EvaluationConfig = field(default_factory=EvaluationConfig)
@@ -159,12 +172,18 @@ def _validate_table(name: str, values: Json, *, context: Json | None = None) -> 
     cls = TransformerModelConfig if name in ("model", "opponent") and values.get("model_id") == "transformer" else GRUModelConfig if name in ("model", "opponent") and values.get("model_id") == "gru" else SequencePPOTrainingConfig if name == "training" and "sequence_length" in values else MLPModelConfig if name in ("model", "opponent") and values.get("model_id") == "mlp" else PPOTrainingConfig if name == "training" and values.get("algorithm") == "ppo" else _TABLES[name]
     # Partial model presets may specify closed structural keys before dispatch.
     defaults = asdict(cls())
+    if name in ("model", "opponent") and values.get("version") == "3":
+        raise ContractError("model3 input layout is not implemented yet")
     structured_model = name in ("model", "opponent") and values.get("version") == "2"
     if structured_model:
         defaults = asdict(ConfiguredTreeModelV2() if values.get("model_id") == "lightgbm" else model_defaults_v2(values.get("model_id", "mlp")))
     elif name == "actions" and values.get("version") == "2":
         defaults = asdict(ActionConfigV2(action_contract=engineering_contract()))
-    elif name == "run" and context.get("actions", {}).get("version") == "2":
+    elif name == "actions" and values.get("version") == "3":
+        defaults = asdict(ActionConfigV3(action_contract=card_instance_contract()))
+    elif name == "server" and values.get("gameplay_api") == "v2":
+        defaults = asdict(ServerConfigV2())
+    elif name == "run" and context.get("actions", {}).get("version") in ("2", "3"):
         defaults = asdict(RunConfigV2())
     if name in ("model", "opponent") and "model_id" not in values and not structured_model:
         defaults["inference"] = asdict(MLPModelConfig().inference)
@@ -253,6 +272,22 @@ def load_config(path: str | Path, overrides: Json | None = None) -> LoadedConfig
                         values[key] = [str(Path(item).resolve()) for item in values[key]]
         data = _merge(data, overrides)
     structured_actions = data.get("actions", {}).get("version") == "2"
+    card_instance_actions = data.get("actions", {}).get("version") == "3"
+    card_instance_server = data.get("server", {}).get("gameplay_api") == "v2"
+    if card_instance_actions != card_instance_server:
+        raise ContractError("actions3 requires an explicit Gameplay v2 server and conversely")
+    if card_instance_actions:
+        if "action_contract" not in data["actions"]:
+            raise ContractError("raw actions3 Config must explicitly declare an action_contract")
+        parse_card_instance_contract(data["actions"]["action_contract"])
+        if data["server"].get("simulator_revision") != CARD_INSTANCE_SIMULATOR_REVISION:
+            raise ContractError("Gameplay v2 requires the explicit pinned simulator revision")
+        base["actions"] = asdict(ActionConfigV3(action_contract=card_instance_contract()))
+        base["server"] = asdict(ServerConfigV2())
+        base["run"] = asdict(RunConfigV2())
+        for table, key in _PATHS:
+            if table in ("server", "run") and base[table].get(key) is not None:
+                base[table][key] = str((source.parent / base[table][key]).resolve())
     if structured_actions:
         # Resolved raw inputs must explicitly declare/inherit the descriptor.
         # Current defaults must never upgrade a pre-adoption v2 Config.
@@ -293,7 +328,7 @@ def load_config(path: str | Path, overrides: Json | None = None) -> LoadedConfig
         integer(seed)
     if run["admission_seconds"] > run["execution_seconds"] or run["execution_seconds"] + run["finalization_seconds"] > run["wall_seconds"]:
         raise ContractError("run deadlines inconsistent")
-    if structured_actions:
+    if structured_actions or card_instance_actions:
         integer(run["concurrency"], 1, 2)
         integer(run["max_participant_workers"], 1, 4)
         integer(run["global_cuda_budget_bytes"], 1, 12884901888)
@@ -311,7 +346,13 @@ def load_config(path: str | Path, overrides: Json | None = None) -> LoadedConfig
         raise ContractError("sequence training/model mismatch")
     for model in models.values():
         validate_capacity(model, effective["actions"]["max_sequence_length"])
-    if structured_actions:
+    if card_instance_actions:
+        actions_v3 = action_config_v3(effective["actions"])
+        if preprocessing.backend != "python" or preprocessing.reader != "legacy":
+            raise ContractError("actions3 preprocessing is not implemented; only inert Python/legacy settings are supported")
+        if any(type(model) is not ModelConfig or model.model_id not in ("random", "heuristic") for model in models.values()):
+            raise ContractError("actions3 currently supports baseline Config validation only; model3 is not implemented")
+    elif structured_actions:
         actions_v2 = action_config_v2(effective["actions"])
         if preprocessing.reader != "structured-v1":
             raise ContractError("actions2 requires explicit preprocessing.reader='structured-v1'")
@@ -336,7 +377,7 @@ def load_config(path: str | Path, overrides: Json | None = None) -> LoadedConfig
     if run["report_reserve_seconds"] + server["cleanup_reserve_seconds"] >= run["finalization_seconds"]:
         raise ContractError("cleanup/report reserves must fit inside finalization allowance")
     integer(server["transport_retries"], 0, 2)
-    if server["simulator_revision"] != SIMULATOR_REVISION:
+    if server["simulator_revision"] != (CARD_INSTANCE_SIMULATOR_REVISION if card_instance_actions else SIMULATOR_REVISION):
         raise ContractError("unsupported simulator contract revision")
     if not server["fixed_seed_experiment"]:
         raise ContractError("repeated server requires explicit fixed_seed_experiment")
@@ -368,7 +409,12 @@ def load_config(path: str | Path, overrides: Json | None = None) -> LoadedConfig
         if name == "actions" and structured_actions:
             converted[name] = actions_v2
             continue
-        if name == "run" and structured_actions:
+        if name == "actions" and card_instance_actions:
+            converted[name] = actions_v3
+            continue
+        if name == "server" and card_instance_server:
+            cls = ServerConfigV2
+        if name == "run" and (structured_actions or card_instance_actions):
             cls = RunConfigV2
         values = effective[name]
         defaults = asdict(cls())

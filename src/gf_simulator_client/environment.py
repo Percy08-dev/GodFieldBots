@@ -124,8 +124,10 @@ def _save(path: Path, value: Any) -> None:
 class SimulatorEnvironment:
     def __init__(self, settings: EnvironmentSettings, policy_factory: Callable[[str], Policy],
                  journal_factory: Callable[..., Journal]) -> None:
-        if isinstance(settings.actions, ActionConfigV2):
+        if type(settings.actions) is ActionConfigV2:
             require_qualified_contract(settings.actions.action_contract)
+        elif type(settings.actions) is not ActionConfig:
+            raise ContractError("legacy environment requires exact actions1; actions3 runtime is not implemented")
         self._initialize(settings, policy_factory, journal_factory)
 
     def _initialize(self, settings: EnvironmentSettings, policy_factory: Callable[[str], Policy],

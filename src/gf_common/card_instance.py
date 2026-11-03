@@ -1,0 +1,136 @@
+"""Pinned card-instance contract metadata, independent of transport and models."""
+
+from __future__ import annotations
+
+from dataclasses import asdict, dataclass, field
+
+from gf_common.domain import ContractError, Json, closed, integer
+
+SIMULATOR_REVISION = "07e8185f98c503aa41200a80ea554b4fd21088ad"
+CARD_INSTANCE_SIMULATOR_REVISION = SIMULATOR_REVISION
+RULE_SET = "true-match-1v1-v2"
+CATALOG_HASH = "f51a3c73feb8b3f01837e65768aafb5a3aa805a33483308130244b33b16a8ad6"
+SPEC_INVENTORY_HASH = "8381079eae8a68378d8419c7f7245c62358833f0dd9045667021e112a1e9bad5"
+GENERATOR_VERSION = "public-card-instance-diverse-v5"
+CATALOG_META: Json = {
+    "catalog_schema_version": 2,
+    "catalog_version": "public-ja-v3",
+    "rule_set_version": RULE_SET,
+    "locale": "ja",
+    "content_sha256": CATALOG_HASH,
+    "definition_count": 296,
+}
+
+
+@dataclass(frozen=True)
+class CardInstanceContract:
+    profile_id: str = "card-instance-simulator-v2-20261103"
+    simulator_revision: str = SIMULATOR_REVISION
+    rule_set_version: str = RULE_SET
+    gameplay_api: str = "v2"
+    card_ref_scheme: str = "aes256-card-ref-v1"
+    catalog_schema_version: int = 2
+    catalog_version: str = "public-ja-v3"
+    catalog_sha256: str = CATALOG_HASH
+    spec_inventory_sha256: str = SPEC_INVENTORY_HASH
+    policy_input_version: str = "player-card-refs-v2"
+    input_recipe: str = "participant-structured-v2"
+
+    def __post_init__(self) -> None:
+        for name, descriptor in self.__dataclass_fields__.items():
+            value = getattr(self, name)
+            if type(value) is not type(descriptor.default) or value != descriptor.default:
+                raise ContractError("unknown card-instance contract pin")
+
+
+def card_instance_contract() -> CardInstanceContract:
+    return CardInstanceContract()
+
+
+def parse_card_instance_contract(raw: Json) -> CardInstanceContract:
+    return CardInstanceContract(**closed(raw, set(CardInstanceContract.__dataclass_fields__)))
+
+
+@dataclass(frozen=True)
+class ActionConfigV3:
+    action_contract: CardInstanceContract = field(kw_only=True)
+    version: str = "3"
+    generator: str = GENERATOR_VERSION
+    use_action_options: bool = True
+    targets: tuple[str, ...] = ("opponent", "self")
+    max_sequence_length: int = 18
+    max_candidates: int = 32768
+    max_expansions: int = 262144
+    max_temporary_candidates: int = 262144
+    count_states: int = 16384
+    count_milliseconds: int = 50
+    search_milliseconds: int = 1000
+    channel_weights: tuple[int, ...] = (1, 1, 1, 1, 1, 1, 1)
+
+    def __post_init__(self) -> None:
+        if type(self.action_contract) is not CardInstanceContract:
+            raise ContractError("explicit card-instance contract required")
+        parse_card_instance_contract(asdict(self.action_contract))
+        if (
+            type(self.version) is not str
+            or self.version != "3"
+            or self.generator != GENERATOR_VERSION
+        ):
+            raise ContractError("unsupported card-instance action recipe")
+        if self.use_action_options is not True:
+            raise ContractError("actions3 requires acting-player atomic hints")
+        if (
+            type(self.targets) is not tuple
+            or not self.targets
+            or any(type(value) is not str for value in self.targets)
+            or len(set(self.targets)) != len(self.targets)
+            or set(self.targets) - {"self", "opponent"}
+        ):
+            raise ContractError("invalid card-instance targets")
+        for name, maximum in (
+            ("max_sequence_length", 128),
+            ("max_candidates", 65536),
+            ("max_expansions", 2**31 - 1),
+            ("max_temporary_candidates", 2**31 - 1),
+            ("count_states", 2**31 - 1),
+            ("count_milliseconds", 1000),
+            ("search_milliseconds", 10000),
+        ):
+            integer(getattr(self, name), 1, maximum)
+        if type(self.channel_weights) is not tuple or len(self.channel_weights) != 7:
+            raise ContractError("seven channel weights required")
+        for weight in self.channel_weights:
+            integer(weight, 1, 2**31 - 1)
+
+
+def action_config_v3(raw: Json) -> ActionConfigV3:
+    value = closed(raw, set(ActionConfigV3.__dataclass_fields__))
+    for name in ("targets", "channel_weights"):
+        if not isinstance(value[name], (list, tuple)):
+            raise ContractError("action array required")
+    return ActionConfigV3(
+        **{
+            **value,
+            "action_contract": parse_card_instance_contract(value["action_contract"]),
+            "targets": tuple(value["targets"]),
+            "channel_weights": tuple(value["channel_weights"]),
+        }
+    )
+
+
+# Exact normative source inventory at the pinned Simulator revision.
+REVIEWED_SPEC_HASHES: dict[str, str] = {
+    "docs/spec/00-specification-overview.md": "674346a7b3f798a4c02e5241e7c760170224670e52bf81f5fe0acf46c8189a3e",
+    "docs/spec/01-server-spec.md": "4ab2072fafef4a7b400527cafaf933de8896c045da1e5943ed6d7e1dd1c655ba",
+    "docs/spec/02-software-design.md": "74fb313ebd0322d39e359b192b07bc6b702952b10b8a8345720b11a5b6409533",
+    "docs/spec/03-game-engine.md": "24e1b6f7ffe2d5eb78df3d553ffd969ab04bb24438719c7f815dc44a0fb09a37",
+    "docs/spec/04-random-system.md": "54ace9374f8d6ba93612a35548e33ce542b6ae9271ebac5dde9aad6fbe847a19",
+    "docs/spec/05-observation.md": "6a1cf52eab8e88f588020955bd281052eb2ac6b19612f5229ce4f86f178d6e8b",
+    "docs/spec/06-persistence-history.md": "eb5db7bbd72d265af3cf90bbe30e5a0e59944bf6c42ef8feedafe3d24abfa99d",
+    "docs/spec/07-external-interfaces-adapters.md": "5a179c97ef116d52ab1a4e52b82726fb45fb025cc6a6cbeeec4cf639718e9664",
+    "docs/spec/08-test-requirements.md": "ad1b275112c1c019ca78be48831e8a5e4f1bf1472c0db0645c2359e3895c9e09",
+    "docs/spec/09-gameplay-rules.md": "1f8ab2fa87748fb79d927dbcce3457b92ea2e05d825e70c78a51bedb7f31b536",
+    "docs/spec/10-cli-client.md": "7394dddb8498bfead6f91a47b7cfdbd0b9179bc40dba1416e25acabe9b99734a",
+    "docs/spec/card-definition-classification-v2.md": "62e6b88b237d46e808758f30e3964b4811c4e5f73786595840fda206fc79885c",
+    "docs/spec/godfield_rule_verification_register.md": "a1a9e4aee2ec05ee490154cb1df143be6cd63df6865d2cbfca4f863fc6af4ce5",
+}

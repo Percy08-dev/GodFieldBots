@@ -1,0 +1,4696 @@
+{
+  "catalog_schema_version": 2,
+  "catalog_version": "public-ja-v3",
+  "content_sha256": "f51a3c73feb8b3f01837e65768aafb5a3aa805a33483308130244b33b16a8ad6",
+  "definition_count": 296,
+  "definitions": [
+    {
+      "ability": "absorbHP",
+      "attack": 10,
+      "attribute": "light",
+      "classification": {
+        "definition_class": "owned_card",
+        "miracle_subclass": "weapon",
+        "use_roles": [
+          "miracle:weapon"
+        ]
+      },
+      "definition_id": "absorption",
+      "display_name": "＜吸収＞",
+      "effect_text": "HPを吸収する",
+      "kind": "miracles",
+      "mp_cost": 10
+    },
+    {
+      "additional_attack": true,
+      "attack": 5,
+      "attribute": "darkness",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "weapon",
+          "additional_attack"
+        ]
+      },
+      "definition_id": "abyss-dart",
+      "display_name": "冥矢",
+      "kind": "weapons",
+      "price": 15
+    },
+    {
+      "ability": "setCurseOfEverybody",
+      "classification": {
+        "definition_class": "automatic",
+        "use_roles": []
+      },
+      "curse": {
+        "description": "毎ターン2ダメージ / (悪化すると地獄病)",
+        "id": "fever",
+        "name": "熱病"
+      },
+      "definition_id": "afterglow",
+      "display_name": "夕焼け",
+      "effect_text": "みんなに熱病",
+      "guardian": {
+        "description": "火を司る守護神",
+        "id": "mars",
+        "name": "火星神"
+      },
+      "kind": "phenomena"
+    },
+    {
+      "attribute": "wood",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "armor",
+          "numeric_defense"
+        ]
+      },
+      "defense": 8,
+      "definition_id": "amber-breastplate",
+      "display_name": "コハクの胸当て",
+      "kind": "armor",
+      "price": 10
+    },
+    {
+      "ability": "blockMiracle",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "armor",
+          "numeric_defense"
+        ]
+      },
+      "defense": 15,
+      "definition_id": "angel-armor",
+      "display_name": "エンゼルアーマー",
+      "effect_text": "奇跡を止める",
+      "kind": "armor",
+      "price": 15
+    },
+    {
+      "ability": "blockMiracle",
+      "attack": 15,
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "weapon"
+        ]
+      },
+      "definition_id": "angel-axe",
+      "display_name": "エンゼルアクス",
+      "effect_text": "奇跡を止める",
+      "kind": "weapons",
+      "price": 15
+    },
+    {
+      "ability": "blockMiracle",
+      "additional_attack": true,
+      "attack": 15,
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "weapon",
+          "additional_attack"
+        ]
+      },
+      "definition_id": "angel-bow",
+      "display_name": "エンゼルの弓",
+      "effect_text": "奇跡を止める",
+      "kind": "weapons",
+      "price": 15
+    },
+    {
+      "ability": "blockMiracle",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "armor",
+          "numeric_defense"
+        ]
+      },
+      "defense": 11,
+      "definition_id": "angel-cap",
+      "display_name": "エンゼルの帽子",
+      "effect_text": "奇跡を止める",
+      "kind": "armor",
+      "price": 15
+    },
+    {
+      "ability": "blockMiracle",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "armor",
+          "numeric_defense"
+        ]
+      },
+      "defense": 9,
+      "definition_id": "angel-gauntlet",
+      "display_name": "エンゼルの小手",
+      "effect_text": "奇跡を止める",
+      "kind": "armor",
+      "price": 15
+    },
+    {
+      "ability": "blockMiracle",
+      "attack": 11,
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "weapon"
+        ]
+      },
+      "definition_id": "angel-knife",
+      "display_name": "エンゼルナイフ",
+      "effect_text": "奇跡を止める",
+      "kind": "weapons",
+      "price": 15
+    },
+    {
+      "ability": "blockMiracle",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "armor",
+          "numeric_defense"
+        ]
+      },
+      "defense": 13,
+      "definition_id": "angel-shield",
+      "display_name": "エンゼルシールド",
+      "effect_text": "奇跡を止める",
+      "kind": "armor",
+      "price": 15
+    },
+    {
+      "ability": "blockMiracle",
+      "attack": 13,
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "weapon"
+        ]
+      },
+      "definition_id": "angel-sword",
+      "display_name": "エンゼルソード",
+      "effect_text": "奇跡を止める",
+      "kind": "weapons",
+      "price": 15
+    },
+    {
+      "attribute": "water",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "armor",
+          "numeric_defense"
+        ]
+      },
+      "defense": 2,
+      "definition_id": "aqua-glove",
+      "display_name": "アクアグローブ",
+      "kind": "armor",
+      "price": 4
+    },
+    {
+      "attribute": "water",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "armor",
+          "numeric_defense"
+        ]
+      },
+      "defense": 1,
+      "definition_id": "aqua-shoes",
+      "display_name": "アクアシューズ",
+      "kind": "armor",
+      "price": 2
+    },
+    {
+      "ability": "attackDyingly",
+      "ability_value": 30,
+      "attack": 1,
+      "attribute": "light",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "weapon"
+        ]
+      },
+      "definition_id": "ascension-bow",
+      "display_name": "昇天弓",
+      "effect_text": "昇天のとき75%攻30",
+      "hit_rate": 25,
+      "kind": "weapons",
+      "price": 10
+    },
+    {
+      "ability": "doubleAtk",
+      "additional_attack": true,
+      "classification": {
+        "definition_class": "owned_card",
+        "miracle_subclass": "attack_support",
+        "use_roles": [
+          "miracle:attack_support",
+          "additional_attack"
+        ]
+      },
+      "definition_id": "aura",
+      "display_name": "＜オーラ＞",
+      "effect_text": "攻撃力を倍にする",
+      "kind": "miracles",
+      "mp_cost": 6
+    },
+    {
+      "attack": 8,
+      "attribute": "water",
+      "classification": {
+        "definition_class": "owned_card",
+        "miracle_subclass": "weapon",
+        "use_roles": [
+          "miracle:weapon"
+        ]
+      },
+      "definition_id": "avalanche",
+      "display_name": "＜雪崩＞",
+      "hit_rate": 75,
+      "kind": "miracles",
+      "mp_cost": 6
+    },
+    {
+      "additional_attack": true,
+      "attack": 4,
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "weapon",
+          "additional_attack"
+        ]
+      },
+      "definition_id": "battle-ball",
+      "display_name": "バトルボール",
+      "kind": "weapons",
+      "price": 4
+    },
+    {
+      "ability": "boostMP",
+      "ability_value": 5,
+      "classification": {
+        "definition_class": "automatic",
+        "use_roles": []
+      },
+      "definition_id": "beach-aroma",
+      "display_name": "磯の香り",
+      "effect_text": "+MP5",
+      "guardian": {
+        "description": "いやしを司る守護神",
+        "id": "neptune",
+        "name": "海王神"
+      },
+      "kind": "guardians"
+    },
+    {
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "armor",
+          "numeric_defense"
+        ]
+      },
+      "defense": 8,
+      "definition_id": "beautiful-glasswork",
+      "display_name": "美しいガラス細工",
+      "kind": "armor",
+      "price": 20
+    },
+    {
+      "attribute": "stone",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "armor",
+          "numeric_defense"
+        ]
+      },
+      "defense": 2,
+      "definition_id": "bedrock",
+      "display_name": "岩盤",
+      "kind": "armor",
+      "price": 4
+    },
+    {
+      "attack": 6,
+      "attribute": "wood",
+      "classification": {
+        "definition_class": "owned_card",
+        "miracle_subclass": "weapon",
+        "use_roles": [
+          "miracle:weapon"
+        ]
+      },
+      "definition_id": "big-tree",
+      "display_name": "＜大木＞",
+      "kind": "miracles",
+      "mp_cost": 3
+    },
+    {
+      "attack": 30,
+      "attribute": "darkness",
+      "classification": {
+        "definition_class": "automatic",
+        "use_roles": []
+      },
+      "definition_id": "black-hole",
+      "display_name": "ブラックホール",
+      "hit_rate": 75,
+      "kind": "phenomena"
+    },
+    {
+      "attack": 5,
+      "attribute": "fire",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "weapon"
+        ]
+      },
+      "definition_id": "blaze-blade",
+      "display_name": "ブレイズブレイド",
+      "kind": "weapons",
+      "price": 5
+    },
+    {
+      "ability": "absorbHP",
+      "attack": 5,
+      "attribute": "light",
+      "classification": {
+        "definition_class": "automatic",
+        "use_roles": []
+      },
+      "definition_id": "blessing",
+      "display_name": "祝福",
+      "effect_text": "HPを吸収する",
+      "guardian": {
+        "description": "光を司る守護神",
+        "id": "uranus",
+        "name": "天王神"
+      },
+      "kind": "guardians"
+    },
+    {
+      "additional_attack": true,
+      "attack": 1,
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "weapon",
+          "additional_attack"
+        ]
+      },
+      "definition_id": "blowgun",
+      "display_name": "吹き矢",
+      "kind": "weapons",
+      "price": 1
+    },
+    {
+      "attack": 9,
+      "attribute": "stone",
+      "classification": {
+        "definition_class": "automatic",
+        "use_roles": []
+      },
+      "definition_id": "body-press",
+      "display_name": "体当たり",
+      "guardian": {
+        "description": "土を司る守護神",
+        "id": "saturn",
+        "name": "土星神"
+      },
+      "kind": "guardians"
+    },
+    {
+      "ability": "addCurseOnDamage",
+      "attack": 10,
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "weapon"
+        ]
+      },
+      "curse": {
+        "description": "授かった神器が50%の / 確率で別の神器に見える",
+        "id": "dream",
+        "name": "夢"
+      },
+      "definition_id": "bogus-spear",
+      "display_name": "いんちきスピア",
+      "effect_text": "ダメージで夢",
+      "kind": "weapons",
+      "price": 10
+    },
+    {
+      "additional_attack": true,
+      "attack": 3,
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "weapon",
+          "additional_attack"
+        ]
+      },
+      "definition_id": "boomerang",
+      "display_name": "ブーメラン",
+      "kind": "weapons",
+      "price": 3
+    },
+    {
+      "attack": 6,
+      "attribute": "stone",
+      "classification": {
+        "definition_class": "automatic",
+        "use_roles": []
+      },
+      "definition_id": "boulder",
+      "display_name": "大きな石",
+      "guardian": {
+        "description": "土を司る守護神",
+        "id": "saturn",
+        "name": "土星神"
+      },
+      "kind": "guardians"
+    },
+    {
+      "ability": "bounceWeapon",
+      "attack": 5,
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "weapon"
+        ]
+      },
+      "definition_id": "bouncing-sword",
+      "display_name": "乱弾武剣",
+      "effect_text": "無属性武器を弾く",
+      "kind": "weapons",
+      "price": 10
+    },
+    {
+      "attack": 1,
+      "attribute": "wood",
+      "classification": {
+        "definition_class": "automatic",
+        "use_roles": []
+      },
+      "definition_id": "branch",
+      "display_name": "枝",
+      "guardian": {
+        "description": "木を司る守護神",
+        "id": "jupiter",
+        "name": "木星神"
+      },
+      "kind": "guardians"
+    },
+    {
+      "ability": "boostCPToEnemy",
+      "ability_value": 5,
+      "classification": {
+        "definition_class": "automatic",
+        "use_roles": []
+      },
+      "definition_id": "bribe",
+      "display_name": "わいろ",
+      "effect_text": "敵にあげる",
+      "guardian": {
+        "description": "お金を司る守護神",
+        "id": "venus",
+        "name": "金星神"
+      },
+      "kind": "guardians"
+    },
+    {
+      "attack": 1,
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "weapon"
+        ]
+      },
+      "definition_id": "bronze-club",
+      "display_name": "銅のこん棒",
+      "kind": "weapons",
+      "price": 1
+    },
+    {
+      "attack": 3,
+      "attribute": "water",
+      "classification": {
+        "definition_class": "automatic",
+        "use_roles": []
+      },
+      "definition_id": "bubbles",
+      "display_name": "泡",
+      "guardian": {
+        "description": "水を司る守護神",
+        "id": "mercury",
+        "name": "水星神"
+      },
+      "kind": "guardians"
+    },
+    {
+      "attack": 3,
+      "attribute": "wood",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "weapon"
+        ]
+      },
+      "definition_id": "bur-nut",
+      "display_name": "いがナッツ",
+      "kind": "weapons",
+      "price": 3
+    },
+    {
+      "attribute": "fire",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "armor",
+          "numeric_defense"
+        ]
+      },
+      "defense": 8,
+      "definition_id": "burning-jacket",
+      "display_name": "バーニングジャケット",
+      "kind": "armor",
+      "price": 10
+    },
+    {
+      "attribute": "fire",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "armor",
+          "numeric_defense"
+        ]
+      },
+      "defense": 7,
+      "definition_id": "burning-shield",
+      "display_name": "バーニングシールド",
+      "kind": "armor",
+      "price": 10
+    },
+    {
+      "ability": "buy",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "trade"
+        ]
+      },
+      "definition_id": "buy",
+      "display_name": "買う",
+      "effect_text": "神器を一個買う",
+      "kind": "trade",
+      "price": 5
+    },
+    {
+      "attack": 5,
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "weapon"
+        ]
+      },
+      "definition_id": "chain-sickle",
+      "display_name": "鎖ガマ",
+      "kind": "weapons",
+      "price": 2
+    },
+    {
+      "ability": "boostSomething",
+      "ability_value": 10,
+      "classification": {
+        "definition_class": "automatic",
+        "use_roles": []
+      },
+      "definition_id": "charity-fairy",
+      "display_name": "めぐみの妖精",
+      "effect_text": "+HP10 +MP10 / または +¥10",
+      "kind": "devils"
+    },
+    {
+      "attack": 4,
+      "attribute": "water",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "weapon"
+        ]
+      },
+      "definition_id": "chill-cup",
+      "display_name": "冷気杯",
+      "hit_rate": 75,
+      "kind": "weapons",
+      "price": 6
+    },
+    {
+      "attack": 6,
+      "attribute": "stone",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "weapon"
+        ]
+      },
+      "definition_id": "cliff-hammer",
+      "display_name": "ガケッツチ",
+      "hit_rate": 25,
+      "kind": "weapons",
+      "price": 4
+    },
+    {
+      "attack": 3,
+      "attribute": "darkness",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "weapon"
+        ]
+      },
+      "definition_id": "cobra",
+      "display_name": "コブラ",
+      "kind": "weapons",
+      "price": 10
+    },
+    {
+      "ability": "boostCPOfEverybody",
+      "ability_value": 1,
+      "classification": {
+        "definition_class": "automatic",
+        "use_roles": []
+      },
+      "definition_id": "coin-scattering",
+      "display_name": "小銭ばらまき",
+      "effect_text": "みんなにあげる",
+      "guardian": {
+        "description": "お金を司る守護神",
+        "id": "venus",
+        "name": "金星神"
+      },
+      "kind": "guardians"
+    },
+    {
+      "ability": "addCurse",
+      "attribute": "wood",
+      "classification": {
+        "definition_class": "automatic",
+        "use_roles": []
+      },
+      "curse": {
+        "description": "授かった神器が50%の / 確率で別の神器に見える",
+        "id": "dream",
+        "name": "夢"
+      },
+      "definition_id": "colored-leaves",
+      "display_name": "紅葉",
+      "effect_text": "対象に夢を付与",
+      "guardian": {
+        "description": "木を司る守護神",
+        "id": "jupiter",
+        "name": "木星神"
+      },
+      "kind": "guardians"
+    },
+    {
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "armor",
+          "numeric_defense"
+        ]
+      },
+      "defense": 12,
+      "definition_id": "core-barrier",
+      "display_name": "コアバリヤー",
+      "kind": "armor",
+      "price": 10
+    },
+    {
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "armor",
+          "numeric_defense"
+        ]
+      },
+      "defense": 13,
+      "definition_id": "core-protector",
+      "display_name": "コアプロテクター",
+      "kind": "armor",
+      "price": 10
+    },
+    {
+      "attack": 4,
+      "attribute": "darkness",
+      "classification": {
+        "definition_class": "automatic",
+        "use_roles": []
+      },
+      "definition_id": "cough",
+      "display_name": "せき払い",
+      "guardian": {
+        "description": "闇を司る守護神",
+        "id": "pluto",
+        "name": "冥王神"
+      },
+      "kind": "guardians"
+    },
+    {
+      "additional_attack": true,
+      "attack": 2,
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "weapon",
+          "additional_attack"
+        ]
+      },
+      "definition_id": "crossbow",
+      "display_name": "クロスボウ",
+      "kind": "weapons",
+      "price": 2
+    },
+    {
+      "attribute": "stone",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "armor",
+          "numeric_defense"
+        ]
+      },
+      "defense": 3,
+      "definition_id": "crystal-board",
+      "display_name": "結晶板",
+      "kind": "armor",
+      "price": 6
+    },
+    {
+      "ability": "addCurseOnDamage",
+      "attack": 2,
+      "attribute": "wood",
+      "classification": {
+        "definition_class": "automatic",
+        "use_roles": []
+      },
+      "curse": {
+        "description": "授かった神器が50%の / 確率で別の神器に見える",
+        "id": "dream",
+        "name": "夢"
+      },
+      "definition_id": "dance-of-fallen-leaves",
+      "display_name": "落ち葉の舞",
+      "effect_text": "ダメージで夢",
+      "guardian": {
+        "description": "木を司る守護神",
+        "id": "jupiter",
+        "name": "木星神"
+      },
+      "hit_rate": 75,
+      "kind": "guardians"
+    },
+    {
+      "ability": "attractDanger",
+      "ability_value": 99,
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "utility"
+        ]
+      },
+      "definition_id": "dangerous-mortar",
+      "display_name": "あぶないウス",
+      "effect_text": "あぶないキネから / 99ダメージ",
+      "kind": "sundries",
+      "price": 1
+    },
+    {
+      "ability": "danger",
+      "attack": 30,
+      "attribute": "light",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "weapon"
+        ]
+      },
+      "definition_id": "dangerous-pestle",
+      "display_name": "あぶないキネ",
+      "effect_text": "あぶないキネ固有の対象決定とあぶないウス相互作用",
+      "kind": "weapons",
+      "price": 5
+    },
+    {
+      "ability": "addCurse",
+      "attribute": "darkness",
+      "classification": {
+        "definition_class": "owned_card",
+        "miracle_subclass": "status",
+        "use_roles": [
+          "miracle:status"
+        ]
+      },
+      "curse": {
+        "description": "全体攻撃を受けると / 必ず命中する",
+        "id": "darkcloud",
+        "name": "暗雲"
+      },
+      "definition_id": "dark-cloud",
+      "display_name": "＜暗雲＞",
+      "effect_text": "対象に暗雲を付与",
+      "kind": "miracles",
+      "mp_cost": 5
+    },
+    {
+      "attack": 5,
+      "attribute": "darkness",
+      "classification": {
+        "definition_class": "owned_card",
+        "miracle_subclass": "weapon",
+        "use_roles": [
+          "miracle:weapon"
+        ]
+      },
+      "definition_id": "darkness",
+      "display_name": "＜闇＞",
+      "kind": "miracles",
+      "mp_cost": 5
+    },
+    {
+      "attack": 10,
+      "attribute": "darkness",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "weapon"
+        ]
+      },
+      "definition_id": "death-s-scythe",
+      "display_name": "死神のカマ",
+      "kind": "weapons",
+      "price": 20
+    },
+    {
+      "ability": "setCurseOfEverybody",
+      "classification": {
+        "definition_class": "automatic",
+        "use_roles": []
+      },
+      "curse": {
+        "description": "周りの状況が / わからなくなる",
+        "id": "fog",
+        "name": "霧"
+      },
+      "definition_id": "dense-fog",
+      "display_name": "濃霧",
+      "effect_text": "みんなに霧",
+      "guardian": {
+        "description": "水を司る守護神",
+        "id": "mercury",
+        "name": "水星神"
+      },
+      "kind": "phenomena"
+    },
+    {
+      "ability": "categoryWeapons",
+      "attack": 15,
+      "attribute": "stone",
+      "classification": {
+        "definition_class": "automatic",
+        "use_roles": []
+      },
+      "definition_id": "diamond-axe",
+      "display_name": "ダイヤモンドアクス",
+      "effect_text": "武器として扱う",
+      "guardian": {
+        "description": "土を司る守護神",
+        "id": "saturn",
+        "name": "土星神"
+      },
+      "kind": "guardians"
+    },
+    {
+      "attack": 13,
+      "attribute": "stone",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "weapon"
+        ]
+      },
+      "definition_id": "diamond-sword",
+      "display_name": "ダイヤモンドソード",
+      "kind": "weapons",
+      "price": 25
+    },
+    {
+      "attack": 12,
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "weapon"
+        ]
+      },
+      "definition_id": "direct-smash-axe",
+      "display_name": "もろぶっこみアクス",
+      "kind": "weapons",
+      "price": 4
+    },
+    {
+      "ability": "discard",
+      "classification": {
+        "definition_class": "operation",
+        "use_roles": []
+      },
+      "definition_id": "discard",
+      "display_name": "捨てる",
+      "effect_text": "神器を捨てる / (新しい神器は授からない)",
+      "kind": "trade"
+    },
+    {
+      "attack": 15,
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "weapon"
+        ]
+      },
+      "definition_id": "dragon-claws",
+      "display_name": "ドラゴンクロウ",
+      "kind": "weapons",
+      "price": 5
+    },
+    {
+      "ability": "addCurse",
+      "attribute": "wood",
+      "classification": {
+        "definition_class": "owned_card",
+        "miracle_subclass": "status",
+        "use_roles": [
+          "miracle:status"
+        ]
+      },
+      "curse": {
+        "description": "授かった神器が50%の / 確率で別の神器に見える",
+        "id": "dream",
+        "name": "夢"
+      },
+      "definition_id": "dream",
+      "display_name": "＜夢＞",
+      "effect_text": "対象に夢を付与",
+      "kind": "miracles",
+      "mp_cost": 6
+    },
+    {
+      "ability": "addCurseOnDamage",
+      "attack": 4,
+      "attribute": "wood",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "weapon"
+        ]
+      },
+      "curse": {
+        "description": "授かった神器が50%の / 確率で別の神器に見える",
+        "id": "dream",
+        "name": "夢"
+      },
+      "definition_id": "dream-mallet",
+      "display_name": "夢の木づち",
+      "effect_text": "ダメージで夢",
+      "kind": "weapons",
+      "price": 15
+    },
+    {
+      "ability": "selfCurseAndRedraw",
+      "attribute": "wood",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "armor",
+          "numeric_defense"
+        ]
+      },
+      "curse": {
+        "description": "授かった神器が50%の / 確率で別の神器に見える",
+        "id": "dream",
+        "name": "夢"
+      },
+      "defense": 14,
+      "definition_id": "dreaming-hat",
+      "display_name": "夢見る帽子",
+      "effect_text": "使用者に夢と神器一新",
+      "kind": "armor",
+      "price": 15
+    },
+    {
+      "ability": "addCurseOnDamage",
+      "attack": 1,
+      "attribute": "water",
+      "classification": {
+        "definition_class": "automatic",
+        "use_roles": []
+      },
+      "curse": {
+        "description": "周りの状況が / わからなくなる",
+        "id": "fog",
+        "name": "霧"
+      },
+      "definition_id": "drizzle",
+      "display_name": "霧雨",
+      "effect_text": "ダメージで霧",
+      "guardian": {
+        "description": "水を司る守護神",
+        "id": "mercury",
+        "name": "水星神"
+      },
+      "hit_rate": 50,
+      "kind": "guardians"
+    },
+    {
+      "ability": "addItem",
+      "classification": {
+        "definition_class": "automatic",
+        "use_roles": []
+      },
+      "definition_id": "drop",
+      "display_name": "もらす",
+      "effect_text": "神器を一個もらす",
+      "guardian": {
+        "description": "神器を司る守護神",
+        "id": "earth",
+        "name": "地球神"
+      },
+      "kind": "guardians"
+    },
+    {
+      "attack": 6,
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "weapon",
+          "numeric_defense"
+        ]
+      },
+      "defense": 3,
+      "definition_id": "elbow-sack",
+      "display_name": "エルボーサック",
+      "kind": "weapons",
+      "price": 3
+    },
+    {
+      "attack": 4,
+      "attribute": "light",
+      "classification": {
+        "definition_class": "automatic",
+        "use_roles": []
+      },
+      "definition_id": "electric-shock",
+      "display_name": "電撃",
+      "guardian": {
+        "description": "光を司る守護神",
+        "id": "uranus",
+        "name": "天王神"
+      },
+      "hit_rate": 25,
+      "kind": "guardians"
+    },
+    {
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "armor",
+          "numeric_defense"
+        ]
+      },
+      "defense": 11,
+      "definition_id": "energy-armor",
+      "display_name": "エナジーアーマー",
+      "kind": "armor",
+      "price": 10
+    },
+    {
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "armor",
+          "numeric_defense"
+        ]
+      },
+      "defense": 10,
+      "definition_id": "energy-helm",
+      "display_name": "エナジーヘルム",
+      "kind": "armor",
+      "price": 10
+    },
+    {
+      "ability": "dealSameDamage",
+      "attack": 14,
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "weapon"
+        ]
+      },
+      "definition_id": "evil-broadsword",
+      "display_name": "邪神の大剣",
+      "effect_text": "使用者に同じダメージ",
+      "kind": "weapons",
+      "price": 1
+    },
+    {
+      "ability": "exchange",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "trade"
+        ]
+      },
+      "definition_id": "exchange",
+      "display_name": "両替",
+      "effect_text": "両替する / (HP1=MP1=¥1)",
+      "kind": "trade",
+      "price": 5
+    },
+    {
+      "ability": "selfCurse",
+      "attribute": "fire",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "armor",
+          "numeric_defense"
+        ]
+      },
+      "curse": {
+        "description": "毎ターン2ダメージ / (悪化すると地獄病)",
+        "id": "fever",
+        "name": "熱病"
+      },
+      "defense": 10,
+      "definition_id": "fever-mask",
+      "display_name": "熱狂仮面",
+      "effect_text": "使用者に熱病",
+      "kind": "armor",
+      "price": 10
+    },
+    {
+      "attack": 8,
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "weapon"
+        ]
+      },
+      "definition_id": "final-tusk",
+      "display_name": "ファイナル牙",
+      "kind": "weapons",
+      "price": 3
+    },
+    {
+      "ability": "takeCP",
+      "ability_value": 3,
+      "classification": {
+        "definition_class": "automatic",
+        "use_roles": []
+      },
+      "definition_id": "fine",
+      "display_name": "罰金",
+      "effect_text": "¥3 没収",
+      "guardian": {
+        "description": "お金を司る守護神",
+        "id": "venus",
+        "name": "金星神"
+      },
+      "kind": "guardians"
+    },
+    {
+      "attack": 5,
+      "attribute": "fire",
+      "classification": {
+        "definition_class": "automatic",
+        "use_roles": []
+      },
+      "definition_id": "fire-buzz",
+      "display_name": "炎のしゃべり",
+      "guardian": {
+        "description": "火を司る守護神",
+        "id": "mars",
+        "name": "火星神"
+      },
+      "hit_rate": 75,
+      "kind": "guardians"
+    },
+    {
+      "additional_attack": true,
+      "attack": 4,
+      "attribute": "fire",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "weapon",
+          "additional_attack"
+        ]
+      },
+      "definition_id": "fire-crossbow",
+      "display_name": "ファイヤークロスボウ",
+      "kind": "weapons",
+      "price": 8
+    },
+    {
+      "attack": 8,
+      "attribute": "fire",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "weapon"
+        ]
+      },
+      "definition_id": "fire-dragon-s-horn",
+      "display_name": "火竜一角",
+      "kind": "weapons",
+      "price": 10
+    },
+    {
+      "attack": 6,
+      "attribute": "fire",
+      "classification": {
+        "definition_class": "automatic",
+        "use_roles": []
+      },
+      "definition_id": "fire-roar",
+      "display_name": "炎のうなり",
+      "guardian": {
+        "description": "火を司る守護神",
+        "id": "mars",
+        "name": "火星神"
+      },
+      "hit_rate": 75,
+      "kind": "guardians"
+    },
+    {
+      "attack": 7,
+      "attribute": "fire",
+      "classification": {
+        "definition_class": "automatic",
+        "use_roles": []
+      },
+      "definition_id": "fire-shout",
+      "display_name": "炎の叫び",
+      "guardian": {
+        "description": "火を司る守護神",
+        "id": "mars",
+        "name": "火星神"
+      },
+      "hit_rate": 75,
+      "kind": "guardians"
+    },
+    {
+      "attack": 7,
+      "attribute": "fire",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "weapon"
+        ]
+      },
+      "definition_id": "fire-shower",
+      "display_name": "烈火シャワー",
+      "hit_rate": 75,
+      "kind": "weapons",
+      "price": 10
+    },
+    {
+      "attack": 4,
+      "attribute": "fire",
+      "classification": {
+        "definition_class": "automatic",
+        "use_roles": []
+      },
+      "definition_id": "fire-tweet",
+      "display_name": "炎のつぶやき",
+      "guardian": {
+        "description": "火を司る守護神",
+        "id": "mars",
+        "name": "火星神"
+      },
+      "hit_rate": 75,
+      "kind": "guardians"
+    },
+    {
+      "attack": 3,
+      "attribute": "fire",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "weapon"
+        ]
+      },
+      "definition_id": "fire-whip",
+      "display_name": "燃えムチ",
+      "kind": "weapons",
+      "price": 3
+    },
+    {
+      "attack": 3,
+      "attribute": "fire",
+      "classification": {
+        "definition_class": "automatic",
+        "use_roles": []
+      },
+      "definition_id": "fire-whisper",
+      "display_name": "炎のささやき",
+      "guardian": {
+        "description": "火を司る守護神",
+        "id": "mars",
+        "name": "火星神"
+      },
+      "hit_rate": 75,
+      "kind": "guardians"
+    },
+    {
+      "additional_attack": true,
+      "attack": 2,
+      "attribute": "fire",
+      "classification": {
+        "definition_class": "owned_card",
+        "miracle_subclass": "additional_weapon",
+        "use_roles": [
+          "miracle:additional_weapon",
+          "additional_attack"
+        ]
+      },
+      "definition_id": "fireball",
+      "display_name": "＜火の玉＞",
+      "kind": "miracles",
+      "mp_cost": 2
+    },
+    {
+      "attack": 10,
+      "attribute": "fire",
+      "classification": {
+        "definition_class": "owned_card",
+        "miracle_subclass": "weapon",
+        "use_roles": [
+          "miracle:weapon"
+        ]
+      },
+      "definition_id": "flame",
+      "display_name": "＜炎＞",
+      "kind": "miracles",
+      "mp_cost": 5
+    },
+    {
+      "attribute": "fire",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "armor",
+          "numeric_defense"
+        ]
+      },
+      "defense": 3,
+      "definition_id": "flame-boots",
+      "display_name": "フレイムブーツ",
+      "kind": "armor",
+      "price": 6
+    },
+    {
+      "attack": 4,
+      "attribute": "fire",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "weapon"
+        ]
+      },
+      "definition_id": "flame-cup",
+      "display_name": "火炎杯",
+      "hit_rate": 75,
+      "kind": "weapons",
+      "price": 6
+    },
+    {
+      "attribute": "fire",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "armor",
+          "numeric_defense"
+        ]
+      },
+      "defense": 4,
+      "definition_id": "flame-helm",
+      "display_name": "フレイムヘルム",
+      "kind": "armor",
+      "price": 8
+    },
+    {
+      "attribute": "fire",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "armor",
+          "numeric_defense"
+        ]
+      },
+      "defense": 6,
+      "definition_id": "flame-mail",
+      "display_name": "フレイムメイル",
+      "kind": "armor",
+      "price": 10
+    },
+    {
+      "attribute": "fire",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "armor",
+          "numeric_defense"
+        ]
+      },
+      "defense": 5,
+      "definition_id": "flame-shield",
+      "display_name": "フレイムシールド",
+      "kind": "armor",
+      "price": 10
+    },
+    {
+      "attack": 4,
+      "attribute": "fire",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "weapon",
+          "numeric_defense"
+        ]
+      },
+      "defense": 4,
+      "definition_id": "flaming-roll",
+      "display_name": "ほむら巻き",
+      "kind": "weapons",
+      "price": 8
+    },
+    {
+      "attack": 10,
+      "attribute": "fire",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "weapon"
+        ]
+      },
+      "definition_id": "flare-axe",
+      "display_name": "フレアアクス",
+      "hit_rate": 50,
+      "kind": "weapons",
+      "price": 10
+    },
+    {
+      "ability": "addCurseOnDamage",
+      "attack": 1,
+      "attribute": "light",
+      "classification": {
+        "definition_class": "owned_card",
+        "miracle_subclass": "weapon",
+        "use_roles": [
+          "miracle:weapon"
+        ]
+      },
+      "curse": {
+        "description": "防御のときに神器を / 一つしか使えない",
+        "id": "flash",
+        "name": "閃光"
+      },
+      "definition_id": "flash",
+      "display_name": "＜閃光＞",
+      "effect_text": "ダメージで閃光",
+      "hit_rate": 25,
+      "kind": "miracles",
+      "mp_cost": 3
+    },
+    {
+      "ability": "addCurseOnDamage",
+      "attack": 2,
+      "attribute": "light",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "weapon"
+        ]
+      },
+      "curse": {
+        "description": "防御のときに神器を / 一つしか使えない",
+        "id": "flash",
+        "name": "閃光"
+      },
+      "definition_id": "flash-dagger",
+      "display_name": "フラッシュダガー",
+      "effect_text": "ダメージで閃光",
+      "kind": "weapons",
+      "price": 15
+    },
+    {
+      "ability": "addCurse",
+      "attribute": "water",
+      "classification": {
+        "definition_class": "owned_card",
+        "miracle_subclass": "status",
+        "use_roles": [
+          "miracle:status"
+        ]
+      },
+      "curse": {
+        "description": "周りの状況が / わからなくなる",
+        "id": "fog",
+        "name": "霧"
+      },
+      "definition_id": "fog",
+      "display_name": "＜霧＞",
+      "effect_text": "対象に霧を付与",
+      "kind": "miracles",
+      "mp_cost": 3
+    },
+    {
+      "ability": "addCurseOnDamage",
+      "attack": 3,
+      "attribute": "water",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "weapon"
+        ]
+      },
+      "curse": {
+        "description": "周りの状況が / わからなくなる",
+        "id": "fog",
+        "name": "霧"
+      },
+      "definition_id": "fog-fan",
+      "display_name": "霧の扇",
+      "effect_text": "ダメージで霧",
+      "hit_rate": 50,
+      "kind": "weapons",
+      "price": 8
+    },
+    {
+      "ability": "addCurseOnDamage",
+      "attack": 3,
+      "attribute": "water",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "weapon"
+        ]
+      },
+      "curse": {
+        "description": "周りの状況が / わからなくなる",
+        "id": "fog",
+        "name": "霧"
+      },
+      "definition_id": "fog-gun",
+      "display_name": "霧鉄砲",
+      "effect_text": "ダメージで霧",
+      "kind": "weapons",
+      "price": 10
+    },
+    {
+      "attribute": "wood",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "armor",
+          "numeric_defense"
+        ]
+      },
+      "defense": 6,
+      "definition_id": "forest-shield",
+      "display_name": "森の盾",
+      "kind": "armor",
+      "price": 10
+    },
+    {
+      "ability": "boostMP",
+      "ability_value": 10,
+      "classification": {
+        "definition_class": "automatic",
+        "use_roles": []
+      },
+      "definition_id": "fresh-beach-aroma",
+      "display_name": "さわやかな磯の香り",
+      "effect_text": "+MP10",
+      "guardian": {
+        "description": "いやしを司る守護神",
+        "id": "neptune",
+        "name": "海王神"
+      },
+      "kind": "guardians"
+    },
+    {
+      "attack": 4,
+      "attribute": "water",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "weapon"
+        ]
+      },
+      "definition_id": "frozen-hammer",
+      "display_name": "氷結ハンマー",
+      "kind": "weapons",
+      "price": 4
+    },
+    {
+      "ability": "categoryWeapons",
+      "attack": 10,
+      "classification": {
+        "definition_class": "automatic",
+        "use_roles": []
+      },
+      "definition_id": "full-moon-blade",
+      "display_name": "満月刀",
+      "effect_text": "武器として扱う",
+      "guardian": {
+        "description": "奇跡を司る守護神",
+        "id": "moon",
+        "name": "月神"
+      },
+      "kind": "guardians"
+    },
+    {
+      "ability": "boostHP",
+      "ability_value": 20,
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "utility"
+        ]
+      },
+      "definition_id": "galaxy-geyser",
+      "display_name": "天の川のおいしい水",
+      "effect_text": "+HP20",
+      "kind": "sundries",
+      "price": 20
+    },
+    {
+      "ability": "addCurseOnDamage",
+      "attack": 9,
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "weapon"
+        ]
+      },
+      "curse": {
+        "description": "毎ターン1ダメージ / (悪化すると熱病)",
+        "id": "cold",
+        "name": "風邪"
+      },
+      "definition_id": "gale-sword",
+      "display_name": "疾風剣",
+      "effect_text": "ダメージで風邪",
+      "kind": "weapons",
+      "price": 10
+    },
+    {
+      "ability": "absorbHP",
+      "attack": 7,
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "weapon"
+        ]
+      },
+      "definition_id": "ghost-sword",
+      "display_name": "ゴーストソード",
+      "effect_text": "HPを吸収する",
+      "kind": "weapons",
+      "price": 10
+    },
+    {
+      "ability": "attackSomebody",
+      "attack": 50,
+      "attribute": "light",
+      "classification": {
+        "definition_class": "automatic",
+        "use_roles": []
+      },
+      "definition_id": "gigantic-tub",
+      "display_name": "巨大なタライ",
+      "effect_text": "誰かに攻撃する",
+      "kind": "phenomena"
+    },
+    {
+      "attack": 7,
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "weapon"
+        ]
+      },
+      "definition_id": "glaive-classic",
+      "display_name": "なぎなたクラシック",
+      "kind": "weapons",
+      "price": 3
+    },
+    {
+      "attribute": "light",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "armor",
+          "numeric_defense"
+        ]
+      },
+      "defense": 10,
+      "definition_id": "glittering-dress",
+      "display_name": "きらきらドレス",
+      "kind": "armor",
+      "price": 15
+    },
+    {
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "armor",
+          "numeric_defense"
+        ]
+      },
+      "defense": 30,
+      "definition_id": "god-shield",
+      "display_name": "神の盾",
+      "kind": "armor",
+      "price": 30
+    },
+    {
+      "attack": 30,
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "weapon"
+        ]
+      },
+      "definition_id": "god-sword",
+      "display_name": "神の剣",
+      "kind": "weapons",
+      "price": 30
+    },
+    {
+      "ability": "removeUsedMiracles",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "utility"
+        ]
+      },
+      "definition_id": "goddess-s-soap",
+      "display_name": "女神の石けん",
+      "effect_text": "起こした奇跡を / 二個洗い流す",
+      "kind": "sundries",
+      "price": 10
+    },
+    {
+      "attack": 1,
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "weapon"
+        ]
+      },
+      "definition_id": "gold-club",
+      "display_name": "金のこん棒",
+      "kind": "weapons",
+      "price": 25
+    },
+    {
+      "ability": "collectCPOfEverybody",
+      "classification": {
+        "definition_class": "automatic",
+        "use_roles": []
+      },
+      "definition_id": "gold-mountain",
+      "display_name": "金山",
+      "effect_text": "みんなの金が / 誰かに集まる",
+      "guardian": {
+        "description": "お金を司る守護神",
+        "id": "venus",
+        "name": "金星神"
+      },
+      "kind": "phenomena"
+    },
+    {
+      "attack": 4,
+      "attribute": "darkness",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "weapon"
+        ]
+      },
+      "definition_id": "goodbye-sword",
+      "display_name": "さよならの剣",
+      "kind": "weapons",
+      "price": 10
+    },
+    {
+      "attack": 11,
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "weapon"
+        ]
+      },
+      "definition_id": "gravity-mace",
+      "display_name": "グラビティメイス",
+      "kind": "weapons",
+      "price": 4
+    },
+    {
+      "attribute": "wood",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "armor",
+          "numeric_defense"
+        ]
+      },
+      "defense": 4,
+      "definition_id": "grove-shield",
+      "display_name": "林の盾",
+      "kind": "armor",
+      "price": 8
+    },
+    {
+      "ability": "setGuardian",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "utility"
+        ]
+      },
+      "definition_id": "guardian-pot",
+      "display_name": "守護封印のつぼ",
+      "effect_text": "守護神が宿る",
+      "kind": "sundries",
+      "price": 10
+    },
+    {
+      "attack": 6,
+      "attribute": "water",
+      "classification": {
+        "definition_class": "automatic",
+        "use_roles": []
+      },
+      "definition_id": "hail",
+      "display_name": "あられ",
+      "guardian": {
+        "description": "水を司る守護神",
+        "id": "mercury",
+        "name": "水星神"
+      },
+      "hit_rate": 50,
+      "kind": "guardians"
+    },
+    {
+      "ability": "addCurse",
+      "attribute": "light",
+      "classification": {
+        "definition_class": "automatic",
+        "use_roles": []
+      },
+      "curse": {
+        "description": "防御のときに神器を / 一つしか使えない",
+        "id": "flash",
+        "name": "閃光"
+      },
+      "definition_id": "halo",
+      "display_name": "後光",
+      "effect_text": "対象に閃光を付与",
+      "guardian": {
+        "description": "光を司る守護神",
+        "id": "uranus",
+        "name": "天王神"
+      },
+      "kind": "guardians"
+    },
+    {
+      "attack": 8,
+      "attribute": "darkness",
+      "classification": {
+        "definition_class": "automatic",
+        "use_roles": []
+      },
+      "definition_id": "hand-raising",
+      "display_name": "挙手",
+      "guardian": {
+        "description": "闇を司る守護神",
+        "id": "pluto",
+        "name": "冥王神"
+      },
+      "kind": "guardians"
+    },
+    {
+      "attack": 6,
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "weapon"
+        ]
+      },
+      "definition_id": "hard-hammer",
+      "display_name": "硬いつち",
+      "kind": "weapons",
+      "price": 2
+    },
+    {
+      "attack": 4,
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "weapon"
+        ]
+      },
+      "definition_id": "hatchet",
+      "display_name": "ハチェット",
+      "kind": "weapons",
+      "price": 2
+    },
+    {
+      "ability": "boostHP",
+      "ability_value": 10,
+      "classification": {
+        "definition_class": "automatic",
+        "use_roles": []
+      },
+      "definition_id": "healthy-seafood-soup",
+      "display_name": "あっさりした潮汁",
+      "effect_text": "+HP10",
+      "guardian": {
+        "description": "いやしを司る守護神",
+        "id": "neptune",
+        "name": "海王神"
+      },
+      "kind": "guardians"
+    },
+    {
+      "ability": "boostHP",
+      "ability_value": 10,
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "utility"
+        ]
+      },
+      "definition_id": "heart-dew",
+      "display_name": "ハートのしずく",
+      "effect_text": "+HP10",
+      "kind": "sundries",
+      "price": 3
+    },
+    {
+      "ability": "boostMP",
+      "ability_value": 10,
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "utility"
+        ]
+      },
+      "definition_id": "heart-flower",
+      "display_name": "ハートの花",
+      "effect_text": "+MP10",
+      "kind": "sundries",
+      "price": 3
+    },
+    {
+      "ability": "removeAllCurses",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "utility"
+        ]
+      },
+      "definition_id": "heart-shell",
+      "display_name": "ハートの貝がら",
+      "effect_text": "すべての / 災いを払う",
+      "kind": "sundries",
+      "price": 15
+    },
+    {
+      "attribute": "fire",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "armor",
+          "numeric_defense"
+        ]
+      },
+      "defense": 12,
+      "definition_id": "heat-haze-armor",
+      "display_name": "陽炎のよろい",
+      "kind": "armor",
+      "price": 15
+    },
+    {
+      "ability": "boostMPAndAddCurse",
+      "ability_value": 20,
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "utility"
+        ]
+      },
+      "curse": {
+        "description": "毎ターン+HP5 / (悪化するとHP0になる)",
+        "id": "heaven",
+        "name": "天国病"
+      },
+      "definition_id": "heaven-herb",
+      "display_name": "天国草",
+      "effect_text": "明示した対象PlayerがMP20を得て天国病になる",
+      "kind": "sundries",
+      "price": 20
+    },
+    {
+      "ability": "addCurse",
+      "classification": {
+        "definition_class": "owned_card",
+        "miracle_subclass": "status",
+        "use_roles": [
+          "miracle:status"
+        ]
+      },
+      "curse": {
+        "description": "毎ターン+HP5 / (悪化するとHP0になる)",
+        "id": "heaven",
+        "name": "天国病"
+      },
+      "definition_id": "heaven-wind",
+      "display_name": "＜天国風＞",
+      "effect_text": "対象に天国病を付与",
+      "kind": "miracles",
+      "mp_cost": 15
+    },
+    {
+      "ability": "addCurseOnDamage",
+      "attack": 8,
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "weapon"
+        ]
+      },
+      "curse": {
+        "description": "毎ターン5ダメージ / (悪化すると天国病)",
+        "id": "hell",
+        "name": "地獄病"
+      },
+      "definition_id": "hell-scissors",
+      "display_name": "地獄のハサミ",
+      "effect_text": "ダメージで地獄病",
+      "kind": "weapons",
+      "price": 15
+    },
+    {
+      "ability": "addCurseOnDamage",
+      "attack": 11,
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "weapon"
+        ]
+      },
+      "curse": {
+        "description": "全体攻撃を受けると / 必ず命中する",
+        "id": "darkcloud",
+        "name": "暗雲"
+      },
+      "definition_id": "hexagon-doom",
+      "display_name": "六角凶",
+      "effect_text": "ダメージで暗雲",
+      "kind": "weapons",
+      "price": 15
+    },
+    {
+      "attack": 9,
+      "attribute": "light",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "weapon"
+        ]
+      },
+      "definition_id": "holy-sword",
+      "display_name": "聖剣",
+      "kind": "weapons",
+      "price": 15
+    },
+    {
+      "additional_attack": true,
+      "attack": 11,
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "weapon",
+          "additional_attack"
+        ]
+      },
+      "definition_id": "horror-wheel",
+      "display_name": "恐怖の車輪",
+      "kind": "weapons",
+      "price": 10
+    },
+    {
+      "attack": 4,
+      "attribute": "water",
+      "classification": {
+        "definition_class": "owned_card",
+        "miracle_subclass": "weapon",
+        "use_roles": [
+          "miracle:weapon"
+        ]
+      },
+      "definition_id": "ice",
+      "display_name": "＜氷＞",
+      "kind": "miracles",
+      "mp_cost": 2
+    },
+    {
+      "attack": 30,
+      "attribute": "water",
+      "classification": {
+        "definition_class": "owned_card",
+        "miracle_subclass": "weapon",
+        "use_roles": [
+          "miracle:weapon"
+        ]
+      },
+      "definition_id": "ice-age",
+      "display_name": "＜氷河期＞",
+      "hit_rate": 75,
+      "kind": "miracles",
+      "mp_cost": 30
+    },
+    {
+      "attribute": "water",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "armor",
+          "numeric_defense"
+        ]
+      },
+      "defense": 6,
+      "definition_id": "ice-armor",
+      "display_name": "アイスアーマー",
+      "kind": "armor",
+      "price": 10
+    },
+    {
+      "attribute": "water",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "armor",
+          "numeric_defense"
+        ]
+      },
+      "defense": 3,
+      "definition_id": "ice-boots",
+      "display_name": "アイスブーツ",
+      "kind": "armor",
+      "price": 6
+    },
+    {
+      "attribute": "water",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "armor",
+          "numeric_defense"
+        ]
+      },
+      "defense": 4,
+      "definition_id": "ice-helm",
+      "display_name": "アイスヘルム",
+      "kind": "armor",
+      "price": 8
+    },
+    {
+      "attribute": "water",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "armor",
+          "numeric_defense"
+        ]
+      },
+      "defense": 5,
+      "definition_id": "ice-shield",
+      "display_name": "アイスシールド",
+      "kind": "armor",
+      "price": 10
+    },
+    {
+      "attack": 1,
+      "attribute": "water",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "weapon"
+        ]
+      },
+      "definition_id": "icicle",
+      "display_name": "つらら",
+      "kind": "weapons",
+      "price": 1
+    },
+    {
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "armor",
+          "numeric_defense"
+        ]
+      },
+      "defense": 5,
+      "definition_id": "iron-armor",
+      "display_name": "アイアンアーマー",
+      "kind": "armor",
+      "price": 5
+    },
+    {
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "armor",
+          "numeric_defense"
+        ]
+      },
+      "defense": 3,
+      "definition_id": "iron-gauntlet",
+      "display_name": "アイアンガントレット",
+      "kind": "armor",
+      "price": 3
+    },
+    {
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "armor",
+          "numeric_defense"
+        ]
+      },
+      "defense": 4,
+      "definition_id": "iron-shield",
+      "display_name": "アイアンシールド",
+      "kind": "armor",
+      "price": 4
+    },
+    {
+      "additional_attack": true,
+      "attack": 6,
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "weapon",
+          "additional_attack"
+        ]
+      },
+      "definition_id": "jet-yo-yo",
+      "display_name": "ジェットヨーヨー",
+      "kind": "weapons",
+      "price": 6
+    },
+    {
+      "attack": 8,
+      "attribute": "wood",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "weapon",
+          "numeric_defense"
+        ]
+      },
+      "defense": 6,
+      "definition_id": "jinn-s-rocking-horse",
+      "display_name": "魔神の木馬",
+      "hit_rate": 75,
+      "kind": "weapons",
+      "price": 15
+    },
+    {
+      "ability": "counterCurse",
+      "attribute": "wood",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "armor",
+          "numeric_defense"
+        ]
+      },
+      "curse": {
+        "description": "授かった神器が50%の / 確率で別の神器に見える",
+        "id": "dream",
+        "name": "夢"
+      },
+      "definition_id": "jupiter-ring",
+      "display_name": "木星の指輪",
+      "effect_text": "被ダメージ後に相手へ夢を付与",
+      "kind": "armor",
+      "price": 10
+    },
+    {
+      "attack": 5,
+      "attribute": "light",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "weapon"
+        ]
+      },
+      "definition_id": "justice-lance",
+      "display_name": "ジャスティスランス",
+      "kind": "weapons",
+      "price": 5
+    },
+    {
+      "attack": 5,
+      "attribute": "darkness",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "weapon"
+        ]
+      },
+      "definition_id": "killer-fork",
+      "display_name": "キラーフォーク",
+      "kind": "weapons",
+      "price": 10
+    },
+    {
+      "ability": "dealDamage",
+      "ability_value": 30,
+      "classification": {
+        "definition_class": "automatic",
+        "use_roles": []
+      },
+      "definition_id": "large-devil",
+      "display_name": "大悪魔",
+      "effect_text": "30ダメージ",
+      "kind": "devils"
+    },
+    {
+      "attack": 10,
+      "attribute": "light",
+      "classification": {
+        "definition_class": "automatic",
+        "use_roles": []
+      },
+      "definition_id": "laser-beam",
+      "display_name": "レーザービーム",
+      "guardian": {
+        "description": "光を司る守護神",
+        "id": "uranus",
+        "name": "天王神"
+      },
+      "hit_rate": 75,
+      "kind": "guardians"
+    },
+    {
+      "attribute": "wood",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "armor",
+          "numeric_defense"
+        ]
+      },
+      "defense": 1,
+      "definition_id": "laurel-wreath",
+      "display_name": "草かんむり",
+      "kind": "armor",
+      "price": 2
+    },
+    {
+      "additional_attack": true,
+      "attack": 2,
+      "attribute": "wood",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "weapon",
+          "additional_attack"
+        ]
+      },
+      "definition_id": "leaf-shuriken",
+      "display_name": "葉っぱ手裏剣",
+      "kind": "weapons",
+      "price": 4
+    },
+    {
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "armor",
+          "numeric_defense"
+        ]
+      },
+      "defense": 1,
+      "definition_id": "leather-cap",
+      "display_name": "革の帽子",
+      "kind": "armor",
+      "price": 1
+    },
+    {
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "armor",
+          "numeric_defense"
+        ]
+      },
+      "defense": 2,
+      "definition_id": "leather-clothes",
+      "display_name": "革の服",
+      "kind": "armor",
+      "price": 2
+    },
+    {
+      "attack": 13,
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "weapon",
+          "numeric_defense"
+        ]
+      },
+      "defense": 1,
+      "definition_id": "legendary-scabbard",
+      "display_name": "伝説の剣のさや",
+      "kind": "weapons",
+      "price": 3
+    },
+    {
+      "attack": 6,
+      "attribute": "light",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "weapon"
+        ]
+      },
+      "definition_id": "light-orb",
+      "display_name": "光のオーブ",
+      "hit_rate": 75,
+      "kind": "weapons",
+      "price": 10
+    },
+    {
+      "attack": 3,
+      "attribute": "light",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "weapon"
+        ]
+      },
+      "definition_id": "lightning-kids",
+      "display_name": "イナヅマキッズ",
+      "hit_rate": 25,
+      "kind": "weapons",
+      "price": 2
+    },
+    {
+      "ability": "boostCP",
+      "ability_value": 8,
+      "classification": {
+        "definition_class": "automatic",
+        "use_roles": []
+      },
+      "definition_id": "little-something",
+      "display_name": "つまらない物",
+      "effect_text": "+¥8",
+      "guardian": {
+        "description": "お金を司る守護神",
+        "id": "venus",
+        "name": "金星神"
+      },
+      "kind": "guardians"
+    },
+    {
+      "ability": "boostCP",
+      "ability_value": 20,
+      "classification": {
+        "definition_class": "automatic",
+        "use_roles": []
+      },
+      "definition_id": "luxury-accessory",
+      "display_name": "豪華なアクセサリー",
+      "effect_text": "+¥20",
+      "guardian": {
+        "description": "お金を司る守護神",
+        "id": "venus",
+        "name": "金星神"
+      },
+      "kind": "guardians"
+    },
+    {
+      "ability": "atkBy2xMP",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "weapon"
+        ]
+      },
+      "definition_id": "magical-stick",
+      "display_name": "マジカルステッキ",
+      "effect_text": "併用する奇跡の実支払MPを除いた残りのMPの2倍を攻撃値とし、MPをすべて消費する",
+      "kind": "weapons",
+      "price": 10
+    },
+    {
+      "attack": 15,
+      "attribute": "fire",
+      "classification": {
+        "definition_class": "owned_card",
+        "miracle_subclass": "weapon",
+        "use_roles": [
+          "miracle:weapon"
+        ]
+      },
+      "definition_id": "magma",
+      "display_name": "＜マグマ＞",
+      "hit_rate": 75,
+      "kind": "miracles",
+      "mp_cost": 10
+    },
+    {
+      "ability": "shuffleItemsOfEverybody",
+      "classification": {
+        "definition_class": "automatic",
+        "use_roles": []
+      },
+      "definition_id": "magnetic-storm",
+      "display_name": "磁気嵐",
+      "effect_text": "みんなの神器が / 無作為に入れ替わる",
+      "guardian": {
+        "description": "神器を司る守護神",
+        "id": "earth",
+        "name": "地球神"
+      },
+      "kind": "phenomena"
+    },
+    {
+      "ability": "counterAtk",
+      "attribute": "fire",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "armor",
+          "numeric_defense"
+        ]
+      },
+      "definition_id": "mars-ring",
+      "display_name": "火星の指輪",
+      "effect_text": "攻{ダメージ}",
+      "hit_rate": 75,
+      "kind": "armor",
+      "price": 10
+    },
+    {
+      "additional_attack": true,
+      "attack": 3,
+      "attribute": "wood",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "weapon",
+          "additional_attack"
+        ]
+      },
+      "definition_id": "mature-rubber-bow",
+      "display_name": "熟成ゴムの弓",
+      "kind": "weapons",
+      "price": 6
+    },
+    {
+      "ability": "dealDamage",
+      "ability_value": 20,
+      "classification": {
+        "definition_class": "automatic",
+        "use_roles": []
+      },
+      "definition_id": "medium-devil",
+      "display_name": "中悪魔",
+      "effect_text": "20ダメージ",
+      "kind": "devils"
+    },
+    {
+      "ability": "counterCurse",
+      "attribute": "water",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "armor",
+          "numeric_defense"
+        ]
+      },
+      "curse": {
+        "description": "周りの状況が / わからなくなる",
+        "id": "fog",
+        "name": "霧"
+      },
+      "definition_id": "mercury-ring",
+      "display_name": "水星の指輪",
+      "effect_text": "被ダメージ後に相手へ霧を付与",
+      "kind": "armor",
+      "price": 10
+    },
+    {
+      "additional_attack": true,
+      "attack": 10,
+      "attribute": "light",
+      "classification": {
+        "definition_class": "owned_card",
+        "miracle_subclass": "additional_weapon",
+        "use_roles": [
+          "miracle:additional_weapon",
+          "additional_attack"
+        ]
+      },
+      "definition_id": "meteor",
+      "display_name": "＜流星＞",
+      "kind": "miracles",
+      "mp_cost": 7
+    },
+    {
+      "ability": "attackEveryEnemy",
+      "additional_attack": true,
+      "classification": {
+        "definition_class": "owned_card",
+        "miracle_subclass": "attack_support",
+        "use_roles": [
+          "miracle:attack_support",
+          "additional_attack"
+        ]
+      },
+      "definition_id": "mirage",
+      "display_name": "＜蜃気楼＞",
+      "effect_text": "すべての敵に / 攻撃する",
+      "kind": "miracles",
+      "mp_cost": 5
+    },
+    {
+      "ability": "addCurseOnDamage",
+      "attack": 2,
+      "attribute": "water",
+      "classification": {
+        "definition_class": "automatic",
+        "use_roles": []
+      },
+      "curse": {
+        "description": "周りの状況が / わからなくなる",
+        "id": "fog",
+        "name": "霧"
+      },
+      "definition_id": "misty-breath",
+      "display_name": "かすむ息",
+      "effect_text": "ダメージで霧",
+      "guardian": {
+        "description": "水を司る守護神",
+        "id": "mercury",
+        "name": "水星神"
+      },
+      "kind": "guardians"
+    },
+    {
+      "ability": "reflectMiracle",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "armor",
+          "numeric_defense"
+        ]
+      },
+      "defense": 12,
+      "definition_id": "moonlight-armor",
+      "display_name": "月光のよろい",
+      "effect_text": "奇跡をはね返す",
+      "kind": "armor",
+      "price": 10
+    },
+    {
+      "ability": "reflectMiracle",
+      "attack": 10,
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "weapon"
+        ]
+      },
+      "definition_id": "moonlight-axe",
+      "display_name": "月光のオノ",
+      "effect_text": "奇跡をはね返す",
+      "kind": "weapons",
+      "price": 10
+    },
+    {
+      "ability": "reflectMiracle",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "armor",
+          "numeric_defense"
+        ]
+      },
+      "defense": 8,
+      "definition_id": "moonlight-helm",
+      "display_name": "月光のかぶと",
+      "effect_text": "奇跡をはね返す",
+      "kind": "armor",
+      "price": 10
+    },
+    {
+      "ability": "reflectMiracle",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "armor",
+          "numeric_defense"
+        ]
+      },
+      "defense": 10,
+      "definition_id": "moonlight-shield",
+      "display_name": "月光の盾",
+      "effect_text": "奇跡をはね返す",
+      "kind": "armor",
+      "price": 10
+    },
+    {
+      "attack": 12,
+      "attribute": "stone",
+      "classification": {
+        "definition_class": "owned_card",
+        "miracle_subclass": "weapon",
+        "use_roles": [
+          "miracle:weapon"
+        ]
+      },
+      "definition_id": "mudflow",
+      "display_name": "＜土石流＞",
+      "hit_rate": 50,
+      "kind": "miracles",
+      "mp_cost": 6
+    },
+    {
+      "ability": "confuseEverybody",
+      "classification": {
+        "definition_class": "automatic",
+        "use_roles": []
+      },
+      "definition_id": "mushroom-outbreak",
+      "display_name": "きのこ大発生",
+      "effect_text": "みんなが三回ずつ / 勝手に行動する",
+      "guardian": {
+        "description": "木を司る守護神",
+        "id": "jupiter",
+        "name": "木星神"
+      },
+      "kind": "phenomena"
+    },
+    {
+      "additional_attack": true,
+      "attack": 7,
+      "attribute": "stone",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "weapon",
+          "additional_attack"
+        ]
+      },
+      "definition_id": "neolithic-tomahawk",
+      "display_name": "新石器トマホーク",
+      "kind": "weapons",
+      "price": 10
+    },
+    {
+      "ability": "counterBoost2xMP",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "armor",
+          "numeric_defense"
+        ]
+      },
+      "definition_id": "neptune-ring",
+      "display_name": "海王の指輪",
+      "effect_text": "+MP{ダメージ×2}",
+      "guardian": {
+        "description": "いやしを司る守護神",
+        "id": "neptune",
+        "name": "海王神"
+      },
+      "kind": "armor",
+      "price": 10
+    },
+    {
+      "ability": "removeItems",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "utility"
+        ]
+      },
+      "definition_id": "nocturnal-broom",
+      "display_name": "夜空のホウキ",
+      "effect_text": "神器を / 三個掃き飛ばす",
+      "kind": "sundries",
+      "price": 10
+    },
+    {
+      "additional_attack": true,
+      "attack": 15,
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "armor",
+          "numeric_defense",
+          "additional_attack"
+        ]
+      },
+      "defense": 9,
+      "definition_id": "ogre-s-armor",
+      "display_name": "鬼のよろい",
+      "kind": "armor",
+      "price": 20
+    },
+    {
+      "additional_attack": true,
+      "attack": 10,
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "armor",
+          "numeric_defense",
+          "additional_attack"
+        ]
+      },
+      "defense": 5,
+      "definition_id": "ogre-s-gauntlet",
+      "display_name": "鬼の小手",
+      "kind": "armor",
+      "price": 15
+    },
+    {
+      "additional_attack": true,
+      "attack": 10,
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "armor",
+          "numeric_defense",
+          "additional_attack"
+        ]
+      },
+      "defense": 7,
+      "definition_id": "ogre-s-helm",
+      "display_name": "鬼のかぶと",
+      "kind": "armor",
+      "price": 15
+    },
+    {
+      "additional_attack": true,
+      "attack": 5,
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "armor",
+          "numeric_defense",
+          "additional_attack"
+        ]
+      },
+      "defense": 3,
+      "definition_id": "ogre-s-shoes",
+      "display_name": "鬼のくつ",
+      "kind": "armor",
+      "price": 10
+    },
+    {
+      "ability": "addCurse",
+      "attribute": "darkness",
+      "classification": {
+        "definition_class": "automatic",
+        "use_roles": []
+      },
+      "curse": {
+        "description": "全体攻撃を受けると / 必ず命中する",
+        "id": "darkcloud",
+        "name": "暗雲"
+      },
+      "definition_id": "ominous-premonition",
+      "display_name": "不吉な予感",
+      "effect_text": "対象に暗雲を付与",
+      "guardian": {
+        "description": "闇を司る守護神",
+        "id": "pluto",
+        "name": "冥王神"
+      },
+      "kind": "guardians"
+    },
+    {
+      "attack": 2,
+      "attribute": "fire",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "weapon"
+        ]
+      },
+      "definition_id": "ouch-knife",
+      "display_name": "あちちナイフ",
+      "kind": "weapons",
+      "price": 2
+    },
+    {
+      "attack": 5,
+      "attribute": "water",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "weapon"
+        ]
+      },
+      "definition_id": "oversize-snowball",
+      "display_name": "特大雪玉",
+      "hit_rate": 50,
+      "kind": "weapons",
+      "price": 5
+    },
+    {
+      "additional_attack": true,
+      "attack": 5,
+      "attribute": "stone",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "weapon",
+          "additional_attack"
+        ]
+      },
+      "definition_id": "paleolithic-javelin",
+      "display_name": "旧石器ジャベリン",
+      "kind": "weapons",
+      "price": 10
+    },
+    {
+      "attack": 2,
+      "attribute": "stone",
+      "classification": {
+        "definition_class": "automatic",
+        "use_roles": []
+      },
+      "definition_id": "pebble",
+      "display_name": "小石",
+      "guardian": {
+        "description": "土を司る守護神",
+        "id": "saturn",
+        "name": "土星神"
+      },
+      "kind": "guardians"
+    },
+    {
+      "attack": 20,
+      "attribute": "stone",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "weapon"
+        ]
+      },
+      "definition_id": "petit-saturn",
+      "display_name": "プチサターン",
+      "hit_rate": 25,
+      "kind": "weapons",
+      "price": 15
+    },
+    {
+      "additional_attack": true,
+      "attack": 1,
+      "attribute": "light",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "weapon",
+          "additional_attack"
+        ]
+      },
+      "definition_id": "piece-of-brightness",
+      "display_name": "輝きのカケラ",
+      "kind": "weapons",
+      "price": 10
+    },
+    {
+      "attack": 4,
+      "attribute": "wood",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "weapon"
+        ]
+      },
+      "definition_id": "plant-cup",
+      "display_name": "植物杯",
+      "hit_rate": 75,
+      "kind": "weapons",
+      "price": 6
+    },
+    {
+      "attack": 5,
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "weapon",
+          "numeric_defense"
+        ]
+      },
+      "defense": 7,
+      "definition_id": "plate-of-strike",
+      "display_name": "打撃の鉄板",
+      "kind": "weapons",
+      "price": 3
+    },
+    {
+      "ability": "counterCurse",
+      "attribute": "darkness",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "armor",
+          "numeric_defense"
+        ]
+      },
+      "curse": {
+        "description": "全体攻撃を受けると / 必ず命中する",
+        "id": "darkcloud",
+        "name": "暗雲"
+      },
+      "definition_id": "pluto-ring",
+      "display_name": "冥王の指輪",
+      "effect_text": "被ダメージ後に相手へ暗雲を付与",
+      "kind": "armor",
+      "price": 10
+    },
+    {
+      "attack": 9,
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "weapon"
+        ]
+      },
+      "definition_id": "power-halberd",
+      "display_name": "パワーハルベルト",
+      "kind": "weapons",
+      "price": 3
+    },
+    {
+      "attack": 1,
+      "attribute": "darkness",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "weapon"
+        ]
+      },
+      "definition_id": "pri-pri-pricker",
+      "display_name": "ちくりんちょ",
+      "kind": "weapons",
+      "price": 10
+    },
+    {
+      "additional_attack": true,
+      "attack": 8,
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "weapon",
+          "additional_attack"
+        ]
+      },
+      "definition_id": "psychic-card",
+      "display_name": "サイキックカード",
+      "kind": "weapons",
+      "price": 8
+    },
+    {
+      "attack": 3,
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "weapon"
+        ]
+      },
+      "definition_id": "punch",
+      "display_name": "パンチ",
+      "kind": "weapons",
+      "price": 1
+    },
+    {
+      "attack": 9,
+      "attribute": "water",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "weapon"
+        ]
+      },
+      "definition_id": "rain-deity-s-saber",
+      "display_name": "雨神刀",
+      "hit_rate": 50,
+      "kind": "weapons",
+      "price": 9
+    },
+    {
+      "ability": "filterAtkElement",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "armor"
+        ]
+      },
+      "definition_id": "rainbow-curtain",
+      "display_name": "虹のカーテン",
+      "effect_text": "攻撃の属性を / こし取る",
+      "kind": "armor",
+      "price": 15
+    },
+    {
+      "ability": "absorbHP",
+      "attack": 12,
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "weapon"
+        ]
+      },
+      "definition_id": "real-ghost-sword",
+      "display_name": "リアルゴーストソード",
+      "effect_text": "HPを吸収する",
+      "kind": "weapons",
+      "price": 15
+    },
+    {
+      "ability": "reflectWeapon",
+      "attack": 10,
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "weapon"
+        ]
+      },
+      "definition_id": "reflection-sword",
+      "display_name": "反射剣",
+      "effect_text": "無属性武器をはね返す",
+      "kind": "weapons",
+      "price": 5
+    },
+    {
+      "ability": "setGuardian",
+      "classification": {
+        "definition_class": "owned_card",
+        "miracle_subclass": "utility",
+        "use_roles": [
+          "miracle:utility"
+        ]
+      },
+      "definition_id": "release",
+      "display_name": "＜解放＞",
+      "effect_text": "守護神が宿る",
+      "kind": "miracles",
+      "mp_cost": 15
+    },
+    {
+      "attribute": "wood",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "armor",
+          "numeric_defense"
+        ]
+      },
+      "defense": 5,
+      "definition_id": "resin-knit-robe",
+      "display_name": "樹脂で編んだ法衣",
+      "kind": "armor",
+      "price": 10
+    },
+    {
+      "attack": 8,
+      "attribute": "stone",
+      "classification": {
+        "definition_class": "owned_card",
+        "miracle_subclass": "weapon",
+        "use_roles": [
+          "miracle:weapon"
+        ]
+      },
+      "definition_id": "rock",
+      "display_name": "＜岩＞",
+      "kind": "miracles",
+      "mp_cost": 4
+    },
+    {
+      "attack": 4,
+      "attribute": "stone",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "weapon"
+        ]
+      },
+      "definition_id": "rock-cup",
+      "display_name": "岩石杯",
+      "hit_rate": 75,
+      "kind": "weapons",
+      "price": 6
+    },
+    {
+      "ability": "boostMP",
+      "ability_value": 15,
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "utility"
+        ]
+      },
+      "definition_id": "romance-fragrance",
+      "display_name": "ロマンスの香木",
+      "effect_text": "+MP15",
+      "kind": "sundries",
+      "price": 5
+    },
+    {
+      "ability": "boostHP",
+      "ability_value": 15,
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "utility"
+        ]
+      },
+      "definition_id": "romance-water",
+      "display_name": "ロマンスウォーター",
+      "effect_text": "+HP15",
+      "kind": "sundries",
+      "price": 5
+    },
+    {
+      "attack": 2,
+      "attribute": "wood",
+      "classification": {
+        "definition_class": "automatic",
+        "use_roles": []
+      },
+      "definition_id": "root",
+      "display_name": "根っこ",
+      "guardian": {
+        "description": "木を司る守護神",
+        "id": "jupiter",
+        "name": "木星神"
+      },
+      "kind": "guardians"
+    },
+    {
+      "attribute": "wood",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "armor",
+          "numeric_defense"
+        ]
+      },
+      "defense": 3,
+      "definition_id": "sacred-tree-gauntlet",
+      "display_name": "御神木の小手",
+      "kind": "armor",
+      "price": 6
+    },
+    {
+      "ability": "sacrifice",
+      "classification": {
+        "definition_class": "operation",
+        "use_roles": []
+      },
+      "definition_id": "sacrifice",
+      "display_name": "ささげる",
+      "effect_text": "神器をささげる / (新しい神器を授かる)",
+      "kind": "trade"
+    },
+    {
+      "ability": "counter2xAtk",
+      "attribute": "stone",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "armor",
+          "numeric_defense"
+        ]
+      },
+      "definition_id": "saturn-ring",
+      "display_name": "土星の指輪",
+      "effect_text": "攻{ダメージ×2}",
+      "kind": "armor",
+      "price": 10
+    },
+    {
+      "attack": 2,
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "weapon",
+          "numeric_defense"
+        ]
+      },
+      "defense": 6,
+      "definition_id": "saver-rod",
+      "display_name": "セイバーロッド",
+      "kind": "weapons",
+      "price": 10
+    },
+    {
+      "ability": "attackTwice",
+      "attack": 3,
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "weapon"
+        ]
+      },
+      "definition_id": "saw-boom-boom",
+      "display_name": "のこぶんぶん",
+      "effect_text": "二回攻撃する",
+      "kind": "weapons",
+      "price": 10
+    },
+    {
+      "ability": "boostHP",
+      "ability_value": 5,
+      "classification": {
+        "definition_class": "automatic",
+        "use_roles": []
+      },
+      "definition_id": "seafood-soup",
+      "display_name": "潮汁",
+      "effect_text": "+HP5",
+      "guardian": {
+        "description": "いやしを司る守護神",
+        "id": "neptune",
+        "name": "海王神"
+      },
+      "kind": "guardians"
+    },
+    {
+      "ability": "sell",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "trade"
+        ]
+      },
+      "definition_id": "sell",
+      "display_name": "売る",
+      "effect_text": "神器を一個売る",
+      "kind": "trade",
+      "price": 5
+    },
+    {
+      "ability": "addCurseOnDamage",
+      "attack": 13,
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "weapon"
+        ]
+      },
+      "curse": {
+        "description": "毎ターン1ダメージ / (悪化すると熱病)",
+        "id": "cold",
+        "name": "風邪"
+      },
+      "definition_id": "severe-gale-sword",
+      "display_name": "激烈疾風剣",
+      "effect_text": "ダメージで風邪",
+      "kind": "weapons",
+      "price": 15
+    },
+    {
+      "attack": 2,
+      "attribute": "darkness",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "weapon"
+        ]
+      },
+      "definition_id": "shadow-hand",
+      "display_name": "シャドウハンド",
+      "hit_rate": 50,
+      "kind": "weapons",
+      "price": 8
+    },
+    {
+      "attribute": "light",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "armor",
+          "numeric_defense"
+        ]
+      },
+      "defense": 6,
+      "definition_id": "shining-high-heels",
+      "display_name": "ぴかぴかハイヒール",
+      "kind": "armor",
+      "price": 15
+    },
+    {
+      "attack": 1,
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "weapon"
+        ]
+      },
+      "definition_id": "silver-club",
+      "display_name": "銀のこん棒",
+      "kind": "weapons",
+      "price": 10
+    },
+    {
+      "ability": "bounceMiracle",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "armor",
+          "numeric_defense"
+        ]
+      },
+      "defense": 9,
+      "definition_id": "sky-armor",
+      "display_name": "スカイアーマー",
+      "effect_text": "奇跡を弾く",
+      "kind": "armor",
+      "price": 5
+    },
+    {
+      "ability": "bounceMiracle",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "armor",
+          "numeric_defense"
+        ]
+      },
+      "defense": 1,
+      "definition_id": "sky-boots",
+      "display_name": "スカイブーツ",
+      "effect_text": "奇跡を弾く",
+      "kind": "armor",
+      "price": 5
+    },
+    {
+      "ability": "bounceMiracle",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "armor",
+          "numeric_defense"
+        ]
+      },
+      "defense": 3,
+      "definition_id": "sky-gauntlet",
+      "display_name": "スカイガントレット",
+      "effect_text": "奇跡を弾く",
+      "kind": "armor",
+      "price": 5
+    },
+    {
+      "ability": "bounceMiracle",
+      "additional_attack": true,
+      "attack": 9,
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "weapon",
+          "additional_attack"
+        ]
+      },
+      "definition_id": "sky-harpoon",
+      "display_name": "スカイハープーン",
+      "effect_text": "奇跡を弾く",
+      "kind": "weapons",
+      "price": 5
+    },
+    {
+      "ability": "bounceMiracle",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "armor",
+          "numeric_defense"
+        ]
+      },
+      "defense": 5,
+      "definition_id": "sky-helm",
+      "display_name": "スカイヘルム",
+      "effect_text": "奇跡を弾く",
+      "kind": "armor",
+      "price": 5
+    },
+    {
+      "ability": "bounceMiracle",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "armor",
+          "numeric_defense"
+        ]
+      },
+      "defense": 7,
+      "definition_id": "sky-shield",
+      "display_name": "スカイシールド",
+      "effect_text": "奇跡を弾く",
+      "kind": "armor",
+      "price": 5
+    },
+    {
+      "attribute": "stone",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "armor",
+          "numeric_defense"
+        ]
+      },
+      "defense": 1,
+      "definition_id": "slate",
+      "display_name": "石版",
+      "kind": "armor",
+      "price": 2
+    },
+    {
+      "ability": "dealDamage",
+      "ability_value": 10,
+      "classification": {
+        "definition_class": "automatic",
+        "use_roles": []
+      },
+      "definition_id": "small-devil",
+      "display_name": "小悪魔",
+      "effect_text": "10ダメージ",
+      "kind": "devils"
+    },
+    {
+      "ability": "boostHP",
+      "ability_value": 5,
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "utility"
+        ]
+      },
+      "definition_id": "smile-dew",
+      "display_name": "スマイルのしずく",
+      "effect_text": "+HP5",
+      "kind": "sundries",
+      "price": 1
+    },
+    {
+      "ability": "boostMP",
+      "ability_value": 5,
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "utility"
+        ]
+      },
+      "definition_id": "smile-flower",
+      "display_name": "スマイルの花",
+      "effect_text": "+MP5",
+      "kind": "sundries",
+      "price": 1
+    },
+    {
+      "ability": "removeMildCurses",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "utility"
+        ]
+      },
+      "definition_id": "smile-shell",
+      "display_name": "スマイルの貝がら",
+      "effect_text": "風邪 熱病 霧 閃光 / の災いを払う",
+      "kind": "sundries",
+      "price": 5
+    },
+    {
+      "attack": 5,
+      "attribute": "fire",
+      "classification": {
+        "definition_class": "owned_card",
+        "miracle_subclass": "weapon",
+        "use_roles": [
+          "miracle:weapon"
+        ]
+      },
+      "definition_id": "smoke",
+      "display_name": "＜煙＞",
+      "hit_rate": 75,
+      "kind": "miracles",
+      "mp_cost": 4
+    },
+    {
+      "attribute": "water",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "armor",
+          "numeric_defense"
+        ]
+      },
+      "defense": 8,
+      "definition_id": "snow-mask",
+      "display_name": "スノーマスク",
+      "kind": "armor",
+      "price": 10
+    },
+    {
+      "attribute": "water",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "armor",
+          "numeric_defense"
+        ]
+      },
+      "defense": 7,
+      "definition_id": "snow-mitten",
+      "display_name": "スノーミトン",
+      "kind": "armor",
+      "price": 10
+    },
+    {
+      "ability": "setGuardianOfEverybody",
+      "classification": {
+        "definition_class": "automatic",
+        "use_roles": []
+      },
+      "definition_id": "solar-eclipse",
+      "display_name": "日食",
+      "effect_text": "みんなに守護神が宿る",
+      "guardian": {
+        "description": "奇跡を司る守護神",
+        "id": "moon",
+        "name": "月神"
+      },
+      "kind": "phenomena"
+    },
+    {
+      "ability": "removeAllCurses",
+      "classification": {
+        "definition_class": "owned_card",
+        "miracle_subclass": "utility",
+        "use_roles": [
+          "miracle:utility"
+        ]
+      },
+      "definition_id": "song",
+      "display_name": "＜歌声＞",
+      "effect_text": "すべての / 災いを払う",
+      "kind": "miracles",
+      "mp_cost": 5
+    },
+    {
+      "ability": "removeAllCurses",
+      "classification": {
+        "definition_class": "automatic",
+        "use_roles": []
+      },
+      "definition_id": "sound-of-ripples",
+      "display_name": "さざ波の音",
+      "effect_text": "すべての / 災いを払う",
+      "guardian": {
+        "description": "いやしを司る守護神",
+        "id": "neptune",
+        "name": "海王神"
+      },
+      "kind": "guardians"
+    },
+    {
+      "attack": 1,
+      "attribute": "fire",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "weapon"
+        ]
+      },
+      "definition_id": "spark-bag",
+      "display_name": "火の粉袋",
+      "hit_rate": 75,
+      "kind": "weapons",
+      "price": 2
+    },
+    {
+      "attribute": "fire",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "armor",
+          "numeric_defense"
+        ]
+      },
+      "defense": 2,
+      "definition_id": "sparkle-glove",
+      "display_name": "火花の手袋",
+      "kind": "armor",
+      "price": 4
+    },
+    {
+      "attack": 13,
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "weapon"
+        ]
+      },
+      "definition_id": "spear-in-fine-view",
+      "display_name": "絶景のヤリ",
+      "kind": "weapons",
+      "price": 5
+    },
+    {
+      "attack": 4,
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "weapon",
+          "numeric_defense"
+        ]
+      },
+      "defense": 2,
+      "definition_id": "spiked-belt",
+      "display_name": "とげベルト",
+      "kind": "weapons",
+      "price": 3
+    },
+    {
+      "ability": "cutCost",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "utility",
+          "cost_cut"
+        ]
+      },
+      "definition_id": "spiritual-doll",
+      "display_name": "精霊のぬいぐるみ",
+      "effect_text": "消費なしで奇跡を起こす",
+      "kind": "sundries",
+      "price": 5
+    },
+    {
+      "ability": "cutCost",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "armor",
+          "numeric_defense",
+          "cost_cut"
+        ]
+      },
+      "defense": 9,
+      "definition_id": "spiritual-hood",
+      "display_name": "精霊の頭巾",
+      "effect_text": "消費なしで奇跡を起こす",
+      "kind": "armor",
+      "price": 20
+    },
+    {
+      "ability": "cutCost",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "armor",
+          "numeric_defense",
+          "cost_cut"
+        ]
+      },
+      "defense": 12,
+      "definition_id": "spiritual-sash",
+      "display_name": "精霊の帯",
+      "effect_text": "消費なしで奇跡を起こす",
+      "kind": "armor",
+      "price": 20
+    },
+    {
+      "ability": "cutCost",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "armor",
+          "numeric_defense",
+          "cost_cut"
+        ]
+      },
+      "defense": 6,
+      "definition_id": "spiritual-socks",
+      "display_name": "精霊の足袋",
+      "effect_text": "消費なしで奇跡を起こす",
+      "kind": "armor",
+      "price": 20
+    },
+    {
+      "ability": "cutCost",
+      "attack": 12,
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "weapon",
+          "cost_cut"
+        ]
+      },
+      "definition_id": "spiritual-staff",
+      "display_name": "精霊の杖",
+      "effect_text": "消費なしで奇跡を起こす",
+      "kind": "weapons",
+      "price": 20
+    },
+    {
+      "attack": 3,
+      "attribute": "water",
+      "classification": {
+        "definition_class": "automatic",
+        "use_roles": []
+      },
+      "definition_id": "splash",
+      "display_name": "しぶき",
+      "guardian": {
+        "description": "水を司る守護神",
+        "id": "mercury",
+        "name": "水星神"
+      },
+      "hit_rate": 50,
+      "kind": "guardians"
+    },
+    {
+      "ability": "boostHP",
+      "ability_value": 10,
+      "classification": {
+        "definition_class": "owned_card",
+        "miracle_subclass": "utility",
+        "use_roles": [
+          "miracle:utility"
+        ]
+      },
+      "definition_id": "spring",
+      "display_name": "＜泉＞",
+      "effect_text": "+HP10",
+      "guardian": {
+        "description": "いやしを司る守護神",
+        "id": "neptune",
+        "name": "海王神"
+      },
+      "kind": "miracles",
+      "mp_cost": 7
+    },
+    {
+      "attack": 3,
+      "attribute": "light",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "weapon"
+        ]
+      },
+      "definition_id": "star-staff",
+      "display_name": "スタースタッフ",
+      "kind": "weapons",
+      "price": 3
+    },
+    {
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "armor",
+          "numeric_defense"
+        ]
+      },
+      "defense": 9,
+      "definition_id": "steel-armor",
+      "display_name": "はがねのよろい",
+      "kind": "armor",
+      "price": 9
+    },
+    {
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "armor",
+          "numeric_defense"
+        ]
+      },
+      "defense": 6,
+      "definition_id": "steel-gauntlet",
+      "display_name": "はがねの小手",
+      "kind": "armor",
+      "price": 6
+    },
+    {
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "armor",
+          "numeric_defense"
+        ]
+      },
+      "defense": 7,
+      "definition_id": "steel-helm",
+      "display_name": "はがねのかぶと",
+      "kind": "armor",
+      "price": 7
+    },
+    {
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "armor",
+          "numeric_defense"
+        ]
+      },
+      "defense": 8,
+      "definition_id": "steel-shield",
+      "display_name": "はがねの盾",
+      "kind": "armor",
+      "price": 8
+    },
+    {
+      "attack": 4,
+      "attribute": "stone",
+      "classification": {
+        "definition_class": "automatic",
+        "use_roles": []
+      },
+      "definition_id": "stone",
+      "display_name": "石",
+      "guardian": {
+        "description": "土を司る守護神",
+        "id": "saturn",
+        "name": "土星神"
+      },
+      "kind": "guardians"
+    },
+    {
+      "additional_attack": true,
+      "attack": 10,
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "utility",
+          "additional_attack"
+        ]
+      },
+      "definition_id": "strength-powder",
+      "display_name": "ちからの粉",
+      "kind": "sundries",
+      "price": 15
+    },
+    {
+      "ability": "callPhenomenon",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "utility"
+        ]
+      },
+      "definition_id": "string-of-fate",
+      "display_name": "運命のひも",
+      "effect_text": "超常現象が起こる",
+      "kind": "sundries",
+      "price": 3
+    },
+    {
+      "ability": "revive",
+      "ability_value": 10,
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "utility"
+        ]
+      },
+      "definition_id": "sun-amulet",
+      "display_name": "太陽のお守り",
+      "effect_text": "HP0になると / +HP10",
+      "kind": "sundries",
+      "price": 10
+    },
+    {
+      "ability": "reflectAnything",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "armor"
+        ]
+      },
+      "definition_id": "super-mirror",
+      "display_name": "スーパーミラー",
+      "effect_text": "何でもはね返す",
+      "kind": "armor",
+      "price": 10
+    },
+    {
+      "attack": 10,
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "weapon",
+          "numeric_defense"
+        ]
+      },
+      "defense": 10,
+      "definition_id": "sword-shield",
+      "display_name": "ソードシールド",
+      "kind": "weapons",
+      "price": 15
+    },
+    {
+      "attack": 2,
+      "attribute": "stone",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "weapon"
+        ]
+      },
+      "definition_id": "sword-ware",
+      "display_name": "つるぎ焼き",
+      "kind": "weapons",
+      "price": 2
+    },
+    {
+      "ability": "absorbHP",
+      "attack": 1,
+      "attribute": "wood",
+      "classification": {
+        "definition_class": "automatic",
+        "use_roles": []
+      },
+      "definition_id": "tentacles",
+      "display_name": "触手",
+      "effect_text": "HPを吸収する",
+      "guardian": {
+        "description": "木を司る守護神",
+        "id": "jupiter",
+        "name": "木星神"
+      },
+      "hit_rate": 75,
+      "kind": "guardians"
+    },
+    {
+      "attribute": "stone",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "armor",
+          "numeric_defense"
+        ]
+      },
+      "defense": 8,
+      "definition_id": "terra-armor",
+      "display_name": "大地のよろい",
+      "kind": "armor",
+      "price": 10
+    },
+    {
+      "attribute": "stone",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "armor",
+          "numeric_defense"
+        ]
+      },
+      "defense": 5,
+      "definition_id": "terra-gauntlet",
+      "display_name": "大地の小手",
+      "kind": "armor",
+      "price": 10
+    },
+    {
+      "attribute": "stone",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "armor",
+          "numeric_defense"
+        ]
+      },
+      "defense": 6,
+      "definition_id": "terra-helm",
+      "display_name": "大地のかぶと",
+      "kind": "armor",
+      "price": 10
+    },
+    {
+      "attribute": "stone",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "armor",
+          "numeric_defense"
+        ]
+      },
+      "defense": 4,
+      "definition_id": "terra-shoes",
+      "display_name": "大地のくつ",
+      "kind": "armor",
+      "price": 8
+    },
+    {
+      "attack": 1,
+      "attribute": "darkness",
+      "classification": {
+        "definition_class": "automatic",
+        "use_roles": []
+      },
+      "definition_id": "thinking",
+      "display_name": "思考",
+      "guardian": {
+        "description": "闇を司る守護神",
+        "id": "pluto",
+        "name": "冥王神"
+      },
+      "hit_rate": 25,
+      "kind": "guardians"
+    },
+    {
+      "attack": 2,
+      "attribute": "wood",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "weapon"
+        ]
+      },
+      "definition_id": "thorn-whip",
+      "display_name": "いばらのムチ",
+      "kind": "weapons",
+      "price": 2
+    },
+    {
+      "ability": "boostHPOrDealDamage",
+      "ability_value": 10,
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "utility"
+        ]
+      },
+      "definition_id": "thump-thump-tear",
+      "display_name": "ドキドキ涙",
+      "effect_text": "明示した対象PlayerがHP10を得る、または10ダメージを受ける",
+      "kind": "sundries",
+      "price": 1
+    },
+    {
+      "attack": 10,
+      "attribute": "light",
+      "classification": {
+        "definition_class": "owned_card",
+        "miracle_subclass": "weapon",
+        "use_roles": [
+          "miracle:weapon"
+        ]
+      },
+      "definition_id": "thunder",
+      "display_name": "＜雷＞",
+      "hit_rate": 25,
+      "kind": "miracles",
+      "mp_cost": 4
+    },
+    {
+      "ability": "removeMildCurses",
+      "classification": {
+        "definition_class": "owned_card",
+        "miracle_subclass": "utility",
+        "use_roles": [
+          "miracle:utility"
+        ]
+      },
+      "definition_id": "tone",
+      "display_name": "＜音色＞",
+      "effect_text": "風邪 熱病 霧 閃光 / の災いを払う",
+      "kind": "miracles",
+      "mp_cost": 2
+    },
+    {
+      "additional_attack": true,
+      "attack": 13,
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "weapon",
+          "additional_attack"
+        ]
+      },
+      "definition_id": "top-of-combat",
+      "display_name": "独楽コンバット",
+      "kind": "weapons",
+      "price": 10
+    },
+    {
+      "attack": 1,
+      "attribute": "fire",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "weapon"
+        ]
+      },
+      "definition_id": "torch",
+      "display_name": "たいまつ",
+      "kind": "weapons",
+      "price": 1
+    },
+    {
+      "ability": "setHPOfEverybody",
+      "ability_value": 1,
+      "classification": {
+        "definition_class": "automatic",
+        "use_roles": []
+      },
+      "definition_id": "tornado",
+      "display_name": "竜巻",
+      "effect_text": "みんなのHPが1になる",
+      "guardian": {
+        "description": "土を司る守護神",
+        "id": "saturn",
+        "name": "土星神"
+      },
+      "kind": "phenomena"
+    },
+    {
+      "ability": "boostCP",
+      "ability_value": 10,
+      "classification": {
+        "definition_class": "owned_card",
+        "miracle_subclass": "utility",
+        "use_roles": [
+          "miracle:utility"
+        ]
+      },
+      "definition_id": "treasure",
+      "display_name": "＜財宝＞",
+      "effect_text": "+¥10",
+      "guardian": {
+        "description": "お金を司る守護神",
+        "id": "venus",
+        "name": "金星神"
+      },
+      "kind": "miracles",
+      "mp_cost": 5
+    },
+    {
+      "ability": "removeSomething",
+      "classification": {
+        "definition_class": "automatic",
+        "use_roles": []
+      },
+      "definition_id": "trickster",
+      "display_name": "イタズラマン",
+      "effect_text": "神器か起こした奇跡を / 二個盗む",
+      "kind": "devils"
+    },
+    {
+      "ability": "bounceMiracle",
+      "classification": {
+        "definition_class": "owned_card",
+        "miracle_subclass": "defense",
+        "use_roles": [
+          "miracle:defense"
+        ]
+      },
+      "definition_id": "turbulence",
+      "display_name": "＜乱気流＞",
+      "effect_text": "奇跡を弾く",
+      "kind": "miracles",
+      "mp_cost": 5
+    },
+    {
+      "attack": 2,
+      "attribute": "light",
+      "classification": {
+        "definition_class": "automatic",
+        "use_roles": []
+      },
+      "definition_id": "twinkle",
+      "display_name": "点滅",
+      "guardian": {
+        "description": "光を司る守護神",
+        "id": "uranus",
+        "name": "天王神"
+      },
+      "kind": "guardians"
+    },
+    {
+      "additional_attack": true,
+      "attack": 7,
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "weapon",
+          "additional_attack"
+        ]
+      },
+      "definition_id": "unknown-feather",
+      "display_name": "未知の羽根",
+      "kind": "weapons",
+      "price": 7
+    },
+    {
+      "ability": "counterCurse",
+      "attribute": "light",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "armor",
+          "numeric_defense"
+        ]
+      },
+      "curse": {
+        "description": "防御のときに神器を / 一つしか使えない",
+        "id": "flash",
+        "name": "閃光"
+      },
+      "definition_id": "uranus-ring",
+      "display_name": "天王の指輪",
+      "effect_text": "被ダメージ後に相手へ閃光を付与",
+      "kind": "armor",
+      "price": 10
+    },
+    {
+      "ability": "counterTakeCP",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "armor",
+          "numeric_defense"
+        ]
+      },
+      "definition_id": "venus-ring",
+      "display_name": "金星の指輪",
+      "effect_text": "¥{ダメージ} 没収",
+      "guardian": {
+        "description": "お金を司る守護神",
+        "id": "venus",
+        "name": "金星神"
+      },
+      "kind": "armor",
+      "price": 10
+    },
+    {
+      "ability": "absorbHP",
+      "attack": 3,
+      "attribute": "wood",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "weapon"
+        ]
+      },
+      "definition_id": "vine-shoot",
+      "display_name": "つるシュート",
+      "effect_text": "HPを吸収する",
+      "hit_rate": 75,
+      "kind": "weapons",
+      "price": 10
+    },
+    {
+      "attack": 14,
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "weapon"
+        ]
+      },
+      "definition_id": "violent-flail",
+      "display_name": "暴れフレイル",
+      "kind": "weapons",
+      "price": 5
+    },
+    {
+      "ability": "blockWeapon",
+      "classification": {
+        "definition_class": "owned_card",
+        "miracle_subclass": "defense",
+        "use_roles": [
+          "miracle:defense"
+        ]
+      },
+      "definition_id": "wall",
+      "display_name": "＜壁＞",
+      "effect_text": "無属性武器を止める",
+      "kind": "miracles",
+      "mp_cost": 6
+    },
+    {
+      "ability": "setElement",
+      "additional_attack": true,
+      "attack": 2,
+      "attribute": "fire",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "weapon",
+          "additional_attack"
+        ]
+      },
+      "definition_id": "wand-of-ignition",
+      "display_name": "発火のワンド",
+      "effect_text": "火属性に染める",
+      "kind": "weapons",
+      "price": 15
+    },
+    {
+      "ability": "setElement",
+      "additional_attack": true,
+      "attack": 5,
+      "attribute": "water",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "weapon",
+          "additional_attack"
+        ]
+      },
+      "definition_id": "wand-of-mystic-water",
+      "display_name": "魔水のワンド",
+      "effect_text": "水属性に染める",
+      "kind": "weapons",
+      "price": 15
+    },
+    {
+      "ability": "boostHP",
+      "ability_value": 50,
+      "classification": {
+        "definition_class": "automatic",
+        "use_roles": []
+      },
+      "definition_id": "warm-current",
+      "display_name": "暖流",
+      "effect_text": "+HP50",
+      "guardian": {
+        "description": "いやしを司る守護神",
+        "id": "neptune",
+        "name": "海王神"
+      },
+      "kind": "phenomena"
+    },
+    {
+      "additional_attack": true,
+      "attack": 5,
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "weapon",
+          "additional_attack"
+        ]
+      },
+      "definition_id": "warrior-s-bow",
+      "display_name": "戦士の弓",
+      "kind": "weapons",
+      "price": 5
+    },
+    {
+      "attack": 8,
+      "attribute": "water",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "weapon"
+        ]
+      },
+      "definition_id": "water-dragon-s-horn",
+      "display_name": "水竜一角",
+      "kind": "weapons",
+      "price": 10
+    },
+    {
+      "attack": 25,
+      "attribute": "water",
+      "classification": {
+        "definition_class": "owned_card",
+        "miracle_subclass": "weapon",
+        "use_roles": [
+          "miracle:weapon"
+        ]
+      },
+      "definition_id": "waterfall",
+      "display_name": "＜滝＞",
+      "kind": "miracles",
+      "mp_cost": 12
+    },
+    {
+      "attack": 2,
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "weapon"
+        ]
+      },
+      "definition_id": "whip",
+      "display_name": "ムチ",
+      "kind": "weapons",
+      "price": 1
+    },
+    {
+      "ability": "addCurse",
+      "classification": {
+        "definition_class": "owned_card",
+        "miracle_subclass": "status",
+        "use_roles": [
+          "miracle:status"
+        ]
+      },
+      "curse": {
+        "description": "毎ターン1ダメージ / (悪化すると熱病)",
+        "id": "cold",
+        "name": "風邪"
+      },
+      "definition_id": "wind",
+      "display_name": "＜風＞",
+      "effect_text": "対象に風邪を付与",
+      "kind": "miracles",
+      "mp_cost": 6
+    },
+    {
+      "ability": "addCurseOnDamage",
+      "attack": 1,
+      "attribute": "stone",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "weapon"
+        ]
+      },
+      "curse": {
+        "description": "毎ターン1ダメージ / (悪化すると熱病)",
+        "id": "cold",
+        "name": "風邪"
+      },
+      "definition_id": "wind-talons",
+      "display_name": "風のカギ爪",
+      "effect_text": "ダメージで風邪",
+      "kind": "weapons",
+      "price": 10
+    },
+    {
+      "attack": 2,
+      "attribute": "darkness",
+      "classification": {
+        "definition_class": "automatic",
+        "use_roles": []
+      },
+      "definition_id": "wink",
+      "display_name": "まばたき",
+      "guardian": {
+        "description": "闇を司る守護神",
+        "id": "pluto",
+        "name": "冥王神"
+      },
+      "kind": "guardians"
+    },
+    {
+      "attack": 10,
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "weapon"
+        ]
+      },
+      "definition_id": "wonder-sword",
+      "display_name": "ワンダーソード",
+      "kind": "weapons",
+      "price": 4
+    },
+    {
+      "attribute": "wood",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "armor",
+          "numeric_defense"
+        ]
+      },
+      "defense": 2,
+      "definition_id": "wood-shield",
+      "display_name": "木の盾",
+      "kind": "armor",
+      "price": 4
+    },
+    {
+      "attack": 1,
+      "attribute": "wood",
+      "classification": {
+        "definition_class": "owned_card",
+        "use_roles": [
+          "weapon"
+        ]
+      },
+      "definition_id": "wooden-sword",
+      "display_name": "木刀",
+      "kind": "weapons",
+      "price": 1
+    }
+  ],
+  "locale": "ja",
+  "rule_set_version": "true-match-1v1-v2"
+}
