@@ -22,12 +22,11 @@ from gf_common.structured import (
     EventBoundary,
     EventDelta,
     Selection,
-    _CardInstanceDecisionFrame,
+    _frame_type,
     _validate_purpose,
     event_delta,
 )
 from gf_common.structured_layout import (
-    CARD_INSTANCE_LAYOUT,
     LEGACY_LAYOUT,
     StructuredLayout,
     layout_for_contract,
@@ -47,7 +46,7 @@ def parse_frame(raw: Json, *, layout: StructuredLayout = LEGACY_LAYOUT) -> Decis
     require_layout(layout)
     closed(raw, {"actor", "episode", "revision", "interval_start", "boundary", "interval_start_hash", "payload", "frame_hash"})
     boundary = EventBoundary(**closed(raw["boundary"], {"end", "prefix_hash"}))
-    frame_type = DecisionFrame if layout is LEGACY_LAYOUT else _CardInstanceDecisionFrame
+    frame_type = _frame_type(layout)
     return frame_type(raw["actor"], raw["episode"], raw["revision"], raw["interval_start"], boundary,
                          raw["interval_start_hash"], canonical(raw["payload"]).encode(), raw["frame_hash"])
 
@@ -165,7 +164,7 @@ def parse_report_v3(raw: Json, *, action_contract: CardInstanceContract,
 
 def generated_dict_v3(value: GeneratedCandidatesV3, *, action_contract: CardInstanceContract,
                       rules: CardInstanceRules) -> Json:
-    if type(value) is not GeneratedCandidatesV3 or value.table.layout is not CARD_INSTANCE_LAYOUT:
+    if type(value) is not GeneratedCandidatesV3 or value.table.layout is not layout_for_contract(action_contract):
         raise ContractError("explicit card-instance generated candidates required")
     report = report_dict_v3(value.report, action_contract=action_contract, rules=rules)
     if value.table.action_contract != action_contract:
@@ -178,5 +177,5 @@ def parse_generated_v3(raw: Json, *, action_contract: CardInstanceContract,
     closed(raw, {"table", "report"})
     report = parse_report_v3(raw["report"], action_contract=action_contract, rules=rules)
     table = parse_table(raw["table"], action_contract=action_contract, purpose="component",
-                        synthetic_capacity=False, layout=CARD_INSTANCE_LAYOUT)
+                        synthetic_capacity=False, layout=layout_for_contract(action_contract))
     return GeneratedCandidatesV3(table, report)

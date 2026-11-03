@@ -27,9 +27,11 @@ from gf_common.card_instance import (
 from gf_common.domain import ContractError, DecisionInput, Json, canonical, closed, digest, integer
 from gf_common.structured_layout import (
     CARD_INSTANCE_LAYOUT,
+    CORRECTED_CARD_INSTANCE_LAYOUT,
     GENERATOR_V2,
     LEGACY_LAYOUT,
     StructuredLayout,
+    is_card_instance_layout,
     layout_for_contract,
     require_layout,
 )
@@ -179,7 +181,11 @@ class EventDelta:
 
 
 def _initial(actor: int, episode: str, layout: StructuredLayout = LEGACY_LAYOUT) -> str:
-    return digest([require_layout(layout).input_recipe, "event-bank", actor, episode])
+    require_layout(layout)
+    binding: list[Any] = [layout.input_recipe, "event-bank", actor, episode]
+    if layout is CORRECTED_CARD_INSTANCE_LAYOUT:
+        binding.append(asdict(layout.action_contract))
+    return digest(binding)
 
 
 def _next(previous: str, event: bytes) -> str:
@@ -278,7 +284,8 @@ class EventBank:
         integer(boundary.end, 0, len(self._events))
         if self._prefixes[boundary.end] != boundary.prefix_hash:
             raise ContractError("bank boundary mismatch")
-        view_type = EventBankView if self.layout is LEGACY_LAYOUT else _CardInstanceEventBankView
+        view_type = (EventBankView if self.layout is LEGACY_LAYOUT else
+                     _CardInstanceEventBankView if self.layout is CARD_INSTANCE_LAYOUT else _CorrectedCardInstanceEventBankView)
         return view_type(self.actor, self.episode, tuple(self._events[:boundary.end]),
                              tuple(self._prefixes[:boundary.end + 1]))
 
@@ -341,8 +348,10 @@ class DecisionFrame:
         binding = {"actor": self.actor, "episode": self.episode, "revision": self.revision,
                 "interval_start": self.interval_start, "interval_start_hash": self.interval_start_hash,
                 "boundary": asdict(self.boundary), "payload": json.loads(self.payload)}
-        if self.layout is CARD_INSTANCE_LAYOUT:
+        if is_card_instance_layout(self.layout):
             binding.update(input_recipe=self.layout.input_recipe, policy_input_version=self.layout.policy_input_version)
+        if self.layout is CORRECTED_CARD_INSTANCE_LAYOUT:
+            binding["action_contract"] = asdict(self.layout.action_contract)
         return binding
 
     @property
@@ -356,7 +365,7 @@ class DecisionFrame:
     @property
     def references(self) -> tuple[Any, ...]:
         own = self.observation["own"]
-        if self.layout is CARD_INSTANCE_LAYOUT:
+        if is_card_instance_layout(self.layout):
             return tuple(card["card_ref"] for card in own["cards"])
         return tuple([{"source": "hand_artifact", "instance_id": card["instance_id"]}
                       for card in own["hand"]]
@@ -394,9 +403,11 @@ class DecisionFrame:
         binding = {"actor": bank.actor, "episode": bank.episode, "revision": obs["state_revision"],
                    "interval_start": interval_start, "interval_start_hash": bank._prefixes[interval_start],
                    "boundary": asdict(bank.boundary), "payload": raw}
-        if layout is CARD_INSTANCE_LAYOUT:
+        if is_card_instance_layout(layout):
             binding.update(input_recipe=layout.input_recipe, policy_input_version=layout.policy_input_version)
-        frame_type = DecisionFrame if layout is LEGACY_LAYOUT else _CardInstanceDecisionFrame
+        if layout is CORRECTED_CARD_INSTANCE_LAYOUT:
+            binding["action_contract"] = asdict(layout.action_contract)
+        frame_type = _frame_type(layout)
         frame = frame_type(bank.actor, bank.episode, obs["state_revision"], interval_start, bank.boundary,
                     bank._prefixes[interval_start], _bytes(raw), digest(binding))
         bank._last_frame = frame
@@ -424,10 +435,39 @@ class _CardInstanceDecisionFrame(DecisionFrame):
         return CARD_INSTANCE_LAYOUT
 
 
+@dataclass(frozen=True, init=False)
+class _CorrectedCardInstanceEventDelta(EventDelta):
+    @property
+    def layout(self) -> StructuredLayout:
+        return CORRECTED_CARD_INSTANCE_LAYOUT
+
+
+@dataclass(frozen=True)
+class _CorrectedCardInstanceEventBankView(EventBankView):
+    @property
+    def layout(self) -> StructuredLayout:
+        return CORRECTED_CARD_INSTANCE_LAYOUT
+
+
+@dataclass(frozen=True)
+class _CorrectedCardInstanceDecisionFrame(DecisionFrame):
+    @property
+    def layout(self) -> StructuredLayout:
+        return CORRECTED_CARD_INSTANCE_LAYOUT
+
+
+def _frame_type(layout: StructuredLayout) -> type[DecisionFrame]:
+    require_layout(layout)
+    if layout is LEGACY_LAYOUT:
+        return DecisionFrame
+    return _CardInstanceDecisionFrame if layout is CARD_INSTANCE_LAYOUT else _CorrectedCardInstanceDecisionFrame
+
+
 def event_delta(actor: int, episode: str, start: int, previous_hash: str,
                 events: tuple[Json, ...] | list[Json], *, layout: StructuredLayout = LEGACY_LAYOUT) -> EventDelta:
     require_layout(layout)
-    delta_type = EventDelta if layout is LEGACY_LAYOUT else _CardInstanceEventDelta
+    delta_type = (EventDelta if layout is LEGACY_LAYOUT else
+                  _CardInstanceEventDelta if layout is CARD_INSTANCE_LAYOUT else _CorrectedCardInstanceEventDelta)
     return delta_type(actor, episode, start, previous_hash, events)
 
 
@@ -469,7 +509,7 @@ class CandidateTable:
         for index, kind in enumerate(self.kinds):
             if kind not in layout.action_kinds or self.targets[index] not in layout.targets:
                 raise ContractError("unknown action kind/relative target")
-            if layout is CARD_INSTANCE_LAYOUT:
+            if is_card_instance_layout(layout):
                 targeted = kind in ("play_sequence", "sell", "buy")
                 if (targeted and self.targets[index] not in ("self", "opponent")
                         or not targeted and self.targets[index] != "omitted"):
@@ -552,13 +592,13 @@ class CandidateTable:
 
     def to_action(self, index: int, original_frame: DecisionFrame, *, validate: bool = True) -> Json:
         layout = self.layout
-        if layout is CARD_INSTANCE_LAYOUT and self.synthetic_capacity:
+        if is_card_instance_layout(layout) and self.synthetic_capacity:
             raise ContractError("synthetic card-instance table cannot reconstruct a submit-ready Action")
         if original_frame.layout is not layout or original_frame.frame_hash != self.frame_hash:
             raise ContractError("selection original frame mismatch")
         context = _ActionContext.from_frame(original_frame)
         action = self._to_action(index, context.actor, context.references, layout)
-        if validate or layout is CARD_INSTANCE_LAYOUT:
+        if validate or is_card_instance_layout(layout):
             _validate_action_context(action, context)
         return action
 
@@ -570,7 +610,7 @@ class CandidateTable:
         elements = [refs[slot] for slot in row]
         kind = self.kinds[index]
         action: Json = {"type": kind}
-        if layout is CARD_INSTANCE_LAYOUT:
+        if is_card_instance_layout(layout):
             if kind in ("play_sequence", "respond"):
                 action["ordered_card_refs"] = elements
             elif kind in ("discard", "sacrifice"):
@@ -610,7 +650,7 @@ class CandidateTable:
 
 def _action_refs(action: Json, layout: StructuredLayout = LEGACY_LAYOUT) -> list[Any]:
     kind = action["type"]
-    if layout is CARD_INSTANCE_LAYOUT:
+    if is_card_instance_layout(layout):
         if kind in ("play_sequence", "respond"):
             return action["ordered_card_refs"]
         if kind in ("discard", "sacrifice"):
@@ -645,7 +685,7 @@ class _ActionContext:
         # frames, and never exposed as mutable policy/global cache state.
         raw = frame.raw
         own = raw["observation"]["own"]
-        references = (tuple(card["card_ref"] for card in own["cards"]) if frame.layout is CARD_INSTANCE_LAYOUT else tuple([{"source": "hand_artifact", "instance_id": card["instance_id"]}
+        references = (tuple(card["card_ref"] for card in own["cards"]) if is_card_instance_layout(frame.layout) else tuple([{"source": "hand_artifact", "instance_id": card["instance_id"]}
                             for card in own["hand"]]
                            + [{"source": "learned_miracle", "definition_id": name}
                               for name in own["learned_miracles"]]))
@@ -659,7 +699,7 @@ def _validate_action_context(action: Json, context: _ActionContext, *, synthetic
         raise ContractError("action kind not in typed metadata")
     desc = descriptors[action["type"]]
     closed(action, {"type"} | set(desc["required_fields"]), set(desc["optional_fields"]))
-    if context.layout is CARD_INSTANCE_LAYOUT:
+    if is_card_instance_layout(context.layout):
         if synthetic:
             card_v2.dataset_action(action, action_schema_version="2")
         else:

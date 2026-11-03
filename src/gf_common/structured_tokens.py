@@ -24,9 +24,9 @@ from gf_common.structured_history import (
     exact_history_tail,
 )
 from gf_common.structured_layout import (
-    CARD_INSTANCE_LAYOUT,
     LEGACY_LAYOUT,
     StructuredLayout,
+    is_card_instance_layout,
     require_layout,
 )
 
@@ -91,7 +91,7 @@ def signature_payload(aggregate_window: int = 128, *, aggregate_recipe: str | No
                    "candidate_categories": (layout.action_kinds, layout.targets),
                    "candidate_numeric": ("hp", "mp", "money", "accept"), "slots": 18,
                    "numeric_transform": "signed-log1p-fp32-v1"}
-    if layout is CARD_INSTANCE_LAYOUT:
+    if is_card_instance_layout(layout):
         if aggregate_recipe != layout.aggregate_recipe:
             raise ContractError("unsupported card-instance history recipe")
         history_fields = (tuple("event." + kind for kind in layout.event_types)

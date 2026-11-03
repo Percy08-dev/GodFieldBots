@@ -12,6 +12,7 @@ from typing import Any
 from gf_common.action_contract import engineering_contract, parse_action_contract
 from gf_common.card_instance import (
     CARD_INSTANCE_SIMULATOR_REVISION,
+    CORRECTED_SIMULATOR_REVISION,
     ActionConfigV3,
     action_config_v3,
     card_instance_contract,
@@ -89,6 +90,12 @@ class ServerConfig:
 class ServerConfigV2(ServerConfig):
     simulator_revision: str = CARD_INSTANCE_SIMULATOR_REVISION
     gameplay_api: str = "v2"
+
+
+@dataclass(frozen=True)
+class CorrectedServerConfigV2(ServerConfigV2):
+    binary: str = "../GodFieldSimurator/target/release/gf-test-server"
+    simulator_revision: str = CORRECTED_SIMULATOR_REVISION
 
 
 @dataclass(frozen=True)
@@ -182,7 +189,7 @@ def _validate_table(name: str, values: Json, *, context: Json | None = None) -> 
     elif name == "actions" and values.get("version") == "3":
         defaults = asdict(ActionConfigV3(action_contract=card_instance_contract()))
     elif name == "server" and values.get("gameplay_api") == "v2":
-        defaults = asdict(ServerConfigV2())
+        defaults = asdict(CorrectedServerConfigV2() if values.get("simulator_revision") == CORRECTED_SIMULATOR_REVISION else ServerConfigV2())
     elif name == "run" and context.get("actions", {}).get("version") in ("2", "3"):
         defaults = asdict(RunConfigV2())
     if name in ("model", "opponent") and "model_id" not in values and not structured_model:
@@ -274,16 +281,21 @@ def load_config(path: str | Path, overrides: Json | None = None) -> LoadedConfig
     structured_actions = data.get("actions", {}).get("version") == "2"
     card_instance_actions = data.get("actions", {}).get("version") == "3"
     card_instance_server = data.get("server", {}).get("gameplay_api") == "v2"
+    card_server_cls: type[ServerConfigV2] = ServerConfigV2
+    card_revision = CARD_INSTANCE_SIMULATOR_REVISION
     if card_instance_actions != card_instance_server:
         raise ContractError("actions3 requires an explicit Gameplay v2 server and conversely")
     if card_instance_actions:
         if "action_contract" not in data["actions"]:
             raise ContractError("raw actions3 Config must explicitly declare an action_contract")
-        parse_card_instance_contract(data["actions"]["action_contract"])
-        if data["server"].get("simulator_revision") != CARD_INSTANCE_SIMULATOR_REVISION:
+        selected_contract = parse_card_instance_contract(data["actions"]["action_contract"])
+        card_revision = selected_contract.simulator_revision
+        if data["server"].get("simulator_revision") != card_revision:
             raise ContractError("Gameplay v2 requires the explicit pinned simulator revision")
-        base["actions"] = asdict(ActionConfigV3(action_contract=card_instance_contract()))
-        base["server"] = asdict(ServerConfigV2())
+        if card_revision == CORRECTED_SIMULATOR_REVISION:
+            card_server_cls = CorrectedServerConfigV2
+        base["actions"] = asdict(ActionConfigV3(action_contract=selected_contract))
+        base["server"] = asdict(card_server_cls())
         base["run"] = asdict(RunConfigV2())
         for table, key in _PATHS:
             if table in ("server", "run") and base[table].get(key) is not None:
@@ -377,7 +389,7 @@ def load_config(path: str | Path, overrides: Json | None = None) -> LoadedConfig
     if run["report_reserve_seconds"] + server["cleanup_reserve_seconds"] >= run["finalization_seconds"]:
         raise ContractError("cleanup/report reserves must fit inside finalization allowance")
     integer(server["transport_retries"], 0, 2)
-    if server["simulator_revision"] != (CARD_INSTANCE_SIMULATOR_REVISION if card_instance_actions else SIMULATOR_REVISION):
+    if server["simulator_revision"] != (card_revision if card_instance_actions else SIMULATOR_REVISION):
         raise ContractError("unsupported simulator contract revision")
     if not server["fixed_seed_experiment"]:
         raise ContractError("repeated server requires explicit fixed_seed_experiment")
@@ -413,7 +425,7 @@ def load_config(path: str | Path, overrides: Json | None = None) -> LoadedConfig
             converted[name] = actions_v3
             continue
         if name == "server" and card_instance_server:
-            cls = ServerConfigV2
+            cls = card_server_cls
         if name == "run" and (structured_actions or card_instance_actions):
             cls = RunConfigV2
         values = effective[name]

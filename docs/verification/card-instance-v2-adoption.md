@@ -397,3 +397,51 @@ requires old incompatible rejected Attempts to fail strict revalidation; rebuilt
 ActionOptions can also differ, so full old Replay JSON byte identity is not
 promised. Preserve old data/pins/signatures until that adoption is implemented.
 Worker/model/native/Source integration and planned full acceptance remain pending.
+
+## Explicit corrected-profile adoption — 2026-11-04
+
+ADR0024§12 implementation and both final reviews are READY. Root accepts the
+same-class two-full-tuple CardInstanceContract registry, explicit corrected
+factory/profile04, separate corrected layout/no-field record variants and exact
+profile compatibility. Corrected bank initial/frame hashes bind full contract.
+Old07efactories/defaults/constants/presets/record hashes remain unchanged; raw
+Delta parsing still supplies context and append verifies the bank chain.
+
+Corrected token signature:
+`72db3a64f6d087a5f889c4e3cf6b4eb46a8595fd334e1249ca2d51f76496e1ad`.
+Corrected candidate-rule signature:
+`3f55f044225fb20c63d683145cdceb397c36f0b7161c7b16793f72210db3e86d`.
+Tuple/codebook widths and Rules1/owner record remain unchanged. New corrected
+Config/server defaults select the release binary/revision pair before merge and
+fresh `runs/card-instance-v2-91d5926` output; old presets stay exact.
+
+Implementer551affected tests PASS17.81s, including60new cases. Independent
+correctness271cases and architecture246cases PASS; counts overlap. Mutation
+audit accepts only2of8profile/revision/spec tuple combinations and rejects22
+single-field mutations. Actual13spec bytes match the corrected map. All13prior
+experiment hashes, original Config/contract/actions defaults, old token/rule
+signatures and goldens match the pre-edit receipt, SHA
+`3f0768e9aed4118c0f18ee6f765b8892f2df9eaa1400b56b035712d9b88789c3`.
+Whole Ruff/mypy125source files/diff checks PASS. No model/native/Source gate lift.
+
+Root's corrected-profile witness uses original dedicated Events/current own
+Observation/same-revision hints, corrected Frame,531candidate rows, v3 wire and
+actual tokenization. Original learned-Mudflow ref restores and submits at2→3;
+retained card identity/order/state/resources match exactly, Replay validates and
+server exits0/stdin_eof. Independent audit reproduces frame/wire/tokens and checks
+actual HTTP action/ack. Receipt `discard-conformance-2` in
+`runs/assessments/card-instance-corrected-adoption-20261104`. First witness1had a
+harness metadata label storing recipe under token_signature; it is preserved,
+then actual tokenization/correct signature is checked in fresh witness2.
+This is direct conformance, not192pilot, complete parent or qualified Source.
+
+Wheel SHA `8b66e54bff9650bbd6064c70858b372637ff1c769d8470bf046f79a18d20bc70`
+matches all125current Python sources. Separate mandatory-only installed baseline
+reproduces531corrected-profile rows/rule signature and starts/reaps both baseline
+workers with optional Torch/LightGBM/PyArrow/native absent. Model3/artifact4 design
+is independently READY; implementation and remaining end-to-end acceptance follow.
+
+Hardware check limitation resolved: default sandbox cannot access GPU, but HOST
+Torch2.14.1+cu132 reports CUDA available/device1 and nvidia-smi identifies RTX5070Ti
+with16303MiBtotal VRAM (12749MiBfree at capture). Preserve12GiBmanaged budget;
+this availability check is not CUDA numerical/performance acceptance.

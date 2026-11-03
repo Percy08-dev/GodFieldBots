@@ -35,7 +35,7 @@ from gf_common.structured import (
     DecisionFrame,
     EventBankView,
 )
-from gf_common.structured_layout import CARD_INSTANCE_LAYOUT, LEGACY_LAYOUT
+from gf_common.structured_layout import LEGACY_LAYOUT, layout_for_contract
 
 SATURATION = 2**63 - 1
 CHANNELS = ("attribute_effect", "attack_breadth", "resources", "refresh", "remaining_hand", "length", "exploration")
@@ -597,6 +597,8 @@ class _Space:
 
 class _CardInstanceSpace:
     def __init__(self, frame: DecisionFrame, config: ActionConfigV3, rules: CardInstanceRules) -> None:
+        if frame.layout is not layout_for_contract(config.action_contract):
+            raise ContractError("candidate configuration/frame contract mismatch")
         self.frame, self.config, self.rules = frame, config, rules
         self.rule_signature = rule_signature(config.action_contract, rules)
         self.obs, self.raw = frame.observation, frame.raw
@@ -1295,7 +1297,8 @@ class PublicCandidateGeneratorV3:
 
     def generate(self, frame: DecisionFrame, bank_view: EventBankView,
                  search_rng: random.Random, numeric_costs: NumericCosts) -> GeneratedCandidatesV3:
-        if frame.layout is not CARD_INSTANCE_LAYOUT or bank_view.layout is not CARD_INSTANCE_LAYOUT:
+        expected_layout = layout_for_contract(self.config.action_contract)
+        if frame.layout is not expected_layout or bank_view.layout is not expected_layout:
             raise ContractError("generator3 requires the card-instance layout")
         if type(search_rng) is not random.Random or type(numeric_costs) is not NumericCosts:
             raise ContractError("independent Random and closed NumericCosts required")

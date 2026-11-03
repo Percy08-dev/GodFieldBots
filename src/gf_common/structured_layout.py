@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from gf_common import structured_vocab as vocab
 from gf_common.action_contract import ActionContract, engineering_contract, parse_action_contract
 from gf_common.card_instance import (
     CardInstanceContract,
     card_instance_contract,
+    corrected_card_instance_contract,
     parse_card_instance_contract,
 )
 from gf_common.domain import CATALOG_HASH, POLICY_INPUT_VERSION, SIMULATOR_REVISION, ContractError
@@ -333,10 +334,20 @@ CARD_INSTANCE_LAYOUT = StructuredLayout(
 )
 
 
+_CORRECTED_CONTRACT = corrected_card_instance_contract()
+CORRECTED_CARD_INSTANCE_LAYOUT = replace(CARD_INSTANCE_LAYOUT,
+    action_contract=_CORRECTED_CONTRACT, simulator_revision=_CORRECTED_CONTRACT.simulator_revision)
+
+
 def require_layout(layout: StructuredLayout) -> StructuredLayout:
-    if layout is not LEGACY_LAYOUT and layout is not CARD_INSTANCE_LAYOUT:
+    if (layout is not LEGACY_LAYOUT and layout is not CARD_INSTANCE_LAYOUT
+            and layout is not CORRECTED_CARD_INSTANCE_LAYOUT):
         raise ContractError("explicit known immutable structured layout required")
     return layout
+
+
+def is_card_instance_layout(layout: StructuredLayout) -> bool:
+    return require_layout(layout) is not LEGACY_LAYOUT
 
 
 def layout_for_contract(contract: ActionContract | CardInstanceContract) -> StructuredLayout:
@@ -347,7 +358,8 @@ def layout_for_contract(contract: ActionContract | CardInstanceContract) -> Stru
         return LEGACY_LAYOUT
     if type(contract) is CardInstanceContract:
         parse_card_instance_contract(asdict(contract))
-        return CARD_INSTANCE_LAYOUT
+        return (CARD_INSTANCE_LAYOUT if contract == CARD_INSTANCE_LAYOUT.action_contract
+                else CORRECTED_CARD_INSTANCE_LAYOUT)
     raise ContractError("closed structured action contract required")
 
 

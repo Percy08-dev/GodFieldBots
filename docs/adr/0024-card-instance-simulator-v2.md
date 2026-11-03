@@ -613,3 +613,303 @@ fake clocks for exact enumeration, bounded search and count-upper-bound cases.
 Preserve table row order/hash, pre-count/search accounting, cutoff/mandatory
 coverage and full RNG before/after state. Independently reproduce those goldens
 from the committed old module during final review; wall timing is not the oracle.
+
+## 12. Corrected-runtime adoption (accepted)
+
+Independent architecture DESIGN READY after clarifying standalone Delta parsing
+versus bank-chain attestation; root accepts that scope. Source conformance and
+verification remain required before milestone acceptance.
+
+Implementation and both final reviews are READY. Root accepts551affected tests,
+old13Config/default/signature/golden preservation, corrected direct runtime
+frame/token/generator/wire conformance,125source wheel and optional-free baseline.
+Current corrected token/rule signatures are respectively
+`72db3a64f6d087a5f889c4e3cf6b4eb46a8595fd334e1249ca2d51f76496e1ad` and
+`3f55f044225fb20c63d683145cdceb397c36f0b7161c7b16793f72210db3e86d`.
+This adopts identity and pure diagnostics, not the still-unimplemented qualified
+collection/model/worker/native/Source paths.
+
+### Scope and authority
+
+Explicitly adopt verified Simulator
+`91d5926a7572db327eaea3751e7c24f428120996`, normative13inventory
+`131890dfe579bc6951f5189e460971d33658339106e219a2e00b1a289a0534d0`.
+Rule set/API/schema/catalog/ref scheme remain unchanged; catalog SHA is still
+`f51a3c73feb8b3f01837e65768aafb5a3aa805a33483308130244b33b16a8ad6`.
+The verified release TestServer SHA is
+`76aff19c2f720a572bfe422d9b1e089a1467f253038cda66de3d8c35180d0f7d`;
+debug SHA is `b3670dac3eb099ba4363058f8d92a44976ebaaf1dfdc187df5a9fe333ec0e4a1`.
+The handoff change inventory matches committed source/test/spec content; no new
+reproducible compiler build is claimed. No Simulator edits or dependencies.
+
+Spec03§34.1/spec06§31.1/spec09§11.3 govern the correction: historical rejected
+Attempts can now disagree with the engine and must fail strict reconstruction;
+rebuilt ActionOptions and full Replay JSON need not remain byte-identical.
+Do not rerun old data under new semantics, rewrite an old rejection, flip source
+eligibility, or transfer old weights automatically. Keep earlier evidence and
+all v1/engineering2/07e-component hashes/meanings unchanged.
+
+This first adoption slice adds the closed corrected identity and pure/Config/
+direct-HTTP paths. It does NOT publish model3/protocol3/journal6/native/Source
+support or open public collection/training. Those require the following scoped
+integration gates and final acceptance. All new runs use dedicated91d5926 paths.
+
+### Closed identity and dependency direction
+
+Keep the SAME exact frozen CardInstanceContract class and eleven serialized
+fields. Its defaults and card_instance_contract() remain the original07eprofile.
+Replace single-default validation with a closed immutable registry of TWO exact
+full tuples, selected by profile_id; mixed pins, missing fields, changed types
+and unknown profiles reject. This avoids subclass/type-guard proliferation while
+retaining exact historical construction/serialization. Add explicit
+corrected_card_instance_contract() and corrected revision/spec constants/map.
+The new profile is `card-instance-simulator-v2-20261104`. No partial/default
+upgrade of raw Config or stored records is permitted.
+
+Existing CARD_INSTANCE_LAYOUT stays07e. Add CORRECTED_CARD_INSTANCE_LAYOUT with
+identical field tuples/codebooks/dimensions/format versions and corrected full
+contract/revision. Only known singleton layouts pass require_layout. A closed
+is_card_instance_layout(layout) identifies schema behavior for either card-ref
+profile; it is not permission to mix their records. layout_for_contract dispatches
+the exact registered contract to its matching singleton. Keep exact expected
+layout identity checks in every bank/frame/table/token/wire boundary.
+
+The layout module remains below records/tokens and imports no upper package.
+Rules1/owner confirmation3f3090…e44ee stay unchanged; rule_signature's full-contract
+input yields a new corrected signature. Existing07erule signature1480f832…79a36
+and token signatures remain reproducible under their explicit original layout.
+Legacy default arguments continue to mean strict LEGACY_LAYOUT.
+
+### Record, signature and serialization behavior
+
+Add three thin frozen no-field corrected EventDelta/View/DecisionFrame classes;
+Delta uses init=False to retain validated construction. Existing classes stay
+unchanged. Explicit factories select the matching known class; View.prefix and
+dataclasses.replace preserve it. No InitVar or serialized runtime-layout field.
+
+For corrected banks ONLY, bind the full corrected contract into the initial
+prefix digest. For corrected frames ONLY, include that full contract in the
+frame-hash binding as well as recipe/actor/revision/payload/history. Old initial
+hashes and frame bindings stay exact. Corrected Frame/View binding verification
+rejects cross-profile reinterpretation even when event/payload bytes coincide.
+Raw Delta has no standalone profile discriminator: its parser constructs the
+explicit caller-expected variant, and append must verify previous_hash against
+the profile-bound bank chain. Parsing a Delta alone is not profile attestation.
+The new token signature already binds the full contract/revision; preserve the
+original payload keys/values for old layout signature computation.
+
+All schema branches currently written as `is CARD_INSTANCE_LAYOUT` must handle
+the closed card-ref family. All SAME-profile checks remain exact, including
+generator config↔frame↔bank, table↔frame, tokens↔model expectation and v3 wire
+expected contract/rules. CandidateTable derives layout from its stored contract;
+neither its field set nor old hash changes. New bank/frame/table/token/report
+hashes are distinct and explicitly recorded. No codec2/native marker is added;
+codec1 and old numeric consumers continue rejecting BOTH card-ref profiles.
+
+### Config, I/O and failure ownership
+
+Root adds a corrected ServerConfigV2 variant with the same field set, overridden
+revision and release-binary default, preserving original ServerConfigV2 defaults.
+Dispatch the concrete defaults before merging from the explicit raw contract and
+server revision; require their exact agreement. Keep raw API/revision/contract
+declarations mandatory, path origins correct and all old Config hashes stable.
+Add new corrected actions/experiment presets; do not overwrite07epresets. Fresh
+output root is `runs/card-instance-v2-91d5926`. Baseline-only Config validation
+and direct attested HTTP remain available; incomplete-pipeline/model3 guards stay.
+
+HTTP dispatch uses the validated passed contract and unchanged v2 public wire
+validators. Debug attestation, complete public info/catalog before Create,
+sticky poison, UUID/payload retries, ownership/deadlines/reap stay shared and
+unchanged. Metadata parsing can recognize the historical profile without granting
+qualified-use authority; future public Source/coordinator preflight must require
+the corrected profile AND verified complete original runtime/source evidence.
+Neither a contract flag nor a manually constructed qualified-purpose DTO suffices.
+
+The unchanged /v2/info carries no Git revision. Future qualified execution must
+bind actual locally managed executable/source evidence separately: exact accepted
+binary SHA, configured source revision/spec inventory and recorded handoff change
+inventory must agree before Create. Preserve that evidence in run diagnostics,
+never policy input. An external URL lacking equivalent code evidence cannot
+qualify merely by returning matching wire/catalog metadata. No such qualified
+execution path is enabled in this adoption slice.
+
+### Verification and milestone acceptance
+
+Before mutation, freeze hashes/bytes for all existing Config presets, original
+CardInstanceContract/ActionConfigV3 defaults,07e token/rule signatures and exact
+legacy/card-ref goldens. Preserve current owner record and all old fixtures.
+Verify both registry entries round-trip; all mixed/unknown tuples reject; new
+Config dispatch/relative paths work; old defaults/Config hashes stay exact.
+Check distinct corrected initial prefixes/frame/table/token/rule hashes,
+cross-profile Frame/View parser and bank/table/wire/token rejection before arrays,
+explicit Delta-context plus append-chain mismatch rejection, no-field
+dataclass/replace guarantees, and all unchanged rule/small-space/RNG goldens.
+
+Use fresh diagnostic games on the already verified release binary, full own
+Events/current Observation/same-revision hints, corrected frames, generator and
+wire; submit an original-ref learned-Mudflow Discard and verify accepted removal,
+resources/order, replay reconciliation and clean owner shutdown. This is direct
+contract conformance, not192pilot or qualified Source. Both final correctness and
+architecture-conformance reviews, relevant tests/Ruff/mypy and package baseline
+checks precede root acceptance. Full migration/learning remains subsequent work.
+
+## 13. Model3 neural kernels, inference and safe artifacts (design accepted)
+
+Independent architecture DESIGN READY after fixing exact owned RNG scope,
+per-manifest/private-namespace publication semantics, pre-change initialization
+goldens, immutable action-config binding and component-only policy selection.
+Root accepts those boundaries; implementation/conformance remain pending.
+
+This gate covers closed neural Config3, the SAME learned neural implementation
+under an explicit selected layout, participant-local standalone inference and
+inference/resume format4. It adds no runtime dependency. Tree3, participant
+protocol3/journal6, numerical rollout4/learner wire4, Source/coordinator/native
+integration are following scopes; none is implied by this numerical milestone.
+
+### Config and shared kernels
+
+Add distinct frozen EventConfigV3/ModelConfigV3/ConfiguredNeuralModelV3 types.
+Reuse existing state/card/hand/temporal/head/resource/inference component DTOs;
+event default is the card-reference aggregate, version3/input-recipe2 identify
+input semantics, initialization/PPO algorithms remain unchanged. Old dataclass
+fields/defaults, historical62 descriptors and pure/recorded parsers stay strict.
+Model3 Config metadata never duplicates the full action contract in every preset.
+
+Pure model3 functions require an explicit known card-instance layout. Support
+either registered card profile for explicit component numerics/read-only evidence;
+all active experiment/model3 Config combinations require the corrected profile.
+Omitting layout retains LEGACY_LAYOUT and therefore rejects Model3 before Torch
+or arrays. V2/historical functions reject card layouts. Root Config dispatches
+from raw actions/model/version before defaults and invokes the model parser with
+that exact layout; wrong profile/recipe/version/capacity fails before allocation.
+Add neural3 presets only when standalone model3 inference is implemented; keep
+the public run/collection guard until the complete execution path exists.
+
+Parameterize shared dimensions/parameter_shapes/resource_estimate/make_network
+and architecture/token identity with keyword-only layout=LEGACY_LAYOUT. Validate
+the closed model/layout pair once, carry the known layout through all inner
+packing, validators, caches, history, full/split and dense/chunked methods. Do not
+fake a ModelConfigV2 or change module globals to process Model3. The same named
+ActorCritic/state/hand/interval/GRU/Transformer/head modules and initialization
+draw order remain for legacy calls. No second neural/PPO stack.
+
+Use layout-derived category/field counts, including membership vocabulary at
+membership_index and numeric order_field. Remove literal2*12 and old source-vector
+assumptions from shared formulas. Default old→new widths: card_input116→166,
+card_actor70→71, frame600→601, actor1414→1432; state5499 unchanged, card_direct
+428→478, event394→395, aggregate376→377. These widths are the SAME for both
+card profiles but identities remain different through their token/contract pins.
+Hand attention still has no arbitrary position embedding. Critic receives no
+candidate content/count/order/search report. PreserveIEEEFP32, deterministic
+initialization/backends, noAMP/TF32 and existing1e-5parity tolerances.
+
+### Input binding and standalone policy
+
+Add distinct safe-options/input-binding/network-binding v3 DTOs; never add fields
+to the existing v2 serialized DTOs. The v3 binding explicitly carries full
+CardInstanceContract, rule_signature, purpose and synthetic_capacity. Rules are
+the reviewed rules1; computed signature must match the supplied contract before
+arrays/model loading. Check model↔network↔active binding/layout and parameter
+versions; frozen input identity cannot be relabeled or changed on resave.
+
+The policy and private immutable network binding also require an explicit
+action_config_hash from authoritative passed Actions Config (fresh construction)
+or the externally checked artifact/load binding. Generated report.config_hash
+must equal it before tokenization or cache advance. Manifest4 stores this hash
+explicitly; first binding freezes it on the network, and subsequent policy/save/
+resave/load cannot substitute another value even if contract/rules/shapes agree.
+Architecture identity stays model/layout-only; full policy identity binds the
+manifest/execution/input/action-config context. No Config dataclass field is added.
+
+Fresh binding declares component inference-use scope, not Source authority.
+This milestone permits component numerics under either explicit card profile;
+qualified_game binding and selection remain rejected/deferred until a separately
+reviewed qualified generated-table/Source path exists. Current GeneratedCandidatesV3
+requires component+nonsynthetic tables and is not relaxed here. Synthetic capacity
+can support explicit component numerical/artifact tests, but standalone policy
+selection requires exact nonsynthetic purpose/capacity agreement. A component
+network/artifact cannot be relabeled on resave. New labels
+name version3 and include full manifest/execution/input identities.
+
+StructuredPolicyV3 uses the shared inference/CPU sampling/cache mechanics with
+an explicit expected layout/rules binding. Its select_frame validates a
+GeneratedCandidatesV3 report+table against expected rule signature/contract and
+the immutable expected action-config hash,
+then tokenizes only policy-visible frame/table values. Report/cutoff metadata
+are compatibility checks and diagnostics, never features. Before token/array
+work check all scalar caps and exact profile, then retain the existing admission,
+chunking and participant cache ownership. Empty events/masked hands stay finite.
+
+### Inference/resume4 and metadata isolation
+
+Expose new format4 save/inspect/load/read/restore wrappers with explicit expected
+model/layout/contract/rules/execution/action-config binding. Factor private
+version/context helpers around existing sharded storage, FP32 extraction,
+named Adam moments/steps and the exact existing owned RNG set: Torch CPU RNG,
+all CUDA RNG states visible to the dedicated learner process when using CUDA
+(none on CPU), and the explicitly supplied NumPy Generator's PCG64 shuffle state.
+Do not capture Python random/global NumPy state or implicit future search,
+schedule or sampling state. Those are separately owned by future coordinator/
+participant formats, with their own later resume verification.
+Old format3 APIs/keysets/defaults/semantic helpers stay exact and reject format4;
+new wrappers reject old format/unknown keys or mismatched profile/signature.
+Do not duplicate optimizer serialization or an entire persistence module.
+
+Format4 semantic metadata binds the selected profile's actual revision and13
+normative hashes, catalog2, recipe/generator/policy-input versions, token signature,
+candidate rule signature, transform/reward/numerics and architecture. Preserve
+lower NumPy-bundle1/bank dtypes/shard hash/64MiB decoded-tensor limits. Producer
+source identity and runtime execution metadata stay explicit and separate from
+architecture. Add distinct sealed metadata keysets/inspectors for4; do not mutate
+global legacy semantic/classification sets. Metadata inspection remains below
+training and lazy with respect to Torch, never imports training orchestration.
+
+The format4 record is numerical/inference compatibility evidence. It cannot
+authorize a generation, complete parent or qualified Source. On failed validation,
+timeout/cancel/save/reload, retain original failure and existing owned-file/
+directory cleanup behavior. This milestone retains the existing per-manifest
+commit semantics: validate/copy/write shards before publishing that manifest;
+do not add reportable post-commit work or claim late-failure revocation. Inference
+and resume are separate commits: a later failed resume save may leave its earlier
+healthy inference loadable, but no healthy resume or parent-generation completion
+is thereby implied. Pre-manifest injected failures must leave the affected output
+unloadable. Output storage in this milestone assumes an exclusively caller-owned
+private namespace and rejects preexisting foreign entries. Existing lstat/
+write/replace helpers do not protect against concurrent hostile pathname
+substitution; no such guarantee or C3b-style FD protection is claimed. Revisit
+this assumption before supporting shared/untrusted output namespaces, with
+exclusive FD/publication remedies and their tests rather than another preflight.
+A late OS flush/
+publication error may leave a readable manifest with uncertain durability; it is
+failed/diagnostic and cannot authorize Source or parent commit. Accepted debt:
+this scope has no owned-FD post-publication revocation; revisit before adding
+post-save deadline/reload failures to these APIs or requiring durable standalone
+failure revocation. The later coordinator must commit its generation only after
+both validated records succeed. Ordinary
+resume keeps strict configuration/code/execution/input/RNG identity; seed alone
+does not establish determinism. New profiles never auto-load old trained weights.
+
+### Verification
+
+Before shared model-kernel edits, freeze named V2 state_dict shape/dtype/value
+hashes plus post-initialization Torch CPU RNG for nine pinned small CPU
+hand3×model3 constructions. Independently reproduce from committed pre-Model3
+code and compare after changes; deterministic repetition alone is insufficient
+to prove unchanged draw order. CPU construction covers the shared CPU initializer
+before device transfer, while actual CUDA checks remain separate.
+
+Hand3×model3 CPU numerical matrix and required actual CUDA counterparts: parameter
+shape estimates versus state_dict, empty/masks, original order/duplicate instances,
+encoder gradients, candidate permutation, critic independence, dense/chunked
+logits AND gradients, cached/full/split equivalence and cache invalidation.
+Test preallocation failure, wrong-profile/equal-width signatures and resource
+envelopes. CPU/CUDA comparisons retain established tolerances.
+
+Round-trip inference4 and all named Adam/RNG state at a normal synthetic update
+boundary; compare continuous2 versus save1/load/update2 across encoders/models
+where applicable. Keep inference-only artifact evidence separate from later
+real PPO/coordinator resume acceptance. Check missing/extra/modified shards,
+input signatures/rules, wrong execution/model, synthetic/qualification relabel,
+old3/new4 mismatches and old configured/saved artifact corpus unchanged. The
+verified host GPU is RTX5070Ti with16GiBphysical VRAM; preserve the12GiBmanaged
+global limit and64MiBarray/shard limits, failing oversized settings explicitly.

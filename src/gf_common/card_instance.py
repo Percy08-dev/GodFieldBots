@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
+from types import MappingProxyType
+from typing import Any
 
 from gf_common.domain import ContractError, Json, closed, integer
 
 SIMULATOR_REVISION = "07e8185f98c503aa41200a80ea554b4fd21088ad"
 CARD_INSTANCE_SIMULATOR_REVISION = SIMULATOR_REVISION
+CORRECTED_SIMULATOR_REVISION = "91d5926a7572db327eaea3751e7c24f428120996"
+CORRECTED_SPEC_INVENTORY_HASH = "131890dfe579bc6951f5189e460971d33658339106e219a2e00b1a289a0534d0"
 RULE_SET = "true-match-1v1-v2"
 CATALOG_HASH = "f51a3c73feb8b3f01837e65768aafb5a3aa805a33483308130244b33b16a8ad6"
 SPEC_INVENTORY_HASH = "8381079eae8a68378d8419c7f7245c62358833f0dd9045667021e112a1e9bad5"
@@ -37,14 +41,41 @@ class CardInstanceContract:
     input_recipe: str = "participant-structured-v2"
 
     def __post_init__(self) -> None:
-        for name, descriptor in self.__dataclass_fields__.items():
+        if type(self.profile_id) is not str or self.profile_id not in _CONTRACT_PINS:
+            raise ContractError("unknown card-instance contract profile")
+        expected = _CONTRACT_PINS[self.profile_id]
+        for name, pin in zip(_CONTRACT_FIELD_NAMES, expected, strict=True):
             value = getattr(self, name)
-            if type(value) is not type(descriptor.default) or value != descriptor.default:
+            if type(value) is not type(pin) or value != pin:
                 raise ContractError("unknown card-instance contract pin")
+
+
+_CONTRACT_FIELD_NAMES = tuple(CardInstanceContract.__dataclass_fields__)
+_ORIGINAL_PIN: tuple[Any, ...] = tuple(
+    descriptor.default for descriptor in CardInstanceContract.__dataclass_fields__.values()
+)
+_CORRECTED_PIN: tuple[Any, ...] = tuple(
+    {
+        "profile_id": "card-instance-simulator-v2-20261104",
+        "simulator_revision": CORRECTED_SIMULATOR_REVISION,
+        "spec_inventory_sha256": CORRECTED_SPEC_INVENTORY_HASH,
+    }.get(name, default)
+    for name, default in zip(_CONTRACT_FIELD_NAMES, _ORIGINAL_PIN, strict=True)
+)
+_CONTRACT_PINS = MappingProxyType(
+    {
+        "card-instance-simulator-v2-20261103": _ORIGINAL_PIN,
+        "card-instance-simulator-v2-20261104": _CORRECTED_PIN,
+    }
+)
 
 
 def card_instance_contract() -> CardInstanceContract:
     return CardInstanceContract()
+
+
+def corrected_card_instance_contract() -> CardInstanceContract:
+    return CardInstanceContract(**dict(zip(_CONTRACT_FIELD_NAMES, _CORRECTED_PIN, strict=True)))
 
 
 def parse_card_instance_contract(raw: Json) -> CardInstanceContract:
@@ -133,4 +164,21 @@ REVIEWED_SPEC_HASHES: dict[str, str] = {
     "docs/spec/10-cli-client.md": "7394dddb8498bfead6f91a47b7cfdbd0b9179bc40dba1416e25acabe9b99734a",
     "docs/spec/card-definition-classification-v2.md": "62e6b88b237d46e808758f30e3964b4811c4e5f73786595840fda206fc79885c",
     "docs/spec/godfield_rule_verification_register.md": "a1a9e4aee2ec05ee490154cb1df143be6cd63df6865d2cbfca4f863fc6af4ce5",
+}
+
+# Corrected91d5926 normative inventory; historical07e map above stays unchanged.
+CORRECTED_REVIEWED_SPEC_HASHES: dict[str, str] = {
+    "docs/spec/00-specification-overview.md": "674346a7b3f798a4c02e5241e7c760170224670e52bf81f5fe0acf46c8189a3e",
+    "docs/spec/01-server-spec.md": "4ab2072fafef4a7b400527cafaf933de8896c045da1e5943ed6d7e1dd1c655ba",
+    "docs/spec/02-software-design.md": "74fb313ebd0322d39e359b192b07bc6b702952b10b8a8345720b11a5b6409533",
+    "docs/spec/03-game-engine.md": "2441745566f553d8ce01806b64f88d4978209cd75e2ba0699fe71dc1fa022a04",
+    "docs/spec/04-random-system.md": "54ace9374f8d6ba93612a35548e33ce542b6ae9271ebac5dde9aad6fbe847a19",
+    "docs/spec/05-observation.md": "6a1cf52eab8e88f588020955bd281052eb2ac6b19612f5229ce4f86f178d6e8b",
+    "docs/spec/06-persistence-history.md": "3ac16199cb0a15289a1324f1f375a581a32e7889bcb73efa142dc24235853f64",
+    "docs/spec/07-external-interfaces-adapters.md": "5a179c97ef116d52ab1a4e52b82726fb45fb025cc6a6cbeeec4cf639718e9664",
+    "docs/spec/08-test-requirements.md": "ad1b275112c1c019ca78be48831e8a5e4f1bf1472c0db0645c2359e3895c9e09",
+    "docs/spec/09-gameplay-rules.md": "6a11ad81e5df99d4962a57f7cf45b620f46624c7bb04628514600930e9543d5d",
+    "docs/spec/10-cli-client.md": "7394dddb8498bfead6f91a47b7cfdbd0b9179bc40dba1416e25acabe9b99734a",
+    "docs/spec/card-definition-classification-v2.md": "62e6b88b237d46e808758f30e3964b4811c4e5f73786595840fda206fc79885c",
+    "docs/spec/godfield_rule_verification_register.md": "d892bafb621be33dc24455af2ab07d173f1127736e78da3e86a72134520084da",
 }

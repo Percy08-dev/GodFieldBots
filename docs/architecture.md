@@ -15,9 +15,11 @@ optional-free wheel smoke. Config/token identities stay unchanged; the new
 generator report/wire binds its explicit supplemental rule signature.
 The learned-Discard runtime mismatch in
 [issue0008](issues/0008-learned-miracle-discard-runtime.md) is verified corrected
-in Simulator91d5926 on2026-11-04. Bots still needs explicit new-revision/semantic
-adoption and the remaining runtime/model/worker/native/Source integration;
-verification of the correction alone lifts none of those gates.
+in Simulator91d5926 on2026-11-04. Its distinct corrected contract/layout/profile
+is now explicitly adopted alongside the preserved07eprofile, with both reviews,
+551affected tests and source-matched/isolated-wheel/runtime diagnostic evidence.
+Model3 neural/artifact design passes its separate review. Remaining runtime/
+model/worker/native/Source integration gates stay closed until implemented.
 Exact conditions are in the [new ledger](verification/card-instance-v2-adoption.md).
 Legacy and ADR0023 engineering identities remain unchanged; historical evidence
 below does not qualify the new contract.

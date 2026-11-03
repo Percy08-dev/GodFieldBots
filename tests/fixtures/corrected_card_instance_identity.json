@@ -1,0 +1,26 @@
+{
+  "candidate_tokens_sha256": "8d889467880a96bf0dc8a56c617275802e31cab77e59e08551abf7977b991934",
+  "contract": {
+    "card_ref_scheme": "aes256-card-ref-v1",
+    "catalog_schema_version": 2,
+    "catalog_sha256": "f51a3c73feb8b3f01837e65768aafb5a3aa805a33483308130244b33b16a8ad6",
+    "catalog_version": "public-ja-v3",
+    "gameplay_api": "v2",
+    "input_recipe": "participant-structured-v2",
+    "policy_input_version": "player-card-refs-v2",
+    "profile_id": "card-instance-simulator-v2-20261104",
+    "rule_set_version": "true-match-1v1-v2",
+    "simulator_revision": "91d5926a7572db327eaea3751e7c24f428120996",
+    "spec_inventory_sha256": "131890dfe579bc6951f5189e460971d33658339106e219a2e00b1a289a0534d0"
+  },
+  "episode": "corrected-adoption-fixed",
+  "frame_hash": "10aac96ee1a3375d409ca16fff6322fff6043386ac812cf2c53e26bc0d3324f1",
+  "frame_tokens_sha256": "184aff30679e83c8d0600d499b4bf7c8735fba3e8cb8d867cb5438f86d4fa095",
+  "initial_prefix": "0383f8f85ce64bc2ad5c458d59cd89516a49d5de00fe249de99ce31530cea341",
+  "input_recipe": "participant-structured-v2",
+  "purpose": "pure component identity golden; no runtime/Source qualification",
+  "rule_signature": "3f55f044225fb20c63d683145cdceb397c36f0b7161c7b16793f72210db3e86d",
+  "sampling_seed": 17,
+  "table_hash": "0570901e65bcc291e6ce2255d18c4f50e38f57ae96c642fa98b4daa9f82141ea",
+  "token_signature": "72db3a64f6d087a5f889c4e3cf6b4eb46a8595fd334e1249ca2d51f76496e1ad"
+}
