@@ -15,6 +15,7 @@ from typing import Any
 from gf_common.action_contract import ActionContract, parse_action_contract, validate_record_purpose
 from gf_common.domain import ContractError, Json, canonical, closed, integer
 from gf_common.structured import ACTION_KINDS, TARGETS, CandidateTable
+from gf_common.structured_layout import LEGACY_LAYOUT
 
 CODEC = "candidate-columns-v1"
 MAX_COLUMN_BYTES = 64 * 1024**2
@@ -84,6 +85,8 @@ def validate_descriptor(descriptor: Json, *, expected_file: str | None = None,
 
 def encode_candidate_columns(table: CandidateTable, file: str, *, max_positions: int = 128,
                              max_bytes: int = MAX_COLUMN_BYTES) -> tuple[bytes, Json]:
+    if table.layout is not LEGACY_LAYOUT:
+        raise ContractError("candidate-columns-v1 cannot encode a card-instance table")
     safe_basename(file)
     integer(max_positions, 1, 128)
     if any(stop - start > max_positions for start, stop in zip(table.offsets[:-1], table.offsets[1:], strict=True)):

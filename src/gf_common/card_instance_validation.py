@@ -653,3 +653,40 @@ def dataset_action(value: Any, *, action_schema_version: Any) -> Json:
     if type(action_schema_version) is not str or action_schema_version != "2":
         raise UnsupportedContract("Dataset Action schema must be string 2")
     return _validate_action(value, None, submission=False)
+
+
+def own_visible_input(value: Any) -> Any:
+    """Validate an original participant input and its exact perceived subset.
+
+    The immutable digest map authenticates supplied visible definitions only;
+    no unobserved definition values are fetched or returned.
+    """
+    from gf_common.card_instance_vocab import DEFINITION_SHA256
+    from gf_common.domain import DecisionInput
+
+    if type(value) is not DecisionInput:
+        raise ContractError("original participant DecisionInput required")
+    obs = observation(value.observation)
+    if not obs["actionable"]:
+        raise ContractError("structured frame requires actionable own view")
+    if canonical(value.typed_metadata) != canonical(obs["typed_action_schema"]):
+        raise ContractError("original typed metadata mismatch")
+    if not isinstance(value.events, tuple):
+        raise ContractError("owned complete event tuple required")
+    validate_events(list(value.events))
+    if value.history_end is not None:
+        text_value(value.history_end)
+    visible = {card["definition_id"] for card in obs["own"]["cards"]}
+    if not isinstance(value.catalog, dict) or set(value.catalog) != visible:
+        raise ContractError("catalog must be exactly the own-visible definition subset")
+    for name, definition in value.catalog.items():
+        if digest(definition) != DEFINITION_SHA256.get(name):
+            raise ContractError("perceived definition differs from pinned public catalog")
+    for card in obs["own"]["cards"]:
+        definition = value.catalog[card["definition_id"]]
+        if (definition["classification"]["definition_class"] != "owned_card"
+                or (card["kind"] == "miracle") != (definition["kind"] == "miracles")):
+            raise ContractError("observed kind/class differs from own perceived definition")
+    hints = actor_action_options(value.action_options, obs, raw=False)
+    return DecisionInput(obs, tuple(clone(list(value.events))), value.history_end,
+                         tuple(clone(list(value.typed_metadata))), clone(value.catalog), hints)

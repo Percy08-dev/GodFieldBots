@@ -12,21 +12,67 @@ import math
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
+from gf_common import card_instance_validation as card_v2
+from gf_common import structured_layout as layouts
 from gf_common.action_contract import (
     ActionContract,
     parse_action_contract,
     validate_game_references,
     validate_record_purpose,
 )
+from gf_common.card_instance import (
+    ActionConfigV3,
+    CardInstanceContract,
+)
 from gf_common.domain import ContractError, DecisionInput, Json, canonical, closed, digest, integer
+from gf_common.structured_layout import (
+    CARD_INSTANCE_LAYOUT,
+    GENERATOR_V2,
+    LEGACY_LAYOUT,
+    StructuredLayout,
+    layout_for_contract,
+    require_layout,
+)
 from gf_common.validation import validate_events, validate_worker_input
 
-INPUT_RECIPE = "participant-structured-v1"
-GENERATOR_V2 = "public-atomic-diverse-v4"
-ACTION_KINDS = ("pray", "play_sequence", "respond", "respond_sequence", "discard", "sacrifice",
-                "exchange", "sell", "buy", "buy_decision")
-TARGETS = ("omitted", "null", "self", "opponent")
+ACTION_KINDS = layouts.ACTION_KINDS
+INPUT_RECIPE = layouts.INPUT_RECIPE
+TARGETS = layouts.TARGETS
+
 NUMERIC_FIELDS = ("hp", "mp", "money", "accept")
+
+
+def layout_for_actions(actions: ActionConfigV2 | ActionConfigV3) -> StructuredLayout:
+    if type(actions) not in (ActionConfigV2, ActionConfigV3):
+        raise ContractError("closed structured action settings required")
+    layout = layout_for_contract(actions.action_contract)
+    if (actions.version != ("2" if layout is LEGACY_LAYOUT else "3")
+            or actions.generator != layout.generator):
+        raise ContractError("mixed structured action layout")
+    return layout
+
+
+def _validate_events(events: list[Json], layout: StructuredLayout) -> None:
+    require_layout(layout)
+    if layout is LEGACY_LAYOUT:
+        validate_events(events)
+    else:
+        from gf_common.card_instance_vocab import DEFINITION_SHA256
+        card_v2.validate_events(events)
+        if any("definition_id" in event and event["definition_id"] not in DEFINITION_SHA256 for event in events):
+            raise ContractError("unknown public event-time definition")
+
+
+def _validate_input(value: DecisionInput, layout: StructuredLayout) -> DecisionInput:
+    return validate_worker_input(value, True) if layout is LEGACY_LAYOUT else card_v2.own_visible_input(value)
+
+
+def _validate_purpose(purpose: str, contract: ActionContract | CardInstanceContract) -> None:
+    if layout_for_contract(contract) is LEGACY_LAYOUT:
+        assert type(contract) is ActionContract
+        validate_record_purpose(purpose, contract)
+    elif type(purpose) is not str or purpose not in ("component", "qualified_game"):
+        raise ContractError("explicit component or qualified_game purpose required")
 
 
 def _bytes(value: Any) -> bytes:
@@ -110,6 +156,10 @@ class EventDelta:
     previous_hash: str
     _events: tuple[bytes, ...] = field(repr=False)
 
+    @property
+    def layout(self) -> StructuredLayout:
+        return LEGACY_LAYOUT
+
     def __init__(self, actor: int, episode: str, start: int, previous_hash: str,
                  events: tuple[Json, ...] | list[Json]) -> None:
         _owner(actor, episode)
@@ -117,7 +167,7 @@ class EventDelta:
         _hash(previous_hash)
         if not isinstance(events, (list, tuple)):
             raise ContractError("event array required")
-        validate_events(list(events))
+        _validate_events(list(events), self.layout)
         for key, value in (("actor", actor), ("episode", episode), ("start", start),
                            ("previous_hash", previous_hash),
                            ("_events", tuple(_bytes(event) for event in events))):
@@ -128,8 +178,8 @@ class EventDelta:
         return tuple(json.loads(event) for event in self._events)
 
 
-def _initial(actor: int, episode: str) -> str:
-    return digest([INPUT_RECIPE, "event-bank", actor, episode])
+def _initial(actor: int, episode: str, layout: StructuredLayout = LEGACY_LAYOUT) -> str:
+    return digest([require_layout(layout).input_recipe, "event-bank", actor, episode])
 
 
 def _next(previous: str, event: bytes) -> str:
@@ -143,18 +193,22 @@ class EventBankView:
     _events: tuple[bytes, ...] = field(repr=False)
     _prefixes: tuple[str, ...] = field(repr=False)
 
+    @property
+    def layout(self) -> StructuredLayout:
+        return LEGACY_LAYOUT
+
     def __post_init__(self) -> None:
         _owner(self.actor, self.episode)
         if (not isinstance(self._events, tuple) or not isinstance(self._prefixes, tuple)
                 or len(self._events) > 2**31 - 1 or len(self._prefixes) != len(self._events) + 1
-                or self._prefixes[0] != _initial(self.actor, self.episode)):
+                or self._prefixes[0] != _initial(self.actor, self.episode, self.layout)):
             raise ContractError("invalid bank view")
         previous = self._prefixes[0]
         for raw, expected in zip(self._events, self._prefixes[1:], strict=True):
             if type(raw) is not bytes:
                 raise ContractError("bank events must be owned bytes")
             event = json.loads(raw)
-            validate_events([event])
+            _validate_events([event], self.layout)
             if _bytes(event) != raw or _next(previous, raw) != expected:
                 raise ContractError("event prefix hash mismatch")
             previous = expected
@@ -173,18 +227,24 @@ class EventBankView:
         integer(boundary.end, 0, len(self._events))
         if self._prefixes[boundary.end] != boundary.prefix_hash:
             raise ContractError("bank boundary mismatch")
-        return EventBankView(self.actor, self.episode, self._events[:boundary.end],
+        return type(self)(self.actor, self.episode, self._events[:boundary.end],
                              self._prefixes[:boundary.end + 1])
 
 
 class EventBank:
-    def __init__(self, actor: int, episode: str, max_events: int = 262144) -> None:
+    def __init__(self, actor: int, episode: str, max_events: int = 262144, *,
+                 layout: StructuredLayout = LEGACY_LAYOUT) -> None:
         _owner(actor, episode)
         integer(max_events, 1, 2**31 - 1)
+        self._layout = require_layout(layout)
         self._actor, self._episode, self._max_events = actor, episode, max_events
         self._events: list[bytes] = []
-        self._prefixes = [_initial(actor, episode)]
+        self._prefixes = [_initial(actor, episode, layout)]
         self._last_frame: DecisionFrame | None = None
+
+    @property
+    def layout(self) -> StructuredLayout:
+        return self._layout
 
     @property
     def actor(self) -> int:
@@ -203,7 +263,7 @@ class EventBank:
         return EventBoundary(len(self._events), self._prefixes[-1])
 
     def append(self, delta: EventDelta) -> EventBoundary:
-        if ((delta.actor, delta.episode) != (self.actor, self.episode)
+        if (delta.layout is not self.layout or (delta.actor, delta.episode) != (self.actor, self.episode)
                 or delta.start != len(self._events) or delta.previous_hash != self._prefixes[-1]):
             raise ContractError("event delta owner/continuity mismatch")
         if len(self._events) + len(delta._events) > self.max_events:
@@ -218,7 +278,8 @@ class EventBank:
         integer(boundary.end, 0, len(self._events))
         if self._prefixes[boundary.end] != boundary.prefix_hash:
             raise ContractError("bank boundary mismatch")
-        return EventBankView(self.actor, self.episode, tuple(self._events[:boundary.end]),
+        view_type = EventBankView if self.layout is LEGACY_LAYOUT else _CardInstanceEventBankView
+        return view_type(self.actor, self.episode, tuple(self._events[:boundary.end]),
                              tuple(self._prefixes[:boundary.end + 1]))
 
 
@@ -233,6 +294,10 @@ class DecisionFrame:
     payload: bytes = field(repr=False)
     frame_hash: str
 
+    @property
+    def layout(self) -> StructuredLayout:
+        return LEGACY_LAYOUT
+
     def __post_init__(self) -> None:
         _owner(self.actor, self.episode)
         integer(self.revision)
@@ -245,23 +310,22 @@ class DecisionFrame:
             raise ContractError("frame payload must be owned bytes")
         value = json.loads(self.payload)
         closed(value, {"observation", "typed_metadata", "catalog", "action_options", "history_end"})
-        rebuilt = validate_worker_input(DecisionInput(value["observation"], (), value["history_end"],
+        rebuilt = _validate_input(DecisionInput(value["observation"], (), value["history_end"],
                                                      tuple(value["typed_metadata"]), value["catalog"],
-                                                     value["action_options"]), True)
+                                                     value["action_options"]), self.layout)
+        own = rebuilt.observation["own"]
         if (rebuilt.observation["viewer_player_id"] != self.actor
                 or rebuilt.observation["current_player"] != self.actor
                 or not rebuilt.observation["actionable"]
                 or rebuilt.observation["state_revision"] != self.revision
-                or len(rebuilt.observation["own"]["hand"])
-                + len(rebuilt.observation["own"]["learned_miracles"]) > 18
+                or (len(own["hand"]) + len(own["learned_miracles"]) if self.layout is LEGACY_LAYOUT else len(own["cards"])) > 18
                 or len(rebuilt.observation["opponent"]["learned_miracles"]) > 18
                 or self.payload != _bytes(value)):
             raise ContractError("frame actor/revision/shape mismatch")
         if any(key != definition["definition_id"] for key, definition in rebuilt.catalog.items()):
             raise ContractError("perceived catalog key/definition mismatch")
-        own = rebuilt.observation["own"]
-        hand_ids = [card["instance_id"] for card in own["hand"]]
-        learned_ids = own["learned_miracles"]
+        hand_ids = ([card["instance_id"] for card in own["hand"]] if self.layout is LEGACY_LAYOUT else [card["card_ref"] for card in own["cards"]])
+        learned_ids = own["learned_miracles"] if self.layout is LEGACY_LAYOUT else []
         # Slot identity must be an unambiguous physical source+ID mapping.
         # Distinct hand instances sharing a definition remain separate; a hand
         # miracle and its learned definition are also different sources.
@@ -274,9 +338,12 @@ class DecisionFrame:
             raise ContractError("frame hash mismatch")
 
     def _binding(self) -> Json:
-        return {"actor": self.actor, "episode": self.episode, "revision": self.revision,
+        binding = {"actor": self.actor, "episode": self.episode, "revision": self.revision,
                 "interval_start": self.interval_start, "interval_start_hash": self.interval_start_hash,
                 "boundary": asdict(self.boundary), "payload": json.loads(self.payload)}
+        if self.layout is CARD_INSTANCE_LAYOUT:
+            binding.update(input_recipe=self.layout.input_recipe, policy_input_version=self.layout.policy_input_version)
+        return binding
 
     @property
     def observation(self) -> Json:
@@ -287,15 +354,17 @@ class DecisionFrame:
         return json.loads(self.payload)
 
     @property
-    def references(self) -> tuple[Json, ...]:
+    def references(self) -> tuple[Any, ...]:
         own = self.observation["own"]
+        if self.layout is CARD_INSTANCE_LAYOUT:
+            return tuple(card["card_ref"] for card in own["cards"])
         return tuple([{"source": "hand_artifact", "instance_id": card["instance_id"]}
                       for card in own["hand"]]
                      + [{"source": "learned_miracle", "definition_id": name}
                         for name in own["learned_miracles"]])
 
     def bank_view(self, bank: EventBankView) -> EventBankView:
-        if (bank.actor, bank.episode) != (self.actor, self.episode):
+        if bank.layout is not self.layout or (bank.actor, bank.episode) != (self.actor, self.episode):
             raise ContractError("foreign event viewer/episode")
         view = bank.prefix(self.boundary)
         if view._prefixes[self.interval_start] != self.interval_start_hash:
@@ -304,8 +373,11 @@ class DecisionFrame:
 
     @classmethod
     def from_input(cls, value: DecisionInput, bank: EventBank,
-                   interval_start: int) -> DecisionFrame:
-        value = validate_worker_input(value, True)
+                   interval_start: int, *, layout: StructuredLayout = LEGACY_LAYOUT) -> DecisionFrame:
+        require_layout(layout)
+        if bank.layout is not layout:
+            raise ContractError("frame/input bank layout mismatch")
+        value = _validate_input(value, layout)
         obs = value.observation
         if obs["viewer_player_id"] != bank.actor:
             raise ContractError("foreign input viewer")
@@ -322,15 +394,46 @@ class DecisionFrame:
         binding = {"actor": bank.actor, "episode": bank.episode, "revision": obs["state_revision"],
                    "interval_start": interval_start, "interval_start_hash": bank._prefixes[interval_start],
                    "boundary": asdict(bank.boundary), "payload": raw}
-        frame = cls(bank.actor, bank.episode, obs["state_revision"], interval_start, bank.boundary,
+        if layout is CARD_INSTANCE_LAYOUT:
+            binding.update(input_recipe=layout.input_recipe, policy_input_version=layout.policy_input_version)
+        frame_type = DecisionFrame if layout is LEGACY_LAYOUT else _CardInstanceDecisionFrame
+        frame = frame_type(bank.actor, bank.episode, obs["state_revision"], interval_start, bank.boundary,
                     bank._prefixes[interval_start], _bytes(raw), digest(binding))
         bank._last_frame = frame
         return frame
 
 
+@dataclass(frozen=True, init=False)
+class _CardInstanceEventDelta(EventDelta):
+    @property
+    def layout(self) -> StructuredLayout:
+        return CARD_INSTANCE_LAYOUT
+
+
+@dataclass(frozen=True)
+class _CardInstanceEventBankView(EventBankView):
+    @property
+    def layout(self) -> StructuredLayout:
+        return CARD_INSTANCE_LAYOUT
+
+
+@dataclass(frozen=True)
+class _CardInstanceDecisionFrame(DecisionFrame):
+    @property
+    def layout(self) -> StructuredLayout:
+        return CARD_INSTANCE_LAYOUT
+
+
+def event_delta(actor: int, episode: str, start: int, previous_hash: str,
+                events: tuple[Json, ...] | list[Json], *, layout: StructuredLayout = LEGACY_LAYOUT) -> EventDelta:
+    require_layout(layout)
+    delta_type = EventDelta if layout is LEGACY_LAYOUT else _CardInstanceEventDelta
+    return delta_type(actor, episode, start, previous_hash, events)
+
+
 @dataclass(frozen=True)
 class CandidateTable:
-    action_contract: ActionContract = field(kw_only=True)
+    action_contract: ActionContract | CardInstanceContract = field(kw_only=True)
     purpose: str = field(kw_only=True)
     synthetic_capacity: bool = field(kw_only=True)
     frame_hash: str
@@ -342,10 +445,12 @@ class CandidateTable:
     slots: tuple[int, ...]
     table_hash: str
 
+    @property
+    def layout(self) -> StructuredLayout:
+        return layout_for_contract(self.action_contract)
+
     def __post_init__(self) -> None:
-        if type(self.action_contract) is not ActionContract:
-            raise ContractError("candidate table explicit action contract required")
-        validate_record_purpose(self.purpose, self.action_contract)
+        _validate_purpose(self.purpose, self.action_contract)
         if type(self.synthetic_capacity) is not bool or self.synthetic_capacity and self.purpose != "component":
             raise ContractError("synthetic capacity requires explicit boolean component classification")
         _hash(self.frame_hash)
@@ -360,9 +465,15 @@ class CandidateTable:
             raise ContractError("candidate shape/offset mismatch")
         for slot in self.slots:
             integer(slot, 0, 17)
+        layout = self.layout
         for index, kind in enumerate(self.kinds):
-            if kind not in ACTION_KINDS or self.targets[index] not in TARGETS:
+            if kind not in layout.action_kinds or self.targets[index] not in layout.targets:
                 raise ContractError("unknown action kind/relative target")
+            if layout is CARD_INSTANCE_LAYOUT:
+                targeted = kind in ("play_sequence", "sell", "buy")
+                if (targeted and self.targets[index] not in ("self", "opponent")
+                        or not targeted and self.targets[index] != "omitted"):
+                    raise ContractError("card-instance target presence mismatch")
             integer(self.offsets[index], 0, len(self.slots))
             integer(self.offsets[index + 1], self.offsets[index],
                     min(len(self.slots), self.offsets[index] + 128))
@@ -383,9 +494,11 @@ class CandidateTable:
 
     @classmethod
     def from_actions(cls, frame: DecisionFrame, actions: tuple[Json, ...] | list[Json],
-                     max_positions: int = 128, *, action_contract: ActionContract, purpose: str,
+                     max_positions: int = 128, *, action_contract: ActionContract | CardInstanceContract, purpose: str,
                      synthetic_capacity: bool) -> CandidateTable:
-        validate_record_purpose(purpose, action_contract)
+        _validate_purpose(purpose, action_contract)
+        if frame.layout is not layout_for_contract(action_contract):
+            raise ContractError("candidate contract/frame layout mismatch")
         integer(max_positions, 1, 128)
         context = _ActionContext.from_frame(frame)
         refs = {canonical(ref): i for i, ref in enumerate(context.references)}
@@ -396,9 +509,9 @@ class CandidateTable:
         offsets = [0]
         slots: list[int] = []
         for action in actions:
-            _validate_action_context(action, context)
+            _validate_action_context(action, context, synthetic=synthetic_capacity)
             kind = action["type"]
-            elements = _action_refs(action)
+            elements = _action_refs(action, frame.layout)
             if len(elements) > max_positions:
                 raise ContractError("candidate exceeds position capacity")
             try:
@@ -422,30 +535,34 @@ class CandidateTable:
         return result
 
     def validate(self, frame: DecisionFrame) -> None:
-        if self.frame_hash != frame.frame_hash:
+        if frame.layout is not self.layout or self.frame_hash != frame.frame_hash:
             raise ContractError("candidate frame mismatch")
         self._validate_context(_ActionContext.from_frame(frame))
 
     def _validate_context(self, context: _ActionContext) -> None:
         if any(slot >= len(context.references) for slot in self.slots):
             raise ContractError("candidate slot not in original own view")
+        layout = self.layout
         for index in range(len(self.kinds)):
-            action = self._to_action(index, context.actor, context.references)
-            _validate_action_context(action, context)
+            action = self._to_action(index, context.actor, context.references, layout)
+            _validate_action_context(action, context, synthetic=self.synthetic_capacity)
             if (tuple(int(action.get(key, 0)) for key in NUMERIC_FIELDS) != self.numerics[index]
                     or tuple(key in action for key in NUMERIC_FIELDS) != self.presence[index]):
                 raise ContractError("noncanonical candidate numeric encoding")
 
     def to_action(self, index: int, original_frame: DecisionFrame, *, validate: bool = True) -> Json:
-        if original_frame.frame_hash != self.frame_hash:
+        layout = self.layout
+        if layout is CARD_INSTANCE_LAYOUT and self.synthetic_capacity:
+            raise ContractError("synthetic card-instance table cannot reconstruct a submit-ready Action")
+        if original_frame.layout is not layout or original_frame.frame_hash != self.frame_hash:
             raise ContractError("selection original frame mismatch")
         context = _ActionContext.from_frame(original_frame)
-        action = self._to_action(index, context.actor, context.references)
-        if validate:
+        action = self._to_action(index, context.actor, context.references, layout)
+        if validate or layout is CARD_INSTANCE_LAYOUT:
             _validate_action_context(action, context)
         return action
 
-    def _to_action(self, index: int, actor: int, refs: tuple[Json, ...]) -> Json:
+    def _to_action(self, index: int, actor: int, refs: tuple[Any, ...], layout: StructuredLayout) -> Json:
         integer(index, 0, len(self.kinds) - 1)
         row = self.slots[self.offsets[index]:self.offsets[index + 1]]
         if any(slot >= len(refs) for slot in row):
@@ -453,7 +570,20 @@ class CandidateTable:
         elements = [refs[slot] for slot in row]
         kind = self.kinds[index]
         action: Json = {"type": kind}
-        if kind in ("play_sequence", "respond_sequence"):
+        if layout is CARD_INSTANCE_LAYOUT:
+            if kind in ("play_sequence", "respond"):
+                action["ordered_card_refs"] = elements
+            elif kind in ("discard", "sacrifice"):
+                action["card_refs"] = elements
+            elif kind in ("exchange", "sell", "buy", "invoke_phenomenon"):
+                if len(elements) != (2 if kind == "sell" else 1):
+                    raise ContractError("invalid v2 action reference count")
+                action["card_ref"] = elements[0]
+                if kind == "sell":
+                    action["sold_card_ref"] = elements[1]
+            elif elements:
+                raise ContractError("unexpected action references")
+        elif kind in ("play_sequence", "respond_sequence"):
             action["ordered_elements" if kind == "play_sequence" else "ordered_defenses"] = elements
         elif kind in ("respond", "discard", "sacrifice"):
             if any(ref["source"] != "hand_artifact" for ref in elements):
@@ -478,8 +608,16 @@ class CandidateTable:
         return action
 
 
-def _action_refs(action: Json) -> list[Json]:
+def _action_refs(action: Json, layout: StructuredLayout = LEGACY_LAYOUT) -> list[Any]:
     kind = action["type"]
+    if layout is CARD_INSTANCE_LAYOUT:
+        if kind in ("play_sequence", "respond"):
+            return action["ordered_card_refs"]
+        if kind in ("discard", "sacrifice"):
+            return action["card_refs"]
+        if kind in ("exchange", "buy", "invoke_phenomenon"):
+            return [action["card_ref"]]
+        return [action["card_ref"], action["sold_card_ref"]] if kind == "sell" else []
     if kind in ("play_sequence", "respond_sequence"):
         elements = action["ordered_elements" if kind == "play_sequence" else "ordered_defenses"]
         if not isinstance(elements, list):
@@ -496,9 +634,10 @@ def _action_refs(action: Json) -> list[Json]:
 @dataclass(frozen=True)
 class _ActionContext:
     actor: int
-    references: tuple[Json, ...]
+    references: tuple[Any, ...]
     owned: frozenset[str]
     descriptors: Json
+    layout: StructuredLayout
 
     @classmethod
     def from_frame(cls, frame: DecisionFrame) -> _ActionContext:
@@ -506,24 +645,29 @@ class _ActionContext:
         # frames, and never exposed as mutable policy/global cache state.
         raw = frame.raw
         own = raw["observation"]["own"]
-        references = tuple([{"source": "hand_artifact", "instance_id": card["instance_id"]}
+        references = (tuple(card["card_ref"] for card in own["cards"]) if frame.layout is CARD_INSTANCE_LAYOUT else tuple([{"source": "hand_artifact", "instance_id": card["instance_id"]}
                             for card in own["hand"]]
                            + [{"source": "learned_miracle", "definition_id": name}
-                              for name in own["learned_miracles"]])
+                              for name in own["learned_miracles"]]))
         return cls(frame.actor, references, frozenset(canonical(ref) for ref in references),
-                   {item["type"]: item for item in raw["typed_metadata"]})
+                   {item["type"]: item for item in raw["typed_metadata"]}, frame.layout)
 
 
-def _validate_action_context(action: Json, context: _ActionContext) -> None:
+def _validate_action_context(action: Json, context: _ActionContext, *, synthetic: bool = False) -> None:
     descriptors = context.descriptors
     if not isinstance(action, dict) or action.get("type") not in descriptors:
         raise ContractError("action kind not in typed metadata")
     desc = descriptors[action["type"]]
     closed(action, {"type"} | set(desc["required_fields"]), set(desc["optional_fields"]))
+    if context.layout is CARD_INSTANCE_LAYOUT:
+        if synthetic:
+            card_v2.dataset_action(action, action_schema_version="2")
+        else:
+            card_v2.validate_action(action)
     for field_name in ("ordered_elements", "ordered_defenses", "instance_ids"):
         if field_name in action and not isinstance(action[field_name], list):
             raise ContractError("ordered action array required")
-    for ref in _action_refs(action):
+    for ref in _action_refs(action, context.layout):
         if canonical(ref) not in context.owned:
             raise ContractError("action reference not owned")
     if "target" in action and action["target"] is not None:

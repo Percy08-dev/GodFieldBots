@@ -354,6 +354,12 @@ def write_rollout(directory: Path, rollout: StructuredRollout, *, shard_bytes: i
     return _write_rollout(directory, rollout, shard_bytes=shard_bytes)
 
 
+def _legacy_table_contract(table: CandidateTable) -> ActionContract:
+    if type(table.action_contract) is not ActionContract:
+        raise ContractError("numeric rollout3 requires an exact legacy ActionContract")
+    return table.action_contract
+
+
 def _write_rollout(directory: Path, rollout: StructuredRollout, *, shard_bytes: int = MAX_ARRAY_BYTES,
                    extra_owned_bytes: int = 0, max_owned_bytes: int | None = None,
                    check: Callable[[], None] | None = None,
@@ -361,6 +367,9 @@ def _write_rollout(directory: Path, rollout: StructuredRollout, *, shard_bytes: 
     poll = check or (lambda: None)
     validate_config(rollout.model)
     assert type(rollout.model) is ModelConfigV2
+    for episode in rollout.episodes:
+        for table in episode.records.tables:
+            _legacy_table_contract(table)  # Reject new semantics before output/admission/planning.
     poll()
     limit = rollout.model.resources.max_owned_bytes if max_owned_bytes is None else min(max_owned_bytes, rollout.model.resources.max_owned_bytes)
     integer(extra_owned_bytes, 0, limit)
@@ -420,7 +429,7 @@ def _write_rollout(directory: Path, rollout: StructuredRollout, *, shard_bytes: 
                                   "interval_start_hash": frame.interval_start_hash, "frame_hash": frame.frame_hash,
                                   "payload_key": payload_key, "token_prefix": frame_prefix,
                                   "event_token_prefix": event_prefix, "table_hash": table.table_hash,
-                                  **input_binding(table.action_contract, table.purpose, table.synthetic_capacity)})
+                                  **input_binding(_legacy_table_contract(table), table.purpose, table.synthetic_capacity)})
         for name, values in (("selected", tuple(selection.index for selection in record.selections)),
                              ("old_logprob", tuple(selection.logprob for selection in record.selections)),
                              ("old_value", tuple(selection.value for selection in record.selections))):

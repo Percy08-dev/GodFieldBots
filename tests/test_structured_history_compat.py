@@ -1,5 +1,7 @@
 """Actual pre-correction bytes, historical diagnostics only, never Source authority."""
 import json
+import shutil
+import stat
 import subprocess
 import sys
 import time
@@ -18,11 +20,25 @@ from gf_training.structured_rollout import _read_recorded_rollout, read_rollout,
 
 ROOT = Path(__file__).parent / 'fixtures/structured_history62_parent'
 PROOF = json.loads((ROOT.parent / 'structured_history62_files.json').read_text())
+EMPTY_SHA256 = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'
+
+
+def verify_frozen_fixture(directory):
+    for name, expected in PROOF.items():
+        path = directory / name
+        try:
+            metadata = path.lstat()
+        except FileNotFoundError:
+            # The original committed archive omits only this empty transient lock.
+            if name == '.lock' and expected == EMPTY_SHA256:
+                continue
+            raise
+        assert stat.S_ISREG(metadata.st_mode), f'non-file frozen fixture entry: {name}'
+        assert sha256(path) == expected
 
 
 def test_actual_old_bytes_and_whole_retained_pruned_metadata_inspect_unchanged():
-    for name, expected in PROOF.items():
-        assert sha256(ROOT / name) == expected
+    verify_frozen_fixture(ROOT)
     before = (ROOT / 'run.json').read_bytes()
     state, records = validate_component_chain(ROOT, max_owned_bytes=512 * 1024**2, deadline=time.monotonic() + 60)
     assert state['updates'] == 2 and len(records) == 3 and records[-1]['optimizer_steps'] == 8
@@ -37,6 +53,36 @@ def test_actual_old_bytes_and_whole_retained_pruned_metadata_inspect_unchanged()
         assert canonical(result.inference['model']) == canonical(original_model)
         assert 'aggregate_recipe' not in result.inference['model']['event']
     assert (ROOT / 'run.json').read_bytes() == before
+
+
+@pytest.mark.parametrize('lock_kind', ['absent', 'empty', 'nonempty', 'dangling', 'directory'])
+def test_copied_frozen_fixture_only_missing_or_empty_lock_is_permitted(tmp_path, lock_kind):
+    directory = tmp_path / 'copied'
+    shutil.copytree(ROOT, directory)
+    lock = directory / '.lock'
+    if lock.exists():
+        lock.unlink()
+    if lock_kind == 'empty':
+        lock.write_bytes(b'')
+    elif lock_kind == 'nonempty':
+        lock.write_bytes(b'changed')
+    elif lock_kind == 'dangling':
+        lock.symlink_to(directory / 'missing-target')
+    elif lock_kind == 'directory':
+        lock.mkdir()
+    if lock_kind in ('absent', 'empty'):
+        verify_frozen_fixture(directory)
+    else:
+        with pytest.raises(AssertionError):
+            verify_frozen_fixture(directory)
+
+
+def test_copied_frozen_fixture_payload_is_always_required(tmp_path):
+    directory = tmp_path / 'copied'
+    shutil.copytree(ROOT, directory)
+    (directory / 'run.json').unlink()
+    with pytest.raises(FileNotFoundError):
+        verify_frozen_fixture(directory)
 
 
 @pytest.mark.parametrize('batch', [0, 1])

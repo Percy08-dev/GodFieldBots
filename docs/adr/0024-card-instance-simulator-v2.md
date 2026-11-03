@@ -243,12 +243,17 @@ questions are gates for their dependent stages, not invented public rules.
   and the interrupted whole-suite limitation are in the verification ledger.
 - Stage2a §9 DESIGN READY after explicit validated Delta initialization,
   old-codec/default-layout gates and pinned own-catalog subset authority.
-  Root accepts those corrections. Implementation/conformance remain pending.
+  Root accepts those corrections. Implementation and both final source reviews
+  are READY, including a call-local layout reuse fix restoring table validation
+  cost without fields/caches/semantic changes. Root accepts the scoped stage2a
+  milestone after2181whole HOST passes/55skips, static/Rust/old-data proofs,
+  source-matching wheel and isolated optional-free baseline checks. Exact
+  conditions and limitations are in the verification ledger.
 - Stage2b generator and full runtime acceptance remain blocked by issue0007.
 
-## 9. Stage2a: shared layout, original frames and deterministic tokens (proposed)
+## 9. Stage2a: shared layout, original frames and deterministic tokens (accepted)
 
-This section is a separate pre-implementation gate. It does not enable a worker,
+This section passed its separate design and implementation gates. It enables no worker,
 model, native capability, collection or Source consumer. `gf_common` owns the
 layout and pure records/tokens; no upper-layer or third-party dependency is added.
 
@@ -302,6 +307,14 @@ be consistent with the pinned public catalog classification. Store raw
 `candidate_groups` without semantic interpretation. Opponent learned IDs remain
 an ordered duplicate-preserving sequence. Keep original complete-event-input
 versus event-delta meanings distinct, advancing intervals only at own decisions.
+
+The raw HTTP ActionOptions wrapper remains `{state_revision,action_options}`.
+The participant `DecisionInput` envelope additionally carries the explicit
+`viewer_player_id` bound from that requested actor path and original Observation,
+as in the existing participant envelope convention. Its validator rechecks that
+outer viewer, inner actor and Observation actor agree. This is an envelope binding,
+not a synthesized HTTP Observation field or a feature. Preserve raw endpoint
+payloads separately in transport diagnostics when recording them.
 
 Pure per-definition authority is an immutable ID→canonical-definition-SHA256
 table generated from the verified public-ja-v3 catalog and stored with common

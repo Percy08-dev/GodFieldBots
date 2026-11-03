@@ -4,7 +4,8 @@ from __future__ import annotations
 from dataclasses import asdict
 from typing import Any
 
-from gf_common.action_contract import ActionContract, parse_action_contract, validate_record_purpose
+from gf_common.action_contract import ActionContract, parse_action_contract
+from gf_common.card_instance import CardInstanceContract, parse_card_instance_contract
 from gf_common.diverse_actions import (
     GeneratedCandidates,
     NumericCosts,
@@ -12,40 +13,70 @@ from gf_common.diverse_actions import (
     SearchReport,
 )
 from gf_common.domain import ContractError, Json, canonical, closed
-from gf_common.structured import CandidateTable, DecisionFrame, EventBoundary, EventDelta, Selection
+from gf_common.structured import (
+    CandidateTable,
+    DecisionFrame,
+    EventBoundary,
+    EventDelta,
+    Selection,
+    _CardInstanceDecisionFrame,
+    _validate_purpose,
+    event_delta,
+)
+from gf_common.structured_layout import (
+    LEGACY_LAYOUT,
+    StructuredLayout,
+    layout_for_contract,
+    require_layout,
+)
 
 
-def frame_dict(frame: DecisionFrame) -> Json:
+def frame_dict(frame: DecisionFrame, *, layout: StructuredLayout = LEGACY_LAYOUT) -> Json:
+    if frame.layout is not require_layout(layout):
+        raise ContractError("frame wire layout mismatch")
     return {"actor": frame.actor, "episode": frame.episode, "revision": frame.revision,
             "interval_start": frame.interval_start, "boundary": asdict(frame.boundary),
             "interval_start_hash": frame.interval_start_hash, "payload": frame.raw, "frame_hash": frame.frame_hash}
 
 
-def parse_frame(raw: Json) -> DecisionFrame:
+def parse_frame(raw: Json, *, layout: StructuredLayout = LEGACY_LAYOUT) -> DecisionFrame:
+    require_layout(layout)
     closed(raw, {"actor", "episode", "revision", "interval_start", "boundary", "interval_start_hash", "payload", "frame_hash"})
     boundary = EventBoundary(**closed(raw["boundary"], {"end", "prefix_hash"}))
-    return DecisionFrame(raw["actor"], raw["episode"], raw["revision"], raw["interval_start"], boundary,
+    frame_type = DecisionFrame if layout is LEGACY_LAYOUT else _CardInstanceDecisionFrame
+    return frame_type(raw["actor"], raw["episode"], raw["revision"], raw["interval_start"], boundary,
                          raw["interval_start_hash"], canonical(raw["payload"]).encode(), raw["frame_hash"])
 
 
-def delta_dict(delta: EventDelta) -> Json:
+def delta_dict(delta: EventDelta, *, layout: StructuredLayout = LEGACY_LAYOUT) -> Json:
+    if delta.layout is not require_layout(layout):
+        raise ContractError("delta wire layout mismatch")
     return {"actor": delta.actor, "episode": delta.episode, "start": delta.start,
             "previous_hash": delta.previous_hash, "events": delta.events}
 
 
-def parse_delta(raw: Json) -> EventDelta:
+def parse_delta(raw: Json, *, layout: StructuredLayout = LEGACY_LAYOUT) -> EventDelta:
     closed(raw, {"actor", "episode", "start", "previous_hash", "events"})
-    return EventDelta(**raw)
+    return event_delta(**raw, layout=layout)
 
 
-def parse_table(raw: Json, *, action_contract: ActionContract, purpose: str, synthetic_capacity: bool) -> CandidateTable:
-    validate_record_purpose(purpose, action_contract)
+def parse_table(raw: Json, *, action_contract: ActionContract | CardInstanceContract, purpose: str,
+                synthetic_capacity: bool, layout: StructuredLayout = LEGACY_LAYOUT) -> CandidateTable:
+    _validate_purpose(purpose, action_contract)
+    if layout_for_contract(action_contract) is not require_layout(layout):
+        raise ContractError("candidate wire layout mismatch")
     closed(raw, set(CandidateTable.__dataclass_fields__))
     for key in ("kinds", "targets", "numerics", "presence", "offsets", "slots"):
         if not isinstance(raw[key], (list, tuple)):
             raise ContractError("compact table column arrays required")
     values = dict(raw)
-    values["action_contract"] = parse_action_contract(raw["action_contract"], expected=action_contract)
+    if layout is LEGACY_LAYOUT:
+        assert type(action_contract) is ActionContract
+        values["action_contract"] = parse_action_contract(raw["action_contract"], expected=action_contract)
+    else:
+        values["action_contract"] = parse_card_instance_contract(raw["action_contract"])
+        if values["action_contract"] != action_contract:
+            raise ContractError("candidate wire action contract mismatch")
     if (raw["purpose"] != purpose or type(synthetic_capacity) is not bool
             or type(raw["synthetic_capacity"]) is not bool or raw["synthetic_capacity"] != synthetic_capacity):
         raise ContractError("wire candidate purpose/synthetic classification mismatch")
@@ -83,6 +114,8 @@ def parse_report(raw: Json, *, action_contract: ActionContract) -> SearchReport:
 
 
 def generated_dict(value: GeneratedCandidates) -> Json:
+    if value.table.layout is not LEGACY_LAYOUT:
+        raise ContractError("protocol2 generated candidates require legacy layout")
     return {"table": asdict(value.table), "report": asdict(value.report)}
 
 

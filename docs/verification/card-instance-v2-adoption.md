@@ -49,8 +49,10 @@ evidence.
 
 Stage1 contract/wire/Config/direct-HTTP implementation is accepted after both
 independent final reviews. No worker/model/native/Source capability is enabled.
-Stages2–5 (candidate/frame/token, model/worker/journal/native, Source/learning/
-artifacts/evaluation and full runtime acceptance): implementation NOT RUN here.
+Stage2a pure frame/token implementation and both independent source reviews are
+accepted after final host regression checks. Stage2b candidate generation
+and stages3–5 (model/worker/journal/native, Source/learning/artifacts/evaluation
+and full runtime acceptance) remain closed pending issue0007.
 No192-game pilot, real PPO resume matrix, real decision performance panel or
 complete migration acceptance is claimed.
 
@@ -118,3 +120,110 @@ No Simulator files changed, rule inference/probing performed, seeds replaced or
 candidate scope reduced. Complete generator adoption and dependent real-game
 acceptance are BLOCKED pending an explicit amended-contract adoption. Independent
 frame/token implementation continues under its own design gate.
+
+## Stage2a source and scoped verification
+
+Shared pure layout/record/token implementation follows ADR0024§9. New immutable
+layout descriptors sit below records/tokens; thin frozen record subclasses add
+no serialized fields. Exact own-visible definitions match296pinned per-definition
+digests. Original refs/kind/state/order, duplicate learned definitions,25events
+and historical prefixes are retained. Expected layout defaults strictly to old
+semantics. Codec1/old numeric consumers reject new tables before allocation;
+new synthetic128tables cannot reconstruct Actions even with validation disabled.
+No codec2, worker3, model3, native recipe, journal6 or Source capability is enabled.
+
+Both final source reviews are READY, including a narrow call-local layout reuse
+fix. Independent architecture189tests plus85post-fix cases pass; correctness171
+plus92post-fix cases pass. Counts overlap. Both reviewers independently execute
+`f0c5636` module text read through Git and reproduce every original golden bank/
+frame/table/token/signature/codec byte. All296definition digests match the public
+catalog; bottom import isolation passes. Correctness independently enumerates
+all25event codes/counts and reproduces both recorded live-smoke frames/tokens.
+Implementer423related passes include one inadvertently repeated records module;
+the final post-fix239-case command has no such repeat. New stage2modules contain
+35cases. These are pure compatibility checks, not learning/Source evidence.
+
+A pre-existing fixture packaging mismatch was independently investigated:
+`structured_history62_files.json` lists38files including an empty runtime `.lock`,
+but the introduction commit and current fixture contain37payloads and no lock.
+Do not create/repair a lock in the frozen fixture. The reviewed test-only remedy
+permits only a truly absent literal `.lock` with the known empty-file digest;
+if present it must be a regular file with that digest. `lstat` rejects dangling
+symlinks/non-file entries, and all37payload checks remain mandatory. Six copied
+fixture tests cover this. Inventory and frozen payload bytes are unchanged.
+Early implementation failures from missing legacy reexports were fixed by
+restoring those exports; no new signature is substituted for an old one.
+
+The same32768-row legacy table constructor measures median0.289615→0.058134s
+over3samples after avoiding per-row repeated contract validation. Its exact hash
+remains `68e46a1c75289d6d21df918d2083cb90bf5634f0668b7c1e4fa30e62d3237ee0`.
+This is constructor-only evidence, not a full search/latency acceptance panel.
+
+## Stage2a runtime, old-data and package checks
+
+PASS: `structured_runtime_smoke.py` creates one diagnostic game and builds two
+separate participant frames. A public normal-weapon singleton and empty response
+round-trip through the new compact table/tokens back to original refs, and both
+HTTP Acts are accepted. Actor1has0visible events, actor2has3; nonempty Replay
+validates. Process exit0/stdin_eof. Receipt: `structured-smoke-2/report.json`.
+This incomplete game is not a pilot, a complete parent or an eligible Source.
+The first attempt used raw HTTP options where the harness needed the explicit
+viewer-bound participant envelope; its failure is preserved. Only the harness
+binding changed, with raw options saved separately; no rule was inferred.
+
+PASS: all five original full-data proof commands and the independent verifier's
+semantic audit. Fresh outputs: `legacy-proofs/`. Both corpus encoders retain
+83783accepted actions,13568journals/534640records/6784completed episodes and exact
+original dataset/sample/arrays/archive hashes. The83783-row Parquet and sidecar
+are exact. Saved PPO1/4worker probes retain16episodes/224decisions and all8arrays
+across all3readers;72original source hashes/sizes/mtime/inodes recheck exactly.
+Only diagnostic clone paths/manifest pointers change, with zero updates and no
+new eligibility. `execution.json` and actual output logs are execution evidence;
+the copied `bound-plan.json` remains a template and is not a completion receipt.
+The24protected fit-file hashes also pass a fresh root check; the historical
+baseline has no stat identities, so none are claimed for those24files.
+
+PASS: unchanged Rust sources, `cargo test --manifest-path native/Cargo.toml
+--offline`:114passed/2ignored. Installed native ELF remains
+`d093ccaa68e8359b9f1a9619754a65dc733747aa31a8a1578c9a299f051b1e5e`, declared
+native source `b29d025b2f547440cced90ecdd5448e19e29ea311b3b5d3fe196847ec5185206`;
+independent proof identity/direct ELF checks match the prior verified candidate.
+No native source or installed binary changed, and no v2card-instance capability
+is advertised.
+
+PASS: whole Ruff/mypy124source files/diff checks. Python wheel SHA
+`4b1bd6d987e39757702938c0c927d005fc129dc7870d0868536ee56006e9b3eb` matches all124
+current package sources exactly. A separate Python3.14environment contains only
+the wheel and8mandatory distributions (1110copied/hash-checked dependency files),
+passes dependency checking, loads the new Config, and starts/reaps Random and
+heuristic workers with all optional Torch/LightGBM/PyArrow/native packages absent.
+Expected worker SIGTERM exits-15 have empty health; the initial harness's mistaken
+exit0assertion is preserved separately and corrected to the actual worker cleanup
+contract. Existing environments/dependencies remain unchanged.
+
+Full frozen-source HOST pytest PASS:2181passed/55skipped in1445.77s, exit0, under
+the2100sbound. It is CPU-only with native Tree/frozen Dataset/trained-default
+fixtures enabled. The central original-source fixture recognizes only Source17/
+29reuse variables, which this command did not set; the Source43variable does not
+reuse that central fixture. It therefore creates all3old engineering/FakeHTTP
+parents fresh (seeds17/29/43), each complete after2updates and64natural validation
+games. `full-host-central-fixture.json` verifies those conditions. These are
+old-format component checks, not new-contract or formal learning parents.
+The120sfaulthandler emits a diagnostic stack during the slow central fixture;
+the case and whole run subsequently complete successfully. Real Simulator and
+CUDA opt-ins remain off;55skips are not passed tests. Log SHA
+`bd988704dc3ba8def4433c1029cab281ebea875e6e7336bf098ba2e48987e6b4`;
+`stage2a-full-host-conditions.json` records exact flags and completion.
+
+After the test process exits/reaps, all124source bytes still match the tested
+wheel map and the24protected fit-file hashes recheck exactly. The full suite
+leaves an empty runtime `.lock` in the historical fixture; its precise test
+creator was not established. After confirmed process completion, root verifies
+regular-file/empty bytes/inode, acquires a nonblocking exclusive flock, and removes
+only that initially absent transient file. The37payload hashes and committed
+inventory bytes remain exact. No source fixture was repaired or data rewritten.
+
+Root accepts only stages1and2a. Actual new-generator/model/worker/journal/native/
+Source, CUDA/PPO/pilot/fixed-data/performance acceptance remains NOT RUN/BLOCKED
+under issue0007. Reopen those stages after explicit amended revision/hash
+adoption; never relabel these component records as qualified Sources.

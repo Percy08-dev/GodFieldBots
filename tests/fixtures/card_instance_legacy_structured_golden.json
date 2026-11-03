@@ -1,0 +1,1963 @@
+{
+  "bank_prefixes": [
+    "85d9998a7587162e1e25cc86c3806e041c4d44a406896baaf61235cfd2ee8e22",
+    "18f926f8b95c02ccb8d3fd9044901ff650255e11348de4ad0600b313587dde6d"
+  ],
+  "candidate_tokens": {
+    "frame_hash": "7ea55c1be09b603fc192c81a881038b98768ccb687960d5bca33de8f2bede84d",
+    "kinds": [
+      2,
+      3
+    ],
+    "numerics": [
+      [
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0
+      ]
+    ],
+    "offsets": [
+      0,
+      0,
+      2
+    ],
+    "present": [
+      [
+        false,
+        false,
+        false,
+        false
+      ],
+      [
+        false,
+        false,
+        false,
+        false
+      ]
+    ],
+    "recipe_signature": "4b4ae064f08192a322de83e24e4a93ef4191c7d73396997d59cd7710cd05cb04",
+    "slots": [
+      0,
+      1
+    ],
+    "table_hash": "706fe0b390d1016fe64c8113a09f208e07753c7221616f9ab6f04fe7be0de84c",
+    "targets": [
+      2,
+      5
+    ]
+  },
+  "column_hex": "00010003000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000002000000000000000001",
+  "columns": {
+    "action_contract": {
+      "adopted_rules_sha256": "f4132843bb700947d51e19b57bed1b3bc9bcaf5f63c0cfa60998f1ddc3d6d978",
+      "eligibility": "engineering_only",
+      "owner_confirmation_sha256": "a0e6acb7fdc708ce4bd1b11f23d5dd3f0e41373cc1c1c1bef0a43a3e3efc2cb2",
+      "profile_id": "owner-proposal-engineering-20261101-v1"
+    },
+    "bytes": 106,
+    "codec": "candidate-columns-v1",
+    "columns": [
+      {
+        "bytes": 2,
+        "dtype": "uint8",
+        "name": "kinds",
+        "offset": 0,
+        "shape": [
+          2
+        ]
+      },
+      {
+        "bytes": 2,
+        "dtype": "uint8",
+        "name": "targets",
+        "offset": 2,
+        "shape": [
+          2
+        ]
+      },
+      {
+        "bytes": 64,
+        "dtype": "int64",
+        "name": "numerics",
+        "offset": 8,
+        "shape": [
+          2,
+          4
+        ]
+      },
+      {
+        "bytes": 8,
+        "dtype": "uint8",
+        "name": "presence",
+        "offset": 72,
+        "shape": [
+          2,
+          4
+        ]
+      },
+      {
+        "bytes": 24,
+        "dtype": "int64",
+        "name": "offsets",
+        "offset": 80,
+        "shape": [
+          3
+        ]
+      },
+      {
+        "bytes": 2,
+        "dtype": "uint8",
+        "name": "slots",
+        "offset": 104,
+        "shape": [
+          2
+        ]
+      }
+    ],
+    "count": 2,
+    "elements": 2,
+    "file": "table.bin",
+    "frame_hash": "7ea55c1be09b603fc192c81a881038b98768ccb687960d5bca33de8f2bede84d",
+    "purpose": "component",
+    "schema_version": 1,
+    "sha256": "64835222c61256937372823cb842c8bcab0ed5d6f7892315758d7d1f4c2dda06",
+    "synthetic_capacity": false,
+    "table_hash": "706fe0b390d1016fe64c8113a09f208e07753c7221616f9ab6f04fe7be0de84c"
+  },
+  "delta": {
+    "actor": 1,
+    "episode": "stage2-old-golden",
+    "events": [
+      {
+        "definition_id": "angel-axe",
+        "player": 2,
+        "type": "artifact_used"
+      }
+    ],
+    "previous_hash": "85d9998a7587162e1e25cc86c3806e041c4d44a406896baaf61235cfd2ee8e22",
+    "start": 0
+  },
+  "frame": {
+    "actor": 1,
+    "boundary": {
+      "end": 1,
+      "prefix_hash": "18f926f8b95c02ccb8d3fd9044901ff650255e11348de4ad0600b313587dde6d"
+    },
+    "episode": "stage2-old-golden",
+    "frame_hash": "7ea55c1be09b603fc192c81a881038b98768ccb687960d5bca33de8f2bede84d",
+    "interval_start": 0,
+    "interval_start_hash": "85d9998a7587162e1e25cc86c3806e041c4d44a406896baaf61235cfd2ee8e22",
+    "payload": "{\"action_options\":{\"action_options\":{\"buy_artifacts\":[],\"can_allow\":false,\"can_discard\":true,\"can_pray\":false,\"can_sacrifice\":true,\"exchange_artifacts\":[],\"required_choice\":\"turn_action\",\"sell_artifacts\":[],\"usable_hand_elements\":[1],\"usable_learned_miracles\":[\"fireball\"],\"valid_targets\":[1,2]},\"state_revision\":0,\"viewer_player_id\":1},\"catalog\":{\"bronze-club\":{\"attack\":1,\"definition_id\":\"bronze-club\",\"display_name\":\"\u9285\u306e\u3053\u3093\u68d2\",\"kind\":\"weapons\",\"price\":1},\"fireball\":{\"additional_attack\":true,\"attack\":2,\"attribute\":\"fire\",\"definition_id\":\"fireball\",\"display_name\":\"\uff1c\u706b\u306e\u7389\uff1e\",\"kind\":\"miracles\",\"mp_cost\":2}},\"history_end\":null,\"observation\":{\"action_schema_version\":1,\"actionable\":true,\"active_player\":1,\"current_player\":1,\"end_times\":false,\"first_player\":1,\"observation_schema_version\":\"1\",\"opponent\":{\"ascended\":false,\"hp\":40,\"learned_miracles\":[],\"money\":20,\"mp\":10,\"player_id\":2,\"status\":{\"dark_cloud\":false,\"disease\":null,\"dream\":false,\"flash\":false,\"fog\":false}},\"own\":{\"ascended\":false,\"guardian\":null,\"hand\":[{\"definition_id\":\"bronze-club\",\"instance_id\":1}],\"hp\":40,\"learned_miracles\":[\"fireball\"],\"money\":20,\"mp\":10,\"player_id\":1,\"status\":{\"dark_cloud\":false,\"disease\":null,\"dream\":false,\"flash\":false,\"fog\":false}},\"phase\":\"awaiting_action\",\"required_choice\":\"turn_action\",\"result\":null,\"state_revision\":0,\"turn\":1,\"turns_until_end_of_world\":149,\"typed_action_schema\":[{\"additional_fields\":false,\"optional_fields\":{},\"required_fields\":{},\"type\":\"pray\"},{\"additional_fields\":false,\"optional_fields\":{\"target\":{\"one_of\":[{\"enum\":[1,2],\"sources\":[\"own.player_id\",\"opponent.player_id\"],\"type\":\"integer\"},{\"type\":\"null\"}]}},\"required_fields\":{\"ordered_elements\":{\"items\":{\"one_of\":[{\"additional_fields\":false,\"optional_fields\":{},\"required_fields\":{\"instance_id\":{\"maximum\":18446744073709551615,\"minimum\":0,\"sources\":[\"own.hand[].instance_id\"],\"type\":\"integer\"},\"source\":{\"const\":\"hand_artifact\",\"type\":\"string\"}},\"type\":\"object\"},{\"additional_fields\":false,\"optional_fields\":{},\"required_fields\":{\"definition_id\":{\"sources\":[\"own.learned_miracles[]\"],\"type\":\"string\"},\"source\":{\"const\":\"learned_miracle\",\"type\":\"string\"}},\"type\":\"object\"}]},\"ordered\":true,\"type\":\"array\"}},\"type\":\"play_sequence\"},{\"additional_fields\":false,\"optional_fields\":{},\"required_fields\":{\"instance_ids\":{\"items\":{\"maximum\":18446744073709551615,\"minimum\":0,\"sources\":[\"own.hand[].instance_id\"],\"type\":\"integer\"},\"ordered\":true,\"type\":\"array\"}},\"type\":\"discard\"},{\"additional_fields\":false,\"optional_fields\":{},\"required_fields\":{\"instance_ids\":{\"items\":{\"maximum\":18446744073709551615,\"minimum\":0,\"sources\":[\"own.hand[].instance_id\"],\"type\":\"integer\"},\"ordered\":true,\"type\":\"array\"}},\"type\":\"sacrifice\"},{\"additional_fields\":false,\"optional_fields\":{},\"required_fields\":{\"artifact\":{\"maximum\":18446744073709551615,\"minimum\":0,\"sources\":[\"own.hand[].instance_id\"],\"type\":\"integer\"},\"hp\":{\"maximum\":2147483647,\"minimum\":-2147483648,\"type\":\"integer\"},\"money\":{\"maximum\":4294967295,\"minimum\":0,\"type\":\"integer\"},\"mp\":{\"maximum\":4294967295,\"minimum\":0,\"type\":\"integer\"}},\"type\":\"exchange\"},{\"additional_fields\":false,\"optional_fields\":{},\"required_fields\":{\"artifact\":{\"maximum\":18446744073709551615,\"minimum\":0,\"sources\":[\"own.hand[].instance_id\"],\"type\":\"integer\"},\"sold_artifact\":{\"maximum\":18446744073709551615,\"minimum\":0,\"sources\":[\"own.hand[].instance_id\"],\"type\":\"integer\"},\"target\":{\"enum\":[1,2],\"sources\":[\"own.player_id\",\"opponent.player_id\"],\"type\":\"integer\"}},\"type\":\"sell\"},{\"additional_fields\":false,\"optional_fields\":{},\"required_fields\":{\"artifact\":{\"maximum\":18446744073709551615,\"minimum\":0,\"sources\":[\"own.hand[].instance_id\"],\"type\":\"integer\"},\"target\":{\"enum\":[1,2],\"sources\":[\"own.player_id\",\"opponent.player_id\"],\"type\":\"integer\"}},\"type\":\"buy\"}],\"viewer_player_id\":1},\"typed_metadata\":[{\"additional_fields\":false,\"optional_fields\":{},\"required_fields\":{},\"type\":\"pray\"},{\"additional_fields\":false,\"optional_fields\":{\"target\":{\"one_of\":[{\"enum\":[1,2],\"sources\":[\"own.player_id\",\"opponent.player_id\"],\"type\":\"integer\"},{\"type\":\"null\"}]}},\"required_fields\":{\"ordered_elements\":{\"items\":{\"one_of\":[{\"additional_fields\":false,\"optional_fields\":{},\"required_fields\":{\"instance_id\":{\"maximum\":18446744073709551615,\"minimum\":0,\"sources\":[\"own.hand[].instance_id\"],\"type\":\"integer\"},\"source\":{\"const\":\"hand_artifact\",\"type\":\"string\"}},\"type\":\"object\"},{\"additional_fields\":false,\"optional_fields\":{},\"required_fields\":{\"definition_id\":{\"sources\":[\"own.learned_miracles[]\"],\"type\":\"string\"},\"source\":{\"const\":\"learned_miracle\",\"type\":\"string\"}},\"type\":\"object\"}]},\"ordered\":true,\"type\":\"array\"}},\"type\":\"play_sequence\"},{\"additional_fields\":false,\"optional_fields\":{},\"required_fields\":{\"instance_ids\":{\"items\":{\"maximum\":18446744073709551615,\"minimum\":0,\"sources\":[\"own.hand[].instance_id\"],\"type\":\"integer\"},\"ordered\":true,\"type\":\"array\"}},\"type\":\"discard\"},{\"additional_fields\":false,\"optional_fields\":{},\"required_fields\":{\"instance_ids\":{\"items\":{\"maximum\":18446744073709551615,\"minimum\":0,\"sources\":[\"own.hand[].instance_id\"],\"type\":\"integer\"},\"ordered\":true,\"type\":\"array\"}},\"type\":\"sacrifice\"},{\"additional_fields\":false,\"optional_fields\":{},\"required_fields\":{\"artifact\":{\"maximum\":18446744073709551615,\"minimum\":0,\"sources\":[\"own.hand[].instance_id\"],\"type\":\"integer\"},\"hp\":{\"maximum\":2147483647,\"minimum\":-2147483648,\"type\":\"integer\"},\"money\":{\"maximum\":4294967295,\"minimum\":0,\"type\":\"integer\"},\"mp\":{\"maximum\":4294967295,\"minimum\":0,\"type\":\"integer\"}},\"type\":\"exchange\"},{\"additional_fields\":false,\"optional_fields\":{},\"required_fields\":{\"artifact\":{\"maximum\":18446744073709551615,\"minimum\":0,\"sources\":[\"own.hand[].instance_id\"],\"type\":\"integer\"},\"sold_artifact\":{\"maximum\":18446744073709551615,\"minimum\":0,\"sources\":[\"own.hand[].instance_id\"],\"type\":\"integer\"},\"target\":{\"enum\":[1,2],\"sources\":[\"own.player_id\",\"opponent.player_id\"],\"type\":\"integer\"}},\"type\":\"sell\"},{\"additional_fields\":false,\"optional_fields\":{},\"required_fields\":{\"artifact\":{\"maximum\":18446744073709551615,\"minimum\":0,\"sources\":[\"own.hand[].instance_id\"],\"type\":\"integer\"},\"target\":{\"enum\":[1,2],\"sources\":[\"own.player_id\",\"opponent.player_id\"],\"type\":\"integer\"}},\"type\":\"buy\"}]}",
+    "revision": 0
+  },
+  "frame_tokens": {
+    "actor": 1,
+    "aggregate_window": 128,
+    "card_categories": [
+      [
+        35,
+        1,
+        9,
+        1,
+        1,
+        1,
+        2
+      ],
+      [
+        88,
+        1,
+        5,
+        3,
+        1,
+        1,
+        3
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    ],
+    "card_mask": [
+      true,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ],
+    "card_numerics": [
+      [
+        1,
+        0,
+        0,
+        1,
+        0,
+        0,
+        0,
+        1,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        2,
+        0,
+        0,
+        0,
+        2,
+        0,
+        1,
+        1,
+        1,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    ],
+    "card_present": [
+      [
+        true,
+        false,
+        false,
+        true,
+        false,
+        false,
+        false,
+        true,
+        true,
+        true,
+        true,
+        true
+      ],
+      [
+        true,
+        false,
+        false,
+        false,
+        true,
+        false,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true
+      ],
+      [
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false
+      ],
+      [
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false
+      ],
+      [
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false
+      ],
+      [
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false
+      ],
+      [
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false
+      ],
+      [
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false
+      ],
+      [
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false
+      ],
+      [
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false
+      ],
+      [
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false
+      ],
+      [
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false
+      ],
+      [
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false
+      ],
+      [
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false
+      ],
+      [
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false
+      ],
+      [
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false
+      ],
+      [
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false
+      ],
+      [
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false
+      ]
+    ],
+    "episode": "stage2-old-golden",
+    "event_end": 1,
+    "event_start": 0,
+    "frame_hash": "7ea55c1be09b603fc192c81a881038b98768ccb687960d5bca33de8f2bede84d",
+    "history": [
+      0,
+      0,
+      1,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      1,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      1,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      1,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      1,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "interval_categories": [
+      [
+        4,
+        7,
+        1,
+        1,
+        3,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1
+      ]
+    ],
+    "interval_numerics": [
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    ],
+    "interval_present": [
+      [
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false
+      ]
+    ],
+    "opponent_learned": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "recipe_signature": "4b4ae064f08192a322de83e24e4a93ef4191c7d73396997d59cd7710cd05cb04",
+    "revision": 0,
+    "state_categories": [
+      2,
+      2,
+      2,
+      2,
+      2,
+      1,
+      1,
+      1,
+      1,
+      1
+    ],
+    "state_category_present": [
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      false
+    ],
+    "state_numerics": [
+      1,
+      149,
+      0,
+      1,
+      40,
+      10,
+      20,
+      0,
+      0,
+      0,
+      0,
+      0,
+      40,
+      10,
+      20,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      1,
+      1,
+      0,
+      1,
+      1
+    ],
+    "state_present": [
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "input": {
+    "action_options": {
+      "action_options": {
+        "buy_artifacts": [],
+        "can_allow": false,
+        "can_discard": true,
+        "can_pray": false,
+        "can_sacrifice": true,
+        "exchange_artifacts": [],
+        "required_choice": "turn_action",
+        "sell_artifacts": [],
+        "usable_hand_elements": [
+          1
+        ],
+        "usable_learned_miracles": [
+          "fireball"
+        ],
+        "valid_targets": [
+          1,
+          2
+        ]
+      },
+      "state_revision": 0,
+      "viewer_player_id": 1
+    },
+    "catalog": {
+      "bronze-club": {
+        "attack": 1,
+        "definition_id": "bronze-club",
+        "display_name": "\u9285\u306e\u3053\u3093\u68d2",
+        "kind": "weapons",
+        "price": 1
+      },
+      "fireball": {
+        "additional_attack": true,
+        "attack": 2,
+        "attribute": "fire",
+        "definition_id": "fireball",
+        "display_name": "\uff1c\u706b\u306e\u7389\uff1e",
+        "kind": "miracles",
+        "mp_cost": 2
+      }
+    },
+    "events": [
+      {
+        "definition_id": "angel-axe",
+        "player": 2,
+        "type": "artifact_used"
+      }
+    ],
+    "history_end": null,
+    "observation": {
+      "action_schema_version": 1,
+      "actionable": true,
+      "active_player": 1,
+      "current_player": 1,
+      "end_times": false,
+      "first_player": 1,
+      "observation_schema_version": "1",
+      "opponent": {
+        "ascended": false,
+        "hp": 40,
+        "learned_miracles": [],
+        "money": 20,
+        "mp": 10,
+        "player_id": 2,
+        "status": {
+          "dark_cloud": false,
+          "disease": null,
+          "dream": false,
+          "flash": false,
+          "fog": false
+        }
+      },
+      "own": {
+        "ascended": false,
+        "guardian": null,
+        "hand": [
+          {
+            "definition_id": "bronze-club",
+            "instance_id": 1
+          }
+        ],
+        "hp": 40,
+        "learned_miracles": [
+          "fireball"
+        ],
+        "money": 20,
+        "mp": 10,
+        "player_id": 1,
+        "status": {
+          "dark_cloud": false,
+          "disease": null,
+          "dream": false,
+          "flash": false,
+          "fog": false
+        }
+      },
+      "phase": "awaiting_action",
+      "required_choice": "turn_action",
+      "result": null,
+      "state_revision": 0,
+      "turn": 1,
+      "turns_until_end_of_world": 149,
+      "typed_action_schema": [
+        {
+          "additional_fields": false,
+          "optional_fields": {},
+          "required_fields": {},
+          "type": "pray"
+        },
+        {
+          "additional_fields": false,
+          "optional_fields": {
+            "target": {
+              "one_of": [
+                {
+                  "enum": [
+                    1,
+                    2
+                  ],
+                  "sources": [
+                    "own.player_id",
+                    "opponent.player_id"
+                  ],
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required_fields": {
+            "ordered_elements": {
+              "items": {
+                "one_of": [
+                  {
+                    "additional_fields": false,
+                    "optional_fields": {},
+                    "required_fields": {
+                      "instance_id": {
+                        "maximum": 18446744073709551615,
+                        "minimum": 0,
+                        "sources": [
+                          "own.hand[].instance_id"
+                        ],
+                        "type": "integer"
+                      },
+                      "source": {
+                        "const": "hand_artifact",
+                        "type": "string"
+                      }
+                    },
+                    "type": "object"
+                  },
+                  {
+                    "additional_fields": false,
+                    "optional_fields": {},
+                    "required_fields": {
+                      "definition_id": {
+                        "sources": [
+                          "own.learned_miracles[]"
+                        ],
+                        "type": "string"
+                      },
+                      "source": {
+                        "const": "learned_miracle",
+                        "type": "string"
+                      }
+                    },
+                    "type": "object"
+                  }
+                ]
+              },
+              "ordered": true,
+              "type": "array"
+            }
+          },
+          "type": "play_sequence"
+        },
+        {
+          "additional_fields": false,
+          "optional_fields": {},
+          "required_fields": {
+            "instance_ids": {
+              "items": {
+                "maximum": 18446744073709551615,
+                "minimum": 0,
+                "sources": [
+                  "own.hand[].instance_id"
+                ],
+                "type": "integer"
+              },
+              "ordered": true,
+              "type": "array"
+            }
+          },
+          "type": "discard"
+        },
+        {
+          "additional_fields": false,
+          "optional_fields": {},
+          "required_fields": {
+            "instance_ids": {
+              "items": {
+                "maximum": 18446744073709551615,
+                "minimum": 0,
+                "sources": [
+                  "own.hand[].instance_id"
+                ],
+                "type": "integer"
+              },
+              "ordered": true,
+              "type": "array"
+            }
+          },
+          "type": "sacrifice"
+        },
+        {
+          "additional_fields": false,
+          "optional_fields": {},
+          "required_fields": {
+            "artifact": {
+              "maximum": 18446744073709551615,
+              "minimum": 0,
+              "sources": [
+                "own.hand[].instance_id"
+              ],
+              "type": "integer"
+            },
+            "hp": {
+              "maximum": 2147483647,
+              "minimum": -2147483648,
+              "type": "integer"
+            },
+            "money": {
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "mp": {
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "type": "exchange"
+        },
+        {
+          "additional_fields": false,
+          "optional_fields": {},
+          "required_fields": {
+            "artifact": {
+              "maximum": 18446744073709551615,
+              "minimum": 0,
+              "sources": [
+                "own.hand[].instance_id"
+              ],
+              "type": "integer"
+            },
+            "sold_artifact": {
+              "maximum": 18446744073709551615,
+              "minimum": 0,
+              "sources": [
+                "own.hand[].instance_id"
+              ],
+              "type": "integer"
+            },
+            "target": {
+              "enum": [
+                1,
+                2
+              ],
+              "sources": [
+                "own.player_id",
+                "opponent.player_id"
+              ],
+              "type": "integer"
+            }
+          },
+          "type": "sell"
+        },
+        {
+          "additional_fields": false,
+          "optional_fields": {},
+          "required_fields": {
+            "artifact": {
+              "maximum": 18446744073709551615,
+              "minimum": 0,
+              "sources": [
+                "own.hand[].instance_id"
+              ],
+              "type": "integer"
+            },
+            "target": {
+              "enum": [
+                1,
+                2
+              ],
+              "sources": [
+                "own.player_id",
+                "opponent.player_id"
+              ],
+              "type": "integer"
+            }
+          },
+          "type": "buy"
+        }
+      ],
+      "viewer_player_id": 1
+    },
+    "typed_metadata": [
+      {
+        "additional_fields": false,
+        "optional_fields": {},
+        "required_fields": {},
+        "type": "pray"
+      },
+      {
+        "additional_fields": false,
+        "optional_fields": {
+          "target": {
+            "one_of": [
+              {
+                "enum": [
+                  1,
+                  2
+                ],
+                "sources": [
+                  "own.player_id",
+                  "opponent.player_id"
+                ],
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required_fields": {
+          "ordered_elements": {
+            "items": {
+              "one_of": [
+                {
+                  "additional_fields": false,
+                  "optional_fields": {},
+                  "required_fields": {
+                    "instance_id": {
+                      "maximum": 18446744073709551615,
+                      "minimum": 0,
+                      "sources": [
+                        "own.hand[].instance_id"
+                      ],
+                      "type": "integer"
+                    },
+                    "source": {
+                      "const": "hand_artifact",
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                },
+                {
+                  "additional_fields": false,
+                  "optional_fields": {},
+                  "required_fields": {
+                    "definition_id": {
+                      "sources": [
+                        "own.learned_miracles[]"
+                      ],
+                      "type": "string"
+                    },
+                    "source": {
+                      "const": "learned_miracle",
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                }
+              ]
+            },
+            "ordered": true,
+            "type": "array"
+          }
+        },
+        "type": "play_sequence"
+      },
+      {
+        "additional_fields": false,
+        "optional_fields": {},
+        "required_fields": {
+          "instance_ids": {
+            "items": {
+              "maximum": 18446744073709551615,
+              "minimum": 0,
+              "sources": [
+                "own.hand[].instance_id"
+              ],
+              "type": "integer"
+            },
+            "ordered": true,
+            "type": "array"
+          }
+        },
+        "type": "discard"
+      },
+      {
+        "additional_fields": false,
+        "optional_fields": {},
+        "required_fields": {
+          "instance_ids": {
+            "items": {
+              "maximum": 18446744073709551615,
+              "minimum": 0,
+              "sources": [
+                "own.hand[].instance_id"
+              ],
+              "type": "integer"
+            },
+            "ordered": true,
+            "type": "array"
+          }
+        },
+        "type": "sacrifice"
+      },
+      {
+        "additional_fields": false,
+        "optional_fields": {},
+        "required_fields": {
+          "artifact": {
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "sources": [
+              "own.hand[].instance_id"
+            ],
+            "type": "integer"
+          },
+          "hp": {
+            "maximum": 2147483647,
+            "minimum": -2147483648,
+            "type": "integer"
+          },
+          "money": {
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "mp": {
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "type": "exchange"
+      },
+      {
+        "additional_fields": false,
+        "optional_fields": {},
+        "required_fields": {
+          "artifact": {
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "sources": [
+              "own.hand[].instance_id"
+            ],
+            "type": "integer"
+          },
+          "sold_artifact": {
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "sources": [
+              "own.hand[].instance_id"
+            ],
+            "type": "integer"
+          },
+          "target": {
+            "enum": [
+              1,
+              2
+            ],
+            "sources": [
+              "own.player_id",
+              "opponent.player_id"
+            ],
+            "type": "integer"
+          }
+        },
+        "type": "sell"
+      },
+      {
+        "additional_fields": false,
+        "optional_fields": {},
+        "required_fields": {
+          "artifact": {
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "sources": [
+              "own.hand[].instance_id"
+            ],
+            "type": "integer"
+          },
+          "target": {
+            "enum": [
+              1,
+              2
+            ],
+            "sources": [
+              "own.player_id",
+              "opponent.player_id"
+            ],
+            "type": "integer"
+          }
+        },
+        "type": "buy"
+      }
+    ]
+  },
+  "signature": "4b4ae064f08192a322de83e24e4a93ef4191c7d73396997d59cd7710cd05cb04",
+  "table": {
+    "action_contract": {
+      "adopted_rules_sha256": "f4132843bb700947d51e19b57bed1b3bc9bcaf5f63c0cfa60998f1ddc3d6d978",
+      "eligibility": "engineering_only",
+      "owner_confirmation_sha256": "a0e6acb7fdc708ce4bd1b11f23d5dd3f0e41373cc1c1c1bef0a43a3e3efc2cb2",
+      "profile_id": "owner-proposal-engineering-20261101-v1"
+    },
+    "frame_hash": "7ea55c1be09b603fc192c81a881038b98768ccb687960d5bca33de8f2bede84d",
+    "kinds": [
+      "pray",
+      "play_sequence"
+    ],
+    "numerics": [
+      [
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0
+      ]
+    ],
+    "offsets": [
+      0,
+      0,
+      2
+    ],
+    "presence": [
+      [
+        false,
+        false,
+        false,
+        false
+      ],
+      [
+        false,
+        false,
+        false,
+        false
+      ]
+    ],
+    "purpose": "component",
+    "slots": [
+      0,
+      1
+    ],
+    "synthetic_capacity": false,
+    "table_hash": "706fe0b390d1016fe64c8113a09f208e07753c7221616f9ab6f04fe7be0de84c",
+    "targets": [
+      "omitted",
+      "opponent"
+    ]
+  }
+}

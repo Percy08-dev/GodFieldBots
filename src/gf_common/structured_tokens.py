@@ -5,15 +5,13 @@ Unknown categories reject. PAD0 and MISSING1 are distinct from observed values.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import Any
 
+from gf_common import structured_layout as layouts
 from gf_common import structured_vocab as vocab
-from gf_common.domain import CATALOG_HASH, SIMULATOR_REVISION, ContractError, digest, integer
+from gf_common.domain import ContractError, digest, integer
 from gf_common.structured import (
-    ACTION_KINDS,
-    INPUT_RECIPE,
-    TARGETS,
     CandidateTable,
     DecisionFrame,
     EventBankView,
@@ -22,47 +20,43 @@ from gf_common.structured_history import (
     ACTIVE_AGGREGATE,
     APPENDED_HISTORY_FIELDS,
     HISTORICAL_AGGREGATE,
-    HISTORY_WIDTH,
     LEGACY_HISTORY_WIDTH,
     exact_history_tail,
 )
+from gf_common.structured_layout import (
+    CARD_INSTANCE_LAYOUT,
+    LEGACY_LAYOUT,
+    StructuredLayout,
+    require_layout,
+)
 
-PAD, MISSING = 0, 1
-EVENT_TYPES = ("turn_started", "action_accepted", "artifact_used", "artifact_drawn", "devil_appeared",
-               "artifact_discarded", "guardian_set", "guardian_left", "guardian_acted", "miracle_used",
-               "attack_declared", "attack_missed", "damage_applied", "healed", "resource_changed",
-               "buy_offered", "sale_offered", "artifact_transferred", "sun_amulet_activated",
-               "status_changed", "phenomenon_invoked", "player_ascended", "player_defeated", "game_ended")
-# Both spellings are public identifiers: Observation.status uses dark_cloud,
-# public-ja-v2 curse.id uses darkcloud. These are separate exact categories;
-# this supported vocabulary does not claim an unpublished exhaustive Event enum.
-STATUSES = ("cold", "fever", "hell", "heaven", "fog", "flash", "dream", "dark_cloud", "darkcloud")
-PHASES = ("awaiting_action", "awaiting_response", "resolving", "terminal")
-CHOICES = ("turn_action", "defense", "buy_accept_reject", "additional_choice")
-RELATIVE = ("self", "opponent")
-RESULTS = ("self_win", "opponent_win", "draw")
-SOURCES = ("hand_artifact", "learned_miracle")
-STATE_NUMERIC_FIELDS = ("turn", "turns_until_end_of_world", "end_times", "actionable",
-                        "own.hp", "own.mp", "own.money", "own.ascended", "own.fog", "own.flash",
-                        "own.dream", "own.dark_cloud", "opponent.hp", "opponent.mp", "opponent.money",
-                        "opponent.ascended", "opponent.fog", "opponent.flash", "opponent.dream",
-                        "opponent.dark_cloud", "can_pray", "can_discard", "can_sacrifice", "can_allow",
-                        "target_self", "target_opponent")
-STATE_CATEGORIES = (PHASES, CHOICES, RELATIVE, RELATIVE, RELATIVE, RESULTS,
-                    vocab.DISEASES, vocab.GUARDIANS, vocab.DISEASES, vocab.GUARDIANS)
-CARD_NUMERIC_FIELDS = ("attack", "defense", "ability_value", "price", "mp_cost", "hit_rate",
-                       "additional_attack", "usable", "learned_order", "exchange", "sell", "buy")
-CARD_CATEGORIES = (vocab.DEFINITIONS, vocab.ABILITIES, vocab.KINDS, vocab.ATTRIBUTES,
-                   vocab.DISEASES, vocab.GUARDIANS, SOURCES)
-EVENT_ACTORS = ("player", "attacker", "target", "active_player", "buyer", "seller", "from", "to")
-EVENT_NUMERIC_FIELDS = ("turn", "price", "mp_spent", "attack", "amount", "remaining_hp", "hp",
-                        "hp_delta", "mp_delta", "money_delta", "active")
-EVENT_CATEGORIES = (EVENT_TYPES, vocab.DEFINITIONS, STATUSES, RESULTS, *(RELATIVE for _ in EVENT_ACTORS))
-STATE_WIDTH = 2 * len(STATE_NUMERIC_FIELDS) + len(STATE_CATEGORIES) + sum(len(c) + 2 for c in STATE_CATEGORIES) + 18 * (len(vocab.DEFINITIONS) + 2)
-CARD_DIRECT_WIDTH = 2 * len(CARD_NUMERIC_FIELDS) + sum(len(c) + 2 for c in CARD_CATEGORIES)
-EVENT_WIDTH = 2 * len(EVENT_NUMERIC_FIELDS) + sum(len(c) + 2 for c in EVENT_CATEGORIES)
-CANDIDATE_WIDTH = len(ACTION_KINDS) + 2 + len(TARGETS) + 2 + 8
+ACTION_KINDS = layouts.ACTION_KINDS
+INPUT_RECIPE = layouts.INPUT_RECIPE
+TARGETS = layouts.TARGETS
+CATALOG_HASH = layouts.CATALOG_HASH
+SIMULATOR_REVISION = layouts.SIMULATOR_REVISION
+HISTORY_WIDTH = layouts.HISTORY_WIDTH
 
+PAD = layouts.PAD
+MISSING = layouts.MISSING
+EVENT_TYPES = layouts.EVENT_TYPES
+STATUSES = layouts.STATUSES
+PHASES = layouts.PHASES
+CHOICES = layouts.CHOICES
+RELATIVE = layouts.RELATIVE
+RESULTS = layouts.RESULTS
+SOURCES = layouts.SOURCES
+STATE_NUMERIC_FIELDS = layouts.STATE_NUMERIC_FIELDS
+STATE_CATEGORIES = layouts.STATE_CATEGORIES
+CARD_NUMERIC_FIELDS = layouts.CARD_NUMERIC_FIELDS
+CARD_CATEGORIES = layouts.CARD_CATEGORIES
+EVENT_ACTORS = layouts.EVENT_ACTORS
+EVENT_NUMERIC_FIELDS = layouts.EVENT_NUMERIC_FIELDS
+EVENT_CATEGORIES = layouts.EVENT_CATEGORIES
+STATE_WIDTH = layouts.STATE_WIDTH
+CARD_DIRECT_WIDTH = layouts.CARD_DIRECT_WIDTH
+EVENT_WIDTH = layouts.EVENT_WIDTH
+CANDIDATE_WIDTH = layouts.CANDIDATE_WIDTH
 
 def category(value: Any, values: tuple[str, ...]) -> int:
     if value is None:
@@ -83,18 +77,33 @@ def _result(value: Any, actor: int) -> str | None:
     return "self_win" if value["win"]["winner"] == actor else "opponent_win"
 
 
-def signature_payload(aggregate_window: int = 128, *, aggregate_recipe: str = ACTIVE_AGGREGATE) -> dict[str, Any]:
+def signature_payload(aggregate_window: int = 128, *, aggregate_recipe: str | None = None,
+                      layout: StructuredLayout = LEGACY_LAYOUT) -> dict[str, Any]:
+    require_layout(layout)
+    aggregate_recipe = layout.aggregate_recipe if aggregate_recipe is None else aggregate_recipe
     integer(aggregate_window, 1, 65536)
-    payload = {"recipe": INPUT_RECIPE, "revision": SIMULATOR_REVISION, "catalog": CATALOG_HASH,
+    payload = {"recipe": layout.input_recipe, "revision": layout.simulator_revision, "catalog": layout.catalog_sha256,
                    "pad": PAD, "missing": MISSING, "state_numeric": STATE_NUMERIC_FIELDS,
-                   "state_categories": STATE_CATEGORIES, "state_category_presence": True, "card_numeric": CARD_NUMERIC_FIELDS,
-                   "card_categories": CARD_CATEGORIES, "event_numeric": EVENT_NUMERIC_FIELDS,
-                   "event_categories": EVENT_CATEGORIES, "history_window": aggregate_window,
+                   "state_categories": STATE_CATEGORIES, "state_category_presence": True, "card_numeric": layout.card_numeric_fields,
+                   "card_categories": layout.card_categories, "event_numeric": EVENT_NUMERIC_FIELDS,
+                   "event_categories": layout.event_categories, "history_window": aggregate_window,
                    "history": "event-counts/actor-role-counts/numeric-sums-and-presence-v1",
-                   "candidate_categories": (ACTION_KINDS, TARGETS),
+                   "candidate_categories": (layout.action_kinds, layout.targets),
                    "candidate_numeric": ("hp", "mp", "money", "accept"), "slots": 18,
                    "numeric_transform": "signed-log1p-fp32-v1"}
-    if aggregate_recipe == ACTIVE_AGGREGATE:
+    if layout is CARD_INSTANCE_LAYOUT:
+        if aggregate_recipe != layout.aggregate_recipe:
+            raise ContractError("unsupported card-instance history recipe")
+        history_fields = (tuple("event." + kind for kind in layout.event_types)
+            + tuple("actor." + role + "." + side for role in EVENT_ACTORS for side in RELATIVE)
+            + tuple(prefix + name for name in EVENT_NUMERIC_FIELDS for prefix in ("sum.", "present."))
+            + APPENDED_HISTORY_FIELDS)
+        payload.update(action_contract=asdict(layout.action_contract), policy_input_version=layout.policy_input_version,
+            generator_version=layout.generator, aggregate_recipe=aggregate_recipe, history_fields=history_fields,
+            history_actor_priority=("player", "attacker", "active_player"), history_actor_fallback="key-presence",
+            state_presence=True, card_presence=True, card_mask=True, event_presence=True,
+            candidate_presence=True, format_versions=layout.format_versions)
+    elif aggregate_recipe == ACTIVE_AGGREGATE:
         payload.update(aggregate_recipe=ACTIVE_AGGREGATE, history_append=APPENDED_HISTORY_FIELDS,
             history_actor_priority=('player', 'attacker', 'active_player'), history_actor_fallback='key-presence')
     elif aggregate_recipe != HISTORICAL_AGGREGATE:
@@ -102,13 +111,16 @@ def signature_payload(aggregate_window: int = 128, *, aggregate_recipe: str = AC
     return payload
 
 
-def signature(aggregate_window: int = 128, *, aggregate_recipe: str = ACTIVE_AGGREGATE) -> str:
-    return digest(signature_payload(aggregate_window, aggregate_recipe=aggregate_recipe))
+def signature(aggregate_window: int = 128, *, aggregate_recipe: str | None = None,
+              layout: StructuredLayout = LEGACY_LAYOUT) -> str:
+    return digest(signature_payload(aggregate_window, aggregate_recipe=aggregate_recipe, layout=layout))
 
 
-def recorded_aggregate_recipe(recorded_signature: str, aggregate_window: int) -> str:
-    for recipe in (ACTIVE_AGGREGATE, HISTORICAL_AGGREGATE):
-        if recorded_signature == signature(aggregate_window, aggregate_recipe=recipe):
+def recorded_aggregate_recipe(recorded_signature: str, aggregate_window: int, *,
+                              layout: StructuredLayout = LEGACY_LAYOUT) -> str:
+    require_layout(layout)
+    for recipe in ((ACTIVE_AGGREGATE, HISTORICAL_AGGREGATE) if layout is LEGACY_LAYOUT else (layout.aggregate_recipe,)):
+        if recorded_signature == signature(aggregate_window, aggregate_recipe=recipe, layout=layout):
             return recipe
     raise ContractError('unknown recorded structured aggregate signature')
 
@@ -155,16 +167,20 @@ def _numbers(row: dict[str, Any], fields: tuple[str, ...]) -> tuple[tuple[int, .
     return tuple(int(row.get(key, 0)) for key in fields), tuple(key in row for key in fields)
 
 
-def _event(event: dict[str, Any], actor: int) -> tuple[tuple[int, ...], tuple[bool, ...], tuple[int, ...]]:
+def _event(event: dict[str, Any], actor: int, layout: StructuredLayout = LEGACY_LAYOUT) -> tuple[tuple[int, ...], tuple[bool, ...], tuple[int, ...]]:
     numeric, present = _numbers(event, EVENT_NUMERIC_FIELDS)
-    categories = (category(event["type"], EVENT_TYPES), category(event.get("definition_id"), vocab.DEFINITIONS),
+    categories = (category(event["type"], layout.event_types), category(event.get("definition_id"), vocab.DEFINITIONS),
                   category(event.get("status"), STATUSES), category(_result(event.get("result"), actor), RESULTS),
                   *(category(_relative(event.get(key), actor), RELATIVE) for key in EVENT_ACTORS))
     return numeric, present, categories
 
 
 def tokenize_frame(frame: DecisionFrame, bank_view: EventBankView, *, aggregate_window: int = 128,
-                   aggregate_recipe: str = ACTIVE_AGGREGATE) -> FrameTokens:
+                   aggregate_recipe: str | None = None, layout: StructuredLayout = LEGACY_LAYOUT) -> FrameTokens:
+    require_layout(layout)
+    if frame.layout is not layout or bank_view.layout is not layout:
+        raise ContractError("raw frame tokenizer layout mismatch")
+    aggregate_recipe = layout.aggregate_recipe if aggregate_recipe is None else aggregate_recipe
     integer(aggregate_window, 1, 65536)
     view = frame.bank_view(bank_view)
     obs, payload = frame.observation, frame.raw
@@ -196,47 +212,66 @@ def tokenize_frame(frame: DecisionFrame, bank_view: EventBankView, *, aggregate_
     card_presence: list[tuple[bool, ...]] = []
     card_cats: list[tuple[int, ...]] = []
     own = obs["own"]
-    cards = [(card["definition_id"], "hand_artifact", card["instance_id"], 0) for card in own["hand"]]
-    cards += [(name, "learned_miracle", name, order + 1) for order, name in enumerate(own["learned_miracles"])]
-    for name, source, ref, order in cards:
+    if layout is LEGACY_LAYOUT:
+        cards = [(card["definition_id"], "hand_artifact", card["instance_id"], 0, None) for card in own["hand"]]
+        cards += [(name, "learned_miracle", name, order + 1, None) for order, name in enumerate(own["learned_miracles"])]
+    else:
+        cards = [(card["definition_id"], card["kind"], card["card_ref"], index + 1, card.get("state"))
+                 for index, card in enumerate(own["cards"])]
+    for name, source, ref, order, miracle_state in cards:
         definition = payload["catalog"][name]
-        numbers = {key: definition[key] for key in CARD_NUMERIC_FIELDS if key in definition}
-        numbers.update(usable=ref in options["usable_hand_elements" if source == "hand_artifact" else "usable_learned_miracles"],
-                       learned_order=order)
-        for ability in ("exchange", "sell", "buy"):
-            numbers[ability] = source == "hand_artifact" and ref in options[ability + "_artifacts"]
-        numeric, present = _numbers(numbers, CARD_NUMERIC_FIELDS)
+        numbers = {key: definition[key] for key in layout.card_numeric_fields if key in definition}
+        if layout is LEGACY_LAYOUT:
+            numbers.update(usable=ref in options["usable_hand_elements" if source == "hand_artifact" else "usable_learned_miracles"], learned_order=order)
+            for ability in ("exchange", "sell", "buy"):
+                numbers[ability] = source == "hand_artifact" and ref in options[ability + "_artifacts"]
+        else:
+            numbers.update(usable=ref in {row["card_ref"] for row in options["usable_cards"]}, possession_position=order)
+            for ability in ("exchange", "sell", "buy", "phenomenon"):
+                numbers[ability] = ref in {row["card_ref"] for row in options[ability + "_cards"]}
+            for role in layouts.USE_ROLES:
+                numbers["role." + role] = role in definition["classification"]["use_roles"]
+        numeric, present = _numbers(numbers, layout.card_numeric_fields)
         card_numbers.append(numeric)
         card_presence.append(present)
-        card_cats.append((category(name, vocab.DEFINITIONS), category(definition.get("ability"), vocab.ABILITIES),
+        categories: tuple[int, ...] = (category(name, vocab.DEFINITIONS), category(definition.get("ability"), vocab.ABILITIES),
                           category(definition["kind"], vocab.KINDS), category(definition.get("attribute"), vocab.ATTRIBUTES),
                           category(definition.get("curse", {}).get("id"), vocab.DISEASES),
-                          category(definition.get("guardian", {}).get("id"), vocab.GUARDIANS), category(source, SOURCES)))
+                          category(definition.get("guardian", {}).get("id"), vocab.GUARDIANS))
+        if layout is LEGACY_LAYOUT:
+            categories += (category(source, SOURCES),)
+        else:
+            classification = definition["classification"]
+            membership = "artifact" if source == "artifact" else "miracle_" + str(miracle_state)
+            categories += (category(source, layouts.INSTANCE_KINDS), category(miracle_state, layouts.MIRACLE_STATES),
+                category(classification["definition_class"], layouts.DEFINITION_CLASSES),
+                category(classification.get("miracle_subclass"), layouts.MIRACLE_SUBCLASSES), category(membership, layouts.MEMBERSHIPS))
+        card_cats.append(categories)
     count = len(cards)
     while len(card_numbers) < 18:
-        card_numbers.append((0,) * len(CARD_NUMERIC_FIELDS))
-        card_presence.append((False,) * len(CARD_NUMERIC_FIELDS))
-        card_cats.append((PAD,) * len(CARD_CATEGORIES))
+        card_numbers.append((0,) * len(layout.card_numeric_fields))
+        card_presence.append((False,) * len(layout.card_numeric_fields))
+        card_cats.append((PAD,) * len(layout.card_categories))
     opponent = tuple(category(name, vocab.DEFINITIONS) for name in obs["opponent"]["learned_miracles"])
     opponent += (PAD,) * (18 - len(opponent))
-    interval = [_event(event, frame.actor) for event in view.events(frame.interval_start)]
-    history = [0] * LEGACY_HISTORY_WIDTH
+    interval = [_event(event, frame.actor, layout) for event in view.events(frame.interval_start)]
+    history = [0] * (len(layout.event_types) + 2 * len(EVENT_ACTORS) + 2 * len(EVENT_NUMERIC_FIELDS))
     events = view.events(max(0, view.boundary.end - aggregate_window))
     for event in events:
-        event_numbers, event_presence, categories = _event(event, frame.actor)
+        event_numbers, event_presence, categories = _event(event, frame.actor, layout)
         history[categories[0] - 2] += 1
-        for role, value in enumerate(categories[4:]):
+        for role_index, value in enumerate(categories[4:]):
             if value >= 2:
-                history[len(EVENT_TYPES) + 2 * role + value - 2] += 1
-        offset = len(EVENT_TYPES) + 2 * len(EVENT_ACTORS)
+                history[len(layout.event_types) + 2 * role_index + value - 2] += 1
+        offset = len(layout.event_types) + 2 * len(EVENT_ACTORS)
         for index, (number, event_exists) in enumerate(zip(event_numbers, event_presence, strict=True)):
             history[offset + index * 2] += number
             history[offset + index * 2 + 1] += event_exists
-    if aggregate_recipe == ACTIVE_AGGREGATE:
+    if aggregate_recipe == layout.aggregate_recipe:
         history.extend(exact_history_tail(events, frame.actor, prefix_count=view.boundary.end, window=aggregate_window))
     elif aggregate_recipe != HISTORICAL_AGGREGATE:
         raise ContractError('unsupported structured aggregate recipe')
-    return FrameTokens(frame.frame_hash, signature(aggregate_window, aggregate_recipe=aggregate_recipe), aggregate_window, frame.actor, frame.episode, frame.revision,
+    return FrameTokens(frame.frame_hash, signature(aggregate_window, aggregate_recipe=aggregate_recipe, layout=layout), aggregate_window, frame.actor, frame.episode, frame.revision,
                        frame.interval_start, frame.boundary.end, state, state_present, cats, category_present, tuple(card_numbers),
                        tuple(card_presence), tuple(card_cats), tuple(i < count for i in range(18)), opponent,
                        tuple(item[0] for item in interval), tuple(item[1] for item in interval),
@@ -244,22 +279,27 @@ def tokenize_frame(frame: DecisionFrame, bank_view: EventBankView, *, aggregate_
 
 
 def tokenize_table(table: CandidateTable, frame: DecisionFrame, max_positions: int = 128, *,
-                   aggregate_window: int = 128, aggregate_recipe: str = ACTIVE_AGGREGATE) -> CandidateTokens:
+                   aggregate_window: int = 128, aggregate_recipe: str | None = None,
+                   layout: StructuredLayout = LEGACY_LAYOUT) -> CandidateTokens:
+    require_layout(layout)
+    if table.layout is not layout or frame.layout is not layout:
+        raise ContractError("raw candidate tokenizer layout mismatch")
     integer(max_positions, 1, 128)
     table.validate(frame)
     if any(b - a > max_positions for a, b in zip(table.offsets[:-1], table.offsets[1:], strict=True)):
         raise ContractError("candidate token position capacity exceeded")
-    return CandidateTokens(table.table_hash, frame.frame_hash, signature(aggregate_window, aggregate_recipe=aggregate_recipe),
-                           tuple(category(kind, ACTION_KINDS) for kind in table.kinds),
-                           tuple(category(target, TARGETS) for target in table.targets), table.numerics,
+    return CandidateTokens(table.table_hash, frame.frame_hash, signature(aggregate_window, aggregate_recipe=aggregate_recipe, layout=layout),
+                           tuple(category(kind, layout.action_kinds) for kind in table.kinds),
+                           tuple(category(target, layout.targets) for target in table.targets), table.numerics,
                            table.presence, table.offsets, table.slots)
 
 
-def validate_frame_tokens(tokens: FrameTokens) -> None:
+def validate_frame_tokens(tokens: FrameTokens, *, layout: StructuredLayout = LEGACY_LAYOUT) -> None:
     """Validate every shape/category/mask before array allocation."""
     if type(tokens) is not FrameTokens:
         raise ContractError("structured frame token recipe mismatch")
-    recipe = recorded_aggregate_recipe(tokens.recipe_signature, tokens.aggregate_window)
+    require_layout(layout)
+    recipe = recorded_aggregate_recipe(tokens.recipe_signature, tokens.aggregate_window, layout=layout)
 
     for name in ("state_numerics", "state_present", "state_categories", "state_category_present",
                  "card_numerics", "card_present", "card_categories", "card_mask", "opponent_learned",
@@ -299,8 +339,8 @@ def validate_frame_tokens(tokens: FrameTokens) -> None:
         raise ContractError("18 card slots required")
     for numbers, present, cats, valid in zip(tokens.card_numerics, tokens.card_present,
                                            tokens.card_categories, tokens.card_mask, strict=True):
-        numeric(numbers, present, len(CARD_NUMERIC_FIELDS))
-        categories(cats, CARD_CATEGORIES)
+        numeric(numbers, present, len(layout.card_numeric_fields))
+        categories(cats, layout.card_categories)
         if type(valid) is not bool or not valid and (any(numbers) or any(present) or any(cats)):
             raise ContractError("invalid card padding")
         if valid and any(value == PAD for value in cats):
@@ -314,16 +354,20 @@ def validate_frame_tokens(tokens: FrameTokens) -> None:
     for numbers, present, cats in zip(tokens.interval_numerics, tokens.interval_present,
                                      tokens.interval_categories, strict=True):
         numeric(numbers, present, len(EVENT_NUMERIC_FIELDS))
-        categories(cats, EVENT_CATEGORIES)
+        categories(cats, layout.event_categories)
         if any(value == PAD for value in cats):
             raise ContractError("event category cannot be padding")
-    if len(tokens.history) != (HISTORY_WIDTH if recipe == ACTIVE_AGGREGATE else LEGACY_HISTORY_WIDTH):
+    if len(tokens.history) != (layout.history_width if recipe == layout.aggregate_recipe else LEGACY_HISTORY_WIDTH):
         raise ContractError("history token shape mismatch")
     for value in tokens.history:
         integer(value, -(2**63), 2**63 - 1)
 
 
-def validate_candidate_tokens(tokens: CandidateTokens, frame: FrameTokens, max_positions: int) -> None:
+def validate_candidate_tokens(tokens: CandidateTokens, frame: FrameTokens, max_positions: int, *,
+                              layout: StructuredLayout = LEGACY_LAYOUT) -> None:
+    require_layout(layout)
+    recorded_aggregate_recipe(frame.recipe_signature, frame.aggregate_window, layout=layout)
+    integer(max_positions, 1, 128)
     if (type(tokens) is not CandidateTokens or tokens.recipe_signature != frame.recipe_signature
             or tokens.frame_hash != frame.frame_hash):
         raise ContractError("candidate token binding mismatch")
@@ -336,8 +380,8 @@ def validate_candidate_tokens(tokens: CandidateTokens, frame: FrameTokens, max_p
             and tokens.offsets[-1] == len(tokens.slots)):
         raise ContractError("candidate token column mismatch")
     for index in range(count):
-        integer(tokens.kinds[index], 2, len(ACTION_KINDS) + 1)
-        integer(tokens.targets[index], 2, len(TARGETS) + 1)
+        integer(tokens.kinds[index], 2, len(layout.action_kinds) + 1)
+        integer(tokens.targets[index], 2, len(layout.targets) + 1)
         integer(tokens.offsets[index], 0, len(tokens.slots))
         integer(tokens.offsets[index + 1], tokens.offsets[index],
                 min(len(tokens.slots), tokens.offsets[index] + max_positions))
