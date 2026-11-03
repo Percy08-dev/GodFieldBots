@@ -1266,7 +1266,7 @@ Independent correctness/conformance reviews and another complete same-condition
 preceding-validator evidence; final whole-project/package checks must use the
 final code. Do not repeat unrelated lengthy checks solely to count passes.
 
-## 15. Corrected neural game inference (design accepted)
+## 15. Corrected neural game inference (accepted inference-only scope)
 
 Independent architecture DESIGN READY after pinning the closed initialization
 union, whole concurrent memory admission and retained external-artifact owner.
@@ -1274,6 +1274,15 @@ Root accepts this inference-only scope under the repaired §14.1 input.
 Implementation/reviews and actual smokes remain required; this is not Source,
 generation or learning acceptance. Do not start dependent implementation until
 the §14.1 shared input/handshake interfaces are stable and reviewed.
+
+Implementation and both final reviews are now READY. A blocking child CPU
+visibility-canonicalization finding is fixed before Torch/factory import and
+rechecked. Focused540CPU/43actual CUDA cases pass, plus14CPU/3actual CUDA worker
+rechecks. All six real initial-policy inference conditions complete12natural
+games, and an independent24journal/Replay/retained-input audit passes. Current
+135module source-matched wheel and mandatory-only baseline checks pass. Root
+accepts inference only; Source/numeric/learner/generation/native/Tree authority
+remains closed until its own implementation and acceptance.
 
 This bounded increment joins the reviewed Model3 kernels/artifact4 to the
 corrected protocol3/journal6/collection5 real-game owner. It enables explicit
@@ -1468,6 +1477,22 @@ Source are checked against the live owner; none of those serialized fields is
 authority by itself. Missing/mixed/extra linkage fields reject. Metadata alone
 still declares source_eligibility=not-authorized-by-collection-metadata.
 
+Concrete handoff before implementation: the PPO collection adds exactly
+collection_role and linkage; linkage's exact key set is parent_run_id,
+parent_run_path, batch_id, collection_generation, learner_seats, schedule_digest,
+policy_registry_digest. Digests use canonical serialize_schedule(...,4) and the
+frozen label→serialized RuntimePolicyBinding registry respectively. Per-batch
+run_id remains the actual collection ID. No lock token, live process object or
+Source authorization is serialized into this metadata.
+
+The collector keeps §15's inference-owner constructor. It reconstructs configured
+neural3 entries only from closed validated frozen safe options (pure model,
+checkpoint, inference and visibility), creates the retained owner, then requires
+exact original options, registry key/policy label and expected manifest digest
+agreement before output/Popen. A valid but different current artifact cannot be
+silently rebound. This creates inference-file ownership only; the separate SAME
+live parent/learner/ledger check authorizes online use. No permissive owner flag.
+
 Reuse existing owned Source snapshot/file inventory, retention accounting and
 deadline mechanisms with explicit closed layout/reader context, rather than
 copying the Source lifecycle. New public wrappers accept actions3/model3 and
@@ -1493,6 +1518,21 @@ and linked policy manifests; an after-update Source mutation fails the run and
 publishes no completed generation. Cleanup preserves the first failure and all
 reachable resource owners. No claim of rollback of an already executed optimizer
 step, hostile-copy revocation or cryptographic attestation is added.
+
+Through-commit phase is explicit: immediately before commit, recheck the original
+immutable collection/numeric inputs and OLD mutable parent/control snapshots.
+Finish any per-batch cleanup that can report I/O failure before publication,
+while retaining the issued handle, immutable in-memory proof and borrowed live
+parent-lock/learner/ledger identity through commit. Retire the old mutable-control
+snapshot checks after that successful pre-commit guard; commit deliberately
+replaces run/registry names using its existing owned compare/publication logic.
+After successful publication, retire the projection without reportable I/O or
+an automatic context-exit recheck against legitimately superseded parent names.
+Retain immutable-input metadata through commit, but do not append a new post-
+publication failure check. Preparation/cleanup failure publishes no generation;
+commit failure uses the existing owned invalidation/failure boundary. Shared
+parent run-lock and learner leases are borrowed and remain owned by the outer
+coordinator. Legacy/component context-exit behavior stays exactly unchanged.
 
 ### Numeric rollout and learner wire4
 
@@ -1520,6 +1560,30 @@ parity, optimizer or owned-RNG mutation, and the parent retains/finalizes the
 issuing Source owner through completion. An arbitrary proof dictionary or
 numeric self-hash cannot issue permission. Reuse the owned projection/process
 handoff; do not create a second training framework or authority from DTO flags.
+
+The private issued projection retains actual Source/run-lock/process/lease/ledger
+references and an active owner state. Its serializable expectation has the exact
+keys recipe, parent_run_id, batch_id, collection_generation,
+expected_optimizer_steps, expected_policy_version, collection_manifest_sha256,
+numeric_manifest_sha256, numeric_files_sha256, source_correspondence. Recipe is
+card-instance-source-update-v1; numeric_files_sha256 covers canonical sorted
+relative file→SHA256 entries validated by the Source owner. The correspondence
+uses the existing closed fields recipe, control_fingerprint, semantics_sha256,
+episode_count, episode_digests, binding_sha256, with distinct recipe
+structured-source-cohort-correspondence-v2 and full game semantic declaration.
+Its control fingerprint binds the owned original controls/files/source plan;
+these serialized hashes never replace the live issuer check.
+
+Wire4 update preserves the familiar request fields protocol_version, command,
+identity, batch, batch_digest, expected_policy_version, output, adding required
+transaction_id and projection. Projection is the exact expectation above;
+numeric_manifest_sha256 equals batch_digest. Parent's typed update method accepts
+only the live issued handle; a raw request/proof dictionary cannot bypass its
+active owner/expected-step checks. Child checks the expectation and original
+numeric correspondence/file identities before parity or optimizer/RNG mutation,
+and reply binds the same transaction and generation/step advancement. Existing
+initialize/close shapes retain their meaning with version4/game identity. Do not
+introduce a new learned/random stream for transaction identity.
 
 Natural±1/0 reward uses the selected learner viewer and only the reconciled
 terminal outcome. Interrupted/unsupported/truncated/failed games invalidate the
@@ -1566,6 +1630,10 @@ healthy inference4+resume4 acknowledgements, source final recheck and linked
 numeric/update metadata validation; a standalone inference file is insufficient.
 Maintain the existing run lock, single coordinator,16games/update, snapshot pool
 (at most5, every10updates), worker≤4/game≤2, storage and7200/5400/7140s caps.
+Snapshot-pool eviction is distinct from artifact retention: preserve the existing
+legacy/component2 policy retaining every ten-update milestone artifact, including
+those no longer in the active five-entry pool. Reuse ordinary-generation pruning;
+do not introduce deletion of inactive milestone artifacts through this migration.
 
 Resume checks all code/config/input/execution/RNG identities before allocation.
 Restore all named encoder/actor/critic/Adam state, Torch CPU/visible CUDA RNG,
@@ -1594,7 +1662,9 @@ the pre-edit outputs from the saved code/receipt, rather than trusting a newly
 generated same-code golden.
 
 Exercise registry3 retention/pruning with bounded complete fixture chains across
-the generation10snapshot boundary and later pool eviction/pruning. Verify retained
+the generation10snapshot boundary and later50/60pool eviction. Verify inactive
+ten-update artifacts remain retained and ordinary generations prune correctly.
+Verify retained
 generation ownership and historical pruned-generation read-only validation,
 including missing/foreign/replaced files and interrupted pruning. Two-update
 actual smokes do not cover this boundary; no long formal training is required
@@ -1614,3 +1684,110 @@ acceptance runs are not shortened formal training parents or qualified real-data
 three-parent Tree fitting evidence. New native-v2, Tree3/fixed Dataset3 component
 fit, fixed512train-decision performance and whole-project/package checks remain
 required subsequent migration acceptance.
+
+## 17. Corrected native Source/token/staging parity (design accepted)
+
+Independent architecture DESIGN READY; Root accepts the bounded native design.
+Implementation remains gated on stable accepted §16 Python interfaces and exact
+record-shape confirmation. No native capability or Tree scope is enabled by
+this design review, and no native runtime test is claimed here.
+
+This increment follows stable accepted §16 Python Source/rollout4/lineage3
+interfaces. It adds the explicitly selected rust backend for the SAME corrected
+input and owned PPO lifecycle; it adds no learner, game-rule engine, model stack,
+new dependency or Tree authorization. Python remains an explicit reference path,
+never an automatic fallback after a native failure. Parent preprocessing identity
+records the selected implementation; resume cannot silently change backend.
+
+### Closed recipe and compatibility
+
+Preserve existing native legacy/typed-borrowed-v1/structured-v1 markers, entry
+points, token values, Source/protocol behavior and binary identity evidence.
+Add a separately named card_instance_contract marker:
+participant-structured-v2;journal6;rollout4;generation3;model3, a separate
+card_instance_signature for the fixed128ed0c6115…68002f layout, and explicit
+card_instance_models support for mlp/gru/transformer. They are capabilities,
+not Source qualification. Old binaries cannot satisfy them through Python flags
+or a changed recipe string. Reject wrong/missing markers, source/binary identity
+mismatches, versions or full corrected contract before staging/collection/model
+allocation. New capabilities stay absent until validation, tokenization,
+persistence/correspondence and the tests below are complete.
+
+Rust uses one explicit closed recipe context for old engineering versus corrected
+card-instance layouts. Parameterize reusable pure token/count/array kernels;
+retain separate public schema entry points and closed DTO variants. Do not
+reinterpret integer hand IDs as card refs, infer a definition-level learned ref,
+or serialize opaque ref strings into numerical features. New raw possession
+order/kind/unused-learned state, duplicate instances,18slots, classification/roles,
+25events and original participant prefixes match the Python reference exactly.
+Set/Left events use Guardian IDs; Acted uses catalog definition IDs. Corrected
+event306-ID and history387 layout, exact actor/window counts and signature are
+the §14.1/14.2 definitions. Legacy history376/296indices and old recipes stay exact.
+
+### Original Source and numeric ownership
+
+Add closed J6/C5/codec2/Model3/control3 inspection on the existing Sources,
+CohortSession, typed staging and retirement infrastructure. The concrete key
+sets are the accepted §15/16 records; confirm them against those implementations
+before native edits, returning incompatible assumptions to Root. Validate whole
+original inventory/runtime/role/label/semantic bindings and natural closure.
+Policy tokens contain only the acting learner's own original frames/events and
+selected row/recorded outputs. Management/RNG/other-private/canonical/rejection
+data remains control/diagnostic only; opaque server files may be hashed for
+inventory but never parsed into features. No SequenceOptions, regenerated
+missing history, rejection teacher or new legality oracle.
+
+Reuse §16's SAME live online parent/learner/lease/ledger admission and Source-issued
+update expectation. Native original-file and staged-output owners remain active
+through numerical use and final pre-commit guard. Source controls/files are
+rechecked before publication; mutable old controls retire and post-commit release
+follows §16's no-reportable-I/O phase. A capsule/summary/DTO flag or numeric self-
+hash cannot mint a live Source permission. Completed offline parent reading and
+component fixtures retain separate authority. Native model3 staging emits the
+same numeric4 bundle1 payload, exact per-episode correspondence and file/control
+fingerprints; the learner does not accept a weaker native proof variant.
+
+Do not duplicate the codec or whole source lifecycle. Reuse the existing private
+array writers, source snapshots, budgets, cancellation checks, retirement worker,
+exported-payload leases and no-overwrite publication. Preserve64MiBper-array/shard
+decode, record/source/chunk/memory/scratch limits and cumulative admission before
+reading. The GIL may be released only while all borrowed data has an owned native
+lifetime. No callback into mutable Python policy/Source state while detached.
+Timeout/cancel/late success drains or quarantines the reachable owner, preserves
+the initiating failure, and publishes no healthy numeric/generation completion.
+No earlier private-spool deletion while an exported batch/learner still needs it.
+
+The Python adapter selects a concrete corrected native operations context for
+the same _run_ppo loop and game lineage3; legacy/component operations remain
+exact. Match original↔numeric facts and full metadata, not just row counts or
+floating output samples. Native TreeDataset/RAW remains a separate following
+gate because its three-parent/validation roles and Dataset3 authority differ.
+
+### Verification and capability publication
+
+First exercise diagnostic validation/token/staging without publishing the new
+capability. Exhaustive/small-space Python-reference comparisons include all
+Action families, ref renaming/duplicate definitions, learned7/12/18, state/order,
+empty masks, all event vocabularies/Guardian namespaces, perceived historical IDs,
+Fog omission and stale/foreign/future prefix refusal. Ref renaming must preserve
+numerical tokens while original correspondence still binds the changed raw refs.
+Compare exact raw arrays/dtypes/shapes/offsets/source correspondence and persisted
+numeric4 round trips; retain established FP32 tolerances where transformation
+actually uses floating arithmetic.
+
+Test mixed versions/old binaries, malformed/corrupt metadata/sidecars, source and
+control mutation before/after staging/update, crossed roles/issuers/transactions,
+over-budget decoding, cancellation, repeated finalization, late publication,
+retirement and exported-array lifetime under the same resource limits. Keep all
+old native Rust/Python cases and original corpus/index/saved-PPO proofs. Build
+and record exact Rust sources/cargo/toolchain/wheel/ELF/capability identity;
+installed artifacts must match the reviewed source, not a stale extension.
+
+Only after both reviews and complete parity/ownership checks publish the new
+markers and allow reader=participant-structured-v2/backend=rust. Run actual
+corrected native common-coordinator update/resume checks with CPU and CUDA
+inference/CUDA learner, holding the exact Source→numeric correspondence and
+comparing state to the Python reference conditions. These supplement the
+requested full §16 six-condition real acceptance; they cannot relabel a synthetic
+fit, source fixture or short smoke as a formal parent. Final combined package/
+whole-project/performance acceptance and Tree3 remain required.

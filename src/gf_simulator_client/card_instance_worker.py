@@ -14,7 +14,7 @@ from typing import cast
 from gf_common.card_instance import ActionConfigV3
 from gf_common.card_instance_rules import card_instance_rules, rule_signature
 from gf_common.card_instance_runtime import check_game_binding, game_binding
-from gf_common.diverse_actions import GameGeneratedCandidatesV3, NumericCosts
+from gf_common.diverse_actions import GameGeneratedCandidatesV3
 from gf_common.domain import ContractError, Json, closed, digest, integer
 from gf_common.structured import DecisionFrame, EventBank, EventDelta, Selection
 from gf_common.structured_layout import CORRECTED_CARD_INSTANCE_LAYOUT
@@ -24,7 +24,10 @@ from gf_common.structured_wire import (
     parse_game_generated_v3,
     parse_selection,
 )
-from gf_models.structured_runtime import WorkerCaps
+from gf_models.card_instance_artifacts import RetainedGameArtifacts
+from gf_models.structured_binding import policy_label_game_v3, safe_options_game_v3
+from gf_models.structured_config import InferenceBindingV2, model_config_v3
+from gf_models.structured_runtime import own_game_worker_settings_v3
 from gf_simulator_client.structured_resources import ReservationLedger
 from gf_simulator_client.structured_worker import (
     StructuredParticipantWorker,
@@ -44,22 +47,36 @@ class CardInstanceParticipantWorker(StructuredParticipantWorker):
         timeout: float = 10,
         *,
         ledger: ReservationLedger,
+        policy_options: Json | None = None,
+        artifact_inputs: RetainedGameArtifacts | None = None,
     ) -> None:
         self.rules = card_instance_rules()
         self.binding = game_binding(
             actions.action_contract, rule_signature(actions.action_contract, self.rules)
         )
-        if model_id not in ("random", "heuristic") or actions.max_sequence_length > 18:
-            raise ContractError("protocol3 currently supports corrected baselines only")
+        options = (safe_options_game_v3(policy_options, actions=actions, rules=self.rules)
+            if policy_options is not None else None)
+        self.caps, self.costs, residency, self.temporary_bytes = own_game_worker_settings_v3(
+            model_id, actions, options, rules=self.rules)
+        self.artifact_inputs = artifact_inputs
+        self.neural_metadata: Json | None = None
+        if options is None:
+            if artifact_inputs is not None:
+                raise ContractError("baseline worker forbids neural artifact inputs")
+            self.expected_policy = model_id + "-card-instance-v2"
+        else:
+            if type(artifact_inputs) is not RetainedGameArtifacts:
+                raise ContractError("neural worker requires its retained original artifact owner")
+            artifact_inputs.require_options(model_id, options)
+            self.expected_policy = policy_label_game_v3(model_config_v3(options["model"], layout=CORRECTED_CARD_INSTANCE_LAYOUT),
+                InferenceBindingV2(**options["inference"]), options["expected_manifest_digest"],
+                action_contract=actions.action_contract, rules=self.rules, action_config_hash=digest(asdict(actions)),
+                cuda_visible_devices=options["cuda_visible_devices"])
+            self.neural_metadata = artifact_inputs.journal_metadata(self.expected_policy)
         integer(sampling_seed)
         if type(timeout) not in (int, float) or not math.isfinite(timeout) or timeout <= 0:
             raise ContractError("positive protocol3 timeout required")
-        self.caps = WorkerCaps(
-            max_positions=actions.max_sequence_length, max_candidates=actions.max_candidates
-        )
-        self.costs, self.temporary_bytes = NumericCosts(), 0
         self.model_id, self.actions = model_id, actions
-        self.expected_policy = model_id + "-card-instance-v2"
         self.initial = {
             "protocol_version": 3,
             "model_id": model_id,
@@ -70,6 +87,8 @@ class CardInstanceParticipantWorker(StructuredParticipantWorker):
             "numeric_costs": asdict(self.costs),
             **self.binding,
         }
+        if options is not None:
+            self.initial["policy_options"] = options
         self._search_state = random.Random(
             int(
                 digest({"recipe": "structured-search-stream-v1", "sampling_seed": sampling_seed})[
@@ -87,7 +106,7 @@ class CardInstanceParticipantWorker(StructuredParticipantWorker):
         self._last_frame = None
         self._spawn_started = time.monotonic()
         self.process = cast("subprocess.Popen[bytes]", None)
-        self.lease = ledger.reserve_worker(0)  # must precede Popen.
+        self.lease = ledger.reserve_worker(residency)  # must precede Popen.
         self.lease._cleanup_owner = self
         process = None
         try:
@@ -174,7 +193,7 @@ class CardInstanceParticipantWorker(StructuredParticipantWorker):
             if self._parent_bank.boundary != frame.boundary:
                 raise ContractError("protocol3 event delta/frame boundary mismatch")
             frame.bank_view(self._parent_bank.view())
-            scope = self.lease.reserve_decision(0)
+            scope = self.lease.reserve_decision(self.temporary_bytes)
             received = await self._roundtrip(
                 {
                     "protocol_version": 3,
@@ -205,8 +224,9 @@ class CardInstanceParticipantWorker(StructuredParticipantWorker):
                 or generated.report.attempts > self.actions.max_expansions
                 or generated.report.discovered > self.actions.max_temporary_candidates
                 or selected.policy_version != self.expected_policy
-                or selected.logprob is not None
-                or selected.value is not None
+                or self.neural_metadata is None and (selected.logprob is not None or selected.value is not None)
+                or self.neural_metadata is not None and any(type(value) not in (int, float)
+                    or value is None or not math.isfinite(value) for value in (selected.logprob, selected.value))
             ):
                 raise ContractError("protocol3 search/baseline binding mismatch")
             if len(generated.table.kinds) > self.caps.max_candidates or any(

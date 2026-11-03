@@ -1,4 +1,4 @@
-"""Corrected baseline composition; runtime evidence stays outside participants."""
+"""Corrected game composition; runtime evidence stays outside participants."""
 from __future__ import annotations
 
 import asyncio
@@ -24,6 +24,7 @@ from gf_common.domain import (
 from gf_common.schedule import schedule, serialize_schedule
 from gf_evaluation.evaluation import report
 from gf_models.config import ModelConfig
+from gf_models.structured_binding import ConfiguredNeuralModelV3
 from gf_simulator_client.card_instance_environment import CardInstanceSimulatorEnvironment
 from gf_simulator_client.card_instance_runtime import CardInstanceRuntimeEvidence
 from gf_simulator_client.environment import EnvironmentSettings
@@ -37,15 +38,25 @@ def _check(deadline: float) -> None:
         raise TimeoutError("corrected collection deadline")
 
 
-def _baseline_labels(loaded: LoadedConfig) -> tuple[dict[str, RuntimePolicyBinding], tuple[str, str]]:
+def _require_actions(loaded: LoadedConfig) -> None:
     config = loaded.config
     if (type(config.actions) is not ActionConfigV3
             or config.actions.action_contract != corrected_card_instance_contract()
             or config.actions.max_sequence_length > 18 or not isinstance(config.run, RunConfigV2)):
         raise ContractError("corrected baseline collection requires the corrected contract and real18card limits")
+
+
+def _baseline_labels(loaded: LoadedConfig, *, artifact_inputs: Any = None) -> tuple[dict[str, RuntimePolicyBinding], tuple[str, str]]:
+    _require_actions(loaded)
+    config = loaded.config
     labels = []
     bindings = {}
     for model in (config.model, config.opponent):
+        if type(model) is ConfiguredNeuralModelV3 and artifact_inputs is not None:
+            label, binding = artifact_inputs.binding(model)
+            labels.append(label)
+            bindings[label] = binding
+            continue
         if (type(model) is not ModelConfig or model.model_id not in ("random", "heuristic")
                 or asdict(model) != asdict(ModelConfig(model_id=model.model_id))):
             raise ContractError("corrected collection currently supports canonical Random/Heuristic only")
@@ -79,7 +90,8 @@ def _inventory(directory: Path, deadline: float) -> list[Json]:
 
 def _validate_recorded_episodes(directory: Path, episodes: list[Any], actions: ActionConfigV3,
                                 run_id: str, deadline: float,
-                                expected: dict[str, tuple[EpisodeSpec, Json]]) -> None:
+                                expected: dict[str, tuple[EpisodeSpec, Json]],
+                                neural_metadata: dict[str, Json] | None = None) -> None:
     import json
 
     for episode in episodes:
@@ -97,6 +109,9 @@ def _validate_recorded_episodes(directory: Path, episodes: list[Any], actions: A
                     or canonical(journal.header["runtime_evidence"]) != canonical(runtime)
                     or journal.end["end_kind"] != episode.end_kind or journal.end["outcome"] != episode.outcome):
                 raise ContractError("persisted corrected journal/episode identity mismatch")
+            if (neural_metadata is not None and journal.header["policy"] in neural_metadata
+                    and canonical(journal.header.get("neural")) != canonical(neural_metadata[journal.header["policy"]])):
+                raise ContractError("persisted neural journal differs from its retained artifact input")
             accepted = [journal.decisions[index].command["action"] for index in journal.accepted]
             value = json.loads((folder / f"replay-player-{viewer}.json").read_bytes())
             reconcile_replay(value, viewer, accepted, episode.outcome)
@@ -110,17 +125,70 @@ async def run_baseline(loaded: LoadedConfig, command: str) -> tuple[Path, Json]:
     if command not in ("smoke", "collect", "evaluate"):
         raise ContractError("corrected baseline integration supports smoke/collect/evaluate only")
     bindings, labels = _baseline_labels(loaded)
+    return await _run_corrected(loaded, command, bindings, labels)
+
+
+async def run_inference(loaded: LoadedConfig, command: str) -> tuple[Path, Json]:
+    if command not in ("smoke", "collect", "evaluate"):
+        raise ContractError("corrected neural inference supports smoke/collect/evaluate only")
+    _require_actions(loaded)
+    config = loaded.config
+    assert type(config.actions) is ActionConfigV3 and isinstance(config.run, RunConfigV2)
+    neural = tuple(model for model in (config.model, config.opponent)
+                   if type(model) is ConfiguredNeuralModelV3)
+    if not neural or any(model.checkpoint is None for model in neural):
+        raise ContractError("corrected neural inference requires an explicit game checkpoint")
+    for model in (config.model, config.opponent):
+        if type(model) is ConfiguredNeuralModelV3:
+            continue
+        if (type(model) is not ModelConfig or model.model_id not in ("random", "heuristic")
+                or asdict(model) != asdict(ModelConfig(model_id=model.model_id))):
+            raise ContractError("corrected neural inference requires model3 or canonical baselines")
+    if config.server.external_url is not None or config.server.source_dir is None:
+        raise ContractError("corrected neural inference requires locally managed verified source/binary evidence")
+    started = time.monotonic()
+    work_deadline = started + config.run.wall_seconds - config.run.report_reserve_seconds
+    preflight_deadline = min(started + config.run.execution_seconds,
+                             work_deadline - config.server.cleanup_reserve_seconds)
+    evidence = CardInstanceRuntimeEvidence(Path(config.server.binary), Path(config.server.source_dir),
+                                          deadline=preflight_deadline)
+    evidence.preflight()
+    from gf_common.card_instance_rules import card_instance_rules
+    from gf_models.card_instance_artifacts import RetainedGameArtifacts
+    from gf_models.structured_runtime import admit_game_workers_v3
+    rules = card_instance_rules()
+    owner = RetainedGameArtifacts(neural, config.actions, rules=rules,
+        max_owned_bytes=min(model.resources.max_owned_bytes for model in neural),
+        preflight_deadline=preflight_deadline, finalization_deadline=work_deadline)
+    try:
+        bindings, labels = _baseline_labels(loaded, artifact_inputs=owner)
+        admission = admit_game_workers_v3(config.actions, (bindings[labels[0]], bindings[labels[1]]),
+            rules=rules, game_concurrency=config.run.concurrency,
+            global_cuda_bytes=config.run.global_cuda_budget_bytes,
+            max_workers=config.run.max_participant_workers)
+        return await _run_corrected(loaded, command, bindings, labels, started=started,
+                                    artifact_inputs=owner, runtime_evidence=evidence,
+                                    resource_admission=admission)
+    finally:
+        owner.release()  # no filesystem I/O or reportable operation after healthy publication.
+
+
+async def _run_corrected(loaded: LoadedConfig, command: str,
+                         bindings: dict[str, RuntimePolicyBinding], labels: tuple[str, str], *,
+                         started: float | None = None, artifact_inputs: Any = None,
+                         runtime_evidence: CardInstanceRuntimeEvidence | None = None,
+                         resource_admission: Json | None = None) -> tuple[Path, Json]:
     config = loaded.config
     assert isinstance(config.actions, ActionConfigV3)
     if config.server.external_url is not None or config.server.source_dir is None:
         raise ContractError("corrected baseline collection requires locally managed verified source/binary evidence")
-    started = time.monotonic()
+    started = time.monotonic() if started is None else started
     wall_deadline = started + config.run.wall_seconds
     work_deadline = wall_deadline - config.run.report_reserve_seconds
     replay_deadline = work_deadline - config.server.cleanup_reserve_seconds
     execution_deadline = started + config.run.execution_seconds
     preflight_deadline = min(execution_deadline, replay_deadline)
-    evidence = CardInstanceRuntimeEvidence(Path(config.server.binary), Path(config.server.source_dir), deadline=preflight_deadline)
+    evidence = runtime_evidence or CardInstanceRuntimeEvidence(Path(config.server.binary), Path(config.server.source_dir), deadline=preflight_deadline)
     evidence.preflight()
     planned = schedule(config.run.seeds, config.run.sampling_seeds, config.run.pairs_per_seed,
                        labels[0], labels[1], deadline=preflight_deadline)
@@ -138,7 +206,7 @@ async def run_baseline(loaded: LoadedConfig, command: str) -> tuple[Path, Json]:
         policy_bindings=bindings)
     assert isinstance(config.run, RunConfigV2)
     ledger = ReservationLedger(config.run.global_cuda_budget_bytes, config.run.max_participant_workers)
-    environment = CardInstanceSimulatorEnvironment(settings, CardInstanceJournal, ledger=ledger, runtime_evidence=evidence)
+    extra: dict[str, Any] = {} if artifact_inputs is None else {"artifact_inputs": artifact_inputs}
     semaphore = asyncio.Semaphore(config.run.concurrency)
     tasks: list[asyncio.Task[GroupResult]] = []
     admission_closed = False
@@ -156,6 +224,8 @@ async def run_baseline(loaded: LoadedConfig, command: str) -> tuple[Path, Json]:
                 raise
 
     try:
+        environment = CardInstanceSimulatorEnvironment(settings, CardInstanceJournal, ledger=ledger,
+                                                      runtime_evidence=evidence, **extra)
         tasks = [asyncio.create_task(group_run(group)) for group in planned]
         groups = await asyncio.gather(*tasks)
         episodes = [episode for group in groups for episode in group.episodes]
@@ -173,14 +243,23 @@ async def run_baseline(loaded: LoadedConfig, command: str) -> tuple[Path, Json]:
             raise ContractError("corrected collection has unreaped resource ownership before publication")
         expected = {spec.episode_id: (spec, group.health["runtime_evidence"])
                     for plan, group in zip(planned, groups, strict=True) for spec in plan.episodes}
-        _validate_recorded_episodes(directory, episodes, config.actions, run_id, work_deadline, expected)
+        neural_metadata = ({label: artifact_inputs.journal_metadata(label) for label, binding in bindings.items()
+                            if binding.model_id in ("mlp", "gru", "transformer")}
+                           if artifact_inputs is not None else None)
+        _validate_recorded_episodes(directory, episodes, config.actions, run_id, work_deadline, expected,
+                                   neural_metadata=neural_metadata)
+        neural_inputs = artifact_inputs.finalize(deadline=work_deadline) if artifact_inputs is not None else None
         inventory = _inventory(directory, work_deadline)
         from gf_cli import _code_provenance
         producer = _code_provenance(work_deadline)
         receipts = [group.health["runtime_evidence"] for group in groups]
+        metadata_options: dict[str, Any] = ({} if neural_inputs is None else
+            {"policy_bindings": bindings, "neural_inputs": neural_inputs})
         manifest = collection_metadata(actions=config.actions, config=loaded.effective,
             runtime_evidence=receipts, schedule=serialize_schedule(planned, 4), inventory=inventory,
-            policies=list(labels), bots_revision=producer["revision"])
+            policies=list(labels), bots_revision=producer["revision"], **metadata_options)
+        if resource_admission is not None:
+            manifest["resource_admission"] = resource_admission
         manifest.update(kind="card-instance-collection", run_id=run_id, command=command,
             status="complete" if summary["comparison_valid"] else "incomplete", schedule_schema_version=4,
             code=producer, inputs=loaded.inputs, groups=[group.health for group in groups],

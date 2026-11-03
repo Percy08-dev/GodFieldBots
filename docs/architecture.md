@@ -30,8 +30,11 @@ full384journal/Replay/4492file audit. Root accepts this baseline feasibility sco
 The two prior failed populations remain preserved and ineligible; this does not
 qualify a learning Source or establish strength. The source-matched134module
 wheel also passes mandatory-only installed baseline-worker checks.
-Qualified neural selection, native-v2, Source, numeric rollout/learner4, PPO and
-Tree integration remain pending.
+Corrected neural game inference now also passes both reviews and all six real
+MLP/GRU/Transformer×CPU/CUDA conditions (12natural games), plus a complete24journal
+audit and source-matched135module wheel/mandatory-only baseline checks. This is
+initial-policy inference evidence; Source, numeric rollout/learner4, PPO updates/
+resume, native-v2 and Tree integration remain pending.
 Exact conditions are in the [new ledger](verification/card-instance-v2-adoption.md).
 Legacy and ADR0023 engineering identities remain unchanged; historical evidence
 below does not qualify the new contract.

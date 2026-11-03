@@ -7,10 +7,15 @@ from itertools import pairwise
 from gf_common.card_instance import ActionConfigV3
 from gf_common.card_instance_rules import CardInstanceRules
 from gf_common.diverse_actions import NumericCosts
-from gf_common.domain import ContractError, Json, integer
+from gf_common.domain import ContractError, Json, RuntimePolicyBinding, integer
 from gf_common.structured import ActionConfigV2
 from gf_common.structured_layout import LEGACY_LAYOUT, StructuredLayout, layout_for_contract
-from gf_models.structured_binding import safe_options_v2, safe_options_v3
+from gf_models.structured_binding import (
+    input_binding_game_v3,
+    safe_options_game_v3,
+    safe_options_v2,
+    safe_options_v3,
+)
 from gf_models.structured_config import (
     InferenceBindingV2,
     ModelConfigV2,
@@ -114,3 +119,43 @@ def _neural_settings(model: ModelConfigV2 | ModelConfigV3, binding: InferenceBin
 
 def caps_dict(value: WorkerCaps) -> Json:
     return asdict(value)
+
+
+def own_game_worker_settings_v3(model_id: str, actions: ActionConfigV3, options: Json | None, *,
+                                rules: CardInstanceRules) -> tuple[WorkerCaps, NumericCosts, int, int]:
+    if type(actions) is not ActionConfigV3 or actions.max_sequence_length > 18:
+        raise ContractError("game worker requires real18 actions3")
+    input_binding_game_v3(actions.action_contract, rules)
+    if model_id in ("random", "heuristic"):
+        if options is not None:
+            raise ContractError("baseline forbids policy options")
+        return WorkerCaps(max_positions=actions.max_sequence_length, max_candidates=actions.max_candidates), NumericCosts(), 0, 0
+    if model_id not in ("mlp", "gru", "transformer") or options is None:
+        raise ContractError("neural game worker requires explicit safe options")
+    safe = safe_options_game_v3(options, actions=actions, rules=rules)
+    layout = layout_for_contract(actions.action_contract)
+    model, binding = model_config_v3(safe["model"], layout=layout), InferenceBindingV2(**safe["inference"])
+    if model.model_id != model_id or actions.max_sequence_length > model.max_positions or actions.max_candidates > binding.max_candidates:
+        raise ContractError("game model/actions capacity mismatch")
+    return _neural_settings(model, binding, actions, layout=layout)
+
+
+def admit_game_workers_v3(actions: ActionConfigV3, roles: tuple[RuntimePolicyBinding, RuntimePolicyBinding], *,
+                          rules: CardInstanceRules, game_concurrency: int, global_cuda_bytes: int = 12 * 1024**3,
+                          max_workers: int = 4, learner_cuda_bytes: int = 0) -> Json:
+    integer(game_concurrency, 1, 2)
+    integer(max_workers, 1, 4)
+    integer(global_cuda_bytes, 1, 12 * 1024**3)
+    integer(learner_cuda_bytes, 0, global_cuda_bytes)
+    if type(roles) is not tuple or len(roles) != 2 or any(type(role) is not RuntimePolicyBinding for role in roles):
+        raise ContractError("joint admission requires both configured player roles")
+    settings = [own_game_worker_settings_v3(role.model_id, actions, role.policy_options, rules=rules) for role in roles]
+    resident = game_concurrency * sum(row[2] for row in settings)
+    temporary = game_concurrency * max(row[3] for row in settings)
+    peak = learner_cuda_bytes + resident + temporary
+    if 2 * game_concurrency > max_workers or peak > global_cuda_bytes:
+        raise ContractError("joint game worker demand exceeds shared worker/CUDA budget")
+    return {"recipe": PROCESS_ENVELOPE_RECIPE, "game_concurrency": game_concurrency,
+        "workers": 2 * game_concurrency, "worker_resident_bytes": resident,
+        "decision_temporary_bytes": temporary, "learner_cuda_bytes": learner_cuda_bytes,
+        "peak_cuda_bytes": peak, "global_cuda_bytes": global_cuda_bytes, "max_workers": max_workers}

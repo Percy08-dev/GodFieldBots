@@ -23,17 +23,23 @@ os.environ.update(
 import random
 import time
 from dataclasses import asdict
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from gf_models.structured_policy import GameStructuredPolicyV3
 
 from gf_common.card_instance import action_config_v3
 from gf_common.card_instance_rules import parse_card_instance_rules, rule_signature
 from gf_common.card_instance_runtime import check_game_binding, game_binding
-from gf_common.diverse_actions import NumericCosts, PublicCandidateGeneratorV3
+from gf_common.diverse_actions import PublicCandidateGeneratorV3
 from gf_common.domain import ContractError, closed, digest, integer
 from gf_common.structured import EventBank
 from gf_common.structured_layout import CORRECTED_CARD_INSTANCE_LAYOUT
 from gf_common.structured_wire import game_generated_dict_v3, parse_delta, parse_frame
 from gf_models.card_instance_baselines import CardInstanceBaseline
-from gf_models.structured_runtime import WorkerCaps
+from gf_models.structured_binding import child_cuda_visibility, safe_options_game_v3
+from gf_models.structured_runtime import own_game_worker_settings_v3
 from gf_simulator_client.framing import read_frame, write_frame
 
 
@@ -41,6 +47,10 @@ def main() -> None:
     output, source = sys.stdout.buffer, sys.stdin.buffer
     try:
         initial = read_frame(source)
+        model_id = initial.get("model_id")
+        neural = model_id in ("mlp", "gru", "transformer")
+        if model_id not in ("random", "heuristic", "mlp", "gru", "transformer"):
+            raise ContractError("unknown fixed protocol3 model ID")
         closed(
             initial,
             {
@@ -56,7 +66,7 @@ def main() -> None:
                 "layout_signature",
                 "purpose",
                 "synthetic_capacity",
-            },
+            } | ({"policy_options"} if neural else set()),
         )
         if type(initial["protocol_version"]) is not int or initial["protocol_version"] != 3:
             raise ContractError("explicit protocol3 initialization required")
@@ -73,20 +83,42 @@ def main() -> None:
             binding["rule_signature"],
         )
         integer(initial["sampling_seed"])
-        caps = WorkerCaps(
-            max_positions=actions.max_sequence_length, max_candidates=actions.max_candidates
-        )
-        costs = NumericCosts()
+        sampling_seed = initial["sampling_seed"]
+        options = safe_options_game_v3(initial["policy_options"], actions=actions, rules=rules) if neural else None
+        if options is not None and options["cuda_visible_devices"] != child_cuda_visibility(
+                options["inference"]["device"], options["cuda_visible_devices"]):
+            raise ContractError("protocol3 inference CUDA visibility must match canonical child execution")
+        caps, costs, _, _ = own_game_worker_settings_v3(model_id, actions, options, rules=rules)
         if initial["caps"] != asdict(caps) or initial["numeric_costs"] != asdict(costs):
             raise ContractError("protocol3 baseline limits/cost mismatch")
-        policy = CardInstanceBaseline(initial["model_id"], actions, rules=rules)
-        policy.reset(initial["sampling_seed"])
+        policy: CardInstanceBaseline | GameStructuredPolicyV3
+        load_started = time.perf_counter()
+        if options is None:
+            policy = CardInstanceBaseline(model_id, actions, rules=rules)
+        else:
+            os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
+            visibility = options["cuda_visible_devices"]
+            if visibility is None:
+                os.environ.pop("CUDA_VISIBLE_DEVICES", None)
+            else:
+                os.environ["CUDA_VISIBLE_DEVICES"] = visibility
+            from gf_common.structured_layout import layout_for_contract
+            from gf_models.structured_config import InferenceBindingV2, model_config_v3
+            from gf_models.structured_policy import GameStructuredPolicyV3
+            policy = GameStructuredPolicyV3.from_artifact(
+                Path(options["checkpoint"]), options["expected_manifest_digest"],
+                model_config_v3(options["model"], layout=layout_for_contract(actions.action_contract)),
+                InferenceBindingV2(**options["inference"]), options["action_config_hash"],
+                action_contract=actions.action_contract, rules=rules)
+        model_load_ms = (time.perf_counter() - load_started) * 1000 if neural else 0.0
+        policy.reset(sampling_seed)
+        del initial, options
         search_rng = random.Random(
             int(
                 digest(
                     {
                         "recipe": "structured-search-stream-v1",
-                        "sampling_seed": initial["sampling_seed"],
+                        "sampling_seed": sampling_seed,
                     }
                 )[:16],
                 16,
@@ -99,7 +131,7 @@ def main() -> None:
                 "protocol_version": 3,
                 "kind": "ready",
                 "policy_version": policy.version,
-                "model_load_ms": 0.0,
+                "model_load_ms": model_load_ms,
                 **binding,
             },
         )

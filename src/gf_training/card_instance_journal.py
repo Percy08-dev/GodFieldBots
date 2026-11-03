@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import os
 import random
 import re
@@ -28,6 +29,7 @@ from gf_common.domain import (
     END_PROJECTION_VERSION,
     ContractError,
     Json,
+    clone,
     closed,
     digest,
     integer,
@@ -36,7 +38,8 @@ from gf_common.structured import EventBank, Selection
 from gf_common.structured_layout import CORRECTED_CARD_INSTANCE_LAYOUT
 from gf_common.structured_tokens import signature
 from gf_common.structured_wire import parse_report_v3
-from gf_models.structured_runtime import WorkerCaps
+from gf_models.card_instance_artifacts import validate_neural_metadata
+from gf_models.structured_runtime import WorkerCaps, own_game_worker_settings_v3
 from gf_training.candidate_storage import (
     publish_candidates_v2,
     read_candidates_v2,
@@ -63,6 +66,9 @@ class _Context:
     def __init__(self, actions: ActionConfigV3, rules: CardInstanceRules) -> None:
         require_corrected_contract(actions.action_contract)
         self.actions, self.rules = actions, rules
+        self.neural: Json | None = None
+        self.policy = ""
+        self.numeric_costs_hash = ""
         self.binding = game_binding(
             actions.action_contract, rule_signature(actions.action_contract, rules)
         )
@@ -92,12 +98,16 @@ class _Context:
             or value.report.config_hash != digest(asdict(self.actions))
             or value.report.attempts > self.actions.max_expansions
             or value.report.discovered > self.actions.max_temporary_candidates
-            or selection.logprob is not None
-            or selection.value is not None
+            or value.report.numeric_costs_hash != self.numeric_costs_hash
+            or selection.policy_version != self.policy
+            or self.neural is None and (selection.logprob is not None or selection.value is not None)
+            or self.neural is not None and any(type(number) not in (int, float)
+                or number is None or not math.isfinite(number) for number in (selection.logprob, selection.value))
         ):
             raise ContractError("journal6 exact baseline game report/config/rules required")
 
     def validate_header(self, header: Json) -> tuple[WorkerCaps, EventBank]:
+        neural = header.get("model_version") == "3"
         closed(
             header,
             {
@@ -134,7 +144,7 @@ class _Context:
                 "protocol_version",
                 "actions",
                 "runtime_evidence",
-            },
+            } | ({"neural"} if neural else set()),
         )
         if (
             type(header["schema_version"]) is not int
@@ -149,11 +159,10 @@ class _Context:
             or header["end_projection_version"] != END_PROJECTION_VERSION
             or header["catalog"] != CATALOG_META
             or header["generator_version"] != GENERATOR_VERSION
-            or header["model_id"] not in ("random", "heuristic")
-            or header["model_version"] != "1"
+            or not neural and (header["model_id"] not in ("random", "heuristic") or header["model_version"] != "1")
             or header["generation_schema"] is not None
             or header["use_action_options"] is not True
-            or header["policy"] != header["model_id"] + "-card-instance-v2"
+            or not neural and header["policy"] != header["model_id"] + "-card-instance-v2"
             or action_config_v3(header["actions"]) != self.actions
             or header["action_config_hash"] != digest(asdict(self.actions))
         ):
@@ -168,6 +177,19 @@ class _Context:
         ):
             raise ContractError("journal6 action/capacity mismatch")
         NumericCosts(**closed(header["numeric_costs"], set(NumericCosts.__dataclass_fields__)))
+        if neural:
+            safe, label = validate_neural_metadata(header["neural"], actions=self.actions, rules=self.rules)
+            expected_caps, expected_costs, _, _ = own_game_worker_settings_v3(
+                header["model_id"], self.actions, safe, rules=self.rules)
+            if (header["policy"] != label or header["caps"] != asdict(expected_caps)
+                    or header["numeric_costs"] != asdict(expected_costs)
+                    or header["aggregate_window"] != safe["model"]["event"]["aggregate_window"]):
+                raise ContractError("journal6 neural execution/label/capacity mismatch")
+            self.neural = clone(header["neural"])
+        else:
+            self.neural = None
+        self.policy = header["policy"]
+        self.numeric_costs_hash = digest(header["numeric_costs"])
         integer(header["viewer"], 1, 2)
         integer(header["sampling_seed"])
         integer(header["aggregate_window"], 1, min(65536, caps.max_episode_events))
@@ -203,8 +225,13 @@ class CardInstanceJournal(StructuredJournal):
         runtime_evidence: Json,
         sampling_seed: int = 0,
         rules: CardInstanceRules | None = None,
+        neural: Json | None = None,
     ) -> None:
         context = _Context(actions, card_instance_rules() if rules is None else rules)
+        aggregate_window = 128
+        if neural is not None:
+            safe, _ = validate_neural_metadata(neural, actions=actions, rules=context.rules)
+            aggregate_window = safe["model"]["event"]["aggregate_window"]
         header = {
             **context.binding,
             "kind": "header",
@@ -226,16 +253,18 @@ class CardInstanceJournal(StructuredJournal):
             "caps": caps,
             "numeric_costs": numeric_costs,
             "model_id": model_id,
-            "model_version": "1",
+            "model_version": "3" if neural is not None else "1",
             "generation_schema": None,
-            "aggregate_window": 128,
-            "token_signature": signature(128, layout=context.layout),
+            "aggregate_window": aggregate_window,
+            "token_signature": signature(aggregate_window, layout=context.layout),
             "sampling_seed": sampling_seed,
             "use_action_options": True,
             "protocol_version": 3,
             "actions": asdict(actions),
             "runtime_evidence": runtime_evidence,
         }
+        if neural is not None:
+            header["neural"] = clone(neural)
         _, bank = context.validate_header(header)  # before output creation.
         self._context = context
         self.action_contract, self.purpose = actions.action_contract, "qualified_game"

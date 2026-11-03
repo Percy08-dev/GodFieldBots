@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Protocol, cast
 
 from gf_common.card_instance import ActionConfigV3, CardInstanceContract
+from gf_common.card_instance_rules import card_instance_rules
 from gf_common.card_instance_runtime import require_corrected_contract
 from gf_common.card_instance_validation import decision_input, reconcile_replay, replay_closure
 from gf_common.diverse_actions import GameGeneratedCandidatesV3
@@ -26,6 +27,8 @@ from gf_common.domain import (
 )
 from gf_common.structured import DecisionFrame, EventBank, EventDelta, Selection, event_delta
 from gf_common.structured_layout import CORRECTED_CARD_INSTANCE_LAYOUT
+from gf_models.card_instance_artifacts import RetainedGameArtifacts
+from gf_models.structured_runtime import own_game_worker_settings_v3
 from gf_simulator_client.card_instance_runtime import CardInstanceRuntimeEvidence
 from gf_simulator_client.card_instance_worker import CardInstanceParticipantWorker
 from gf_simulator_client.environment import (
@@ -72,6 +75,7 @@ class CardInstanceSimulatorEnvironment(SimulatorEnvironment):
         *,
         ledger: ReservationLedger,
         runtime_evidence: CardInstanceRuntimeEvidence,
+        artifact_inputs: RetainedGameArtifacts | None = None,
     ) -> None:
         if type(settings.actions) is not ActionConfigV3:
             raise ContractError("corrected environment requires exact actions3")
@@ -86,15 +90,20 @@ class CardInstanceSimulatorEnvironment(SimulatorEnvironment):
             )
         runtime_evidence.preflight()  # before output, server or participant allocation.
         for label, binding in settings.policy_bindings.items():
-            if (
-                binding.model_id not in ("random", "heuristic")
-                or binding.policy_options is not None
-                or label != binding.model_id + "-card-instance-v2"
-            ):
-                raise ContractError("corrected execution currently supports fixed baselines only")
+            own_game_worker_settings_v3(binding.model_id, settings.actions, binding.policy_options, rules=card_instance_rules())
+            if binding.policy_options is None:
+                if label != binding.model_id + "-card-instance-v2":
+                    raise ContractError("baseline label differs from fixed execution")
+            else:
+                if type(artifact_inputs) is not RetainedGameArtifacts:
+                    raise ContractError("neural environment requires retained external inputs")
+                artifact_inputs.require_options(binding.model_id, binding.policy_options)
+                if artifact_inputs.journal_metadata(label)["policy_options"] != binding.policy_options:
+                    raise ContractError("neural environment label/options mismatch")
         self._initialize(settings, _unused_factory, journal_factory)
         self._include_input_time = True
         self.ledger, self.runtime_evidence = ledger, runtime_evidence
+        self.artifact_inputs = artifact_inputs
         self._managed_server: ManagedServer | None = None
 
     async def run_group(self, group: EpisodeGroup) -> GroupResult:
@@ -105,8 +114,7 @@ class CardInstanceSimulatorEnvironment(SimulatorEnvironment):
                 binding = self.settings.policy_bindings.get(label)
                 if (
                     binding is None
-                    or binding.model_id not in ("random", "heuristic")
-                    or label != binding.model_id + "-card-instance-v2"
+                    or binding.policy_options is None and label != binding.model_id + "-card-instance-v2"
                 ):
                     raise ContractError(
                         "corrected schedule requires explicit baseline execution bindings"
@@ -120,6 +128,7 @@ class CardInstanceSimulatorEnvironment(SimulatorEnvironment):
                 self.runtime_evidence.source_root,
                 deadline=min(self.settings.wall_deadline, self.settings.work_deadline),
             ),
+            artifact_inputs=self.artifact_inputs,
         )
         return await own._run_group_body(group)
 
@@ -202,6 +211,8 @@ class CardInstanceSimulatorEnvironment(SimulatorEnvironment):
                 self.settings.actions,
                 self.settings.worker_seconds,
                 ledger=self.ledger,
+                policy_options=binding.policy_options,
+                artifact_inputs=self.artifact_inputs if binding.policy_options is not None else None,
             )
         except BaseException as error:
             owner = _startup_cleanup_owner(error, self.ledger)
@@ -232,6 +243,7 @@ class CardInstanceSimulatorEnvironment(SimulatorEnvironment):
             model_id=binding.model_id,
             sampling_seed=spec.sampling_seeds[viewer - 1],
             runtime_evidence=self.runtime_evidence.receipt(require_executed=True),
+            **({"neural": worker.neural_metadata} if worker.neural_metadata is not None else {}),
         )
 
     async def _ready_actors(

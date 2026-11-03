@@ -45,8 +45,10 @@ from gf_models.structured_binding import (
     _bind_network_input,
     _bind_network_input_v3,
     check_input_binding,
+    check_input_binding_game_v3,
     check_input_binding_v3,
     input_binding,
+    input_binding_game_v3,
     input_binding_v3,
 )
 from gf_models.structured_config import (
@@ -104,6 +106,7 @@ class _ArtifactContext:
     layout: StructuredLayout = LEGACY_LAYOUT
     rules: CardInstanceRules | None = None
     action_config_hash: str | None = None
+    _game: bool = False
 
     @property
     def schema(self) -> int:
@@ -123,7 +126,8 @@ class _ArtifactContext:
         if self.layout is not layout_for_contract(self.action_contract):
             raise ContractError("format4 exact profile/layout mismatch")
         _hash(self.action_config_hash)
-        return input_binding_v3(self.action_contract, self.rules, self.purpose, self.synthetic_capacity)
+        return (input_binding_game_v3(self.action_contract, self.rules) if self._game else
+            input_binding_v3(self.action_contract, self.rules, self.purpose, self.synthetic_capacity))
 
     def check(self, raw: Json) -> None:
         expected = self.classification()
@@ -132,8 +136,11 @@ class _ArtifactContext:
             check_input_binding(raw, action_contract=self.action_contract, purpose=self.purpose, synthetic_capacity=self.synthetic_capacity)
         else:
             assert type(self.action_contract) is CardInstanceContract and self.rules is not None
-            check_input_binding_v3(raw, action_contract=self.action_contract, rules=self.rules,
-                purpose=self.purpose, synthetic_capacity=self.synthetic_capacity)
+            if self._game:
+                check_input_binding_game_v3(raw, action_contract=self.action_contract, rules=self.rules)
+            else:
+                check_input_binding_v3(raw, action_contract=self.action_contract, rules=self.rules,
+                    purpose=self.purpose, synthetic_capacity=self.synthetic_capacity)
         if set(raw) != set(expected):
             raise ContractError("artifact classification mismatch")
 
@@ -147,10 +154,13 @@ class _ArtifactContext:
             assert type(self.action_contract) is CardInstanceContract and self.rules is not None and self.action_config_hash is not None
             _bind_network_input_v3(network, action_contract=self.action_contract, rules=self.rules,
                 purpose=self.purpose, synthetic_capacity=self.synthetic_capacity,
-                action_config_hash=self.action_config_hash, fresh=fresh)
+                action_config_hash=self.action_config_hash, fresh=fresh, _game=self._game)
 
     def model(self, raw: Json) -> Any:
-        return model_config_v2(raw) if self.schema == 3 else model_config_v3(raw, layout=self.layout)
+        model = model_config_v2(raw) if self.schema == 3 else model_config_v3(raw, layout=self.layout)
+        if self._game and model.max_positions > 18:
+            raise ContractError("game artifact capacity exceeds real18")
+        return model
 
     def semantics(self, model: Any) -> Json:
         if self.schema == 3:
@@ -619,3 +629,61 @@ def restore_resume_v3(directory: Path, network: Any, optimizer: Any, shuffle: An
     context = _context_v3(layout, action_contract, rules, purpose, synthetic_capacity, action_config_hash)
     return _restore_resume(directory, network, optimizer, shuffle, model, binding, resume_identity,
         action_contract=action_contract, purpose=purpose, synthetic_capacity=synthetic_capacity, _context=context)
+
+
+def _game_context_v3(action_contract: CardInstanceContract, rules: CardInstanceRules,
+                     action_config_hash: str) -> _ArtifactContext:
+    context = _ArtifactContext(action_contract, "qualified_game", False,
+        layout_for_contract(action_contract), rules, action_config_hash, True)
+    context.classification()
+    return context
+
+
+def save_game_inference_v3(directory: Path, network: Any, model: ModelConfigV3, action_config_hash: str, *,
+                            action_contract: CardInstanceContract, rules: CardInstanceRules,
+                            code_revision: str | None = None, shard_bytes: int = MAX_ARRAY_BYTES) -> Json:
+    return _save_inference(directory, network, model, action_config_hash, code_revision=code_revision,
+        shard_bytes=shard_bytes, action_contract=action_contract, purpose="qualified_game", synthetic_capacity=False,
+        _context=_game_context_v3(action_contract, rules, action_config_hash))
+
+
+def inspect_game_inference_v3(directory: Path, *, expected_digest: str, model: ModelConfigV3,
+                               binding: InferenceBindingV2, action_config_hash: str,
+                               action_contract: CardInstanceContract, rules: CardInstanceRules) -> tuple[Json, ModelConfigV3]:
+    manifest, active = _inspect_inference(directory, expected_digest=expected_digest, model=model, binding=binding,
+        action_config_hash=action_config_hash, action_contract=action_contract, purpose="qualified_game",
+        synthetic_capacity=False, _context=_game_context_v3(action_contract, rules, action_config_hash))
+    assert type(active) is ModelConfigV3
+    return manifest, active
+
+
+def load_game_inference_v3(directory: Path, *, expected_digest: str, model: ModelConfigV3,
+                            binding: InferenceBindingV2, action_config_hash: str,
+                            action_contract: CardInstanceContract, rules: CardInstanceRules) -> tuple[Any, Json]:
+    return _load_inference(directory, expected_digest=expected_digest, model=model, binding=binding,
+        action_config_hash=action_config_hash, action_contract=action_contract, purpose="qualified_game",
+        synthetic_capacity=False, _context=_game_context_v3(action_contract, rules, action_config_hash))
+
+
+def save_game_resume_v3(directory: Path, network: Any, optimizer: Any, shuffle: Any, steps: int,
+                         model: ModelConfigV3, binding: InferenceBindingV2, resume_identity: str, *,
+                         action_config_hash: str, action_contract: CardInstanceContract, rules: CardInstanceRules,
+                         shard_bytes: int = MAX_ARRAY_BYTES) -> Json:
+    return _save_resume(directory, network, optimizer, shuffle, steps, model, binding, resume_identity,
+        shard_bytes=shard_bytes, action_contract=action_contract, purpose="qualified_game", synthetic_capacity=False,
+        _context=_game_context_v3(action_contract, rules, action_config_hash))
+
+
+def read_game_resume_v3(directory: Path, model: ModelConfigV3, binding: InferenceBindingV2,
+                         resume_identity: str, *, action_config_hash: str,
+                         action_contract: CardInstanceContract, rules: CardInstanceRules) -> tuple[Json, dict[str, Any]]:
+    return _read_resume(directory, model, binding, resume_identity, action_contract=action_contract,
+        purpose="qualified_game", synthetic_capacity=False, _context=_game_context_v3(action_contract, rules, action_config_hash))
+
+
+def restore_game_resume_v3(directory: Path, network: Any, optimizer: Any, shuffle: Any, model: ModelConfigV3,
+                            binding: InferenceBindingV2, resume_identity: str, *, action_config_hash: str,
+                            action_contract: CardInstanceContract, rules: CardInstanceRules) -> int:
+    return _restore_resume(directory, network, optimizer, shuffle, model, binding, resume_identity,
+        action_contract=action_contract, purpose="qualified_game", synthetic_capacity=False,
+        _context=_game_context_v3(action_contract, rules, action_config_hash))

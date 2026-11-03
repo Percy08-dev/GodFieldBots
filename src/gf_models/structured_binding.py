@@ -6,8 +6,13 @@ from dataclasses import asdict, dataclass, field
 from typing import Any
 
 from gf_common.action_contract import ActionContract, parse_action_contract, validate_record_purpose
-from gf_common.card_instance import CardInstanceContract, parse_card_instance_contract
+from gf_common.card_instance import (
+    ActionConfigV3,
+    CardInstanceContract,
+    parse_card_instance_contract,
+)
 from gf_common.card_instance_rules import CardInstanceRules, rule_signature
+from gf_common.card_instance_runtime import check_game_binding, game_binding
 from gf_common.domain import ContractError, Json, canonical, clone, closed, digest
 from gf_common.structured_layout import StructuredLayout, layout_for_contract
 from gf_models.structured_config import (
@@ -234,6 +239,15 @@ def check_input_binding_v3(raw: Json, *, action_contract: CardInstanceContract, 
         raise ContractError("model3 input/rules/purpose binding mismatch")
 
 
+def input_binding_game_v3(action_contract: CardInstanceContract, rules: CardInstanceRules) -> Json:
+    return game_binding(action_contract, rule_signature(action_contract, rules))
+
+
+def check_input_binding_game_v3(raw: Json, *, action_contract: CardInstanceContract,
+                               rules: CardInstanceRules) -> None:
+    check_game_binding(raw, action_contract, rule_signature(action_contract, rules))
+
+
 def _action_hash(value: str) -> str:
     if type(value) is not str or re.fullmatch(r"[0-9a-f]{64}", value) is None:
         raise ContractError("explicit full action-config hash required")
@@ -251,8 +265,11 @@ class _NetworkInputBindingV3:
 
 def _bind_network_input_v3(network: Any, *, action_contract: CardInstanceContract,
                             rules: CardInstanceRules, purpose: str, synthetic_capacity: bool,
-                            action_config_hash: str, fresh: bool = False) -> None:
-    context = input_binding_v3(action_contract, rules, purpose, synthetic_capacity)
+                            action_config_hash: str, fresh: bool = False, _game: bool = False) -> None:
+    context = (input_binding_game_v3(action_contract, rules) if _game else
+        input_binding_v3(action_contract, rules, purpose, synthetic_capacity))
+    if _game and (purpose != "qualified_game" or synthetic_capacity is not False or network.config.max_positions > 18):
+        raise ContractError("game network requires nonsynthetic real18 context")
     _action_hash(action_config_hash)
     if (type(network.config) is not ModelConfigV3 or network.layout is not layout_for_contract(action_contract)
             or hasattr(network, "_structured_input_binding")):
@@ -276,12 +293,15 @@ def execution_binding_v3(model: ModelConfigV3, inference: InferenceBindingV2, *,
             "cuda_visible_devices": validate_cuda_visibility(cuda_visible_devices)}
 
 
-def policy_label_v3(model: ModelConfigV3, inference: InferenceBindingV2, manifest_digest: str, *,
+def _policy_label_v3(model: ModelConfigV3, inference: InferenceBindingV2, manifest_digest: str, *,
                     layout: StructuredLayout, action_contract: CardInstanceContract, rules: CardInstanceRules,
                     purpose: str, synthetic_capacity: bool, action_config_hash: str,
-                    cuda_visible_devices: str | None = None) -> str:
+                    cuda_visible_devices: str | None = None, _game: bool = False) -> str:
     _action_hash(manifest_digest)
-    context = input_binding_v3(action_contract, rules, purpose, synthetic_capacity)
+    context = (input_binding_game_v3(action_contract, rules) if _game else
+        input_binding_v3(action_contract, rules, purpose, synthetic_capacity))
+    if _game and model.max_positions > 18:
+        raise ContractError("game model capacity exceeds real18")
     if layout is not layout_for_contract(action_contract):
         raise ContractError("policy3 profile/layout mismatch")
     identity = {"execution": execution_binding_v3(model, inference, layout=layout, cuda_visible_devices=cuda_visible_devices),
@@ -289,18 +309,50 @@ def policy_label_v3(model: ModelConfigV3, inference: InferenceBindingV2, manifes
     return f"{model.model_id}-ppo-v3-{manifest_digest}-{digest(identity)}"
 
 
-def safe_options_v3(value: Any, *, action_contract: CardInstanceContract, rules: CardInstanceRules,
-                     purpose: str, synthetic_capacity: bool, action_config_hash: str) -> Json:
+def policy_label_v3(model: ModelConfigV3, inference: InferenceBindingV2, manifest_digest: str, *,
+                    layout: StructuredLayout, action_contract: CardInstanceContract, rules: CardInstanceRules,
+                    purpose: str, synthetic_capacity: bool, action_config_hash: str,
+                    cuda_visible_devices: str | None = None) -> str:
+    return _policy_label_v3(model, inference, manifest_digest, layout=layout, action_contract=action_contract,
+        rules=rules, purpose=purpose, synthetic_capacity=synthetic_capacity, action_config_hash=action_config_hash,
+        cuda_visible_devices=cuda_visible_devices)
+
+
+def policy_label_game_v3(model: ModelConfigV3, inference: InferenceBindingV2, manifest_digest: str, *,
+                         action_contract: CardInstanceContract, rules: CardInstanceRules, action_config_hash: str,
+                         cuda_visible_devices: str | None = None) -> str:
+    return _policy_label_v3(model, inference, manifest_digest, layout=layout_for_contract(action_contract),
+        action_contract=action_contract, rules=rules, purpose="qualified_game", synthetic_capacity=False,
+        action_config_hash=action_config_hash, cuda_visible_devices=cuda_visible_devices, _game=True)
+
+
+def _safe_options_v3(value: Any, *, action_contract: CardInstanceContract, rules: CardInstanceRules,
+                     purpose: str, synthetic_capacity: bool, action_config_hash: str, _game: bool = False) -> Json:
+    context = (input_binding_game_v3(action_contract, rules) if _game else
+        input_binding_v3(action_contract, rules, purpose, synthetic_capacity))
     raw = closed(value, {"version", "checkpoint", "expected_manifest_digest", "model", "inference", "cuda_visible_devices",
-        "action_contract", "rule_signature", "purpose", "synthetic_capacity", "action_config_hash"})
-    check_input_binding_v3({key: raw[key] for key in ("action_contract", "rule_signature", "purpose", "synthetic_capacity")},
-        action_contract=action_contract, rules=rules, purpose=purpose, synthetic_capacity=synthetic_capacity)
+        "action_config_hash"} | set(context))
+    if canonical({key: raw[key] for key in context}) != canonical(context):
+        raise ContractError("safe model3 context mismatch")
     if raw["version"] != "3" or type(raw["checkpoint"]) is not str or not raw["checkpoint"] or raw["action_config_hash"] != _action_hash(action_config_hash):
         raise ContractError("invalid safe model3/action-config binding")
     layout = layout_for_contract(action_contract)
     model = model_config_v3(raw["model"], layout=layout)
     inference = InferenceBindingV2(**closed(raw["inference"], set(asdict(InferenceBindingV2()))))
-    policy_label_v3(model, inference, raw["expected_manifest_digest"], layout=layout, action_contract=action_contract,
+    _policy_label_v3(model, inference, raw["expected_manifest_digest"], layout=layout, action_contract=action_contract,
         rules=rules, purpose=purpose, synthetic_capacity=synthetic_capacity, action_config_hash=action_config_hash,
-        cuda_visible_devices=raw["cuda_visible_devices"])
+        cuda_visible_devices=raw["cuda_visible_devices"], _game=_game)
     return clone(raw)
+
+
+def safe_options_v3(value: Any, *, action_contract: CardInstanceContract, rules: CardInstanceRules,
+                     purpose: str, synthetic_capacity: bool, action_config_hash: str) -> Json:
+    return _safe_options_v3(value, action_contract=action_contract, rules=rules, purpose=purpose,
+        synthetic_capacity=synthetic_capacity, action_config_hash=action_config_hash)
+
+
+def safe_options_game_v3(value: Any, *, actions: ActionConfigV3, rules: CardInstanceRules) -> Json:
+    if type(actions) is not ActionConfigV3 or actions.max_sequence_length > 18:
+        raise ContractError("game options require exact real18 actions3")
+    return _safe_options_v3(value, action_contract=actions.action_contract, rules=rules,
+        purpose="qualified_game", synthetic_capacity=False, action_config_hash=digest(asdict(actions)), _game=True)

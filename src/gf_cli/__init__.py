@@ -226,6 +226,10 @@ async def run_experiment(loaded: LoadedConfig, command: str, *, collection: Coll
             and config.actions.action_contract == corrected_card_instance_contract()):
         if collection is not None or ledger is not None:
             raise ContractError("corrected PPO/Source collection integration is not implemented")
+        from gf_models.structured_binding import ConfiguredNeuralModelV3
+        if any(type(model) is ConfiguredNeuralModelV3 for model in (config.model, config.opponent)):
+            from gf_cli.card_instance import run_inference
+            return await run_inference(loaded, command)
         from gf_cli.card_instance import run_baseline
         return await run_baseline(loaded, command)
     _require_implemented_pipeline(config.actions)

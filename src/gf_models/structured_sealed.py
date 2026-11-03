@@ -22,7 +22,7 @@ from typing import Any, BinaryIO
 import numpy as np
 
 from gf_common.action_contract import ActionContract
-from gf_common.card_instance import CardInstanceContract
+from gf_common.card_instance import ActionConfigV3, CardInstanceContract
 from gf_common.card_instance_rules import CardInstanceRules
 from gf_common.domain import (
     CATALOG_META,
@@ -41,8 +41,10 @@ from gf_common.structured_layout import StructuredLayout, layout_for_contract
 from gf_models.sharded_arrays import MAX_MANIFEST_BYTES, _pairs, validate_bundle_metadata
 from gf_models.structured_binding import (
     check_input_binding,
+    check_input_binding_game_v3,
     check_input_binding_v3,
     input_binding,
+    input_binding_game_v3,
     input_binding_v3,
 )
 from gf_models.structured_config import (
@@ -297,11 +299,19 @@ class _SealedContextV3:
     purpose: str
     synthetic_capacity: bool
     action_config_hash: str
+    game: bool = False
+
+    @property
+    def class_keys(self) -> set[str]:
+        return CLASSIFICATION_V3 | ({"layout_signature"} if self.game else set())
 
     def check(self, raw: Json) -> None:
         checksum(self.action_config_hash)
-        check_input_binding_v3(raw, action_contract=self.action_contract, rules=self.rules,
-            purpose=self.purpose, synthetic_capacity=self.synthetic_capacity)
+        if self.game:
+            check_input_binding_game_v3(raw, action_contract=self.action_contract, rules=self.rules)
+        else:
+            check_input_binding_v3(raw, action_contract=self.action_contract, rules=self.rules,
+                purpose=self.purpose, synthetic_capacity=self.synthetic_capacity)
 
 
 def validate_recorded_semantics_v3(value: Json, model: Any, *, layout: StructuredLayout,
@@ -338,13 +348,20 @@ class SealedArtifact:
 def _inference_metadata(directory: Path, expected_inference_digest: str, action_contract: Any,
                         purpose: str, synthetic_capacity: bool, scan: SealedScan, context: _SealedContextV3 | None = None) -> tuple[Json, Any, Json]:
     checksum(expected_inference_digest)
-    semantic_keys, class_keys = (SEMANTIC_KEYS, CLASSIFICATION) if context is None else (SEMANTIC_KEYS_V3, CLASSIFICATION_V3)
-    schema = 3 if context is None else 4
     if context is None:
         input_binding(action_contract, purpose, synthetic_capacity)
+    elif context.game:
+        input_binding_game_v3(context.action_contract, context.rules)
     else:
         input_binding_v3(context.action_contract, context.rules, purpose, synthetic_capacity)
     inference = scan.object(directory / 'inference.json', expected_inference_digest)
+    return _inference_document(inference, action_contract, purpose, synthetic_capacity, context)
+
+
+def _inference_document(inference: Json, action_contract: Any, purpose: str, synthetic_capacity: bool,
+                        context: _SealedContextV3 | None = None) -> tuple[Json, Any, Json]:
+    semantic_keys, class_keys = (SEMANTIC_KEYS, CLASSIFICATION) if context is None else (SEMANTIC_KEYS_V3, context.class_keys)
+    schema = 3 if context is None else 4
     closed(inference, {'schema_version', 'kind', 'model', 'architecture_identity', 'action_config_hash', 'producer', 'weights'} | semantic_keys | class_keys)
     if context is None:
         check_input_binding({key: inference[key] for key in class_keys}, action_contract=action_contract, purpose=purpose, synthetic_capacity=synthetic_capacity)
@@ -356,6 +373,8 @@ def _inference_metadata(directory: Path, expected_inference_digest: str, action_
         raise ContractError('sealed inference3 required')
     model = (recorded_model_config_v2(inference['model'], inference['token_signature']) if context is None else
              model_config_v3(inference['model'], layout=context.layout))
+    if context is not None and context.game and model.max_positions > 18:
+        raise ContractError("game sealed model capacity exceeds real18")
     options: dict[str, Any] = {} if context is None else {"layout": context.layout}
     _semantics(inference, model, context)
     if inference['architecture_identity'] != recorded_architecture_identity(model, **options):
@@ -372,7 +391,7 @@ def _inference_metadata(directory: Path, expected_inference_digest: str, action_
 
 def _inspect_retained_artifact(directory: Path, *, expected_inference_digest: str, action_contract: Any,
                               purpose: str, synthetic_capacity: bool, scan: SealedScan, context: _SealedContextV3 | None = None) -> SealedArtifact:
-    semantic_keys, class_keys = (SEMANTIC_KEYS, CLASSIFICATION) if context is None else (SEMANTIC_KEYS_V3, CLASSIFICATION_V3)
+    semantic_keys, class_keys = (SEMANTIC_KEYS, CLASSIFICATION) if context is None else (SEMANTIC_KEYS_V3, context.class_keys)
     schema = 3 if context is None else 4
     inference, model, expected_weights = _inference_metadata(directory, expected_inference_digest, action_contract,
                                                             purpose, synthetic_capacity, scan, context)
@@ -497,3 +516,30 @@ def inspect_retained_artifact_v3(directory: Path, *, expected_inference_digest: 
         raise ContractError("recorded format4 profile/layout mismatch")
     return _inspect_retained_artifact(directory, expected_inference_digest=expected_inference_digest,
         action_contract=action_contract, purpose=purpose, synthetic_capacity=synthetic_capacity, scan=scan, context=context)
+
+
+def validate_game_inference_metadata(inference: Json, *, actions: ActionConfigV3,
+                                      rules: CardInstanceRules) -> Any:
+    """Recorded-only format4 game declaration, without files/Torch/runtime queries."""
+    from dataclasses import asdict
+
+    from gf_common.domain import digest
+    context = _SealedContextV3(layout_for_contract(actions.action_contract), actions.action_contract,
+        rules, "qualified_game", False, digest(asdict(actions)), True)
+    input_binding_game_v3(actions.action_contract, rules)
+    if actions.max_sequence_length > 18:
+        raise ContractError("game sealed actions exceed real18")
+    _, model, _ = _inference_document(inference, actions.action_contract, "qualified_game", False, context)
+    return model
+
+
+def inspect_retained_game_inference_v3(directory: Path, *, expected_inference_digest: str,
+                                        actions: ActionConfigV3, rules: CardInstanceRules,
+                                        scan: SealedScan) -> SealedArtifact:
+    """Own just inference and its referenced shards; a resume is not required."""
+    inference = scan.object(directory / "inference.json", expected_inference_digest)
+    validate_game_inference_metadata(inference, actions=actions, rules=rules)
+    scan.bundle(directory, inference["weights"])
+    files = {"inference.json": expected_inference_digest, **inference["weights"]["files"]}
+    scan.finalize()
+    return SealedArtifact(inference, None, files, True)

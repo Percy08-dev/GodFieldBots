@@ -11,9 +11,18 @@ from pathlib import Path
 from gf_common.card_instance import ActionConfigV3
 from gf_common.card_instance_rules import card_instance_rules, rule_signature
 from gf_common.card_instance_runtime import game_binding, validate_runtime_receipt
-from gf_common.domain import ContractError, Json, canonical, digest
+from gf_common.domain import (
+    ContractError,
+    Json,
+    RuntimePolicyBinding,
+    canonical,
+    clone,
+    closed,
+    digest,
+)
 from gf_common.structured_layout import CORRECTED_CARD_INSTANCE_LAYOUT
 from gf_common.structured_tokens import signature
+from gf_models.card_instance_artifacts import EXTERNAL_INPUT_CONTRACT, validate_neural_metadata
 
 
 def collection_metadata(
@@ -25,6 +34,8 @@ def collection_metadata(
     inventory: list[Json],
     policies: list[str],
     bots_revision: str,
+    policy_bindings: dict[str, RuntimePolicyBinding] | None = None,
+    neural_inputs: Json | None = None,
 ) -> Json:
     binding = game_binding(
         actions.action_contract, rule_signature(actions.action_contract, card_instance_rules())
@@ -34,7 +45,36 @@ def collection_metadata(
     receipts = [
         validate_runtime_receipt(value, require_executed=True) for value in runtime_evidence
     ]
-    if not policies or any(
+    neural_fields: Json = {}
+    if (policy_bindings is None) != (neural_inputs is None):
+        raise ContractError("neural collection requires both policy bindings and retained inputs")
+    if neural_inputs is not None:
+        assert policy_bindings is not None
+        closed(neural_inputs, {"input_contract", "policies"})
+        if neural_inputs["input_contract"] != EXTERNAL_INPUT_CONTRACT or not isinstance(neural_inputs["policies"], dict) or not neural_inputs["policies"]:
+            raise ContractError("collection requires sealed retained external neural inputs")
+        if set(policy_bindings) != set(policies):
+            raise ContractError("collection policy registry differs from declared policy labels")
+        expected_neural = set()
+        for label, execution in policy_bindings.items():
+            if type(execution) is not RuntimePolicyBinding:
+                raise ContractError("closed runtime policy binding required")
+            if execution.policy_options is None:
+                if execution.model_id not in ("random", "heuristic") or label != execution.model_id + "-card-instance-v2":
+                    raise ContractError("collection baseline binding mismatch")
+            else:
+                expected_neural.add(label)
+                raw = neural_inputs["policies"].get(label)
+                if type(raw) is not dict:
+                    raise ContractError("missing sealed neural policy metadata")
+                safe, expected = validate_neural_metadata(raw, actions=actions, rules=card_instance_rules())
+                if expected != label or canonical(safe) != canonical(execution.policy_options) or safe["model"]["model_id"] != execution.model_id:
+                    raise ContractError("collection sealed neural policy mismatch")
+        if set(neural_inputs["policies"]) != expected_neural:
+            raise ContractError("collection external input inventory differs from neural registry")
+        neural_fields = {"policy_bindings": {label: asdict(value) for label, value in policy_bindings.items()},
+            "neural_inputs": clone(neural_inputs)}
+    elif not policies or any(
         value not in ("random-card-instance-v2", "heuristic-card-instance-v2") for value in policies
     ):
         raise ContractError("collection5 supports corrected baselines only")
@@ -54,10 +94,11 @@ def collection_metadata(
         "derived_schema_version": 6,
         "participant_protocol_version": 3,
         "candidate_codec": "candidate-columns-v2",
-        "model_version": "1",
+        "model_version": "3" if neural_fields else "1",
         "input_recipe": CORRECTED_CARD_INSTANCE_LAYOUT.input_recipe,
         "token_signature": signature(128, layout=CORRECTED_CARD_INSTANCE_LAYOUT),
         "source_eligibility": "not-authorized-by-collection-metadata",
+        **neural_fields,
     }
 
 

@@ -100,7 +100,7 @@ def test_model3_reference_partial_override_and_run_guard_stays_closed(tmp_path):
         loaded.config.model.model_id == "gru"
         and loaded.config.model.heads.actor_hidden_sizes == (32, 16)
     )
-    with pytest.raises(ContractError, match="canonical Random/Heuristic only"):
+    with pytest.raises(ContractError, match="explicit game checkpoint"):
         asyncio.run(gf_cli.run_experiment(loaded, "collect"))
     assert not (tmp_path / "forbidden").exists()
 

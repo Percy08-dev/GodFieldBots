@@ -1,0 +1,29 @@
+# Fresh inference-only game artifact; no PPO parent or Source qualification.
+schema_version = 1
+kind = "experiment"
+
+[references]
+actions = "../actions/card-instance-v2-corrected.toml"
+model = "../models/card-instance-gru.toml"
+opponent = "../models/random.toml"
+
+[model]
+checkpoint = "../../runs/card-instance-v2-91d5926/initial-inference-v3/gru"
+
+[run]
+name = "card-instance-v2-gru-inference"
+output_dir = "../../runs/card-instance-v2-91d5926/inference-smokes"
+seeds = ["00000000-0000-0000-0000-000000000001"]
+sampling_seeds = [17]
+
+[server]
+gameplay_api = "v2"
+simulator_revision = "91d5926a7572db327eaea3751e7c24f428120996"
+source_dir = "../../../GodFieldSimurator"
+binary = "../../../GodFieldSimurator/target/release/gf-test-server"
+config = "../test-server.toml"
+fixed_seed_experiment = true
+
+[training]
+algorithm = "ppo"
+device = "cuda:0"

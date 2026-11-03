@@ -655,3 +655,54 @@ No learning strength or qualified Source is inferred. §15neural game inference,
 §16Source/numeric/learner/PPO, native-v2, Tree/fixed Dataset3, performance and final
 combined whole-project/package acceptance remain required. Formal multiple-seed
 training/HPO/final-test remain excluded as requested.
+
+## Neural game inference accepted — 2026-11-04
+
+ADR0024§15 implementation passes independent correctness and conformance.
+CPU child visibility is now checked against canonical execution before any
+factory/Torch import; malformed None/nonempty CPU visibility refuses. Focused
+CPU540PASS/44deselected and actual HOST CUDA43PASS/114deselected cover shared
+game policies/artifacts, three actual NN workers, old component numerics and
+resource/ownership checks. The visibility recheck adds14CPU/3actual CUDA worker
+PASS. Full mypy135source files, affected Ruff and diff checks PASS. Independent
+correctness has105CPU plus11targeted PASS, and conformance82PASS/12deselected
+(overlapping subsets); neither claims its skipped GPU cases executed.
+
+Fresh seed17 initial game-purpose weights are created for MLP/GRU/Transformer;
+no old weights are transferred. Real CPU/CUDA inference for all three models
+completes two natural games per condition,12total, zero failures,552decisions.
+These use default attention and the same per-model artifact across CPU/CUDA.
+They are inference-only initial policies, not PPO updates/resume, formal parents,
+qualified Sources or model-strength results. All135source hashes stay frozen
+through artifact creation and six-condition execution.
+
+Independent audit rereads all24J6s/own public Replays:282NNdecisions have finite
+logprob/value,270baseline decisions retain None, all12outcomes/rewards/health,
+actual devices, sealed labels/window/caps and retained-original manifest/shard
+hash/stat identities agree. The full corrected audit completes in3.562s. Its
+initial erroneous expectation that neural_inputs included baseline records is
+retained separately; the corrected audit uses NN-only retained inputs plus the
+complete policy_bindings role map without changing production/run data.
+
+Wheel SHA `b6d6af071d75e8a5ee54e6370fbf8eac8ffcb83b7cf700e74a855d640e55cff1`
+matches all135current and installed Python modules; source inventory SHA is
+`ee5ae6bbf6ccdca7559f8f405bf90894b4494ebf96c08c0da567fb45fce16432`.
+Mandatory-only installed Random/Heuristic protocol3 checks pass with optional
+Torch/LightGBM/PyArrow/native absent. NN itself is not loaded in that environment.
+Actual runs use matching source bytes; they do not claim an installed wheel SHA
+or no-process guarantee outside the observed OS namespace.
+
+Assessment directory: `runs/assessments/card-instance-neural-inference-20261104`.
+Primary receipts are `implementation-and-checks.json` (SHA
+`4d30ba7435950edcb394013b947ec6afb9e4fd372c5a963b7f09685238afe8d2`),
+`visibility-fix-checks.json`, `initial-artifacts.json`,
+`real-six-inference-smokes.json`, `neural-inference-acceptance-audit-corrected.json`
+and `wheel/receipt.json`. The current legacy/component2 coordinator trace still
+matches the immutable pre-edit reference exactly, SHA586d3c55…f4669d, no masked
+fields or Torch execution. Historical fixture/archive bytes remain preserved.
+
+Root accepts §15 inference-only scope. §16Source/numeric4/wire4/registry3/shared
+PPO and its bounded design addendum are independently READY but implementation/
+real training/resume remain pending. §17native design is READY, gated on stable
+§16Python interfaces. Tree/fixed Dataset3, performance, original-data/native
+proofs and final combined whole-project/package acceptance remain pending.
