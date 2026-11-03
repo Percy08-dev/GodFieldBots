@@ -445,3 +445,213 @@ Hardware check limitation resolved: default sandbox cannot access GPU, but HOST
 Torch2.14.1+cu132 reports CUDA available/device1 and nvidia-smi identifies RTX5070Ti
 with16303MiBtotal VRAM (12749MiBfree at capture). Preserve12GiBmanaged budget;
 this availability check is not CUDA numerical/performance acceptance.
+
+## Model3 component and corrected baseline integration — 2026-11-04
+
+ADR0024§13 shared-layout neural kernels, standalone component policy and
+inference/resume4 implementations pass both independent reviews. The CPU matrix
+has434PASS/27CUDA skips; separate HOST execution of
+`GF_RUN_CUDA=1 .venv/bin/pytest -q tests/test_model3_network.py tests/test_model3_artifacts.py -k cuda`
+has27PASS across hand3×model3 numeric/gradient/cache, empty-input and full
+Adam/RNG resume cases. The wrong destination shuffle-RNG regression now rejects
+before network binding, optimizer or RNG mutation; independent targeted review
+is READY. These are component checks, not real PPO or model-strength acceptance.
+
+Nine pre-Model3 model2 initializer/state/RNG goldens were independently reproduced
+from committed code; all match. The fixture SHA is
+`0c7ea418f1e624584397dd250befc8f5a65c71dabdd280b8e89950d7e97ab4e9`.
+All14pre-Model3 experiment Config hashes are retained in the assessment receipt
+`pre-model3-configs.json`, SHA
+`44674705ab4a29a36d6169890d89dc3bf9358facc90d735207339546fb169e9e`.
+
+ADR0024§14 corrected baseline protocol3, codec2, journal6, runtime execution
+attestation and collection5 implementations pass both independent reviews.
+The raw HTTP atomic-hint viewer binding and late publication-close fault findings
+were fixed and re-reviewed. Independent correctness has136targeted PASS;
+conformance has157PASS. The healthy two-game real-server smoke has4original
+journals,44accepted Actions, matching original commands/Replay closures and
+all59inventory hashes. Its run is
+`runs/card-instance-v2-91d5926/card-instance-v2-91d5926-contract-c6983ca8-9ff8-42e8-acbe-5ac34222e34f`.
+The first zero-decision smoke failure remains retained separately.
+
+The first exact fixed192-game pilot FAILS: all192planned games are recorded,
+180natural and12incomplete (11rejections,1contract failure),84complete pairs,
+285.229s. Config SHA is
+`98ce96a3fd39e07c37d511620eea9b947b88dce8164f34921d1c05761582f3e6`;
+all134Python source hashes remain unchanged throughout the run. Group/process
+health failures are empty, but comparison_valid and healthy are false. The run
+publishes only incomplete diagnostics, not healthy final report/manifest names.
+The entire population remains ineligible, without replacement seeds or inferred
+legality rules. The retained run is
+`runs/card-instance-v2-91d5926/pilot/card-instance-v2-91d5926-pilot-c711832a-8a3c-44de-b672-4c6bac4a0426`;
+assessment receipts are `pilot-conditions.json` and `pilot-result-1.json` under
+`runs/assessments/card-instance-corrected-adoption-20261104`.
+
+The independent public-rule audit confirms a Bots omission of the already
+authorized normal Discard exclusions in ADR0005/ADR0023. The shared V3 fix
+restores those exclusions only for artifacts outside EndTimes, preserves all
+miracles, uses perceived IDs and applies to both card-instance profiles. Eight
+new exact-subset cells cover both profiles/phases/Dream views; implementer225
+and independent165affected tests PASS. Config/token/rule signatures are unchanged
+by that rule-conformance fix; the failed population is not rewritten.
+
+The event diagnostic is also a Bots input omission. The failed delta is absent
+from J6 because validation precedes append. All persisted J6 definition IDs are
+known catalog cards. Separate public Player Replay DTOs show guardian_set and
+guardian_left events with definition_id="earth", a public Guardian identity
+outside the card296namespace. Replay diagnoses the failure only and is never
+used to rebuild the missing original prefix or infer candidate legality.
+Validator-only relaxation is insufficient: interval categories and exact history
+counts also assume card IDs. ADR0024§14.1 therefore requires architecture review
+of the corrected layout repair, new input signature/derived widths and explicit
+historical91receipt handling. Prior Model3 numerical results above describe the
+preceding layout and must be rerun for the repaired input. Simulator revision,
+catalog and public rules remain unchanged. No further Simulator fix is indicated.
+
+Full-suite/package/new native/Source/PPO/Tree and final acceptance remain pending.
+
+## Repaired Guardian input — 2026-11-04
+
+ADR0024§14.1 design and both independent implementation reviews are READY.
+Root accepts the corrected-only namespace/input repair and the historical91
+fail-closed disposition. The old07e and engineering/legacy layouts, original
+fixtures and configuration identities remain unchanged. The normalDiscard
+correction above also passes its independent review.
+
+Current corrected fixed128 token/layout signature is
+`ed0c61152b78fa984aad342be22c6b9d6ef49b12b8f0d1c0f0de89724468002f`.
+The earlier72db… signature remains historical and cannot load into the repaired
+runtime. Current event/history/default-frame widths are405/387/611; actor width
+remains1432. The event306-ID vocabulary preserves all296card indices and appends
+ten public Guardian IDs; exact history and interval tokens retain those IDs.
+Protocol3 and Journal6 require the new layout signature before acceptance.
+Default Model3 architecture identity is
+`cc49eff39f3dd3dd93dce396ec4353fa72a05efaa2dc22000680c3502d65e5c8`.
+
+The repaired-input CPU suite/full Model3 matrix has803PASS/32deselected.
+Actual HOST `GF_RUN_CUDA=1` network/artifact selection has31PASS/65deselected,
+including the original27matrix cases and4invalid-shuffle-RNG guards. Guardian
+set/acted/left events are included in numerical inputs. Independent correctness
+has286CPU PASS/31CUDA-skipped; conformance has331PASS plus8targeted artifact/
+signature PASS (overlapping counts). Both reviews report no remaining findings.
+Whole Ruff, mypy134source files and diff checks PASS. Whole HOST pytest and
+source-matched/optional-free wheel checks are running; no completed result is
+claimed yet. The complete same-condition192pilot has not yet been rerun.
+
+Exact commands, source hashes, all nine model identities/resource estimates and
+logs are under `runs/assessments/card-instance-guardian-repair-20261104`.
+Receipt `after-layout-and-checks.json` SHA is
+`74a9d28b6fa3a231c0aea1a5747f410e8e7506516feb488f0981170a51a1a66e`.
+The original public diagnostic is separately retained as
+`guardian-event-diagnostic-1.json` in the corrected-adoption assessment directory.
+No original journal/prefix/artifact was repaired or relabelled.
+
+ADR0024§15 neural game-inference design is independently READY; implementation,
+real NN smoke, Source/learner/coordinator/native/Tree and full requested acceptance
+remain pending. §16 qualified Python Source/numeric/PPO design is in review.
+
+Follow-up whole-project checks PASS: HOST `.venv/bin/pytest -q` completes
+2554PASS/140SKIPPED in1400.08s. Skipped tests are not counted as executed; the
+separate31actual CUDA cases above cover the changed numerical/artifact scope.
+The log is `whole-host-pytest.log` in the Guardian-repair assessment directory.
+
+Fresh offline Python wheel SHA is
+`757f377fe6b48925b2558266aeb6caf56334f14ec4ae119f64834553d889cb5a`.
+All134Python modules are byte-identical to current source, with source inventory
+SHA `7f9c5871247fb7547ed4fd66fad866457b7ad2e134c2fbac3ea6da7adeaaa1d6`.
+The mandatory-only Python3.14.10 environment imports all exercised package/
+NumPy/baseline/bootstrap modules from its installed site-packages, with optional
+Torch/torchvision/LightGBM/PyArrow/native absent. Corrected protocol3 Random and
+Heuristic workers both select from277game-context candidates with Guardian
+events/observations and reap with all reservations released. This is synthetic
+component packaging/worker evidence, not a Simulator or Source qualification.
+Receipts are `wheel/receipt.json`, `protocol3_installed_smoke.json` and
+`verification.json` in the same assessment directory. UV's default cache and
+pip-unavailable attempts are retained; the offline temporary-cache/local-wheel
+fallback succeeds without adding dependencies or changing the active environment.
+
+The second complete192pilot is now running under `pilot-conditions-2.json`,
+with exactly the preceding effective Config SHA,32GameSeeds,17/29/43sampling,
+seat swaps and7200/5400/7140s caps. All134source hashes are frozen and rechecked
+before launch. A result is pending. §16 design is now independently READY;
+dependent implementations remain pending.
+
+## Guardian action identity correction — 2026-11-04
+
+The second full unchanged192pilot FAILS with191natural/1incomplete and zero
+rejections,298.246s, no group/process health failures. All134source files remain
+unchanged during that run. Result: `pilot-result-2.json` in the Guardian-repair
+assessment directory; the whole population remains preserved/ineligible.
+
+The remaining failure is introduced by the first repair's overly narrow
+GuardianActed namespace. Its public Replays show guardian_acted with card
+definition_id=seafood-soup, linked by the pinned catalog to guardian.id=neptune.
+The corrected validator now distinguishes Set/Left Guardian IDs from Acted's
+generic catalog-definition IDs, preserving all306indices, raw strings, dimensions
+and signatures. All42Guardian-kind action definitions and representative other
+catalog IDs are covered;54nestedGuardian references include other definition
+kinds and are not that action-kind count. No candidate rule changes, source
+promotion or reconstructed missing history are involved.
+
+ADR0024§14.2 design and both independent implementation reviews are READY.
+Current affected CPU/full Model3 matrix:551PASS/31deselected. Actual HOST CUDA
+matrix:31PASS/65deselected. Independent correctness:260PASS/18CUDA-skipped;
+conformance:173PASS (overlapping counts). Ruff/mypy/diff checks PASS.
+Receipt `after-provenance-and-checks.json` SHA is
+`34a176d685d496c23fd0d0b27f9b697e5126ce0cb8dabde2bb72c065f424582a`
+under `runs/assessments/card-instance-guardian-action-repair-20261104`.
+Only structured.py changes among the134production files; all204preceding
+Guardian-repair/coordinator-reference evidence files retain their exact bytes.
+The preceding2554whole-test/wheel results remain preceding-validator evidence;
+the final complete code still requires whole-project/package acceptance.
+
+The pre-edit legacy/component2 coordinator semantic reference is also frozen:
+two inert updates per path, exact control/update/schedule/label/identity/RNG
+outputs, no numerical learner/Simulator/Source qualification. Independent archived
+replay imports66saved repository modules without current-code fallback and
+matches the reference byte-for-byte. Reference SHA is
+`586d3c55a4f426450655e84ef15f6be91b853f4021072deecc71a607d8f4669d`;
+receipt `baseline-evidence.json` is under
+`runs/assessments/card-instance-ppo-preedit-20261104`.
+
+## Corrected baseline provisional feasibility accepted — 2026-11-04
+
+Third full same-condition192pilot PASS:192natural/96complete pairs, zero failures,
+empty episode/group health errors,297.091s,3244accepted decisions. Run:
+`runs/card-instance-v2-91d5926/pilot/card-instance-v2-91d5926-pilot-dc641b06-42f0-43e9-bceb-1bebacf3a38c`.
+Config SHA remains98ce96a3…182f3e6; all134source bytes remain frozen throughout.
+Current input ed0c6115…68002f and rule3f55f044…b3e86d remain unchanged.
+
+Independent read-only audit rereads all384J6s and matches all384own accepted-action
+streams to their public Player Replays, all192outcomes/rewards/empty health and
+32runtime groups. All4492inventory entries/273062500bytes match hashes/sizes;
+192opaque server files are hashed only, never parsed as policy input. The full
+192schedule exactly matches existing schedule()/serialize_schedule(...,4),
+including17/29/43base sampling streams and seat reversal. All384rereads complete
+in88.877s. The initial audit's false hard-coded seed expectation is preserved as
+a FAIL receipt; the separately corrected audit passes without changing run data.
+Current HOST process scan also finds no target run server or protocol3 worker.
+
+Current wheel SHA:
+`246a263256f7deb38bb28f0e4992d3b74cf6853c2c8ab492f5e78feaa144d215`.
+All134wheel and installed Python modules match the current source, inventory SHA
+`ed7d6f0e56a5f0315c41fb7c2dea6bedd9413e24b667f22a3e131c903e48b78d`.
+Mandatory-only installed Random/Heuristic protocol3 selection with actual catalog
+GuardianActed ID and reservation/reap checks passes. The pilot ran matching source
+bytes; its manifest itself does not claim a wheel SHA or per-worker PID receipts.
+Those limits and OS-namespace limits are explicit in the audit. Separate installed
+checks establish packaging behavior, not that the actual pilot imported a wheel.
+
+Receipts `pilot-result-3.json`, `pilot3-acceptance-audit-corrected.json`,
+`wheel/receipt.json`, `verification.json` and `old-payload-integrity.json` are in
+`runs/assessments/card-instance-guardian-action-repair-20261104`.
+All37historical fixture payloads exactly match Git and24protected fit files match
+their original receipts. Only the test-created, unlocked empty fixture lock was
+removed after reaping; no historical payload or failed population was rewritten.
+
+Root accepts ADR0024§13component models/artifacts and§14–14.2baseline provisional
+feasibility. Source eligibility remains not-authorized-by-collection-metadata.
+No learning strength or qualified Source is inferred. §15neural game inference,
+§16Source/numeric/learner/PPO, native-v2, Tree/fixed Dataset3, performance and final
+combined whole-project/package acceptance remain required. Formal multiple-seed
+training/HPO/final-test remain excluded as requested.

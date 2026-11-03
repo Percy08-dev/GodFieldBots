@@ -336,7 +336,9 @@ CARD_INSTANCE_LAYOUT = StructuredLayout(
 
 _CORRECTED_CONTRACT = corrected_card_instance_contract()
 CORRECTED_CARD_INSTANCE_LAYOUT = replace(CARD_INSTANCE_LAYOUT,
-    action_contract=_CORRECTED_CONTRACT, simulator_revision=_CORRECTED_CONTRACT.simulator_revision)
+    action_contract=_CORRECTED_CONTRACT, simulator_revision=_CORRECTED_CONTRACT.simulator_revision,
+    event_categories=(_EVENT_TYPES, vocab.DEFINITIONS + vocab.GUARDIANS, *EVENT_CATEGORIES[2:]),
+    history_width=CARD_INSTANCE_LAYOUT.history_width + len(vocab.GUARDIANS))
 
 
 def require_layout(layout: StructuredLayout) -> StructuredLayout:

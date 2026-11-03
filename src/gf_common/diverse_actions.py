@@ -16,7 +16,12 @@ from dataclasses import asdict, dataclass, field
 from typing import Any
 
 from gf_common.action_contract import PENDING_COVERAGE, ActionContract, validate_game_references
-from gf_common.card_instance import GENERATOR_VERSION, ActionConfigV3, CardInstanceContract
+from gf_common.card_instance import (
+    GENERATOR_VERSION,
+    ActionConfigV3,
+    CardInstanceContract,
+    corrected_card_instance_contract,
+)
 from gf_common.card_instance_rules import (
     UTILITY_IDS,
     CardInstanceRules,
@@ -327,11 +332,23 @@ class GeneratedCandidatesV3:
         _validate_generated(self.table, self.report, SearchReportV3)
 
 
+@dataclass(frozen=True)
+class GameGeneratedCandidatesV3:
+    """Corrected game-use context, never evidence of Source eligibility."""
+    table: CandidateTable
+    report: SearchReportV3
+
+    def __post_init__(self) -> None:
+        if type(self.table) is not CandidateTable or self.table.action_contract != corrected_card_instance_contract():
+            raise ContractError("game candidates require the corrected contract")
+        _validate_generated(self.table, self.report, SearchReportV3, purpose="qualified_game")
+
+
 def _validate_generated(table: CandidateTable, report: _SearchReportFields,
-                        report_type: type[_SearchReportFields]) -> None:
+                        report_type: type[_SearchReportFields], *, purpose: str = "component") -> None:
     if (type(table) is not CandidateTable or type(report) is not report_type
             or table.table_hash != report.table_hash
-            or table.action_contract != report.action_contract or table.purpose != "component"
+            or table.action_contract != report.action_contract or table.purpose != purpose
             or table.synthetic_capacity
             or len(table.kinds) != report.selected
             or len(table.slots) != report.selected_elements):
@@ -622,7 +639,11 @@ class _CardInstanceSpace:
             card.subclass == "status" or card.ability == "cutCost")]
         self.defense = [card.slot for card in self.cards if card.slot in self.usable and (
             defense_kind(card) is not None or card.ability == "cutCost")]
-        self.discard = [card.slot for card in self.cards if card.miracle or card.definition["kind"] != "weapons"]
+        # ADR0005's protected-artifact rule applies only to normal Discard;
+        # the owner-confirmed permission for every miracle remains independent.
+        self.discard = [card.slot for card in self.cards if card.miracle or (
+            card.definition["kind"] != "weapons" and (self.obs["end_times"]
+                or card.definition["definition_id"] not in ("sun-amulet", "dangerous-mortar")))]
         self.total = sum(self.obs["own"][name] for name in ("hp", "mp", "money"))
         self.maximum = min(config.max_sequence_length, len(self.cards), 18)
 
@@ -1248,7 +1269,8 @@ def _select(collector: _Collector, rng: random.Random) -> tuple[list[_Proposal],
     return selected, tuple(counts)
 
 
-def _table(frame: DecisionFrame, proposals: list[_Proposal], collector: _Collector) -> CandidateTable:
+def _table(frame: DecisionFrame, proposals: list[_Proposal], collector: _Collector, *,
+           purpose: str = "component") -> CandidateTable:
     offsets = [0]
     slots: list[int] = []
     for index, proposal in enumerate(proposals):
@@ -1266,8 +1288,8 @@ def _table(frame: DecisionFrame, proposals: list[_Proposal], collector: _Collect
                "presence": tuple(proposal.presence for proposal in proposals),
                "offsets": tuple(offsets), "slots": tuple(slots)}
     contract = collector.space.config.action_contract
-    table = CandidateTable(**content, action_contract=contract, purpose="component", synthetic_capacity=False,
-                           table_hash=digest({**content, "action_contract": asdict(contract), "purpose": "component",
+    table = CandidateTable(**content, action_contract=contract, purpose=purpose, synthetic_capacity=False,
+                           table_hash=digest({**content, "action_contract": asdict(contract), "purpose": purpose,
                                               "synthetic_capacity": False}))
     return table
 
@@ -1305,9 +1327,21 @@ class PublicCandidateGeneratorV3:
         return _run_search(lambda: _CardInstanceSpace(frame, self.config, self.rules), frame, bank_view,
                            search_rng, numeric_costs, self.clock)
 
+    def generate_game(self, frame: DecisionFrame, bank_view: EventBankView,
+                      search_rng: random.Random, numeric_costs: NumericCosts) -> GameGeneratedCandidatesV3:
+        if self.config.action_contract != corrected_card_instance_contract():
+            raise ContractError("game generation requires the corrected contract")
+        expected = layout_for_contract(self.config.action_contract)
+        if frame.layout is not expected or bank_view.layout is not expected:
+            raise ContractError("game generator frame/bank profile mismatch")
+        if type(search_rng) is not random.Random or type(numeric_costs) is not NumericCosts:
+            raise ContractError("independent Random and closed NumericCosts required")
+        return _run_search(lambda: _CardInstanceSpace(frame, self.config, self.rules), frame, bank_view,
+                           search_rng, numeric_costs, self.clock, game=True)
+
 
 def _run_search(space_factory: Callable[[], _Space | _CardInstanceSpace], frame: DecisionFrame, bank_view: EventBankView,
-                search_rng: random.Random, numeric_costs: NumericCosts, clock: Callable[[], float]) -> Any:
+                search_rng: random.Random, numeric_costs: NumericCosts, clock: Callable[[], float], *, game: bool = False) -> Any:
     count_started = clock()
     frame.bank_view(bank_view)  # same participant/episode, no future events.
     space = space_factory()
@@ -1386,7 +1420,7 @@ def _run_search(space_factory: Callable[[], _Space | _CardInstanceSpace], frame:
     if not estimate_costs(numeric_costs, len(selected), selected_elements, space.config.max_sequence_length,
                           len(collector.proposals), collector.elements, _prefix_capacity(space)).fits(numeric_costs):
         raise ContractError("selected table exceeds supplied numeric cost envelope")
-    table = _table(frame, selected, collector)
+    table = _table(frame, selected, collector, purpose="qualified_game" if game else "component")
     selected_elements = len(table.slots)
     channel_counts = tuple(sum(collector.assigned.get(proposal) == index for proposal in selected) for index in range(7))
     finished = clock()
@@ -1399,4 +1433,8 @@ def _run_search(space_factory: Callable[[], _Space | _CardInstanceSpace], frame:
         OMISSIONS if type(space.config) is ActionConfigV2 else OMISSIONS_V3, rng_before, search_rng.getstate(),
         (search_started - count_started) * 1000, (selection_started - search_started) * 1000,
         (finished - selection_started) * 1000)
+    if game:
+        assert isinstance(space, _CardInstanceSpace)
+        return GameGeneratedCandidatesV3(table, SearchReportV3(*fields, action_contract=space.config.action_contract,
+                                                              rule_signature=space.rule_signature))
     return space.generated(table, fields)

@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from gf_common.action_contract import require_qualified_contract
+from gf_common.card_instance import ActionConfigV3
 from gf_common.domain import (
     ActionConfig,
     CandidateSet,
@@ -60,7 +61,7 @@ class EnvironmentSettings:
     server_config: str
     output_dir: Path
     run_id: str
-    actions: ActionConfig | ActionConfigV2
+    actions: ActionConfig | ActionConfigV2 | ActionConfigV3
     fixed_seed_experiment: bool = True
     expected_fingerprint: str | None = None
     external_url: str | None = None
@@ -163,6 +164,25 @@ class SimulatorEnvironment:
     async def _ready_actors(self, workers: dict[int, ParticipantWorker], result: EpisodeResult) -> None:
         return
 
+    def _decision_input(self, obs: Json, events: list[Json], cursor: str | None,
+                        definitions: Json, options: Json | None) -> DecisionInput:
+        return decision_input(obs, events, cursor, definitions, options)
+
+    def _reconcile_replay(self, replay: Json, viewer: int, accepted: list[Json], outcome: Any) -> None:
+        reconcile_replay(replay, viewer, accepted, outcome)
+
+    def _replay_closure(self, replay: Json, game: str, viewer: int) -> Json | None:
+        return replay_closure(replay, game, viewer)
+
+    def _server_started(self, server: ManagedServer) -> None:
+        """Version-specific code evidence fence, before any Gameplay Create."""
+
+    def _server_stopped(self, server: ManagedServer, health: Json) -> None:
+        """Version-specific final evidence fence, before group health returns."""
+
+    def _finish_journal(self, journal: Journal, result: EpisodeResult, final: Json | None) -> None:
+        journal.finish(result.end_kind, result.outcome, final, result.simulator_abort_reason)
+
     async def _select_and_journal(self, value: DecisionInput, worker: ParticipantWorker, journal: Journal,
                                   context: Any, selection_started: float, result: EpisodeResult) -> _DecisionReceipt:
         candidates, selected = await worker.select(value)
@@ -231,7 +251,7 @@ class SimulatorEnvironment:
                     histories[actor].extend(events)
                     options = await client.actor_options(game, actor, obs) if self.settings.actions.use_action_options else None
                     input_started = time.monotonic() if self._include_input_time else None
-                    value = decision_input(obs, histories[actor], cursors[actor], definitions, options)
+                    value = self._decision_input(obs, histories[actor], cursors[actor], definitions, options)
                     selection_started = time.monotonic() if input_started is None else input_started
                     receipt = await self._select_and_journal(value, workers[actor], journals[actor], contexts[actor], selection_started, result)
                     payload, index = receipt.command, receipt.index
@@ -332,8 +352,8 @@ class SimulatorEnvironment:
                         if time.monotonic() >= min(self.settings.replay_deadline, min(self.settings.wall_deadline, self.settings.work_deadline)):
                             raise TimeoutError("replay persistence deadline")
                         _save(directory / f"replay-player-{viewer}.json", replay)
-                        reconcile_replay(replay, viewer, accepted[viewer], result.outcome)
-                        closures.append(replay_closure(replay, game, viewer))
+                        self._reconcile_replay(replay, viewer, accepted[viewer], result.outcome)
+                        closures.append(self._replay_closure(replay, game, viewer))
                     if closures[0] != closures[1]:
                         raise ContractError("participant replay closure identities disagree")
                     closure = closures[0]
@@ -356,7 +376,7 @@ class SimulatorEnvironment:
                         journal.close_incomplete()
                         result.health["save_failure"] = "no terminal observation or journal finalization budget"
                     else:
-                        journal.finish(result.end_kind, result.outcome, final.get(viewer), result.simulator_abort_reason)
+                        self._finish_journal(journal, result, final.get(viewer))
                         if remaining() <= 0:
                             result.health["budget_overrun"] = "journal persistence exceeded wall deadline"
                 except (OSError, ValueError, RuntimeError) as exc:
@@ -412,6 +432,7 @@ class SimulatorEnvironment:
                                        cleanup_deadline=min(self.settings.wall_deadline, self.settings.work_deadline))
                 async with asyncio.timeout_at(self.settings.execution_deadline):
                     startup = await server.start()
+                self._server_started(server)
                 health["startup"] = startup
                 url = startup["base_url"]
                 expected = server.expected
@@ -453,6 +474,12 @@ class SimulatorEnvironment:
                     if health["process"]["exit_code"] != 0 or health["process"]["shutdown"] != "stdin_eof" or health["process"]["log_error"]:
                         for episode in results:
                             episode.health["process_failure"] = str(health["process"])
+                    try:
+                        self._server_stopped(server, health)
+                    except (OSError, ValueError, RuntimeError, TimeoutError) as exc:
+                        health["runtime_evidence_failure"] = str(exc)
+                        for episode in results:
+                            episode.health["runtime_evidence_failure"] = str(exc)
                 if time.monotonic() > min(self.settings.wall_deadline, self.settings.work_deadline):
                     health["budget_overrun_seconds"] = time.monotonic() - min(self.settings.wall_deadline, self.settings.work_deadline)
                     for episode in results:

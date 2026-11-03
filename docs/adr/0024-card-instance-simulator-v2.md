@@ -753,12 +753,15 @@ contract conformance, not192pilot or qualified Source. Both final correctness an
 architecture-conformance reviews, relevant tests/Ruff/mypy and package baseline
 checks precede root acceptance. Full migration/learning remains subsequent work.
 
-## 13. Model3 neural kernels, inference and safe artifacts (design accepted)
+## 13. Model3 neural kernels, inference and safe artifacts (implementation reviewed)
 
 Independent architecture DESIGN READY after fixing exact owned RNG scope,
 per-manifest/private-namespace publication semantics, pre-change initialization
 goldens, immutable action-config binding and component-only policy selection.
-Root accepts those boundaries; implementation/conformance remain pending.
+Root accepts those boundaries. Both independent implementation reviews are now
+READY; the original-layout CPU/actual CUDA matrix passes. The later §14.1 repair
+supersedes its corrected-profile event/history widths and requires fresh numeric
+acceptance. Original07e and legacy dimensions remain as recorded below.
 
 This gate covers closed neural Config3, the SAME learned neural implementation
 under an explicit selected layout, participant-local standalone inference and
@@ -797,8 +800,10 @@ Use layout-derived category/field counts, including membership vocabulary at
 membership_index and numeric order_field. Remove literal2*12 and old source-vector
 assumptions from shared formulas. Default old→new widths: card_input116→166,
 card_actor70→71, frame600→601, actor1414→1432; state5499 unchanged, card_direct
-428→478, event394→395, aggregate376→377. These widths are the SAME for both
-card profiles but identities remain different through their token/contract pins.
+428→478, event394→395, aggregate376→377. These were the SAME for both
+card profiles before §14.1; that repair changes only corrected-profile event/
+history-dependent dimensions. Identities remain distinct through token/contract
+pins.
 Hand attention still has no arbitrary position embedding. Critic receives no
 candidate content/count/order/search report. PreserveIEEEFP32, deterministic
 initialization/backends, noAMP/TF32 and existing1e-5parity tolerances.
@@ -913,3 +918,699 @@ input signatures/rules, wrong execution/model, synthetic/qualification relabel,
 old3/new4 mismatches and old configured/saved artifact corpus unchanged. The
 verified host GPU is RTX5070Ti with16GiBphysical VRAM; preserve the12GiBmanaged
 global limit and64MiBarray/shard limits, failing oversized settings explicitly.
+
+## 14. Corrected baseline end-to-end collection (accepted baseline scope)
+
+Independent architecture DESIGN READY after pinning executed-code verification,
+closed approved runtime tuples, final publication/invalidation order, pure
+receipt dependency direction and new heuristic facts. Root accepts this scope.
+Implementation/conformance/pilot remain required. Root permits two disjoint
+implementers for §13 model modules and §14 new common/client/journal modules
+while their reviewed interfaces are fixed; only root edits shared CLI/Config.
+Neither implementer edits the other's modules; global checks wait for stability.
+
+Both independent implementation reviews are now READY after the raw HTTP hint
+viewer-binding and terminal publication-close findings were resolved. The
+two-game real smoke passes. The first exact192-game pilot completes all192but
+fails with180natural/12incomplete (11Discard rejections and1event validation
+failure); the whole failed population is preserved and ineligible.
+
+After §14.1/14.2 input corrections and both independent incremental reviews,
+the third exact192pilot completes192natural/zero failures/96complete pairs in
+297.091s. Independent audit validates all384original journals/own Replay streams,
+3244accepted decisions, all4492inventory hashes, exact schedule/runtime bindings
+and cleanup health. Root accepts baseline provisional feasibility only, not
+neural/Source/learning/Tree acceptance or strength. Both earlier failed populations
+remain ineligible. Current134module wheel bytes match the frozen source and pass
+mandatory-only installed protocol3 baseline checks; actual pilot ran those source
+bytes, not an asserted wheel installation. Final combined acceptance remains.
+
+Root's public-rule audit disposition: restore ADR0005's already-authorized
+Sun Amulet/Dangerous Mortar exclusion for normal Discard, explicitly retained
+by ADR0023's action matrix. Owner confirmation and the v2 override extend miracle
+permission; they do not rescind this artifact exception. Sacrifice does not
+acquire that exclusion. `_CardInstanceSpace` dropped the prior condition; this
+is a local implementation conformance fix for BOTH v2card-instance profiles,
+using perceived definitions. It restores the declared rules rather than deriving
+a new mask from rejection. Keep all contract/token/rule/Config/schema identities
+and saved bytes unchanged; record the corrected code revision/source digest and
+require a fresh complete pilot. Exact old buggy-generation reproduction uses its
+recorded code, never rewrites historical outputs or grants Source eligibility.
+Independent offline exact-subset tests cover both profiles/normal-vs-EndTimes
+and all miracle states/subclasses before the next full pilot.
+
+This is the next execution/persistence gate after the model component scope.
+It integrates corrected-profile Random/Heuristic only: protocol3, codec2,
+journal6, collection manifest5, real Replay reconciliation and the fixed192game
+pilot. It does not enable model3 qualified selection, neural training/rollout4,
+Tree3, new native capability or fitting. Existing protocol2/codec1/journal5/
+engineering/private-test paths and serialized meanings stay unchanged.
+
+### Qualified-use context and evidence
+
+Keep current GeneratedCandidatesV3 component-only. Add a distinct explicit
+GameGeneratedCandidatesV3/serialization path requiring corrected contract,
+purpose=qualified_game and nonsynthetic rows; its report still binds the same
+reviewed Rule signature and actual Actions Config hash. Provide an explicit
+game-generation entry on the shared generator/search engine, never mutate an
+existing component table's purpose or relax its current DTO. Like a bare table,
+this new DTO is use-context metadata, NOT Source qualification authority.
+
+Actual public collection requires a locally managed verified runtime evidence
+owner before allocating processes or creating output. The cross-module pure
+receipt/pin schema and validators live in gf_common below journal consumers;
+filesystem/live-process ownership lives in gf_simulator_client and composition
+in CLI. Journal6 imports no client transport/lifecycle or CLI Config. The
+evidence descriptor binds corrected contract, expected full source revision/
+13spec inventory, approved executable hash and handoff source-change inventory,
+plus actual binary stat/hash and source read checks. /v2/info is not a revision
+attestation. Compare configured executable/source bytes before startup/Create
+and recheck after owned shutdown, BEFORE healthy collection publication. Changes
+invalidate run health. Approval is a CLOSED release-only tuple for this scope:
+corrected profile/revision91d5926/normative131890…534d0/change inventory
+e34b716…70346/release76aff19…d0f7d plus exact approved file→SHA maps. Paths may
+vary; callers cannot supply arbitrary approval hashes. After startup and BEFORE
+Create, open/hash the owned live process's /proc/<pid>/exe (or equivalent
+executed-FD facility), verify owned-process liveness/identity around the read,
+and retain the actual executed-code receipt. Pre/post pathname hashes alone
+cannot detect swap-and-restore. Missing evidence fails before Create. Other
+builds remain diagnostic pending an explicitly reviewed approval entry.
+Keep debug management identity/seed/effective Config attestation in addition.
+Reject corrected qualified external-URL collection absent equivalent explicit
+build evidence; diagnostic HTTP remains separate. Policy workers receive none
+of this source/path/seed/URL evidence.
+
+New versioned bindings/header metadata must bind expected Config/contract/layout/
+token/rules/purpose/caps/model identity explicitly. Only corrected profile can
+enter this real-game path. Historical profiles remain readable in their original
+scopes and cannot be upgraded by changing eligibility flags or DTO purpose.
+
+### Shared episode ownership and clean participants
+
+Reuse SimulatorEnvironment's one group/server ownership, one original accepted
+command record, cursor histories, episode deadline/finalization/reap and outcome
+handling. Extract small version-specific hooks for client creation, DecisionInput
+building, Replay reconciliation/closure and participant adapter rather than copy
+the entire episode loop. Old hooks/defaults reproduce old behavior.
+
+Add a corrected baseline environment adapter using explicit runtime evidence,
+new contract/layout/result identity and the existing shared ReservationLedger.
+Preserve reserve-before-Popen, startup failure ownership, shielded cancellation,
+worker≤4/game≤2 and source/process lifetime boundaries. The adapter gathers only
+the current actor's own HTTP Observation, dedicated full visible Events prefix,
+typed metadata, own-visible perceived catalog and same-revision bound hints.
+It builds corrected deltas/frames in original possession order. Never use Act
+events/next-observation/options or Replay as policy history.
+
+Protocol3 uses a separate explicit bootstrap/DTO route; old protocol2 remains
+strict. Bootstrap receives only safe own policy identifier/settings, sampling
+seed, Actions/rules/input bindings and participant-local messages. Scrub argv/env
+as currently implemented; no full experiment/server Config, management evidence,
+GameSeed/RNG, other viewer, canonical history or Snapshot enters the policy.
+Send once-only actor event deltas with prefix hashes and raw frames; child
+validates exact profile, Config hash/rules/caps/continuity before candidate work.
+
+Baseline Random/Heuristic implementations reuse selection/tie/penalty mechanics
+with explicit corrected context and new labels. Heuristic payment/attack/
+effective-role facts MUST come from new SequenceAnalysis: no old sequence-free
+CostCut or suppressed armor defense is ported. They emit no PPO
+logprob/value. Keep independent search and sampling RNG ownership/versioned
+seed derivation. Parent validates full GameGeneratedCandidatesV3 and Selection,
+then reconstructs the typed Action from its ORIGINAL own frame before journaling
+or Act. Retain exact command UUID/revision/ordered payload on bounded resend;
+consumed references are never regenerated. A rejection stops with diagnostics
+and no re-proposal, fabricated transition or changed legality predicate.
+
+### Codec2 and journal6
+
+Add codec2 using the same numeric section encodings/shape/limits and a separate
+closed action codebook/descriptor identity. Header binds full corrected contract,
+frame/table digest, purpose/capacity, lengths and exact section bytes/hash. The
+old codec1 API/descriptor/keysets stay exact and reject card-instance tables.
+New codec2 accepts only the explicitly expected known layout; corrupt/mixed
+descriptors/offsets/refs/numerics reject before arrays. Existing lower array/shard
+64MiB limits and file hashing remain unchanged.
+
+Factor private byte-layout and sidecar I/O helpers where shared; keep distinct
+public old/new codec/storage wrappers. Preserve original relative sidecar paths,
+exclusive ownership, fsync/hash/stat checks and publication BEFORE the journal
+decision row references it. File failure remains a pending/failed decision,
+never an accepted Action. Do not grant semantic/Source authority to codec data.
+
+Journal6 is an additive closed writer/reader with original frame/prefix/raw input,
+rule-bound generated report and codec2 table, selection, command identity,
+acknowledgement, policy execution/timing and terminal metadata. Header includes
+corrected revision/13spec/catalog/input/token/rule/Config identities, viewer/run/
+game/episode/bank, explicit model1 baseline and protocol3/feature2. Preserve
+once-only delta continuity and revision advance; raw refs/history semantics do
+not get normalized to v1. Check report.config_hash/rules, frame/table/selection,
+caps and exact reconstructed command before publishing a decision.
+
+Only positive validated acknowledgement resolves pending commands. Preserve
+pending rows on interrupted delivery. Reuse existing finish/close-incomplete and
+no-overwrite journal publication ownership. Natural selected-actor reward±1/0 is
+assigned only after known natural result and reconciled closure. Truncation,
+abort, unsupported rules and infrastructure failures retain separate metadata;
+no invented final Observation/bootstrap/return. Old schema5 readers cannot read6.
+
+### Replay and collection completion
+
+Add pure v2 Replay reconciliation/closure functions separate from legacy ones.
+Validate both full player DTOs, compare each actor's accepted journal Action
+sequence to own visible_action entries in decision order, and require shared
+terminal/aborted closure identity and known result agreement. Concealed other
+actions are not policy input or an own acceptance record. Aborted/no-action
+decisions cannot become accepted journal transitions. Keep exact turn-limit
+projection; reconciliation never invents an unknown natural result.
+
+CLI opens ONLY corrected baseline collect/evaluate/smoke after complete runtime
+preflight and all new adapters are ready; old07e/actions2 and neural/tree3 paths
+remain guarded. Add collection5 manifest/report binding actual runtime evidence,
+schedule, seeds/splits, original file inventory/hashes, policy labels and all
+semantic versions. Reuse scheduling, deadlines, pair/seed-cluster statistics,
+incomplete-run retention and late-report invalidation. Do not infer success from
+an exit code alone; all192games/pairs/closures/process/journal health must pass.
+Current unused preprocessing fields remain explicitly inert for collection;
+new offline Source/native/learning readers are not advertised until implemented.
+
+Finish all owned worker/server cleanup, actual-executable/path/source evidence
+checks, journal/Replay health and original file inventory before healthy report/
+manifest commit. No reportable evidence recheck follows that commit. Final
+publication owns exclusively created report/manifest temporary files and retains
+their read-write FDs through publication and the final work-deadline check. If a
+late publication/deadline check fails, invalidate only the held owned inodes
+before releasing them, using the existing cleanup allowance, preserving the
+initiating exception and any foreign substituted paths. Reuse the C3b small
+owned-invalidation mechanism where practical; do not duplicate a persistence
+stack or reset deadlines. Unconfirmed invalidation retains its reachable owner
+and reports quarantine; never return healthy collection success. After successful
+FD release, perform no further operation that can reclassify the healthy commit
+as collection failure. Private run namespace and ordinary OS/I/O limitations
+remain explicit; no revocation of foreign copies is claimed.
+
+Terminal-release clarification (root accepts advisor B): closing descriptors is
+itself inside the commit failure boundary; set committed only after all release
+operations succeed. Keep names/inode/directory ownership separate from FD
+liveness. A close error may occur AFTER descriptor release; EBADF is not proof
+of successful persistence, and blindly retrying its number risks a reused foreign
+FD. On failure, invalidate both outputs independently: use unquestionably held
+FDs, otherwise freshly open the recorded name without create/truncate/symlink
+following and verify opened type/dev/inode before any write. Reopen/verify the
+owned directory identity if necessary. Never use an uncertain stale FD number,
+search renamed originals or modify a foreign replacement. Recover within the
+original cleanup deadline; inaccessible original, recovery/sync failure or
+unresolved resource release retains the reachable quarantine owner and original
+exception. Test before/after-actual-close failures for report, manifest and
+directory, FD-number reuse, foreign file/directory replacement and bounded
+independent recovery failures. This adds no foreign-copy revocation guarantee.
+
+Baseline qualified-use binding/headers are distinct from §13's component neural3
+binding. Do not widen Model3/Tree/artifact selection to enable baselines. Test
+GameGenerated refusal by component policy/DTOs and all old protocol/codec/journal
+paths. Neither purpose flag grants Source authority: only original live-runtime
+ownership, exact health/records and the later complete Source verification can.
+
+### Verification and acceptance
+
+Test code evidence mismatches before output/process/Create, no management-data
+leak at import/reset/select, malformed/stale/foreign deltas and selections,
+correct original-ref recovery, exact retries, poisoned late success, rollback/
+pending ack/cancel/reap/deadlines, sidecar/journal publication and mixed versions.
+Keep current component GeneratedV3 rejection and old codec/journal/Config proofs.
+Test learned-only and duplicate miracles, all Action families and corrected
+Replay's decisions/visible_action/aborted semantics, including zero decisions.
+
+Run a fresh bounded real corrected baseline E2E smoke first, then the exact
+fixed192game pilot (32hexsuffix1..20GameSeeds×17/29/43sampling×seat swap) under
+unchanged7200/5400/7140s and existing resource/search limits. No seed replacement,
+budget shortening or rejection-derived rule changes. Preserve any failed run;
+fix concrete client/declared-contract defects with independent reviews before
+new complete acceptance attempts. Report pilot feasibility separately from
+strength/learning. Root accepts after both independent reviews, relevant checks
+and original-data/package/optional-free baseline proofs.
+
+## 14.1 Guardian event namespace and corrected input repair (design accepted)
+
+Independent architecture DESIGN READY; root accepts the bounded corrected-only
+repair, historical-data disposition and mixed-code handshake protection.
+Implementation and both independent final reviews are now READY, with803CPU
+and31actual HOST CUDA tests passing. Whole-project/package checks and the
+complete fixed pilot remain required. Public catalog aggregation verifies all ten known
+Guardian IDs in nested guardian.id references, with no overlap with card IDs.
+
+Public Player Replay diagnostics from the retained failed pilot show
+`guardian_set`/`guardian_left` with `definition_id="earth"`. Guardian IDs form
+the existing public ten-value GUARDIANS namespace, separate from the296card
+catalog. The event validator, interval tokenizer and exact definition-count
+aggregate currently assume all event IDs are card IDs. This is a Bots input
+omission, not evidence of an invalid Simulator transition. Replay diagnoses the
+missing value only: do not reconstruct the failed original journal, infer an
+Action mask, add unseen information or promote that population.
+
+Correct only the newly adopted91profile's event-ID vocabulary to the ordered
+card296plus guardian10 tuple. Preserve LEGACY_LAYOUT and original07e layout,
+their recipes, bytes, Config/defaults and all hashes exactly. Keep the corrected
+contract's Simulator/public schema/catalog pins; this repairs the already
+declared public-events input implementation, not Simulator semantics. The
+corrected token signature, exact dimensions/architecture identity and dependent
+new artifact bindings necessarily change and must be recorded. Do not invent
+new state, definition IDs or card refs; raw event strings remain unchanged.
+
+The corrected validator checks namespaces by event family: guardian_set/left/
+acted require a known public Guardian ID; card-ID events retain the pinned
+catalog whitelist. Unknown and cross-namespace IDs still fail closed. Use public
+DTO/test representation only to confirm field meaning, never Engine resolution
+or rejection results. The existing observation Guardian vocabulary provides the
+closed ID values; do not convert Guardian IDs to card definitions or hashes.
+
+Pass the explicit layout's event-ID vocabulary into the shared interval token
+and exact-history functions. Default/shared legacy calls retain the exact
+296-card behavior. Corrected history appends all306definition counts in stable
+order before the existing window/actor sums; preserve the prior card count
+indices. Guardian interval categories likewise receive distinct observed values,
+not PAD/MISSING or a fabricated card identity. Resource/parameter formulae derive
+from the explicit layout; do not special-case model types or relax tolerances.
+
+Protocol3's current game binding must also carry the exact repaired layout
+signature, checked by parent/child at initialization and every response before
+candidate work/acceptance. Use a fixed documented128window signature as this
+structural layout identity; the actual model/Journal token signature additionally
+binds its configured aggregate window. Journal6 already binds that actual token
+signature. Keep this new game-binding field distinct from live runtime evidence;
+derive it in pure common code without importing client/I/O or changing component
+bindings. Historical old91protocol messages without this field reject. This
+closes equal-profile/mixed-code handshakes instead of waiting for a Guardian
+event to reveal the mismatch.
+
+All preceding91component artifacts/healthy smoke/failed pilot receipts retain
+their original bytes and producer-code identity. They are historical evidence
+for the preceding incomplete layout, not current input/numerical acceptance or
+eligible Sources. The previous corrected token signature must reject on current
+load/worker/journal/Source paths BEFORE allocation or mutation; do not reinterpret
+old files by width, profile flag, padding or new signature. Reproduce historical
+records with their recorded code. No old91trained parent or qualified Source
+exists. Metadata inspection may fail closed for unsupported old91signature;
+legacy/engineering/original07compatibility remains fully supported and exact.
+Do not silently turn earlier27CUDA/CPU numerical results into current acceptance;
+rerun the full affected Model3 matrix and actual CUDA cases after this repair.
+
+Architecture review precedes implementation because this changes persisted input
+meaning/layout, although public rules and Config hashes remain unchanged.
+Verification covers all ten Guardian IDs × three event families with both
+viewer-relative encodings, event-time identity/order/prefix preservation, exact
+306counts/interval categories, unknown/cross-namespace refusal, no same-width
+signature coercion, old-layout/token/model2 goldens and new parameter/resource
+shape checks. Baseline J6/protocol3 replay/candidate tests and the exact full192
+pilot must pass after the normalDiscard fix. Final numerical/package acceptance
+uses the repaired input, never a reduced candidate or event domain.
+
+## 14.2 Guardian action-definition representation (design accepted)
+
+Independent architecture DESIGN READY after correcting the catalog subset count;
+root accepts this validator/fixture correction. Implementation and both
+independent reviews are now READY, with551CPU and31actual HOST CUDA checks
+passing. The whole unchanged third pilot and current source-matched/installed
+wheel checks now pass; final combined migration acceptance remains pending.
+
+The second unchanged192pilot completes191natural/1incomplete and no rejections.
+Both public Player Replay DTOs for s10-m1-r0-seat0 expose guardian_acted with
+definition_id="seafood-soup". The pinned catalog explicitly classifies that
+definition as kind=guardians/automatic and links it to guardian.id=neptune.
+GuardianSet/Left use the Guardian identity, while GuardianActed identifies an
+action definition. The public DTO uses a generic String and does not promise
+the uniform Guardian-ID domain assumed by §14.1. That assumption was too narrow;
+the second failed population remains preserved/ineligible and is not repaired.
+
+Amend §14.1's validator partition only: guardian_set/guardian_left accept the ten
+public Guardian IDs; guardian_acted uses the pinned296card-definition namespace
+like other definition-ID events. Do not invent a narrower kind-specific Action
+constraint from an event name. Preserve the same corrected306-ID token vocabulary,
+all existing indices, widths, token/layout/rule/Config/schema signatures and raw
+event strings. No conversion from the action definition to Guardian ID, missing
+past-event reconstruction or candidate/legality predicate changes. This corrects
+public representation support; rejected Action details are not evidence for it.
+The public catalog plus Player-visible output/DTO is the evidence.
+
+Replace the incorrect GuardianActed-with-Guardian-ID synthetic fixtures; retain
+original recorded fixture/artifact bytes with their producer identity. Test all
+ten IDs for Set/Left and all42pinned guardian-kind action definitions for Acted,
+plus representative other catalog definitions under the declared generic card-ID
+support, both viewers, exact categories/counts/order/prefix, and unknown/cross-
+namespace refusal. The54entries with nested Guardian refs also include8phenomena,
+2armor and2miracles; that is not the Guardian-kind action-definition set.
+Other observed catalog definition IDs keep the existing generic card-ID support.
+Run affected token/worker/J6 and all hand3×model3 CPU/actual CUDA numerical checks
+with a real catalog Guardian action ID. No dimension/signature change is expected.
+Independent correctness/conformance reviews and another complete same-condition
+192pilot are required. The preceding2554whole pytest/wheel results remain
+preceding-validator evidence; final whole-project/package checks must use the
+final code. Do not repeat unrelated lengthy checks solely to count passes.
+
+## 15. Corrected neural game inference (design accepted)
+
+Independent architecture DESIGN READY after pinning the closed initialization
+union, whole concurrent memory admission and retained external-artifact owner.
+Root accepts this inference-only scope under the repaired §14.1 input.
+Implementation/reviews and actual smokes remain required; this is not Source,
+generation or learning acceptance. Do not start dependent implementation until
+the §14.1 shared input/handshake interfaces are stable and reviewed.
+
+This bounded increment joins the reviewed Model3 kernels/artifact4 to the
+corrected protocol3/journal6/collection5 real-game owner. It enables explicit
+MLP/GRU/Transformer inference on CPU/CUDA with corrected game candidates, followed
+by actual game records. It does not implement or qualify Source, numeric
+rollout4, learner wire4, PPO updates, native-v2 or Tree. Those remain required
+subsequent work; a natural inference smoke does not satisfy their acceptance.
+The independent pilot defects in §14 must be resolved before real NN smoke.
+
+### Explicit use binding and shared model code
+
+Keep all existing component-only entry points strict and their serialized bytes
+unchanged. Add named game entry points on the shared Model3 implementation,
+requiring the closed corrected contract, existing Rules1/action Config hash,
+purpose=qualified_game, synthetic_capacity=false and positions≤18 before model
+or process allocation. Share private input-binding/artifact/policy helpers with
+an explicit checked use context; no module globals, fake Model2 configuration,
+copied neural network, or relabelled component table/artifact. A fresh network
+can receive one immutable use binding; a bound component network cannot become
+a game network, or conversely. Historical07e/game bindings remain rejected.
+
+Add explicit game inference/resume4 save/inspect/load wrappers with the same
+shard encodings/limits, named Adam state and RNG ownership as §13. Manifest
+purpose and full input/rule/action Config identities distinguish game artifacts.
+All component wrappers/readers continue to reject game files and game wrappers
+reject component files, before allocation or mutation. Static recorded metadata
+parsing remains NumPy-only, version/context explicit and independent of current
+Torch availability. Sealed artifact metadata is compatibility/provenance, never
+Source eligibility or proof of completed training. Only an independently owned
+future coordinator can publish a completed generation after both paired saves.
+The ordinary private-namespace publication guarantee/debt in §13 is unchanged.
+
+Add GameStructuredPolicyV3 (or equivalently explicit named factory) that accepts
+ONLY GameGeneratedCandidatesV3 and the exact original corrected frame/prefix.
+Reuse the same token encoders, cache, actor/critic and chunked scoring. Validate
+report Config/rules and exact context before tokenization/cache activity.
+Sampling yields finite old logprob/value using the existing Selection contract;
+critic values and search summaries are not actor features. Component policy
+continues accepting only its existing GeneratedCandidatesV3 component type.
+
+### Worker, journal and execution ownership
+
+Extend protocol3 initialization with a closed baseline/neural tagged union.
+Existing baseline payloads remain exact. Neural init carries only own Model3
+safe inference options, manifest identity, action/rules/use bindings, caps and
+sampling seed. No experiment/server config, source/revision paths, GameSeed,
+management evidence, other-view observations, Snapshot or Replay enters child.
+Fixed bootstrap sets permitted CUDA visibility BEFORE any Torch/factory import,
+uses the reviewed model factory, then clears unused launch inputs. Arbitrary
+factory/module selection is not enabled. Reuse original parent-bank continuity,
+search RNG, framed I/O, exception/cancellation/reap and lease ownership.
+
+The existing model_id is the discriminator: random/heuristic retain the exact
+repaired baseline init key set and forbid policy_options; mlp/gru/transformer
+require that same common set plus a mandatory closed policy_options object.
+Unknown IDs, missing options, None options for NN and extra baseline options
+reject before factory/Torch import. There is no caller-selected factory/module.
+Ready/select wire shapes stay common and bind repaired layout_signature; neural
+policy_version must equal the independently computed sealed manifest/execution
+label, and baseline policy labels remain unchanged.
+
+Reuse Model3 resource estimates and existing ReservationLedger: validate artifact
+and configuration metadata, caps, CUDA visibility and numeric generation costs
+before Popen; reserve before spawn; account actual inference lifetime plus
+temporary decision memory under the unchanged global12GiB budget. Parent/child
+independently agree on safe options, costs/caps and policy label. Initialization,
+partial construction, timeout and cancellation preserve the original cleanup
+owner. Baselines keep zero managed CUDA reservation. Maximum2games/4workers and
+10sworker timeout remain; oversized configurations fail before allocation.
+
+Before output or any Popen, CLI must admit the maximum concurrently live worker
+set for the configured game concurrency, including both player roles per game,
+and any already-owned learner reservation. Use the existing full configured
+worker peak as lifetime charge where it already includes decision temporaries;
+otherwise add the maximum overlapping temporary scopes (one acting worker per
+live game). Do not double-count a covered scope or assume that individually
+fitting models compose. With two simultaneous games, reject a two-role GPU
+configuration whose four lifetime/covered-peak charges exceed the shared12GiB
+budget before starting either game. Dynamic ledger checks remain mandatory and
+use the same formulas; they do not replace this whole-configuration admission.
+
+Inference artifacts use an explicit retained external-input contract for this
+scope. Before output/process allocation, a bounded sealed input owner validates
+the expected original manifest and every referenced regular shard, full hashes,
+stat identities, context and metadata under existing64MiBper-array/shard limits.
+Reuse SealedScan/snapshot accounting instead of a new persistence stack. Keep
+that owner and exact file inventory through all child loads and reaps; children
+load the same expected manifest digest and validate shard hashes independently.
+Recheck the complete owned original inventory after reap and before healthy
+collection publication. Changed/missing/replaced inputs or a late I/O/deadline
+failure invalidate the collection; no silent copy/rebind/reload is attempted.
+Collection5 records exact sealed metadata/file hashes and the external retained
+input contract, distinguishing them from run-owned journal inventory. The owner
+can release retained metadata after final recheck without further reportable I/O.
+This is identity/compatibility integrity with the ordinary private-namespace/OS
+limits already stated, not Source qualification or hostile-copy revocation.
+
+Journal6 retains its baseline header/selection validation. Add a separate closed
+neural header branch identified by model_version3, containing sealed Model3,
+execution/artifact manifest identity and expected policy label/caps/numeric costs.
+Validate it without loading Torch. Accept finite logprob/value only for the
+neural branch; baseline still requires both None. The raw original Observation,
+once-only event prefix, codec2 candidates, original-ref Action, acknowledgement
+and natural terminal reward ownership stay identical. Reading either branch
+never grants Source authority. Reader must validate neural policy/candidate/
+selection context, not trust a model_version or purpose flag.
+
+Reuse the same corrected environment, live executed-code attestation, Replay
+reconciliation, original-journal checks, inventory and final collection owner.
+Extend its allowed policy bindings explicitly and share per-group evidence
+ownership. CLI validates corrected actions3 plus neural3 checkpoint/metadata and
+resource envelope before output/process allocation. Root owns Config/presets/CLI
+composition; implementer owns assigned model/client/journal modules/tests.
+Collection5 retains exact baseline records and includes the actual sealed neural
+bindings for new runs. Do not enter PPO collector/coordinator or fixed-data Source
+from this inference-only increment.
+
+### Verification
+
+Retain old Model2 initialization/Config/artifact hashes and Model3 component
+round trips. Test both directions of component/game/old-profile mismatches,
+bound-network immutability, descriptor corruption, wrong action Config, candidate
+permutation, cache/full/split/logprob/value equivalence and preallocation refusal.
+Run CPU and actual CUDA inference/artifact/worker tests for all three models;
+reuse the established numerical tolerances and resource budgets. Test malformed
+safe init, import/env information isolation, fail-spawn, reserve/reap, timeout,
+cancel and crossed journal/policy binding including empty-input handling.
+
+After §14's full pilot passes, run fresh bounded real-game inference smokes for
+the three NN models with CPU and CUDA inference, recording exact initial artifact
+identity, original own-input journals and Replay closure. These are inference
+smokes only: no result becomes a formal training parent, 512train performance
+panel or PPO/resume acceptance by relabelling. Independent correctness and
+implementation-conformance reviews remain required before this increment opens.
+
+## 16. Qualified Python Source, numeric4 and shared PPO (design accepted)
+
+Independent architecture DESIGN READY after pinning online ownership, exact
+reader/PPO-collection variants, Source-issued wire expectation, RNG-neutral
+recorded-output parity, early combined admission and compatibility/pruning
+verification. Root accepts this bounded Python scope. Dependent implementation,
+independent reviews and the real acceptance matrix remain required; native and
+Tree remain separate gates. One implementer may capture bounded assessment-only
+pre-edit compatibility evidence while current production source is frozen.
+
+After §15, connect the corrected neural game path to the existing single
+`ppo_run._run_ppo` lifecycle. Implement the explicitly selected Python reference
+reader first; rust selection stays rejected until the separate new native
+capability is complete. This is an execution backend choice, not a reduction of
+candidate/input/source domains or acceptance conditions. No new dependency.
+Legacy PPO and engineering/component2 remain exact and distinct; formal
+multi-seed learning/HPO/final-test remain outside the requested migration scope.
+
+### Original-source authority and visibility
+
+A new closed card-instance Source composition requires the complete original
+collection5/Journal6/codec2 inventory, repaired token/layout/rule/action Config
+bindings, corrected runtime receipts, unchanged original files and healthy natural
+game/Replay closure. It additionally binds the actual owning PPO run, batch,
+generation, schedule/learner seats, frozen registry and previous inference4
+manifest from the committed lineage. A purpose flag, copied metadata, component
+fixture, baseline pilot or standalone artifact cannot supply this authority.
+Fresh NN inference collections remain inference records until all of this
+source/lineage correspondence is checked. Failed parents/populations never gain
+eligibility through a flag update or later passing run.
+
+Online admission additionally requires the SAME live parent run-lock token,
+wire4 learner process and lease, shared reservation ledger, exact expected
+optimizer/generation steps and frozen control/schedule/registry owners BEFORE
+collection output, Simulator or update activity. Mirror the existing
+validate_owned_collection live-owner checks, not just JSON linkage equality.
+Copied valid controls or a validated complete offline parent cannot authorize
+an active run. Keep completed-parent/offline read-only qualification a separate
+entry with its complete-state/source/split requirements; it creates no live
+learner/lock authority.
+
+Training explicitly selects preprocessing.backend=python and
+preprocessing.reader=participant-structured-v2. Its identity records backend,
+reader_contract=participant-structured-v2,
+implementation=python-reference-player-card-refs-v2 and the repaired full input/
+token/rule bindings. Reject inert legacy/structured-v1 readers and rust/old native
+before output/allocation; no fallback. Baseline/inference preprocessing remains
+inert as documented and cannot qualify a training Source.
+
+Add a closed PPO-batch collection5 variant through a separate composition entry,
+with the existing shared inventory/health/publication owner. Preserve baseline
+and standalone-inference collection5 records. The PPO variant adds a required
+collection_role=ppo-batch and closed linkage containing parent_run_id,
+parent_run_path, batch_id, collection_generation, learner_seats, frozen schedule
+digest and policy registry/binding digest. Its full linked controls/original
+Source are checked against the live owner; none of those serialized fields is
+authority by itself. Missing/mixed/extra linkage fields reject. Metadata alone
+still declares source_eligibility=not-authorized-by-collection-metadata.
+
+Reuse existing owned Source snapshot/file inventory, retention accounting and
+deadline mechanisms with explicit closed layout/reader context, rather than
+copying the Source lifecycle. New public wrappers accept actions3/model3 and
+repaired corrected context only; old component wrappers reject these formats.
+Read all original participants for ownership/closure validation, but project
+only each declared learner seat's own original frame/visible-event prefix,
+candidate table, selected original slot/refs and recorded logprob/value. Never
+feed opponent-private fields, Replay, management/RNG/rejection data to either
+actor or critic. Recreate deterministic tokens from original perceived facts;
+do not reconstruct missing original events or recompute old policy outputs.
+
+Here "do not recompute" forbids replacing or inventing the recorded values.
+Preserve read-only frozen-policy parity verification of recorded logprob/value
+against the original selected row before the first optimizer or owned-RNG
+mutation. Reuse existing CPU/cache/full/learner-device/split parity and unchanged
+tolerances; preserve CPU/CUDA/shuffle states while constructing comparison
+networks and checking. A mismatch invalidates the whole batch, rather than
+repairing its recorded outputs or treating current policy outputs as old values.
+
+Own every original parent/control/journal/sidecar until learner completion and
+final recheck before generation publication. Recheck path/inode/hash identities
+and linked policy manifests; an after-update Source mutation fails the run and
+publishes no completed generation. Cleanup preserves the first failure and all
+reachable resource owners. No claim of rollback of an already executed optimizer
+step, hostile-copy revocation or cryptographic attestation is added.
+
+### Numeric rollout and learner wire4
+
+Add explicit episode/rollout4 wrappers on shared raw-token/GAE/normalization/
+numeric-shard code with the repaired layout and game binding. Preserve NumPy
+bundle1, numeric dtype, optimizer/PPO algorithms and each64MiBarray/shard decode
+limit. Validate the whole cohort and conservative raw+token+endpoint memory
+envelope before tokenization/update; do not decode an unbounded source first.
+Serialized context binds schema4, full contract, rule/action Config/token
+signatures, source correspondence and exact Model3 architecture/semantics.
+Schema3/component/model2 and old91signature are rejected before arrays/Torch.
+
+Original↔numeric proof covers every learner frame/event boundary+prefix, codec2
+table/content/order, selected row/reference identity, recorded old logprob/value,
+natural terminal reward, viewer, role/generation and original file inventory.
+Keep correspondence verification inside the original Source owner; a self-hash
+on a numeric bundle alone grants no learning permission. No learned latent,
+cached past-update encoder output or candidate search report becomes a feature.
+
+The Source owner issues the expected raw↔numeric correspondence/file/control
+fingerprint through its live projection context to the owned parent process.
+Bind that exact expectation and current expected optimizer/generation step in
+the wire4 update transaction. The learner verifies numeric4 against it before
+parity, optimizer or owned-RNG mutation, and the parent retains/finalizes the
+issuing Source owner through completion. An arbitrary proof dictionary or
+numeric self-hash cannot issue permission. Reuse the owned projection/process
+handoff; do not create a second training framework or authority from DTO flags.
+
+Natural±1/0 reward uses the selected learner viewer and only the reconciled
+terminal outcome. Interrupted/unsupported/truncated/failed games invalidate the
+whole requested16-game update cohort. Empty natural learner episodes remain
+valid original episodes, but cannot invent decisions or bootstrap values; an
+empty overall learner batch fails explicitly. GAE/Adam/shuffle/clip/minibatch/
+suffix-gradient behavior and numerical tolerances remain the existing ones.
+
+Add a strict Model3/game learner wrapper sharing the existing numerical update
+implementation through an explicit immutable layout/context. Preserve legacy
+Learner calls exactly; do not coerce Model3 into Model2. Wire4 parent/child carries
+closed model/execution/use/source identities, numerical file hashes and resource
+caps. Reuse process framing, one learner's lifetime CUDA reservation, owned
+update transaction, cleanup/reap and paired artifact acknowledgements. Validate
+CPU/CUDA visibility before Torch import and the whole batch before optimizer/RNG
+mutation. Keep global12GiB and Source+rollout+endpoint accounting unchanged.
+
+### One coordinator and version3 lineage
+
+Refactor only the concrete operations supplied to the existing coordinator;
+do not add a second training loop. Replace its Model2-specific labels/schedule/
+record literals with explicit values from the selected known operations context,
+keeping all legacy defaults and component2 serialized values exact. Add a closed
+corrected-game operations implementation and explicit train entry dispatch.
+Validation occurs before output, learner or Simulator allocation. Unsupported
+rust/old native and mixed Config/model/action/readers fail without fallback.
+
+For the corrected fresh entry, explicitly run closed approved Simulator runtime/
+source metadata preflight and whole-configuration memory admission BEFORE the
+existing run_lock(create=True) point. Admit known planned learner residency plus
+the worst concurrently live NN player roles/covered peak or uncovered temporary
+scopes using §15's same formulas. Do not first allocate a learner and rely on the
+collector's later remaining-budget check to discover a predictable overcommit.
+The collector still checks the SAME actually live ledger/learner owner, and
+normal resume performs recorded identity validation before spawning anything.
+Keep legacy/component2 ordering/outputs unchanged; this is concrete corrected
+entry preflight, not a new resource manager or trainer loop.
+
+Run/generation/update/registry3 bind repaired input, full execution/Config/code/
+Simulator/preprocessing/reward identity, original source proof and numeric4
+hashes. Shared file ownership/lineage validation/pair save/retention are reused
+with explicit closed version context. Publish completed generation only after
+healthy inference4+resume4 acknowledgements, source final recheck and linked
+numeric/update metadata validation; a standalone inference file is insufficient.
+Maintain the existing run lock, single coordinator,16games/update, snapshot pool
+(at most5, every10updates), worker≤4/game≤2, storage and7200/5400/7140s caps.
+
+Resume checks all code/config/input/execution/RNG identities before allocation.
+Restore all named encoder/actor/critic/Adam state, Torch CPU/visible CUDA RNG,
+explicit PCG64 learner shuffle and existing coordinator schedule/opponent-pool/
+generation controls. Keep sampling/search streams versioned and independent.
+Pause only at a completed normal update boundary; retain original elapsed/wall
+budget semantics. A previous failed/ineligible parent cannot become complete
+by resuming into new semantics. Root owns new Config/CLI/presets/docs and final
+acceptance; delegated implementer owns explicitly assigned source/learner/lineage
+modules and tests. These scope boundaries do not authorize native or Tree.
+
+### Verification and requested real acceptance
+
+Test exact original↔numeric parity, source/control/sidecar/role mutation before
+and after update, full cohort refusal, reward perspective, no missing-event
+repair, mixed formats/old signatures, numeric corruption/limits, cancel/fail-spawn/
+reap and late generation publication failures. Check legacy corpus/config/
+checkpoint identity and all named encoder/optimizer/RNG resume equivalence.
+Before coordinator literal/context edits, freeze bounded legacy/component2
+control, schedule and update semantic outputs under fixed owned fixture inputs.
+Compare exact versioned key sets, labels, input/reward/numeric identities,
+schedule/seat choices, pool and RNG controls after the refactor. Any normalized
+timing/path/producer-derived variable must be listed explicitly; do not mask
+semantic/version fields with broad hash normalization. Independently reproduce
+the pre-edit outputs from the saved code/receipt, rather than trusting a newly
+generated same-code golden.
+
+Exercise registry3 retention/pruning with bounded complete fixture chains across
+the generation10snapshot boundary and later pool eviction/pruning. Verify retained
+generation ownership and historical pruned-generation read-only validation,
+including missing/foreign/replaced files and interrupted pruning. Two-update
+actual smokes do not cover this boundary; no long formal training is required
+to exercise it.
+Component fixtures remain component evidence and cannot pass a qualified Source
+gate solely through test flags. Independent correctness and conformance reviews
+must examine learning/evaluation validity as well as byte/schema handling.
+
+Then run the exact requested actual server acceptance: seed17/default attention,
+MLP/GRU/Transformer × CPU/CUDA inference, CUDA learner,16games/update, continuous2
+updates versus pause after1/resume through2 at normal boundaries. Record complete
+source/numeric/lineage correspondence and compare all saved state, retaining
+failures. CPU learner gets numerical verification and a real MLP smoke; direct/
+DeepSets get real16-game MLP checks and every-model numerical verification.
+Existing tolerance, budgets and input/candidate bounds are not loosened. These
+acceptance runs are not shortened formal training parents or qualified real-data
+three-parent Tree fitting evidence. New native-v2, Tree3/fixed Dataset3 component
+fit, fixed512train-decision performance and whole-project/package checks remain
+required subsequent migration acceptance.

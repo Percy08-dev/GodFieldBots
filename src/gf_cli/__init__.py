@@ -15,7 +15,7 @@ from typing import Any
 
 from gf_cli.config import LoadedConfig, load_config
 from gf_common.action_contract import require_qualified_contract
-from gf_common.card_instance import ActionConfigV3
+from gf_common.card_instance import ActionConfigV3, corrected_card_instance_contract
 from gf_common.domain import (
     CATALOG_META,
     END_PROJECTION_VERSION,
@@ -222,6 +222,12 @@ async def _join_owned_groups(tasks: list[asyncio.Task[Any]], wall_deadline: floa
 async def run_experiment(loaded: LoadedConfig, command: str, *, collection: CollectionPlan | None = None,
                          ledger: Any = None) -> tuple[Path, Json]:
     config = loaded.config
+    if (isinstance(config.actions, ActionConfigV3)
+            and config.actions.action_contract == corrected_card_instance_contract()):
+        if collection is not None or ledger is not None:
+            raise ContractError("corrected PPO/Source collection integration is not implemented")
+        from gf_cli.card_instance import run_baseline
+        return await run_baseline(loaded, command)
     _require_implemented_pipeline(config.actions)
     if isinstance(config.actions, ActionConfigV2):
         require_qualified_contract(config.actions.action_contract)
@@ -272,11 +278,11 @@ async def _run_experiment(loaded: LoadedConfig, command: str, *, collection: Col
     if collection is None and structured:
         registry, labels = structured_bindings(config.model, config.opponent,actions=config.actions,deadline=preflight_deadline)
     elif collection is None:
-        from gf_models.structured_binding import ConfiguredNeuralModelV2
+        from gf_models.structured_binding import ConfiguredNeuralModelV2, ConfiguredNeuralModelV3
         from gf_models.structured_tree_config import ConfiguredTreeModelV2
         assert isinstance(config.actions, ActionConfig)
-        assert not isinstance(config.model, (ConfiguredNeuralModelV2, ConfiguredTreeModelV2))
-        assert not isinstance(config.opponent, (ConfiguredNeuralModelV2, ConfiguredTreeModelV2))
+        assert not isinstance(config.model, (ConfiguredNeuralModelV2, ConfiguredNeuralModelV3, ConfiguredTreeModelV2))
+        assert not isinstance(config.opponent, (ConfiguredNeuralModelV2, ConfiguredNeuralModelV3, ConfiguredTreeModelV2))
         registry, labels = bindings(config.model, config.opponent, config.actions, deadline=preflight_deadline)
     else:
         registry, labels = collection.bindings, ("owned", "owned")
@@ -576,7 +582,10 @@ def main(argv: list[str] | None = None) -> int:
             print(canonical({"valid": True, "config_sha256": loaded.sha256, "effective_config": loaded.effective,
                              "inputs": loaded.inputs}))
             return 0
-        _require_implemented_pipeline(loaded.config.actions)
+        if not (isinstance(loaded.config.actions, ActionConfigV3)
+                and loaded.config.actions.action_contract == corrected_card_instance_contract()
+                and args.command in ("smoke", "collect", "evaluate")):
+            _require_implemented_pipeline(loaded.config.actions)
         if isinstance(loaded.config.actions, ActionConfigV2):
             require_qualified_contract(loaded.config.actions.action_contract)
         if args.command == "validate-policy":

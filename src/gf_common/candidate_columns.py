@@ -13,9 +13,16 @@ from itertools import pairwise
 from typing import Any
 
 from gf_common.action_contract import ActionContract, parse_action_contract, validate_record_purpose
-from gf_common.domain import ContractError, Json, canonical, closed, integer
-from gf_common.structured import ACTION_KINDS, TARGETS, CandidateTable
-from gf_common.structured_layout import LEGACY_LAYOUT
+from gf_common.card_instance import CardInstanceContract, parse_card_instance_contract
+from gf_common.domain import ContractError, Json, canonical, closed, digest, integer
+from gf_common.structured import CandidateTable
+from gf_common.structured_layout import (
+    LEGACY_LAYOUT,
+    StructuredLayout,
+    is_card_instance_layout,
+    layout_for_contract,
+    require_layout,
+)
 
 CODEC = "candidate-columns-v1"
 MAX_COLUMN_BYTES = 64 * 1024**2
@@ -91,13 +98,18 @@ def encode_candidate_columns(table: CandidateTable, file: str, *, max_positions:
     integer(max_positions, 1, 128)
     if any(stop - start > max_positions for start, stop in zip(table.offsets[:-1], table.offsets[1:], strict=True)):
         raise ContractError("candidate column row exceeds active position capacity")
+    return _encode_columns(table, file, max_bytes=max_bytes, layout=LEGACY_LAYOUT, schema=1, codec=CODEC)
+
+
+def _encode_columns(table: CandidateTable, file: str, *, max_bytes: int, layout: StructuredLayout,
+                    schema: int, codec: str) -> tuple[bytes, Json]:
     columns, size = column_layout(len(table.kinds), len(table.slots), max_bytes=max_bytes)
     payload = bytearray(size)  # zero initialization also establishes canonical alignment padding.
     by_name = {column["name"]: column for column in columns}
     start = by_name["kinds"]["offset"]
-    payload[start:start + len(table.kinds)] = bytes(ACTION_KINDS.index(kind) for kind in table.kinds)
+    payload[start:start + len(table.kinds)] = bytes(layout.action_kinds.index(kind) for kind in table.kinds)
     start = by_name["targets"]["offset"]
-    payload[start:start + len(table.targets)] = bytes(TARGETS.index(target) for target in table.targets)
+    payload[start:start + len(table.targets)] = bytes(layout.targets.index(target) for target in table.targets)
     start = by_name["numerics"]["offset"]
     for row in table.numerics:
         for value in row:
@@ -112,7 +124,7 @@ def encode_candidate_columns(table: CandidateTable, file: str, *, max_positions:
     start = by_name["slots"]["offset"]
     payload[start:start + len(table.slots)] = bytes(table.slots)
     owned = bytes(payload)
-    return owned, {"schema_version": 1, "codec": CODEC, "file": file, "count": len(table.kinds),
+    return owned, {"schema_version": schema, "codec": codec, "file": file, "count": len(table.kinds),
                    "elements": len(table.slots), "bytes": size, "sha256": hashlib.sha256(owned).hexdigest(),
                    "frame_hash": table.frame_hash, "table_hash": table.table_hash, "columns": columns,
                    "action_contract": asdict(table.action_contract), "purpose": table.purpose,
@@ -126,6 +138,13 @@ def decode_candidate_columns(payload: bytes, descriptor: Json, *, expected_file:
     columns, size = validate_descriptor(descriptor, expected_file=expected_file,
                                        expected_frame_hash=expected_frame_hash, max_bytes=max_bytes,
                                        action_contract=action_contract, purpose=purpose, synthetic_capacity=synthetic_capacity)
+    return _decode_columns(payload, descriptor, columns, size, max_positions=max_positions,
+        action_contract=action_contract, purpose=purpose, synthetic_capacity=synthetic_capacity, layout=LEGACY_LAYOUT)
+
+
+def _decode_columns(payload: bytes, descriptor: Json, columns: list[Json], size: int, *, max_positions: int,
+                    action_contract: ActionContract | CardInstanceContract, purpose: str, synthetic_capacity: bool,
+                    layout: StructuredLayout) -> CandidateTable:
     integer(max_positions, 1, 128)
     if type(payload) is not bytes or len(payload) != size or hashlib.sha256(payload).hexdigest() != descriptor["sha256"]:
         raise ContractError("candidate column payload length/hash mismatch")
@@ -138,7 +157,7 @@ def decode_candidate_columns(payload: bytes, descriptor: Json, *, expected_file:
             raise ContractError("nonzero candidate alignment padding")
         parts[column["name"]] = view[offset:offset + length]
         previous = offset + length
-    if any(code >= len(ACTION_KINDS) for code in parts["kinds"]) or any(code >= len(TARGETS) for code in parts["targets"]):
+    if any(code >= len(layout.action_kinds) for code in parts["kinds"]) or any(code >= len(layout.targets) for code in parts["targets"]):
         raise ContractError("unknown raw candidate kind/target code")
     if any(value not in (0, 1) for value in parts["presence"]) or any(slot > 17 for slot in parts["slots"]):
         raise ContractError("invalid candidate presence/own slot code")
@@ -149,7 +168,71 @@ def decode_candidate_columns(payload: bytes, descriptor: Json, *, expected_file:
     if (offsets[0] != 0 or offsets[-1] != descriptor["elements"]
             or any(not 0 <= stop - start <= max_positions for start, stop in pairwise(offsets))):
         raise ContractError("candidate column offsets/active capacity mismatch")
-    return CandidateTable(descriptor["frame_hash"], tuple(ACTION_KINDS[code] for code in parts["kinds"]),
-                          tuple(TARGETS[code] for code in parts["targets"]), numerics, presence,
+    return CandidateTable(descriptor["frame_hash"], tuple(layout.action_kinds[code] for code in parts["kinds"]),
+                          tuple(layout.targets[code] for code in parts["targets"]), numerics, presence,
                           offsets, tuple(parts["slots"]), descriptor["table_hash"], action_contract=action_contract,
                           purpose=purpose, synthetic_capacity=synthetic_capacity)
+
+
+CODEC_V2 = "candidate-columns-v2"
+
+
+def _codebook(layout: StructuredLayout) -> str:
+    return digest({"codec": CODEC_V2, "contract": asdict(layout.action_contract),
+                   "action_kinds": layout.action_kinds, "targets": layout.targets})
+
+
+def validate_descriptor_v2(descriptor: Json, *, action_contract: CardInstanceContract, purpose: str,
+                           synthetic_capacity: bool, layout: StructuredLayout,
+                           expected_file: str | None = None, expected_frame_hash: str | None = None,
+                           max_bytes: int = MAX_COLUMN_BYTES) -> tuple[list[Json], int]:
+    if (not is_card_instance_layout(require_layout(layout)) or layout_for_contract(action_contract) is not layout):
+        raise ContractError("codec2 requires the explicitly expected card-instance layout")
+    closed(descriptor, {"schema_version", "codec", "file", "count", "elements", "bytes", "sha256",
+        "frame_hash", "table_hash", "columns", "action_contract", "purpose", "synthetic_capacity", "codebook_sha256"})
+    if (type(descriptor["schema_version"]) is not int or descriptor["schema_version"] != 2
+            or descriptor["codec"] != CODEC_V2 or descriptor["codebook_sha256"] != _codebook(layout)):
+        raise ContractError("codec2 descriptor/codebook mismatch")
+    if parse_card_instance_contract(descriptor["action_contract"]) != action_contract:
+        raise ContractError("codec2 contract mismatch")
+    from gf_common.structured import _validate_purpose
+    _validate_purpose(purpose, action_contract)
+    if (descriptor["purpose"] != purpose or type(synthetic_capacity) is not bool
+            or type(descriptor["synthetic_capacity"]) is not bool or descriptor["synthetic_capacity"] != synthetic_capacity):
+        raise ContractError("codec2 purpose/capacity mismatch")
+    name = safe_basename(descriptor["file"])
+    if expected_file is not None and name != expected_file:
+        raise ContractError("codec2 foreign actor/decision file")
+    for key in ("sha256", "frame_hash", "table_hash"):
+        _sha(descriptor[key])
+    if expected_frame_hash is not None and descriptor["frame_hash"] != expected_frame_hash:
+        raise ContractError("codec2 frame binding mismatch")
+    columns, size = column_layout(descriptor["count"], descriptor["elements"], max_bytes=max_bytes)
+    integer(descriptor["bytes"], 1, max_bytes)
+    if descriptor["bytes"] != size or canonical(descriptor["columns"]) != canonical(columns):
+        raise ContractError("codec2 layout/size mismatch")
+    return columns, size
+
+
+def encode_candidate_columns_v2(table: CandidateTable, file: str, *, layout: StructuredLayout,
+                                max_positions: int = 18, max_bytes: int = MAX_COLUMN_BYTES) -> tuple[bytes, Json]:
+    if not is_card_instance_layout(require_layout(layout)) or table.layout is not layout:
+        raise ContractError("codec2 table/layout mismatch")
+    safe_basename(file)
+    integer(max_positions, 1, 128)
+    if any(b - a > max_positions for a, b in pairwise(table.offsets)):
+        raise ContractError("codec2 row exceeds active position capacity")
+    payload, descriptor = _encode_columns(table, file, max_bytes=max_bytes, layout=layout, schema=2, codec=CODEC_V2)
+    descriptor["codebook_sha256"] = _codebook(layout)
+    return payload, descriptor
+
+
+def decode_candidate_columns_v2(payload: bytes, descriptor: Json, *, action_contract: CardInstanceContract,
+                                purpose: str, synthetic_capacity: bool, layout: StructuredLayout,
+                                expected_file: str | None = None, expected_frame_hash: str | None = None,
+                                max_positions: int = 18, max_bytes: int = MAX_COLUMN_BYTES) -> CandidateTable:
+    columns, size = validate_descriptor_v2(descriptor, action_contract=action_contract, purpose=purpose,
+        synthetic_capacity=synthetic_capacity, layout=layout, expected_file=expected_file,
+        expected_frame_hash=expected_frame_hash, max_bytes=max_bytes)
+    return _decode_columns(payload, descriptor, columns, size, max_positions=max_positions,
+        action_contract=action_contract, purpose=purpose, synthetic_capacity=synthetic_capacity, layout=layout)

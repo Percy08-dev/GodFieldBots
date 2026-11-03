@@ -30,6 +30,7 @@ from gf_common.domain import (
 )
 from gf_common.preprocessing import PreparationConfig, preparation_config
 from gf_common.structured import ActionConfigV2, action_config_v2
+from gf_common.structured_layout import layout_for_contract
 from gf_models.config import (
     GRUModelConfig,
     MLPModelConfig,
@@ -42,7 +43,12 @@ from gf_models.config import (
     training_config,
     validate_capacity,
 )
-from gf_models.structured_binding import ConfiguredNeuralModelV2, model_defaults_v2
+from gf_models.structured_binding import (
+    ConfiguredNeuralModelV2,
+    ConfiguredNeuralModelV3,
+    model_defaults_v2,
+    model_defaults_v3,
+)
 from gf_models.structured_tree_config import ConfiguredTreeModelV2
 
 
@@ -111,8 +117,8 @@ class ExperimentConfig:
     run: RunConfig | RunConfigV2 = field(default_factory=RunConfig)
     server: ServerConfig | ServerConfigV2 = field(default_factory=ServerConfig)
     actions: ActionConfig | ActionConfigV2 | ActionConfigV3 = field(default_factory=ActionConfig)
-    model: ModelConfig | MLPModelConfig | GRUModelConfig | TransformerModelConfig | ConfiguredNeuralModelV2 | ConfiguredTreeModelV2 = field(default_factory=ModelConfig)
-    opponent: ModelConfig | MLPModelConfig | GRUModelConfig | TransformerModelConfig | ConfiguredNeuralModelV2 | ConfiguredTreeModelV2 = field(default_factory=ModelConfig)
+    model: ModelConfig | MLPModelConfig | GRUModelConfig | TransformerModelConfig | ConfiguredNeuralModelV2 | ConfiguredNeuralModelV3 | ConfiguredTreeModelV2 = field(default_factory=ModelConfig)
+    opponent: ModelConfig | MLPModelConfig | GRUModelConfig | TransformerModelConfig | ConfiguredNeuralModelV2 | ConfiguredNeuralModelV3 | ConfiguredTreeModelV2 = field(default_factory=ModelConfig)
     evaluation: EvaluationConfig = field(default_factory=EvaluationConfig)
     training: TrainingConfig | PPOTrainingConfig = field(default_factory=TrainingConfig)
     preprocessing: PreparationConfig = field(default_factory=PreparationConfig)
@@ -179,11 +185,14 @@ def _validate_table(name: str, values: Json, *, context: Json | None = None) -> 
     cls = TransformerModelConfig if name in ("model", "opponent") and values.get("model_id") == "transformer" else GRUModelConfig if name in ("model", "opponent") and values.get("model_id") == "gru" else SequencePPOTrainingConfig if name == "training" and "sequence_length" in values else MLPModelConfig if name in ("model", "opponent") and values.get("model_id") == "mlp" else PPOTrainingConfig if name == "training" and values.get("algorithm") == "ppo" else _TABLES[name]
     # Partial model presets may specify closed structural keys before dispatch.
     defaults = asdict(cls())
-    if name in ("model", "opponent") and values.get("version") == "3":
-        raise ContractError("model3 input layout is not implemented yet")
-    structured_model = name in ("model", "opponent") and values.get("version") == "2"
+    structured_model = name in ("model", "opponent") and values.get("version") in ("2", "3")
     if structured_model:
-        defaults = asdict(ConfiguredTreeModelV2() if values.get("model_id") == "lightgbm" else model_defaults_v2(values.get("model_id", "mlp")))
+        if values.get("version") == "3":
+            if values.get("model_id", "mlp") not in ("mlp", "gru", "transformer"):
+                raise ContractError("model3 currently supports neural Config only; Tree3 is not implemented")
+            defaults = asdict(model_defaults_v3(values.get("model_id", "mlp")))
+        else:
+            defaults = asdict(ConfiguredTreeModelV2() if values.get("model_id") == "lightgbm" else model_defaults_v2(values.get("model_id", "mlp")))
     elif name == "actions" and values.get("version") == "2":
         defaults = asdict(ActionConfigV2(action_contract=engineering_contract()))
     elif name == "actions" and values.get("version") == "3":
@@ -308,7 +317,13 @@ def load_config(path: str | Path, overrides: Json | None = None) -> LoadedConfig
         parse_action_contract(data["actions"]["action_contract"])
         base["actions"] = asdict(ActionConfigV2(action_contract=engineering_contract()))
         base["run"] = asdict(RunConfigV2())
+    if (any(data.get(name, {}).get("version") == "3" for name in ("model", "opponent"))
+            and (not card_instance_actions or card_revision != CORRECTED_SIMULATOR_REVISION)):
+        raise ContractError("model3 experiment Config requires the corrected card-instance contract")
     for name in ("model", "opponent"):
+        if data.get(name, {}).get("version") == "3":
+            base[name] = asdict(model_defaults_v3(data[name].get("model_id", "mlp")))
+            continue
         if data.get(name, {}).get("version") == "2":
             base[name] = asdict(ConfiguredTreeModelV2() if data[name].get("model_id") == "lightgbm" else model_defaults_v2(data[name].get("model_id", "mlp")))
             continue
@@ -346,7 +361,9 @@ def load_config(path: str | Path, overrides: Json | None = None) -> LoadedConfig
         integer(run["global_cuda_budget_bytes"], 1, 12884901888)
         if run["max_participant_workers"] < 2 * run["concurrency"]:
             raise ContractError("participant capacity must cover both players of every concurrent game")
-    models = {name: model_config(effective[name]) for name in ("model", "opponent")}
+    models = {name: model_config(effective[name], layout=layout_for_contract(selected_contract))
+              if effective[name].get("version") == "3" else model_config(effective[name])
+              for name in ("model", "opponent")}
     training = training_config(effective["training"])
     preprocessing = preparation_config(effective["preprocessing"])
     if ("training" in data or "training" in data.get("references", {})) and models["model"].model_id not in ("lightgbm", "mlp", "gru", "transformer"):
@@ -362,8 +379,13 @@ def load_config(path: str | Path, overrides: Json | None = None) -> LoadedConfig
         actions_v3 = action_config_v3(effective["actions"])
         if preprocessing.backend != "python" or preprocessing.reader != "legacy":
             raise ContractError("actions3 preprocessing is not implemented; only inert Python/legacy settings are supported")
-        if any(type(model) is not ModelConfig or model.model_id not in ("random", "heuristic") for model in models.values()):
-            raise ContractError("actions3 currently supports baseline Config validation only; model3 is not implemented")
+        if any(not isinstance(model, ConfiguredNeuralModelV3)
+               and (type(model) is not ModelConfig or model.model_id not in ("random", "heuristic"))
+               for model in models.values()):
+            raise ContractError("actions3 requires model3 neural or baseline Config; legacy neural/tree artifacts are incompatible")
+        if any(isinstance(model, ConfiguredNeuralModelV3)
+               and actions_v3.max_candidates > model.inference.max_candidates for model in models.values()):
+            raise ContractError("action presentation limit exceeds configured model3 admission")
     elif structured_actions:
         actions_v2 = action_config_v2(effective["actions"])
         if preprocessing.reader != "structured-v1":

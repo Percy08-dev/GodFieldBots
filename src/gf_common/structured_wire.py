@@ -8,6 +8,7 @@ from gf_common.action_contract import ActionContract, parse_action_contract
 from gf_common.card_instance import CardInstanceContract, parse_card_instance_contract
 from gf_common.card_instance_rules import CardInstanceRules, rule_signature
 from gf_common.diverse_actions import (
+    GameGeneratedCandidatesV3,
     GeneratedCandidates,
     GeneratedCandidatesV3,
     NumericCosts,
@@ -179,3 +180,21 @@ def parse_generated_v3(raw: Json, *, action_contract: CardInstanceContract,
     table = parse_table(raw["table"], action_contract=action_contract, purpose="component",
                         synthetic_capacity=False, layout=layout_for_contract(action_contract))
     return GeneratedCandidatesV3(table, report)
+
+
+def game_generated_dict_v3(value: GameGeneratedCandidatesV3, *, action_contract: CardInstanceContract,
+                           rules: CardInstanceRules) -> Json:
+    if type(value) is not GameGeneratedCandidatesV3 or value.table.layout is not layout_for_contract(action_contract):
+        raise ContractError("explicit corrected game candidates required")
+    if value.table.action_contract != action_contract:
+        raise ContractError("game table contract mismatch")
+    return {"table": asdict(value.table), "report": report_dict_v3(value.report, action_contract=action_contract, rules=rules)}
+
+
+def parse_game_generated_v3(raw: Json, *, action_contract: CardInstanceContract,
+                            rules: CardInstanceRules) -> GameGeneratedCandidatesV3:
+    closed(raw, {"table", "report"})
+    return GameGeneratedCandidatesV3(
+        parse_table(raw["table"], action_contract=action_contract, purpose="qualified_game", synthetic_capacity=False,
+                    layout=layout_for_contract(action_contract)),
+        parse_report_v3(raw["report"], action_contract=action_contract, rules=rules))

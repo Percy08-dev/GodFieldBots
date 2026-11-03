@@ -21,6 +21,7 @@ from gf_common.structured_history import (
     APPENDED_HISTORY_FIELDS,
     HISTORICAL_AGGREGATE,
     LEGACY_HISTORY_WIDTH,
+    appended_history_fields,
     exact_history_tail,
 )
 from gf_common.structured_layout import (
@@ -97,7 +98,7 @@ def signature_payload(aggregate_window: int = 128, *, aggregate_recipe: str | No
         history_fields = (tuple("event." + kind for kind in layout.event_types)
             + tuple("actor." + role + "." + side for role in EVENT_ACTORS for side in RELATIVE)
             + tuple(prefix + name for name in EVENT_NUMERIC_FIELDS for prefix in ("sum.", "present."))
-            + APPENDED_HISTORY_FIELDS)
+            + appended_history_fields(layout.event_categories[1]))
         payload.update(action_contract=asdict(layout.action_contract), policy_input_version=layout.policy_input_version,
             generator_version=layout.generator, aggregate_recipe=aggregate_recipe, history_fields=history_fields,
             history_actor_priority=("player", "attacker", "active_player"), history_actor_fallback="key-presence",
@@ -169,7 +170,7 @@ def _numbers(row: dict[str, Any], fields: tuple[str, ...]) -> tuple[tuple[int, .
 
 def _event(event: dict[str, Any], actor: int, layout: StructuredLayout = LEGACY_LAYOUT) -> tuple[tuple[int, ...], tuple[bool, ...], tuple[int, ...]]:
     numeric, present = _numbers(event, EVENT_NUMERIC_FIELDS)
-    categories = (category(event["type"], layout.event_types), category(event.get("definition_id"), vocab.DEFINITIONS),
+    categories = (category(event["type"], layout.event_types), category(event.get("definition_id"), layout.event_categories[1]),
                   category(event.get("status"), STATUSES), category(_result(event.get("result"), actor), RESULTS),
                   *(category(_relative(event.get(key), actor), RELATIVE) for key in EVENT_ACTORS))
     return numeric, present, categories
@@ -268,7 +269,8 @@ def tokenize_frame(frame: DecisionFrame, bank_view: EventBankView, *, aggregate_
             history[offset + index * 2] += number
             history[offset + index * 2 + 1] += event_exists
     if aggregate_recipe == layout.aggregate_recipe:
-        history.extend(exact_history_tail(events, frame.actor, prefix_count=view.boundary.end, window=aggregate_window))
+        history.extend(exact_history_tail(events, frame.actor, prefix_count=view.boundary.end,
+            window=aggregate_window, definition_ids=layout.event_categories[1]))
     elif aggregate_recipe != HISTORICAL_AGGREGATE:
         raise ContractError('unsupported structured aggregate recipe')
     return FrameTokens(frame.frame_hash, signature(aggregate_window, aggregate_recipe=aggregate_recipe, layout=layout), aggregate_window, frame.actor, frame.episode, frame.revision,

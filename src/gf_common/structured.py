@@ -14,6 +14,7 @@ from typing import Any
 
 from gf_common import card_instance_validation as card_v2
 from gf_common import structured_layout as layouts
+from gf_common import structured_vocab as vocab
 from gf_common.action_contract import (
     ActionContract,
     parse_action_contract,
@@ -61,8 +62,14 @@ def _validate_events(events: list[Json], layout: StructuredLayout) -> None:
     else:
         from gf_common.card_instance_vocab import DEFINITION_SHA256
         card_v2.validate_events(events)
-        if any("definition_id" in event and event["definition_id"] not in DEFINITION_SHA256 for event in events):
-            raise ContractError("unknown public event-time definition")
+        for event in events:
+            if "definition_id" not in event:
+                continue
+            guardian = (layout is CORRECTED_CARD_INSTANCE_LAYOUT
+                and event["type"] in ("guardian_set", "guardian_left"))
+            namespace = vocab.GUARDIANS if guardian else DEFINITION_SHA256
+            if event["definition_id"] not in namespace:
+                raise ContractError("unknown public event-time definition namespace")
 
 
 def _validate_input(value: DecisionInput, layout: StructuredLayout) -> DecisionInput:

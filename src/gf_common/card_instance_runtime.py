@@ -1,0 +1,124 @@
+"""Closed approved runtime receipts. Pure diagnostics, never policy/Source authority."""
+
+from __future__ import annotations
+
+from dataclasses import asdict
+from types import MappingProxyType
+from typing import Any
+
+from gf_common.card_instance import (
+    CORRECTED_REVIEWED_SPEC_HASHES,
+    CardInstanceContract,
+    corrected_card_instance_contract,
+    parse_card_instance_contract,
+)
+from gf_common.domain import ContractError, Json, closed, digest, integer
+
+APPROVED_BINARY_SHA256 = "76aff19c2f720a572bfe422d9b1e089a1467f253038cda66de3d8c35180d0f7d"
+APPROVED_CHANGE_SHA256 = "e34b7160f956b6510243077d418a0a96f34f6e271077021641b2fd50a9870346"
+APPROVED_SPEC_FILES = MappingProxyType(dict(CORRECTED_REVIEWED_SPEC_HASHES))
+APPROVED_CHANGE_FILES = MappingProxyType(
+    {
+        "src/engine/resolution/entry.rs": "3432945727970ebdb7a9ade9b03aee4641a36cdebab5312542092c38e0d6e663",
+        "src/engine/resolution/turn.rs": "853bab7afcaecbf95980f0781b7d2e20d2d5d612d57fa02006e674fa089bd80c",
+        "src/engine/resolution/tests.rs": "66b59de141f1f940c572bd9501376646514fc82690ad774100b1fc976439a0b4",
+        "tests/http_contract.rs": "fbbcc074c111d245aea137f0755caea248614c89b7c13f44ad7f75efdf491fd1",
+        "tests/canonical_v2.rs": "0978a7d531908d2408a77c30207648af4a7aba7635f9b1eaa375266fa35df205",
+        "docs/spec/03-game-engine.md": "2441745566f553d8ce01806b64f88d4978209cd75e2ba0699fe71dc1fa022a04",
+        "docs/spec/06-persistence-history.md": "3ac16199cb0a15289a1324f1f375a581a32e7889bcb73efa142dc24235853f64",
+        "docs/spec/09-gameplay-rules.md": "6a11ad81e5df99d4962a57f7cf45b620f46624c7bb04628514600930e9543d5d",
+        "docs/spec/godfield_rule_verification_register.md": "d892bafb621be33dc24455af2ab07d173f1127736e78da3e86a72134520084da",
+    }
+)
+
+
+def require_corrected_contract(contract: CardInstanceContract) -> None:
+    if type(contract) is not CardInstanceContract or contract != corrected_card_instance_contract():
+        raise ContractError("corrected runtime requires the exact approved contract")
+
+
+def game_binding(contract: CardInstanceContract, rules_signature: str) -> Json:
+    from gf_common.card_instance_rules import card_instance_rules, rule_signature
+    from gf_common.structured_layout import layout_for_contract
+    from gf_common.structured_tokens import signature
+
+    require_corrected_contract(contract)
+    if rules_signature != rule_signature(contract, card_instance_rules()):
+        raise ContractError("corrected game rule signature mismatch")
+    return {
+        "action_contract": asdict(contract),
+        "rule_signature": rules_signature,
+        # Fixed128 window identifies structure across worker versions. Actual
+        # model/journal token signatures additionally bind their own window.
+        "layout_signature": signature(128, layout=layout_for_contract(contract)),
+        "purpose": "qualified_game",
+        "synthetic_capacity": False,
+    }
+
+
+def check_game_binding(raw: Json, contract: CardInstanceContract, rules_signature: str) -> None:
+    expected = game_binding(contract, rules_signature)
+    closed(raw, set(expected))
+    if digest(raw) != digest(expected):
+        raise ContractError("corrected game input binding mismatch")
+
+
+def _identity(raw: Any) -> None:
+    if type(raw) not in (list, tuple) or len(raw) != 5:
+        raise ContractError("runtime file identity required")
+    for number in raw:
+        integer(number, 0)
+
+
+def validate_runtime_receipt(raw: Json, *, require_executed: bool = False) -> Json:
+    """Validate representation/pins only; only the live owner can attest reads."""
+    from gf_common.domain import clone
+
+    closed(raw, {"schema_version", "action_contract", "build", "binary", "source", "executed"})
+    if type(raw["schema_version"]) is not int or raw["schema_version"] != 1:
+        raise ContractError("runtime receipt schema required")
+    contract = parse_card_instance_contract(raw["action_contract"])
+    require_corrected_contract(contract)
+    build = closed(
+        raw["build"],
+        {
+            "binary_sha256",
+            "spec_inventory_sha256",
+            "change_inventory_sha256",
+            "spec_files",
+            "change_files",
+        },
+    )
+    if (
+        build["binary_sha256"] != APPROVED_BINARY_SHA256
+        or build["spec_inventory_sha256"] != contract.spec_inventory_sha256
+        or build["change_inventory_sha256"] != APPROVED_CHANGE_SHA256
+        or build["spec_files"] != dict(APPROVED_SPEC_FILES)
+        or build["change_files"] != dict(APPROVED_CHANGE_FILES)
+    ):
+        raise ContractError("unapproved runtime release tuple/file inventory")
+    binary = closed(raw["binary"], {"path", "sha256", "identity"})
+    source = closed(raw["source"], {"path", "revision", "spec_files", "change_files"})
+    if (
+        binary["sha256"] != APPROVED_BINARY_SHA256
+        or source["revision"] != contract.simulator_revision
+        or source["spec_files"] != dict(APPROVED_SPEC_FILES)
+        or source["change_files"] != dict(APPROVED_CHANGE_FILES)
+    ):
+        raise ContractError("runtime actual code/source differs from approved release")
+    for path in (binary["path"], source["path"]):
+        if type(path) is not str or not path.startswith("/"):
+            raise ContractError("absolute runtime diagnostic path required")
+    _identity(binary["identity"])
+    executed = raw["executed"]
+    if executed is None:
+        if require_executed:
+            raise ContractError("live executed-code receipt required before Create")
+    else:
+        closed(executed, {"pid", "start_time", "sha256", "identity"})
+        integer(executed["pid"], 1)
+        integer(executed["start_time"], 1)
+        _identity(executed["identity"])
+        if executed["sha256"] != APPROVED_BINARY_SHA256:
+            raise ContractError("actual executed binary differs from approved release")
+    return clone(raw)

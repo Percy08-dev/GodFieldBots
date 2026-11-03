@@ -59,6 +59,7 @@ class StructuredJournal(ParticipantJournal):
                  model_id: str, model_version: str, aggregate_window: int = 128,
                  sampling_seed: int = 0, use_action_options: bool = True, action_contract: ActionContract,
                  purpose: str, synthetic_capacity: bool) -> None:
+        self._context: Any = None
         classification = input_binding(action_contract, purpose, synthetic_capacity)
         if synthetic_capacity:
             raise ContractError("journal5 game proposals reject synthetic capacity")
@@ -114,7 +115,10 @@ class StructuredJournal(ParticipantJournal):
     def begin_frame(self, frame: DecisionFrame, delta: EventDelta, generated: GeneratedCandidates,
                     selection: Selection, command: Json, timings: Json) -> int:
         started = time.perf_counter()
-        check_input_binding({"action_contract": asdict(generated.table.action_contract), "purpose": generated.table.purpose,
+        if self._context is not None:
+            self._context.validate_generated(generated, selection)
+        check = check_input_binding if self._context is None else self._context.check_binding
+        check({"action_contract": asdict(generated.table.action_contract), "purpose": generated.table.purpose,
                              "synthetic_capacity": generated.table.synthetic_capacity}, action_contract=self.action_contract,
                             purpose=self.purpose, synthetic_capacity=False)
         if self.caps["max_decisions"] is not None:
@@ -156,7 +160,8 @@ class StructuredJournal(ParticipantJournal):
             raise ContractError("journal5 numeric cost binding mismatch")
         _host_timings(timings)
         index = self.count
-        descriptor = publish_candidates(self.path.parent, frame, generated.table, index,
+        publish = publish_candidates if self._context is None else self._context.publish_candidates
+        descriptor = publish(self.path.parent, frame, generated.table, index,
                                         max_positions=self.caps["max_positions"], action_contract=self.action_contract,
                                         purpose=self.purpose, synthetic_capacity=False)
         # Sidecar is closed/verified/published BEFORE any referencing JSONL row.
@@ -164,9 +169,10 @@ class StructuredJournal(ParticipantJournal):
             self.write({"kind": "transition", "decision": self.last_accepted, "next_decision": index,
                         "reward": 0, "terminal": False})
             self.last_accepted = None
-        self.write({"kind": "events", "delta": delta_dict(delta), "boundary": {"end": frame.boundary.end,
+        active_layout = {} if self._context is None else {"layout": self._context.layout}
+        self.write({"kind": "events", "delta": delta_dict(delta, **active_layout), "boundary": {"end": frame.boundary.end,
                     "prefix_hash": frame.boundary.prefix_hash}})
-        self.write({"kind": "decision", "decision": index, "frame": frame_dict(frame),
+        self.write({"kind": "decision", "decision": index, "frame": frame_dict(frame, **active_layout),
                     "table": descriptor, "search_report": asdict(generated.report), "selection": asdict(selection),
                     "command": command, "timings": timings})
         self.pending.add(index)
@@ -194,7 +200,8 @@ class StructuredJournal(ParticipantJournal):
         reward = None
         if end_kind == "natural":
             reward = _reward(outcome, self.viewer)
-            if (final_observation is None or observation(final_observation, self.viewer)["phase"] != "terminal"
+            validate_observation = observation if self._context is None else self._context.observation
+            if (final_observation is None or validate_observation(final_observation, self.viewer)["phase"] != "terminal"
                     or final_observation["result"] != outcome or self.pending):
                 raise ContractError("natural end requires observed participant final state")
             if self.last_accepted is not None:
@@ -274,12 +281,22 @@ def read_structured_journal(path: Path, *, deadline: float = float("inf"),
                             records: list[Json] | None = None, max_jsonl_bytes: int = 64 * 1024**2,
                             max_record_bytes: int = 8 * 1024**2, action_contract: ActionContract,
                             purpose: str, synthetic_capacity: bool) -> StructuredJournalData:
+    return _read_structured_journal(path, deadline=deadline, records=records, max_jsonl_bytes=max_jsonl_bytes,
+        max_record_bytes=max_record_bytes, action_contract=action_contract, purpose=purpose,
+        synthetic_capacity=synthetic_capacity)
+
+
+def _read_structured_journal(path: Path, *, deadline: float = float("inf"),
+                            records: list[Json] | None = None, max_jsonl_bytes: int = 64 * 1024**2,
+                            max_record_bytes: int = 8 * 1024**2, action_contract: Any,
+                            purpose: str, synthetic_capacity: bool, _context: Any = None) -> StructuredJournalData:
     """Return structural component records/evidence, NOT source eligibility.
 
     Whole-run, Replay, split and whole-PPO-parent qualification remain mandatory
     in the source layer; this result alone authorizes no training or evaluation.
     """
-    classification = input_binding(action_contract, purpose, synthetic_capacity)
+    classification = (input_binding(action_contract, purpose, synthetic_capacity) if _context is None
+                      else _context.binding)
     if synthetic_capacity:
         raise ContractError("journal5 game proposals reject synthetic capacity")
     import json
@@ -310,40 +327,43 @@ def read_structured_journal(path: Path, *, deadline: float = float("inf"),
     if not records or records[0].get("kind") != "header":
         raise ContractError("journal5 header required")
     header = records[0]
-    closed(header, {"kind", "schema_version", "feature_version", "input_recipe", "reward_version", "policy_input_version",
-                    "end_projection_version", "catalog", "episode_id", "viewer", "policy", "run_id", "game_id",
-                    "action_config_hash", "generator_version", "bank_episode", "caps", "numeric_costs", "model_id",
-                    "model_version", "generation_schema", "aggregate_window", "token_signature", "sampling_seed", "use_action_options"} | set(classification))
-    check_input_binding({key: header[key] for key in classification}, action_contract=action_contract,
-                        purpose=purpose, synthetic_capacity=synthetic_capacity)
-    if (type(header["schema_version"]) is not int or header["schema_version"] != 5
-            or header["feature_version"] != STRUCTURED_FEATURE_VERSION or header["input_recipe"] != STRUCTURED_FEATURE_VERSION
-            or header["reward_version"] != REWARD_VERSION or header["policy_input_version"] != POLICY_INPUT_VERSION
-            or header["end_projection_version"] != END_PROJECTION_VERSION or canonical(header["catalog"]) != canonical(CATALOG_META)
-            or header["generator_version"] != GENERATOR_V2 or header["use_action_options"] is not True):
-        raise ContractError("journal5 semantic identity mismatch")
-    recorded_aggregate_recipe(header['token_signature'], header['aggregate_window'])
-    integer(header["viewer"], 1, 2)
-    integer(header["sampling_seed"])
-    for key in ("episode_id", "policy", "run_id", "game_id", "action_config_hash", "bank_episode"):
-        if type(header[key]) is not str or not header[key]:
-            raise ContractError("journal5 identity string required")
-    caps = WorkerCaps(**closed(header["caps"], set(WorkerCaps.__dataclass_fields__)))
-    NumericCosts(**closed(header["numeric_costs"], set(NumericCosts.__dataclass_fields__)))
-    if header["model_id"] not in ("random", "heuristic", "mlp", "gru", "transformer", "lightgbm") or header["model_version"] not in ("1", "2"):
-        raise ContractError("unknown journal5 policy model")
-    if header["model_version"] == "2" and header["model_id"] == "lightgbm":
-        if header["generation_schema"] is not None:
-            raise ContractError("journal5 Tree2 is non-PPO and requires null generation schema")
-    elif header["model_version"] == "2":
-        if type(header["generation_schema"]) is not int or header["generation_schema"] != 2 or header["model_id"] not in ("mlp", "gru", "transformer"):
-            raise ContractError("journal5 neural generation schema must be integer2")
-    elif header["generation_schema"] is not None or header["model_id"] not in ("random", "heuristic"):
-        raise ContractError("journal5 baseline generation schema must be None")
-    integer(header["aggregate_window"], 1, min(65536, caps.max_episode_events))
-    if re.fullmatch(r"[0-9a-f]{64}", header["action_config_hash"]) is None:
-        raise ContractError("journal5 action hash required")
-    bank = EventBank(header["viewer"], header["bank_episode"], caps.max_episode_events)
+    if _context is None:
+        closed(header, {"kind", "schema_version", "feature_version", "input_recipe", "reward_version", "policy_input_version",
+                        "end_projection_version", "catalog", "episode_id", "viewer", "policy", "run_id", "game_id",
+                        "action_config_hash", "generator_version", "bank_episode", "caps", "numeric_costs", "model_id",
+                        "model_version", "generation_schema", "aggregate_window", "token_signature", "sampling_seed", "use_action_options"} | set(classification))
+        check_input_binding({key: header[key] for key in classification}, action_contract=action_contract,
+                            purpose=purpose, synthetic_capacity=synthetic_capacity)
+        if (type(header["schema_version"]) is not int or header["schema_version"] != 5
+                or header["feature_version"] != STRUCTURED_FEATURE_VERSION or header["input_recipe"] != STRUCTURED_FEATURE_VERSION
+                or header["reward_version"] != REWARD_VERSION or header["policy_input_version"] != POLICY_INPUT_VERSION
+                or header["end_projection_version"] != END_PROJECTION_VERSION or canonical(header["catalog"]) != canonical(CATALOG_META)
+                or header["generator_version"] != GENERATOR_V2 or header["use_action_options"] is not True):
+            raise ContractError("journal5 semantic identity mismatch")
+        recorded_aggregate_recipe(header['token_signature'], header['aggregate_window'])
+        integer(header["viewer"], 1, 2)
+        integer(header["sampling_seed"])
+        for key in ("episode_id", "policy", "run_id", "game_id", "action_config_hash", "bank_episode"):
+            if type(header[key]) is not str or not header[key]:
+                raise ContractError("journal5 identity string required")
+        caps = WorkerCaps(**closed(header["caps"], set(WorkerCaps.__dataclass_fields__)))
+        NumericCosts(**closed(header["numeric_costs"], set(NumericCosts.__dataclass_fields__)))
+        if header["model_id"] not in ("random", "heuristic", "mlp", "gru", "transformer", "lightgbm") or header["model_version"] not in ("1", "2"):
+            raise ContractError("unknown journal5 policy model")
+        if header["model_version"] == "2" and header["model_id"] == "lightgbm":
+            if header["generation_schema"] is not None:
+                raise ContractError("journal5 Tree2 is non-PPO and requires null generation schema")
+        elif header["model_version"] == "2":
+            if type(header["generation_schema"]) is not int or header["generation_schema"] != 2 or header["model_id"] not in ("mlp", "gru", "transformer"):
+                raise ContractError("journal5 neural generation schema must be integer2")
+        elif header["generation_schema"] is not None or header["model_id"] not in ("random", "heuristic"):
+            raise ContractError("journal5 baseline generation schema must be None")
+        integer(header["aggregate_window"], 1, min(65536, caps.max_episode_events))
+        if re.fullmatch(r"[0-9a-f]{64}", header["action_config_hash"]) is None:
+            raise ContractError("journal5 action hash required")
+        bank = EventBank(header["viewer"], header["bank_episode"], caps.max_episode_events)
+    else:
+        caps, bank = _context.validate_header(header)
     search_seed = int(digest({"recipe": "structured-search-stream-v1", "sampling_seed": header["sampling_seed"]})[:16], 16)
     expected_search_state = random.Random(search_seed).getstate()
     decisions: list[StructuredDecision] = []
@@ -366,7 +386,7 @@ def read_structured_journal(path: Path, *, deadline: float = float("inf"),
             closed(row, {"kind", "delta", "boundary"})
             if pending is not None or delta_pending or lifecycle is not None:
                 raise ContractError("journal5 event delta ordering mismatch")
-            delta = parse_delta(row["delta"])
+            delta = parse_delta(row["delta"], **({} if _context is None else {"layout": _context.layout}))
             if len(delta._events) > caps.max_interval_events:
                 raise ContractError("journal5 event interval cap exceeded")
             boundary = bank.append(delta)
@@ -392,7 +412,7 @@ def read_structured_journal(path: Path, *, deadline: float = float("inf"),
             if awaiting_next is not None and awaiting_next != index:
                 raise ContractError("journal5 transition/next mismatch")
             awaiting_next = None
-            frame = parse_frame(row["frame"])
+            frame = parse_frame(row["frame"], **({} if _context is None else {"layout": _context.layout}))
             integer(frame.boundary.end, 0, caps.max_episode_events)
             integer(frame.boundary.end - frame.interval_start, 0, caps.max_interval_events)
             if frame.boundary != bank.boundary:
@@ -400,10 +420,16 @@ def read_structured_journal(path: Path, *, deadline: float = float("inf"),
             frame.bank_view(bank.view())
             if frame.interval_start != (0 if last_frame is None else last_frame.boundary.end) or last_frame is not None and frame.revision <= last_frame.revision:
                 raise ContractError("journal5 frame interval/revision mismatch")
-            table = read_candidates(path.parent, row["table"], frame, index, max_positions=caps.max_positions, action_contract=action_contract,
+            read = read_candidates if _context is None else _context.read_candidates
+            table = read(path.parent, row["table"], frame, index, max_positions=caps.max_positions, action_contract=action_contract,
                                     purpose=purpose, synthetic_capacity=False)
-            report = parse_report(row["search_report"], action_contract=action_contract)
-            generated = GeneratedCandidates(table, report)
+            if _context is None:
+                report = parse_report(row["search_report"], action_contract=action_contract)
+                generated: Any = GeneratedCandidates(table, report)
+            else:
+                report = _context.parse_report(row["search_report"])
+                generated = _context.generated(table, report)
+                _context.validate_generated(generated, selection)
             if report.rng_before != expected_search_state:
                 raise ContractError("journal5 search RNG stream discontinuity")
             expected_search_state = report.rng_after
@@ -416,7 +442,8 @@ def read_structured_journal(path: Path, *, deadline: float = float("inf"),
             _host_timings(row["timings"])
             commands[index] = command
             decisions.append(StructuredDecision(frame, generated, selection, command, row["timings"]))
-            inventories.append(sidecar_inventory(path.parent, row["table"], frame, index, max_positions=caps.max_positions, action_contract=action_contract,
+            inventory = sidecar_inventory if _context is None else _context.sidecar_inventory
+            inventories.append(inventory(path.parent, row["table"], frame, index, max_positions=caps.max_positions, action_contract=action_contract,
                                     purpose=purpose, synthetic_capacity=False))
             pending, last_frame, delta_pending = index, frame, False
         elif kind == "acknowledgement":
@@ -458,7 +485,8 @@ def read_structured_journal(path: Path, *, deadline: float = float("inf"),
                 result(row["outcome"])
                 reward = _reward(row["outcome"], header["viewer"])
                 integer(row["terminal_reward"], -1, 1)
-                final = observation(row["final_observation"], header["viewer"])
+                validate_observation = observation if _context is None else _context.observation
+                final = validate_observation(row["final_observation"], header["viewer"])
                 if pending is not None or final["phase"] != "terminal" or final["result"] != row["outcome"] or row["terminal_reward"] != reward:
                     raise ContractError("journal5 natural closure lacks observed participant outcome")
                 if accepted and (terminal_transition is None or terminal_transition["decision"] != accepted[-1] or terminal_transition["reward"] != reward):

@@ -4,24 +4,29 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from itertools import pairwise
 
+from gf_common.card_instance import ActionConfigV3
+from gf_common.card_instance_rules import CardInstanceRules
 from gf_common.diverse_actions import NumericCosts
 from gf_common.domain import ContractError, Json, integer
 from gf_common.structured import ActionConfigV2
-from gf_models.structured_binding import safe_options_v2
+from gf_common.structured_layout import LEGACY_LAYOUT, StructuredLayout, layout_for_contract
+from gf_models.structured_binding import safe_options_v2, safe_options_v3
 from gf_models.structured_config import (
     InferenceBindingV2,
     ModelConfigV2,
+    ModelConfigV3,
     dimensions,
     model_config_v2,
+    model_config_v3,
     resource_estimate,
 )
 
 PROCESS_ENVELOPE_RECIPE = "structured-process-envelope-v1"
 
 
-def learner_process_bytes(model: ModelConfigV2, binding: InferenceBindingV2) -> int:
+def learner_process_bytes(model: ModelConfigV2 | ModelConfigV3, binding: InferenceBindingV2, *, layout: StructuredLayout = LEGACY_LAYOUT) -> int:
     """Full configured W envelope, charged until the numerical process is reaped."""
-    peak = resource_estimate(model, binding)["total_bytes"]
+    peak = resource_estimate(model, binding, layout=layout)["total_bytes"]
     return peak if binding.device != "cpu" else 0
 
 
@@ -67,22 +72,41 @@ def own_worker_settings(model_id: str, actions: ActionConfigV2, options: Json | 
     binding = InferenceBindingV2(**safe["inference"])
     if model.model_id != model_id or actions.max_sequence_length > model.max_positions or actions.max_candidates > binding.max_candidates:
         raise ContractError("own model/actions capacity mismatch")
+    return _neural_settings(model, binding, actions)
+
+
+def own_worker_settings_v3(model_id: str, actions: ActionConfigV3, options: Json, *, rules: CardInstanceRules) -> tuple[WorkerCaps, NumericCosts, int, int]:
+    if type(actions) is not ActionConfigV3:
+        raise ContractError("explicit actions3 required")
+    from gf_common.domain import digest
+    safe = safe_options_v3(options, action_contract=actions.action_contract, rules=rules, purpose="component",
+        synthetic_capacity=False, action_config_hash=digest(asdict(actions)))
+    layout = layout_for_contract(actions.action_contract)
+    model = model_config_v3(safe["model"], layout=layout)
+    binding = InferenceBindingV2(**safe["inference"])
+    if model.model_id != model_id or actions.max_sequence_length > model.max_positions or actions.max_candidates > binding.max_candidates:
+        raise ContractError("own model3/actions capacity mismatch")
+    return _neural_settings(model, binding, actions, layout=layout)
+
+
+def _neural_settings(model: ModelConfigV2 | ModelConfigV3, binding: InferenceBindingV2,
+                     actions: ActionConfigV2 | ActionConfigV3, *, layout: StructuredLayout = LEGACY_LAYOUT) -> tuple[WorkerCaps, NumericCosts, int, int]:
     caps = WorkerCaps(model.event.max_interval, model.event.max_episode, model.temporal.max_decisions,
                       actions.max_sequence_length, actions.max_candidates)
-    dims = dimensions(model)
+    dims = dimensions(model, layout=layout)
     widths = (*model.heads.actor_hidden_sizes, 1)
     tail_ops = model.heads.actor_hidden_sizes[0]
     for source, target in pairwise(widths):
         tail_ops += 2 * source * target + target
     tail_ops += sum(model.heads.actor_hidden_sizes[1:])
-    peak = resource_estimate(model, binding, suffix_decisions=1)["total_bytes"]
+    peak = resource_estimate(model, binding, suffix_decisions=1, layout=layout)["total_bytes"]
     costs = NumericCosts(context_width=model.temporal.hidden_size, card_width=dims["card_actor"],
                          actor_input_width=dims["actor"], actor_hidden_width=widths[0],
                          position_capacity=model.max_positions, candidate_chunk=binding.candidate_chunk,
                          tail_operations_per_candidate=tail_ops,
                          tail_working_bytes_per_candidate=sum(widths) * 32,
                          tail_tensor_bytes_per_candidate=max(widths) * 4,
-                         fixed_bytes=resource_estimate(model, binding, candidates=1, suffix_decisions=1)["total_bytes"],
+                         fixed_bytes=resource_estimate(model, binding, candidates=1, suffix_decisions=1, layout=layout)["total_bytes"],
                          max_preparation_bytes=min(model.resources.max_owned_bytes, binding.managed_budget_bytes),
                          max_tensor_bytes=model.resources.max_tensor_bytes)
     return caps, costs, peak if binding.device != "cpu" else 0, 0

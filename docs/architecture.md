@@ -18,8 +18,20 @@ The learned-Discard runtime mismatch in
 in Simulator91d5926 on2026-11-04. Its distinct corrected contract/layout/profile
 is now explicitly adopted alongside the preserved07eprofile, with both reviews,
 551affected tests and source-matched/isolated-wheel/runtime diagnostic evidence.
-Model3 neural/artifact design passes its separate review. Remaining runtime/
-model/worker/native/Source integration gates stay closed until implemented.
+Model3 shared neural kernels, component inference and format4 artifacts pass
+both independent reviews and the hand3×model3 numerical/resume checks, including
+27 actual CUDA cases for the preceding layout. The pilot's Guardian event
+namespace omission is now repaired for the corrected layout: both reviews are
+READY, with803CPU and31actual CUDA checks passing. Current token/layout signature
+is ed0c6115…68002f; historical91signatures reject instead of being reinterpreted.
+Corrected baseline protocol3/codec2/journal6/collection5 also passes both reviews,
+the final same-condition192-game pilot (192natural/zero failures) and an independent
+full384journal/Replay/4492file audit. Root accepts this baseline feasibility scope.
+The two prior failed populations remain preserved and ineligible; this does not
+qualify a learning Source or establish strength. The source-matched134module
+wheel also passes mandatory-only installed baseline-worker checks.
+Qualified neural selection, native-v2, Source, numeric rollout/learner4, PPO and
+Tree integration remain pending.
 Exact conditions are in the [new ledger](verification/card-instance-v2-adoption.md).
 Legacy and ADR0023 engineering identities remain unchanged; historical evidence
 below does not qualify the new contract.

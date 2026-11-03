@@ -14,15 +14,10 @@ from dataclasses import dataclass, field, replace
 from itertools import pairwise
 from typing import Any
 
+from gf_common import structured_layout as legacy_layout_constants
 from gf_common.domain import ContractError, integer
+from gf_common.structured_layout import LEGACY_LAYOUT, StructuredLayout
 from gf_common.structured_tokens import (
-    ACTION_KINDS,
-    CARD_CATEGORIES,
-    EVENT_CATEGORIES,
-    SOURCES,
-    STATE_CATEGORIES,
-    STATE_WIDTH,
-    TARGETS,
     CandidateTokens,
     FrameTokens,
     validate_candidate_tokens,
@@ -31,6 +26,7 @@ from gf_common.structured_tokens import (
 from gf_models.structured_config import (
     InferenceBindingV2,
     ModelConfigV2,
+    ModelConfigV3,
     dimensions,
     parameter_shapes,
     recorded_token_signature,
@@ -38,6 +34,14 @@ from gf_models.structured_config import (
     validate_config,
 )
 
+# Historical exported aliases retain their exact legacy meaning.
+ACTION_KINDS = legacy_layout_constants.ACTION_KINDS
+CARD_CATEGORIES = legacy_layout_constants.CARD_CATEGORIES
+EVENT_CATEGORIES = legacy_layout_constants.EVENT_CATEGORIES
+SOURCES = legacy_layout_constants.SOURCES
+STATE_CATEGORIES = legacy_layout_constants.STATE_CATEGORIES
+STATE_WIDTH = legacy_layout_constants.STATE_WIDTH
+TARGETS = legacy_layout_constants.TARGETS
 
 @dataclass
 class TemporalCache:
@@ -59,17 +63,18 @@ class TemporalCache:
         self.position, self.owner, self.revision, self.event_end = 0, None, -1, 0
 
 
-def make_network(model: ModelConfigV2, seed: int,
-                 binding: InferenceBindingV2 | None = None) -> Any:
-    validate_config(model)
+def make_network(model: ModelConfigV2 | ModelConfigV3, seed: int,
+                 binding: InferenceBindingV2 | None = None, *, layout: StructuredLayout = LEGACY_LAYOUT) -> Any:
+    layout_options: dict[str, Any] = {} if layout is LEGACY_LAYOUT else {"layout": layout}
+    validate_config(model, layout=layout)
     runtime_binding = InferenceBindingV2() if binding is None else binding
-    resource_estimate(model, runtime_binding)  # BEFORE Torch import / parameter allocation.
+    resource_estimate(model, runtime_binding, **layout_options)  # BEFORE Torch import / parameter allocation.
     integer(seed, 0, 2**63 - 1)
     from gf_models.torch_runtime import torch_runtime
     torch = torch_runtime(runtime_binding.device)
     nn, functional = torch.nn, torch.nn.functional
     base: Any = nn.Module
-    d = dimensions(model)
+    d = dimensions(model, layout=layout)
 
     def mlp(widths: tuple[int, ...], final_relu: bool = False) -> Any:
         layers = []
@@ -143,11 +148,11 @@ def make_network(model: ModelConfigV2, seed: int,
             self.config, self.binding = model, runtime_binding
             self._measure_input_packing = False
             self._input_packing_seconds = 0.
-            self.state_encoder = (mlp((STATE_WIDTH,
+            self.state_encoder = (mlp((layout.state_width,
                                        *model.state.hidden_sizes, model.state.output_size), True)
                                   if model.state.kind == "mlp" else nn.Identity())
-            self.definition_embedding = nn.Embedding(len(CARD_CATEGORIES[0]) + 2, model.card.definition_embedding, padding_idx=0)
-            self.ability_embedding = nn.Embedding(len(CARD_CATEGORIES[1]) + 2, model.card.ability_embedding, padding_idx=0)
+            self.definition_embedding = nn.Embedding(len(layout.card_categories[0]) + 2, model.card.definition_embedding, padding_idx=0)
+            self.ability_embedding = nn.Embedding(len(layout.card_categories[1]) + 2, model.card.ability_embedding, padding_idx=0)
             self.card_encoder = nn.Linear(d["card_input"], model.card.output_size)
             if model.hand.kind != "direct":
                 self.hand_encoder = mlp((model.card.output_size, *model.hand.hidden_sizes, model.hand.latent_size), True)
@@ -155,8 +160,7 @@ def make_network(model: ModelConfigV2, seed: int,
                 self.hand_attention = nn.ModuleList([AttentionLayer(model.card.output_size, model.hand.attention_heads,
                                                                     model.hand.attention_feedforward)
                                                     for _ in range(model.hand.attention_layers)])
-            from gf_common.structured_tokens import EVENT_WIDTH
-            self.event_encoder = nn.GRU(EVENT_WIDTH, model.event.hidden_size, model.event.num_layers, batch_first=True)
+            self.event_encoder = nn.GRU(layout.event_width, model.event.hidden_size, model.event.num_layers, batch_first=True)
             self.frame_projection = nn.Linear(d["frame"], model.temporal.hidden_size)
             if model.model_id == "gru":
                 self.temporal = nn.GRU(model.temporal.hidden_size, model.temporal.hidden_size,
@@ -175,6 +179,10 @@ def make_network(model: ModelConfigV2, seed: int,
             pe[:, 0::2] = angles.sin()
             pe[:, 1::2] = angles[:, :model.temporal.hidden_size // 2].cos()
             self.register_buffer("positions", pe, persistent=False)
+
+        @property
+        def layout(self) -> StructuredLayout:
+            return layout
 
         @property
         def device(self) -> Any:
@@ -212,19 +220,19 @@ def make_network(model: ModelConfigV2, seed: int,
                               for index, vocabulary in enumerate(categories)], -1)
 
         def encode_frame(self, tokens: FrameTokens) -> tuple[Any, Any]:
-            validate_frame_tokens(tokens)
-            if tokens.aggregate_window != model.event.aggregate_window or tokens.recipe_signature != recorded_token_signature(model):
+            validate_frame_tokens(tokens, layout=layout)
+            if tokens.aggregate_window != model.event.aggregate_window or tokens.recipe_signature != recorded_token_signature(model, layout=layout):
                 raise ContractError("aggregate window recipe mismatch")
             if len(tokens.interval_numerics) > model.event.max_interval:
                 raise ContractError("configured interval event limit exceeded")
             state_input = torch.cat((self._float(tokens.state_numerics),
                                      self._tensor(tokens.state_present, dtype=torch.float32, device=self.device),
-                                     self._onehot(tokens.state_categories, STATE_CATEGORIES),
+                                     self._onehot(tokens.state_categories, layout.state_categories),
                                      self._tensor(tokens.state_category_present, dtype=torch.float32, device=self.device),
                                      functional.one_hot(self._tensor(tokens.opponent_learned, dtype=torch.long, device=self.device),
-                                                        len(CARD_CATEGORIES[0]) + 2).float().flatten()))
+                                                        len(layout.card_categories[0]) + 2).float().flatten()))
             # PAD opponent slots have no representation; category0 is not a fact.
-            opponent_width = len(CARD_CATEGORIES[0]) + 2
+            opponent_width = len(layout.card_categories[0]) + 2
             state_input[-18 * opponent_width:] *= self._tensor(
                 [value != 0 for value in tokens.opponent_learned], dtype=torch.float32,
                 device=self.device).repeat_interleave(opponent_width)
@@ -233,14 +241,14 @@ def make_network(model: ModelConfigV2, seed: int,
             numbers = torch.cat((self._float(tokens.card_numerics),
                                  self._tensor(tokens.card_present, dtype=torch.float32, device=self.device)), -1)
             card_input = torch.cat((self.definition_embedding(cats[:, 0]), self.ability_embedding(cats[:, 1]),
-                                    self._onehot(tuple(row[2:] for row in tokens.card_categories), CARD_CATEGORIES[2:]), numbers), -1)
+                                    self._onehot(tuple(row[2:] for row in tokens.card_categories), layout.card_categories[2:]), numbers), -1)
             mask = self._tensor(tokens.card_mask, dtype=torch.bool, device=self.device)
             cards = self.card_encoder(card_input).relu().masked_fill(~mask[:, None], 0)
-            source = functional.one_hot(cats[:, -1], len(SOURCES) + 2).float().masked_fill(~mask[:, None], 0)
-            order = self._float(tuple(row[8] for row in tokens.card_numerics))[:, None]
+            source = functional.one_hot(cats[:, layout.membership_index], len(layout.card_categories[layout.membership_index]) + 2).float().masked_fill(~mask[:, None], 0)
+            order = self._float(tuple(row[layout.card_numeric_fields.index(layout.order_field)] for row in tokens.card_numerics))[:, None]
             actor_cards = torch.cat((cards, source, mask.float()[:, None], order), -1)
             if model.hand.kind == "direct":
-                hand = torch.cat((self._onehot(tokens.card_categories, CARD_CATEGORIES), numbers), -1)
+                hand = torch.cat((self._onehot(tokens.card_categories, layout.card_categories), numbers), -1)
                 hand = hand.masked_fill(~mask[:, None], 0).flatten()
             else:
                 hand_cards = cards[None]
@@ -258,7 +266,7 @@ def make_network(model: ModelConfigV2, seed: int,
             if tokens.interval_numerics:
                 event_input = torch.cat((self._float(tokens.interval_numerics),
                                          self._tensor(tokens.interval_present, dtype=torch.float32, device=self.device),
-                                         self._onehot(tokens.interval_categories, EVENT_CATEGORIES)), -1)
+                                         self._onehot(tokens.interval_categories, layout.event_categories)), -1)
                 with no_cudnn():
                     _, hidden = self.event_encoder(event_input[None])
                 event = hidden[-1, 0]
@@ -292,8 +300,8 @@ def make_network(model: ModelConfigV2, seed: int,
             suffix_length = len(frames) if suffix_length is None else suffix_length
             integer(suffix_length, 1, len(frames))
             for index, frame in enumerate(frames):
-                validate_frame_tokens(frame)
-                if (frame.aggregate_window != model.event.aggregate_window or frame.recipe_signature != recorded_token_signature(model)
+                validate_frame_tokens(frame, layout=layout)
+                if (frame.aggregate_window != model.event.aggregate_window or frame.recipe_signature != recorded_token_signature(model, layout=layout)
                         or len(frame.interval_numerics) > model.event.max_interval):
                     raise ContractError("historical frame window/interval cap mismatch")
                 if frame.event_end > model.event.max_episode:
@@ -306,7 +314,7 @@ def make_network(model: ModelConfigV2, seed: int,
                 raise ContractError("full own-decision history must start at first event interval")
             resource_estimate(model, runtime_binding, decisions=len(frames),
                               interval_events=max(len(frame.interval_numerics) for frame in frames),
-                              candidates=1, suffix_decisions=suffix_length if torch.is_grad_enabled() else 1)
+                              candidates=1, suffix_decisions=suffix_length if torch.is_grad_enabled() else 1, **layout_options)
             if model.model_id == "mlp":
                 # Historical frames are validated above, but MLP consumes only
                 # the current detailed state/hand/interval/aggregate observation.
@@ -326,7 +334,7 @@ def make_network(model: ModelConfigV2, seed: int,
         def new_cache(self) -> TemporalCache:
             # Reserve the full configured capacity, not only the first observed
             # prefix. Admission happens before allocating either bounded buffer.
-            resource_estimate(model, runtime_binding)
+            resource_estimate(model, runtime_binding, **layout_options)
             cache = TemporalCache(id(self), tuple(parameter._version for parameter in self.parameters()))
             if model.model_id == "transformer":
                 shape = (model.temporal.num_layers, 1, model.temporal.num_heads,
@@ -337,7 +345,7 @@ def make_network(model: ModelConfigV2, seed: int,
             return cache
 
         def step(self, frame: FrameTokens, cache: TemporalCache) -> tuple[Any, Any]:
-            if frame.recipe_signature != recorded_token_signature(model):
+            if frame.recipe_signature != recorded_token_signature(model, layout=layout):
                 raise ContractError('cache frame aggregate recipe mismatch')
             if (cache.model_identity != id(self)
                     or cache.parameter_versions != tuple(parameter._version for parameter in self.parameters())):
@@ -368,8 +376,8 @@ def make_network(model: ModelConfigV2, seed: int,
             return output[0], cards
 
         def _candidate_features(self, tokens: CandidateTokens) -> Any:
-            kinds = functional.one_hot(self._tensor(tokens.kinds, device=self.device), len(ACTION_KINDS) + 2).float()
-            targets = functional.one_hot(self._tensor(tokens.targets, device=self.device), len(TARGETS) + 2).float()
+            kinds = functional.one_hot(self._tensor(tokens.kinds, device=self.device), len(layout.action_kinds) + 2).float()
+            targets = functional.one_hot(self._tensor(tokens.targets, device=self.device), len(layout.targets) + 2).float()
             return torch.cat((kinds, targets, self._float(tokens.numerics),
                               self._tensor(tokens.present, dtype=torch.float32, device=self.device)), -1)
 
@@ -379,12 +387,12 @@ def make_network(model: ModelConfigV2, seed: int,
                                 dtype=torch.long, device=self.device)
 
         def dense_logits(self, context: Any, cards: Any, tokens: CandidateTokens) -> Any:
-            if tokens.recipe_signature != recorded_token_signature(model):
+            if tokens.recipe_signature != recorded_token_signature(model, layout=layout):
                 raise ContractError('actor candidate aggregate recipe mismatch')
             # The reference materializes all rows. Its admission uses that full
             # width, never the production factorized chunk reservation.
             resource_estimate(model, replace(runtime_binding, candidate_chunk=len(tokens.kinds)),
-                              decisions=1, interval_events=0, candidates=len(tokens.kinds))
+                              decisions=1, interval_events=0, candidates=len(tokens.kinds), **layout_options)
             refs = self._references(tokens, 0, len(tokens.kinds))
             padded = torch.cat((cards, torch.zeros_like(cards[:1])), 0)
             dense = torch.cat((context[None].expand(len(tokens.kinds), -1), self._candidate_features(tokens),
@@ -393,12 +401,12 @@ def make_network(model: ModelConfigV2, seed: int,
 
         def factorized_logits(self, context: Any, cards: Any, tokens: CandidateTokens,
                               chunk_size: int | None = None, checkpoint: bool = True) -> Any:
-            if tokens.recipe_signature != recorded_token_signature(model):
+            if tokens.recipe_signature != recorded_token_signature(model, layout=layout):
                 raise ContractError('actor candidate aggregate recipe mismatch')
             chunk_size = runtime_binding.candidate_chunk if chunk_size is None else chunk_size
             integer(chunk_size, 1, 65536)
             resource_estimate(model, replace(runtime_binding, candidate_chunk=chunk_size),
-                              decisions=1, interval_events=0, candidates=len(tokens.kinds))
+                              decisions=1, interval_events=0, candidates=len(tokens.kinds), **layout_options)
             first = self.actor[0]
             width = model.temporal.hidden_size
             shared = functional.linear(context, first.weight[:, :width], first.bias)
@@ -451,7 +459,7 @@ def make_network(model: ModelConfigV2, seed: int,
                     chunk_size: int | None = None, mask: Any = None) -> tuple[Any, Any, Any]:
             if not frames:
                 raise ContractError("nonempty frame history required")
-            validate_candidate_tokens(tokens, frames[-1], model.max_positions)
+            validate_candidate_tokens(tokens, frames[-1], model.max_positions, layout=layout)
             if len(tokens.kinds) > runtime_binding.max_candidates:
                 raise ContractError("candidate admission limit exceeded")
             # Admit the effective scoring allocation and the full endpoint as
@@ -464,7 +472,7 @@ def make_network(model: ModelConfigV2, seed: int,
                               interval_events=max(len(frame.interval_numerics) for frame in frames),
                               candidates=len(tokens.kinds),
                               suffix_decisions=(len(frames) if suffix_length is None else suffix_length)
-                              if torch.is_grad_enabled() else 1)
+                              if torch.is_grad_enabled() else 1, **layout_options)
             context, cards = self.encode_history(frames, suffix_length)
             logprob, entropy = self.distribution(context, cards, tokens, mask, dense=dense, chunk_size=chunk_size)
             value = self.value(context)
@@ -504,7 +512,7 @@ def make_network(model: ModelConfigV2, seed: int,
                 nn.init.orthogonal_(module.weight, gain)
                 nn.init.zeros_(module.bias)
         actual_shapes = {name: tuple(parameter.shape) for name, parameter in network.named_parameters()}
-        if actual_shapes != parameter_shapes(model):
+        if actual_shapes != parameter_shapes(model, layout=layout):
             raise ContractError("preallocation parameter shape proof mismatch")
         return network.to(runtime_binding.device)
     finally:

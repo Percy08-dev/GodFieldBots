@@ -150,7 +150,9 @@ def test_old_defaults_thirteen_config_hashes_tokens_rules_and_all_goldens_stay_e
         assert hashlib.sha256((ROOT / name).read_bytes()).hexdigest() == expected
 
 
-def test_corrected_layout_uses_identical_field_tuples_but_new_exact_identity():
+def test_corrected_layout_preserves_card_fields_but_repairs_guardian_event_namespace():
+    from gf_common import structured_vocab as vocab
+
     assert layout_for_contract(card_instance_contract()) is OLD
     assert layout_for_contract(corrected_card_instance_contract()) is NEW
     assert is_card_instance_layout(OLD) and is_card_instance_layout(NEW)
@@ -163,12 +165,16 @@ def test_corrected_layout_uses_identical_field_tuples_but_new_exact_identity():
         "card_categories",
         "event_types",
         "event_numeric_fields",
-        "event_categories",
         "action_kinds",
         "targets",
         "format_versions",
     ):
         assert getattr(NEW, name) is getattr(OLD, name)
+    assert NEW.event_categories[1] == OLD.event_categories[1] + vocab.GUARDIANS
+    assert NEW.event_categories[0] is OLD.event_categories[0]
+    assert NEW.event_categories[2:] == OLD.event_categories[2:]
+    assert NEW.event_width == OLD.event_width + len(vocab.GUARDIANS) == 405
+    assert NEW.history_width == OLD.history_width + len(vocab.GUARDIANS) == 387
     with pytest.raises(ContractError):
         require_layout(replace(NEW))
 
@@ -434,7 +440,7 @@ def test_both_profiles_reject_old_codec_numeric_and_submit_ready_synthetic(
         synthetic.to_action(0, frame, validate=False)
 
 
-def test_corrected_config_release_paths_pairing_and_unchanged_runtime_guard(tmp_path):
+def test_corrected_config_release_paths_pairing_and_guarded_ppo_integration(tmp_path):
     import asyncio
 
     import gf_cli
@@ -460,7 +466,7 @@ def test_corrected_config_release_paths_pairing_and_unchanged_runtime_guard(tmp_
         with pytest.raises(ContractError):
             load_config(preset, overrides)
     with pytest.raises(ContractError, match="not implemented"):
-        asyncio.run(gf_cli.run_experiment(loaded, "collect"))
+        asyncio.run(gf_cli.run_experiment(loaded, "collect", ledger=object()))
     assert not (tmp_path / "unused").exists()
 
 
@@ -504,7 +510,7 @@ def test_corrected_minimal_config_default_paths_resolve_at_origin(tmp_path):
     assert loaded.config.run.output_dir == str(candidate.parent / "runs")
 
 
-def test_corrected_identity_goldens():
+def test_corrected_raw_identity_goldens_preserved_and_incomplete_tokens_superseded():
     result, _, frame, bank, _ = generate()
     expected = json.loads(
         (ROOT / "tests/fixtures/corrected_card_instance_identity.json").read_text()
@@ -513,13 +519,15 @@ def test_corrected_identity_goldens():
     assert bank.view()._prefixes[0] == expected["initial_prefix"]
     assert frame.frame_hash == expected["frame_hash"]
     assert result.table.table_hash == expected["table_hash"]
-    assert signature(layout=NEW) == expected["token_signature"]
+    assert signature(layout=NEW) != expected["token_signature"]
+    assert signature(layout=NEW) == "ed0c61152b78fa984aad342be22c6b9d6ef49b12b8f0d1c0f0de89724468002f"
     assert result.report.rule_signature == expected["rule_signature"]
     tokens = tokenize_frame(frame, bank.view(), layout=NEW)
-    assert digest(asdict(tokens)) == expected["frame_tokens_sha256"]
+    assert digest(asdict(tokens)) != expected["frame_tokens_sha256"]
+    assert digest(asdict(tokens)) == "2c3d318a4a4cb047f68c87b9721db7be0a5c9595e07e82fb4fa2b84bd4bb8d20"
     assert (
         digest(asdict(tokenize_table(result.table, frame, layout=NEW)))
-        == expected["candidate_tokens_sha256"]
+        == "64e8778719518c7b6fddc0069a0894a238ca1e4710db4d4c864027cebf61c4be"
     )
 
 

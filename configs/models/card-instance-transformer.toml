@@ -1,0 +1,9 @@
+schema_version = 1
+kind = "model"
+
+[model]
+model_id = "transformer"
+version = "3"
+
+[model.inference]
+device = "cpu"

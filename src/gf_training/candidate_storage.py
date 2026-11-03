@@ -14,11 +14,16 @@ from gf_common.action_contract import ActionContract, parse_action_contract, val
 from gf_common.candidate_columns import (
     MAX_COLUMN_BYTES,
     decode_candidate_columns,
+    decode_candidate_columns_v2,
     encode_candidate_columns,
+    encode_candidate_columns_v2,
     validate_descriptor,
+    validate_descriptor_v2,
 )
+from gf_common.card_instance import CardInstanceContract, parse_card_instance_contract
 from gf_common.domain import ContractError, Json, integer
 from gf_common.structured import CandidateTable, DecisionFrame
+from gf_common.structured_layout import LEGACY_LAYOUT, StructuredLayout, layout_for_contract
 
 
 def candidate_basename(actor: int, decision: int) -> str:
@@ -65,8 +70,19 @@ def _open_regular(path: Path, size: int) -> BinaryIO:
 def publish_candidates(directory: Path, frame: DecisionFrame, table: CandidateTable, decision: int, *,
                        max_positions: int = 128, max_bytes: int = MAX_COLUMN_BYTES,
                        action_contract: ActionContract, purpose: str, synthetic_capacity: bool) -> Json:
-    validate_record_purpose(purpose, action_contract)
-    parse_action_contract(asdict(table.action_contract), expected=action_contract)
+    return _publish_candidates(directory, frame, table, decision, max_positions=max_positions, max_bytes=max_bytes,
+        action_contract=action_contract, purpose=purpose, synthetic_capacity=synthetic_capacity)
+
+
+def _publish_candidates(directory: Path, frame: DecisionFrame, table: CandidateTable, decision: int, *,
+                        max_positions: int, max_bytes: int, action_contract: ActionContract | CardInstanceContract,
+                        purpose: str, synthetic_capacity: bool, layout: StructuredLayout = LEGACY_LAYOUT) -> Json:
+    if layout is LEGACY_LAYOUT:
+        assert type(action_contract) is ActionContract
+        validate_record_purpose(purpose, action_contract)
+        parse_action_contract(asdict(table.action_contract), expected=action_contract)
+    elif type(action_contract) is not CardInstanceContract or parse_card_instance_contract(asdict(table.action_contract)) != action_contract or table.layout is not layout:
+        raise ContractError("codec2 publication contract/layout mismatch")
     if (table.purpose != purpose or type(synthetic_capacity) is not bool
             or table.synthetic_capacity != synthetic_capacity):
         raise ContractError("candidate publication purpose/synthetic classification mismatch")
@@ -81,7 +97,10 @@ def publish_candidates(directory: Path, frame: DecisionFrame, table: CandidateTa
         except FileNotFoundError:
             continue
         raise ContractError("candidate sidecar destination already exists")
-    payload, descriptor = encode_candidate_columns(table, name, max_positions=max_positions, max_bytes=max_bytes)
+    if layout is LEGACY_LAYOUT:
+        payload, descriptor = encode_candidate_columns(table, name, max_positions=max_positions, max_bytes=max_bytes)
+    else:
+        payload, descriptor = encode_candidate_columns_v2(table, name, layout=layout, max_positions=max_positions, max_bytes=max_bytes)
     flags = os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_NONBLOCK
     owned = os.open(temporary, flags, 0o600)
     # Keep the actual written object open through publication. Failed temporary
@@ -146,10 +165,17 @@ def _still_current(snapshot: _ReadSnapshot) -> None:
 @contextmanager
 def _verified_read(directory: Path, descriptor: Json, frame: DecisionFrame, decision: int, *,
                    max_positions: int = 128, max_bytes: int = MAX_COLUMN_BYTES,
-                   action_contract: ActionContract, purpose: str, synthetic_capacity: bool) -> Iterator[_ReadSnapshot]:
+                   action_contract: ActionContract | CardInstanceContract, purpose: str, synthetic_capacity: bool,
+                   layout: StructuredLayout = LEGACY_LAYOUT) -> Iterator[_ReadSnapshot]:
     name = candidate_basename(frame.actor, decision)
-    _, size = validate_descriptor(descriptor, expected_file=name, expected_frame_hash=frame.frame_hash, max_bytes=max_bytes,
-                                  action_contract=action_contract, purpose=purpose, synthetic_capacity=synthetic_capacity)
+    if layout is LEGACY_LAYOUT:
+        assert type(action_contract) is ActionContract
+        _, size = validate_descriptor(descriptor, expected_file=name, expected_frame_hash=frame.frame_hash, max_bytes=max_bytes,
+            action_contract=action_contract, purpose=purpose, synthetic_capacity=synthetic_capacity)
+    else:
+        assert type(action_contract) is CardInstanceContract
+        _, size = validate_descriptor_v2(descriptor, expected_file=name, expected_frame_hash=frame.frame_hash, max_bytes=max_bytes,
+            action_contract=action_contract, purpose=purpose, synthetic_capacity=synthetic_capacity, layout=layout)
     path = directory / name
     if directory.is_symlink():
         raise ContractError("symlink candidate sidecar directory")
@@ -159,9 +185,16 @@ def _verified_read(directory: Path, descriptor: Json, frame: DecisionFrame, deci
         after = os.fstat(source.fileno())
         if _identity(before) != _identity(after):
             raise ContractError("candidate sidecar changed while reading")
-        table = decode_candidate_columns(payload, descriptor, expected_file=name, expected_frame_hash=frame.frame_hash,
-                                         max_positions=max_positions, max_bytes=max_bytes, action_contract=action_contract,
-                                         purpose=purpose, synthetic_capacity=synthetic_capacity)
+        if layout is LEGACY_LAYOUT:
+            assert type(action_contract) is ActionContract
+            table = decode_candidate_columns(payload, descriptor, expected_file=name, expected_frame_hash=frame.frame_hash,
+                max_positions=max_positions, max_bytes=max_bytes, action_contract=action_contract,
+                purpose=purpose, synthetic_capacity=synthetic_capacity)
+        else:
+            assert type(action_contract) is CardInstanceContract
+            table = decode_candidate_columns_v2(payload, descriptor, expected_file=name, expected_frame_hash=frame.frame_hash,
+                max_positions=max_positions, max_bytes=max_bytes, action_contract=action_contract,
+                purpose=purpose, synthetic_capacity=synthetic_capacity, layout=layout)
         table.validate(frame)
         snapshot = _ReadSnapshot(table, _identity(after), hashlib.sha256(payload).hexdigest(), source, path, size)
         yield snapshot
@@ -186,3 +219,33 @@ def sidecar_inventory(directory: Path, descriptor: Json, frame: DecisionFrame, d
                 "identity": list(snapshot.identity), "frame_hash": descriptor["frame_hash"], "table_hash": descriptor["table_hash"],
                 "action_contract": asdict(snapshot.table.action_contract), "purpose": snapshot.table.purpose,
                 "synthetic_capacity": snapshot.table.synthetic_capacity}
+
+
+def publish_candidates_v2(directory: Path, frame: DecisionFrame, table: CandidateTable, decision: int, *,
+                          action_contract: CardInstanceContract, purpose: str, synthetic_capacity: bool,
+                          max_positions: int = 18, max_bytes: int = MAX_COLUMN_BYTES) -> Json:
+    return _publish_candidates(directory, frame, table, decision, action_contract=action_contract, purpose=purpose,
+        synthetic_capacity=synthetic_capacity, max_positions=max_positions, max_bytes=max_bytes,
+        layout=layout_for_contract(action_contract))
+
+
+def read_candidates_v2(directory: Path, descriptor: Json, frame: DecisionFrame, decision: int, *,
+                       action_contract: CardInstanceContract, purpose: str, synthetic_capacity: bool,
+                       max_positions: int = 18, max_bytes: int = MAX_COLUMN_BYTES) -> CandidateTable:
+    with _verified_read(directory, descriptor, frame, decision, action_contract=action_contract, purpose=purpose,
+            synthetic_capacity=synthetic_capacity, max_positions=max_positions, max_bytes=max_bytes,
+            layout=layout_for_contract(action_contract)) as snapshot:
+        return snapshot.table
+
+
+def sidecar_inventory_v2(directory: Path, descriptor: Json, frame: DecisionFrame, decision: int, *,
+                         action_contract: CardInstanceContract, purpose: str, synthetic_capacity: bool,
+                         max_positions: int = 18, max_bytes: int = MAX_COLUMN_BYTES) -> Json:
+    with _verified_read(directory, descriptor, frame, decision, action_contract=action_contract, purpose=purpose,
+            synthetic_capacity=synthetic_capacity, max_positions=max_positions, max_bytes=max_bytes,
+            layout=layout_for_contract(action_contract)) as snapshot:
+        _still_current(snapshot)
+        return {"path": str(snapshot.path.absolute()), "sha256": snapshot.sha256, "bytes": snapshot.size,
+            "identity": list(snapshot.identity), "frame_hash": descriptor["frame_hash"], "table_hash": descriptor["table_hash"],
+            "action_contract": asdict(snapshot.table.action_contract), "purpose": snapshot.table.purpose,
+            "synthetic_capacity": snapshot.table.synthetic_capacity}

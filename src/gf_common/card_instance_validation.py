@@ -624,6 +624,7 @@ def replay(value: Any, game: str, viewer: int) -> Json:
                 },
             )
             player(decision["actor"])
+            boolean(decision["aborted"])
             obs = replay_observation(decision["observation"], viewer, aborted=decision["aborted"])
             if decision["actor"] != obs["current_player"]:
                 raise ContractError("replay actor differs from original observation")
@@ -690,3 +691,50 @@ def own_visible_input(value: Any) -> Any:
     hints = actor_action_options(value.action_options, obs, raw=False)
     return DecisionInput(obs, tuple(clone(list(value.events))), value.history_end,
                          tuple(clone(list(value.typed_metadata))), clone(value.catalog), hints)
+
+
+def decision_input(obs: Json, events: list[Json], history_end: str | None, definitions: Json,
+                   action_options: Json | None = None) -> Any:
+    """Bind validated raw HTTP hints to this original acting participant view."""
+    from gf_common.domain import DecisionInput
+    original = observation(obs)
+    visible = {card["definition_id"] for card in original["own"]["cards"]}
+    try:
+        own_catalog = {name: clone(definitions[name]) for name in sorted(visible)}
+    except KeyError as error:
+        raise ContractError("missing own perceived definition") from error
+    raw_hints = actor_action_options(action_options, original, raw=True)
+    hints = {**raw_hints, "viewer_player_id": original["viewer_player_id"]}
+    return own_visible_input(DecisionInput(original, tuple(clone(events)), history_end,
+        tuple(clone(original["typed_action_schema"])), own_catalog, hints))
+
+
+def replay_closure(value: Json, game: str, viewer: int) -> Json | None:
+    return replay(value, game, viewer)["episode_end"]
+
+
+def reconcile_replay(value: Json, viewer: int, accepted: list[Json], outcome: Any) -> None:
+    if type(value.get("game_id")) is not str:
+        raise ContractError("replay game identity required")
+    checked = replay(value, value["game_id"], viewer)
+    actual = []
+    for turn in checked["turns"]:
+        for decision in turn["decisions"]:
+            if decision["actor"] != viewer:
+                continue
+            visible = decision["visible_action"]
+            if decision["aborted"]:
+                if visible is not None:
+                    raise ContractError("aborted replay decision cannot record an accepted Action")
+                continue
+            if visible is None:
+                continue
+            if visible["type"] != "action":
+                raise ContractError("own accepted replay Action cannot be concealed")
+            actual.append(visible["action"])
+    for action in accepted:
+        validate_action(action)
+    if canonical(actual) != canonical(accepted):
+        raise ContractError("accepted card-instance actions/replay mismatch")
+    if outcome is not None and checked["episode_end"] != {"type": "terminal", "result": outcome}:
+        raise ContractError("card-instance terminal outcome/replay mismatch")

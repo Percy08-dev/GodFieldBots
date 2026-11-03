@@ -10,7 +10,11 @@ from pathlib import Path
 import pytest
 
 from gf_common.action_contract import engineering_contract
-from gf_common.card_instance import ActionConfigV3, card_instance_contract
+from gf_common.card_instance import (
+    ActionConfigV3,
+    card_instance_contract,
+    corrected_card_instance_contract,
+)
 from gf_common.card_instance_rules import UTILITY_IDS, card_instance_rules, rule_signature
 from gf_common.diverse_actions import (
     GeneratedCandidates,
@@ -27,7 +31,9 @@ from gf_common.structured import (
     EventBank,
     EventDelta,
     action_config_v2,
+    event_delta,
 )
+from gf_common.structured_layout import layout_for_contract
 from gf_common.structured_wire import (
     generated_dict,
     generated_dict_v3,
@@ -84,6 +90,51 @@ def test_discard_independent_subsets_include_both_states_but_exclude_artifact_we
     }
     assert {canonical(action) for action in actions} == expected
     assert result.report.precount.complete == result.report.discovered == 7
+
+
+@pytest.mark.parametrize(
+    "contract", [card_instance_contract(), corrected_card_instance_contract()],
+    ids=["07e", "91d5926"],
+)
+@pytest.mark.parametrize("end_times", [False, True], ids=["discard", "sacrifice"])
+@pytest.mark.parametrize("dream", [False, True], ids=["ordinary-view", "dream-view"])
+def test_protected_artifact_exact_subsets_use_perceived_definitions(contract, end_times, dream):
+    artifacts = ["sun-amulet", "dangerous-mortar", "steel-armor"]
+    if dream:
+        # Same opaque references, different supplied perceptions. No canonical
+        # identity is available to the generator, including for protected cards.
+        artifacts = ["steel-armor", "sun-amulet", "dangerous-mortar"]
+    value = inputs(
+        [(name, None) for name in artifacts]
+        + [("bronze-club", None), ("flame", "unused"), ("fireball", "learned")],
+        mp=0, usable=(), end_times=end_times,
+    )
+    value.observation["own"]["status"]["dream"] = dream
+    layout = layout_for_contract(contract)
+    bank = EventBank(1, "protected-discard", layout=layout)
+    bank.append(event_delta(1, bank.episode, 0, bank.boundary.prefix_hash, (), layout=layout))
+    frame = DecisionFrame.from_input(value, bank, 0, layout=layout)
+    result = PublicCandidateGeneratorV3(
+        ActionConfigV3(action_contract=contract), rules=card_instance_rules(), clock=lambda: 0.0,
+    ).generate(frame, bank.view(), random.Random(17), NumericCosts())
+    result.table.validate(frame)
+    actions = [result.table.to_action(index, frame) for index in range(len(result.table.kinds))]
+    allowed = (0, 1, 2, 4, 5) if end_times else (0 if dream else 2, 4, 5)
+    expected = {
+        canonical({
+            "type": "sacrifice" if end_times else "discard",
+            "card_refs": [frame.references[index] for index in subset],
+        })
+        for length in range(1, len(allowed) + 1)
+        for subset in itertools.combinations(allowed, length)
+    }
+    assert {canonical(action) for action in actions} == expected
+    count, elements = (31, 80) if end_times else (7, 12)
+    assert result.report.precount.mode == "exact"
+    assert result.report.precount.full_enumeration_admitted
+    assert result.report.precount.complete == result.report.discovered == len(actions) == count
+    assert result.report.precount.elements == len(result.table.slots) == elements
+    assert set(frame.raw["catalog"]) == set(artifacts) | {"bronze-club", "flame", "fireball"}
 
 
 @pytest.mark.parametrize("name", sorted(UTILITY_IDS))

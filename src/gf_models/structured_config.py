@@ -10,17 +10,27 @@ from itertools import pairwise
 from math import prod
 from typing import Any
 
+from gf_common import structured_layout as legacy_layout_constants
 from gf_common.domain import ContractError, Json, closed, digest, integer
 from gf_common.structured_history import ACTIVE_AGGREGATE, HISTORICAL_AGGREGATE, history_width
+from gf_common.structured_layout import (
+    CARD_INSTANCE_AGGREGATE,
+    LEGACY_LAYOUT,
+    StructuredLayout,
+    is_card_instance_layout,
+    require_layout,
+)
 from gf_common.structured_tokens import (
-    CANDIDATE_WIDTH,
-    CARD_CATEGORIES,
-    CARD_DIRECT_WIDTH,
-    EVENT_WIDTH,
-    SOURCES,
-    STATE_WIDTH,
     signature,
 )
+
+# Historical exported aliases retain their exact legacy meaning.
+CANDIDATE_WIDTH = legacy_layout_constants.CANDIDATE_WIDTH
+CARD_CATEGORIES = legacy_layout_constants.CARD_CATEGORIES
+CARD_DIRECT_WIDTH = legacy_layout_constants.CARD_DIRECT_WIDTH
+EVENT_WIDTH = legacy_layout_constants.EVENT_WIDTH
+SOURCES = legacy_layout_constants.SOURCES
+STATE_WIDTH = legacy_layout_constants.STATE_WIDTH
 
 MAX_TENSOR_BYTES = 64 * 1024 * 1024
 
@@ -61,6 +71,11 @@ class EventConfigV2:
     aggregate_window: int = 128
     max_interval: int = 4096
     max_episode: int = 262144
+
+
+@dataclass(frozen=True)
+class EventConfigV3(EventConfigV2):
+    aggregate_recipe: str = CARD_INSTANCE_AGGREGATE
 
 
 @dataclass(frozen=True)
@@ -110,6 +125,13 @@ class ModelConfigV2:
 
 
 @dataclass(frozen=True)
+class ModelConfigV3(ModelConfigV2):
+    version: str = "3"
+    input_recipe: str = "participant-structured-v2"
+    event: EventConfigV2 = field(default_factory=EventConfigV3)
+
+
+@dataclass(frozen=True)
 class HistoricalEventConfigV2:
     """Exact original serialization; never an accepted active configuration."""
     hidden_size: int = 32
@@ -138,18 +160,20 @@ class HistoricalModelConfigV2:
 
 
 type RecordedModelConfigV2 = ModelConfigV2 | HistoricalModelConfigV2
+type StructuredModel = RecordedModelConfigV2 | ModelConfigV3
 
 
-def aggregate_recipe(model: RecordedModelConfigV2) -> str:
+def aggregate_recipe(model: StructuredModel) -> str:
     if type(model) is HistoricalModelConfigV2:
         return HISTORICAL_AGGREGATE
-    if type(model.event) is not EventConfigV2:
+    if type(model.event) is not (EventConfigV3 if type(model) is ModelConfigV3 else EventConfigV2):
         raise ContractError('closed active event descriptor required')
     return model.event.aggregate_recipe
 
 
-def recorded_token_signature(model: RecordedModelConfigV2) -> str:
-    return signature(model.event.aggregate_window, aggregate_recipe=aggregate_recipe(model))
+def recorded_token_signature(model: StructuredModel, *, layout: StructuredLayout = LEGACY_LAYOUT) -> str:
+    _check_model_layout(model, layout)
+    return signature(model.event.aggregate_window, aggregate_recipe=aggregate_recipe(model), layout=layout)
 
 
 @dataclass(frozen=True)
@@ -174,23 +198,35 @@ def _widths(value: Any) -> None:
         integer(width, 1, 1024)
 
 
-def validate_config(model: RecordedModelConfigV2) -> None:
-    _validate_descriptor(model, historical=False)
+def _check_model_layout(model: StructuredModel, layout: StructuredLayout) -> None:
+    require_layout(layout)
+    if layout is LEGACY_LAYOUT:
+        valid = type(model) in (ModelConfigV2, HistoricalModelConfigV2)
+    else:
+        valid = type(model) is ModelConfigV3 and is_card_instance_layout(layout)
+    if not valid or model.input_recipe != layout.input_recipe:
+        raise ContractError("closed structured model/exact layout mismatch")
 
 
-def _validate_descriptor(model: RecordedModelConfigV2, *, historical: bool) -> None:
-    if (type(model) is not (HistoricalModelConfigV2 if historical else ModelConfigV2) or model.version != "2"
+def validate_config(model: StructuredModel, *, layout: StructuredLayout = LEGACY_LAYOUT) -> None:
+    _validate_descriptor(model, historical=False, layout=layout)
+
+
+def _validate_descriptor(model: StructuredModel, *, historical: bool, layout: StructuredLayout = LEGACY_LAYOUT) -> None:
+    _check_model_layout(model, layout)
+    modern = layout is not LEGACY_LAYOUT
+    if (type(model) is not (ModelConfigV3 if modern else HistoricalModelConfigV2 if historical else ModelConfigV2) or model.version != ("3" if modern else "2")
             or model.model_id not in ("mlp", "gru", "transformer")
-            or model.input_recipe != "participant-structured-v1"
+            or model.input_recipe != layout.input_recipe
             or model.initialization != "orthogonal-structured-v1"
             or type(model.dropout) is not int or model.dropout != 0 or model.precision != "ieee-fp32"):
         raise ContractError("unsupported v2 model recipe")
     for name, expected in (("state", StateConfigV2), ("card", CardConfigV2), ("hand", HandConfigV2),
-                           ("event", HistoricalEventConfigV2 if historical else EventConfigV2), ("temporal", TemporalConfigV2),
+                           ("event", EventConfigV3 if modern else HistoricalEventConfigV2 if historical else EventConfigV2), ("temporal", TemporalConfigV2),
                            ("heads", HeadConfigV2), ("resources", ResourceConfigV2)):
         if type(getattr(model, name)) is not expected:
             raise ContractError("closed typed v2 component required")
-    if not historical and aggregate_recipe(model) != ACTIVE_AGGREGATE:
+    if not historical and aggregate_recipe(model) != layout.aggregate_recipe:
         raise ContractError('only corrected public-exact-v2 history is active')
     integer(model.max_positions, 1, 128)
     for component in (model.state, model.card, model.hand, model.temporal, model.heads):
@@ -241,7 +277,7 @@ def _validate_descriptor(model: RecordedModelConfigV2, *, historical: bool) -> N
                            (model.resources.cuda_context_bytes, 4 * 1024**3),
                            (model.resources.workspace_bytes, 4 * 1024**3)):
         integer(value, 1, maximum)
-    shapes = parameter_shapes(model)
+    shapes = parameter_shapes(model, layout=layout)
     if sum(prod(shape) for shape in shapes.values()) > model.resources.max_parameters:
         raise ContractError("structured parameter limit exceeded")
     if any(prod(shape) * 4 > model.resources.max_tensor_bytes for shape in shapes.values()):
@@ -254,11 +290,13 @@ def model_config_v2(value: Json) -> ModelConfigV2:
     return result
 
 
-def _construct_descriptor(value: Json, *, historical: bool) -> RecordedModelConfigV2:
+def _construct_descriptor(value: Json, *, historical: bool, layout: StructuredLayout = LEGACY_LAYOUT) -> StructuredModel:
+    require_layout(layout)
+    modern = layout is not LEGACY_LAYOUT
     closed(value, set(asdict(ModelConfigV2())))
     converted = dict(value)
     for name, constructor in (("state", StateConfigV2), ("card", CardConfigV2), ("hand", HandConfigV2),
-                              ("event", HistoricalEventConfigV2 if historical else EventConfigV2), ("temporal", TemporalConfigV2),
+                              ("event", EventConfigV3 if modern else HistoricalEventConfigV2 if historical else EventConfigV2), ("temporal", TemporalConfigV2),
                               ("heads", HeadConfigV2), ("resources", ResourceConfigV2)):
         raw = closed(value[name], set(asdict(constructor())))
         fields = dict(raw)
@@ -268,8 +306,16 @@ def _construct_descriptor(value: Json, *, historical: bool) -> RecordedModelConf
                     raise ContractError("hidden width array required")
                 fields[key] = tuple(fields[key])
         converted[name] = constructor(**fields)
-    model = (HistoricalModelConfigV2 if historical else ModelConfigV2)(**converted)
-    _validate_descriptor(model, historical=historical)
+    model = (ModelConfigV3 if modern else HistoricalModelConfigV2 if historical else ModelConfigV2)(**converted)
+    _validate_descriptor(model, historical=historical, layout=layout)
+    return model
+
+
+def model_config_v3(value: Json, *, layout: StructuredLayout) -> ModelConfigV3:
+    if not is_card_instance_layout(layout):
+        raise ContractError("model3 requires explicit card-instance layout")
+    model = _construct_descriptor(value, historical=False, layout=layout)
+    assert type(model) is ModelConfigV3
     return model
 
 
@@ -282,38 +328,40 @@ def recorded_model_config_v2(value: Json, recorded_signature: str) -> RecordedMo
     model = _construct_descriptor(value, historical=historical)
     if recorded_signature != recorded_token_signature(model):
         raise ContractError('recorded closed model/signature descriptor mismatch')
+    assert type(model) in (ModelConfigV2, HistoricalModelConfigV2)
     return model
 
 
-def architecture_identity(model: ModelConfigV2) -> str:
-    validate_config(model)
-    return recorded_architecture_identity(model)
+def architecture_identity(model: StructuredModel, *, layout: StructuredLayout = LEGACY_LAYOUT) -> str:
+    validate_config(model, layout=layout)
+    return recorded_architecture_identity(model, layout=layout)
 
 
-def recorded_architecture_identity(model: RecordedModelConfigV2) -> str:
-    _validate_descriptor(model, historical=type(model) is HistoricalModelConfigV2)
+def recorded_architecture_identity(model: StructuredModel, *, layout: StructuredLayout = LEGACY_LAYOUT) -> str:
+    _validate_descriptor(model, historical=type(model) is HistoricalModelConfigV2, layout=layout)
     # Resource admission and runtime bindings are not network semantics.
     fields = asdict(model)
     del fields["resources"]
-    return digest({"model": fields, "token_signature": recorded_token_signature(model)})
+    return digest({"model": fields, "token_signature": recorded_token_signature(model, layout=layout)})
 
 
-def dimensions(model: RecordedModelConfigV2) -> dict[str, int]:
-    state = STATE_WIDTH if model.state.kind == "identity" else model.state.output_size
-    hand = 18 * CARD_DIRECT_WIDTH if model.hand.kind == "direct" else model.hand.latent_size
+def dimensions(model: StructuredModel, *, layout: StructuredLayout = LEGACY_LAYOUT) -> dict[str, int]:
+    _check_model_layout(model, layout)
+    state = layout.state_width if model.state.kind == "identity" else model.state.output_size
+    hand = 18 * layout.card_direct_width if model.hand.kind == "direct" else model.hand.latent_size
     card_input = (model.card.definition_embedding + model.card.ability_embedding
-                  + sum(len(values) + 2 for values in CARD_CATEGORIES[2:])
-                  + 2 * 12)
-    card_actor = model.card.output_size + len(SOURCES) + 2 + 2
-    frame = state + hand + model.event.hidden_size + history_width(aggregate_recipe(model))
+                  + sum(len(values) + 2 for values in layout.card_categories[2:])
+                  + 2 * len(layout.card_numeric_fields))
+    card_actor = model.card.output_size + len(layout.card_categories[layout.membership_index]) + 2 + 2
+    frame = state + hand + model.event.hidden_size + (history_width(aggregate_recipe(model)) if layout is LEGACY_LAYOUT else layout.history_width)
     return {"state": state, "hand": hand, "card_input": card_input, "card_actor": card_actor,
-            "frame": frame, "actor": model.temporal.hidden_size + CANDIDATE_WIDTH + model.max_positions * card_actor}
+            "frame": frame, "actor": model.temporal.hidden_size + layout.candidate_width + model.max_positions * card_actor}
 
 
-def parameter_shapes(model: RecordedModelConfigV2) -> dict[str, tuple[int, ...]]:
+def parameter_shapes(model: StructuredModel, *, layout: StructuredLayout = LEGACY_LAYOUT) -> dict[str, tuple[int, ...]]:
     """Exact named parameter shapes; keep differential tests against state_dict."""
     shapes: dict[str, tuple[int, ...]] = {}
-    d = dimensions(model)
+    d = dimensions(model, layout=layout)
 
     def linear(name: str, source: int, target: int) -> None:
         shapes[name + ".weight"] = (target, source)
@@ -340,16 +388,16 @@ def parameter_shapes(model: RecordedModelConfigV2) -> dict[str, tuple[int, ...]]
             shapes[f"{name}.{part}.bias"] = (width,)
 
     if model.state.kind == "mlp":
-        mlp("state_encoder", (STATE_WIDTH, *model.state.hidden_sizes, model.state.output_size))
-    shapes["definition_embedding.weight"] = (len(CARD_CATEGORIES[0]) + 2, model.card.definition_embedding)
-    shapes["ability_embedding.weight"] = (len(CARD_CATEGORIES[1]) + 2, model.card.ability_embedding)
+        mlp("state_encoder", (layout.state_width, *model.state.hidden_sizes, model.state.output_size))
+    shapes["definition_embedding.weight"] = (len(layout.card_categories[0]) + 2, model.card.definition_embedding)
+    shapes["ability_embedding.weight"] = (len(layout.card_categories[1]) + 2, model.card.ability_embedding)
     linear("card_encoder", d["card_input"], model.card.output_size)
     if model.hand.kind != "direct":
         mlp("hand_encoder", (model.card.output_size, *model.hand.hidden_sizes, model.hand.latent_size))
     if model.hand.kind == "attention":
         for index in range(model.hand.attention_layers):
             attention(f"hand_attention.{index}", model.card.output_size, model.hand.attention_feedforward)
-    gru("event_encoder", EVENT_WIDTH, model.event.hidden_size, model.event.num_layers)
+    gru("event_encoder", layout.event_width, model.event.hidden_size, model.event.num_layers)
     linear("frame_projection", d["frame"], model.temporal.hidden_size)
     if model.model_id == "gru":
         gru("temporal", model.temporal.hidden_size, model.temporal.hidden_size, model.temporal.num_layers)
@@ -361,7 +409,8 @@ def parameter_shapes(model: RecordedModelConfigV2) -> dict[str, tuple[int, ...]]
     return shapes
 
 
-def resource_estimate(model: ModelConfigV2, binding: InferenceBindingV2, *,
+def resource_estimate(model: StructuredModel, binding: InferenceBindingV2, *,
+                      layout: StructuredLayout = LEGACY_LAYOUT,
                       decisions: int | None = None, interval_events: int | None = None,
                       candidates: int | None = None,
                       suffix_decisions: int | None = None) -> Json:
@@ -371,7 +420,7 @@ def resource_estimate(model: ModelConfigV2, binding: InferenceBindingV2, *,
     suffix, weights/gradients/Adam/steps and CPU references. Chunking does not
     remove the global candidate-normalization allocation.
     """
-    validate_config(model)
+    validate_config(model, layout=layout)
     decisions = model.temporal.max_decisions if decisions is None else decisions
     interval_events = model.event.max_interval if interval_events is None else interval_events
     candidates = binding.max_candidates if candidates is None else candidates
@@ -380,20 +429,20 @@ def resource_estimate(model: ModelConfigV2, binding: InferenceBindingV2, *,
     integer(candidates, 1, binding.max_candidates)
     suffix_decisions = (min(decisions, model.temporal.sequence_length) if suffix_decisions is None else suffix_decisions)
     integer(suffix_decisions, 1, decisions)
-    d = dimensions(model)
-    parameter_count = sum(prod(shape) for shape in parameter_shapes(model).values())
+    d = dimensions(model, layout=layout)
+    parameter_count = sum(prod(shape) for shape in parameter_shapes(model, layout=layout).values())
     chunk = min(binding.candidate_chunk, candidates)
     tensors = {
-        "raw_state": decisions * STATE_WIDTH * 4,
-        "raw_cards": decisions * 18 * CARD_DIRECT_WIDTH * 4,
-        "interval_tokens": interval_events * EVENT_WIDTH * 4,
+        "raw_state": decisions * layout.state_width * 4,
+        "raw_cards": decisions * 18 * layout.card_direct_width * 4,
+        "interval_tokens": interval_events * layout.event_width * 4,
         "interval_gru": interval_events * model.event.hidden_size * model.event.num_layers * 4 * 12,
         "hand_attention": suffix_decisions * model.hand.attention_layers * model.hand.attention_heads * 18 * 18 * 4 * 8,
         "frame_history": decisions * d["frame"] * 4,
         "temporal_attention": model.temporal.num_layers * model.temporal.num_heads * decisions * decisions * 4,
         "temporal_cache": 2 * model.temporal.num_layers * decisions * model.temporal.hidden_size * 4,
         "candidate_references": candidates * model.max_positions * 8,
-        "candidate_columns": candidates * (CANDIDATE_WIDTH + 2) * 4,
+        "candidate_columns": candidates * (layout.candidate_width + 2) * 4,
         "chunk_dense_reference": chunk * d["actor"] * 4,
         "chunk_position_gather": chunk * model.max_positions * model.heads.actor_hidden_sizes[0] * 4,
         "chunk_checkpoint_replay": chunk * sum(model.heads.actor_hidden_sizes) * 4 * 8,
@@ -406,7 +455,7 @@ def resource_estimate(model: ModelConfigV2, binding: InferenceBindingV2, *,
         raise ContractError("runtime tensor exceeds 64MiB/configured limit")
     suffix_intervals = suffix_decisions
     parts = {"parameter_optimizer_cpu_reference_bytes": parameter_count * 4 * 6
-             + len(parameter_shapes(model)) * 8,
+             + len(parameter_shapes(model, layout=layout)) * 8,
              "context_workspace_bytes": model.resources.workspace_bytes
              + (model.resources.cuda_context_bytes if binding.device == "cuda:0" else 0),
              # Prefix is detached, suffix/replay intermediate copies are bounded

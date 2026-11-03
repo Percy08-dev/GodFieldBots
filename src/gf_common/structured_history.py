@@ -8,9 +8,13 @@ ACTIVE_AGGREGATE = 'public-exact-v2'
 HISTORICAL_AGGREGATE = 'historical-structured-62'
 LEGACY_HISTORY_WIDTH = 62
 ACTOR_SUM_FIELDS = ('amount', 'hp_delta', 'mp_delta', 'money_delta', 'mp_spent', 'price', 'attack')
-APPENDED_HISTORY_FIELDS = (tuple('definition.' + name for name in vocab.DEFINITIONS)
-    + ('window.count', 'window.truncated')
-    + tuple(role + '.' + name for role in ('own', 'opponent') for name in ('count', *ACTOR_SUM_FIELDS)))
+def appended_history_fields(definition_ids: tuple[str, ...] = vocab.DEFINITIONS) -> tuple[str, ...]:
+    return (tuple('definition.' + name for name in definition_ids)
+        + ('window.count', 'window.truncated')
+        + tuple(role + '.' + name for role in ('own', 'opponent') for name in ('count', *ACTOR_SUM_FIELDS)))
+
+
+APPENDED_HISTORY_FIELDS = appended_history_fields()
 HISTORY_WIDTH = LEGACY_HISTORY_WIDTH + len(APPENDED_HISTORY_FIELDS)
 
 
@@ -22,7 +26,8 @@ def history_width(recipe: str) -> int:
     raise ContractError('unsupported closed structured aggregate recipe')
 
 
-def exact_history_tail(events: tuple[Json, ...], actor: int, *, prefix_count: int, window: int) -> tuple[int, ...]:
+def exact_history_tail(events: tuple[Json, ...], actor: int, *, prefix_count: int, window: int,
+                       definition_ids: tuple[str, ...] = vocab.DEFINITIONS) -> tuple[int, ...]:
     """Use event-time IDs and exact key-presence fallback, never a catalog lookup.
 
     events is the already bounded last window of the participant's own prefix.
@@ -33,12 +38,12 @@ def exact_history_tail(events: tuple[Json, ...], actor: int, *, prefix_count: in
     integer(prefix_count, len(events), 2**31 - 1)
     if len(events) != min(prefix_count, window):
         raise ContractError('exact history tail must cover the last own-prefix window')
-    counts = [0] * len(vocab.DEFINITIONS)
+    counts = [0] * len(definition_ids)
     roles = [[0] * (1 + len(ACTOR_SUM_FIELDS)) for _ in range(2)]
     for event in events:
         if 'definition_id' in event:
             try:
-                counts[vocab.DEFINITIONS.index(event['definition_id'])] += 1
+                counts[definition_ids.index(event['definition_id'])] += 1
             except ValueError as error:
                 raise ContractError('unknown event-time public definition ID') from error
         player = event.get('player', event.get('attacker', event.get('active_player')))

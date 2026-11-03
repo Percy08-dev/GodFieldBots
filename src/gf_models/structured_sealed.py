@@ -22,6 +22,8 @@ from typing import Any, BinaryIO
 import numpy as np
 
 from gf_common.action_contract import ActionContract
+from gf_common.card_instance import CardInstanceContract
+from gf_common.card_instance_rules import CardInstanceRules
 from gf_common.domain import (
     CATALOG_META,
     END_PROJECTION_VERSION,
@@ -35,10 +37,17 @@ from gf_common.domain import (
     integer,
 )
 from gf_common.structured import GENERATOR_V2, INPUT_RECIPE
+from gf_common.structured_layout import StructuredLayout, layout_for_contract
 from gf_models.sharded_arrays import MAX_MANIFEST_BYTES, _pairs, validate_bundle_metadata
-from gf_models.structured_binding import check_input_binding, input_binding
+from gf_models.structured_binding import (
+    check_input_binding,
+    check_input_binding_v3,
+    input_binding,
+    input_binding_v3,
+)
 from gf_models.structured_config import (
     InferenceBindingV2,
+    model_config_v3,
     parameter_shapes,
     recorded_architecture_identity,
     recorded_model_config_v2,
@@ -48,6 +57,8 @@ from gf_models.structured_config import (
 SEMANTIC_KEYS = {'input_recipe', 'generator_version', 'policy_input_version', 'end_projection_version', 'reward_policy_version',
                  'reviewed_spec_hashes', 'simulator_revision', 'catalog', 'token_signature', 'numeric_transform', 'runtime', 'numerics'}
 CLASSIFICATION = {'action_contract', 'purpose', 'synthetic_capacity'}
+SEMANTIC_KEYS_V3 = SEMANTIC_KEYS | {'rule_signature', 'spec_inventory_sha256'}
+CLASSIFICATION_V3 = CLASSIFICATION | {'rule_signature'}
 NUMERICS = {'precision': 'ieee-fp32', 'tf32': False, 'amp': False, 'deterministic': True, 'cublas_workspace_config': ':4096:8', 'threads': 1}
 ADAM = {'name': 'Adam', 'lr': .0003, 'betas': [.9, .999], 'eps': 1e-8, 'weight_decay': 0, 'amsgrad': False,
         'maximize': False, 'foreach': None, 'capturable': False, 'differentiable': False, 'fused': None, 'decoupled_weight_decay': False}
@@ -254,8 +265,62 @@ def validate_recorded_semantics(value: Json, model: Any) -> None:
         raise ContractError('invalid recorded runtime shape')
 
 
-def _semantics(value: Json, model: Any) -> None:
-    validate_recorded_semantics(value, model)
+def static_semantics_v3(model: Any, *, layout: StructuredLayout, action_contract: CardInstanceContract,
+                        rules: CardInstanceRules) -> Json:
+    from dataclasses import asdict
+
+    from gf_common.card_instance import CATALOG_META as CARD_CATALOG
+    from gf_common.card_instance import (
+        CORRECTED_REVIEWED_SPEC_HASHES,
+        CORRECTED_SPEC_INVENTORY_HASH,
+    )
+    from gf_common.card_instance import REVIEWED_SPEC_HASHES as OLD_CARD_SPECS
+    from gf_common.card_instance_rules import rule_signature
+    model_config_v3(asdict(model), layout=layout)
+    if layout is not layout_for_contract(action_contract):
+        raise ContractError("recorded model3 profile/layout mismatch")
+    specs = CORRECTED_REVIEWED_SPEC_HASHES if action_contract.spec_inventory_sha256 == CORRECTED_SPEC_INVENTORY_HASH else OLD_CARD_SPECS
+    return {"input_recipe": layout.input_recipe, "generator_version": layout.generator,
+        "policy_input_version": layout.policy_input_version, "end_projection_version": END_PROJECTION_VERSION,
+        "reward_policy_version": "natural-terminal-v1", "reviewed_spec_hashes": specs,
+        "simulator_revision": action_contract.simulator_revision, "catalog": CARD_CATALOG,
+        "token_signature": recorded_token_signature(model, layout=layout), "numeric_transform": "signed-log1p-fp32-v1",
+        "numerics": NUMERICS, "rule_signature": rule_signature(action_contract, rules),
+        "spec_inventory_sha256": action_contract.spec_inventory_sha256}
+
+
+@dataclass(frozen=True)
+class _SealedContextV3:
+    layout: StructuredLayout
+    action_contract: CardInstanceContract
+    rules: CardInstanceRules
+    purpose: str
+    synthetic_capacity: bool
+    action_config_hash: str
+
+    def check(self, raw: Json) -> None:
+        checksum(self.action_config_hash)
+        check_input_binding_v3(raw, action_contract=self.action_contract, rules=self.rules,
+            purpose=self.purpose, synthetic_capacity=self.synthetic_capacity)
+
+
+def validate_recorded_semantics_v3(value: Json, model: Any, *, layout: StructuredLayout,
+                                   action_contract: CardInstanceContract, rules: CardInstanceRules) -> None:
+    if not SEMANTIC_KEYS_V3 <= value.keys():
+        raise ContractError("missing recorded format4 semantic declaration")
+    expected = static_semantics_v3(model, layout=layout, action_contract=action_contract, rules=rules)
+    if any(canonical(value[key]) != canonical(item) for key, item in expected.items()):
+        raise ContractError("unsupported recorded format4 semantics")
+    runtime = closed(value["runtime"], {"torch", "numpy", "python", "gil_enabled"})
+    if any(type(runtime[key]) is not str or not runtime[key] for key in ("torch", "numpy", "python")) or type(runtime["gil_enabled"]) is not bool:
+        raise ContractError("invalid recorded runtime shape")
+
+
+def _semantics(value: Json, model: Any, context: _SealedContextV3 | None = None) -> None:
+    if context is None:
+        validate_recorded_semantics(value, model)
+    else:
+        validate_recorded_semantics_v3(value, model, layout=context.layout, action_contract=context.action_contract, rules=context.rules)
     producer = closed(value['producer'], {'code_revision', 'source_digest'})
     checksum(producer['source_digest'])
     if producer['code_revision'] is not None and (type(producer['code_revision']) is not str or re.fullmatch(r'[0-9a-f]{40}', producer['code_revision']) is None):
@@ -270,44 +335,63 @@ class SealedArtifact:
     retained: bool
 
 
-def _inference_metadata(directory: Path, expected_inference_digest: str, action_contract: ActionContract,
-                        purpose: str, synthetic_capacity: bool, scan: SealedScan) -> tuple[Json, Any, Json]:
+def _inference_metadata(directory: Path, expected_inference_digest: str, action_contract: Any,
+                        purpose: str, synthetic_capacity: bool, scan: SealedScan, context: _SealedContextV3 | None = None) -> tuple[Json, Any, Json]:
     checksum(expected_inference_digest)
-    input_binding(action_contract, purpose, synthetic_capacity)
+    semantic_keys, class_keys = (SEMANTIC_KEYS, CLASSIFICATION) if context is None else (SEMANTIC_KEYS_V3, CLASSIFICATION_V3)
+    schema = 3 if context is None else 4
+    if context is None:
+        input_binding(action_contract, purpose, synthetic_capacity)
+    else:
+        input_binding_v3(context.action_contract, context.rules, purpose, synthetic_capacity)
     inference = scan.object(directory / 'inference.json', expected_inference_digest)
-    closed(inference, {'schema_version', 'kind', 'model', 'architecture_identity', 'action_config_hash', 'producer', 'weights'} | SEMANTIC_KEYS | CLASSIFICATION)
-    check_input_binding({key: inference[key] for key in CLASSIFICATION}, action_contract=action_contract, purpose=purpose, synthetic_capacity=synthetic_capacity)
-    if type(inference['schema_version']) is not int or inference['schema_version'] != 3 or inference['kind'] != 'structured-inference':
+    closed(inference, {'schema_version', 'kind', 'model', 'architecture_identity', 'action_config_hash', 'producer', 'weights'} | semantic_keys | class_keys)
+    if context is None:
+        check_input_binding({key: inference[key] for key in class_keys}, action_contract=action_contract, purpose=purpose, synthetic_capacity=synthetic_capacity)
+    else:
+        context.check({key: inference[key] for key in class_keys})
+        if inference["action_config_hash"] != context.action_config_hash:
+            raise ContractError("recorded format4 action Config mismatch")
+    if type(inference['schema_version']) is not int or inference['schema_version'] != schema or inference['kind'] != 'structured-inference':
         raise ContractError('sealed inference3 required')
-    model = recorded_model_config_v2(inference['model'], inference['token_signature'])
-    _semantics(inference, model)
-    if inference['architecture_identity'] != recorded_architecture_identity(model):
+    model = (recorded_model_config_v2(inference['model'], inference['token_signature']) if context is None else
+             model_config_v3(inference['model'], layout=context.layout))
+    options: dict[str, Any] = {} if context is None else {"layout": context.layout}
+    _semantics(inference, model, context)
+    if inference['architecture_identity'] != recorded_architecture_identity(model, **options):
         raise ContractError('sealed architecture identity mismatch')
     checksum(inference['action_config_hash'])
     if inference['weights'].get('prefix') != 'weights':
         raise ContractError('sealed inference weights prefix mismatch')
     weights = validate_bundle_metadata(inference['weights'])
-    expected_weights = parameter_shapes(model)
+    expected_weights = parameter_shapes(model, **options)
     if set(weights) != set(expected_weights) or any(weights[key]['dtype'] != 'float32' or weights[key]['shape'] != list(shape) for key, shape in expected_weights.items()):
         raise ContractError('sealed named weight descriptors mismatch')
     return inference, model, expected_weights
 
 
-def inspect_retained_artifact(directory: Path, *, expected_inference_digest: str, action_contract: ActionContract,
-                              purpose: str, synthetic_capacity: bool, scan: SealedScan) -> SealedArtifact:
+def _inspect_retained_artifact(directory: Path, *, expected_inference_digest: str, action_contract: Any,
+                              purpose: str, synthetic_capacity: bool, scan: SealedScan, context: _SealedContextV3 | None = None) -> SealedArtifact:
+    semantic_keys, class_keys = (SEMANTIC_KEYS, CLASSIFICATION) if context is None else (SEMANTIC_KEYS_V3, CLASSIFICATION_V3)
+    schema = 3 if context is None else 4
     inference, model, expected_weights = _inference_metadata(directory, expected_inference_digest, action_contract,
-                                                            purpose, synthetic_capacity, scan)
+                                                            purpose, synthetic_capacity, scan, context)
     resume = scan.object(directory / 'resume.json')
     closed(resume, {'schema_version', 'kind', 'inference_digest', 'model', 'binding', 'resume_identity', 'producer',
-        'optimizer_steps', 'optimizer_recipe', 'parameter_states', 'cuda_rng_count', 'shuffle_rng', 'state'} | SEMANTIC_KEYS | CLASSIFICATION)
-    check_input_binding({key: resume[key] for key in CLASSIFICATION}, action_contract=action_contract, purpose=purpose, synthetic_capacity=synthetic_capacity)
+        'optimizer_steps', 'optimizer_recipe', 'parameter_states', 'cuda_rng_count', 'shuffle_rng', 'state'} | ({'action_config_hash'} if context is not None else set()) | semantic_keys | class_keys)
+    if context is None:
+        check_input_binding({key: resume[key] for key in class_keys}, action_contract=action_contract, purpose=purpose, synthetic_capacity=synthetic_capacity)
+    else:
+        context.check({key: resume[key] for key in class_keys})
+        if resume["action_config_hash"] != context.action_config_hash:
+            raise ContractError("recorded resume4 action Config mismatch")
     checksum(resume['inference_digest'])
-    if (type(resume['schema_version']) is not int or resume['schema_version'] != 3 or resume['kind'] != 'structured-resume'
+    if (type(resume['schema_version']) is not int or resume['schema_version'] != schema or resume['kind'] != 'structured-resume'
             or resume['inference_digest'] != expected_inference_digest or canonical(resume['model']) != canonical(inference['model'])
-            or any(canonical(resume[key]) != canonical(inference[key]) for key in SEMANTIC_KEYS)
+            or any(canonical(resume[key]) != canonical(inference[key]) for key in semantic_keys)
             or canonical(resume['optimizer_recipe']) != canonical(ADAM)):
         raise ContractError('sealed paired resume/inference declarations mismatch')
-    _semantics(resume, model)
+    _semantics(resume, model, context)
     if (resume['producer']['source_digest'] != inference['producer']['source_digest']
             or resume['producer']['code_revision'] is not None and inference['producer']['code_revision'] is not None
             and resume['producer']['code_revision'] != inference['producer']['code_revision']):
@@ -394,3 +478,22 @@ def inspect_pruned_inference(directory: Path, *, expected_inference_digest: str,
     scan.inventory(directory, {'inference.json'})
     scan.finalize()
     return SealedArtifact(inference, None, dict(original_files), False)
+
+
+
+def inspect_retained_artifact(directory: Path, *, expected_inference_digest: str, action_contract: ActionContract,
+                              purpose: str, synthetic_capacity: bool, scan: SealedScan) -> SealedArtifact:
+    return _inspect_retained_artifact(directory, expected_inference_digest=expected_inference_digest,
+        action_contract=action_contract, purpose=purpose, synthetic_capacity=synthetic_capacity, scan=scan)
+
+
+def inspect_retained_artifact_v3(directory: Path, *, expected_inference_digest: str,
+                                action_contract: CardInstanceContract, rules: CardInstanceRules,
+                                purpose: str, synthetic_capacity: bool, action_config_hash: str,
+                                layout: StructuredLayout, scan: SealedScan) -> SealedArtifact:
+    context = _SealedContextV3(layout, action_contract, rules, purpose, synthetic_capacity, action_config_hash)
+    input_binding_v3(action_contract, rules, purpose, synthetic_capacity)
+    if layout is not layout_for_contract(action_contract):
+        raise ContractError("recorded format4 profile/layout mismatch")
+    return _inspect_retained_artifact(directory, expected_inference_digest=expected_inference_digest,
+        action_contract=action_contract, purpose=purpose, synthetic_capacity=synthetic_capacity, scan=scan, context=context)
