@@ -16,6 +16,17 @@ from dataclasses import asdict, dataclass, field
 from typing import Any
 
 from gf_common.action_contract import PENDING_COVERAGE, ActionContract, validate_game_references
+from gf_common.card_instance import GENERATOR_VERSION, ActionConfigV3, CardInstanceContract
+from gf_common.card_instance_rules import (
+    UTILITY_IDS,
+    CardInstanceRules,
+    PublicCard,
+    SequenceAnalysis,
+    analyze_sequence,
+    card_instance_rules,
+    defense_kind,
+    rule_signature,
+)
 from gf_common.domain import ContractError, EmptyCandidates, Json, digest, integer
 from gf_common.structured import (
     GENERATOR_V2,
@@ -24,6 +35,7 @@ from gf_common.structured import (
     DecisionFrame,
     EventBankView,
 )
+from gf_common.structured_layout import CARD_INSTANCE_LAYOUT, LEGACY_LAYOUT
 
 SATURATION = 2**63 - 1
 CHANNELS = ("attribute_effect", "attack_breadth", "resources", "refresh", "remaining_hand", "length", "exploration")
@@ -211,8 +223,8 @@ def _rng_state(value: Any) -> None:
 
 
 @dataclass(frozen=True)
-class SearchReport:
-    action_contract: ActionContract = field(kw_only=True)
+class _SearchReportFields:
+    action_contract: ActionContract | CardInstanceContract = field(kw_only=True)
     generator_version: str
     config_hash: str
     numeric_costs_hash: str
@@ -236,38 +248,65 @@ class SearchReport:
     search_ms: float
     selection_ms: float
 
+
+
+def _validate_report(report: _SearchReportFields, omissions: tuple[str, ...]) -> None:
+    for value in (report.config_hash, report.numeric_costs_hash, report.table_hash):
+        _sha(value)
+    if digest(asdict(report.numeric_costs)) != report.numeric_costs_hash:
+        raise ContractError("report numeric cost binding mismatch")
+    for amount in (report.attempts, report.prunes, report.discovered, report.mandatory, report.selected, report.selected_elements):
+        integer(amount, 0, SATURATION)
+    if (report.prunes > report.attempts or not (0 <= report.mandatory <= report.selected <= report.discovered and report.selected >= 1)
+            or type(report.channel_counts) is not tuple or len(report.channel_counts) != 7):
+        raise ContractError("search report counts inconsistent")
+    for channel_count in report.channel_counts:
+        integer(channel_count, 0, report.selected)
+    if sum(report.channel_counts) != report.selected - report.mandatory:
+        raise ContractError("channel assignments do not cover nonmandatory selections")
+    if type(report.traversal_complete) is not bool or type(report.presentation_complete) is not bool:
+        raise ContractError("completion boolean required")
+    if report.presentation_complete != (report.traversal_complete and report.selected == report.discovered):
+        raise ContractError("presentation/traversal completeness mismatch")
+    allowed = {"count_time", "count_states", "search_time", "max_expansions", "max_temporary_candidates",
+               "max_candidates", "numeric_costs", "max_sequence_length"}
+    if (type(report.cutoff_reasons) is not tuple or len(set(report.cutoff_reasons)) != len(report.cutoff_reasons)
+            or set(report.cutoff_reasons) - allowed or report.omissions != omissions):
+        raise ContractError("unknown search cutoff/omission")
+    for timing in (report.count_ms, report.search_ms, report.selection_ms):
+        if type(timing) not in (int, float) or not math.isfinite(timing) or timing < 0:
+            raise ContractError("invalid search stage timing")
+    _rng_state(report.rng_before)
+    _rng_state(report.rng_after)
+
+
+@dataclass(frozen=True)
+class SearchReport(_SearchReportFields):
+    action_contract: ActionContract = field(kw_only=True)
+
     def __post_init__(self) -> None:
         if type(self.action_contract) is not ActionContract:
             raise ContractError("explicit report action contract required")
         if self.generator_version != GENERATOR_V2 or type(self.numeric_costs) is not NumericCosts or type(self.precount) is not PrecountReport:
             raise ContractError("invalid search report recipe")
-        for value in (self.config_hash, self.numeric_costs_hash, self.table_hash):
-            _sha(value)
-        if digest(asdict(self.numeric_costs)) != self.numeric_costs_hash:
-            raise ContractError("report numeric cost binding mismatch")
-        for amount in (self.attempts, self.prunes, self.discovered, self.mandatory, self.selected, self.selected_elements):
-            integer(amount, 0, SATURATION)
-        if (self.prunes > self.attempts or not (0 <= self.mandatory <= self.selected <= self.discovered and self.selected >= 1)
-                or type(self.channel_counts) is not tuple or len(self.channel_counts) != 7):
-            raise ContractError("search report counts inconsistent")
-        for channel_count in self.channel_counts:
-            integer(channel_count, 0, self.selected)
-        if sum(self.channel_counts) != self.selected - self.mandatory:
-            raise ContractError("channel assignments do not cover nonmandatory selections")
-        if type(self.traversal_complete) is not bool or type(self.presentation_complete) is not bool:
-            raise ContractError("completion boolean required")
-        if self.presentation_complete != (self.traversal_complete and self.selected == self.discovered):
-            raise ContractError("presentation/traversal completeness mismatch")
-        allowed = {"count_time", "count_states", "search_time", "max_expansions", "max_temporary_candidates",
-                   "max_candidates", "numeric_costs", "max_sequence_length"}
-        if (type(self.cutoff_reasons) is not tuple or len(set(self.cutoff_reasons)) != len(self.cutoff_reasons)
-                or set(self.cutoff_reasons) - allowed or self.omissions != OMISSIONS):
-            raise ContractError("unknown search cutoff/omission")
-        for timing in (self.count_ms, self.search_ms, self.selection_ms):
-            if type(timing) not in (int, float) or not math.isfinite(timing) or timing < 0:
-                raise ContractError("invalid search stage timing")
-        _rng_state(self.rng_before)
-        _rng_state(self.rng_after)
+        _validate_report(self, OMISSIONS)
+
+
+OMISSIONS_V3 = ("unlisted direct-use utility definitions",)
+
+
+@dataclass(frozen=True)
+class SearchReportV3(_SearchReportFields):
+    action_contract: CardInstanceContract = field(kw_only=True)
+    rule_signature: str = field(kw_only=True)
+
+    def __post_init__(self) -> None:
+        if (type(self.action_contract) is not CardInstanceContract or self.generator_version != GENERATOR_VERSION
+                or type(self.numeric_costs) is not NumericCosts or type(self.precount) is not PrecountReport):
+            raise ContractError("invalid card-instance search report recipe")
+        if self.rule_signature != rule_signature(self.action_contract, card_instance_rules()):
+            raise ContractError("search report rule signature mismatch")
+        _validate_report(self, OMISSIONS_V3)
 
 
 @dataclass(frozen=True)
@@ -276,14 +315,28 @@ class GeneratedCandidates:
     report: SearchReport
 
     def __post_init__(self) -> None:
-        if (type(self.table) is not CandidateTable or type(self.report) is not SearchReport
-                or self.table.table_hash != self.report.table_hash
-                or self.table.action_contract != self.report.action_contract or self.table.purpose != "component"
-                or self.table.synthetic_capacity
-                or len(self.table.kinds) != self.report.selected
-                or len(self.table.slots) != self.report.selected_elements):
-            raise ContractError("generated table/report mismatch")
-        validate_game_references(self.table.slots[start:end] for start, end in zip(self.table.offsets[:-1], self.table.offsets[1:], strict=True))
+        _validate_generated(self.table, self.report, SearchReport)
+
+
+@dataclass(frozen=True)
+class GeneratedCandidatesV3:
+    table: CandidateTable
+    report: SearchReportV3
+
+    def __post_init__(self) -> None:
+        _validate_generated(self.table, self.report, SearchReportV3)
+
+
+def _validate_generated(table: CandidateTable, report: _SearchReportFields,
+                        report_type: type[_SearchReportFields]) -> None:
+    if (type(table) is not CandidateTable or type(report) is not report_type
+            or table.table_hash != report.table_hash
+            or table.action_contract != report.action_contract or table.purpose != "component"
+            or table.synthetic_capacity
+            or len(table.kinds) != report.selected
+            or len(table.slots) != report.selected_elements):
+        raise ContractError("generated table/report mismatch")
+    validate_game_references(table.slots[start:end] for start, end in zip(table.offsets[:-1], table.offsets[1:], strict=True))
 
 
 @dataclass(frozen=True)
@@ -477,36 +530,273 @@ class _Space:
                                 presence=(True, True, True, False))
 
     def allocations(self) -> Iterator[tuple[int, int, int]]:
-        if not 0 <= self.total <= 297:
+        return _allocations(self.obs["own"], self.total,
+            tuple(card.definition.get("mp_cost", 0) for card in self.cards if card.miracle))
+
+    def generated(self, table: CandidateTable, fields: tuple[Any, ...]) -> GeneratedCandidates:
+        return GeneratedCandidates(table, SearchReport(*fields, action_contract=self.config.action_contract))
+
+    def completion_stats(self, family: str, refs: tuple[int, ...]) -> tuple[int, int, int]:
+        if family == "offense":
+            mirage = any(self.by_slot[ref].ability == "attackEveryEnemy" for ref in refs)
+            danger = any(self.by_slot[ref].ability == "danger" for ref in refs)
+            count = len(self.targets) if not mirage or danger else int("opponent" in self.targets)
+            return count, len(refs) * count, count
+        return 1, len(refs), 0
+
+    def upper_counts(self) -> dict[str, int]:
+        return _legacy_upper_counts(self)
+
+    def summary(self, proposal: _Proposal) -> _Summary:
+        return _summary(self, proposal)
+
+    def count_fixed(self, tick: Callable[[], None], add: Callable[..., None]) -> None:
+        basics = self.basic_count
+        add(basics, numeric=basics if self.obs["required_choice"] == "buy_accept_reject" else 0, attempts=basics)
+        if self.obs["required_choice"] == "turn_action":
+            for card in self.cards:
+                tick()
+                count = len(self.singleton_targets(card))
+                add(count, count, count, attempts=count)
+            buy = len(self.trade["buy"]) * len(self.targets)
+            sell = (len(self.trade["sell"]) * max(0, len(self.hand) - 1) * len(self.targets)
+                    if self.config.max_sequence_length >= 2 else 0)
+            add(buy + sell, buy + sell * 2, buy + sell, attempts=buy + sell)
+            # Count only the bounded numeric axes as integer triples, shared
+            # across carriers. No typed Action or _Proposal is constructed here.
+            if self.trade["exchange"]:
+                allocations: set[tuple[int, int, int]] = set()
+                visits = 0
+                for allocation in self.allocations():
+                    tick()
+                    visits += 1
+                    allocations.add(allocation)
+                count = len(allocations) * len(self.trade["exchange"])
+                attempts = visits * len(self.trade["exchange"])
+                add(count, count, numeric=count, attempts=attempts, excluded=attempts - count)
+
+
+    def mandatory_rows(self, attempt: Callable[[], None]) -> Iterator[_Proposal]:
+        yield from self.basics(attempt)
+        if self.obs["required_choice"] == "turn_action":
+            for card in self.cards:
+                for target in self.singleton_targets(card):
+                    attempt()
+                    yield _Proposal("play_sequence", target, (card.slot,))
+            for slot in self.trade["buy"]:
+                for target in self.targets:
+                    attempt()
+                    yield _Proposal("buy", target, (slot,))
+            for slot in self.trade["exchange"]:
+                attempt()
+                allocation = next(self.allocations())
+                yield _Proposal("exchange", refs=(slot,), numerics=(*allocation, 0),
+                                    presence=(True, True, True, False))
+
+
+
+class _CardInstanceSpace:
+    def __init__(self, frame: DecisionFrame, config: ActionConfigV3, rules: CardInstanceRules) -> None:
+        self.frame, self.config, self.rules = frame, config, rules
+        self.rule_signature = rule_signature(config.action_contract, rules)
+        self.obs, self.raw = frame.observation, frame.raw
+        self.options = self.raw["action_options"]["action_options"]
+        self.cards = tuple(PublicCard(index, card["kind"], card.get("state"), self.raw["catalog"][card["definition_id"]])
+                           for index, card in enumerate(self.obs["own"]["cards"]))
+        self.by_slot = {card.slot: card for card in self.cards}
+        refs = {card["card_ref"]: index for index, card in enumerate(self.obs["own"]["cards"])}
+        self.usable = frozenset(refs[row["card_ref"]] for row in self.options["usable_cards"])
+        self.targets = tuple(name for name in config.targets if (frame.actor if name == "self" else 3 - frame.actor) in self.options["valid_targets"])
+        self.hand = [card for card in self.cards if card.hand]
+        self.trade = {name: [refs[row["card_ref"]] for row in self.options[name + "_cards"]]
+                      for name in ("exchange", "sell", "buy")}
+        self.phenomena = [refs[row["card_ref"]] for row in self.options["phenomenon_cards"]]
+        self.offense = [card.slot for card in self.cards if card.slot in self.usable and (
+            "weapon" in card.definition["classification"]["use_roles"] or card.additional
+            or card.subclass == "weapon" or card.ability == "cutCost")]
+        self.utility = [card.slot for card in self.cards if card.slot in self.usable and (
+            card.definition["definition_id"] in UTILITY_IDS or card.ability == "cutCost")]
+        self.status = [card.slot for card in self.cards if card.slot in self.usable and (
+            card.subclass == "status" or card.ability == "cutCost")]
+        self.defense = [card.slot for card in self.cards if card.slot in self.usable and (
+            defense_kind(card) is not None or card.ability == "cutCost")]
+        self.discard = [card.slot for card in self.cards if card.miracle or card.definition["kind"] != "weapons"]
+        self.total = sum(self.obs["own"][name] for name in ("hp", "mp", "money"))
+        self.maximum = min(config.max_sequence_length, len(self.cards), 18)
+
+    @property
+    def families(self) -> tuple[str, ...]:
+        if self.obs["required_choice"] == "defense":
+            return ("defense",) if self.defense else ()
+        if self.obs["required_choice"] != "turn_action":
+            return ()
+        result = [name for name in ("offense", "utility", "status") if self.choices(name) and self.targets]
+        if self.discard and self.options["can_sacrifice" if self.obs["end_times"] else "can_discard"]:
+            result.append("discard")
+        return tuple(result)
+
+    def choices(self, family: str) -> list[int]:
+        return getattr(self, family)
+
+    def analysis(self, family: str, refs: tuple[int, ...]) -> SequenceAnalysis:
+        return analyze_sequence(self.cards, refs, family=family, mp=self.obs["own"]["mp"],
+            flash=self.obs["own"]["status"]["flash"], maximum=self.config.max_sequence_length, usable=self.usable)
+
+    def valid(self, family: str, refs: tuple[int, ...]) -> bool:
+        if family == "discard":
+            return len(refs) <= self.maximum and len(set(refs)) == len(refs) and tuple(sorted(refs)) == refs
+        return self.analysis(family, refs).viable
+
+    def completed_targets(self, family: str, refs: tuple[int, ...]) -> tuple[str, ...]:
+        if family == "discard":
+            return ("omitted",)
+        facts = self.analysis(family, refs)
+        if not facts.complete:
+            return ()
+        if family == "defense":
+            return ("omitted",)
+        return tuple(target for target in self.targets if not facts.opponent_only or target == "opponent")
+
+    def completion_stats(self, family: str, refs: tuple[int, ...]) -> tuple[int, int, int]:
+        count = len(self.completed_targets(family, refs))
+        return count, count * len(refs), count if family in ("offense", "utility", "status") else 0
+
+    def completions(self, family: str, refs: tuple[int, ...], attempt: Callable[[], None]) -> Iterator[_Proposal]:
+        kind = ("sacrifice" if self.obs["end_times"] else "discard") if family == "discard" else (
+            "respond" if family == "defense" else "play_sequence")
+        for target in self.completed_targets(family, refs):
+            attempt()
+            yield _Proposal(kind, target, refs)
+
+    @property
+    def basic_count(self) -> int:
+        choice = self.obs["required_choice"]
+        if choice == "buy_accept_reject":
+            return 2
+        return int(choice == "defense" and self.options["can_allow"] or choice == "turn_action" and self.options["can_pray"])
+
+    def mandatory_rows(self, attempt: Callable[[], None]) -> Iterator[_Proposal]:
+        choice = self.obs["required_choice"]
+        if choice == "buy_accept_reject":
+            for accept in (0, 1):
+                attempt()
+                yield _Proposal("buy_decision", numerics=(0, 0, 0, accept), presence=(False, False, False, True))
+        elif choice == "defense" and self.options["can_allow"]:
+            attempt()
+            yield _Proposal("respond")
+        elif choice == "turn_action":
+            if self.options["can_pray"]:
+                attempt()
+                yield _Proposal("pray")
+            for slot in self.trade["buy"]:
+                for target in self.targets:
+                    attempt()
+                    yield _Proposal("buy", target, (slot,))
+            for slot in self.trade["exchange"]:
+                attempt()
+                yield _Proposal("exchange", refs=(slot,), numerics=(*next(self.allocations()), 0), presence=(True, True, True, False))
+            for slot in self.phenomena:
+                attempt()
+                yield _Proposal("invoke_phenomenon", refs=(slot,))
+
+    def allocations(self) -> Iterator[tuple[int, int, int]]:
+        return _allocations(self.obs["own"], self.total,
+            tuple(card.definition.get("mp_cost", 0) for card in self.cards if card.miracle))
+
+    def fixed(self, attempt: Callable[[], None]) -> Iterator[_Proposal]:
+        if self.obs["required_choice"] != "turn_action":
             return
-        # Current allocation is reserved if valid; otherwise a deterministic
-        # conserved allocation completes the mandatory carrier.
-        current = tuple(self.obs["own"][key] for key in ("hp", "mp", "money"))
-        if all(0 <= value <= 99 for value in current):
-            yield current[0], current[1], current[2]
+        for slot in self.trade["sell"] if self.config.max_sequence_length >= 2 else ():
+            for card in self.hand:
+                if card.slot != slot:
+                    for target in self.targets:
+                        attempt()
+                        yield _Proposal("sell", target, (slot, card.slot))
+        for slot in self.trade["exchange"]:
+            for index, allocation in enumerate(self.allocations()):
+                if index:
+                    attempt()
+                    yield _Proposal("exchange", refs=(slot,), numerics=(*allocation, 0), presence=(True, True, True, False))
+
+    def count_fixed(self, tick: Callable[[], None], add: Callable[..., None]) -> None:
+        basics = self.basic_count
+        add(basics, numeric=basics if self.obs["required_choice"] == "buy_accept_reject" else 0, attempts=basics)
+        if self.obs["required_choice"] != "turn_action":
+            return
+        buy = len(self.trade["buy"]) * len(self.targets)
+        sell = sum(sum(card.slot != slot for card in self.hand) for slot in self.trade["sell"]) * len(self.targets) if self.config.max_sequence_length >= 2 else 0
+        phenomena = len(self.phenomena)
+        add(buy + sell + phenomena, buy + sell * 2 + phenomena, buy + sell, attempts=buy + sell + phenomena)
+        if self.trade["exchange"]:
+            unique: set[tuple[int, int, int]] = set()
+            visits = 0
+            for allocation in self.allocations():
+                tick()
+                visits += 1
+                unique.add(allocation)
+            count = len(unique) * len(self.trade["exchange"])
+            attempts = visits * len(self.trade["exchange"])
+            add(count, count, numeric=count, attempts=attempts, excluded=attempts - count)
+
+    def upper_counts(self) -> dict[str, int]:
+        totals = dict.fromkeys(("complete", "prefixes", "attempts", "excluded", "targets", "numeric_variants", "elements"), 0)
+        if self.obs["required_choice"] == "turn_action":
+            buy = len(self.trade["buy"]) * len(self.targets)
+            sell = len(self.trade["sell"]) * max(0, len(self.hand) - 1) * len(self.targets) if self.config.max_sequence_length >= 2 else 0
+            exchange = len(self.trade["exchange"]) * (3 * 26**2 + 3 + len(self.cards) * 6)
+            fixed = self.basic_count + buy + sell + exchange + len(self.phenomena)
+            totals.update(complete=fixed, attempts=fixed, targets=buy + sell, numeric_variants=exchange,
+                          elements=buy + 2 * sell + exchange + len(self.phenomena))
         else:
-            hp = min(99, self.total)
-            mp = min(99, self.total - hp)
-            yield hp, mp, self.total - hp - mp
-        # Three resource orderings, conditional two-axis grids. Do not form a
-        # Cartesian product then drop out-of-range third-axis values.
-        for order in ((0, 1, 2), (1, 2, 0), (2, 0, 1)):
-            lower, upper = max(0, self.total - 198), min(99, self.total)
-            for first in _grid(lower, upper):
-                remaining = self.total - first
-                for second in _grid(max(0, remaining - 99), min(99, remaining)):
-                    values = [0, 0, 0]
-                    values[order[0]], values[order[1]], values[order[2]] = first, second, remaining - second
-                    yield values[0], values[1], values[2]
-        balanced = self.total // 3
-        yield balanced, (self.total - balanced) // 2, self.total - balanced - (self.total - balanced) // 2
-        if 1 <= self.total <= 199:
-            yield 1, min(99, self.total - 1), max(0, self.total - 100)
-        for cost in sorted({card.definition.get("mp_cost", 0) for card in self.cards if card.miracle}):
-            for mp in (cost - 1, cost, cost + 1):
-                if max(0, self.total - 198) <= mp <= min(99, self.total):
-                    for hp in (max(0, self.total - mp - 99), min(99, self.total - mp)):
-                        yield hp, mp, self.total - hp - mp
+            totals.update(complete=self.basic_count, attempts=self.basic_count,
+                          numeric_variants=self.basic_count if self.obs["required_choice"] == "buy_accept_reject" else 0)
+        for family in self.families:
+            size, previous = len(self.choices(family)), 1
+            targets = len(self.targets) if family in ("offense", "utility", "status") else 1
+            for depth in range(1, self.maximum + 1):
+                count = (math.comb(size, depth) if family == "discard" else math.perm(size, depth)) if depth <= size else 0
+                complete = _sat_mul(count, targets)
+                attempts = _sat_mul(previous, max(0, size - depth + 1))
+                for key, amount in (("complete", complete), ("prefixes", count), ("attempts", _sat_add(attempts, complete)),
+                                    ("excluded", attempts), ("targets", complete if family in ("offense", "utility", "status") else 0),
+                                    ("elements", _sat_mul(complete, depth))):
+                    totals[key] = _sat_add(totals[key], amount)
+                previous = count
+        return totals
+
+    def summary(self, proposal: _Proposal) -> _Summary:
+        cards = [self.by_slot[slot] for slot in proposal.refs]
+        facts = SequenceAnalysis()
+        if proposal.kind == "play_sequence":
+            root = cards[0]
+            family = "utility" if root.definition["definition_id"] in UTILITY_IDS else (
+                "status" if root.subclass == "status" else "offense")
+            facts = self.analysis(family, proposal.refs)
+        elif proposal.kind == "respond" and cards:
+            facts = self.analysis("defense", proposal.refs)
+        if proposal.kind in ("play_sequence", "respond"):
+            freed = sum(not card.miracle for card in cards)
+            opportunities = len(cards)
+            removed = {card.slot for card in cards if not card.miracle}
+        elif proposal.kind in ("discard", "sacrifice"):
+            freed = len(cards)
+            opportunities = freed if proposal.kind == "sacrifice" else 0
+            removed = set(proposal.refs)
+        elif proposal.kind == "pray":
+            freed = int(len(self.cards) == 18)
+            opportunities, removed = 1, set()
+        else:
+            removed = set(proposal.refs[:1] if proposal.kind == "sell" and proposal.target == "self" else proposal.refs)
+            freed, opportunities = len(removed), 1
+        refresh = min(18, opportunities, max(0, 18 - len(self.cards) + freed))
+        resources = proposal.numerics[:3] if proposal.kind == "exchange" else (
+            facts.spent_mp, len(cards), sum(card.definition.get("price", 0) for card in cards))
+        return _Summary(facts.attribute, facts.effects, facts.attack, resources, refresh,
+            tuple(card.slot for card in self.cards if card.slot not in removed), len(cards))
+
+    def generated(self, table: CandidateTable, fields: tuple[Any, ...]) -> GeneratedCandidatesV3:
+        return GeneratedCandidatesV3(table, SearchReportV3(*fields, action_contract=self.config.action_contract,
+                                                         rule_signature=self.rule_signature))
 
 
 def _grid(lower: int, upper: int) -> tuple[int, ...]:
@@ -517,18 +807,51 @@ def _grid(lower: int, upper: int) -> tuple[int, ...]:
     return tuple(dict.fromkeys((values[0], values[-1], values[middle], *values)))
 
 
+def _allocations(own: Json, total: int, miracle_costs: tuple[int, ...]) -> Iterator[tuple[int, int, int]]:
+    if not 0 <= total <= 297:
+        return
+    # Current allocation is reserved if valid; otherwise a deterministic
+    # conserved allocation completes the mandatory carrier.
+    current = tuple(own[key] for key in ("hp", "mp", "money"))
+    if all(0 <= value <= 99 for value in current):
+        yield current[0], current[1], current[2]
+    else:
+        hp = min(99, total)
+        mp = min(99, total - hp)
+        yield hp, mp, total - hp - mp
+    # Three resource orderings, conditional two-axis grids. Do not form a
+    # Cartesian product then drop out-of-range third-axis values.
+    for order in ((0, 1, 2), (1, 2, 0), (2, 0, 1)):
+        lower, upper = max(0, total - 198), min(99, total)
+        for first in _grid(lower, upper):
+            remaining = total - first
+            for second in _grid(max(0, remaining - 99), min(99, remaining)):
+                values = [0, 0, 0]
+                values[order[0]], values[order[1]], values[order[2]] = first, second, remaining - second
+                yield values[0], values[1], values[2]
+    balanced = total // 3
+    yield balanced, (total - balanced) // 2, total - balanced - (total - balanced) // 2
+    if 1 <= total <= 199:
+        yield 1, min(99, total - 1), max(0, total - 100)
+    for cost in sorted(set(miracle_costs)):
+        for mp in (cost - 1, cost, cost + 1):
+            if max(0, total - 198) <= mp <= min(99, total):
+                for hp in (max(0, total - mp - 99), min(99, total - mp)):
+                    yield hp, mp, total - hp - mp
+
+
 class _CountLimit(Exception):
     pass
 
 
-def _prefix_capacity(space: _Space) -> int:
+def _prefix_capacity(space: _Space | _CardInstanceSpace) -> int:
     # Bounded mode has three length-band iterators per start/family. Each DFS
     # retains at most one stack whose prefixes sum to L(L+1)/2 elements.
     jobs = sum(len(space.choices(family)) for family in space.families) * 3
     return jobs * space.maximum * (space.maximum + 1) // 2
 
 
-def _upper_counts(space: _Space) -> dict[str, int]:
+def _legacy_upper_counts(space: _Space) -> dict[str, int]:
     length = space.maximum
     totals = dict.fromkeys(("complete", "prefixes", "attempts", "excluded", "targets", "numeric_variants", "elements"), 0)
     basics = space.basic_count
@@ -566,7 +889,11 @@ def _upper_counts(space: _Space) -> dict[str, int]:
     return totals
 
 
-def _precount(space: _Space, costs: NumericCosts, clock: Callable[[], float]) -> tuple[PrecountReport, set[str]]:
+def _upper_counts(space: _Space | _CardInstanceSpace) -> dict[str, int]:
+    return space.upper_counts()
+
+
+def _precount(space: _Space | _CardInstanceSpace, costs: NumericCosts, clock: Callable[[], float]) -> tuple[PrecountReport, set[str]]:
     started = clock()
     deadline = started + space.config.count_milliseconds / 1000
     states = 0
@@ -604,43 +931,14 @@ def _precount(space: _Space, costs: NumericCosts, clock: Callable[[], float]) ->
                 add(0, excluded=1)
                 continue
             totals["prefixes"] += 1
-            if family == "offense":
-                mirage = any(space.by_slot[ref].ability == "attackEveryEnemy" for ref in refs)
-                danger = any(space.by_slot[ref].ability == "danger" for ref in refs)
-                count = (len(space.targets) if not mirage or danger else int("opponent" in space.targets))
-                # Support-only roots are excluded by valid(), so every valid
-                # offensive prefix has an attack-bearing element, even at zero.
-                add(count, len(refs) * count, count, attempts=1 + count)
-            else:
-                add(1, len(refs), attempts=2)
+            count, elements, targets = space.completion_stats(family, refs)
+            add(count, elements, targets, attempts=1 + count)
             tree(family, refs)
 
     mode = "exact"
     try:
         tick()
-        basics = space.basic_count
-        add(basics, numeric=basics if space.obs["required_choice"] == "buy_accept_reject" else 0, attempts=basics)
-        if space.obs["required_choice"] == "turn_action":
-            for card in space.cards:
-                tick()
-                count = len(space.singleton_targets(card))
-                add(count, count, count, attempts=count)
-            buy = len(space.trade["buy"]) * len(space.targets)
-            sell = (len(space.trade["sell"]) * max(0, len(space.hand) - 1) * len(space.targets)
-                    if space.config.max_sequence_length >= 2 else 0)
-            add(buy + sell, buy + sell * 2, buy + sell, attempts=buy + sell)
-            # Count only the bounded numeric axes as integer triples, shared
-            # across carriers. No typed Action or _Proposal is constructed here.
-            if space.trade["exchange"]:
-                allocations: set[tuple[int, int, int]] = set()
-                visits = 0
-                for allocation in space.allocations():
-                    tick()
-                    visits += 1
-                    allocations.add(allocation)
-                count = len(allocations) * len(space.trade["exchange"])
-                attempts = visits * len(space.trade["exchange"])
-                add(count, count, numeric=count, attempts=attempts, excluded=attempts - count)
+        space.count_fixed(tick, add)
         for family in space.families:
             tree(family, ())
     except _CountLimit:
@@ -665,7 +963,7 @@ class _SearchLimit(Exception):
 
 
 class _Collector:
-    def __init__(self, space: _Space, costs: NumericCosts, clock: Callable[[], float], deadline: float) -> None:
+    def __init__(self, space: _Space | _CardInstanceSpace, costs: NumericCosts, clock: Callable[[], float], deadline: float) -> None:
         self.space, self.costs, self.clock, self.deadline = space, costs, clock, deadline
         self.discovery_deadline = deadline - space.config.search_milliseconds / 1000 * .25
         self.summaries: dict[_Proposal, _Summary] = {}
@@ -708,14 +1006,14 @@ class _Collector:
             if mandatory:
                 raise ContractError(f"mandatory coverage cannot fit {reason}")
             raise _SearchLimit
-        self.summaries[proposal] = _summary(self.space, proposal)
+        self.summaries[proposal] = self.space.summary(proposal)
         self.proposals[proposal] = None
         self.elements = elements
         if mandatory:
             self.mandatory[proposal] = None
 
 
-def _walk(space: _Space, family: str, prefix: tuple[int, ...], length: int | None,
+def _walk(space: _Space | _CardInstanceSpace, family: str, prefix: tuple[int, ...], length: int | None,
           order: tuple[int, ...], attempt: Callable[[], None]) -> Iterator[tuple[int, ...] | None]:
     """Yield every attempted extension, including public-domain exclusions.
 
@@ -745,7 +1043,7 @@ def _length_order(maximum: int, band: int) -> tuple[int, ...]:
     return tuple(ordered[band::3])
 
 
-def _bounded_walk(space: _Space, family: str, root: tuple[int, ...], band: int,
+def _bounded_walk(space: _Space | _CardInstanceSpace, family: str, root: tuple[int, ...], band: int,
                   order: tuple[int, ...], attempt: Callable[[], None]) -> Iterator[tuple[int, ...] | None]:
     for length in _length_order(space.maximum, band):
         for refs in _walk(space, family, root, length, order, attempt):
@@ -980,109 +1278,122 @@ class PublicCandidateGeneratorV2:
 
     def generate(self, frame: DecisionFrame, bank_view: EventBankView,
                  search_rng: random.Random, numeric_costs: NumericCosts) -> GeneratedCandidates:
+        if frame.layout is not LEGACY_LAYOUT:
+            raise ContractError("generator2 requires the legacy structured layout")
         if type(search_rng) is not random.Random or type(numeric_costs) is not NumericCosts:
             raise ContractError("independent Random and closed NumericCosts required")
-        count_started = self.clock()
-        frame.bank_view(bank_view)  # same participant/episode, no future events.
-        space = _Space(frame, self.config)
-        if space.trade["exchange"] and not 0 <= space.total <= 297:
-            raise ContractError("hinted exchange carrier has no conserved range-valid allocation")
-        # Validate all numeric dimensions/costs even for empty proposal spaces.
-        estimate_costs(numeric_costs, 0, 0, self.config.max_sequence_length)
-        rng_before = search_rng.getstate()
-        precount, reasons = _precount(space, numeric_costs, self.clock)
-        search_started = self.clock()
-        collector = _Collector(space, numeric_costs, self.clock,
-                               search_started + self.config.search_milliseconds / 1000)
-        collector.reasons.update(reasons)
-        if (self.config.max_sequence_length < 2 and space.trade["sell"]
-                and len(space.hand) >= 2 and space.targets):
-            collector.reasons.add("max_sequence_length")
-        roots: dict[str, list[tuple[int, ...]]] = {}
-        # Mandatory coverage is attempted before discretionary search. Filtering
-        # fixed domains avoids numeric supplements/sell rows delaying a carrier.
-        mandatory_attempt = lambda: collector.tick(True)
-        for proposal in space.basics(mandatory_attempt):
-            collector.offer(proposal, True)
-        if space.obs["required_choice"] == "turn_action":
-            for card in space.cards:
-                for target in space.singleton_targets(card):
-                    collector.tick(True)
-                    collector.offer(_Proposal("play_sequence", target, (card.slot,)), True)
-            for slot in space.trade["buy"]:
-                for target in space.targets:
-                    collector.tick(True)
-                    collector.offer(_Proposal("buy", target, (slot,)), True)
-            for slot in space.trade["exchange"]:
-                collector.tick(True)
-                allocation = next(space.allocations())
-                collector.offer(_Proposal("exchange", refs=(slot,), numerics=(*allocation, 0),
-                                          presence=(True, True, True, False)), True)
+        return _run_search(lambda: _Space(frame, self.config), frame, bank_view, search_rng, numeric_costs, self.clock)
+
+
+class PublicCandidateGeneratorV3:
+    def __init__(self, config: ActionConfigV3, *, rules: CardInstanceRules,
+                 clock: Callable[[], float] = time.monotonic) -> None:
+        if type(config) is not ActionConfigV3:
+            raise ContractError("closed v3 action configuration required")
+        self.rule_signature = rule_signature(config.action_contract, rules)
+        self.config, self.rules, self.clock = config, rules, clock
+
+    def generate(self, frame: DecisionFrame, bank_view: EventBankView,
+                 search_rng: random.Random, numeric_costs: NumericCosts) -> GeneratedCandidatesV3:
+        if frame.layout is not CARD_INSTANCE_LAYOUT or bank_view.layout is not CARD_INSTANCE_LAYOUT:
+            raise ContractError("generator3 requires the card-instance layout")
+        if type(search_rng) is not random.Random or type(numeric_costs) is not NumericCosts:
+            raise ContractError("independent Random and closed NumericCosts required")
+        return _run_search(lambda: _CardInstanceSpace(frame, self.config, self.rules), frame, bank_view,
+                           search_rng, numeric_costs, self.clock)
+
+
+def _run_search(space_factory: Callable[[], _Space | _CardInstanceSpace], frame: DecisionFrame, bank_view: EventBankView,
+                search_rng: random.Random, numeric_costs: NumericCosts, clock: Callable[[], float]) -> Any:
+    count_started = clock()
+    frame.bank_view(bank_view)  # same participant/episode, no future events.
+    space = space_factory()
+    if space.trade["exchange"] and not 0 <= space.total <= 297:
+        raise ContractError("hinted exchange carrier has no conserved range-valid allocation")
+    # Validate all numeric dimensions/costs even for empty proposal spaces.
+    estimate_costs(numeric_costs, 0, 0, space.config.max_sequence_length)
+    rng_before = search_rng.getstate()
+    precount, reasons = _precount(space, numeric_costs, clock)
+    search_started = clock()
+    collector = _Collector(space, numeric_costs, clock,
+                           search_started + space.config.search_milliseconds / 1000)
+    collector.reasons.update(reasons)
+    if (space.config.max_sequence_length < 2 and space.trade["sell"]
+            and len(space.hand) >= 2 and space.targets):
+        collector.reasons.add("max_sequence_length")
+    roots: dict[str, list[tuple[int, ...]]] = {}
+    # Mandatory coverage is attempted before discretionary search. Filtering
+    # fixed domains avoids numeric supplements/sell rows delaying a carrier.
+    mandatory_attempt = lambda: collector.tick(True)
+    for proposal in space.mandatory_rows(mandatory_attempt):
+        collector.offer(proposal, True)
+    for family in space.families:
+        roots[family] = []
+        for slot in space.choices(family):
+            collector.tick(True)
+            root_refs = (slot,)
+            if space.valid(family, root_refs):
+                roots[family].append(root_refs)
+                for proposal in space.completions(family, root_refs, mandatory_attempt):
+                    collector.offer(proposal, True)
+            else:
+                collector.prunes += 1
+    complete = False
+    try:
+        # One shared round-robin work queue: numeric/sell supplements
+        # cannot monopolize the attempt/time budget ahead of tree lengths.
+        jobs: deque[tuple[str, Iterator[Any]]] = deque([(                "fixed", space.fixed(collector.tick))])
         for family in space.families:
-            roots[family] = []
-            for slot in space.choices(family):
-                collector.tick(True)
-                root_refs = (slot,)
-                if space.valid(family, root_refs):
-                    roots[family].append(root_refs)
-                    for proposal in space.completions(family, root_refs, mandatory_attempt):
-                        collector.offer(proposal, True)
-                else:
-                    collector.prunes += 1
-        complete = False
-        try:
-            # One shared round-robin work queue: numeric/sell supplements
-            # cannot monopolize the attempt/time budget ahead of tree lengths.
-            jobs: deque[tuple[str, Iterator[Any]]] = deque([(                "fixed", space.fixed(collector.tick))])
-            for family in space.families:
-                if precount.full_enumeration_admitted:
-                    order = tuple(space.choices(family))
-                    for root in roots[family]:
-                        jobs.append((family, _walk(space, family, root, None, order, collector.tick)))
-                else:
-                    shuffled_order = list(space.choices(family))
-                    search_rng.shuffle(shuffled_order)
-                    for root in roots[family]:
-                        for band in range(3):
-                            jobs.append((family, _bounded_walk(space, family, root, band,
-                                                              tuple(shuffled_order), collector.tick)))
-            while jobs:
-                family, job = jobs.popleft()
-                try:
-                    item = next(job)
-                except StopIteration:
-                    continue
-                if family == "fixed":
-                    collector.offer(item)
-                elif item is None:
-                    collector.prunes += 1
-                elif item:
-                    for proposal in space.completions(family, item, collector.tick):
-                        collector.offer(proposal)
-                jobs.append((family, job))
-            complete = True
-        except _SearchLimit:
-            pass
-        if not collector.proposals:
-            raise EmptyCandidates("no completed v4 proposal found; cutoffs="
-                                  + ",".join(sorted(collector.reasons)) + "; owner-profile pending coverage remains")
-        selection_started = self.clock()
-        selected, channel_counts = _select(collector, search_rng)
-        selected_elements = sum(len(proposal.refs) for proposal in selected)
-        if not estimate_costs(numeric_costs, len(selected), selected_elements, self.config.max_sequence_length,
-                              len(collector.proposals), collector.elements, _prefix_capacity(space)).fits(numeric_costs):
-            raise ContractError("selected table exceeds supplied numeric cost envelope")
-        table = _table(frame, selected, collector)
-        selected_elements = len(table.slots)
-        channel_counts = tuple(sum(collector.assigned.get(proposal) == index for proposal in selected) for index in range(7))
-        finished = self.clock()
-        if finished >= collector.deadline:
-            collector.reasons.add("search_time")
-        report = SearchReport(GENERATOR_V2, digest(asdict(self.config)), digest(asdict(numeric_costs)), table.table_hash,
-                              numeric_costs, precount, collector.attempts, collector.prunes, len(collector.proposals),
-                              len(collector.mandatory), len(selected), selected_elements, channel_counts,
-                              complete, complete and len(selected) == len(collector.proposals),
-                              tuple(sorted(collector.reasons)), OMISSIONS, rng_before, search_rng.getstate(),
-                              (search_started - count_started) * 1000,
-                              (selection_started - search_started) * 1000, (finished - selection_started) * 1000, action_contract=self.config.action_contract)
-        return GeneratedCandidates(table, report)
+            if precount.full_enumeration_admitted:
+                order = tuple(space.choices(family))
+                for root in roots[family]:
+                    jobs.append((family, _walk(space, family, root, None, order, collector.tick)))
+            else:
+                shuffled_order = list(space.choices(family))
+                search_rng.shuffle(shuffled_order)
+                for root in roots[family]:
+                    for band in range(3):
+                        jobs.append((family, _bounded_walk(space, family, root, band,
+                                                          tuple(shuffled_order), collector.tick)))
+        while jobs:
+            family, job = jobs.popleft()
+            try:
+                item = next(job)
+            except StopIteration:
+                continue
+            if family == "fixed":
+                collector.offer(item)
+            elif item is None:
+                collector.prunes += 1
+            elif item:
+                for proposal in space.completions(family, item, collector.tick):
+                    collector.offer(proposal)
+            jobs.append((family, job))
+        complete = True
+    except _SearchLimit:
+        pass
+    if not collector.proposals:
+        version, suffix = (("v4", "; owner-profile pending coverage remains") if type(space.config) is ActionConfigV2
+                           else ("v5", "; component proposals grant no Simulator qualification"))
+        raise EmptyCandidates("no completed " + version + " proposal found; cutoffs="
+                              + ",".join(sorted(collector.reasons)) + suffix)
+    selection_started = clock()
+    selected, channel_counts = _select(collector, search_rng)
+    selected_elements = sum(len(proposal.refs) for proposal in selected)
+    if not estimate_costs(numeric_costs, len(selected), selected_elements, space.config.max_sequence_length,
+                          len(collector.proposals), collector.elements, _prefix_capacity(space)).fits(numeric_costs):
+        raise ContractError("selected table exceeds supplied numeric cost envelope")
+    table = _table(frame, selected, collector)
+    selected_elements = len(table.slots)
+    channel_counts = tuple(sum(collector.assigned.get(proposal) == index for proposal in selected) for index in range(7))
+    finished = clock()
+    if finished >= collector.deadline:
+        collector.reasons.add("search_time")
+    fields = (space.config.generator, digest(asdict(space.config)), digest(asdict(numeric_costs)), table.table_hash,
+        numeric_costs, precount, collector.attempts, collector.prunes, len(collector.proposals),
+        len(collector.mandatory), len(selected), selected_elements, channel_counts,
+        complete, complete and len(selected) == len(collector.proposals), tuple(sorted(collector.reasons)),
+        OMISSIONS if type(space.config) is ActionConfigV2 else OMISSIONS_V3, rng_before, search_rng.getstate(),
+        (search_started - count_started) * 1000, (selection_started - search_started) * 1000,
+        (finished - selection_started) * 1000)
+    return space.generated(table, fields)

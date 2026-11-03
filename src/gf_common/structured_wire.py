@@ -6,11 +6,14 @@ from typing import Any
 
 from gf_common.action_contract import ActionContract, parse_action_contract
 from gf_common.card_instance import CardInstanceContract, parse_card_instance_contract
+from gf_common.card_instance_rules import CardInstanceRules, rule_signature
 from gf_common.diverse_actions import (
     GeneratedCandidates,
+    GeneratedCandidatesV3,
     NumericCosts,
     PrecountReport,
     SearchReport,
+    SearchReportV3,
 )
 from gf_common.domain import ContractError, Json, canonical, closed
 from gf_common.structured import (
@@ -24,6 +27,7 @@ from gf_common.structured import (
     event_delta,
 )
 from gf_common.structured_layout import (
+    CARD_INSTANCE_LAYOUT,
     LEGACY_LAYOUT,
     StructuredLayout,
     layout_for_contract,
@@ -114,7 +118,7 @@ def parse_report(raw: Json, *, action_contract: ActionContract) -> SearchReport:
 
 
 def generated_dict(value: GeneratedCandidates) -> Json:
-    if value.table.layout is not LEGACY_LAYOUT:
+    if type(value) is not GeneratedCandidates or type(value.report) is not SearchReport or value.table.layout is not LEGACY_LAYOUT:
         raise ContractError("protocol2 generated candidates require legacy layout")
     return {"table": asdict(value.table), "report": asdict(value.report)}
 
@@ -127,3 +131,52 @@ def parse_generated(raw: Json, *, action_contract: ActionContract) -> GeneratedC
 
 def parse_selection(raw: Json) -> Selection:
     return Selection(**closed(raw, set(Selection.__dataclass_fields__)))
+
+
+def report_dict_v3(report: SearchReportV3, *, action_contract: CardInstanceContract,
+                   rules: CardInstanceRules) -> Json:
+    expected = rule_signature(action_contract, rules)
+    if (type(report) is not SearchReportV3 or report.action_contract != action_contract
+            or report.rule_signature != expected):
+        raise ContractError("expected explicit card-instance report/rule binding")
+    return asdict(report)
+
+
+def parse_report_v3(raw: Json, *, action_contract: CardInstanceContract,
+                    rules: CardInstanceRules) -> SearchReportV3:
+    expected = rule_signature(action_contract, rules)
+    closed(raw, set(SearchReportV3.__dataclass_fields__))
+    if raw["rule_signature"] != expected:
+        raise ContractError("wire search rule signature mismatch")
+    contract = parse_card_instance_contract(raw["action_contract"])
+    if contract != action_contract:
+        raise ContractError("wire report action contract mismatch")
+    costs = NumericCosts(**closed(raw["numeric_costs"], set(NumericCosts.__dataclass_fields__)))
+    count = PrecountReport(**closed(raw["precount"], set(PrecountReport.__dataclass_fields__)))
+    values = {**raw, "action_contract": contract, "numeric_costs": costs, "precount": count}
+    for key in ("channel_counts", "cutoff_reasons", "omissions"):
+        if not isinstance(values[key], (tuple, list)):
+            raise ContractError("closed report array required")
+        values[key] = tuple(values[key])
+    for key in ("rng_before", "rng_after"):
+        values[key] = _state(values[key])
+    return SearchReportV3(**values)
+
+
+def generated_dict_v3(value: GeneratedCandidatesV3, *, action_contract: CardInstanceContract,
+                      rules: CardInstanceRules) -> Json:
+    if type(value) is not GeneratedCandidatesV3 or value.table.layout is not CARD_INSTANCE_LAYOUT:
+        raise ContractError("explicit card-instance generated candidates required")
+    report = report_dict_v3(value.report, action_contract=action_contract, rules=rules)
+    if value.table.action_contract != action_contract:
+        raise ContractError("generated table action contract mismatch")
+    return {"table": asdict(value.table), "report": report}
+
+
+def parse_generated_v3(raw: Json, *, action_contract: CardInstanceContract,
+                       rules: CardInstanceRules) -> GeneratedCandidatesV3:
+    closed(raw, {"table", "report"})
+    report = parse_report_v3(raw["report"], action_contract=action_contract, rules=rules)
+    table = parse_table(raw["table"], action_contract=action_contract, purpose="component",
+                        synthetic_capacity=False, layout=CARD_INSTANCE_LAYOUT)
+    return GeneratedCandidatesV3(table, report)

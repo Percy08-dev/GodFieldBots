@@ -255,6 +255,12 @@ questions are gates for their dependent stages, not invented public rules.
   rule-signature separation, possession-only discard selection and pre-extraction
   legacy goldens. Real qualification remains closed on issue0008's independently
   confirmed mismatch; no source/worker/model/native gate is lifted.
+- Stage2b pure component implementation passes independent correctness and
+  conformance reviews. Root accepts390affected regressions, exact old-git
+  generator goldens,32independent small-space cases, source-matching125file wheel
+  and optional-free installed smoke. Rule signature is
+  `1480f832b98c0b78b894a823681848b1dc11093b3a6a2aa462dd2069ed579a36`.
+  This does not constitute full migration or corrected-runtime acceptance.
 
 ## 9. Stage2a: shared layout, original frames and deterministic tokens (accepted)
 

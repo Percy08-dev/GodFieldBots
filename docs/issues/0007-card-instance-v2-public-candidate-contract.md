@@ -1,7 +1,9 @@
 # Card-instance v2: missing public candidate predicates
 
-- Status: Owner clarified all three rules (2026-11-03); explicit rule-signature
-  adoption/design review is pending. The original ambiguity below is historical.
+- Status: Resolved by owner confirmation and explicit pure-generator adoption.
+  Rule signature is
+  `1480f832b98c0b78b894a823681848b1dc11093b3a6a2aa462dd2069ed579a36`.
+  The original ambiguity below is historical.
   A separately reproduced runtime mismatch now blocks real-game acceptance in
   [issue0008](0008-learned-miracle-discard-runtime.md). No Simulator changes here.
 - Simulator pin: `07e8185f98c503aa41200a80ea554b4fd21088ad`.

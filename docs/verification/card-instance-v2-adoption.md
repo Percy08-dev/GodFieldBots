@@ -273,3 +273,66 @@ are NOT RUN in this diagnostic. [Issue0008](../issues/0008-learned-miracle-disca
 records the exact separate Simulator correction/source-attested conformance task.
 Pure candidate work continues against the owner rules; real I/O/Source/fitting
 qualification stays closed pending corrected-runtime adoption.
+
+## Stage2b pure owner-rule candidate acceptance
+
+Implemented `CardInstanceRules`/pure sequence analysis, PublicCandidateGeneratorV3
+through the existing shared bounded search engine, distinct rule-bound reports/
+generated DTOs and explicit v3 wire helpers. Rule signature is
+`1480f832b98c0b78b894a823681848b1dc11093b3a6a2aa462dd2069ed579a36`.
+ActionConfigV2/V3 fields/hashes, old report shape, token signatures, budgets and
+all runtime/model/worker/native/Source gates remain unchanged. No new dependency.
+Discard includes learned miracles under the owner rule despite issue0008.
+
+Both final independent source reviews are READY. Implementer342related tests
+pass; reviewer96new+111legacy cases pass, with32independent exhaustive cases
+across8hands×4MPlevels matching Actions and exact count/discovery. That oracle
+does not use production prefix pruning/sequence analysis. Matrix coverage includes
+24miracle subclass/state/EndTimes cells atMP0without offensive availability,
+19utilitytarget cases, CostCut salvage/suppression/payment/summary, attack order,
+Flash response limit plus unrestricted-offense control, trade/exchange/phenomenon,
+mandatory coverage, long bands, resource limits and rule/wire rejection. Counts
+overlap and must not be summed.
+
+Before extraction, four fake-clock legacy generator cases were captured from
+unchanged214b1fd. Fixture SHA
+`ed0c5a377d7db69ce4f3662fbc9bac19a694d88127833259070bd132ac9a2dfd`;
+canonical content SHA
+`40d67782e419c8d7ce6208adee4d0a37a63ea33972f34e84696865848c5f5317`.
+Independent verifier compiles committed generator text read through Git into a
+separate namespace and reproduces every table/order/action/count/cutoff/full-RNG/
+fake-clock field: exact8rows/12attempts/55clockcalls; trade16/34/108; bounded
+60selected/4290discovered/7499attempts/8845clockcalls; upper-bound30/51/149.
+All12provenance hashes match the old commit. Active lower imported dependencies
+remain byte-identical; generator and wire are intentionally modified, so the
+whole provenance-listed file set is not claimed unchanged after implementation.
+No original frozen fixture is rewritten.
+
+Root's bounded HOST regression command passes390tests in52.72s, exit0:
+
+```sh
+timeout --signal=INT --kill-after=15s 600s env CUDA_VISIBLE_DEVICES='' GFB_TREE_DATASET_FROZEN_FIXTURE=/tmp/gfb-tree-dataset-originals-20261102-d/tree-dataset-originals0 .venv/bin/python -m pytest -q tests/test_card_instance_rules.py tests/test_card_instance_actions.py tests/test_diverse_actions.py tests/test_structured_protocol.py tests/test_card_instance_structured.py tests/test_card_instance_tokens.py tests/test_structured_source.py tests/test_structured_ppo_source.py tests/test_structured_tree_dataset_frozen.py
+```
+
+Whole Ruff/mypy125source files/diff checks pass. No source changes follow the
+frozen reviewed code. The earlier2181whole-suite run remains stage2a evidence;
+it is not represented as a post-generator whole-suite run. Native sources and
+binary remain unchanged; no new native recipe is published.
+
+Root's live-input component witness uses only the declared accepted setup
+actions, then fetches the actor's dedicated full Events prefix, current own
+Observation and same-revision ActionOptions. The new generator selects531rows,
+including exactly one singleton learned-Mudflow Discard. Its v3 wire roundtrip
+restores that original ref and the same rule signature. No failing Discard is
+submitted again, and no rejection diagnostics enter the input. Receipt/input/
+generated data: `runs/assessments/card-instance-owner-20261103/discard-conformance-3`.
+Owned server exit0/stdin_eof. This is component evidence, not corrected runtime
+conformance, a complete game, a Source or a learning result.
+
+Python wheel SHA
+`21965448a5c72ae527163361c512f38ea2d78b9421a10a08feb0be883013f49e`
+matches all125package source files exactly. A separately installed mandatory-only
+environment passes dependency checking, starts/reaps both baseline workers, and
+reproduces the rule-bound531-row component result with no Torch/LightGBM/PyArrow/
+native package installed. Receipts/harnesses are in the owner assessment directory.
+Root accepts pure stage2b only; real acceptance remains blocked by issue0008.
