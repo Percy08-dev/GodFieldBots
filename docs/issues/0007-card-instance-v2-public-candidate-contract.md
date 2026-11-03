@@ -1,8 +1,9 @@
 # Card-instance v2: missing public candidate predicates
 
-- Status: Open; blocks complete generator adoption and dependent real-game,
-  PPO/pilot/performance acceptance under ADR0024. Independent frame/token work
-  may continue. No Simulator change is made by this Bots task.
+- Status: Owner clarified all three rules (2026-11-03); explicit rule-signature
+  adoption/design review is pending. The original ambiguity below is historical.
+  A separately reproduced runtime mismatch now blocks real-game acceptance in
+  [issue0008](0008-learned-miracle-discard-runtime.md). No Simulator changes here.
 - Simulator pin: `07e8185f98c503aa41200a80ea554b4fd21088ad`.
 - Normative inventory SHA:
   `8381079eae8a68378d8419c7f7245c62358833f0dd9045667021e112a1e9bad5`.
@@ -10,11 +11,26 @@
   Do not derive these predicates from Engine handlers, SequenceOptions, rejection
   probes, global-target Cartesian products or a successful pilot.
 
-## Required separate Simulator public-contract task
+## Owner resolution and explicit adoption
 
-One normative clarification can resolve all three predicates. Keep the current
-pin and historical evidence until an explicit new revision/content-hash adoption.
-An owner statement alone must not silently change a pinned Simulator contract.
+The [dated owner confirmation](../contracts/owner-20261103-card-instance-candidates.md)
+resolves all three questions: Flash counts every selected physical card and
+permits only1; all miracles in either state may be discarded/sacrificed; every
+scoped utility accepts self/opponent. Owner document SHA is
+`3f3090f521041293bcb6de2a3cbac7e74ffc635b4acc0f7f02c957bbcf0e44ee`.
+
+The earlier blanket requirement for another Simulator revision just to resolve
+ambiguity is superseded by these explicit owner instructions. Keep the actual
+unchanged revision/normative hashes, record the supplemental owner authority
+separately, and bind its reviewed rule signature in new generator/Source/artifact
+metadata. Do not claim the normative text changed or upgrade old records.
+The observed learned-Discard mismatch still requires separate Simulator work.
+
+## Historical public-contract findings
+
+At the initial review, the pinned normative documents alone left these three
+predicates unspecified. The findings below preserve that review's reasoning;
+they are not unresolved owner questions after the confirmation above.
 
 ### 1. Flash counting after role binding
 

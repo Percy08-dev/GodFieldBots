@@ -111,6 +111,8 @@ increment; no tests or candidate domain are removed to obtain acceptance.
 
 ## Public generator contract limitation
 
+Historical initial finding, superseded by the later owner confirmation below:
+
 Independent bot_advisor review confirms three unresolved public predicates at
 the pinned revision: Flash counting for defense miracle+CostCut, Discard/
 Sacrifice kind–state–subclass eligibility, and per-utility accepted targets.
@@ -227,3 +229,47 @@ Root accepts only stages1and2a. Actual new-generator/model/worker/journal/native
 Source, CUDA/PPO/pilot/fixed-data/performance acceptance remains NOT RUN/BLOCKED
 under issue0007. Reopen those stages after explicit amended revision/hash
 adoption; never relabel these component records as qualified Sources.
+
+## Owner clarification and declared-rule runtime conformance
+
+The owner subsequently confirms all3predicates, including an explicit follow-up
+that every scoped utility can target self/opponent. The exact
+[owner record](../contracts/owner-20261103-card-instance-candidates.md) has SHA
+`3f3090f521041293bcb6de2a3cbac7e74ffc635b4acc0f7f02c957bbcf0e44ee`.
+Root accepts that authority and supersedes the blanket requirement for another
+Simulator revision just to resolve ambiguity. Actual Simulator HEAD, normative
+inventory and catalog hashes remain unchanged. A separate candidate-rule
+signature will bind the confirmation; Config fields/token shapes/hashes remain.
+Section11's pure-component generator design passes architecture review; no
+production implementation or real qualification is accepted by that review.
+
+Read-only source inspection finds supporting named utility cases in
+`tests/card_rules_v2.rs` (SHA
+`b08c2053a3c57e20ce3a9194c97a28e739ce22f08afe0f7a7c5f83420823cdb4`).
+Related `card_instance_engine_contract.rs` SHA is
+`413d0b9a46e3d46b99ca4eb10f0a1e662aa0b68e466c2bc2966b2f12a0fa6c1f`;
+`canonical_v2.rs` SHA is
+`ffd90a0cf5c0dbf584ca69f1935d39bdeba9cf54e46c07ccbc84c238bb6b718d`.
+Those sources do not directly establish all3cases: existing learned removal is
+Pray or Dreaming-Hat response, not an explicit Discard. No fresh Simulator unit
+test execution is claimed.
+
+A bounded check of the already declared rule reproduces a different blocker:
+both existing debug/release binaries reject Discard of a CURRENT OWN learned
+Mudflow ref with HTTP422 `artifact_not_owned`. The same fixed GameSeed1was used,
+with no reselection. Play-to-learn and the opponent's unused Avalanche Discard
+both succeed first. Independent correctness review validates every current
+Observation/ref/state/choice/revision/hint and exact raw HTTP command, with each
+UUID sent once and no intervening transition or resend. The rejection is only
+diagnostics; no policy predicate/mask/teacher rule is inferred or narrowed.
+
+Both owned servers exit0/stdin_eof without log error. Receipts/commands/Observations/
+HTTP logs and the harness are under
+`runs/assessments/card-instance-owner-20261103/discard-conformance-{1,2}`.
+The debug/release hashes match the recorded existing binaries. Binary-to-source
+build correspondence remains unverified, so the confirmed P1finding applies to
+those binaries rather than an inspected current-source handler. Flash/Sacrifice
+are NOT RUN in this diagnostic. [Issue0008](../issues/0008-learned-miracle-discard-runtime.md)
+records the exact separate Simulator correction/source-attested conformance task.
+Pure candidate work continues against the owner rules; real I/O/Source/fitting
+qualification stays closed pending corrected-runtime adoption.

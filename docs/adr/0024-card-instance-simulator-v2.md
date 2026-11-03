@@ -250,6 +250,11 @@ questions are gates for their dependent stages, not invented public rules.
   source-matching wheel and isolated optional-free baseline checks. Exact
   conditions and limitations are in the verification ledger.
 - Stage2b generator and full runtime acceptance remain blocked by issue0007.
+- The later owner confirmation supersedes that ambiguity gate: section11's
+  pure Stage2b design is READY after independent review. Root accepts explicit
+  rule-signature separation, possession-only discard selection and pre-extraction
+  legacy goldens. Real qualification remains closed on issue0008's independently
+  confirmed mismatch; no source/worker/model/native gate is lifted.
 
 ## 9. Stage2a: shared layout, original frames and deterministic tokens (accepted)
 
@@ -443,6 +448,156 @@ generation; its unresolved base attack does not authorize a fabricated action.
 Independent advisor review confirms the three predicates are not determined by
 the pinned public contract. Root accepts that finding and records the required
 separate Simulator clarification in [issue0007](../issues/0007-card-instance-v2-public-candidate-contract.md).
-Stage2b and dependent complete real-game acceptance are BLOCKED on that explicit
-contract adoption; independent stage2a remains unaffected. No conservative
-candidate-domain reduction or private-rule lookup is an acceptance workaround.
+That was the initial public-text finding. The owner subsequently resolved all
+three predicates in the [2026-11-03 confirmation](../contracts/owner-20261103-card-instance-candidates.md).
+Section11 supersedes the ambiguity gate; a separately demonstrated runtime
+mismatch in [issue0008](../issues/0008-learned-miracle-discard-runtime.md) now
+keeps real-game acceptance closed. Never reduce the confirmed candidate domain
+to work around that mismatch.
+
+## 11. Stage2b owner-rule generator (design accepted; component scope)
+
+### Authority and compatibility
+
+The owner confirms Flash≤1physical selection (including miracles/CostCut),
+Discard/Sacrifice permission for every miracle subclass in both states, and
+both explicit targets for every utility in spec09§17.5.2. The exact owner record
+SHA is `3f3090f521041293bcb6de2a3cbac7e74ffc635b4acc0f7f02c957bbcf0e44ee`.
+Public normative revision/inventory/catalog pins stay unchanged and are recorded
+as such; the owner record is supplemental authority, not a fabricated Simulator
+specification update. Test-source inspection corroborates named utility cases,
+not every newly confirmed case. No Engine-handler/rejection inference is used.
+
+Implement the pure generator against this declared rule domain. Both existing
+debug/release TestServers reject a currently owned learned Mudflow Discard;
+independent audit confirms current actor/revision/ref/wire correctness. Keep
+public collection/worker/Source/fit entry points closed until issue0008 is fixed
+and an actual corrected source/binary contract is explicitly adopted. The pure
+stage emits component evidence only, never qualified Sources. A failed runtime
+case remains diagnostic; do not turn it into an omission, mask or teacher rule.
+
+Preserve ActionConfigV2/V3 fields/defaults/hash, old report field set, old token
+signatures and all existing paths. Candidate legality authority is separately
+versioned; no input feature shape/meaning changes in this stage. There was no
+implemented generator-v5 or eligible v5 Source before this increment. Earlier
+new-contract frames/tables are raw syntax/component evidence and cannot acquire
+completed-generator or Source authority by adding a flag.
+
+### Responsibilities and interfaces
+
+- New stdlib-only `gf_common.card_instance_rules` owns frozen closed
+  `CardInstanceRules`, `card_instance_rules()`, `rule_signature(contract,rules)`,
+  and one pure `SequenceAnalysis` for ordered roles/payment/completion/summary.
+  Its exact rules descriptor is version=`1`, profile_id=
+  `owner-card-instance-candidates-20261103-v1`, and
+  `owner_confirmation_sha256` above. Reject changed/missing/unknown descriptor
+  values; the implementation does no runtime file I/O.
+  It is below diverse_actions in dependency direction: return only primitive
+  immutable analysis facts/owned pure types, never import _Proposal/_Summary or
+  search machinery back into the rules module.
+- Rule signature is the canonical digest of generator-v5, input-recipe-v2,
+  full existing CardInstanceContract and the exact rules descriptor. It is
+  compatibility/provenance metadata, not a policy feature.
+- `PublicCandidateGeneratorV3(config: ActionConfigV3, *, rules:
+  CardInstanceRules, clock=...)` requires explicit rules before proposal work.
+  `generate(frame, bank_view, search_rng, numeric_costs)` requires the new layout,
+  same participant prefix, independent Random and existing closed NumericCosts.
+- `diverse_actions` holds version wrappers/spaces and a shared private
+  `_run_search(space,frame,rng,costs,clock)`. Reuse traversal, saturation, resource
+  math, quotas, length bands, seven-channel selection, compact table and RNG
+  ownership. Version spaces supply prefix viability, completed-target count,
+  mandatory/fixed rows, conservative count bounds and summaries. Retain old
+  `_Space` semantics and exported aliases/private test seams.
+- `SearchReportV3` is a distinct frozen DTO sharing common validated fields,
+  with required keyword-only `rule_signature` and the new CardInstanceContract.
+  Its generator is v5. `GeneratedCandidatesV3` binds that report to the exact
+  table/counts/contract and verifies real unique18slot rows. Old report/generated
+  DTOs remain closed and reject these variants. Factor common validation rather
+  than copy the whole report implementation.
+- `structured_wire` adds explicit v3 report/generated conversions requiring
+  expected contract/rules, with no unknown-rule default. Old conversions reject
+  new reports before serialization. New parse checks rule signature, generator,
+  hashes, counts, table digest/layout/purpose and raw column bounds.
+
+Future protocol3/journal6/artifact4/Source/Dataset3 consumers must bind the rule
+signature explicitly together with Config hash and input/token signatures, and
+validate it before acceptance/model loading. A bare manual table is not that
+proof. This increment implements none of those future formats/capabilities.
+NumericCosts1 remains the same closed dimensions/budget encoding; only future
+validated model3/layout composition may supply actual model resource formulas.
+
+### One public analysis for pruning and diversity
+
+Analyze refs in original order using own perceived definitions, public catalog
+classification/use_roles, flat same-revision usable_cards and choice-specific
+carrier lists. Arbitrary candidate_groups strings are raw-only. Do not infer
+another participant's possession or fetch unobserved numerical definitions.
+
+Bind adjacent CostCut before counting effective roles: it waives only the prior
+miracle and suppresses its own ordinary attack/defense/effects. No leading pure
+Doll or whole-sequence-free predicate. Return both prefix viability and complete
+submission/payment facts. A prefix can be viable with zero completions: only a
+last unpaid miracle can still be fixed by an available distinct adjacent CostCut
+within length/Flash limits. Earlier unpaid costs cannot be repaired later.
+
+Offense permits an initial ordinary weapon plus additions, additional-only
+attacks, or distinct same-definition normal-miracle instances plus additional
+miracles/support. A normal-miracle root excludes all effective artifact attack
+roles, including additional artifact weapons/armor; different normal miracles
+are excluded. Bound CostCut artifacts are exempt because their ordinary roles
+are suppressed. This is the explicit spec09§9.4 public matrix, not a rule
+derived from rejection. Preserve Wand/Aura
+position effects, Mirage attribute/Wand reset and base-round×max(1,Mirage count),
+including two-hit weapons. Dynamic Stick pays miracle costs first then consumes
+remaining MP; zero attack/MP remains supported. Utility/status roots complete
+alone when affordable and may carry their adjacent CostCut; exclude unrelated
+utility mixtures and multiple status miracles. Utility target choices are both
+configured/hinted targets, including empty-effect/removal/guardian overwrite.
+
+Response combines hinted public numeric-defense/ring roles or one exclusive
+stop/reflect/deflect with only its bound CostCut. Flash allows≤1physical ref,
+so the general CostCut combination permission creates no Flash exception.
+Discard/Sacrifice includes every miracle in either state and artifact nonweapons;
+the artifact weapon exclusion stays. Start from original own.cards plus the
+explicit operation flag; do not reuse direct-use usable_cards or MP payment as
+a discard mask. Include MP0/absent-from-usable cases for every miracle subclass
+and state. Sell excludes learned miracles from sold
+items, supports distinct carrier/item, and obeys configured length. Buy/Sell
+have explicit targets; Exchange has none and conserves own resources with0..99
+allocations including HP0. Phenomenon carrier uses invoke_phenomenon; empty
+response/Pray/buy decisions use their explicit flags/choice. Server owns RNG,
+automatic effects, HP0, actual future state and refill outcomes.
+
+Use this same analysis in public pruning and summary payment/attack/effect axes.
+Support cards do not regain ordinary roles in diversity scoring. Remaining-card
+and refresh proxies account for learned miracles retaining possession slots,
+known removals, self-Sell retention and full-possession Pray's one random removal,
+without predicting its identity. Discard has zero refill; Sacrifice frees selected
+slots. Preserve all seven channels and every mandatory completed singleton/basic.
+
+### Counting, budgets and verification
+
+Counting must distinguish viable prefixes from completed rows. Call a pure
+completion-count hook rather than assume every valid prefix submits, and share
+the exact same target/payment predicate with discovery. Counts/upper bounds
+include all family/carrier/numeric supplements and saturate without materializing
+all Actions. Legacy hook implementations preserve original count/order/RNG facts.
+Keep16384states/50ms,262144expansions/temporary rows,32768presented candidates,
+1ssearch/selection,25interval exchange grid and supplied tensor/storage limits.
+No budget expansion or automatic domain reduction.
+
+Required checks: independent small-space enumeration; exact count/discovery
+agreement; unpaid prefix→CostCut completion with earlier-cost negative cases;
+role suppression shared by pruning and summaries; same-definition distinct
+miracles in both states; Wand/Aura/Mirage/two-hit ordering; all utility targets;
+Flash physical counting; all six miracle subclasses in both Discard/Sacrifice
+states; rings/exclusive responses; HP0/conserved exchange; trade/phenomenon;
+mandatory coverage, long bands, saturation, deadlines and numeric admission;
+wrong/missing rule signatures; old report/wire/Config/token/generator goldens.
+No synthetic fit, game-strength or corrected-runtime acceptance follows.
+
+Before extraction, freeze legacy generator outputs from214b1fd with deterministic
+fake clocks for exact enumeration, bounded search and count-upper-bound cases.
+Preserve table row order/hash, pre-count/search accounting, cutoff/mandatory
+coverage and full RNG before/after state. Independently reproduce those goldens
+from the committed old module during final review; wall timing is not the oracle.

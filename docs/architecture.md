@@ -7,8 +7,11 @@ card-instance Simulator v2 migration. Contract/wire/Config/direct HTTP and pure
 opaque-reference frames/layouts/tokens pass both independent reviews and scoped
 acceptance, including2181whole HOST tests/55skips, Rust114/2ignored, static/old-data/
 wheel/isolated-baseline checks. New generator adoption and dependent model/worker/
-native/Source/learning acceptance remain closed on the public predicates in
-[issue0007](issues/0007-card-instance-v2-public-candidate-contract.md).
+native/Source/learning acceptance remain closed. The owner has resolved
+[issue0007](issues/0007-card-instance-v2-public-candidate-contract.md)'s public
+questions; a new pure generator design binds that explicit confirmation.
+Real acceptance now also needs the demonstrated learned-Discard runtime mismatch
+in [issue0008](issues/0008-learned-miracle-discard-runtime.md) corrected.
 Exact conditions are in the [new ledger](verification/card-instance-v2-adoption.md).
 Legacy and ADR0023 engineering identities remain unchanged; historical evidence
 below does not qualify the new contract.
