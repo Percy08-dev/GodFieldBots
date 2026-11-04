@@ -586,9 +586,11 @@ def main(argv: list[str] | None = None) -> int:
             print(canonical({"valid": True, "config_sha256": loaded.sha256, "effective_config": loaded.effective,
                              "inputs": loaded.inputs}))
             return 0
+        from gf_models.structured_binding import ConfiguredNeuralModelV3
         if not (isinstance(loaded.config.actions, ActionConfigV3)
                 and loaded.config.actions.action_contract == corrected_card_instance_contract()
-                and args.command in ("smoke", "collect", "evaluate")):
+                and (args.command in ("smoke", "collect", "evaluate")
+                     or args.command == "train" and type(loaded.config.model) is ConfiguredNeuralModelV3)):
             _require_implemented_pipeline(loaded.config.actions)
         if isinstance(loaded.config.actions, ActionConfigV2):
             require_qualified_contract(loaded.config.actions.action_contract)
@@ -606,6 +608,19 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.command == "train":
             from gf_models.structured_tree_config import ConfiguredTreeModelV2
+            if isinstance(loaded.config.actions, ActionConfigV3):
+                if args.run_dir is None:
+                    raise ValueError("card-instance PPO train requires --run-dir")
+                from gf_cli.card_instance import collect_ppo as collect_card_instance_ppo
+                from gf_training.card_instance_ppo import train_card_instance_ppo
+
+                async def collect_game_batch(plan: CollectionPlan, ledger: Any) -> FinalizedCollection:
+                    return await collect_card_instance_ppo(loaded, plan, ledger)
+
+                result = asyncio.run(train_card_instance_ppo(loaded, collect_game_batch, args.run_dir,
+                    mode=args.mode, pause_after_update=args.pause_after_update))
+                print(canonical(result))
+                return 0
             if isinstance(loaded.config.model, ConfiguredTreeModelV2):
                 if not isinstance(loaded.config.actions,ActionConfigV2):raise ContractError('Tree2 training requires actions2')
                 require_qualified_contract(loaded.config.actions.action_contract)

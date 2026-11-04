@@ -13,7 +13,7 @@ from typing import Any, Self
 
 import numpy as np
 
-from gf_common.action_contract import ActionContract, parse_action_contract
+from gf_common.action_contract import parse_action_contract
 from gf_common.domain import ContractError, Json, RuntimePolicyBinding, canonical, closed, digest
 from gf_common.schedule import serialize_schedule
 from gf_models.structured_binding import recorded_policy_label
@@ -26,14 +26,19 @@ from gf_models.structured_sealed import (
 from gf_training.collection import training_groups
 
 
-def _verify_parent_controls(original_parents: list[Json], contract: ActionContract, scan: SealedScan) -> tuple[list[Json], dict[int, Any], dict[tuple[int, int], str], dict[tuple[int, int], str]]:
+def _verify_parent_controls(original_parents: list[Json], contract: Any, scan: SealedScan, *, game_actions: Any = None) -> tuple[list[Json], dict[int, Any], dict[tuple[int, int], str], dict[tuple[int, int], str]]:
     """Shared recorded-only seals/PCG/cadence checks; no collection authority."""
     parents, models, schedules, registries = [], {}, {}, {}
     for pi, parent in enumerate(original_parents):
         scan.check()
         if parent['parent_index'] != pi:
             raise ContractError('ordered original parent index mismatch')
-        model = recorded_model_config_v2(parent['model'], parent['semantics']['token_signature'])
+        if game_actions is None:
+            model = recorded_model_config_v2(parent['model'], parent['semantics']['token_signature'])
+        else:
+            from gf_common.structured_layout import CORRECTED_CARD_INSTANCE_LAYOUT
+            from gf_models.structured_config import model_config_v3
+            model = model_config_v3(parent['model'], layout=CORRECTED_CARD_INSTANCE_LAYOUT)
         models[pi] = model
         generations = parent['generations']
         binding = InferenceBindingV2(**parent['execution']['inference']['binding'])
@@ -42,12 +47,22 @@ def _verify_parent_controls(original_parents: list[Json], contract: ActionContra
                    binding: InferenceBindingV2 = binding, visibility: Any = visibility,
                    parent: Json = parent) -> tuple[str, RuntimePolicyBinding]:
             record = generations[number]
-            label = recorded_policy_label(model, binding, record['inference_sha256'], cuda_visible_devices=visibility)
-            return label, RuntimePolicyBinding(model.model_id, {'version': '2',
-                'checkpoint': str(Path(parent['directory']) / 'artifacts' / f'{number:06}'),
-                'expected_manifest_digest': record['inference_sha256'], 'model': asdict(model),
-                'inference': asdict(binding), 'cuda_visible_devices': visibility,
-                'action_contract': asdict(contract), 'purpose': 'component', 'synthetic_capacity': False})
+            if game_actions is None:
+                label = recorded_policy_label(model, binding, record['inference_sha256'], cuda_visible_devices=visibility)
+                options = {'version': '2', 'checkpoint': str(Path(parent['directory']) / 'artifacts' / f'{number:06}'),
+                    'expected_manifest_digest': record['inference_sha256'], 'model': asdict(model),
+                    'inference': asdict(binding), 'cuda_visible_devices': visibility,
+                    'action_contract': asdict(contract), 'purpose': 'component', 'synthetic_capacity': False}
+            else:
+                from gf_common.card_instance_rules import card_instance_rules
+                from gf_models.structured_binding import input_binding_game_v3, policy_label_game_v3
+                label = policy_label_game_v3(model, binding, record['inference_sha256'], action_contract=contract,
+                    rules=card_instance_rules(), action_config_hash=digest(asdict(game_actions)), cuda_visible_devices=visibility)
+                options = {'version': '3', 'checkpoint': str(Path(parent['directory']) / 'artifacts' / f'{number:06}'),
+                    'expected_manifest_digest': record['inference_sha256'], 'model': asdict(model),
+                    'inference': asdict(binding), 'cuda_visible_devices': visibility,
+                    'action_config_hash': digest(asdict(game_actions)), **input_binding_game_v3(contract, card_instance_rules())}
+            return label, RuntimePolicyBinding(model.model_id, options)
         initial = np.random.Generator(np.random.PCG64(parent['state']['seed']))
         initial_controls = {'schedule_opponent_rng': dict(initial.bit_generator.state), 'snapshot_pool': [0], 'collection_position': 0}
         if canonical(generations[0]['parent_controls']) != canonical(initial_controls):
@@ -59,21 +74,37 @@ def _verify_parent_controls(original_parents: list[Json], contract: ActionContra
                 raise ContractError('ordered original generation index mismatch')
             directory = Path(parent['directory']) / 'artifacts' / f'{gi:06}'
             if generation['artifact_status'] == 'retained':
-                actual = inspect_retained_artifact(directory, expected_inference_digest=generation['inference_sha256'],
-                    action_contract=contract, purpose='component', synthetic_capacity=False, scan=scan)
+                if game_actions is None:
+                    actual = inspect_retained_artifact(directory, expected_inference_digest=generation['inference_sha256'],
+                        action_contract=contract, purpose='component', synthetic_capacity=False, scan=scan)
+                else:
+                    from gf_common.card_instance_rules import card_instance_rules
+                    from gf_models.structured_sealed import inspect_retained_game_artifact_v3
+                    actual = inspect_retained_game_artifact_v3(directory, expected_inference_digest=generation['inference_sha256'],
+                        actions=game_actions, rules=card_instance_rules(), scan=scan)
                 if actual.resume is None or scan.files[directory / 'resume.json'][1] != generation['resume_sha256']:
                     raise ContractError('sealed original resume link mismatch')
                 if canonical(actual.resume['binding']) != canonical(parent['execution']['learner']['binding']):
                     raise ContractError('sealed original learner execution differs')
             else:
                 descriptor = generation['pruned_descriptor']
-                actual = inspect_pruned_inference(directory,
-                    expected_inference_digest=generation['inference_sha256'], expected_resume_digest=generation['resume_sha256'],
-                    original_files=descriptor['original_files'], deletion_receipt={
-                        'status': 'deleted', 'inference_sha256': generation['inference_sha256'],
-                        'original_files': descriptor['original_files'],
-                        'deletion_intent': descriptor['deletion_intent'], 'deletion_receipt': descriptor['deletion_receipt']},
-                    action_contract=contract, purpose='component', synthetic_capacity=False, scan=scan)
+                if game_actions is None:
+                    actual = inspect_pruned_inference(directory,
+                        expected_inference_digest=generation['inference_sha256'], expected_resume_digest=generation['resume_sha256'],
+                        original_files=descriptor['original_files'], deletion_receipt={
+                            'status': 'deleted', 'inference_sha256': generation['inference_sha256'],
+                            'original_files': descriptor['original_files'],
+                            'deletion_intent': descriptor['deletion_intent'], 'deletion_receipt': descriptor['deletion_receipt']},
+                        action_contract=contract, purpose='component', synthetic_capacity=False, scan=scan)
+                else:
+                    from gf_common.card_instance_rules import card_instance_rules
+                    from gf_models.structured_sealed import inspect_pruned_game_inference_v3
+                    actual = inspect_pruned_game_inference_v3(directory,
+                        expected_inference_digest=generation['inference_sha256'], expected_resume_digest=generation['resume_sha256'],
+                        original_files=descriptor['original_files'], deletion_receipt={
+                            'status': 'deleted', 'inference_sha256': generation['inference_sha256'],
+                            'original_files': descriptor['original_files'], 'deletion_intent': descriptor['deletion_intent'],
+                            'deletion_receipt': descriptor['deletion_receipt']}, actions=game_actions, rules=card_instance_rules(), scan=scan)
             if canonical(actual.inference['model']) != canonical(asdict(model)) or digest(actual.files) != generation['artifact_files_sha256']:
                 raise ContractError('sealed original full model/resources/file map differs')
             sealed.append({'generation': gi, 'inference_sha256': generation['inference_sha256'],
@@ -81,8 +112,8 @@ def _verify_parent_controls(original_parents: list[Json], contract: ActionContra
                 'retained': actual.retained})
             # Reconstruct all original train schedules with the unchanged helper.
             label, learner = policy(gi)
-            registry = {'random-structured-v1': RuntimePolicyBinding('random'),
-                        'heuristic-structured-v1': RuntimePolicyBinding('heuristic'), label: learner}
+            registry = {('random-structured-v1' if game_actions is None else 'random-card-instance-v2'): RuntimePolicyBinding('random'),
+                        ('heuristic-structured-v1' if game_actions is None else 'heuristic-card-instance-v2'): RuntimePolicyBinding('heuristic'), label: learner}
             snapshots = []
             controls = generation['parent_controls']
             rng = np.random.Generator(np.random.PCG64())
@@ -91,7 +122,7 @@ def _verify_parent_controls(original_parents: list[Json], contract: ActionContra
                 name, value = policy(number)
                 registry[name] = value
                 snapshots.append(name)
-            groups = training_groups(parent['state']['seed'], gi, label, tuple(snapshots), rng, actions_version=2)
+            groups = training_groups(parent['state']['seed'], gi, label, tuple(snapshots), rng, actions_version=2 if game_actions is None else 3)
             schedules[pi, gi] = digest(serialize_schedule(groups, 4))
             registries[pi, gi] = digest({name: asdict(value) for name, value in registry.items()})
             if gi + 1 < len(generations):
@@ -165,13 +196,19 @@ class NativeStructuredSource:
     """
     def __init__(self, plan: Json, settings: Any, *, max_owned_bytes: int, deadline: float,
                  extra_owned_bytes: int = 0, max_scratch_bytes: int | None = None, native: Any = None) -> None:
-        from contextlib import ExitStack
 
         from gf_common.preprocessing import preparation_config
-        from gf_training.structured_rollout import _owned_bytes
         self.settings = preparation_config(asdict(settings))
         if self.settings.backend != 'rust' or self.settings.reader != 'structured-v1':
             raise ContractError('explicit structured native Source consumer required')
+        self._initialize_owner(plan, max_owned_bytes=max_owned_bytes, deadline=deadline,
+            extra_owned_bytes=extra_owned_bytes, max_scratch_bytes=max_scratch_bytes, native=native)
+
+    def _initialize_owner(self, plan: Json, *, max_owned_bytes: int, deadline: float,
+                          extra_owned_bytes: int, max_scratch_bytes: int | None, native: Any) -> None:
+        from contextlib import ExitStack
+
+        from gf_training.structured_rollout import _owned_bytes
         self.plan = plan
         self.limit = min(max_owned_bytes, self.settings.memory_budget_mib * 1024**2)
         self.deadline = min(deadline, time.monotonic() + self.settings.wall_seconds - self.settings.cleanup_seconds)
@@ -206,6 +243,16 @@ class NativeStructuredSource:
     def _held(self, additional: int = 0) -> int:
         return (self.sealed.retained if self.sealed is not None else 0) + self._persistent_python + additional
 
+    def _session_class_name(self) -> str:
+        return 'StructuredNativeSession'
+
+    def _before_session_construct(self) -> None:
+        """Concrete corrected owner may pin its own binary before native allocation."""
+
+    def _authorize_summary(self) -> tuple[Json, SealedScan, dict[int, Any]]:
+        assert self.summary is not None
+        return _authorize_controls(self.summary, self._session, max_owned_bytes=self.budget, deadline=self.deadline)
+
     def __enter__(self) -> Self:
         from gf_training.lineage import _OWNED_LOCKS, run_lock
         from gf_training.native_backend import binary_identity, load_native
@@ -214,13 +261,15 @@ class NativeStructuredSource:
         try:
             self._check()
             self.native = self.native or load_native()
-            if not callable(getattr(self.native, 'StructuredNativeSession', None)):
+            session_class = getattr(self.native, self._session_class_name(), None)
+            if not callable(session_class):
                 raise ContractError('native binary lacks the concrete structured Source session')
             self.identity = binary_identity(self.native)
             self.base += _owned_bytes(self.identity)
             self.budget = self.limit - self.extra - self.base
             if self.budget <= 0:
                 raise ContractError('native Source binary/control ownership exhausted before I/O')
+            self._before_session_construct()
             for entry in sorted(self.plan['parents'], key=lambda value: value['directory']):
                 directory = Path(entry['directory']).resolve()
                 if directory not in _OWNED_LOCKS:
@@ -233,12 +282,11 @@ class NativeStructuredSource:
             cancel = self.native.CancelHandle(self.deadline)
             self._executor = NativeExecution(cancel, thread_name_prefix='gf-structured-source')
             def construct() -> None:
-                self._session = self.native.StructuredNativeSession(encoded_plan, settings, self.deadline, cancel)
+                self._session = session_class(encoded_plan, settings, self.deadline, cancel)
             self._executor.call(construct)
             encoded = self._executor.call(self._session.control_summary)
             self.summary = __import__('json').loads(encoded)
-            self._auth, self.sealed, self.models = _authorize_controls(self.summary, self._session,
-                max_owned_bytes=self.budget, deadline=self.deadline)
+            self._auth, self.sealed, self.models = self._authorize_summary()
             if self.plan['mode'] == 'historical_parent':
                 self._check_historical()
                 self._correspondence_done = True
@@ -426,7 +474,7 @@ class NativeStructuredSource:
         self._correspondence_done = True
         return count, proof, {'rollout.json': numeric_hash, **manifest['data']['files']}
 
-def _payload_views(payload: Any) -> tuple[Json, dict[str, Any]]:
+def _payload_views(payload: Any, *, game: bool = False, recorded: bool = False) -> tuple[Json, dict[str, Any]]:
     """Validate closed bank descriptors before creating any named NumPy view."""
     import json
     import math
@@ -435,9 +483,13 @@ def _payload_views(payload: Any) -> tuple[Json, dict[str, Any]]:
     if type(payload) is not tuple or len(payload) != 4 or any(type(banks) is not tuple for banks in payload[1:]):
         raise ContractError('closed typed-bank tuple payload required')
     metadata = json.loads(payload[0])
-    closed(metadata, {'schema_version', 'kind', 'control_fingerprint', 'collection_index', 'metadata',
-                      'arrays', 'source_proof', 'correspondence'})
-    if type(metadata['schema_version']) is not int or metadata['schema_version'] != 1 or metadata['kind'] != 'structured-cohort-payload':
+    keys = {'schema_version', 'kind', 'collection_index', 'metadata', 'arrays', 'source_proof', 'correspondence'}
+    if not game:
+        keys.add('control_fingerprint')
+    closed(metadata, keys)
+    expected_kind = ('card-instance-recorded-cohort-payload' if recorded else 'card-instance-cohort-payload') if game else 'structured-cohort-payload'
+    if (recorded and not game or type(metadata['schema_version']) is not int
+            or metadata['schema_version'] != (2 if game else 1) or metadata['kind'] != expected_kind):
         raise ContractError('unsupported structured cohort payload')
     banks = {'uint8': payload[1], 'int64': payload[2], 'float32': payload[3]}
     for dtype, values in banks.items():

@@ -12,9 +12,10 @@ import stat
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from gf_common.action_contract import ActionContract, parse_action_contract
+from gf_common.card_instance import CardInstanceContract
 from gf_common.domain import (
     CATALOG_META,
     END_PROJECTION_VERSION,
@@ -25,27 +26,29 @@ from gf_common.domain import (
     Json,
     canonical,
     closed,
+    digest,
     integer,
 )
-from gf_common.structured import GENERATOR_V2, INPUT_RECIPE
+from gf_common.structured import GENERATOR_V2
 from gf_common.structured_tokens import signature
-from gf_models.structured_binding import check_input_binding, input_binding
+from gf_models.structured_binding import input_binding
 from gf_models.structured_sealed import SealedScan, checksum
 from gf_models.structured_tree_config import (
     MAX_ARRAY_BYTES,
-    TREE_RECIPE,
     ConfiguredTreeModelV2,
+    ConfiguredTreeModelV3,
     TreeDescriptor,
-    architecture_config,
-    architecture_identity,
     execution_binding,
-    feature_width,
     resource_estimate,
 )
-from gf_models.structured_tree_encoder import categorical_limits, feature_layout
 from gf_models.structured_tree_pairing import (
+    TREE2_RECORDS,
+    TREE3_RECORDS,
     TrainedProvenance,
+    TrainedProvenanceV4,
     TrainingBinding,
+    _records,
+    _TreeRecords,
     provenance_for_request,
     validate_request,
 )
@@ -63,6 +66,50 @@ def semantics() -> Json:
         'reviewed_simulator_spec_sha256': REVIEWED_SPEC_HASHES, 'policy_input_version': POLICY_INPUT_VERSION,
         'generator_version': GENERATOR_V2, 'reward_policy_version': 'natural-terminal-v1',
         'end_projection_version': END_PROJECTION_VERSION}
+
+
+def _model_records(model: Any) -> _TreeRecords:
+    if type(model) is ConfiguredTreeModelV2:
+        return TREE2_RECORDS
+    if type(model) is ConfiguredTreeModelV3:
+        return TREE3_RECORDS
+    raise ContractError('closed configured Tree2/Tree3 model required')
+
+
+def semantics_v3(model: ConfiguredTreeModelV3, fit_origin: str) -> Json:
+    from gf_common.card_instance import CATALOG_META as catalog
+    from gf_common.card_instance import (
+        CORRECTED_REVIEWED_SPEC_HASHES,
+        corrected_card_instance_contract,
+    )
+    from gf_models.structured_tree_config import TREE_NUMERICS
+    context = TREE3_RECORDS
+    context.require_model(model)
+    contract = corrected_card_instance_contract()
+    layout = context.layout(model.encoder)
+    return {'input_recipe': contract.input_recipe, 'policy_input_version': contract.policy_input_version,
+        'generator_version': context.features.layout.generator, 'simulator_revision': contract.simulator_revision,
+        'catalog': catalog, 'reviewed_spec_hashes': CORRECTED_REVIEWED_SPEC_HASHES,
+        'spec_inventory_sha256': contract.spec_inventory_sha256, 'rule_signature': layout['rule_signature'],
+        'layout_signature': layout['layout_signature'], 'token_signature': layout['token_signature'],
+        'numeric_transform': TREE_NUMERICS,
+        'label_recipe': context.label if fit_origin == 'trained' else 'component-toy-labels-v1'}
+
+
+def _classification(contract: Any, purpose: str, synthetic: bool, context: _TreeRecords) -> Json:
+    if not context.modern:
+        return input_binding(contract, purpose, synthetic)
+    if type(contract) is not CardInstanceContract:
+        raise ContractError('closed corrected Tree3 card-instance contract required')
+    from gf_common.card_instance_fixture import input_binding as fixture_binding
+    return context.binding({**fixture_binding(), 'action_contract': asdict(contract),
+                            'purpose': purpose, 'synthetic_capacity': synthetic})
+
+
+def _creation_execution(model: Any, descriptor: TreeDescriptor) -> Json:
+    if _model_records(model) is TREE2_RECORDS:
+        return execution_binding(model, descriptor)
+    return {'inference': asdict(model.inference), 'resources': asdict(model.resources), 'tree_descriptor': asdict(descriptor)}
 
 
 def runtime_metadata(*, deadline: float = float('inf')) -> Json:
@@ -126,7 +173,7 @@ def _text_descriptor(text: str, model: Any, model_hash: str, deadline: float = f
             if not separator or key in lines:
                 raise ContractError('Tree2 malformed native model header')
             lines[key] = value
-    layout = feature_layout(model.encoder)
+    layout = _model_records(model).layout(model.encoder)
     names = layout['feature_names']
     categorical = set(layout['categorical_indices'])
     if (lines.get('version') != 'v4' or lines.get('num_class') != '1'
@@ -231,6 +278,56 @@ class TreeOrigin:
 
 
 @dataclass(frozen=True)
+class TreeOriginV3:
+    action_config_hash: str
+    action_contract: CardInstanceContract
+    purpose: str
+    synthetic_capacity: bool
+    fit_origin: str = 'toy'
+    provenance: TrainedProvenanceV4 | None = None
+    source_kind: str | None = None
+    source_origin: bytes | None = None
+
+    def __post_init__(self) -> None:
+        checksum(self.action_config_hash)
+        classification = _classification(self.action_contract, self.purpose, self.synthetic_capacity, TREE3_RECORDS)
+        fields = self.fields()
+        TREE3_RECORDS.source(fields, toy=self.fit_origin == 'toy')
+        if self.fit_origin == 'toy':
+            if self.provenance is not None:
+                raise ContractError('Tree3 toy requires null source/provenance')
+        elif self.fit_origin == 'trained':
+            if type(self.provenance) is not TrainedProvenanceV4:
+                raise ContractError('immutable actual trained Tree3 provenance4 required')
+            raw = self.provenance.to_dict()
+            if (canonical(raw['input_binding']) != canonical(classification)
+                    or any(canonical(raw[key]) != canonical(fields[key]) for key in TREE3_RECORDS.extra_fields)):
+                raise ContractError('Tree3 actual trained source origin cannot be relabeled')
+        else:
+            raise ContractError('unsupported Tree3 fit origin')
+
+    def fields(self) -> Json:
+        if self.source_origin is not None and type(self.source_origin) is not bytes:
+            raise ContractError('immutable canonical Tree3 source origin bytes required')
+        source = None if self.source_origin is None else json.loads(self.source_origin)
+        if self.source_origin is not None and canonical(source).encode() != self.source_origin:
+            raise ContractError('canonical Tree3 source origin required')
+        return {'action_config_hash': self.action_config_hash,
+            **_classification(self.action_contract, self.purpose, self.synthetic_capacity, TREE3_RECORDS),
+            'fit_origin': self.fit_origin, 'provenance': None if self.provenance is None else self.provenance.to_dict(),
+            'source_kind': self.source_kind, 'source_origin': source}
+
+
+def _origin_from_fields(raw: Json, contract: Any, context: _TreeRecords) -> Any:
+    if context.modern:
+        return TreeOriginV3(raw['action_config_hash'], contract, raw['purpose'], raw['synthetic_capacity'], raw['fit_origin'],
+            None if raw['provenance'] is None else TrainedProvenanceV4.parse(raw['provenance']), raw['source_kind'],
+            None if raw['source_origin'] is None else canonical(raw['source_origin']).encode())
+    return TreeOrigin(raw['action_config_hash'], contract, raw['purpose'], raw['synthetic_capacity'], raw['fit_origin'],
+                      None if raw['provenance'] is None else TrainedProvenance.parse(raw['provenance']))
+
+
+@dataclass(frozen=True)
 class LoadedTree:
     booster: Any
     model: ConfiguredTreeModelV2
@@ -243,12 +340,50 @@ class LoadedTree:
         _bind_origin(self.booster, self.origin)
 
 
-def _bind_origin(booster: Any, origin: TreeOrigin, *, fresh: bool = False) -> None:
-    if type(origin) is not TreeOrigin:
+@dataclass(frozen=True)
+class LoadedTreeV3:
+    booster: Any
+    model: ConfiguredTreeModelV3
+    origin: TreeOriginV3
+    descriptor: TreeDescriptor
+    training_binding: TrainingBinding | None = None
+    creation_execution: bytes | None = None
+
+    def __post_init__(self) -> None:
+        if type(self.model) is not ConfiguredTreeModelV3 or type(self.origin) is not TreeOriginV3:
+            raise ContractError('closed loaded Tree3 model/origin required')
+        _bind_origin(self.booster, self.origin)
+        _bind_model_v3(self.booster, self.model, self.origin)
+
+
+@dataclass(frozen=True)
+class _BoosterBindingV3:
+    signature: str
+
+
+def _bind_model_v3(booster:Any,model:ConfiguredTreeModelV3,origin:TreeOriginV3,*,fresh:bool=False)->None:
+    """Bind every architecture/feature/input field; execution overrides stay separate."""
+    TREE3_RECORDS.require_model(model)
+    if type(origin) is not TreeOriginV3:
+        raise ContractError('closed Tree3 actual model origin required')
+    expected=_BoosterBindingV3(digest({'model':asdict(model.architecture()),
+        'feature_layout':TREE3_RECORDS.layout(model.encoder),'input_origin':origin.fields()}))
+    previous=getattr(booster,'_structured_tree_binding_v3',None)
+    if previous is not None:
+        if type(previous) is not _BoosterBindingV3 or previous!=expected:
+            raise ContractError('Tree3 actual Booster architecture/feature/input binding differs')
+    elif fresh:
+        booster._structured_tree_binding_v3=expected
+    else:
+        raise ContractError('Tree3 actual Booster has no validated architecture/feature/input binding')
+
+
+def _bind_origin(booster: Any, origin: TreeOrigin | TreeOriginV3, *, fresh: bool = False) -> None:
+    if type(origin) not in (TreeOrigin, TreeOriginV3):
         raise ContractError('immutable Tree2 origin required')
     previous = getattr(booster, '_structured_tree_origin', None)
     if previous is not None:
-        if type(previous) is not TreeOrigin or previous != origin:
+        if type(previous) is not type(origin) or previous != origin:
             raise ContractError('Tree2 actual native model origin cannot be relabeled')
     elif fresh:
         booster._structured_tree_origin = origin
@@ -256,12 +391,19 @@ def _bind_origin(booster: Any, origin: TreeOrigin, *, fresh: bool = False) -> No
         raise ContractError('Tree2 native model has no validated original binding')
 
 
-def inspect_artifact(directory: Path, *, expected_digest: str, model: ConfiguredTreeModelV2,
-                     action_config_hash: str, action_contract: ActionContract,
+def inspect_artifact(directory: Path, *, expected_digest: str, model: Any,
+                     action_config_hash: str, action_contract: Any,
                      purpose: str, synthetic_capacity: bool, deadline: float = float('inf'),
                      expected_tree_descriptor: TreeDescriptor | None = None,
                      expected_feature_signature: str | None = None,
-                     _scan: SealedScan | None = None) -> tuple[Json, str]:
+                     _scan: SealedScan | None = None, _context: _TreeRecords = TREE2_RECORDS,
+                     _expected_source: tuple[Any, Any] | None = None) -> tuple[Json, str]:
+    context = _records(_context); context.require_model(model)
+    classification = _classification(action_contract, purpose, synthetic_capacity, context)
+    if context.modern:
+        if _expected_source is None:
+            raise ContractError('Tree3 loader requires explicit expected component source origin')
+        context.source(dict(zip(('source_kind', 'source_origin'), _expected_source, strict=True)), toy=_expected_source == (None, None))
     checksum(expected_digest)
     checksum(action_config_hash)
     if expected_tree_descriptor is not None and type(expected_tree_descriptor) is not TreeDescriptor:
@@ -272,25 +414,30 @@ def inspect_artifact(directory: Path, *, expected_digest: str, model: Configured
     scan.check()
     scan.inventory(directory, {'inference.json', 'model.txt'})
     manifest = scan.object(directory / 'inference.json', expected_digest)
-    closed(manifest, FIELDS)
-    if type(manifest['schema_version']) is not int or manifest['schema_version'] != 3 or manifest['kind'] != 'structured-tree-inference':
+    closed(manifest, FIELDS | (context.extra_fields | {'rule_signature', 'layout_signature', 'feature_layout'} if context.modern else set()))
+    if type(manifest['schema_version']) is not int or manifest['schema_version'] != context.schema or manifest['kind'] != 'structured-tree-inference':
         raise ContractError('unsupported Tree2 artifact schema/kind')
-    classification = input_binding(action_contract, purpose, synthetic_capacity)
-    check_input_binding({key: manifest[key] for key in classification}, action_contract=action_contract,
-                        purpose=purpose, synthetic_capacity=synthetic_capacity)
-    TreeOrigin(action_config_hash, action_contract, purpose, synthetic_capacity, manifest['fit_origin'],
-               None if manifest['provenance'] is None else TrainedProvenance.parse(manifest['provenance']))
-    layout = feature_layout(model.encoder)
+    if canonical({key: manifest[key] for key in classification}) != canonical(classification):
+        raise ContractError('Tree artifact classification differs from explicit component binding')
+    _origin_from_fields(manifest, action_contract, context)
+    if context.modern:
+        assert _expected_source is not None
+        actual_source=(manifest['source_kind'],manifest['source_origin'])
+        if canonical(actual_source)!=canonical(_expected_source):
+            raise ContractError('Tree3 artifact differs from explicitly expected component source origin')
+    layout = _model_records(model).layout(model.encoder)
     if expected_feature_signature is not None and manifest['feature_signature'] != expected_feature_signature:
         raise ContractError('Tree2 inspected feature signature differs from own admitted binding')
-    for key, expected in {'model': asdict(model.architecture()), 'architecture_identity': architecture_identity(model.architecture()),
-            'input_recipe': INPUT_RECIPE, 'token_signature': signature(model.encoder.aggregate_window),
-            'feature_recipe': TREE_RECIPE, 'feature_signature': layout['feature_signature'],
+    for key, expected in {'model': asdict(model.architecture()), 'architecture_identity': context.identity(model.architecture()),
+            'input_recipe': context.features.layout.input_recipe, 'token_signature': signature(model.encoder.aggregate_window, layout=context.features.layout),
+            'feature_recipe': context.features.recipe, 'feature_signature': layout['feature_signature'],
             'feature_names': layout['feature_names'], 'categorical_indices': layout['categorical_indices'],
-            'semantics': semantics(), 'action_config_hash': action_config_hash, 'native_parameters': NATIVE_PARAMETERS}.items():
+            'semantics': semantics_v3(model, manifest['fit_origin']) if context.modern else semantics(),
+            'action_config_hash': action_config_hash, 'native_parameters': NATIVE_PARAMETERS,
+            **({'rule_signature': layout['rule_signature'], 'layout_signature': layout['layout_signature'], 'feature_layout': layout} if context.modern else {})}.items():
         if canonical(manifest[key]) != canonical(expected):
             raise ContractError('Tree2 artifact derived declaration mismatch: ' + key)
-    architecture_config(manifest['model'])
+    context.architecture(manifest['model'])
     closed(manifest['runtime'], {'numpy_version', 'lightgbm_version', 'native_library_sha256'})
     checksum(manifest['runtime']['native_library_sha256'])
     if manifest['runtime']['numpy_version'] != '2.5.4' or manifest['runtime']['lightgbm_version'] != '4.7.0':
@@ -301,8 +448,7 @@ def inspect_artifact(directory: Path, *, expected_digest: str, model: Configured
         raise ContractError('Tree2 inspected descriptor differs from own admitted binding')
     if canonical(creation['tree_descriptor']) != canonical(asdict(descriptor)):
         raise ContractError('Tree2 creation/actual tree descriptor mismatch')
-    from gf_models.structured_tree_config import configured_tree_v2
-    created_model = configured_tree_v2({**manifest['model'], 'checkpoint': None,
+    created_model = context.configured({**manifest['model'], 'checkpoint': None,
                                       'inference': creation['inference'], 'resources': creation['resources']})
     resource_estimate(created_model, model_bytes=descriptor.model_bytes)
     file = closed(manifest['model_file'], {'file', 'sha256', 'bytes'})
@@ -322,7 +468,7 @@ def inspect_artifact(directory: Path, *, expected_digest: str, model: Configured
     return manifest, text
 
 
-def _validate_booster(booster: Any, model: ConfiguredTreeModelV2, *, deadline: float = float('inf')) -> tuple[str, TreeDescriptor]:
+def _validate_booster(booster: Any, model: Any, *, deadline: float = float('inf')) -> tuple[str, TreeDescriptor]:
     _check(deadline)
     text = booster.model_to_string(num_iteration=-1)
     model_hash = hashlib.sha256(text.encode()).hexdigest()
@@ -331,8 +477,8 @@ def _validate_booster(booster: Any, model: ConfiguredTreeModelV2, *, deadline: f
     _check(deadline)
     dump = booster.dump_model(num_iteration=-1)
     _check(deadline)
-    layout = feature_layout(model.encoder)
-    if (booster.num_feature() != feature_width(model.encoder.max_positions) or booster.feature_name() != layout['feature_names']
+    layout = _model_records(model).layout(model.encoder)
+    if (booster.num_feature() != _model_records(model).features.feature_width(model.encoder.max_positions) or booster.feature_name() != layout['feature_names']
             or dump['num_class'] != 1 or dump['objective'] != 'regression' or dump['average_output']
             or booster.num_trees() != descriptor.tree_count):
         raise ContractError('actual Tree2 Booster semantics/features mismatch')
@@ -365,7 +511,8 @@ def _validate_booster(booster: Any, model: ConfiguredTreeModelV2, *, deadline: f
     return text, descriptor
 
 
-def load_artifact(directory: Path, **options: Any) -> LoadedTree:
+def load_artifact(directory: Path, **options: Any) -> Any:
+    context=_records(options.get('_context',TREE2_RECORDS))
     training_directory=options.pop('training_directory',None)
     training_binding=options.pop('training_binding',None)
     manifest, text = inspect_artifact(directory, **options)
@@ -375,7 +522,7 @@ def load_artifact(directory: Path, **options: Any) -> LoadedTree:
         if training_directory is None:raise ContractError('trained Tree2 requires explicit complete paired training directory')
         from gf_models.structured_tree_pairing import inspect_training
         pair=inspect_training(training_directory,expected_binding=training_binding,
-            max_owned_bytes=options['model'].resources.max_owned_bytes,deadline=deadline)
+            max_owned_bytes=options['model'].resources.max_owned_bytes,deadline=deadline,_context=context)
         if Path(training_directory).absolute()/'artifact'!=Path(directory).absolute() or canonical(pair.inference)!=canonical(manifest):
             raise ContractError('Tree2 explicit training/artifact pair differs')
     elif training_directory is not None or training_binding is not None:
@@ -389,12 +536,12 @@ def load_artifact(directory: Path, **options: Any) -> LoadedTree:
     _, actual = _validate_booster(booster, model, deadline=deadline)
     if actual != TreeDescriptor(**manifest['tree_descriptor']):
         raise ContractError('loaded Tree2 Booster descriptor mismatch')
-    origin = TreeOrigin(options['action_config_hash'], options['action_contract'], options['purpose'], options['synthetic_capacity'],
-        manifest['fit_origin'],None if manifest['provenance'] is None else TrainedProvenance.parse(manifest['provenance']))
+    origin = _origin_from_fields(manifest, options['action_contract'], context)
     _bind_origin(booster, origin, fresh=True)
+    if context.modern:_bind_model_v3(booster,model,cast(TreeOriginV3,origin),fresh=True)
     _check(deadline)
     if pair is not None:pair.finalize()
-    return LoadedTree(booster, model, origin, actual,None if pair is None else pair.binding,
+    return (LoadedTreeV3 if context.modern else LoadedTree)(booster, model, origin, actual,None if pair is None else pair.binding,
         None if pair is None else canonical(manifest['creation_execution']).encode())
 
 
@@ -448,15 +595,19 @@ def _publish(directory: Path, directory_fd: int, name: str, payload: bytes,
 
 
 def save_artifact(directory: Path, tree: LoadedTree, *, deadline: float = float('inf')) -> Json:
-    if type(tree) is LoadedTree and tree.origin.fit_origin=='trained':
+    if type(tree) is not LoadedTree:
+        raise ContractError('closed legacy Tree2 wrapper required')
+    if tree.origin.fit_origin=='trained':
         raise ContractError('trained Tree2 resave requires exact paired-bundle copy; creation/completion cannot be rewritten')
     return _save_inference(directory,tree,deadline=deadline)
 
 
-def _save_inference(directory: Path, tree: LoadedTree, *, deadline: float = float('inf')) -> Json:
-    if type(tree) is not LoadedTree or type(tree.origin) is not TreeOrigin:
-        raise ContractError('Tree2 immutable actual loaded origin required')
+def _save_inference(directory: Path, tree: Any, *, deadline: float = float('inf')) -> Json:
+    context=_model_records(tree.model)
+    if type(tree) is not (LoadedTreeV3 if context.modern else LoadedTree) or type(tree.origin) is not (TreeOriginV3 if context.modern else TreeOrigin):
+        raise ContractError('immutable actual loaded Tree wrapper/context required')
     _bind_origin(tree.booster, tree.origin)
+    if context.modern:_bind_model_v3(tree.booster,cast(ConfiguredTreeModelV3,tree.model),cast(TreeOriginV3,tree.origin))
     text, descriptor = _validate_booster(tree.booster, tree.model, deadline=deadline)
     if descriptor != tree.descriptor:
         raise ContractError('Tree2 actual wrapper/Booster descriptor changed')
@@ -464,15 +615,16 @@ def _save_inference(directory: Path, tree: LoadedTree, *, deadline: float = floa
     resource_estimate(tree.model, model_bytes=len(encoded))
     if time.monotonic() >= deadline:
         raise TimeoutError('Tree2 save deadline')
-    layout = feature_layout(tree.model.encoder)
-    manifest = {'schema_version': 3, 'kind': 'structured-tree-inference', 'model': asdict(tree.model.architecture()),
-        'architecture_identity': architecture_identity(tree.model.architecture()), 'input_recipe': INPUT_RECIPE,
-        'token_signature': signature(tree.model.encoder.aggregate_window), 'feature_recipe': TREE_RECIPE,
+    layout = context.layout(tree.model.encoder)
+    manifest = {'schema_version': context.schema, 'kind': 'structured-tree-inference', 'model': asdict(tree.model.architecture()),
+        'architecture_identity': context.identity(tree.model.architecture()), 'input_recipe': context.features.layout.input_recipe,
+        'token_signature': signature(tree.model.encoder.aggregate_window, layout=context.features.layout), 'feature_recipe': context.features.recipe,
         'feature_signature': layout['feature_signature'], 'feature_names': layout['feature_names'],
-        'categorical_indices': layout['categorical_indices'], 'semantics': semantics(),
+        'categorical_indices': layout['categorical_indices'], 'semantics': semantics_v3(cast(ConfiguredTreeModelV3,tree.model), tree.origin.fit_origin) if context.modern else semantics(),
+        **({'rule_signature': layout['rule_signature'], 'layout_signature': layout['layout_signature'], 'feature_layout': layout} if context.modern else {}),
         **tree.origin.fields(), 'native_parameters': NATIVE_PARAMETERS, 'runtime': runtime_metadata(deadline=deadline),
         'model_file': {'file': 'model.txt', 'sha256': descriptor.model_sha256, 'bytes': len(encoded)},
-        'tree_descriptor': asdict(descriptor), 'creation_execution': execution_binding(tree.model, descriptor) if tree.creation_execution is None else json.loads(tree.creation_execution)}
+        'tree_descriptor': asdict(descriptor), 'creation_execution': _creation_execution(tree.model, descriptor) if tree.creation_execution is None else json.loads(tree.creation_execution)}
     metadata = (canonical(manifest)+'\n').encode()
     resource_estimate(tree.model, model_bytes=len(encoded), extra_bytes=32 * len(metadata) + 65536)
     parents = {}
@@ -514,21 +666,22 @@ def _save_inference(directory: Path, tree: LoadedTree, *, deadline: float = floa
 
 
 def fit_toy(blocks: list[Any], labels: Any, validation_blocks: list[Any], validation_labels: Any, *,
-            model: ConfiguredTreeModelV2, origin: TreeOrigin, seed: int, rounds: int = 500,
+            model: Any, origin: Any, seed: int, rounds: int = 500,
             early_stopping: int = 50, learning_rate: float = .05, min_data_in_leaf: int = 20,
-            deadline: float = float('inf')) -> LoadedTree:
+            deadline: float = float('inf'), _context: _TreeRecords = TREE2_RECORDS) -> Any:
     """Explicit component-only categorical API test; never source/fit authority."""
     import numpy as np
 
+    context=_records(_context);context.require_model(model)
     integer(seed, 0, 2**31-1)
     integer(rounds, 1, 500)
     integer(early_stopping, 1, 2**31-1)
     integer(min_data_in_leaf, 1, 2**31-1)
-    if type(origin) is not TreeOrigin or origin.fit_origin!='toy' or origin.provenance is not None or type(learning_rate) not in (int, float) or not 0 < learning_rate <= 1:
+    if type(origin) is not (TreeOriginV3 if context.modern else TreeOrigin) or origin.fit_origin!='toy' or origin.provenance is not None or type(learning_rate) not in (int, float) or not 0 < learning_rate <= 1:
         raise ContractError('explicit toy Tree2 fit origin/settings required')
     if not blocks or not validation_blocks:
         raise ContractError('nonempty admitted Tree2 matrix lists required')
-    width, raw_bytes = feature_width(model.encoder.max_positions), 0
+    width, raw_bytes = context.features.feature_width(model.encoder.max_positions), 0
     for matrices, targets in ((blocks, labels), (validation_blocks, validation_labels)):
         count = 0
         for matrix in matrices:
@@ -544,7 +697,7 @@ def fit_toy(blocks: list[Any], labels: Any, validation_blocks: list[Any], valida
     # Admit caller-owned blocks/labels, native Dataset copies and workspace as a
     # joint soft estimate before masks, Dataset construction or Booster creation.
     resource_estimate(model, extra_bytes=5 * raw_bytes)
-    layout = feature_layout(model.encoder)
+    layout = _model_records(model).layout(model.encoder)
     for matrices, targets in ((blocks, labels), (validation_blocks, validation_labels)):
         if not np.isfinite(targets).all():
             raise ContractError('nonfinite Tree2 labels')
@@ -553,7 +706,7 @@ def fit_toy(blocks: list[Any], labels: Any, validation_blocks: list[Any], valida
                 chunk = matrix[start:start+model.inference.candidate_chunk]
                 if not np.isfinite(chunk).all():
                     raise ContractError('nonfinite Tree2 features')
-                for index, maximum in zip(layout['categorical_indices'], categorical_limits(model.encoder), strict=True):
+                for index, maximum in zip(layout['categorical_indices'], context.limits(model.encoder), strict=True):
                     values = chunk[:, index]
                     if np.any(values < 0) or np.any(values > maximum) or np.any(values != np.floor(values)):
                         raise ContractError('Tree2 categories require exact closed integer codes')
@@ -578,7 +731,9 @@ def fit_toy(blocks: list[Any], labels: Any, validation_blocks: list[Any], valida
     check()
     _, descriptor = _validate_booster(booster, model, deadline=deadline)
     _bind_origin(booster, origin, fresh=True)
-    return LoadedTree(booster, model, origin, descriptor)
+    if context.modern:_bind_model_v3(booster,model,cast(TreeOriginV3,origin),fresh=True)
+    wrapper:Any=LoadedTreeV3 if context.modern else LoadedTree
+    return wrapper(booster, model, origin, descriptor)
 
 
 def binding_options(directory: Path, *, expected_digest: str, model: ConfiguredTreeModelV2,
@@ -600,16 +755,44 @@ def binding_options(directory: Path, *, expected_digest: str, model: ConfiguredT
     return safe_tree_options_v2(value, action_contract=action_contract, purpose=purpose, synthetic_capacity=synthetic_capacity)
 
 
-def save_provisional_trained(directory:Path,booster:Any,model:ConfiguredTreeModelV2,request:Json,request_sha256:str,
-                             action_config_hash:str,*,deadline:float)->Json:
+def save_provisional_trained(directory:Path,booster:Any,model:Any,request:Json,request_sha256:str,
+                             action_config_hash:str,*,deadline:float,_context:_TreeRecords=TREE2_RECORDS)->Json:
     """Worker-only structural stage; never a bindable completed training pair."""
-    validate_request(request);checksum(request_sha256);checksum(action_config_hash)
+    context=_records(_context);context.require_model(model)
+    validate_request(request,_context=context);checksum(request_sha256);checksum(action_config_hash)
     if canonical(request['model'])!=canonical(asdict(model.architecture())) or canonical(request['execution'])!=canonical({'inference':asdict(model.inference),'resources':asdict(model.resources)}):
         raise ContractError('provisional Tree2 actual request/model execution mismatch')
-    classification=request['input_binding'];contract=parse_action_contract(classification['action_contract'])
-    origin=TreeOrigin(action_config_hash,contract,classification['purpose'],classification['synthetic_capacity'],'trained',provenance_for_request(request,request_sha256))
+    classification=request['input_binding']
+    from gf_common.card_instance import parse_card_instance_contract
+    contract=(parse_card_instance_contract if context.modern else parse_action_contract)(classification['action_contract'])
+    origin_fields={'action_config_hash':action_config_hash,**classification,'fit_origin':'trained',
+        'provenance':provenance_for_request(request,request_sha256,_context=context).to_dict(),
+        **{key:request[key] for key in context.extra_fields}}
+    origin=_origin_from_fields(origin_fields,contract,context)
     _,descriptor=_validate_booster(booster,model,deadline=deadline)
     if descriptor.model_bytes>request['model_envelope']['text_bytes']:raise ContractError('actual native Tree2 exceeds pre-admitted model envelope')
     _bind_origin(booster,origin,fresh=True)
-    tree=LoadedTree(booster,model,origin,descriptor,creation_execution=canonical({**request['execution'],'tree_descriptor':asdict(descriptor)}).encode())
+    if context.modern:_bind_model_v3(booster,model,cast(TreeOriginV3,origin),fresh=True)
+    tree=(LoadedTreeV3 if context.modern else LoadedTree)(booster,model,origin,descriptor,creation_execution=canonical({**request['execution'],'tree_descriptor':asdict(descriptor)}).encode())
     return _save_inference(directory,tree,deadline=deadline)
+
+
+# Explicit component-only Model3 wrappers; no registry or game-factory dispatch.
+def inspect_artifact_v3(directory:Path,*,source_kind:str|None,source_origin:Json|None,**options:Any)->tuple[Json,str]:
+    return inspect_artifact(directory,_context=TREE3_RECORDS,_expected_source=(source_kind,source_origin),**options)
+
+
+def load_artifact_v3(directory:Path,*,source_kind:str|None,source_origin:Json|None,**options:Any)->LoadedTreeV3:
+    return load_artifact(directory,_context=TREE3_RECORDS,_expected_source=(source_kind,source_origin),**options)
+
+
+def save_artifact_v3(directory:Path,tree:LoadedTreeV3,*,deadline:float=float('inf'))->Json:
+    if type(tree) is not LoadedTreeV3:
+        raise ContractError('actual loaded Tree3 required')
+    if tree.origin.fit_origin=='trained':
+        raise ContractError('trained Tree3 resave requires exact paired-bundle copy')
+    return _save_inference(directory,tree,deadline=deadline)
+
+
+def fit_toy_v3(blocks:list[Any],labels:Any,validation_blocks:list[Any],validation_labels:Any,**options:Any)->LoadedTreeV3:
+    return fit_toy(blocks,labels,validation_blocks,validation_labels,_context=TREE3_RECORDS,**options)

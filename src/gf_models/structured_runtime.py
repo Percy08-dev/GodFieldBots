@@ -159,3 +159,29 @@ def admit_game_workers_v3(actions: ActionConfigV3, roles: tuple[RuntimePolicyBin
         "workers": 2 * game_concurrency, "worker_resident_bytes": resident,
         "decision_temporary_bytes": temporary, "learner_cuda_bytes": learner_cuda_bytes,
         "peak_cuda_bytes": peak, "global_cuda_bytes": global_cuda_bytes, "max_workers": max_workers}
+
+
+def admit_planned_game_training_v3(actions: ActionConfigV3, model: ModelConfigV3,
+                                  inference: InferenceBindingV2, learner: InferenceBindingV2, *,
+                                  rules: CardInstanceRules, game_concurrency: int,
+                                  global_cuda_bytes: int, max_workers: int) -> Json:
+    """Pure pre-generation admission, using the exact live worker/learner formulas."""
+    input_binding_game_v3(actions.action_contract, rules)
+    integer(game_concurrency, 1, 2)
+    integer(max_workers, 1, 4)
+    integer(global_cuda_bytes, 1, 12 * 1024**3)
+    if (type(model) is not ModelConfigV3 or model.max_positions > 18
+            or actions.max_sequence_length > model.max_positions
+            or actions.max_candidates > inference.max_candidates):
+        raise ContractError('planned game model/actions capacity mismatch')
+    layout = layout_for_contract(actions.action_contract)
+    _, _, resident, temporary = _neural_settings(model, inference, actions, layout=layout)
+    learner_bytes = learner_process_bytes(model, learner, layout=layout)
+    workers = 2 * game_concurrency
+    peak = learner_bytes + workers * resident + game_concurrency * temporary
+    if workers > max_workers or peak > global_cuda_bytes:
+        raise ContractError('planned learner and worst concurrent neural roles exceed shared budget')
+    return {'recipe': PROCESS_ENVELOPE_RECIPE, 'game_concurrency': game_concurrency,
+        'workers': workers, 'worker_resident_bytes': workers * resident,
+        'decision_temporary_bytes': game_concurrency * temporary, 'learner_cuda_bytes': learner_bytes,
+        'peak_cuda_bytes': peak, 'global_cuda_bytes': global_cuda_bytes, 'max_workers': max_workers}

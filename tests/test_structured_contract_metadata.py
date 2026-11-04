@@ -355,9 +355,10 @@ def test_resume_and_learner_reject_tag_relabel_before_live_state_mutation(tmp_pa
             purpose="component", synthetic_capacity=False)
     learner.synthetic_capacity = False
     learner.input_binding = input_binding(learner.action_contract, "component", False)
-    with pytest.raises(ContractError, match="network input.*classification"):
+    # The authoritative Config can reject the public relabel before a tag check.
+    with pytest.raises(ContractError, match="classification"):
         learner.save(tmp_path / "relabelled")
-    with pytest.raises(ContractError, match="network input.*classification"):
+    with pytest.raises(ContractError, match="classification"):
         learner.restore(tmp_path / "original")
     assert not (tmp_path / "relabelled").exists()
     assert learner.network._structured_input_binding is tag and not learner.optimizer.state and learner.steps == 0
@@ -380,7 +381,7 @@ def test_network_tag_relabel_rejects_before_learner_parity_or_policy_cache_step(
         pytest.fail("tag mismatch reached parity/tokenization")
     monkeypatch.setattr(rollout, "endpoint", forbidden)
     monkeypatch.setattr(module, "tokenize_frame", forbidden)
-    with pytest.raises(ContractError, match="network input.*classification"):
+    with pytest.raises(ContractError, match="classification"):
         learner.admit(rollout)
     record = records_for(make_input, ordinary, count=1)
     rng = policy.rng.get_state().clone()

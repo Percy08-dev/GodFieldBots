@@ -115,7 +115,7 @@ def test_explicit_labels_preserve_original_schedule_rng_and_roles():
         for a, b in zip(before.episodes, after.episodes, strict=True):
             assert asdict(a) | {'policies': tuple(mapping.get(label, label) for label in a.policies)} == asdict(b)
     assert validation_groups(17, 'learner', actions_version=2)[0].episodes[0].policies[1] == mapping['random']
-    for invalid in (True, 0, 3, '2'):
+    for invalid in (True, 0, 4, '2'):
         with pytest.raises(ContractError):
             training_groups(17, 0, 'x', ('x',), new_rng, actions_version=invalid)
 

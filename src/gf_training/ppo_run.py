@@ -285,11 +285,18 @@ async def train_ppo(loaded: Any, collector: Collector, directory: Path, *, mode:
 
 async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 'fresh',
                    pause_after_update: int | None = None, _structured_component: bool = False,
-                   _structured_ops: Any = None) -> Json:
+                   _structured_ops: Any = None, _game_ops: Any = None) -> Json:
     operation_started = time.monotonic()
     operation_unix = time.time()
     config = loaded.config
     ops: Any = None
+    game = _game_ops is not None
+    if game:
+        from gf_training import structured_ppo
+        from gf_training.card_instance_ppo import _GameOperations
+        if type(_game_ops) is not _GameOperations or _structured_component or _structured_ops is not None:
+            raise ContractError("closed corrected game operations required")
+        ops = _game_ops
     if _structured_ops is not None and not _structured_component:
         raise ContractError('private native operations require structured component composition')
     if _structured_component:
@@ -325,6 +332,8 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
     preprocessing = ((ops.preprocessing_identity(config, deadline=operation_started + config.run.execution_seconds) if ops else preprocessing_identity(config.preprocessing, deadline=operation_started + config.run.execution_seconds, **preprocessing_options))
                      if mode == 'fresh' else None)
     directory = directory.resolve()
+    if game and mode == "fresh":
+        ops.preflight(config, deadline=operation_started + config.run.execution_seconds)
     with run_lock(directory, create=mode == 'fresh') as ownership:
         initial_scan = None
         if ops and mode == 'resume':
@@ -337,7 +346,7 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
         if preprocessing is None:
             preprocessing = (ops.preprocessing_identity(config, deadline=identity_deadline) if ops else preprocessing_identity(config.preprocessing, deadline=identity_deadline, **preprocessing_options))
         identity = source_identity(identity_deadline)
-        identity["integration"] = integration_identity(config, identity_deadline)
+        identity["integration"] = ops.integration_identity(config, identity_deadline) if game else integration_identity(config, identity_deadline)
         identity["configuration_inputs_sha256"] = digest(loaded.inputs)
         identity["preprocessing"] = preprocessing
         if ops:
@@ -358,7 +367,7 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
             if ops:
                 ops.initialize_state(state, config)
             if ops:
-                ops.persist_control(directory / 'artifact-registry.json', {'schema_version': 2, 'generations': {}}, config, deadline=identity_deadline)
+                ops.persist_control(directory / 'artifact-registry.json', {'schema_version': 3 if game else 2, 'generations': {}}, config, deadline=identity_deadline)
                 ops.persist_control(directory / 'run.json', state, config, deadline=identity_deadline)
             else:
                 atomic_json(directory / 'artifact-registry.json', {})
@@ -399,6 +408,8 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
         else:
             atomic_json(directory / 'run.json', state)
         ledger = None
+        if game:
+            ops.bind_run(ownership, state)
         if ops:
             child, ledger = ops.make_child(directory, config, state, deadline=execution)
         else:
@@ -436,126 +447,138 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
                     if not state['updates']:
                         raise ContractError('zero-update PPO run ineligible')
                     break
-                generation = state['updates']
-                registry = ({'random-structured-v1': RuntimePolicyBinding('random'), 'heuristic-structured-v1': RuntimePolicyBinding('heuristic')}
-                            if ops else {'random': RuntimePolicyBinding('random'), 'heuristic': RuntimePolicyBinding('heuristic')})
-                learner_label, learner_binding = ops.binding(directory, generation, config, execution) if ops else owned_binding(directory, generation)
-                registry[learner_label] = learner_binding
-                snapshots = []
-                for snapshot in pool:
-                    label, binding = ops.binding(directory, snapshot, config, execution) if ops else owned_binding(directory, snapshot)
-                    registry[label] = binding
-                    snapshots.append(label)
-                groups = (training_groups(training.seeds[0], generation, learner_label, tuple(snapshots), rng, actions_version=2)
-                          if ops else training_groups(training.seeds[0], generation, learner_label, tuple(snapshots), rng))
-                batch_id = f'batch-{generation:06}'
-                linkage = {'parent_run_id': state['run_id'], 'parent_run_path': str(directory), 'batch_id': batch_id,
-                           'collection_generation': generation,
-                           'learner_seats': {spec.episode_id: spec.learner_viewer for group in groups for spec in group.episodes}}
-                collection_started = time.monotonic()
-                plan = CollectionPlan(groups, registry, directory / 'collections' / batch_id, linkage, execution, wall)
-                if ops:
-                    assert ledger is not None
-                    ops.validate_owned_collection(plan, ledger, config=config, deadline=execution)
-                    collection = await collector(plan, ledger)
-                    if ledger.workers or ledger.updating:
-                        raise ContractError('structured collection returned unreaped participants or active update')
-                else:
-                    collection = await collector(plan)
-                if collection.directory.resolve() != (directory / 'collections' / batch_id).resolve() or collection.report.get('comparison_valid') is not True:
-                    raise ContractError('collection callback did not finalize requested original batch')
-                check_clock()
-                from gf_common.schedule import serialize_schedule
-                collection_scan = None
-                if ops:
-                    collection_manifest, collection_scan = ops.read_control(collection.directory / 'manifest.json', config, deadline=execution)
-                else:
-                    collection_manifest = read_json(collection.directory / 'manifest.json')
-                expected_bindings = {key: asdict(value) for key, value in registry.items()}
-                bindings_match = (canonical(collection_manifest.get('policy_bindings')) == canonical(expected_bindings)
-                                  if ops else collection_manifest.get('policy_bindings') == expected_bindings)
-                if collection_manifest.get('schedule') != serialize_schedule(groups, 4) or not bindings_match:
-                    raise ContractError('collection callback changed frozen schedule/policies')
-                collection_seconds = time.monotonic() - collection_started
-                numeric = directory / 'numeric' / batch_id
-                numeric_files = None
-                with ExitStack() as source_scope:
+                with ExitStack() as generation_scope:
+                    generation = state['updates']
+                    registry = ({'random-card-instance-v2': RuntimePolicyBinding('random'), 'heuristic-card-instance-v2': RuntimePolicyBinding('heuristic')} if game else
+                                {'random-structured-v1': RuntimePolicyBinding('random'), 'heuristic-structured-v1': RuntimePolicyBinding('heuristic')}
+                                if ops else {'random': RuntimePolicyBinding('random'), 'heuristic': RuntimePolicyBinding('heuristic')})
+                    learner_label, learner_binding = ops.binding(directory, generation, config, execution) if ops else owned_binding(directory, generation)
+                    registry[learner_label] = learner_binding
+                    snapshots = []
+                    for snapshot in pool:
+                        label, binding = ops.binding(directory, snapshot, config, execution) if ops else owned_binding(directory, snapshot)
+                        registry[label] = binding
+                        snapshots.append(label)
+                    groups = (training_groups(training.seeds[0], generation, learner_label, tuple(snapshots), rng, actions_version=3 if game else 2)
+                              if ops else training_groups(training.seeds[0], generation, learner_label, tuple(snapshots), rng))
+                    batch_id = f'batch-{generation:06}'
+                    linkage = {'parent_run_id': state['run_id'], 'parent_run_path': str(directory), 'batch_id': batch_id,
+                               'collection_generation': generation,
+                               'learner_seats': {spec.episode_id: spec.learner_viewer for group in groups for spec in group.episodes}}
+                    if game:
+                        linkage = ops.linkage(state, directory, generation, groups, registry)
+                    collection_started = time.monotonic()
+                    plan = CollectionPlan(groups, registry, directory / 'collections' / batch_id, linkage, execution, wall)
                     if ops:
-                        assert collection_scan is not None
-                        projection_options: dict[str, Any] = {
-                            'expected_manifest_sha256': collection_scan.files[collection.directory / 'manifest.json'][1],
-                            'extra_owned_bytes': collection_scan.retained,
-                        }
-                        if type(ops) is structured_ppo._NativeComponentOps:
-                            # Actual remaining owned storage bounds the private
-                            # spool. The collection-admission reserve is separate.
-                            projection_options['scratch_allowance_bytes'] = max(
-                                0, training.max_owned_bytes - owned_bytes(directory, execution))
-                        decision_count, proof, numeric_files = source_scope.enter_context(
-                            ops.project(plan, numeric, config, learner_label, generation, execution,
-                                **projection_options))
+                        assert ledger is not None
+                        ops.validate_owned_collection(plan, ledger, config=config, deadline=execution)
+                        collection = await collector(plan, ledger)
+                        if ledger.workers or ledger.updating:
+                            raise ContractError('structured collection returned unreaped participants or active update')
                     else:
-                        online_context = OnlinePPOContext(directory, state["run_id"], batch_id, generation, ownership.token)
-                        if config.preprocessing.backend == 'rust':
-                            decision_count, proof = await stage_rollout(collection.directory, numeric, model, linkage,
-                                                                 config.preprocessing, deadline=execution,
-                                                                 online_context=online_context,
-                                                                 expected_identity=preprocessing, wall_deadline=wall)
-                        else:
-                            decisions, proof = ingest_collection(collection.directory, model, linkage, deadline=execution,
-                                                                 online_context=online_context)
-                            if isinstance(model, (GRUModelConfig, TransformerModelConfig)):
-                                from gf_training.sequence_rollout import (
-                                    write_rollout as write_sequence,
-                                )
-                                write_sequence(numeric, decisions, model, deadline=execution)
-                            else:
-                                write_rollout(numeric, decisions, deadline=execution)
-                            decision_count = len(decisions)
-                            del decisions
-                    numeric_hash = sha256(numeric / 'rollout.json', execution)
-                    if owned_bytes(directory, execution) > training.max_owned_bytes or time.monotonic() >= execution:
-                        raise RuntimeError('PPO collection/encoding exceeded execution/storage limits')
-                    next_generation = generation + 1
-                    await asyncio.sleep(0)  # Serve pending cancellation before optimizer side effects.
-                    update_started = time.monotonic()
-                    if ops:
-                        acknowledgement = await child.update(numeric, numeric_hash, learner_label,
-                            checkpoint_path(directory, next_generation), deadline=execution)
-                        metrics = {**acknowledgement['metrics'], **acknowledgement['timings']}
-                    else:
-                        metrics = await child.request({'command': 'update', 'batch': str(numeric), 'batch_hash': numeric_hash,
-                                                       'output': str(checkpoint_path(directory, next_generation)), 'action_hash': digest(asdict(config.actions))}, execution)
+                        collection = await collector(plan)
+                    if collection.directory.resolve() != (directory / 'collections' / batch_id).resolve() or collection.report.get('comparison_valid') is not True:
+                        raise ContractError('collection callback did not finalize requested original batch')
                     check_clock()
-                    update_seconds = time.monotonic() - update_started
-                    if time.monotonic() >= execution or owned_bytes(directory, execution) > training.max_owned_bytes:
-                        raise RuntimeError('PPO update/save execution/storage overrun')
-                if collection_scan is not None:
-                    collection_scan.finalize()
-                state['accepted_decisions'] += decision_count
-                state['optimizer_steps'] = metrics['optimizer_steps']
-                state['collection_seconds'] += collection_seconds
-                state['update_seconds'] += update_seconds
-                if next_generation % 10 == 0:
-                    pool = (pool + [next_generation])[-5:]
-                update = {'schema_version': 1, 'status': 'complete', 'run_id': state['run_id'], 'generation': next_generation,
-                          'parent_sha256': state['generation_sha256'], 'batch_id': batch_id,
-                          'collection': str(collection.directory.relative_to(directory)), 'collection_manifest_sha256': proof['manifest_sha256'],
-                          'numeric': str(numeric.relative_to(directory)), 'numeric_sha256': numeric_hash,
-                          'accepted_decisions': decision_count, 'source_proof': proof, 'metrics': metrics,
-                          'planned_games': 16, 'actual_games': proof['games'], 'health': {},
-                          'policy_bindings': {key: asdict(value) for key, value in registry.items()},
-                          'learner_seats': linkage['learner_seats'], 'collection_seconds': collection_seconds, 'update_seconds': update_seconds}
-                if ops:
-                    update.update(schema_version=2, model_id=state['model_id'], model_version='2', input_recipe=state['input_recipe'],
-                                  action_contract=state['action_contract'], purpose='component', synthetic_capacity=False,
-                                  numeric_files=numeric_files)
-                    ops.commit(directory, state, config, generation=next_generation, update=update,
-                        controls=_controls(rng, pool, next_generation), acknowledgement=acknowledgement, deadline=execution)
-                    ops.retain(directory, next_generation, config, execution)
-                else:
-                    commit_generation(directory, state, generation=next_generation, update=update, controls=_controls(rng, pool, next_generation), deadline=execution)
-                    retain(directory, next_generation, deadline=execution)
+                    from gf_common.schedule import serialize_schedule
+                    collection_scan = None
+                    if ops:
+                        collection_manifest, collection_scan = ops.read_control(collection.directory / 'manifest.json', config, deadline=execution)
+                    else:
+                        collection_manifest = read_json(collection.directory / 'manifest.json')
+                    expected_bindings = {key: asdict(value) for key, value in registry.items()}
+                    bindings_match = (canonical(collection_manifest.get('policy_bindings')) == canonical(expected_bindings)
+                                      if ops else collection_manifest.get('policy_bindings') == expected_bindings)
+                    if collection_manifest.get('schedule') != serialize_schedule(groups, 4) or not bindings_match:
+                        raise ContractError('collection callback changed frozen schedule/policies')
+                    collection_seconds = time.monotonic() - collection_started
+                    numeric = directory / 'numeric' / batch_id
+                    numeric_files = None
+                    with ExitStack() as source_scope:
+                        if ops:
+                            assert collection_scan is not None
+                            projection_options: dict[str, Any] = {
+                                'expected_manifest_sha256': collection_scan.files[collection.directory / 'manifest.json'][1],
+                                'extra_owned_bytes': collection_scan.retained,
+                            }
+                            if type(ops) is structured_ppo._NativeComponentOps:
+                                # Actual remaining owned storage bounds the private
+                                # spool. The collection-admission reserve is separate.
+                                projection_options['scratch_allowance_bytes'] = max(
+                                    0, training.max_owned_bytes - owned_bytes(directory, execution))
+                            projected = (generation_scope if game else source_scope).enter_context(
+                                ops.project(plan, numeric, config, learner_label, generation, execution,
+                                    **projection_options))
+                            if game:
+                                decision_count, proof, numeric_files, issued_projection = projected
+                            else:
+                                decision_count, proof, numeric_files = projected
+                        else:
+                            online_context = OnlinePPOContext(directory, state["run_id"], batch_id, generation, ownership.token)
+                            if config.preprocessing.backend == 'rust':
+                                decision_count, proof = await stage_rollout(collection.directory, numeric, model, linkage,
+                                                                     config.preprocessing, deadline=execution,
+                                                                     online_context=online_context,
+                                                                     expected_identity=preprocessing, wall_deadline=wall)
+                            else:
+                                decisions, proof = ingest_collection(collection.directory, model, linkage, deadline=execution,
+                                                                     online_context=online_context)
+                                if isinstance(model, (GRUModelConfig, TransformerModelConfig)):
+                                    from gf_training.sequence_rollout import (
+                                        write_rollout as write_sequence,
+                                    )
+                                    write_sequence(numeric, decisions, model, deadline=execution)
+                                else:
+                                    write_rollout(numeric, decisions, deadline=execution)
+                                decision_count = len(decisions)
+                                del decisions
+                        numeric_hash = sha256(numeric / 'rollout.json', execution)
+                        if owned_bytes(directory, execution) > training.max_owned_bytes or time.monotonic() >= execution:
+                            raise RuntimeError('PPO collection/encoding exceeded execution/storage limits')
+                        next_generation = generation + 1
+                        await asyncio.sleep(0)  # Serve pending cancellation before optimizer side effects.
+                        update_started = time.monotonic()
+                        if ops:
+                            acknowledgement = (await child.update(issued_projection, checkpoint_path(directory, next_generation), deadline=execution) if game else
+                                await child.update(numeric, numeric_hash, learner_label,
+                                checkpoint_path(directory, next_generation), deadline=execution))
+                            metrics = {**acknowledgement['metrics'], **acknowledgement['timings']}
+                        else:
+                            metrics = await child.request({'command': 'update', 'batch': str(numeric), 'batch_hash': numeric_hash,
+                                                           'output': str(checkpoint_path(directory, next_generation)), 'action_hash': digest(asdict(config.actions))}, execution)
+                        check_clock()
+                        update_seconds = time.monotonic() - update_started
+                        if time.monotonic() >= execution or owned_bytes(directory, execution) > training.max_owned_bytes:
+                            raise RuntimeError('PPO update/save execution/storage overrun')
+                    if collection_scan is not None:
+                        collection_scan.finalize()
+                    state['accepted_decisions'] += decision_count
+                    state['optimizer_steps'] = metrics['optimizer_steps']
+                    state['collection_seconds'] += collection_seconds
+                    state['update_seconds'] += update_seconds
+                    if next_generation % 10 == 0:
+                        pool = (pool + [next_generation])[-5:]
+                    update = {'schema_version': 1, 'status': 'complete', 'run_id': state['run_id'], 'generation': next_generation,
+                              'parent_sha256': state['generation_sha256'], 'batch_id': batch_id,
+                              'collection': str(collection.directory.relative_to(directory)), 'collection_manifest_sha256': proof['manifest_sha256'],
+                              'numeric': str(numeric.relative_to(directory)), 'numeric_sha256': numeric_hash,
+                              'accepted_decisions': decision_count, 'source_proof': proof, 'metrics': metrics,
+                              'planned_games': 16, 'actual_games': proof['games'], 'health': {},
+                              'policy_bindings': {key: asdict(value) for key, value in registry.items()},
+                              'learner_seats': linkage['learner_seats'], 'collection_seconds': collection_seconds, 'update_seconds': update_seconds}
+                    if ops:
+                        if game:
+                            ops.update_record(update, state, numeric_files)
+                        else:
+                            update.update(schema_version=2, model_id=state['model_id'], model_version='2', input_recipe=state['input_recipe'],
+                                          action_contract=state['action_contract'], purpose='component', synthetic_capacity=False,
+                                          numeric_files=numeric_files)
+                        ops.commit(directory, state, config, generation=next_generation, update=update,
+                            controls=_controls(rng, pool, next_generation), acknowledgement=acknowledgement, deadline=execution)
+                        ops.retain(directory, next_generation, config, execution)
+                    else:
+                        commit_generation(directory, state, generation=next_generation, update=update, controls=_controls(rng, pool, next_generation), deadline=execution)
+                        retain(directory, next_generation, deadline=execution)
                 check_clock()
                 if time.monotonic() >= execution or owned_bytes(directory, execution) > training.max_owned_bytes:
                     raise RuntimeError('PPO commit/retention execution/storage overrun')

@@ -1,5 +1,6 @@
 use crate::json::ValueExt;
 pub mod budget;
+mod card_instance_fixture;
 pub mod control_memory;
 pub mod controls;
 mod episode_pool;
@@ -389,10 +390,174 @@ impl Drop for StructuredJournalTokens {
     }
 }
 
+fn structured_settings(
+    settings: &[u8],
+    control: &Control,
+) -> error::Result<(usize, usize, usize, usize, usize)> {
+    let initial = Budget::new(1048576);
+    let settings = json::parse(settings, &initial, &control)?;
+    let v = &settings.root;
+    v.closed(
+        &[
+            "memory_bytes",
+            "scratch_bytes",
+            "max_source_file_bytes",
+            "max_record_bytes",
+            "chunk_target_bytes",
+        ],
+        &[],
+    )?;
+    let memory = v.require("memory_bytes")?.integer(1, 12i128 << 30)? as usize;
+    let scratch = v.require("scratch_bytes")?.integer(1, 12i128 << 30)? as usize;
+    let source = v
+        .require("max_source_file_bytes")?
+        .integer(1, 64i128 << 20)? as usize;
+    let record = v.require("max_record_bytes")?.integer(1, source as i128)? as usize;
+    let chunk = v.require("chunk_target_bytes")?.integer(1, 64i128 << 20)? as usize;
+    Ok((memory, scratch, source, record, chunk))
+}
+
+enum StructuredBridgeCore {
+    Engineering(structured_session::CohortSession),
+    Corrected(structured_session::CardInstanceNativeSession),
+}
+impl StructuredBridgeCore {
+    fn corrected(&self) -> bool {
+        matches!(self, Self::Corrected(_))
+    }
+    fn summary(&self) -> error::Result<budget::BudgetVec<u8>> {
+        match self {
+            Self::Engineering(v) => v.summary(),
+            Self::Corrected(v) => v.control_summary(),
+        }
+    }
+    fn authorization_max_bytes(&self) -> error::Result<usize> {
+        match self {
+            Self::Engineering(v) => v
+                .controls
+                .summary
+                .root
+                .require("authorization_max_bytes")?
+                .integer(1, 64i128 << 20)
+                .map(|v| v as usize),
+            Self::Corrected(v) => v.authorization_max_bytes(),
+        }
+    }
+    fn original_config_inputs(&self, index: usize) -> error::Result<budget::BudgetVec<u8>> {
+        match self {
+            Self::Engineering(v) => v.original_config_inputs(index),
+            Self::Corrected(v) => v.original_config_inputs(index),
+        }
+    }
+    fn authorize(&mut self, bytes: &[u8]) -> error::Result<()> {
+        match self {
+            Self::Engineering(v) => v.authorize(bytes),
+            Self::Corrected(v) => v.authorize(bytes),
+        }
+    }
+    fn export(
+        &mut self,
+    ) -> error::Result<(
+        budget::BudgetVec<u8>,
+        structured_staging::Banks,
+        Option<(Arc<()>, budget::Lease)>,
+    )> {
+        match self {
+            Self::Engineering(v) => {
+                let (m, b) = v.export()?;
+                Ok((m, b, None))
+            }
+            Self::Corrected(v) => {
+                let (m, b, g, l) = v.export_cohort()?.into_parts();
+                Ok((m, b, Some((g, l))))
+            }
+        }
+    }
+    fn export_recorded(
+        &mut self,
+        index: usize,
+    ) -> error::Result<(
+        budget::BudgetVec<u8>,
+        structured_staging::Banks,
+        Option<(Arc<()>, budget::Lease)>,
+    )> {
+        match self {
+            Self::Corrected(v) => {
+                let (m, b, g, l) = v.export_recorded_cohort(index)?.into_parts();
+                Ok((m, b, Some((g, l))))
+            }
+            _ => Err(Error::contract(
+                "recorded export requires corrected session",
+            )),
+        }
+    }
+    fn export_selected(
+        &mut self,
+        recorded: Option<usize>,
+    ) -> error::Result<(
+        budget::BudgetVec<u8>,
+        structured_staging::Banks,
+        Option<(Arc<()>, budget::Lease)>,
+    )> {
+        match recorded {
+            Some(index) => self.export_recorded(index),
+            None => self.export(),
+        }
+    }
+    fn fail_export(&mut self) {
+        match self {
+            Self::Engineering(v) => v.fail_export(),
+            Self::Corrected(v) => v.fail_admitted(),
+        }
+    }
+    fn retire_payload(&mut self) -> error::Result<()> {
+        match self {
+            Self::Engineering(v) => v.retire_payload(),
+            Self::Corrected(v) => v.retire_payload(),
+        }
+    }
+    fn begin_update(&mut self) -> error::Result<()> {
+        match self {
+            Self::Engineering(v) => v.begin_update(),
+            Self::Corrected(v) => v.begin_update(),
+        }
+    }
+    fn recheck(&self) -> error::Result<()> {
+        match self {
+            Self::Engineering(v) => v.recheck(),
+            Self::Corrected(v) => v.recheck(),
+        }
+    }
+    fn finalize(&mut self) -> error::Result<budget::BudgetVec<u8>> {
+        match self {
+            Self::Engineering(v) => v.finalize(),
+            _ => Err(Error::contract(
+                "corrected finalization uses explicit entry",
+            )),
+        }
+    }
+    fn close(&mut self) -> error::Result<()> {
+        match self {
+            Self::Engineering(v) => v.close(),
+            Self::Corrected(v) => v.close(),
+        }
+    }
+    fn is_closed(&self) -> bool {
+        match self {
+            Self::Engineering(v) => v.is_closed(),
+            Self::Corrected(v) => v.is_closed(),
+        }
+    }
+    fn preflight(&self, op: structured_session::CardInstanceOperation) -> error::Result<()> {
+        match self {
+            Self::Corrected(v) => v.preflight(op),
+            _ => Ok(()),
+        }
+    }
+}
 /// Candidate structured Source/typed-bank path; markers remain disabled until acceptance.
-#[pyclass]
-struct StructuredNativeSession {
-    core: Mutex<Option<structured_session::CohortSession>>,
+struct StructuredSessionBridge {
+    core: Mutex<Option<StructuredBridgeCore>>,
     retirement: Mutex<Option<retirement::Retirement<structured_session::CohortSession>>>,
     budget: Arc<Budget>,
     control: Control,
@@ -405,12 +570,41 @@ fn retire_structured_session(core: structured_session::CohortSession) -> error::
     drop(core);
     Ok(())
 }
-#[pymethods]
-impl StructuredNativeSession {
-    #[new]
-    #[pyo3(signature=(plan,settings,deadline,cancel_handle=None))]
+impl StructuredSessionBridge {
+    fn owned_wire(b: &Arc<Budget>, bytes: &[u8]) -> error::Result<budget::BudgetVec<u8>> {
+        let mut result = budget::BudgetVec::with_capacity(b, bytes.len())?;
+        for value in bytes {
+            result.push(*value)?;
+        }
+        Ok(result)
+    }
+
+    fn mutating<T>(
+        &self,
+        op: structured_session::CardInstanceOperation,
+        work: impl FnOnce() -> error::Result<T>,
+    ) -> error::Result<T> {
+        let corrected = {
+            let core = self.core.lock().map_err(|_| Error::Closed)?;
+            let core = core.as_ref().ok_or(Error::Closed)?;
+            if core.corrected() {
+                core.preflight(op)?;
+            }
+            core.corrected()
+        };
+        let result = work();
+        if result.is_err() && corrected {
+            if let Ok(mut core) = self.core.lock() {
+                if let Some(core) = core.as_mut() {
+                    core.fail_export();
+                }
+            }
+        }
+        result
+    }
     fn new(
         py: Python<'_>,
+        corrected: bool,
         plan: &[u8],
         settings: &[u8],
         deadline: f64,
@@ -420,6 +614,19 @@ impl StructuredNativeSession {
         if settings.len() > 65536 || plan.len() > 65536 {
             return Err(python_error(Error::resource("structured request wire cap")));
         }
+        let wire_budget = Budget::new(1048576);
+        let owned_plan = if corrected {
+            Some(Self::owned_wire(&wire_budget, plan).map_err(python_error)?)
+        } else {
+            None
+        };
+        let owned_settings = if corrected {
+            Some(Self::owned_wire(&wire_budget, settings).map_err(python_error)?)
+        } else {
+            None
+        };
+        let plan = owned_plan.as_deref().unwrap_or(plan);
+        let settings = owned_settings.as_deref().unwrap_or(settings);
         let control = match cancel_handle {
             Some(c) => c.control.at_deadline(deadline),
             None => Control::new(deadline),
@@ -428,44 +635,45 @@ impl StructuredNativeSession {
         let (core, retirement, budget) = py
             .detach(|| {
                 control.check()?;
-                let initial = Budget::new(1048576);
-                let settings = json::parse(settings, &initial, &control)?;
-                let v = &settings.root;
-                v.closed(
-                    &[
-                        "memory_bytes",
-                        "scratch_bytes",
-                        "max_source_file_bytes",
-                        "max_record_bytes",
-                        "chunk_target_bytes",
-                    ],
-                    &[],
-                )?;
-                let memory = v.require("memory_bytes")?.integer(1, 12i128 << 30)? as usize;
-                let scratch = v.require("scratch_bytes")?.integer(1, 12i128 << 30)? as usize;
-                let source = v
-                    .require("max_source_file_bytes")?
-                    .integer(1, 64i128 << 20)? as usize;
-                let record = v.require("max_record_bytes")?.integer(1, source as i128)? as usize;
-                let chunk = v.require("chunk_target_bytes")?.integer(1, 64i128 << 20)? as usize;
+                let (memory, scratch, source, record, chunk) =
+                    structured_settings(settings, &control)?;
                 let budget = Budget::new(memory);
-                let retirement = retirement::Retirement::start(&budget, retire_structured_session)?;
-                let core = structured_session::CohortSession::open(
-                    plan,
-                    budget.clone(),
-                    control.clone(),
-                    source,
-                    record,
-                    scratch,
-                    chunk,
-                )?;
+                let (core, retirement) = if corrected {
+                    (
+                        StructuredBridgeCore::Corrected(
+                            structured_session::CardInstanceNativeSession::open(
+                                plan,
+                                budget.clone(),
+                                control.clone(),
+                                source,
+                                record,
+                                scratch,
+                                chunk,
+                            )?,
+                        ),
+                        None,
+                    )
+                } else {
+                    let retirement =
+                        retirement::Retirement::start(&budget, retire_structured_session)?;
+                    let core = structured_session::CohortSession::open(
+                        plan,
+                        budget.clone(),
+                        control.clone(),
+                        source,
+                        record,
+                        scratch,
+                        chunk,
+                    )?;
+                    (StructuredBridgeCore::Engineering(core), Some(retirement))
+                };
                 Ok((core, retirement, budget))
             })
             .map_err(python_error)?;
         let caller = budget.reserve(0).map_err(python_error)?;
         Ok(Self {
             core: Mutex::new(Some(core)),
-            retirement: Mutex::new(Some(retirement)),
+            retirement: Mutex::new(retirement),
             budget,
             control,
             python: Mutex::new(control_memory::ControlMemory::default()),
@@ -474,7 +682,6 @@ impl StructuredNativeSession {
             payload: Mutex::new(None),
         })
     }
-    #[pyo3(signature=(retained_python_bytes=0))]
     fn control_summary<'py>(
         &self,
         py: Python<'py>,
@@ -490,12 +697,7 @@ impl StructuredNativeSession {
                 let core = self.core.lock().map_err(|_| Error::Closed)?;
                 let core = core.as_ref().ok_or(Error::Closed)?;
                 let bytes = core.summary()?;
-                let auth = core
-                    .controls
-                    .summary
-                    .root
-                    .require("authorization_max_bytes")?
-                    .integer(1, 64i128 << 20)? as usize;
+                let auth = core.authorization_max_bytes()?;
                 self.python.lock().map_err(|_| Error::Closed)?.summary(
                     &self.budget,
                     bytes.len(),
@@ -506,7 +708,6 @@ impl StructuredNativeSession {
             .map_err(python_error)?;
         Ok(PyBytes::new(py, &bytes))
     }
-    #[pyo3(signature=(parent_index,retained_python_bytes=0))]
     fn original_config_inputs<'py>(
         &self,
         py: Python<'py>,
@@ -537,95 +738,90 @@ impl StructuredNativeSession {
             .map_err(python_error)?;
         Ok(PyBytes::new(py, &bytes))
     }
-    #[pyo3(signature=(encoded,retained_python_bytes=0))]
     fn authorize(
         &self,
         py: Python<'_>,
         encoded: &[u8],
         retained_python_bytes: usize,
     ) -> PyResult<()> {
+        let corrected = self
+            .core
+            .lock()
+            .map_err(|_| python_error(Error::Closed))?
+            .as_ref()
+            .ok_or_else(|| python_error(Error::Closed))?
+            .corrected();
+        let owned = if corrected {
+            Some(
+                self.mutating(structured_session::CardInstanceOperation::Authorize, || {
+                    self.python
+                        .lock()
+                        .map_err(|_| Error::Closed)?
+                        .authorization(encoded.len())?;
+                    Self::owned_wire(&self.budget, encoded)
+                })
+                .map_err(python_error)?,
+            )
+        } else {
+            None
+        };
+        let encoded = owned.as_deref().unwrap_or(encoded);
         py.detach(|| {
-            self.caller
-                .lock()
-                .map_err(|_| Error::Closed)?
-                .resize(retained_python_bytes)?;
-            self.python
-                .lock()
-                .map_err(|_| Error::Closed)?
-                .authorization(encoded.len())?;
-            self.core
-                .lock()
-                .map_err(|_| Error::Closed)?
-                .as_mut()
-                .ok_or(Error::Closed)?
-                .authorize(encoded)
-        })
-        .map_err(python_error)
-    }
-    #[pyo3(signature=(retained_python_bytes=0))]
-    fn export_cohort<'py>(
-        &self,
-        py: Python<'py>,
-        retained_python_bytes: usize,
-    ) -> PyResult<(Py<PyBytes>, Py<PyTuple>, Py<PyTuple>, Py<PyTuple>)> {
-        let (metadata, banks) = py
-            .detach(|| {
+            self.mutating(structured_session::CardInstanceOperation::Authorize, || {
                 self.caller
                     .lock()
                     .map_err(|_| Error::Closed)?
                     .resize(retained_python_bytes)?;
+                self.python
+                    .lock()
+                    .map_err(|_| Error::Closed)?
+                    .authorization(encoded.len())?;
                 self.core
                     .lock()
                     .map_err(|_| Error::Closed)?
                     .as_mut()
                     .ok_or(Error::Closed)?
-                    .export()
+                    .authorize(encoded)
+            })
+        })
+        .map_err(python_error)
+    }
+    fn export_selected<'py>(
+        &self,
+        py: Python<'py>,
+        retained_python_bytes: usize,
+        recorded: Option<usize>,
+    ) -> PyResult<(Py<PyBytes>, Py<PyTuple>, Py<PyTuple>, Py<PyTuple>)> {
+        let (metadata, banks, card_guard) = py
+            .detach(|| {
+                self.mutating(
+                    match recorded {
+                        Some(index) => structured_session::CardInstanceOperation::Recorded(index),
+                        None => structured_session::CardInstanceOperation::Export,
+                    },
+                    || {
+                        self.caller
+                            .lock()
+                            .map_err(|_| Error::Closed)?
+                            .resize(retained_python_bytes)?;
+                        self.core
+                            .lock()
+                            .map_err(|_| Error::Closed)?
+                            .as_mut()
+                            .ok_or(Error::Closed)?
+                            .export_selected(recorded)
+                    },
+                )
             })
             .map_err(python_error)?;
         let result = (|| {
-            let structured_staging::Banks {
-                bytes,
-                integers,
-                floats,
-                _metadata,
-            } = banks;
-            let consumer = Arc::new(ExportLease {
-                _consumer: self.budget.reserve(0).map_err(python_error)?,
-                _metadata: self
-                    .budget
-                    .reserve(
-                        control_memory::reservation_bytes(
-                            metadata.len(),
-                            1024 * (bytes.len() + integers.len() + floats.len()),
-                        )
-                        .map_err(python_error)?,
-                    )
-                    .map_err(python_error)?,
-                _index: Some(_metadata),
-                stats: Arc::new(telemetry::Telemetry::default()),
-            });
-            let bytes = bytes
-                .into_iter()
-                .map(|v| byte_array(py, v, &consumer))
-                .collect::<PyResult<Vec<_>>>()?;
-            let integers = integers
-                .into_iter()
-                .map(|v| integer_array(py, v, &consumer))
-                .collect::<PyResult<Vec<_>>>()?;
-            let floats = floats
-                .into_iter()
-                .map(|v| float32_array(py, v, &consumer))
-                .collect::<PyResult<Vec<_>>>()?;
+            let (packet, consumer) =
+                publish_raw_banks(py, &self.budget, &metadata, banks, card_guard)?;
             *self
                 .payload
                 .lock()
                 .map_err(|_| python_error(Error::Closed))? = Some(consumer);
-            Ok((
-                PyBytes::new(py, &metadata).unbind(),
-                PyTuple::new(py, bytes)?.unbind(),
-                PyTuple::new(py, integers)?.unbind(),
-                PyTuple::new(py, floats)?.unbind(),
-            ))
+            Ok(packet)
         })();
         if result.is_err() {
             if let Ok(mut core) = self.core.lock() {
@@ -636,50 +832,79 @@ impl StructuredNativeSession {
         }
         result
     }
-    #[pyo3(signature=(retained_python_bytes=0))]
     fn retire_payload(&self, py: Python<'_>, retained_python_bytes: usize) -> PyResult<()> {
         py.detach(|| {
-            self.caller
+            let corrected = self
+                .core
                 .lock()
                 .map_err(|_| Error::Closed)?
-                .resize(retained_python_bytes)?;
-            let mut payload = self.payload.lock().map_err(|_| Error::Closed)?;
-            let consumer = payload
                 .as_ref()
-                .ok_or_else(|| Error::contract("no exported payload ownership"))?;
-            if Arc::strong_count(consumer) != 1 {
-                return Err(Error::contract(
-                    "raw payload views must retire before decoder reconstruction",
-                ));
-            }
-            self.core
-                .lock()
-                .map_err(|_| Error::Closed)?
-                .as_mut()
                 .ok_or(Error::Closed)?
-                .retire_payload()?;
-            payload.take();
-            Ok(())
+                .corrected();
+            if corrected {
+                let payload = self.payload.lock().map_err(|_| Error::Closed)?;
+                let consumer = payload
+                    .as_ref()
+                    .ok_or_else(|| Error::contract("no exported payload ownership"))?;
+                if Arc::strong_count(consumer) != 1 {
+                    return Err(Error::contract(
+                        "raw payload views must retire before decoder reconstruction",
+                    ));
+                }
+            }
+            self.mutating(structured_session::CardInstanceOperation::Retire, || {
+                self.caller
+                    .lock()
+                    .map_err(|_| Error::Closed)?
+                    .resize(retained_python_bytes)?;
+                let mut payload = self.payload.lock().map_err(|_| Error::Closed)?;
+                let consumer = payload
+                    .as_ref()
+                    .ok_or_else(|| Error::contract("no exported payload ownership"))?;
+                if Arc::strong_count(consumer) != 1 {
+                    return Err(Error::contract(
+                        "raw payload views must retire before decoder reconstruction",
+                    ));
+                }
+                let corrected = self
+                    .core
+                    .lock()
+                    .map_err(|_| Error::Closed)?
+                    .as_ref()
+                    .ok_or(Error::Closed)?
+                    .corrected();
+                if corrected {
+                    payload.take();
+                }
+                self.core
+                    .lock()
+                    .map_err(|_| Error::Closed)?
+                    .as_mut()
+                    .ok_or(Error::Closed)?
+                    .retire_payload()?;
+                payload.take();
+                Ok(())
+            })
         })
         .map_err(python_error)
     }
-    #[pyo3(signature=(retained_python_bytes=0))]
     fn begin_update(&self, py: Python<'_>, retained_python_bytes: usize) -> PyResult<()> {
         py.detach(|| {
-            self.caller
-                .lock()
-                .map_err(|_| Error::Closed)?
-                .resize(retained_python_bytes)?;
-            self.core
-                .lock()
-                .map_err(|_| Error::Closed)?
-                .as_mut()
-                .ok_or(Error::Closed)?
-                .begin_update()
+            self.mutating(structured_session::CardInstanceOperation::Begin, || {
+                self.caller
+                    .lock()
+                    .map_err(|_| Error::Closed)?
+                    .resize(retained_python_bytes)?;
+                self.core
+                    .lock()
+                    .map_err(|_| Error::Closed)?
+                    .as_mut()
+                    .ok_or(Error::Closed)?
+                    .begin_update()
+            })
         })
         .map_err(python_error)
     }
-    #[pyo3(signature=(retained_python_bytes=0))]
     fn recheck(&self, py: Python<'_>, retained_python_bytes: usize) -> PyResult<()> {
         py.detach(|| {
             self.caller
@@ -695,7 +920,6 @@ impl StructuredNativeSession {
         })
         .map_err(python_error)
     }
-    #[pyo3(signature=(retained_python_bytes=0))]
     fn finalize<'py>(
         &self,
         py: Python<'py>,
@@ -719,6 +943,78 @@ impl StructuredNativeSession {
                     .map_err(|_| Error::Closed)?
                     .proof(bytes.len(), true)?;
                 Ok(bytes)
+            })
+            .map_err(python_error)?;
+        Ok(PyBytes::new(py, &bytes))
+    }
+    fn bind_numeric(&self, py: Python<'_>, encoded: &[u8], retained: usize) -> PyResult<()> {
+        let encoded = self
+            .mutating(structured_session::CardInstanceOperation::Bind, || {
+                if encoded.len() > 64 * 1024 * 1024 {
+                    return Err(Error::resource("numeric binding wire cap"));
+                }
+                Self::owned_wire(&self.budget, encoded)
+            })
+            .map_err(python_error)?;
+        py.detach(|| {
+            self.mutating(structured_session::CardInstanceOperation::Bind, || {
+                self.caller
+                    .lock()
+                    .map_err(|_| Error::Closed)?
+                    .resize(retained)?;
+                let mut core = self.core.lock().map_err(|_| Error::Closed)?;
+                match core.as_mut().ok_or(Error::Closed)? {
+                    StructuredBridgeCore::Corrected(v) => v.bind_numeric(&encoded),
+                    _ => Err(Error::contract(
+                        "numeric4 binding requires corrected session",
+                    )),
+                }
+            })
+        })
+        .map_err(python_error)
+    }
+    fn finish_corrected<'py>(
+        &self,
+        py: Python<'py>,
+        retained: usize,
+        prepare: bool,
+    ) -> PyResult<Bound<'py, PyBytes>> {
+        let bytes = py
+            .detach(|| {
+                self.mutating(
+                    if prepare {
+                        structured_session::CardInstanceOperation::Prepare
+                    } else {
+                        structured_session::CardInstanceOperation::FinalizeRead
+                    },
+                    || {
+                        self.caller
+                            .lock()
+                            .map_err(|_| Error::Closed)?
+                            .resize(retained)?;
+                        let mut core = self.core.lock().map_err(|_| Error::Closed)?;
+                        let bytes = match core.as_mut().ok_or(Error::Closed)? {
+                            StructuredBridgeCore::Corrected(v) => {
+                                if prepare {
+                                    v.prepare_commit()?;
+                                } else {
+                                    v.finalize_read()?;
+                                }
+                                v.take_receipt()?
+                            }
+                            _ => {
+                                return Err(Error::contract(
+                                    "corrected finalization requires corrected session",
+                                ));
+                            }
+                        };
+                        self.python
+                            .lock()
+                            .map_err(|_| Error::Closed)?
+                            .proof(bytes.len(), true)?;
+                        Ok(bytes)
+                    },
+                )
             })
             .map_err(python_error)?;
         Ok(PyBytes::new(py, &bytes))
@@ -754,13 +1050,16 @@ impl StructuredNativeSession {
                 return result;
             }
             let owned = core.take().ok_or(Error::Closed)?;
-            let retirement = self
-                .retirement
-                .lock()
-                .map_err(|_| Error::Closed)?
-                .take()
-                .ok_or(Error::Closed)?;
-            let retired = retirement.retire(Some(owned));
+            let retired = match owned {
+                StructuredBridgeCore::Engineering(owned) => self
+                    .retirement
+                    .lock()
+                    .map_err(|_| Error::Closed)?
+                    .take()
+                    .ok_or(Error::Closed)?
+                    .retire(Some(owned)),
+                StructuredBridgeCore::Corrected(_) => Ok(()),
+            };
             self.payload.lock().map_err(|_| Error::Closed)?.take();
             self.python.lock().map_err(|_| Error::Closed)?.release();
             self.input_queries
@@ -773,17 +1072,294 @@ impl StructuredNativeSession {
         .map_err(python_error)
     }
 }
-impl Drop for StructuredNativeSession {
+impl Drop for StructuredSessionBridge {
     fn drop(&mut self) {
         if let Ok(core) = self.core.get_mut() {
             if let Some(owned) = core.take() {
-                if let Ok(retirement) = self.retirement.get_mut() {
-                    if let Some(retirement) = retirement.take() {
-                        let _ = retirement.retire(Some(owned));
+                match owned {
+                    StructuredBridgeCore::Engineering(owned) => {
+                        if let Ok(retirement) = self.retirement.get_mut() {
+                            if let Some(retirement) = retirement.take() {
+                                let _ = retirement.retire(Some(owned));
+                            }
+                        }
                     }
+                    StructuredBridgeCore::Corrected(mut owned) => owned.retire_on_drop(),
                 }
             }
         }
+    }
+}
+
+#[pyclass]
+struct StructuredNativeSession {
+    bridge: StructuredSessionBridge,
+}
+#[pyclass]
+struct CardInstanceNativeSession {
+    bridge: StructuredSessionBridge,
+}
+macro_rules! session_methods {
+    ($class:ident,$corrected:expr,{$($extra:tt)*})=>{
+        #[pymethods]
+        impl $class {
+            #[new]
+            #[pyo3(signature=(plan,settings,deadline,cancel_handle=None))]
+            fn new(py:Python<'_>,plan:&[u8],settings:&[u8],deadline:f64,cancel_handle:Option<PyRef<'_,CancelHandle>>)->PyResult<Self>{
+                Ok(Self{bridge:StructuredSessionBridge::new(py,$corrected,plan,settings,deadline,cancel_handle)?})
+            }
+            #[pyo3(signature=(retained_python_bytes=0))]
+            fn control_summary<'py>(&self,py:Python<'py>,retained_python_bytes:usize)->PyResult<Bound<'py,PyBytes>>{self.bridge.control_summary(py,retained_python_bytes)}
+            #[pyo3(signature=(parent_index,retained_python_bytes=0))]
+            fn original_config_inputs<'py>(&self,py:Python<'py>,parent_index:usize,retained_python_bytes:usize)->PyResult<Bound<'py,PyBytes>>{self.bridge.original_config_inputs(py,parent_index,retained_python_bytes)}
+            #[pyo3(signature=(encoded,retained_python_bytes=0))]
+            fn authorize(&self,py:Python<'_>,encoded:&[u8],retained_python_bytes:usize)->PyResult<()>{self.bridge.authorize(py,encoded,retained_python_bytes)}
+            #[pyo3(signature=(retained_python_bytes=0))]
+            fn export_cohort<'py>(&self,py:Python<'py>,retained_python_bytes:usize)->PyResult<(Py<PyBytes>,Py<PyTuple>,Py<PyTuple>,Py<PyTuple>)>{self.bridge.export_selected(py,retained_python_bytes,None)}
+            #[pyo3(signature=(retained_python_bytes=0))]
+            fn retire_payload(&self,py:Python<'_>,retained_python_bytes:usize)->PyResult<()>{self.bridge.retire_payload(py,retained_python_bytes)}
+            #[pyo3(signature=(retained_python_bytes=0))]
+            fn begin_update(&self,py:Python<'_>,retained_python_bytes:usize)->PyResult<()>{self.bridge.begin_update(py,retained_python_bytes)}
+            #[pyo3(signature=(retained_python_bytes=0))]
+            fn recheck(&self,py:Python<'_>,retained_python_bytes:usize)->PyResult<()>{self.bridge.recheck(py,retained_python_bytes)}
+            fn used_bytes(&self)->usize{self.bridge.used_bytes()}
+            fn peak_bytes(&self)->usize{self.bridge.peak_bytes()}
+            fn control_reserved_bytes(&self)->usize{self.bridge.control_reserved_bytes()}
+            fn cancel_handle(&self)->CancelHandle{self.bridge.cancel_handle()}
+            fn close(&self,py:Python<'_>)->PyResult<()>{self.bridge.close(py)}
+            $($extra)*
+        }
+    }
+}
+session_methods!(StructuredNativeSession, false, {
+    #[pyo3(signature=(retained_python_bytes=0))]
+    fn finalize<'py>(
+        &self,
+        py: Python<'py>,
+        retained_python_bytes: usize,
+    ) -> PyResult<Bound<'py, PyBytes>> {
+        self.bridge.finalize(py, retained_python_bytes)
+    }
+});
+session_methods!(CardInstanceNativeSession, true, {
+    #[pyo3(signature=(collection_index,retained_python_bytes=0))]
+    fn export_recorded_cohort<'py>(
+        &self,
+        py: Python<'py>,
+        collection_index: usize,
+        retained_python_bytes: usize,
+    ) -> PyResult<(Py<PyBytes>, Py<PyTuple>, Py<PyTuple>, Py<PyTuple>)> {
+        self.bridge
+            .export_selected(py, retained_python_bytes, Some(collection_index))
+    }
+    #[pyo3(signature=(encoded,retained_python_bytes=0))]
+    fn bind_numeric(
+        &self,
+        py: Python<'_>,
+        encoded: &[u8],
+        retained_python_bytes: usize,
+    ) -> PyResult<()> {
+        self.bridge.bind_numeric(py, encoded, retained_python_bytes)
+    }
+    #[pyo3(signature=(retained_python_bytes=0))]
+    fn prepare_commit<'py>(
+        &self,
+        py: Python<'py>,
+        retained_python_bytes: usize,
+    ) -> PyResult<Bound<'py, PyBytes>> {
+        self.bridge
+            .finish_corrected(py, retained_python_bytes, true)
+    }
+    #[pyo3(signature=(retained_python_bytes=0))]
+    fn finalize_read<'py>(
+        &self,
+        py: Python<'py>,
+        retained_python_bytes: usize,
+    ) -> PyResult<Bound<'py, PyBytes>> {
+        self.bridge
+            .finish_corrected(py, retained_python_bytes, false)
+    }
+});
+
+/// Structural component tokens. Never a Source owner or fitting permission.
+#[pyclass]
+struct CardInstanceFixtureTokens {
+    owner: Mutex<card_instance_fixture::FixtureTokens>,
+    budget: Arc<Budget>,
+    control: Control,
+    caller: Mutex<budget::Lease>,
+    payload: Mutex<Option<Arc<ExportLease>>>,
+}
+impl CardInstanceFixtureTokens {
+    fn from_parts(
+        owner: card_instance_fixture::FixtureTokens,
+        budget: Arc<Budget>,
+        control: Control,
+        caller: budget::Lease,
+    ) -> Self {
+        Self {
+            owner: Mutex::new(owner),
+            budget,
+            control,
+            caller: Mutex::new(caller),
+            payload: Mutex::new(None),
+        }
+    }
+}
+#[pymethods]
+impl CardInstanceFixtureTokens {
+    #[new]
+    #[pyo3(signature=(envelope,columns,settings,deadline,cancel_handle=None,*,aggregate_window=128,retained_python_bytes=0))]
+    fn new(
+        py: Python<'_>,
+        envelope: &Bound<'_, PyAny>,
+        columns: &Bound<'_, PyAny>,
+        settings: &[u8],
+        deadline: f64,
+        cancel_handle: Option<PyRef<'_, CancelHandle>>,
+        aggregate_window: usize,
+        retained_python_bytes: usize,
+    ) -> PyResult<Self> {
+        stack::ensure_minimum_stack().map_err(python_error)?;
+        if settings.len() > 65536 {
+            return Err(python_error(Error::resource("fixture settings wire cap")));
+        }
+        let envelope = envelope.cast_exact::<PyBytes>()?;
+        let columns = columns.cast_exact::<PyTuple>()?;
+        if columns.len() > 1024 {
+            return Err(python_error(Error::resource("fixture decision capacity")));
+        }
+        let control = match cancel_handle {
+            Some(c) => c.control.at_deadline(deadline),
+            None => Control::new(deadline),
+        }
+        .map_err(python_error)?;
+        let (memory, scratch, source, record, chunk) =
+            structured_settings(settings, &control).map_err(python_error)?;
+        let budget = Budget::new(memory);
+        let borrowed = budget
+            .reserve(65536 + 128 * columns.len())
+            .map_err(python_error)?;
+        let owners = columns
+            .iter()
+            .map(|value| value.cast_exact::<PyBytes>().cloned().map_err(PyErr::from))
+            .collect::<PyResult<Vec<_>>>()?;
+        let columns = owners
+            .iter()
+            .map(|value| value.as_bytes())
+            .collect::<Vec<_>>();
+        let envelope = envelope.as_bytes();
+        let caller = budget
+            .reserve(retained_python_bytes)
+            .map_err(python_error)?;
+        let mut owner =
+            card_instance_fixture::FixtureTokens::empty(budget.clone(), control.clone())
+                .map_err(python_error)?;
+        let result = py.detach(|| {
+            owner.populate(
+                envelope,
+                &columns,
+                source,
+                record,
+                scratch,
+                chunk,
+                aggregate_window,
+            )
+        });
+        drop(borrowed);
+        if let Err(primary) = result {
+            let cleanup = py.detach(|| owner.close());
+            if let Err(cleanup) = cleanup {
+                let error = python_error(Error::Cleanup {
+                    primary: Box::new(primary),
+                    cleanup: format!("{cleanup:?}"),
+                });
+                // No partial constructor owner disappears behind an exception.
+                // The caller can retry close; discarding it quarantines an
+                // unconfirmed spool instead of deleting foreign evidence.
+                match Py::new(py, Self::from_parts(owner, budget, control, caller)) {
+                    Ok(cleanup_owner) => {
+                        // Attaching diagnostic ownership cannot replace the
+                        // initiating cancellation/validation error. If Python
+                        // cannot attach it, Drop quarantines the bounded spool.
+                        let _ = error
+                            .value(py)
+                            .setattr("_native_fixture_cleanup_owner", cleanup_owner);
+                    }
+                    Err(_) => {
+                        let _ = error.value(py).call_method1("add_note", ("fixture cleanup owner allocation failed; unconfirmed spool quarantined",));
+                    }
+                }
+                return Err(error);
+            }
+            return Err(python_error(primary));
+        }
+        Ok(Self::from_parts(owner, budget, control, caller))
+    }
+    #[pyo3(signature=(retained_python_bytes=0))]
+    fn export_tokens(
+        &self,
+        py: Python<'_>,
+        retained_python_bytes: usize,
+    ) -> PyResult<RawTokenPayload> {
+        let (metadata, banks) = py
+            .detach(|| {
+                let mut owner = self.owner.lock().map_err(|_| Error::Closed)?;
+                owner.export_preconditions()?;
+                let quota = self
+                    .caller
+                    .lock()
+                    .map_err(|_| Error::Closed)
+                    .and_then(|mut lease| lease.resize(retained_python_bytes));
+                if let Err(error) = quota {
+                    owner.fail();
+                    return Err(error);
+                }
+                owner.export()
+            })
+            .map_err(python_error)?;
+        let result = (|| {
+            self.control.check().map_err(python_error)?;
+            let (packet, consumer) = publish_raw_banks(py, &self.budget, &metadata, banks, None)?;
+            self.control.check().map_err(python_error)?;
+            *self
+                .payload
+                .lock()
+                .map_err(|_| python_error(Error::Closed))? = Some(consumer);
+            Ok(packet)
+        })();
+        if result.is_err() {
+            if let Ok(mut owner) = self.owner.lock() {
+                owner.fail();
+            }
+        }
+        result
+    }
+    fn used_bytes(&self) -> usize {
+        self.budget.used()
+    }
+    fn peak_bytes(&self) -> usize {
+        self.budget.peak()
+    }
+    fn control_reserved_bytes(&self) -> usize {
+        self.payload
+            .lock()
+            .map(|value| value.as_ref().map(|v| v._metadata.bytes()).unwrap_or(0))
+            .unwrap_or(0)
+    }
+    fn cancel_handle(&self) -> CancelHandle {
+        CancelHandle {
+            control: self.control.clone(),
+            stats: Arc::new(telemetry::Telemetry::default()),
+        }
+    }
+    fn close(&self, py: Python<'_>) -> PyResult<()> {
+        py.detach(|| {
+            self.owner.lock().map_err(|_| Error::Closed)?.close()?;
+            self.payload.lock().map_err(|_| Error::Closed)?.take();
+            self.caller.lock().map_err(|_| Error::Closed)?.resize(0)
+        })
+        .map_err(python_error)
     }
 }
 
@@ -964,6 +1540,7 @@ impl TreeDatasetSession {
                     )
                     .map_err(python_error)?,
                 _index: Some(_metadata),
+                _card_guard: None,
                 stats: Arc::new(telemetry::Telemetry::default()),
             });
             let bytes = bytes
@@ -1328,8 +1905,61 @@ struct ExportLease {
     _consumer: budget::Lease,
     _metadata: budget::Lease,
     _index: Option<budget::Lease>,
+    _card_guard: Option<(Arc<()>, budget::Lease)>,
     stats: Arc<telemetry::Telemetry>,
 }
+type RawTokenPayload = (Py<PyBytes>, Py<PyTuple>, Py<PyTuple>, Py<PyTuple>);
+fn publish_raw_banks(
+    py: Python<'_>,
+    budget: &Arc<Budget>,
+    metadata: &[u8],
+    banks: structured_staging::Banks,
+    card_guard: Option<(Arc<()>, budget::Lease)>,
+) -> PyResult<(RawTokenPayload, Arc<ExportLease>)> {
+    let structured_staging::Banks {
+        bytes,
+        integers,
+        floats,
+        _metadata,
+    } = banks;
+    let consumer = Arc::new(ExportLease {
+        _consumer: budget.reserve(0).map_err(python_error)?,
+        _metadata: budget
+            .reserve(
+                control_memory::reservation_bytes(
+                    metadata.len(),
+                    1024 * (bytes.len() + integers.len() + floats.len()),
+                )
+                .map_err(python_error)?,
+            )
+            .map_err(python_error)?,
+        _index: Some(_metadata),
+        _card_guard: card_guard,
+        stats: Arc::new(telemetry::Telemetry::default()),
+    });
+    let bytes = bytes
+        .into_iter()
+        .map(|v| byte_array(py, v, &consumer))
+        .collect::<PyResult<Vec<_>>>()?;
+    let integers = integers
+        .into_iter()
+        .map(|v| integer_array(py, v, &consumer))
+        .collect::<PyResult<Vec<_>>>()?;
+    let floats = floats
+        .into_iter()
+        .map(|v| float32_array(py, v, &consumer))
+        .collect::<PyResult<Vec<_>>>()?;
+    Ok((
+        (
+            PyBytes::new(py, metadata).unbind(),
+            PyTuple::new(py, bytes)?.unbind(),
+            PyTuple::new(py, integers)?.unbind(),
+            PyTuple::new(py, floats)?.unbind(),
+        ),
+        consumer,
+    ))
+}
+
 fn float_array<'py>(
     py: Python<'py>,
     values: budget::BudgetVec<f64>,
@@ -1568,6 +2198,7 @@ fn publish_batch(
         _consumer: batch.consumer,
         _metadata: metadata_lease,
         _index: batch.index_consumer,
+        _card_guard: None,
         stats: stats.clone(),
     });
     stats.output_copy(batch.metadata.len() + proof.as_ref().map_or(0, |proof| proof.len()));
@@ -2275,6 +2906,15 @@ fn build_info() -> Vec<(&'static str, &'static str)> {
             "structured_default_signature",
             "4b4ae064f08192a322de83e24e4a93ef4191c7d73396997d59cd7710cd05cb04",
         ),
+        (
+            "card_instance_contract",
+            "participant-structured-v2;journal6;rollout4;generation3;model3",
+        ),
+        (
+            "card_instance_signature",
+            "ed0c61152b78fa984aad342be22c6b9d6ef49b12b8f0d1c0f0de89724468002f",
+        ),
+        ("card_instance_models", "mlp,gru,transformer"),
     ]
 }
 
@@ -2297,6 +2937,8 @@ fn gf_native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<StructuredParentControls>()?;
     module.add_class::<StructuredJournalTokens>()?;
     module.add_class::<StructuredNativeSession>()?;
+    module.add_class::<CardInstanceNativeSession>()?;
+    module.add_class::<CardInstanceFixtureTokens>()?;
     module.add_class::<TreeDatasetSession>()?;
     Ok(())
 }

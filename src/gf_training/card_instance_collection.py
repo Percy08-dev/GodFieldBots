@@ -19,6 +19,7 @@ from gf_common.domain import (
     clone,
     closed,
     digest,
+    integer,
 )
 from gf_common.structured_layout import CORRECTED_CARD_INSTANCE_LAYOUT
 from gf_common.structured_tokens import signature
@@ -100,6 +101,44 @@ def collection_metadata(
         "source_eligibility": "not-authorized-by-collection-metadata",
         **neural_fields,
     }
+
+
+def ppo_collection_metadata(*, actions: ActionConfigV3, config: Json,
+                            runtime_evidence: list[Json], schedule: list[Json],
+                            inventory: list[Json], policies: list[str], bots_revision: str,
+                            policy_bindings: dict[str, RuntimePolicyBinding],
+                            neural_inputs: Json, linkage: Json) -> Json:
+    """Closed original PPO linkage; only its live owner can admit the Source."""
+    raw = closed(linkage, {"parent_run_id", "parent_run_path", "batch_id", "collection_generation",
+                           "learner_seats", "schedule_digest", "policy_registry_digest"})
+    for key in ("parent_run_id", "parent_run_path", "batch_id"):
+        if type(raw[key]) is not str or not raw[key]:
+            raise ContractError("PPO collection requires explicit parent/batch linkage")
+    integer(raw["collection_generation"], 0)
+    if (not Path(raw["parent_run_path"]).is_absolute()
+            or raw["batch_id"] != f"batch-{raw['collection_generation']:06}"):
+        raise ContractError("PPO collection parent path/batch generation mismatch")
+    value = collection_metadata(actions=actions, config=config, runtime_evidence=runtime_evidence,
+        schedule=schedule, inventory=inventory, policies=policies, bots_revision=bots_revision,
+        policy_bindings=policy_bindings, neural_inputs=neural_inputs)
+    if "policy_bindings" not in value:
+        raise ContractError("PPO collection requires the exact neural policy registry")
+    if (raw["schedule_digest"] != digest(value["schedule"])
+            or raw["policy_registry_digest"] != digest(value["policy_bindings"])):
+        raise ContractError("PPO collection frozen schedule/registry digest mismatch")
+    seats = raw["learner_seats"]
+    if type(seats) is not dict:
+        raise ContractError("PPO collection requires explicit learner seats")
+    expected = {}
+    for group in value["schedule"]:
+        for episode in group["episodes"]:
+            viewer = integer(episode.get("learner_viewer"), 1, 2)
+            if episode["episode_id"] in expected:
+                raise ContractError("duplicate PPO episode identity")
+            expected[episode["episode_id"]] = viewer
+    if not expected or canonical(seats) != canonical(expected):
+        raise ContractError("PPO collection learner seats differ from frozen schedule")
+    return {**value, "collection_role": "ppo-batch", "linkage": clone(raw)}
 
 
 @dataclass

@@ -9,6 +9,71 @@ use sha2::{Digest, Sha256};
 use std::{collections::BTreeMap, path::Path, sync::Arc};
 
 pub const INPUT: &str = "participant-structured-v1";
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SourceFormat {
+    Engineering,
+    Corrected,
+}
+impl SourceFormat {
+    pub(crate) fn corrected(self) -> bool {
+        self == Self::Corrected
+    }
+    fn class(self) -> &'static [&'static str] {
+        if self.corrected() { GAME_CLASS } else { CLASS }
+    }
+    fn semantics(self) -> Vec<&'static str> {
+        let mut keys = SEMANTICS.to_vec();
+        if self.corrected() {
+            keys.extend(["rule_signature", "spec_inventory_sha256"]);
+        }
+        keys
+    }
+}
+const GAME_CLASS: &[&str] = &[
+    "action_contract",
+    "purpose",
+    "synthetic_capacity",
+    "rule_signature",
+    "layout_signature",
+];
+fn classification_context(
+    v: &Value,
+    contract: &Value,
+    format: SourceFormat,
+    b: &Arc<Budget>,
+    c: &Control,
+) -> Result<()> {
+    if format.corrected() {
+        game_binding3(v, b, c)
+    } else {
+        classification(v, contract)
+    }
+}
+fn semantic_context(
+    v: &Value,
+    m: &Value,
+    format: SourceFormat,
+    b: &Arc<Budget>,
+    c: &Control,
+) -> Result<()> {
+    if format.corrected() {
+        semantic3(v, m, b, c)
+    } else {
+        semantic(v, m, b, c)
+    }
+}
+fn architecture_context(
+    m: &Value,
+    format: SourceFormat,
+    b: &Arc<Budget>,
+    c: &Control,
+) -> Result<String> {
+    if format.corrected() {
+        architecture3(m, b, c)
+    } else {
+        architecture(m, b, c)
+    }
+}
 const CLASS: &[&str] = &["action_contract", "purpose", "synthetic_capacity"];
 const SEMANTICS: &[&str] = &[
     "input_recipe",
@@ -27,6 +92,33 @@ const SEMANTICS: &[&str] = &[
 const RECIPE: &[u8] = include_bytes!("../assets/structured-token-recipe-v1.json");
 const EXACT_RECIPE: &[u8] =
     include_bytes!("../assets/structured-token-recipe-public-exact-v2.json");
+pub(crate) const CARD_INSTANCE_RECIPE: &[u8] =
+    include_bytes!("../assets/card-instance-token-recipe-corrected-v2.json");
+pub(crate) const CARD_INSTANCE_SIGNATURE: &str =
+    "ed0c61152b78fa984aad342be22c6b9d6ef49b12b8f0d1c0f0de89724468002f";
+
+/// Pure diagnostic identity; this does not advertise a reader capability.
+pub(crate) fn card_instance_token_signature(
+    window: usize,
+    budget: &Arc<Budget>,
+    control: &Control,
+) -> Result<String> {
+    if !(1..=65536).contains(&window) {
+        return Err(Error::contract("card-instance aggregate window bound"));
+    }
+    let mut recipe = json::parse(CARD_INSTANCE_RECIPE, budget, control)?;
+    if digest(&recipe.root, budget, control)? != CARD_INSTANCE_SIGNATURE {
+        return Err(Error::contract(
+            "embedded corrected card-instance recipe changed",
+        ));
+    }
+    recipe
+        .root
+        .as_object_mut()
+        .expect("pinned recipe")
+        .insert("history_window".into(), json::integer(window as i128));
+    digest(&recipe.root, budget, control)
+}
 
 fn historical(model: &Value) -> Result<bool> {
     match model.require("event")?.get("aggregate_recipe") {
@@ -310,6 +402,27 @@ pub(crate) fn model(
     budget: &Arc<Budget>,
     control: &Control,
 ) -> Result<BTreeMap<String, Vec<i128>>> {
+    model_context(value, budget, control, ModelFormat::Engineering)
+}
+pub(crate) fn model3(
+    value: &Value,
+    budget: &Arc<Budget>,
+    control: &Control,
+) -> Result<BTreeMap<String, Vec<i128>>> {
+    model_context(value, budget, control, ModelFormat::Corrected)
+}
+#[derive(Clone, Copy)]
+enum ModelFormat {
+    Engineering,
+    Corrected,
+}
+fn model_context(
+    value: &Value,
+    budget: &Arc<Budget>,
+    control: &Control,
+    format: ModelFormat,
+) -> Result<BTreeMap<String, Vec<i128>>> {
+    let corrected = matches!(format, ModelFormat::Corrected);
     value.closed(
         &[
             "model_id",
@@ -329,8 +442,16 @@ pub(crate) fn model(
         ],
         &[],
     )?;
-    is(value, "version", "2")?;
-    is(value, "input_recipe", INPUT)?;
+    is(value, "version", if corrected { "3" } else { "2" })?;
+    is(
+        value,
+        "input_recipe",
+        if corrected {
+            "participant-structured-v2"
+        } else {
+            INPUT
+        },
+    )?;
     is(value, "initialization", "orthogonal-structured-v1")?;
     n(value, "dropout", 0, 0)?;
     is(value, "precision", "ieee-fp32")?;
@@ -366,7 +487,12 @@ pub(crate) fn model(
         &[],
     )?;
     let event = value.require("event")?;
-    let old = historical(value)?;
+    let old = if corrected {
+        is(event, "aggregate_recipe", "public-exact-card-refs-v3")?;
+        false
+    } else {
+        historical(value)?
+    };
     let mut event_keys = vec![
         "hidden_size",
         "num_layers",
@@ -463,7 +589,17 @@ pub(crate) fn model(
     n(resources, "max_owned_bytes", 1, 12i128 << 30)?;
     n(resources, "cuda_context_bytes", 1, 4i128 << 30)?;
     n(resources, "workspace_bytes", 1, 4i128 << 30)?;
-    let recipe = json::parse(if old { RECIPE } else { EXACT_RECIPE }, budget, control)?;
+    let recipe = json::parse(
+        if corrected {
+            CARD_INSTANCE_RECIPE
+        } else if old {
+            RECIPE
+        } else {
+            EXACT_RECIPE
+        },
+        budget,
+        control,
+    )?;
     let cats = |key: &str| -> Result<Vec<i128>> {
         recipe
             .root
@@ -482,18 +618,22 @@ pub(crate) fn model(
     let state_width = 2 * sn + sc.len() as i128 + sc.iter().sum::<i128>() + 18 * cc[0];
     let card_direct = 2 * cn + cc.iter().sum::<i128>();
     let event_width = 2 * en + ec.iter().sum::<i128>();
-    let history = recipe.root.require("event_categories")?.array()?[0]
-        .array()?
-        .len() as i128
-        + (ec.len() as i128 - 4) * 2
-        + en * 2
-        + if old {
-            0
-        } else {
-            recipe.root.require("history_append")?.array()?.len() as i128
-        };
-    let card_in = ce + ae + cc[2..].iter().sum::<i128>() + 24;
-    let card_actor = co + 4 + 2;
+    let history = if corrected {
+        recipe.root.require("history_fields")?.array()?.len() as i128
+    } else {
+        recipe.root.require("event_categories")?.array()?[0]
+            .array()?
+            .len() as i128
+            + (ec.len() as i128 - 4) * 2
+            + en * 2
+            + if old {
+                0
+            } else {
+                recipe.root.require("history_append")?.array()?.len() as i128
+            }
+    };
+    let card_in = ce + ae + cc[2..].iter().sum::<i128>() + 2 * cn;
+    let card_actor = co + cc[if corrected { 10 } else { 6 }] + 2;
     let frame = if sk == "identity" { state_width } else { so }
         + if hk == "direct" { 18 * card_direct } else { hl }
         + eh
@@ -703,6 +843,9 @@ fn semantic(value: &Value, model: &Value, budget: &Arc<Budget>, control: &Contro
     {
         return Err(Error::contract("structured token signature mismatch"));
     }
+    runtime_semantics(value)
+}
+fn runtime_semantics(value: &Value) -> Result<()> {
     let runtime = value.require("runtime")?;
     runtime.closed(&["torch", "numpy", "python", "gil_enabled"], &[])?;
     for key in ["torch", "numpy", "python"] {
@@ -871,6 +1014,7 @@ fn artifact(
     state: &Value,
     model_value: &Value,
     shapes: &BTreeMap<String, Vec<i128>>,
+    format: SourceFormat,
 ) -> Result<Value> {
     let budget = s.budget.clone();
     let control = s.control.clone();
@@ -889,20 +1033,26 @@ fn artifact(
         "producer",
         "weights",
     ];
-    keys.extend(SEMANTICS);
-    keys.extend(CLASS);
+    keys.extend(format.semantics());
+    keys.extend(format.class());
     inf.closed(&keys, &[])?;
-    n(inf, "schema_version", 3, 3)?;
+    n(
+        inf,
+        "schema_version",
+        if format.corrected() { 4 } else { 3 },
+        if format.corrected() { 4 } else { 3 },
+    )?;
     is(inf, "kind", "structured-inference")?;
-    classification(inf, contract)?;
+    classification_context(inf, contract, format, &budget, &control)?;
     producer(inf.require("producer")?)?;
-    semantic(inf, model_value, &budget, &control)?;
+    semantic_context(inf, model_value, format, &budget, &control)?;
     eq(
         inf.require("model")?,
         model_value,
         "artifact/full frozen model mismatch",
     )?;
-    if text(inf, "architecture_identity")? != architecture(model_value, &budget, &control)?
+    if text(inf, "architecture_identity")?
+        != architecture_context(model_value, format, &budget, &control)?
         || text(inf, "action_config_hash")?
             != digest(
                 state.require("effective_config")?.require("actions")?,
@@ -979,15 +1129,24 @@ fn artifact(
             "shuffle_rng",
             "state",
         ];
-        keys.extend(SEMANTICS);
-        keys.extend(CLASS);
+        keys.extend(format.semantics());
+        keys.extend(format.class());
+        if format.corrected() {
+            keys.push("action_config_hash");
+            is(r, "action_config_hash", text(inf, "action_config_hash")?)?;
+        }
         r.closed(&keys, &[])?;
-        n(r, "schema_version", 3, 3)?;
+        n(
+            r,
+            "schema_version",
+            if format.corrected() { 4 } else { 3 },
+            if format.corrected() { 4 } else { 3 },
+        )?;
         is(r, "kind", "structured-resume")?;
-        classification(r, contract)?;
-        semantic(r, model_value, &budget, &control)?;
+        classification_context(r, contract, format, &budget, &control)?;
+        semantic_context(r, model_value, format, &budget, &control)?;
         producer(r.require("producer")?)?;
-        for key in SEMANTICS {
+        for key in format.semantics() {
             eq(
                 r.require(key)?,
                 inf.require(key)?,
@@ -1219,7 +1378,7 @@ fn artifact(
         }
         s.inventory(path, vec!["inference.json".into()], false)?;
     }
-    clone_fields(inf, SEMANTICS, &control)
+    clone_fields(inf, &format.semantics(), &control)
 }
 
 fn relative(root: &Path, value: &Value) -> Result<std::path::PathBuf> {
@@ -1243,6 +1402,7 @@ fn update_metadata(
     previous: &str,
     previous_inf: &str,
     number: usize,
+    format: SourceFormat,
 ) -> Result<i128> {
     let budget = s.budget.clone();
     let control = s.control.clone();
@@ -1277,12 +1437,33 @@ fn update_metadata(
             "synthetic_capacity",
             "numeric_files",
         ],
-        &[],
+        if format.corrected() {
+            &["rule_signature", "layout_signature"]
+        } else {
+            &[]
+        },
     )?;
-    n(u, "schema_version", 2, 2)?;
+    n(
+        u,
+        "schema_version",
+        if format.corrected() { 3 } else { 2 },
+        if format.corrected() { 3 } else { 2 },
+    )?;
     is(u, "status", "complete")?;
-    is(u, "model_version", "2")?;
-    is(u, "input_recipe", INPUT)?;
+    is(
+        u,
+        "model_version",
+        if format.corrected() { "3" } else { "2" },
+    )?;
+    is(
+        u,
+        "input_recipe",
+        if format.corrected() {
+            "participant-structured-v2"
+        } else {
+            INPUT
+        },
+    )?;
     eq(
         u.require("model_id")?,
         state.require("model_id")?,
@@ -1297,7 +1478,13 @@ fn update_metadata(
     if checksum(u.require("parent_sha256")?)? != previous {
         return Err(Error::contract("update parent hash mismatch"));
     }
-    classification(u, state.require("action_contract")?)?;
+    classification_context(
+        u,
+        state.require("action_contract")?,
+        format,
+        &budget,
+        &control,
+    )?;
     n(u, "planned_games", 16, 16)?;
     n(u, "actual_games", 16, 16)?;
     if !u.require("health")?.object()?.is_empty() {
@@ -1316,16 +1503,43 @@ fn update_metadata(
         &relative(&root, u.require("collection")?)?.join("manifest.json"),
         u.require("collection_manifest_sha256")?,
     )?;
-    n(&collection.root, "schema_version", 4, 4)?;
-    n(&collection.root, "journal_schema_version", 5, 5)?;
-    classification(&collection.root, state.require("action_contract")?)?;
+    n(
+        &collection.root,
+        "schema_version",
+        if format.corrected() { 5 } else { 4 },
+        if format.corrected() { 5 } else { 4 },
+    )?;
+    n(
+        &collection.root,
+        "journal_schema_version",
+        if format.corrected() { 6 } else { 5 },
+        if format.corrected() { 6 } else { 5 },
+    )?;
+    classification_context(
+        &collection.root,
+        state.require("action_contract")?,
+        format,
+        &budget,
+        &control,
+    )?;
     let numeric = relative(&root, u.require("numeric")?)?;
     let rollout = s.checked_json(&numeric.join("rollout.json"), u.require("numeric_sha256")?)?;
     let r = &rollout.root;
-    n(r, "schema_version", 3, 3)?;
+    n(
+        r,
+        "schema_version",
+        if format.corrected() { 4 } else { 3 },
+        if format.corrected() { 4 } else { 3 },
+    )?;
     is(r, "kind", "structured-rollout")?;
-    classification(r, state.require("action_contract")?)?;
-    if text(r, "architecture_identity")? != architecture(m, &budget, &control)?
+    classification_context(
+        r,
+        state.require("action_contract")?,
+        format,
+        &budget,
+        &control,
+    )?;
+    if text(r, "architecture_identity")? != architecture_context(m, format, &budget, &control)?
         || text(r, "action_config_hash")?
             != digest(
                 state.require("effective_config")?.require("actions")?,
@@ -1335,7 +1549,7 @@ fn update_metadata(
     {
         return Err(Error::contract("numeric model/action mismatch"));
     }
-    for key in SEMANTICS {
+    for key in format.semantics() {
         eq(
             r.require(key)?,
             sem.require(key)?,
@@ -1355,7 +1569,44 @@ fn update_metadata(
         &budget,
         &control,
     )?;
-    let label = format!("{}-ppo-v2-{previous_inf}-{exec}", text(m, "model_id")?);
+    let label = if format.corrected() {
+        let mut options = json::object([
+            ("version", json::text("3")),
+            ("checkpoint", json::text("recorded")),
+            ("expected_manifest_digest", json::text(previous_inf)),
+            ("model", json::copy(m, &control)?),
+            (
+                "inference",
+                json::copy(execution.require("binding")?, &control)?,
+            ),
+            (
+                "cuda_visible_devices",
+                json::copy(execution.require("cuda_visible_devices")?, &control)?,
+            ),
+            (
+                "action_config_hash",
+                json::text(&digest(
+                    state.require("effective_config")?.require("actions")?,
+                    &budget,
+                    &control,
+                )?),
+            ),
+        ]);
+        for key in GAME_CLASS {
+            options
+                .as_object_mut()
+                .unwrap()
+                .insert((*key).into(), json::copy(state.require(key)?, &control)?);
+        }
+        options3(
+            &options,
+            state.require("effective_config")?.require("actions")?,
+            &budget,
+            &control,
+        )?
+    } else {
+        format!("{}-ppo-v2-{previous_inf}-{exec}", text(m, "model_id")?)
+    };
     is(r, "policy_version", &label)?;
     let episodes = r.require("episodes")?.array()?;
     if episodes.len() != 16 {
@@ -1365,7 +1616,13 @@ fn update_metadata(
     let mut owners = Vec::new();
     for episode in episodes {
         control.check()?;
-        classification(episode, state.require("action_contract")?)?;
+        classification_context(
+            episode,
+            state.require("action_contract")?,
+            format,
+            &budget,
+            &control,
+        )?;
         is(episode, "end_kind", "natural")?;
         crate::validation::result(episode.require("outcome")?)?;
         if episode.require("outcome")?.is_null() || !episode.require("reason")?.is_null() {
@@ -1384,7 +1641,13 @@ fn update_metadata(
             return Err(Error::contract("numeric frames/selections/target mismatch"));
         }
         for frame in frames {
-            classification(frame, state.require("action_contract")?)?;
+            classification_context(
+                frame,
+                state.require("action_contract")?,
+                format,
+                &budget,
+                &control,
+            )?;
         }
         count += frames.len() as i128;
     }
@@ -1395,8 +1658,22 @@ fn update_metadata(
     }
     let proof = u.require("source_proof")?;
     n(proof, "schema_version", 1, 1)?;
-    is(proof, "kind", "structured-component-source-proof")?;
-    classification(proof, state.require("action_contract")?)?;
+    is(
+        proof,
+        "kind",
+        if format.corrected() {
+            "card-instance-original-source-proof"
+        } else {
+            "structured-component-source-proof"
+        },
+    )?;
+    classification_context(
+        proof,
+        state.require("action_contract")?,
+        format,
+        &budget,
+        &control,
+    )?;
     is(proof, "parent_qualification", "not_performed")?;
     if proof.require("qualified")? != &Value::Bool(false) {
         return Err(Error::contract("engineering source cannot qualify"));
@@ -1437,6 +1714,12 @@ fn update_metadata(
 }
 
 pub fn parent(s: &mut Sources) -> Result<Document> {
+    parent_context(s, SourceFormat::Engineering)
+}
+pub(crate) fn parent3(s: &mut Sources) -> Result<Document> {
+    parent_context(s, SourceFormat::Corrected)
+}
+fn parent_context(s: &mut Sources, format: SourceFormat) -> Result<Document> {
     let root = s.root.clone();
     let budget = s.budget.clone();
     let control = s.control.clone();
@@ -1445,13 +1728,38 @@ pub fn parent(s: &mut Sources) -> Result<Document> {
     let run_fields = "schema_version algorithm run_id status config_sha256 effective_config config_inputs identity seed device created_unix last_unix wall_deadline_unix admission_deadline_unix execution_deadline_unix updates accepted_decisions optimizer_steps generation_sha256 collection_seconds update_seconds invocations completed_updates model_id model_version input_recipe action_contract purpose synthetic_capacity resume_identity execution";
     let optional = "hardware elapsed_seconds artifact_bytes peak_coordinator_memory_bytes coordinator_memory_scope timing_scope failure quarantine cleanup_failure budget_overrun_seconds";
     r.closed(
-        &run_fields.split_whitespace().collect::<Vec<_>>(),
+        &[
+            run_fields.split_whitespace().collect::<Vec<_>>(),
+            if format.corrected() {
+                vec!["rule_signature", "layout_signature"]
+            } else {
+                vec![]
+            },
+        ]
+        .concat(),
         &optional.split_whitespace().collect::<Vec<_>>(),
     )?;
-    n(r, "schema_version", 2, 2)?;
+    n(
+        r,
+        "schema_version",
+        if format.corrected() { 3 } else { 2 },
+        if format.corrected() { 3 } else { 2 },
+    )?;
     is(r, "algorithm", "ppo")?;
-    is(r, "model_version", "2")?;
-    is(r, "input_recipe", INPUT)?;
+    is(
+        r,
+        "model_version",
+        if format.corrected() { "3" } else { "2" },
+    )?;
+    is(
+        r,
+        "input_recipe",
+        if format.corrected() {
+            "participant-structured-v2"
+        } else {
+            INPUT
+        },
+    )?;
     if text(r, "run_id")?.is_empty()
         || !["running", "paused", "complete"].contains(&text(r, "status")?)
     {
@@ -1471,8 +1779,13 @@ pub fn parent(s: &mut Sources) -> Result<Document> {
     }
     let cfg = r.require("effective_config")?;
     let action_contract = cfg.require("actions")?.require("action_contract")?;
-    actions(cfg)?;
-    classification(r, action_contract)?;
+    if format.corrected() {
+        actions3(cfg.require("actions")?, &budget, &control)?;
+        validate_preprocessing3(r, &budget, &control)?;
+    } else {
+        actions(cfg)?;
+    }
+    classification_context(r, action_contract, format, &budget, &control)?;
     if digest(cfg, &budget, &control)? != checksum(r.require("config_sha256")?)? {
         return Err(Error::contract("frozen Config checksum mismatch"));
     }
@@ -1501,19 +1814,26 @@ pub fn parent(s: &mut Sources) -> Result<Document> {
         &pure,
         "g0 descriptor bootstrap frozen model mismatch",
     )?;
-    if text(&first.root, "token_signature")?
-        != token_signature(
+    let expected_token = if format.corrected() {
+        card_instance_token_signature(
+            n(pure.require("event")?, "aggregate_window", 1, 65536)? as usize,
+            &budget,
+            &control,
+        )?
+    } else {
+        token_signature(
             n(pure.require("event")?, "aggregate_window", 1, 65536)?,
             historical(&pure)?,
             &budget,
             &control,
         )?
-    {
-        return Err(Error::contract(
-            "g0 recorded model/signature descriptor mismatch",
-        ));
-    }
-    let shapes = model(&pure, &budget, &control)?;
+    };
+    is(&first.root, "token_signature", &expected_token)?;
+    let shapes = if format.corrected() {
+        model3(&pure, &budget, &control)?
+    } else {
+        model(&pure, &budget, &control)?
+    };
     eq(
         pure.require("model_id")?,
         r.require("model_id")?,
@@ -1534,9 +1854,25 @@ pub fn parent(s: &mut Sources) -> Result<Document> {
         &[],
     )?;
     is(train, "algorithm", "ppo")?;
-    let seed = n(r, "seed", 0, i32::MAX as i128)?;
+    let seed = n(
+        r,
+        "seed",
+        0,
+        if format.corrected() {
+            i64::MAX as i128
+        } else {
+            i32::MAX as i128
+        },
+    )?;
     if train.require("seeds")?.array()?.len() != 1
-        || train.require("seeds")?.array()?[0].integer(0, i32::MAX as i128)? != seed
+        || train.require("seeds")?.array()?[0].integer(
+            0,
+            if format.corrected() {
+                i64::MAX as i128
+            } else {
+                i32::MAX as i128
+            },
+        )? != seed
     {
         return Err(Error::contract("seed differs from frozen training seed"));
     }
@@ -1601,7 +1937,7 @@ pub fn parent(s: &mut Sources) -> Result<Document> {
         ("config_sha256", r.require("config_sha256")?.clone()),
         ("identity", r.require("identity")?.clone()),
         ("execution", execution.clone()),
-        ("input_binding", clone_fields(r, CLASS, &control)?),
+        ("input_binding", clone_fields(r, format.class(), &control)?),
     ]);
     if digest(&expected_resume, &budget, &control)? != checksum(r.require("resume_identity")?)? {
         return Err(Error::contract("domain-separated resume identity mismatch"));
@@ -1706,7 +2042,12 @@ pub fn parent(s: &mut Sources) -> Result<Document> {
     registry
         .root
         .closed(&["schema_version", "generations"], &[])?;
-    n(&registry.root, "schema_version", 2, 2)?;
+    n(
+        &registry.root,
+        "schema_version",
+        if format.corrected() { 3 } else { 2 },
+        if format.corrected() { 3 } else { 2 },
+    )?;
     let reg = registry.root.require("generations")?.object()?;
     if reg.len() != count + 1 {
         return Err(Error::contract("registry generation set mismatch"));
@@ -1757,12 +2098,33 @@ pub fn parent(s: &mut Sources) -> Result<Document> {
                 "update_sha256",
                 "parent_controls",
             ],
-            &[],
+            if format.corrected() {
+                &["rule_signature", "layout_signature"]
+            } else {
+                &[]
+            },
         )?;
-        n(g, "schema_version", 2, 2)?;
+        n(
+            g,
+            "schema_version",
+            if format.corrected() { 3 } else { 2 },
+            if format.corrected() { 3 } else { 2 },
+        )?;
         n(g, "generation", number as i128, number as i128)?;
-        is(g, "model_version", "2")?;
-        is(g, "input_recipe", INPUT)?;
+        is(
+            g,
+            "model_version",
+            if format.corrected() { "3" } else { "2" },
+        )?;
+        is(
+            g,
+            "input_recipe",
+            if format.corrected() {
+                "participant-structured-v2"
+            } else {
+                INPUT
+            },
+        )?;
         eq(
             g.require("model_id")?,
             r.require("model_id")?,
@@ -1773,7 +2135,7 @@ pub fn parent(s: &mut Sources) -> Result<Document> {
             r.require("run_id")?,
             "generation run mismatch",
         )?;
-        classification(g, action_contract)?;
+        classification_context(g, action_contract, format, &budget, &control)?;
         if number == 0 {
             if !g.require("parent_sha256")?.is_null() || !g.require("update_sha256")?.is_null() {
                 return Err(Error::contract("generation0 links must be explicitly null"));
@@ -1803,6 +2165,7 @@ pub fn parent(s: &mut Sources) -> Result<Document> {
             r,
             &pure,
             &shapes,
+            format,
         )?;
         let mut summary = clone_fields(
             g,
@@ -1854,6 +2217,7 @@ pub fn parent(s: &mut Sources) -> Result<Document> {
                 previous.as_deref().expect("previous"),
                 previous_inference.as_deref().expect("previous inference"),
                 number,
+                format,
             )?;
             accepted += amount;
             steps += 4 * ((amount + 127) / 128);
@@ -1913,15 +2277,32 @@ pub fn parent(s: &mut Sources) -> Result<Document> {
         control.check()?;
         generation_values.push(json::copy(&item.root, &control)?);
     }
-    let summary = json::object([
-        ("schema_version", json::integer(2)),
-        ("kind", json::text("structured-parent-controls")),
+    let mut summary = json::object([
+        (
+            "schema_version",
+            json::integer(if format.corrected() { 3 } else { 2 }),
+        ),
+        (
+            "kind",
+            json::text(if format.corrected() {
+                "card-instance-parent-controls"
+            } else {
+                "structured-parent-controls"
+            }),
+        ),
         (
             "validation_scope",
             json::text("metadata-maps-filehashes-only"),
         ),
         ("npz_validated", Value::Bool(false)),
-        ("journal5_validated", Value::Bool(false)),
+        (
+            if format.corrected() {
+                "journal6_validated"
+            } else {
+                "journal5_validated"
+            },
+            Value::Bool(false),
+        ),
         ("qualified", Value::Bool(false)),
         ("parent_qualification", json::text("not_performed")),
         (
@@ -1941,7 +2322,14 @@ pub fn parent(s: &mut Sources) -> Result<Document> {
             json::text(&digest(cfg.require("actions")?, &budget, &control)?),
         ),
         ("action_contract", action_contract.clone()),
-        ("purpose", json::text("component")),
+        (
+            "purpose",
+            json::text(if format.corrected() {
+                "qualified_game"
+            } else {
+                "component"
+            }),
+        ),
         ("synthetic_capacity", Value::Bool(false)),
         (
             "identity_sha256",
@@ -1950,6 +2338,14 @@ pub fn parent(s: &mut Sources) -> Result<Document> {
         ("generations", Value::Array(generation_values)),
         ("control_fingerprint", json::text(&s.fingerprint()?)),
     ]);
+    if format.corrected() {
+        for key in ["rule_signature", "layout_signature"] {
+            summary
+                .as_object_mut()
+                .unwrap()
+                .insert(key.into(), json::copy(r.require(key)?, &control)?);
+        }
+    }
     let bytes = json::canonical(&summary, &budget, &control)?;
     json::parse(&bytes, &budget, &control)
 }
@@ -2269,4 +2665,839 @@ mod tree_metadata_tests {
             );
         }
     }
+}
+
+// Corrected pure metadata validation. No files, Torch, learned policy or Source
+// permission are supplied by these helpers; NPZ values remain the sealed owner.
+fn corrected_pins(budget: &Arc<Budget>, control: &Control) -> Result<Document> {
+    json::parse(
+        include_bytes!("../assets/card-instance-validation-pins-v2.json"),
+        budget,
+        control,
+    )
+}
+pub(crate) fn contract3(value: &Value, budget: &Arc<Budget>, control: &Control) -> Result<()> {
+    let pins = corrected_pins(budget, control)?;
+    let expected = pins.root.require("action_contract")?;
+    value.closed(
+        &expected
+            .object()?
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        &[],
+    )?;
+    eq(value, expected, "corrected contract mismatch")
+}
+pub(crate) fn game_binding3(value: &Value, budget: &Arc<Budget>, control: &Control) -> Result<()> {
+    let pins = corrected_pins(budget, control)?;
+    contract3(value.require("action_contract")?, budget, control)?;
+    eq(
+        value.require("rule_signature")?,
+        pins.root.require("rule_signature")?,
+        "game rule signature mismatch",
+    )?;
+    is(value, "layout_signature", CARD_INSTANCE_SIGNATURE)?;
+    is(value, "purpose", "qualified_game")?;
+    eq(
+        value.require("synthetic_capacity")?,
+        &Value::Bool(false),
+        "game rejects synthetic capacity",
+    )
+}
+pub(crate) fn actions3(value: &Value, budget: &Arc<Budget>, control: &Control) -> Result<()> {
+    value.closed(
+        &[
+            "action_contract",
+            "version",
+            "generator",
+            "use_action_options",
+            "targets",
+            "max_sequence_length",
+            "max_candidates",
+            "max_expansions",
+            "max_temporary_candidates",
+            "count_states",
+            "count_milliseconds",
+            "search_milliseconds",
+            "channel_weights",
+        ],
+        &[],
+    )?;
+    contract3(value.require("action_contract")?, budget, control)?;
+    is(value, "version", "3")?;
+    is(value, "generator", "public-card-instance-diverse-v5")?;
+    eq(
+        value.require("use_action_options")?,
+        &Value::Bool(true),
+        "actions3 requires atomic hints",
+    )?;
+    for (key, high) in [
+        ("max_sequence_length", 18),
+        ("max_candidates", 65536),
+        ("max_expansions", i32::MAX as i128),
+        ("max_temporary_candidates", i32::MAX as i128),
+        ("count_states", i32::MAX as i128),
+        ("count_milliseconds", 1000),
+        ("search_milliseconds", 10000),
+    ] {
+        n(value, key, 1, high)?;
+    }
+    let targets = value.require("targets")?.array()?;
+    if targets.is_empty()
+        || targets.len() > 2
+        || targets
+            .iter()
+            .any(|v| !["self", "opponent"].contains(&v.as_str().unwrap_or("")))
+        || targets.len() == 2 && targets[0] == targets[1]
+    {
+        return Err(Error::contract("actions3 target order/set mismatch"));
+    }
+    let weights = value.require("channel_weights")?.array()?;
+    if weights.len() != 7 {
+        return Err(Error::contract("actions3 requires seven channels"));
+    }
+    for weight in weights {
+        weight.integer(1, i32::MAX as i128)?;
+    }
+    Ok(())
+}
+pub(crate) fn architecture3(
+    model: &Value,
+    budget: &Arc<Budget>,
+    control: &Control,
+) -> Result<String> {
+    model3(model, budget, control)?;
+    let _copy = budget.reserve(65536)?;
+    let mut fields = json::copy(model, control)?;
+    fields.as_object_mut().unwrap().remove("resources");
+    digest(
+        &json::object([
+            ("model", fields),
+            (
+                "token_signature",
+                json::text(&card_instance_token_signature(
+                    n(model.require("event")?, "aggregate_window", 1, 65536)? as usize,
+                    budget,
+                    control,
+                )?),
+            ),
+        ]),
+        budget,
+        control,
+    )
+}
+fn semantic3(value: &Value, model: &Value, budget: &Arc<Budget>, control: &Control) -> Result<()> {
+    let pins = corrected_pins(budget, control)?;
+    for (key, expected) in [
+        ("input_recipe", "participant-structured-v2"),
+        ("generator_version", "public-card-instance-diverse-v5"),
+        ("policy_input_version", "player-card-refs-v2"),
+        ("end_projection_version", "simulator-closure-v1"),
+        ("reward_policy_version", "natural-terminal-v1"),
+        ("numeric_transform", "signed-log1p-fp32-v1"),
+    ] {
+        is(value, key, expected)?;
+    }
+    for key in ["simulator_revision", "spec_inventory_sha256"] {
+        eq(
+            value.require(key)?,
+            pins.root.require("action_contract")?.require(key)?,
+            "corrected semantic revision/spec mismatch",
+        )?;
+    }
+    eq(
+        value.require("reviewed_spec_hashes")?,
+        pins.root.require("reviewed_spec_hashes")?,
+        "corrected reviewed specs mismatch",
+    )?;
+    let catalog = value.require("catalog")?;
+    catalog.closed(
+        &[
+            "catalog_schema_version",
+            "catalog_version",
+            "rule_set_version",
+            "locale",
+            "content_sha256",
+            "definition_count",
+        ],
+        &[],
+    )?;
+    n(catalog, "catalog_schema_version", 2, 2)?;
+    n(catalog, "definition_count", 296, 296)?;
+    for (key, expected) in [
+        ("catalog_version", "public-ja-v3"),
+        ("rule_set_version", "true-match-1v1-v2"),
+        ("locale", "ja"),
+    ] {
+        is(catalog, key, expected)?;
+    }
+    eq(
+        catalog.require("content_sha256")?,
+        pins.root
+            .require("action_contract")?
+            .require("catalog_sha256")?,
+        "corrected catalog mismatch",
+    )?;
+    is(
+        value,
+        "token_signature",
+        &card_instance_token_signature(
+            n(model.require("event")?, "aggregate_window", 1, 65536)? as usize,
+            budget,
+            control,
+        )?,
+    )?;
+    runtime_semantics(value)
+}
+pub(crate) fn inference4(
+    value: &Value,
+    actions: &Value,
+    budget: &Arc<Budget>,
+    control: &Control,
+) -> Result<()> {
+    let encoded = json::canonical(value, budget, control)?;
+    let _metadata = json::admit(encoded.len(), budget)?;
+    actions3(actions, budget, control)?;
+    let mut keys = vec![
+        "schema_version",
+        "kind",
+        "model",
+        "architecture_identity",
+        "action_config_hash",
+        "producer",
+        "weights",
+        "rule_signature",
+        "layout_signature",
+        "spec_inventory_sha256",
+    ];
+    keys.extend(SEMANTICS);
+    keys.extend(CLASS);
+    value.closed(&keys, &[])?;
+    n(value, "schema_version", 4, 4)?;
+    is(value, "kind", "structured-inference")?;
+    game_binding3(value, budget, control)?;
+    producer(value.require("producer")?)?;
+    let model = value.require("model")?;
+    let shapes = model3(model, budget, control)?;
+    n(model, "max_positions", 1, 18)?;
+    semantic3(value, model, budget, control)?;
+    is(
+        value,
+        "architecture_identity",
+        &architecture3(model, budget, control)?,
+    )?;
+    is(
+        value,
+        "action_config_hash",
+        &digest(actions, budget, control)?,
+    )?;
+    let descriptors = bundle(value.require("weights")?)?;
+    is(value.require("weights")?, "prefix", "weights")?;
+    if descriptors.len() != shapes.len() {
+        return Err(Error::contract("inference4 named weight count mismatch"));
+    }
+    for (name, shape) in shapes {
+        let descriptor = descriptors
+            .get(&name)
+            .ok_or_else(|| Error::contract("inference4 named weight missing"))?;
+        is(descriptor, "dtype", "float32")?;
+        eq(
+            descriptor.require("shape")?,
+            &json::array(shape.into_iter().map(json::integer)),
+            "inference4 weight shape mismatch",
+        )?;
+    }
+    Ok(())
+}
+/// Pure safe-options validation and exact label. Resources/runtime are bound in
+/// the label but no current machine, artifact path or CUDA process is queried.
+pub(crate) fn options3(
+    value: &Value,
+    actions: &Value,
+    budget: &Arc<Budget>,
+    control: &Control,
+) -> Result<String> {
+    actions3(actions, budget, control)?;
+    value.closed(
+        &[
+            "version",
+            "checkpoint",
+            "expected_manifest_digest",
+            "model",
+            "inference",
+            "cuda_visible_devices",
+            "action_config_hash",
+            "action_contract",
+            "rule_signature",
+            "layout_signature",
+            "purpose",
+            "synthetic_capacity",
+        ],
+        &[],
+    )?;
+    is(value, "version", "3")?;
+    validation_text(value.require("checkpoint")?)?;
+    game_binding3(value, budget, control)?;
+    is(
+        value,
+        "action_config_hash",
+        &digest(actions, budget, control)?,
+    )?;
+    let model = value.require("model")?;
+    model3(model, budget, control)?;
+    n(model, "max_positions", 1, 18)?;
+    let inference = value.require("inference")?;
+    binding(inference)?;
+    visibility(value.require("cuda_visible_devices")?)?;
+    let manifest = checksum(value.require("expected_manifest_digest")?)?;
+    let _copy = budget.reserve(65536)?;
+    let mut identity = json::object([
+        (
+            "execution",
+            json::object([
+                ("inference", json::copy(inference, control)?),
+                (
+                    "resources",
+                    json::copy(model.require("resources")?, control)?,
+                ),
+                (
+                    "cuda_visible_devices",
+                    json::copy(value.require("cuda_visible_devices")?, control)?,
+                ),
+            ]),
+        ),
+        (
+            "action_config_hash",
+            json::copy(value.require("action_config_hash")?, control)?,
+        ),
+    ]);
+    for key in [
+        "action_contract",
+        "rule_signature",
+        "layout_signature",
+        "purpose",
+        "synthetic_capacity",
+    ] {
+        identity
+            .as_object_mut()
+            .unwrap()
+            .insert(key.into(), json::copy(value.require(key)?, control)?);
+    }
+    Ok(format!(
+        "{}-ppo-v3-{manifest}-{}",
+        text(model, "model_id")?,
+        digest(&identity, budget, control)?
+    ))
+}
+fn validation_text(value: &Value) -> Result<()> {
+    crate::validation::text_value(value)
+}
+
+/// Exact Python resource_estimate formulas; all products are i128 after closed
+/// bounds, and each declared tensor remains below its configured64MiB limit.
+pub(crate) fn resource3(
+    model: &Value,
+    inference: &Value,
+    candidates: Option<i128>,
+    suffix: Option<i128>,
+    budget: &Arc<Budget>,
+    control: &Control,
+) -> Result<Value> {
+    let shapes = model3(model, budget, control)?;
+    binding(inference)?;
+    let recipe = json::parse(CARD_INSTANCE_RECIPE, budget, control)?;
+    let cats = |name: &str| -> Result<Vec<i128>> {
+        recipe
+            .root
+            .require(name)?
+            .array()?
+            .iter()
+            .map(|v| Ok(v.array()?.len() as i128 + 2))
+            .collect()
+    };
+    let sc = cats("state_categories")?;
+    let cc = cats("card_categories")?;
+    let ec = cats("event_categories")?;
+    let sn = recipe.root.require("state_numeric")?.array()?.len() as i128;
+    let cn = recipe.root.require("card_numeric")?.array()?.len() as i128;
+    let en = recipe.root.require("event_numeric")?.array()?.len() as i128;
+    let state_width = 2 * sn + sc.len() as i128 + sc.iter().sum::<i128>() + 18 * cc[0];
+    let card_direct = 2 * cn + cc.iter().sum::<i128>();
+    let event_width = 2 * en + ec.iter().sum::<i128>();
+    let temporal = model.require("temporal")?;
+    let hand = model.require("hand")?;
+    let event = model.require("event")?;
+    let heads = model.require("heads")?;
+    let decisions = n(temporal, "max_decisions", 1, 1024)?;
+    let interval = n(event, "max_interval", 1, 65536)?;
+    let count = candidates.unwrap_or(n(inference, "max_candidates", 1, 65536)?);
+    if count < 1 || count > n(inference, "max_candidates", 1, 65536)? {
+        return Err(Error::contract("resource candidate count mismatch"));
+    }
+    let suffix = suffix.unwrap_or(decisions.min(n(temporal, "sequence_length", 1, decisions)?));
+    if suffix < 1 || suffix > decisions {
+        return Err(Error::contract("resource suffix mismatch"));
+    }
+    let positions = n(model, "max_positions", 1, 128)?;
+    let co = n(model.require("card")?, "output_size", 1, 1024)?;
+    let state = if text(model.require("state")?, "kind")? == "identity" {
+        state_width
+    } else {
+        n(model.require("state")?, "output_size", 1, 1024)?
+    };
+    let frame = state
+        + if text(hand, "kind")? == "direct" {
+            18 * card_direct
+        } else {
+            n(hand, "latent_size", 1, 1024)?
+        }
+        + n(event, "hidden_size", 1, 1024)?
+        + 387;
+    let candidate = 26;
+    let actor = n(temporal, "hidden_size", 1, 1024)? + candidate + positions * (co + cc[10] + 2);
+    let widths = widths(heads.require("actor_hidden_sizes")?)?;
+    let first = widths[0];
+    let chunk = n(inference, "candidate_chunk", 1, 65536)?.min(count);
+    let eh = n(event, "hidden_size", 1, 1024)?;
+    let el = n(event, "num_layers", 1, 4)?;
+    let tl = n(temporal, "num_layers", 1, 4)?;
+    let th = n(temporal, "hidden_size", 1, 1024)?;
+    let tensors = [
+        ("raw_state", decisions * state_width * 4),
+        ("raw_cards", decisions * 18 * card_direct * 4),
+        ("interval_tokens", interval * event_width * 4),
+        ("interval_gru", interval * eh * el * 4 * 12),
+        (
+            "hand_attention",
+            suffix
+                * n(hand, "attention_layers", 1, 4)?
+                * n(hand, "attention_heads", 1, 16)?
+                * 18
+                * 18
+                * 4
+                * 8,
+        ),
+        ("frame_history", decisions * frame * 4),
+        (
+            "temporal_attention",
+            tl * n(temporal, "num_heads", 1, 16)? * decisions * decisions * 4,
+        ),
+        ("temporal_cache", 2 * tl * decisions * th * 4),
+        ("candidate_references", count * positions * 8),
+        ("candidate_columns", count * (candidate + 2) * 4),
+        ("chunk_dense_reference", chunk * actor * 4),
+        ("chunk_position_gather", chunk * positions * first * 4),
+        (
+            "chunk_checkpoint_replay",
+            chunk * widths.iter().sum::<i128>() * 4 * 8,
+        ),
+        ("position_card_projection", positions * 19 * first * 4),
+        (
+            "position_card_projection_unpadded",
+            positions * 18 * first * 4,
+        ),
+        ("position_card_projection_padding", positions * first * 4),
+        ("global_logits_probability_gradient", count * 4 * 5),
+    ];
+    let resources = model.require("resources")?;
+    if tensors
+        .iter()
+        .any(|(_, v)| *v > n(resources, "max_tensor_bytes", 1, 64i128 << 20).unwrap_or(0))
+    {
+        return Err(Error::resource("resource tensor cap"));
+    }
+    let parameters = shapes
+        .values()
+        .map(|s| s.iter().product::<i128>())
+        .sum::<i128>();
+    let parameter_bytes = parameters * 4 * 6 + shapes.len() as i128 * 8;
+    let context = n(resources, "workspace_bytes", 1, 4i128 << 30)?
+        + if text(inference, "device")? == "cuda:0" {
+            n(resources, "cuda_context_bytes", 1, 4i128 << 30)?
+        } else {
+            0
+        };
+    let activation = 4
+        * (tensors.iter().map(|(_, v)| v).sum::<i128>()
+            + (suffix - 1) * (interval * event_width * 4 + interval * eh * el * 4 * 12));
+    let total = parameter_bytes + context + activation;
+    if total
+        > n(resources, "max_owned_bytes", 1, 12i128 << 30)?.min(n(
+            inference,
+            "managed_budget_bytes",
+            1,
+            12i128 << 30,
+        )?)
+    {
+        return Err(Error::resource("resource managed cap"));
+    }
+    Ok(json::object([
+        (
+            "parameter_optimizer_cpu_reference_bytes",
+            json::integer(parameter_bytes),
+        ),
+        ("context_workspace_bytes", json::integer(context)),
+        ("activation_and_copy_bytes", json::integer(activation)),
+        ("total_bytes", json::integer(total)),
+        ("parameters", json::integer(parameters)),
+        (
+            "tensor_bytes",
+            json::object(tensors.into_iter().map(|(k, v)| (k, json::integer(v)))),
+        ),
+    ]))
+}
+
+pub(crate) fn worker_settings3(
+    model: &Value,
+    inference: &Value,
+    actions: &Value,
+    budget: &Arc<Budget>,
+    control: &Control,
+) -> Result<(Value, Value)> {
+    actions3(actions, budget, control)?;
+    let _metadata = budget.reserve(65536)?;
+    let peak = resource3(model, inference, None, Some(1), budget, control)?;
+    let fixed = resource3(model, inference, Some(1), Some(1), budget, control)?;
+    if n(actions, "max_sequence_length", 1, 18)? > n(model, "max_positions", 1, 18)?
+        || n(actions, "max_candidates", 1, 65536)? > n(inference, "max_candidates", 1, 65536)?
+    {
+        return Err(Error::contract("game model/actions capacity mismatch"));
+    }
+    let event = model.require("event")?;
+    let temporal = model.require("temporal")?;
+    let heads = model.require("heads")?;
+    let co = n(model.require("card")?, "output_size", 1, 1024)?;
+    let positions = n(model, "max_positions", 1, 18)?;
+    let actor = n(temporal, "hidden_size", 1, 1024)? + 26 + positions * (co + 7);
+    let mut widths = widths(heads.require("actor_hidden_sizes")?)?;
+    let hidden = widths[0];
+    let mut ops = hidden;
+    widths.push(1);
+    for pair in widths.windows(2) {
+        ops += 2 * pair[0] * pair[1] + pair[1];
+    }
+    ops += widths[1..widths.len() - 1].iter().sum::<i128>();
+    let caps = json::object([
+        (
+            "max_interval_events",
+            json::copy(event.require("max_interval")?, control)?,
+        ),
+        (
+            "max_episode_events",
+            json::copy(event.require("max_episode")?, control)?,
+        ),
+        (
+            "max_decisions",
+            json::copy(temporal.require("max_decisions")?, control)?,
+        ),
+        (
+            "max_positions",
+            json::copy(actions.require("max_sequence_length")?, control)?,
+        ),
+        (
+            "max_candidates",
+            json::copy(actions.require("max_candidates")?, control)?,
+        ),
+    ]);
+    let costs = json::object([
+        ("version", json::text("proposal-cost-v1")),
+        (
+            "context_width",
+            json::copy(temporal.require("hidden_size")?, control)?,
+        ),
+        ("card_width", json::integer(co + 7)),
+        ("actor_input_width", json::integer(actor)),
+        ("actor_hidden_width", json::integer(hidden)),
+        ("position_capacity", json::integer(positions)),
+        (
+            "candidate_chunk",
+            json::copy(inference.require("candidate_chunk")?, control)?,
+        ),
+        ("tail_operations_per_candidate", json::integer(ops)),
+        (
+            "tail_working_bytes_per_candidate",
+            json::integer(widths.iter().sum::<i128>() * 32),
+        ),
+        (
+            "tail_tensor_bytes_per_candidate",
+            json::integer(widths.iter().max().unwrap() * 4),
+        ),
+        (
+            "fixed_bytes",
+            json::copy(fixed.require("total_bytes")?, control)?,
+        ),
+        (
+            "max_preparation_bytes",
+            json::integer(
+                n(
+                    model.require("resources")?,
+                    "max_owned_bytes",
+                    1,
+                    12i128 << 30,
+                )?
+                .min(n(inference, "managed_budget_bytes", 1, 12i128 << 30)?),
+            ),
+        ),
+        ("max_scoring_operations", json::integer(i64::MAX as i128)),
+        ("max_storage_bytes", json::integer(64i128 << 20)),
+        (
+            "max_tensor_bytes",
+            json::copy(
+                model.require("resources")?.require("max_tensor_bytes")?,
+                control,
+            )?,
+        ),
+    ]);
+    drop(peak);
+    Ok((caps, costs))
+}
+pub(crate) fn neural_metadata3(
+    value: &Value,
+    actions: &Value,
+    budget: &Arc<Budget>,
+    control: &Control,
+) -> Result<String> {
+    let encoded = json::canonical(value, budget, control)?;
+    let _metadata = json::admit(encoded.len(), budget)?;
+    value.closed(
+        &[
+            "input_contract",
+            "policy_options",
+            "inference_manifest",
+            "files",
+        ],
+        &[],
+    )?;
+    is(value, "input_contract", "retained-external-inference-v1")?;
+    let options = value.require("policy_options")?;
+    let label = options3(options, actions, budget, control)?;
+    let manifest = value.require("inference_manifest")?;
+    inference4(manifest, actions, budget, control)?;
+    eq(
+        manifest.require("model")?,
+        options.require("model")?,
+        "neural manifest/options model mismatch",
+    )?;
+    let inference = options.require("inference")?;
+    if text(inference, "device")? == "cpu"
+        && options.require("cuda_visible_devices")?.as_str() != Some("")
+    {
+        return Err(Error::contract("CPU child visibility must be empty"));
+    }
+    worker_settings3(
+        options.require("model")?,
+        inference,
+        actions,
+        budget,
+        control,
+    )?;
+    let mut expected = manifest
+        .require("weights")?
+        .require("files")?
+        .object()?
+        .clone();
+    expected.insert(
+        "inference.json".into(),
+        json::copy(options.require("expected_manifest_digest")?, control)?,
+    );
+    let files = value.require("files")?.array()?;
+    let mut seen = std::collections::BTreeSet::new();
+    if files.len() != expected.len() {
+        return Err(Error::contract("neural external file count mismatch"));
+    }
+    for file in files {
+        control.check()?;
+        file.closed(&["path", "sha256", "identity"], &[])?;
+        let name = text(file, "path")?;
+        basename(name)?;
+        if !seen.insert(name) || expected.get(name) != Some(file.require("sha256")?) {
+            return Err(Error::contract("neural external file/hash mismatch"));
+        }
+        checksum(file.require("sha256")?)?;
+        let identity = file.require("identity")?.array()?;
+        if identity.len() != 5 {
+            return Err(Error::contract("neural stat identity shape"));
+        }
+        for number in identity {
+            number.integer(0, i128::MAX)?;
+        }
+    }
+    Ok(label)
+}
+
+fn validate_preprocessing3(state: &Value, b: &Arc<Budget>, c: &Control) -> Result<()> {
+    let identity = state.require("identity")?;
+    let v = identity.require("preprocessing")?;
+    let settings = state
+        .require("effective_config")?
+        .require("preprocessing")?;
+    let backend = text(v, "backend")?;
+    let mut keys = vec!["backend", "reader_contract", "implementation"];
+    keys.extend(GAME_CLASS);
+    if backend == "rust" {
+        keys.push("binary");
+    }
+    v.closed(&keys, &[])?;
+    game_binding3(v, b, c)?;
+    is(v, "reader_contract", "participant-structured-v2")?;
+    is(settings, "reader", "participant-structured-v2")?;
+    eq(
+        settings.require("backend")?,
+        v.require("backend")?,
+        "parent preprocessing backend differs",
+    )?;
+    match backend {
+        "python" => is(v, "implementation", "python-reference-player-card-refs-v2")?,
+        "rust" => {
+            is(v, "implementation", "rust-player-card-refs-v2")?;
+            let binary = v.require("binary")?;
+            binary.closed(
+                &[
+                    "backend",
+                    "extension_path",
+                    "extension_sha256",
+                    "build",
+                    "python_abi",
+                    "gil_disabled",
+                ],
+                &[],
+            )?;
+            is(binary, "backend", "native")?;
+            checksum(binary.require("extension_sha256")?)?;
+            if !text(binary, "extension_path")?.starts_with('/')
+                || binary.require("gil_disabled")? != &Value::Bool(false)
+            {
+                return Err(Error::contract("recorded native binary path/GIL mismatch"));
+            }
+            is(binary, "python_abi", "cpython-314")?;
+            let build = binary.require("build")?;
+            build.object()?;
+            checksum(build.require("native_source_sha256")?)?;
+            is(
+                build,
+                "card_instance_contract",
+                "participant-structured-v2;journal6;rollout4;generation3;model3",
+            )?;
+            is(build, "card_instance_signature", CARD_INSTANCE_SIGNATURE)?;
+            is(build, "card_instance_models", "mlp,gru,transformer")?;
+            is(build, "abi", "cp314-gil")?;
+        }
+        _ => {
+            return Err(Error::contract(
+                "recorded game preprocessing backend unsupported",
+            ));
+        }
+    }
+    let integration = identity.require("integration")?;
+    let p = corrected_pins(b, c)?;
+    eq(
+        integration.require("binary_sha256")?,
+        p.root.require("approved_binary_sha256")?,
+        "parent runtime binary mismatch",
+    )?;
+    for key in ["declared_simulator_revision", "source_revision"] {
+        eq(
+            integration.require(key)?,
+            p.root
+                .require("action_contract")?
+                .require("simulator_revision")?,
+            "parent runtime source mismatch",
+        )?;
+    }
+    checksum(integration.require("server_config_sha256")?)?;
+    eq(
+        integration.require("source_spec_sha256")?,
+        p.root.require("approved_spec_files")?,
+        "parent runtime normative inventory mismatch",
+    )
+}
+pub(crate) fn binding3_value(value: &Value, c: &Control) -> Result<Value> {
+    clone_fields(value, GAME_CLASS, c)
+}
+pub(crate) fn semantic3_declaration(value: &Value, c: &Control) -> Result<Value> {
+    clone_fields(value, &SourceFormat::Corrected.semantics(), c)
+}
+pub(crate) fn bundle_metadata(value: &Value) -> Result<BTreeMap<String, &Value>> {
+    bundle(value)
+}
+pub(crate) fn corrected_game_binding(b: &Arc<Budget>, c: &Control) -> Result<Value> {
+    let pins = corrected_pins(b, c)?;
+    Ok(json::object([
+        (
+            "action_contract",
+            json::copy(pins.root.require("action_contract")?, c)?,
+        ),
+        (
+            "rule_signature",
+            json::copy(pins.root.require("rule_signature")?, c)?,
+        ),
+        ("layout_signature", json::text(CARD_INSTANCE_SIGNATURE)),
+        ("purpose", json::text("qualified_game")),
+        ("synthetic_capacity", Value::Bool(false)),
+    ]))
+}
+
+/// Validate the newly derived paired artifact before lineage publication, using
+/// the same sealed metadata/file kernels. This never constructs a generation.
+pub(crate) fn verify_derived_artifact3(
+    s: &mut Sources,
+    state: &Value,
+    generation: usize,
+    steps: usize,
+) -> Result<Value> {
+    let b = s.budget.clone();
+    let c = s.control.clone();
+    let path = s
+        .root
+        .join("artifacts")
+        .join(format!("{:06}", generation + 1));
+    let inference = s.json(&path.join("inference.json"))?;
+    let resume = s.json(&path.join("resume.json"))?;
+    let inf_sha = s.verified_sha(&path.join("inference.json"))?.to_owned();
+    let res_sha = s.verified_sha(&path.join("resume.json"))?.to_owned();
+    let mut files = json::object([]);
+    for bundle in [
+        inference.root.require("weights")?,
+        resume.root.require("state")?,
+    ] {
+        for (name, sha) in bundle.require("files")?.object()? {
+            if files
+                .as_object_mut()
+                .unwrap()
+                .insert(name.clone(), json::copy(sha, &c)?)
+                .is_some()
+            {
+                return Err(Error::contract("derived artifact file collision"));
+            }
+        }
+    }
+    files["inference.json"] = json::text(&inf_sha);
+    files["resume.json"] = json::text(&res_sha);
+    let record = json::object([
+        ("inference_sha256", json::text(&inf_sha)),
+        ("resume_sha256", json::text(&res_sha)),
+        ("artifact_files", json::copy(&files, &c)?),
+        ("optimizer_steps", json::integer(steps as i128)),
+    ]);
+    let receipt = json::object([
+        ("status", json::text("retained")),
+        ("inference_sha256", json::text(&inf_sha)),
+        ("original_files", files),
+        ("deletion_intent", Value::Null),
+        ("deletion_receipt", Value::Null),
+    ]);
+    let model = pure_model(state.require("effective_config")?, &c)?;
+    let shapes = model3(&model, &b, &c)?;
+    artifact(
+        s,
+        &path,
+        &record,
+        &receipt,
+        state,
+        &model,
+        &shapes,
+        SourceFormat::Corrected,
+    )?;
+    Ok(record)
 }

@@ -8,23 +8,117 @@ from dataclasses import asdict, dataclass
 from typing import Any
 
 from gf_common.domain import ContractError, Json, canonical, closed, integer
-from gf_models.structured_tree_config import MAX_ARRAY_BYTES, TreeArchitectureV2, feature_width
+from gf_models.structured_tree_config import (
+    MAX_ARRAY_BYTES,
+    TREE2_CONTEXT,
+    TREE3_CONTEXT,
+    ConfiguredTreeModelV2,
+    ConfiguredTreeModelV3,
+    TreeArchitectureV2,
+    TreeArchitectureV3,
+    architecture_config,
+    architecture_config_v3,
+    architecture_identity,
+    architecture_identity_v3,
+    configured_tree_v2,
+    configured_tree_v3,
+)
+
+
+@dataclass(frozen=True)
+class _TreeRecords:
+    modern: bool
+
+    @property
+    def schema(self) -> int:
+        return 4 if self.modern else 3
+
+    @property
+    def features(self) -> Any:
+        return TREE3_CONTEXT if self.modern else TREE2_CONTEXT
+
+    @property
+    def extra_fields(self) -> set[str]:
+        return {'source_kind', 'source_origin'} if self.modern else set()
+
+    @property
+    def label(self) -> str:
+        return 'card-instance-declared-terminal-v1' if self.modern else 'behavior-selected-natural-return-gamma1-v1'
+
+    @property
+    def shared_cost(self) -> str:
+        return 'shared_fixture_construction' if self.modern else 'shared_generation'
+
+    def architecture(self, raw: Any) -> Any:
+        return (architecture_config_v3 if self.modern else architecture_config)(raw)
+
+    def configured(self, raw: Any) -> Any:
+        return (configured_tree_v3 if self.modern else configured_tree_v2)(raw)
+
+    def identity(self, model: Any) -> str:
+        return (architecture_identity_v3 if self.modern else architecture_identity)(model)
+
+    def layout(self, encoder: Any) -> Json:
+        from gf_models.structured_tree_encoder import feature_layout, feature_layout_v3
+        return (feature_layout_v3 if self.modern else feature_layout)(encoder)
+
+    def limits(self, encoder: Any) -> tuple[int, ...]:
+        from gf_models.structured_tree_encoder import categorical_limits, categorical_limits_v3
+        return (categorical_limits_v3 if self.modern else categorical_limits)(encoder)
+
+    def binding(self, raw: Any) -> Json:
+        if not self.modern:
+            return validate_input_binding(raw)
+        from gf_common.card_instance_fixture import input_binding
+        expected = input_binding()
+        closed(raw, set(expected))
+        if canonical(raw) != canonical(expected):
+            raise ContractError('Tree3 exact corrected component input binding required')
+        return dict(raw)
+
+    def source(self, raw: Json, *, toy: bool = False) -> None:
+        if not self.modern:
+            return
+        if toy:
+            if raw['source_kind'] is not None or raw['source_origin'] is not None:
+                raise ContractError('Tree3 toy cannot claim source-backed origin')
+        else:
+            from gf_common.card_instance_fixture import origin
+            if (type(raw['source_kind']) is not str or raw['source_kind'] != 'card-instance-tree-fixture-originals'
+                    or canonical(raw['source_origin']) != canonical(origin())):
+                raise ContractError('Tree3 trained fit requires exact declared fixture source origin')
+
+    def require_model(self, model: Any, *, pure: bool = False) -> None:
+        expected = ((TreeArchitectureV3 if self.modern else TreeArchitectureV2) if pure else
+                    (ConfiguredTreeModelV3 if self.modern else ConfiguredTreeModelV2))
+        if type(model) is not expected:
+            raise ContractError('closed Tree model differs from explicit record context')
+
+
+TREE2_RECORDS = _TreeRecords(False)
+TREE3_RECORDS = _TreeRecords(True)
+
+
+def _records(value: _TreeRecords) -> _TreeRecords:
+    if value is not TREE2_RECORDS and value is not TREE3_RECORDS:
+        raise ContractError('explicit closed Tree record context required')
+    return value
 
 ENVELOPE_RECIPE='tree-fit-model-envelope-v1'
 
 
-def model_envelope(model:TreeArchitectureV2,rounds:int)->Json:
-    if type(model) is not TreeArchitectureV2:raise ContractError('pure Tree2 architecture required for fit envelope')
+def model_envelope(model:Any,rounds:int,*,_context:_TreeRecords=TREE2_RECORDS)->Json:
+    context=_records(_context);context.require_model(model,pure=True)
     integer(rounds,1,2**31-1)
-    width=feature_width(model.encoder.max_positions);leaves=model.network.num_leaves
+    width=context.features.feature_width(model.encoder.max_positions);leaves=model.network.num_leaves
     nodes=rounds*(2*leaves-1);size=65536+512*width+1024*nodes
     if size>MAX_ARRAY_BYTES:raise ContractError('pre-admitted Tree2 model envelope exceeds64MiB')
     return {'recipe':ENVELOPE_RECIPE,'feature_width':width,'rounds':rounds,'num_leaves':leaves,'node_bound':nodes,'text_bytes':size}
 
 
-def validate_envelope(value:Any,model:TreeArchitectureV2,rounds:int)->Json:
+def validate_envelope(value:Any,model:Any,rounds:int,*,_context:_TreeRecords=TREE2_RECORDS)->Json:
     closed(value,{'recipe','feature_width','rounds','num_leaves','node_bound','text_bytes'})
-    expected=model_envelope(model,rounds)
+    expected=model_envelope(model,rounds,_context=_context)
     for key in ('feature_width','rounds','num_leaves','node_bound','text_bytes'):integer(value[key],1)
     if canonical(value)!=canonical(expected):raise ContractError('Tree2 model envelope differs from exact configured recipe')
     return expected
@@ -72,19 +166,22 @@ def validate_input_binding(value:Any)->Json:
     return dict(raw)
 
 
-def validate_request(value:Any)->Json:
-    from gf_models.structured_tree_config import architecture_config, configured_tree_v2
-    raw=closed(value,REQUEST_FIELDS)
-    if type(raw['schema_version']) is not int or raw['schema_version']!=3 or raw['kind']!='structured-tree-fit-request':
+def validate_request(value:Any,*,_context:_TreeRecords=TREE2_RECORDS)->Json:
+    context=_records(_context)
+    raw=closed(value,REQUEST_FIELDS|context.extra_fields|({'shared_fixture_construction'} if context.modern else set()))
+    context.source(raw)
+    if context.modern:
+        _fixture_construction_cost(raw['shared_fixture_construction'])
+    if type(raw['schema_version']) is not int or raw['schema_version']!=context.schema or raw['kind']!='structured-tree-fit-request':
         raise ContractError('Tree2 immutable fit request3 required')
     import re
     if type(raw['run_id']) is not str or re.fullmatch('[0-9a-f]{32}',raw['run_id']) is None:raise ContractError('Tree2 training run identity invalid')
-    model=architecture_config(raw['model']);execution=closed(raw['execution'],{'inference','resources'})
-    configured_tree_v2({**asdict(model),'checkpoint':None,**execution})
-    fit=validate_fit_settings(raw['fit_settings']);validate_envelope(raw['model_envelope'],model,fit['num_boost_round'])
-    integer(raw['seed'],0,2**31-1);validate_input_binding(raw['input_binding'])
+    model=context.architecture(raw['model']);execution=closed(raw['execution'],{'inference','resources'})
+    context.configured({**asdict(model),'checkpoint':None,**execution})
+    fit=validate_fit_settings(raw['fit_settings']);validate_envelope(raw['model_envelope'],model,fit['num_boost_round'],_context=context)
+    integer(raw['seed'],0,2**31-1);context.binding(raw['input_binding'])
     for key in ('feature_signature','dataset_manifest_sha256','dataset_content_sha256','source_set_sha256'):_sha(raw[key])
-    if raw['label_recipe']!='behavior-selected-natural-return-gamma1-v1':raise ContractError('Tree2 selected natural label recipe required')
+    if raw['label_recipe']!=context.label:raise ContractError('Tree2 selected natural label recipe required')
     rows=closed(raw['row_counts'],{'train','validation'})
     for size in rows.values():integer(size,1,2**63-1)
     files=raw['input_files']
@@ -102,6 +199,15 @@ def validate_request(value:Any)->Json:
     return dict(raw)
 
 
+def _fixture_construction_cost(value:Any)->None:
+    import math
+    raw=closed(value,{'seconds','cost_key','scope'})
+    _sha(raw['cost_key'])
+    if (type(raw['seconds']) not in (int,float) or not math.isfinite(raw['seconds']) or raw['seconds']<0
+            or raw['scope']!='original fixture construction once; excludes PPO, per-fit preparation and fitting'):
+        raise ContractError('Tree3 exact original fixture construction cost receipt required')
+
+
 @dataclass(frozen=True)
 class TrainedProvenance:
     """Canonical immutable owned provenance; no mutable nested dict alias."""
@@ -109,38 +215,56 @@ class TrainedProvenance:
 
     @classmethod
     def parse(cls,value:Any)->TrainedProvenance:
-        raw=closed(value,PROVENANCE_FIELDS)
-        if type(raw['schema_version']) is not int or raw['schema_version']!=3 or raw['kind']!='structured-fixed-dataset2-fit':
-            raise ContractError('Tree2 closed trained provenance3 required')
-        import re
-        if type(raw['training_run_id']) is not str or re.fullmatch('[0-9a-f]{32}',raw['training_run_id']) is None:raise ContractError('Tree2 trained run identity invalid')
-        for key in ('request_sha256','dataset_manifest_sha256'):_sha(raw[key])
-        validate_input_binding(raw['input_binding'])
-        return cls(canonical(raw).encode())
+        return _parse_provenance(cls,value,TREE2_RECORDS)
 
     def to_dict(self)->Json:
         import json
         return json.loads(self.encoded)
 
 
-def provenance_for_request(request:Json,request_sha:str)->TrainedProvenance:
-    validate_request(request);_sha(request_sha)
-    return TrainedProvenance.parse({'schema_version':3,'kind':'structured-fixed-dataset2-fit','training_run_id':request['run_id'],
-        'request_sha256':request_sha,'dataset_manifest_sha256':request['dataset_manifest_sha256'],'input_binding':request['input_binding']})
+@dataclass(frozen=True)
+class TrainedProvenanceV4(TrainedProvenance):
+    @classmethod
+    def parse(cls,value:Any)->TrainedProvenanceV4:
+        return _parse_provenance(cls,value,TREE3_RECORDS)
 
 
-def fit_admission(model:Any,fit:Json,rows:Json,*,retained_bytes:int)->Json:
-    from gf_models.structured_tree_config import ConfiguredTreeModelV2
-    if type(model) is not ConfiguredTreeModelV2:raise ContractError('actual configured Tree2 required')
+def _parse_provenance(cls:Any,value:Any,context:_TreeRecords)->Any:
+    import re
+    raw=closed(value,PROVENANCE_FIELDS|context.extra_fields)
+    expected_kind='structured-fixed-dataset3-fit' if context.modern else 'structured-fixed-dataset2-fit'
+    if type(raw['schema_version']) is not int or raw['schema_version']!=context.schema or raw['kind']!=expected_kind:
+        raise ContractError('closed trained provenance/context mismatch')
+    if type(raw['training_run_id']) is not str or re.fullmatch('[0-9a-f]{32}',raw['training_run_id']) is None:
+        raise ContractError('Tree trained run identity invalid')
+    for key in ('request_sha256','dataset_manifest_sha256'):_sha(raw[key])
+    context.binding(raw['input_binding']);context.source(raw)
+    return cls(canonical(raw).encode())
+
+
+def _provenance(value:Any,context:_TreeRecords)->TrainedProvenance:
+    return (TrainedProvenanceV4 if context.modern else TrainedProvenance).parse(value)
+
+
+def provenance_for_request(request:Json,request_sha:str,*,_context:_TreeRecords=TREE2_RECORDS)->TrainedProvenance:
+    context=_records(_context);validate_request(request,_context=context);_sha(request_sha)
+    value={'schema_version':context.schema,'kind':'structured-fixed-dataset3-fit' if context.modern else 'structured-fixed-dataset2-fit',
+        'training_run_id':request['run_id'],'request_sha256':request_sha,'dataset_manifest_sha256':request['dataset_manifest_sha256'],
+        'input_binding':request['input_binding'],**{key:request[key] for key in context.extra_fields}}
+    return _provenance(value,context)
+
+
+def fit_admission(model:Any,fit:Json,rows:Json,*,retained_bytes:int,_context:_TreeRecords=TREE2_RECORDS)->Json:
+    context=_records(_context);context.require_model(model)
     fit=validate_fit_settings(fit);integer(retained_bytes,0,2**63-1)
-    width=feature_width(model.encoder.max_positions);envelope=model_envelope(model.architecture(),fit['num_boost_round'])
+    width=context.features.feature_width(model.encoder.max_positions);envelope=model_envelope(model.architecture(),fit['num_boost_round'],_context=context)
     closed(rows,{'train','validation'})
     for count in rows.values():integer(count,1,2**63-1)
     if any(count*4>model.resources.max_array_bytes for count in rows.values()):raise ContractError('Tree2 fit label array exceeds admitted64MiB tensor bound')
     raw=sum(rows.values())*(width*4+4)
     threads=max(model.inference.num_threads,fit['num_threads'])
     fixed=256*1024**2+threads*64*1024**2+16*envelope['text_bytes']
-    packing=model.inference.candidate_chunk*(12*width+32)+(1042+18*32)*4+65536
+    packing=model.inference.candidate_chunk*(12*width+32)+(context.features.context_width+18*context.features.card_width)*4+65536
     total=retained_bytes+5*raw+fixed+packing
     if total>model.resources.max_owned_bytes:raise ContractError('Tree2 full Source/raw/Dataset/workspace/model fit admission exceeded')
     return {'raw_bytes':raw,'model_envelope':envelope,'fixed_bytes':fixed,'packing_bytes':packing,'retained_bytes':retained_bytes,'total_bytes':total,'native_threads':threads}
@@ -158,26 +282,31 @@ class TrainingBinding:
 
 
 def validate_pair_records(request:Any,completion:Any,inference:Json,*,request_sha256:str,
-                          inference_sha256:str,model_sha256:str)->None:
+                          inference_sha256:str,model_sha256:str,_context:_TreeRecords=TREE2_RECORDS)->None:
     import math
-    request=validate_request(request);completion=closed(completion,COMPLETION_FIELDS)
+    context=_records(_context)
+    request=validate_request(request,_context=context);completion=closed(completion,COMPLETION_FIELDS|context.extra_fields)
+    context.source(completion)
     for value in (request_sha256,inference_sha256,model_sha256):_sha(value)
-    if (type(completion['schema_version']) is not int or completion['schema_version']!=3
+    if (type(completion['schema_version']) is not int or completion['schema_version']!=context.schema
             or completion['kind']!='structured-tree-training' or completion['status']!='complete'):
         raise ContractError('complete healthy Tree2 Training3 required before binding')
     if completion['request_sha256']!=request_sha256:raise ContractError('Tree2 request/completion hash link differs')
     for key in ('run_id','input_binding','seed','dataset_manifest_sha256','dataset_content_sha256','source_set_sha256',
-                'feature_signature','label_recipe','producer','runtime'):
+                'feature_signature','label_recipe','producer','runtime',*context.extra_fields):
         if canonical(completion[key])!=canonical(request[key]):raise ContractError('Tree2 request/completion identity mismatch: '+key)
-    origin=TrainedProvenance.parse(inference['provenance'])
-    if inference['fit_origin']!='trained' or origin!=provenance_for_request(request,request_sha256):
+    origin=_provenance(inference['provenance'],context)
+    if inference['fit_origin']!='trained' or origin!=provenance_for_request(request,request_sha256,_context=context):
         raise ContractError('Tree2 trained inference provenance differs from immutable request')
     if canonical(inference['model'])!=canonical(request['model']) or inference['feature_signature']!=request['feature_signature']:
         raise ContractError('Tree2 request/inference architecture/features differ')
     creation=closed(inference['creation_execution'],{'inference','resources','tree_descriptor'})
     if canonical({key:creation[key] for key in ('inference','resources')})!=canonical(request['execution']):
         raise ContractError('Tree2 original creation execution differs from pre-fit request')
-    classification={key:inference[key] for key in ('action_contract','purpose','synthetic_capacity')}
+    classification={key:inference[key] for key in request['input_binding']}
+    context.source(inference)
+    if context.modern and any(canonical(inference[key])!=canonical(request[key]) for key in context.extra_fields):
+        raise ContractError('Tree3 source origin promotion forbidden')
     if canonical(classification)!=canonical(request['input_binding']):raise ContractError('Tree2 trained classification promotion forbidden')
     descriptor=inference['tree_descriptor']
     if (descriptor['model_sha256']!=model_sha256 or descriptor['model_bytes']>request['model_envelope']['text_bytes']
@@ -194,14 +323,16 @@ def validate_pair_records(request:Any,completion:Any,inference:Json,*,request_sh
     if metrics['retained_tree_count']!=descriptor['tree_count']:raise ContractError('Tree2 completion retained-tree count differs')
     loss=metrics['validation_l2']
     if type(loss) not in (int,float) or not math.isfinite(loss) or loss<0:raise ContractError('Tree2 finite validation metric required')
-    costs=closed(completion['costs'],{'preparation_seconds','child_seconds','final_validation_seconds','cleanup_seconds','elapsed_seconds','shared_generation'})
+    costs=closed(completion['costs'],{'preparation_seconds','child_seconds','final_validation_seconds','cleanup_seconds','elapsed_seconds',context.shared_cost})
     for key in ('preparation_seconds','child_seconds','final_validation_seconds','cleanup_seconds','elapsed_seconds'):
         number=costs[key]
         if type(number) not in (int,float) or not math.isfinite(number) or number<0:raise ContractError('Tree2 finite measured costs required')
     if costs['elapsed_seconds']>7200:raise ContractError('Tree2 original per-fit7200-second budget exceeded')
-    shared=closed(costs['shared_generation'],{'seconds','cost_key','scope'});_sha(shared['cost_key'])
+    shared=closed(costs[context.shared_cost],{'seconds','cost_key','scope'});_sha(shared['cost_key'])
     if type(shared['seconds']) not in (int,float) or not math.isfinite(shared['seconds']) or shared['seconds']<0 or type(shared['scope']) is not str:
         raise ContractError('Tree2 shared generation accounting invalid')
+    if context.modern and canonical(shared)!=canonical(request['shared_fixture_construction']):
+        raise ContractError('Tree3 completion fixture construction cost differs from immutable request')
     outputs=closed(completion['outputs'],{'files','inference_sha256','model_sha256'})
     if outputs['inference_sha256']!=inference_sha256 or outputs['model_sha256']!=model_sha256:
         raise ContractError('Tree2 completion/inference/model hashes differ')
@@ -215,23 +346,23 @@ def validate_pair_records(request:Any,completion:Any,inference:Json,*,request_sh
         raise ContractError('Tree2 consumed numeric inputs differ from immutable request')
 
 
-def validate_input_envelope(value:Any,request:Json)->tuple[Json,Any]:
+def validate_input_envelope(value:Any,request:Json,*,_context:_TreeRecords=TREE2_RECORDS)->tuple[Json,Any]:
     """Pure envelope/typed-descriptor link, before allocating native inputs."""
     from gf_models.sharded_arrays import validate_bundle_metadata
-    from gf_models.structured_tree_config import configured_tree_v2
-    from gf_models.structured_tree_encoder import feature_layout
-    raw=closed(value,{'schema_version','kind','action_config_hash','feature_signature','label_recipe','input_binding','row_counts','data'})
-    if type(raw['schema_version']) is not int or raw['schema_version']!=3 or raw['kind']!='structured-tree-fit-inputs':
+    context=_records(_context)
+    raw=closed(value,{'schema_version','kind','action_config_hash','feature_signature','label_recipe','input_binding','row_counts','data'}|context.extra_fields)
+    context.source(raw)
+    if type(raw['schema_version']) is not int or raw['schema_version']!=context.schema or raw['kind']!='structured-tree-fit-inputs':
         raise ContractError('Tree2 closed numeric input envelope3 required')
     _sha(raw['action_config_hash'])
-    for key in ('feature_signature','label_recipe','input_binding','row_counts'):
+    for key in ('feature_signature','label_recipe','input_binding','row_counts',*context.extra_fields):
         if canonical(raw[key])!=canonical(request[key]):raise ContractError('Tree2 input/request common fields differ: '+key)
-    model=configured_tree_v2({**request['model'],'checkpoint':None,**request['execution']})
-    if feature_layout(model.encoder)['feature_signature']!=raw['feature_signature']:
+    model=context.configured({**request['model'],'checkpoint':None,**request['execution']})
+    if context.layout(model.encoder)['feature_signature']!=raw['feature_signature']:
         raise ContractError('Tree2 numeric input recipe/architecture mismatch')
-    admission=fit_admission(model,request['fit_settings'],request['row_counts'],retained_bytes=0)
+    admission=fit_admission(model,request['fit_settings'],request['row_counts'],retained_bytes=0,_context=context)
     descriptors=validate_bundle_metadata(raw['data'],max_decoded_bytes=admission['raw_bytes'])
-    expected={};chunk=model.inference.candidate_chunk;width=feature_width(model.encoder.max_positions)
+    expected={};chunk=model.inference.candidate_chunk;width=context.features.feature_width(model.encoder.max_positions)
     # Descriptor totals constrain the declared population before constructing keys.
     if raw['data']['decoded_bytes']!=admission['raw_bytes']:
         raise ContractError('Tree2 typed input decoded population differs')
@@ -249,19 +380,19 @@ def validate_input_envelope(value:Any,request:Json)->tuple[Json,Any]:
     return raw,model
 
 
-def inspect_fit_inputs(directory:Any,request:Json,scan:Any,*,retain:bool=False)->tuple[Json,dict[str,list[Any]],dict[str,list[Any]]]:
+def inspect_fit_inputs(directory:Any,request:Json,scan:Any,*,retain:bool=False,_context:_TreeRecords=TREE2_RECORDS)->tuple[Json,dict[str,list[Any]],dict[str,list[Any]]]:
     """Verify bounded typed blocks; retain arrays only in the own numeric child."""
     import numpy as np
 
     from gf_models.arrays import load_arrays
-    from gf_models.structured_tree_encoder import categorical_limits, feature_layout
-    request=validate_request(request)
+    context=_records(_context)
+    request=validate_request(request,_context=context)
     envelope=scan.object(directory/'inputs'/'manifest.json',request['input_files']['inputs/manifest.json'])
-    envelope,model=validate_input_envelope(envelope,request)
-    fit_admission(model,request['fit_settings'],request['row_counts'],retained_bytes=scan.retained)
+    envelope,model=validate_input_envelope(envelope,request,_context=context)
+    fit_admission(model,request['fit_settings'],request['row_counts'],retained_bytes=scan.retained,_context=context)
     data=envelope['data'];scan.inventory(directory/'inputs',set(data['files'])|{'manifest.json'})
     blocks:dict[str,dict[int,Any]]={'train':{},'validation':{}};labels:dict[str,dict[int,Any]]={'train':{},'validation':{}}
-    kept=0;layout=feature_layout(model.encoder);limits=categorical_limits(model.encoder)
+    kept=0;layout=context.layout(model.encoder);limits=context.limits(model.encoder)
     for shard in data['shards']:
         scan.check();name=shard['file'];side=name[:-4]+'.json'
         if canonical(scan.object(directory/'inputs'/side,data['files'][side]))!=canonical(shard['metadata']):
@@ -345,11 +476,12 @@ def _container(scan:Any,directory:Any,expected:dict[str,str])->dict[Any,tuple[in
 
 
 def inspect_training(directory:Any,*,expected_binding:TrainingBinding|None=None,max_owned_bytes:int=2*1024**3,
-                     deadline:float=float('inf'))->PairedTraining:
+                     deadline:float=float('inf'),_context:_TreeRecords=TREE2_RECORDS)->PairedTraining:
     """Explicit Training3 root only; no ancestor search, Booster or Torch work."""
     from pathlib import Path
 
     from gf_models.structured_sealed import SealedScan, _identity
+    context=_records(_context)
     directory=Path(directory).absolute();scan=SealedScan(max_owned_bytes=max_owned_bytes,deadline=deadline)
     directories=_container(scan,directory,{'request.json':'file','training.json':'file','inputs':'directory','artifact':'directory',
         'child-result.json':'file','stdout.log':'file','stderr.log':'file'})
@@ -359,7 +491,7 @@ def inspect_training(directory:Any,*,expected_binding:TrainingBinding|None=None,
     directories={directory:directories[directory]}
     request=scan.object(directory/'request.json',None if expected_binding is None else expected_binding.request_sha256)
     completion=scan.object(directory/'training.json',None if expected_binding is None else expected_binding.completion_sha256)
-    validate_request(request)
+    validate_request(request,_context=context)
     if expected_binding is not None and Path(expected_binding.directory).absolute()!=directory:
         raise ContractError('Tree2 explicit paired directory differs from binding')
     scan.inventory(directory/'artifact',{'inference.json','model.txt'})
@@ -371,16 +503,17 @@ def inspect_training(directory:Any,*,expected_binding:TrainingBinding|None=None,
         pass
     model_sha=scan.files[directory/'artifact'/'model.txt'][1]
     from gf_common.action_contract import parse_action_contract
+    from gf_common.card_instance import parse_card_instance_contract
     from gf_models.structured_tree_artifacts import inspect_artifact
-    from gf_models.structured_tree_config import configured_tree_v2
-    model=configured_tree_v2({**request['model'],'checkpoint':None,**request['execution']})
+    model=context.configured({**request['model'],'checkpoint':None,**request['execution']})
     classification=request['input_binding']
     inference,text=inspect_artifact(directory/'artifact',expected_digest=inference_sha,model=model,
-        action_config_hash=inference['action_config_hash'],action_contract=parse_action_contract(classification['action_contract']),
-        purpose=classification['purpose'],synthetic_capacity=classification['synthetic_capacity'],deadline=deadline,_scan=scan)
+        action_config_hash=inference['action_config_hash'],action_contract=(parse_card_instance_contract if context.modern else parse_action_contract)(classification['action_contract']),
+        purpose=classification['purpose'],synthetic_capacity=classification['synthetic_capacity'],deadline=deadline,_scan=scan,_context=context,
+        _expected_source=None if not context.modern else (request['source_kind'],request['source_origin']))
     validate_fitted_parameters(text,request,model)
-    validate_pair_records(request,completion,inference,request_sha256=request_sha,inference_sha256=inference_sha,model_sha256=model_sha)
-    envelope,_,_=inspect_fit_inputs(directory,request,scan)
+    validate_pair_records(request,completion,inference,request_sha256=request_sha,inference_sha256=inference_sha,model_sha256=model_sha,_context=context)
+    envelope,_,_=inspect_fit_inputs(directory,request,scan,_context=context)
     if inference['action_config_hash']!=envelope['action_config_hash']:
         raise ContractError('Tree2 actual own action hash differs from verified numeric descriptor')
     expected={'request.json','artifact/inference.json','artifact/model.txt','child-result.json','stdout.log','stderr.log'}|set(request['input_files'])
@@ -388,8 +521,9 @@ def inspect_training(directory:Any,*,expected_binding:TrainingBinding|None=None,
     for name,sha in completion['outputs']['files'].items():
         with scan.file(directory/name,sha):pass
     receipt=scan.object(directory/'child-result.json',completion['outputs']['files']['child-result.json'])
-    closed(receipt,{'schema_version','kind','request_sha256','input_files','metrics','inference_sha256','model_sha256'})
-    if (type(receipt['schema_version']) is not int or receipt['schema_version']!=3 or receipt['kind']!='structured-tree-fit-result'
+    closed(receipt,{'schema_version','kind','request_sha256','input_files','metrics','inference_sha256','model_sha256'}|context.extra_fields)
+    context.source(receipt)
+    if (type(receipt['schema_version']) is not int or receipt['schema_version']!=context.schema or receipt['kind']!='structured-tree-fit-result'
             or receipt['request_sha256']!=request_sha or receipt['input_files']!=request['input_files']
             or canonical(receipt['metrics'])!=canonical(completion['metrics'])
             or receipt['inference_sha256']!=inference_sha or receipt['model_sha256']!=model_sha):
@@ -416,12 +550,13 @@ def tree_fit_producer(code_revision:str|None=None)->Json:
     return {'code_revision':code_revision,'source_digest':source.hexdigest()}
 
 
-def resolve_checkpoint(directory:Any,*,max_owned_bytes:int=2*1024**3,deadline:float=float('inf'))->tuple[Any,str,TrainingBinding|None]:
+def resolve_checkpoint(directory:Any,*,max_owned_bytes:int=2*1024**3,deadline:float=float('inf'),_context:_TreeRecords=TREE2_RECORDS)->tuple[Any,str,TrainingBinding|None]:
     """Inspect only the explicitly supplied toy artifact or Training3 root."""
     import stat
     from pathlib import Path
 
     from gf_models.structured_sealed import SealedScan
+    context=_records(_context)
     directory=Path(directory).absolute()
     entries={}
     for name in ('inference.json','training.json'):
@@ -431,25 +566,54 @@ def resolve_checkpoint(directory:Any,*,max_owned_bytes:int=2*1024**3,deadline:fl
         entries[name]=True
     if len(entries)!=1:raise ContractError('explicit Tree2 toy artifact/Training3 root is ambiguous or incomplete')
     if 'training.json' in entries:
-        pair=inspect_training(directory,max_owned_bytes=max_owned_bytes,deadline=deadline)
+        pair=inspect_training(directory,max_owned_bytes=max_owned_bytes,deadline=deadline,_context=context)
         return directory/'artifact',pair.completion['outputs']['inference_sha256'],pair.binding
     scan=SealedScan(max_owned_bytes=max_owned_bytes,deadline=deadline)
     _container(scan,directory,{'inference.json':'file','model.txt':'file'})
     manifest=scan.object(directory/'inference.json')
-    if (type(manifest.get('schema_version')) is not int or manifest['schema_version']!=3
+    if (type(manifest.get('schema_version')) is not int or manifest['schema_version']!=context.schema
             or manifest.get('kind')!='structured-tree-inference' or manifest.get('fit_origin')!='toy' or manifest.get('provenance') is not None):
         raise ContractError('bare trained/unknown Tree2 artifact cannot bind without explicit paired Training3 root')
+    context.source(manifest,toy=True)
     scan.finalize()
     return directory,scan.files[directory/'inference.json'][1],None
 
 
-def copy_training_bundle(source:Any,target:Any,*,max_owned_bytes:int=2*1024**3,deadline:float=float('inf'))->TrainingBinding:
+def _close_owned_descriptor(owner:Any,fd:int,identity:Any,role:str)->None:
+    """One terminal close attempt; an uncertain number is never operated on again."""
+    import os
+    try:
+        os.close(fd)
+    except BaseException as error:
+        owner._uncertain_releases.append((role,fd,identity,error))
+        raise
+
+
+def _invalidate_owned_completion(owner:Any,path:Any)->None:
+    """An attempted-close FD is absent from active state: recover a NEW capability."""
+    import os
+    import stat
+    if owner.fd is None:
+        owner.fd=os.open(path,os.O_RDWR|os.O_NONBLOCK|os.O_NOFOLLOW)
+        owner._completion_fd_identity=None
+        info=os.fstat(owner.fd)
+        owner._completion_fd_identity=(info.st_dev,info.st_ino)
+    else:
+        # Active descriptor state contains only handles never submitted to close.
+        info=os.fstat(owner.fd)
+    if (not stat.S_ISREG(info.st_mode) or (info.st_dev,info.st_ino)!=owner.snapshot[:2]
+            or os.pwrite(owner.fd,b'!',0)!=1 or os.pread(owner.fd,1,0)!=b'!'):
+        raise ContractError('completion revocation unconfirmed: original owned object invalidation failed')
+
+
+def copy_training_bundle(source:Any,target:Any,*,max_owned_bytes:int=2*1024**3,deadline:float=float('inf'),_context:_TreeRecords=TREE2_RECORDS)->TrainingBinding:
     """Copy unchanged paired bytes; own completion remains revocable until success."""
     import os
     import stat
     from pathlib import Path
 
     from gf_models.structured_tree_artifacts import _publish, _written
+    context=_records(_context)
     source=Path(source).absolute();target=Path(target).absolute()
     # Reject aliasing BEFORE source parsing, mkdir or publication. Lexical '..'
     # and symlink ancestors cannot grant write access inside immutable originals.
@@ -470,12 +634,16 @@ def copy_training_bundle(source:Any,target:Any,*,max_owned_bytes:int=2*1024**3,d
             current=parent.lstat()
             if not stat.S_ISDIR(current.st_mode) or (current.st_dev,current.st_ino)!=identity:
                 raise ContractError('paired copy ancestor replaced')
-    pair=inspect_training(source,max_owned_bytes=max_owned_bytes,deadline=deadline)
+    pair=inspect_training(source,max_owned_bytes=max_owned_bytes,deadline=deadline,_context=context)
     check();target.mkdir(mode=0o700,exist_ok=False)
     root_info=target.lstat();root_identity=(root_info.st_dev,root_info.st_ino)
     root_fd=os.open(target,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
     held:dict[str,int]={'':root_fd};identities={'':root_identity}
+    owner=_CopiedCompletion(target,pair,ancestors,root_identity,deadline,max_owned_bytes,root_fd,_context=context)
+    owner._retained_directories=held
     try:
+        actual_root=os.fstat(root_fd)
+        owner._retained_identities['']=(actual_root.st_dev,actual_root.st_ino)
         if (os.fstat(root_fd).st_dev,os.fstat(root_fd).st_ino)!=root_identity:
             raise ContractError('paired-copy original target root replaced')
         for name in ('inputs','artifact'):
@@ -484,6 +652,7 @@ def copy_training_bundle(source:Any,target:Any,*,max_owned_bytes:int=2*1024**3,d
             created=os.stat(name,dir_fd=root_fd,follow_symlinks=False)
             fd=os.open(name,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=root_fd)
             held[name]=fd;identities[name]=(created.st_dev,created.st_ino)
+            actual_fd=os.fstat(fd);owner._retained_identities[name]=(actual_fd.st_dev,actual_fd.st_ino)
         def owned_directories()->None:
             check()
             for name,fd in held.items():
@@ -504,31 +673,47 @@ def copy_training_bundle(source:Any,target:Any,*,max_owned_bytes:int=2*1024**3,d
                 directory_fd=held['' if parent=='.' else parent]
                 owned_directories()
                 fd,snapshot,actual=_publish(destination.parent,directory_fd,destination.name,raw,deadline)
+                owner._copy_fd=fd;owner._copy_identity=snapshot[:2]
                 try:
                     if actual!=expected:raise ContractError('paired copy changed immutable bytes')
                     _written(destination.parent,directory_fd,destination.name,fd,snapshot,expected,deadline)
                     pair.scan.charge(512+len(str(destination).encode()))
                     pair.scan.files[destination]=(snapshot,expected)
                     owned_directories()
-                finally:os.close(fd)
+                except BaseException as original:
+                    try:owner._retire_file()
+                    except BaseException as cleanup:  # noqa: BLE001 - keep initiating error and exact FD owner
+                        vars(original)['_structured_copy_cleanup_owner']=owner
+                        original.add_note('copied file retirement unconfirmed: '+str(cleanup))
+                    raise
+                owner._retire_file()
             pair.finalize();owned_directories()
         pair.finalize();owned_directories()
         with pair.scan.file(source/'training.json',pair.binding.completion_sha256) as (stream,info):
             pair.scan.charge(32*info.st_size+65536,temporary=True)
             raw=stream.read(info.st_size+1)
             if len(raw)!=info.st_size:raise ContractError('paired completion length changed')
-        owner=_CopiedCompletion(target,pair,ancestors,root_identity,deadline,max_owned_bytes,root_fd)
         return owner.commit(raw)
-    finally:
-        for fd in reversed(tuple(held.values())):os.close(fd)
+    except BaseException as original:
+        if not owner.exposed:
+            try:owner._release()
+            except BaseException as cleanup:  # noqa: BLE001 - retain original error and same descriptor owner
+                vars(original)['_structured_copy_cleanup_owner']=owner
+                original.add_note('copy descriptor retirement unconfirmed: '+str(cleanup))
+        raise
 
 
 class _CopiedCompletion:
     """Narrow models-level exact-copy owner; no training orchestration import."""
-    def __init__(self,target:Any,pair:PairedTraining,ancestors:Any,root_identity:Any,deadline:float,limit:int,root_fd:int)->None:
+    def __init__(self,target:Any,pair:PairedTraining,ancestors:Any,root_identity:Any,deadline:float,limit:int,root_fd:int,*,_context:_TreeRecords=TREE2_RECORDS)->None:
+        self.context=_records(_context)
         self.target,self.pair,self.ancestors,self.root_identity=target,pair,ancestors,root_identity
         self.deadline,self.limit=deadline,limit;self.fd:int|None=None;self.directory_fd:int|None=None
         self.snapshot:Any=None;self.exposed=False;self.revoked=False;self.root_fd=root_fd
+        self._completion_fd_identity:Any=None;self._copy_fd:int|None=None;self._copy_identity:Any=None
+        self._retained_directories:dict[str,int]={};self._retained_identities:dict[str,Any]={}
+        self._uncertain_releases:list[tuple[str,int,Any,BaseException]]=[]
+        self._commit_started=False
 
     def _namespace(self)->None:
         import os
@@ -543,35 +728,56 @@ class _CopiedCompletion:
         self.pair.finalize();self._namespace()
         remaining=self.limit-self.pair.scan.retained
         if remaining<=0:raise ContractError('paired-copy joint metadata ownership exhausted')
-        copied=inspect_training(self.target,max_owned_bytes=remaining,deadline=self.deadline)
+        copied=inspect_training(self.target,max_owned_bytes=remaining,deadline=self.deadline,_context=self.context)
         copied.finalize();self.pair.finalize();self._namespace()
         return copied.binding
 
+    def _retire_file(self)->None:
+        if self._copy_fd is not None:
+            fd=self._copy_fd;self._copy_fd=None
+            _close_owned_descriptor(self,fd,self._copy_identity,'copied-file')
+
+    def _retire_directories(self)->None:
+        for name in reversed(tuple(self._retained_directories)):
+            fd=self._retained_directories.pop(name)
+            _close_owned_descriptor(self,fd,self._retained_identities.get(name),'directory:'+name)
+
     def _release(self)->None:
-        import os
-        if self.fd is not None:os.close(self.fd);self.fd=None
-        if self.directory_fd is not None:os.close(self.directory_fd);self.directory_fd=None
+        self._retire_file();self._retire_directories()
+        # Keep completion revocable until every other descriptor has retired.
+        if self.directory_fd is not None:
+            fd=self.directory_fd;self.directory_fd=None
+            _close_owned_descriptor(self,fd,self.root_identity,'completion-directory')
+        if self.fd is not None:
+            fd=self.fd;self.fd=None
+            _close_owned_descriptor(self,fd,self._completion_fd_identity,'completion')
+        if self._uncertain_releases:
+            raise ContractError('terminal copy descriptor release remains unconfirmed; quarantined numbers are not retryable')
 
     def revoke(self)->None:
-        import os
         import time
-        if self.revoked or self.fd is None:return
-        if time.monotonic()>=self.deadline:raise ContractError('completion revocation unconfirmed: original copy deadline exhausted')
-        held=os.fstat(self.fd)
-        if (held.st_dev,held.st_ino)!=self.snapshot[:2] or os.pwrite(self.fd,b'!',0)!=1 or os.pread(self.fd,1,0)!=b'!':
-            raise ContractError('completion revocation unconfirmed: copied owned FD invalidation failed')
-        self.revoked=True;self._release()
+        if not self.revoked and self.exposed:
+            if time.monotonic()>=self.deadline:raise ContractError('completion revocation unconfirmed: original copy deadline exhausted')
+            _invalidate_owned_completion(self,self.target/'training.json')
+            self.revoked=True
+        self._release()  # Also retry retirement after an already-confirmed invalidation.
 
     def commit(self,raw:bytes)->TrainingBinding:
         import os
         import uuid
 
         from gf_models.structured_tree_artifacts import _identity, _publish, _written
+        if self._commit_started or self._uncertain_releases:
+            raise ContractError('copy publication is one-use; failed attempts are cleanup-only')
+        self._commit_started=True
         temporary='copy-completion-'+uuid.uuid4().hex+'.tmp'
-        self.directory_fd=os.dup(self.root_fd)
         try:
+            self.directory_fd=os.dup(self.root_fd)
+            # No outer finally may fail after a healthy completion is committed.
+            self._retire_directories()
             self._namespace()
             self.fd,self.snapshot,sha=_publish(self.target,self.directory_fd,temporary,raw,self.deadline)
+            self._completion_fd_identity=self.snapshot[:2]
             self.exposed=True
             # Exclusive publication never overwrites an existing final object.
             os.link(temporary,'training.json',src_dir_fd=self.directory_fd,dst_dir_fd=self.directory_fd,follow_symlinks=False)
@@ -590,16 +796,16 @@ class _CopiedCompletion:
             binding=self._postcheck()
             _written(self.target,self.directory_fd,'training.json',self.fd,self.snapshot,sha,self.deadline)
             self._namespace()
+            self._release()
         except BaseException as original:
-            if self.fd is not None and self.exposed:
-                try:self.revoke()
-                except BaseException as cleanup:  # noqa: BLE001 - exact unconfirmed copy owner stays reachable
-                    vars(original)['_structured_copy_cleanup_owner']=self
-                    try:original.add_note('completion revocation unconfirmed: '+type(cleanup).__name__)
-                    except BaseException:pass  # noqa: BLE001, S110 - diagnostics cannot replace original failure
-            else:self._release()
+            try:
+                if self.exposed:self.revoke()
+                else:self._release()
+            except BaseException as cleanup:  # noqa: BLE001 - uncertain revocation/descriptor owner stays reachable
+                vars(original)['_structured_copy_cleanup_owner']=self
+                try:original.add_note('completion revocation unconfirmed: '+type(cleanup).__name__)
+                except BaseException:pass  # noqa: BLE001, S110 - diagnostics cannot replace original failure
             raise
-        self._release()
         return binding
 
 
@@ -613,3 +819,28 @@ def validate_fitted_parameters(text:str,request:Json,model:Any)->None:
         'feature_fraction_seed':str(derived),'bagging_seed':str(derived),'deterministic':'1','force_col_wise':'1','feature_pre_filter':'0'}
     if any(params.get(key)!=value for key,value in expected_params.items()) or float(params.get('learning_rate','nan'))!=fit['learning_rate']:
         raise ContractError('Tree2 actual native fitted parameters differ from immutable request')
+
+
+# Explicit corrected wrappers; legacy entry points keep their original discriminator.
+def model_envelope_v3(model:TreeArchitectureV3,rounds:int)->Json:
+    return model_envelope(model,rounds,_context=TREE3_RECORDS)
+
+
+def validate_request_v3(value:Any)->Json:
+    return validate_request(value,_context=TREE3_RECORDS)
+
+
+def fit_admission_v3(model:ConfiguredTreeModelV3,fit:Json,rows:Json,*,retained_bytes:int)->Json:
+    return fit_admission(model,fit,rows,retained_bytes=retained_bytes,_context=TREE3_RECORDS)
+
+
+def inspect_training_v3(directory:Any,**options:Any)->PairedTraining:
+    return inspect_training(directory,_context=TREE3_RECORDS,**options)
+
+
+def resolve_checkpoint_v3(directory:Any,**options:Any)->tuple[Any,str,TrainingBinding|None]:
+    return resolve_checkpoint(directory,_context=TREE3_RECORDS,**options)
+
+
+def copy_training_bundle_v3(source:Any,target:Any,**options:Any)->TrainingBinding:
+    return copy_training_bundle(source,target,_context=TREE3_RECORDS,**options)

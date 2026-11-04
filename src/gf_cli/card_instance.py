@@ -20,17 +20,23 @@ from gf_common.domain import (
     Json,
     RuntimePolicyBinding,
     canonical,
+    digest,
 )
 from gf_common.schedule import schedule, serialize_schedule
 from gf_evaluation.evaluation import report
-from gf_models.config import ModelConfig
+from gf_models.config import ModelConfig, PPOTrainingConfig
 from gf_models.structured_binding import ConfiguredNeuralModelV3
 from gf_simulator_client.card_instance_environment import CardInstanceSimulatorEnvironment
 from gf_simulator_client.card_instance_runtime import CardInstanceRuntimeEvidence
 from gf_simulator_client.environment import EnvironmentSettings
 from gf_simulator_client.structured_resources import ReservationLedger
-from gf_training.card_instance_collection import CollectionPublication, collection_metadata
+from gf_training.card_instance_collection import (
+    CollectionPublication,
+    collection_metadata,
+    ppo_collection_metadata,
+)
 from gf_training.card_instance_journal import CardInstanceJournal, read_card_instance_journal
+from gf_training.collection import CollectionPlan, FinalizedCollection
 
 
 def _check(deadline: float) -> None:
@@ -174,26 +180,33 @@ async def run_inference(loaded: LoadedConfig, command: str) -> tuple[Path, Json]
 
 
 async def _run_corrected(loaded: LoadedConfig, command: str,
-                         bindings: dict[str, RuntimePolicyBinding], labels: tuple[str, str], *,
+                         bindings: dict[str, RuntimePolicyBinding], labels: tuple[str, ...], *,
                          started: float | None = None, artifact_inputs: Any = None,
                          runtime_evidence: CardInstanceRuntimeEvidence | None = None,
-                         resource_admission: Json | None = None) -> tuple[Path, Json]:
+                         resource_admission: Json | None = None,
+                         collection: CollectionPlan | None = None,
+                         owned_ledger: ReservationLedger | None = None) -> tuple[Path, Json]:
     config = loaded.config
     assert isinstance(config.actions, ActionConfigV3)
     if config.server.external_url is not None or config.server.source_dir is None:
         raise ContractError("corrected baseline collection requires locally managed verified source/binary evidence")
     started = time.monotonic() if started is None else started
-    wall_deadline = started + config.run.wall_seconds
+    wall_deadline = started + config.run.wall_seconds if collection is None else collection.wall_deadline
     work_deadline = wall_deadline - config.run.report_reserve_seconds
     replay_deadline = work_deadline - config.server.cleanup_reserve_seconds
-    execution_deadline = started + config.run.execution_seconds
+    execution_deadline = started + config.run.execution_seconds if collection is None else collection.execution_deadline
     preflight_deadline = min(execution_deadline, replay_deadline)
     evidence = runtime_evidence or CardInstanceRuntimeEvidence(Path(config.server.binary), Path(config.server.source_dir), deadline=preflight_deadline)
     evidence.preflight()
-    planned = schedule(config.run.seeds, config.run.sampling_seeds, config.run.pairs_per_seed,
-                       labels[0], labels[1], deadline=preflight_deadline)
+    planned = (schedule(config.run.seeds, config.run.sampling_seeds, config.run.pairs_per_seed,
+                        labels[0], labels[1], deadline=preflight_deadline)
+               if collection is None else collection.groups)
+    if collection is not None:
+        assert owned_ledger is not None
+        _validate_online_collection(loaded, collection, owned_ledger, preflight_deadline)
     run_id = str(uuid.uuid4())
-    directory = Path(config.run.output_dir) / (config.run.name + "-" + run_id)
+    directory = (Path(config.run.output_dir) / (config.run.name + "-" + run_id)
+                 if collection is None else collection.output)
     directory.mkdir(parents=True, exist_ok=False)
     settings = EnvironmentSettings(binary=config.server.binary, server_config=config.server.config,
         output_dir=directory, run_id=run_id, actions=config.actions,
@@ -201,11 +214,13 @@ async def _run_corrected(loaded: LoadedConfig, command: str,
         startup_seconds=config.server.startup_seconds, request_seconds=config.server.request_seconds,
         worker_seconds=config.server.worker_seconds, shutdown_seconds=config.server.shutdown_seconds,
         transport_retries=config.server.transport_retries, max_decisions=config.run.max_decisions,
-        admission_deadline=started + config.run.admission_seconds, execution_deadline=execution_deadline,
+        admission_deadline=started + config.run.admission_seconds if collection is None else execution_deadline,
+        execution_deadline=execution_deadline,
         wall_deadline=wall_deadline, work_deadline=work_deadline, replay_deadline=replay_deadline,
         policy_bindings=bindings)
     assert isinstance(config.run, RunConfigV2)
-    ledger = ReservationLedger(config.run.global_cuda_budget_bytes, config.run.max_participant_workers)
+    ledger = (ReservationLedger(config.run.global_cuda_budget_bytes, config.run.max_participant_workers)
+              if owned_ledger is None else owned_ledger)
     extra: dict[str, Any] = {} if artifact_inputs is None else {"artifact_inputs": artifact_inputs}
     semaphore = asyncio.Semaphore(config.run.concurrency)
     tasks: list[asyncio.Task[GroupResult]] = []
@@ -239,8 +254,13 @@ async def _run_corrected(loaded: LoadedConfig, command: str,
         if any(group.health.get("runtime_evidence_failure")
                or "runtime_evidence" not in group.health for group in groups):
             raise ContractError("corrected runtime evidence failed or is missing after group cleanup")
-        if ledger.workers or ledger.learner is not None or ledger.updating or ledger.cuda_bytes:
-            raise ContractError("corrected collection has unreaped resource ownership before publication")
+        if collection is None:
+            if ledger.workers or ledger.learner is not None or ledger.updating or ledger.cuda_bytes:
+                raise ContractError("corrected collection has unreaped resource ownership before publication")
+        else:
+            _validate_online_collection(loaded, collection, ledger, work_deadline)
+            if ledger.workers or ledger.updating:
+                raise ContractError("PPO collection has unreaped participant/update ownership")
         expected = {spec.episode_id: (spec, group.health["runtime_evidence"])
                     for plan, group in zip(planned, groups, strict=True) for spec in plan.episodes}
         neural_metadata = ({label: artifact_inputs.journal_metadata(label) for label, binding in bindings.items()
@@ -255,7 +275,10 @@ async def _run_corrected(loaded: LoadedConfig, command: str,
         receipts = [group.health["runtime_evidence"] for group in groups]
         metadata_options: dict[str, Any] = ({} if neural_inputs is None else
             {"policy_bindings": bindings, "neural_inputs": neural_inputs})
-        manifest = collection_metadata(actions=config.actions, config=loaded.effective,
+        metadata_producer = collection_metadata if collection is None else ppo_collection_metadata
+        if collection is not None:
+            metadata_options["linkage"] = collection.linkage
+        manifest = metadata_producer(actions=config.actions, config=loaded.effective,
             runtime_evidence=receipts, schedule=serialize_schedule(planned, 4), inventory=inventory,
             policies=list(labels), bots_revision=producer["revision"], **metadata_options)
         if resource_admission is not None:
@@ -286,3 +309,71 @@ async def _run_corrected(loaded: LoadedConfig, command: str,
 def _write_diagnostic(directory: Path, name: str, value: Json) -> None:
     with (directory / name).open("x", encoding="utf-8") as output:
         output.write(canonical(value) + "\n")
+
+
+def _validate_online_collection(loaded: LoadedConfig, plan: CollectionPlan,
+                                 ledger: ReservationLedger, deadline: float) -> Any:
+    from gf_training.card_instance_source import validate_owned_collection
+    if not isinstance(loaded.config.training, PPOTrainingConfig):
+        raise ContractError("online card-instance collection requires PPO training")
+    online = validate_owned_collection(plan, ledger,
+        max_owned_bytes=min(loaded.config.training.max_owned_bytes,
+                            loaded.config.preprocessing.memory_budget_mib * 1024**2),
+        deadline=deadline)
+    effective = asdict(loaded.config)
+    if (loaded.sha256 != online.state["config_sha256"] or digest(effective) != loaded.sha256
+            or canonical(loaded.effective) != canonical(effective)
+            or canonical(effective) != canonical(online.state["effective_config"])
+            or canonical(list(loaded.inputs)) != canonical(online.state["config_inputs"])):
+        raise ContractError("online collection caller differs from SAME parent Config/input origins")
+    return online
+
+
+async def collect_ppo(loaded: LoadedConfig, plan: CollectionPlan,
+                      ledger: ReservationLedger) -> FinalizedCollection:
+    """Same live parent's frozen plan; metadata cannot mint admission."""
+    _require_actions(loaded)
+    config = loaded.config
+    assert type(config.actions) is ActionConfigV3 and isinstance(config.run, RunConfigV2)
+    if (type(config.model) is not ConfiguredNeuralModelV3
+            or not isinstance(config.training, PPOTrainingConfig)
+            or config.run.split != "train" or config.preprocessing.backend not in ("python", "rust")
+            or config.preprocessing.reader != "participant-structured-v2"):
+        raise ContractError("online card-instance collector requires explicit model3/participant-structured-v2 PPO")
+    online = _validate_online_collection(loaded, plan, ledger, plan.execution_deadline)
+    if config.preprocessing.backend == "rust":
+        from gf_training.native_backend import card_instance_reader_settings
+        card_instance_reader_settings(config.preprocessing)
+    if config.server.external_url is not None or config.server.source_dir is None:
+        raise ContractError("PPO collector requires locally managed verified runtime")
+    started = time.monotonic() if plan.started_monotonic is None else plan.started_monotonic
+    work_deadline = plan.wall_deadline - config.run.report_reserve_seconds
+    preflight_deadline = min(plan.execution_deadline, work_deadline - config.server.cleanup_reserve_seconds)
+    evidence = CardInstanceRuntimeEvidence(Path(config.server.binary), Path(config.server.source_dir),
+                                          deadline=preflight_deadline)
+    evidence.preflight()
+    from gf_common.card_instance_rules import card_instance_rules
+    from gf_models.card_instance_artifacts import RetainedGameArtifacts
+    from gf_models.structured_runtime import admit_game_workers_v3
+    rules = card_instance_rules()
+    owner = RetainedGameArtifacts.for_registry(plan.bindings, config.actions, rules=rules,
+        max_owned_bytes=min(config.training.max_owned_bytes, config.model.resources.max_owned_bytes,
+                            config.preprocessing.memory_budget_mib * 1024**2),
+        preflight_deadline=preflight_deadline, finalization_deadline=work_deadline)
+    try:
+        admissions = [admit_game_workers_v3(config.actions,
+            (plan.bindings[spec.policies[0]], plan.bindings[spec.policies[1]]), rules=rules,
+            game_concurrency=config.run.concurrency, global_cuda_bytes=config.run.global_cuda_budget_bytes,
+            max_workers=config.run.max_participant_workers, learner_cuda_bytes=ledger.cuda_bytes)
+            for group in plan.groups for spec in group.episodes]
+        if not admissions:
+            raise ContractError("empty frozen PPO collection schedule")
+        # Keep the validated borrowed live context reachable until finalization.
+        assert online is not None
+        directory, summary = await _run_corrected(loaded, "collect", plan.bindings,
+            tuple(plan.bindings), started=started, artifact_inputs=owner, runtime_evidence=evidence,
+            resource_admission=max(admissions, key=lambda value: value["peak_cuda_bytes"]),
+            collection=plan, owned_ledger=ledger)
+        return FinalizedCollection(directory, summary)
+    finally:
+        owner.release()

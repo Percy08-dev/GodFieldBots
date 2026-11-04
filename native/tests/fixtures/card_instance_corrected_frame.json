@@ -1,0 +1,535 @@
+{
+  "events": [
+    {
+      "player": 1,
+      "type": "safe"
+    },
+    {
+      "definition_id": "fireball",
+      "mp_spent": 0,
+      "player": 1,
+      "type": "miracle_used"
+    }
+  ],
+  "frame": {
+    "actor": 1,
+    "boundary": {
+      "end": 2,
+      "prefix_hash": "44f62d938fb371f4634539054f5603b1fbdf6affb67a645d4c6a27d88e25e97d"
+    },
+    "episode": "python-corrected-native-frame-golden",
+    "frame_hash": "4a6ccf18f798ce2f1bc9761300d4be11354cdebf128cf1c43e88d1a55f040c7e",
+    "interval_start": 0,
+    "interval_start_hash": "addefa1b960822458f2a79b23f6833b4b314e4e7644a06c12cd200cd187fe413",
+    "payload": {
+      "action_options": {
+        "action_options": {
+          "action_options_schema_version": "2",
+          "actor": 1,
+          "buy_cards": [],
+          "can_allow": false,
+          "can_discard": true,
+          "can_pray": false,
+          "can_sacrifice": false,
+          "candidate_groups": {
+            "uninterpreted-fixture-role": [
+              {
+                "card_ref": "c1_00000000000000000000000000000001",
+                "definition_id": "bronze-club"
+              },
+              {
+                "card_ref": "c1_00000000000000000000000000000002",
+                "definition_id": "fireball"
+              },
+              {
+                "card_ref": "c1_00000000000000000000000000000003",
+                "definition_id": "fireball"
+              }
+            ]
+          },
+          "card_ref_scheme": "aes256-card-ref-v1",
+          "exchange_cards": [],
+          "phenomenon_cards": [],
+          "required_choice": "turn_action",
+          "rule_set_version": "true-match-1v1-v2",
+          "sell_cards": [],
+          "state_revision": 0,
+          "usable_cards": [
+            {
+              "card_ref": "c1_00000000000000000000000000000001",
+              "definition_id": "bronze-club"
+            },
+            {
+              "card_ref": "c1_00000000000000000000000000000002",
+              "definition_id": "fireball"
+            },
+            {
+              "card_ref": "c1_00000000000000000000000000000003",
+              "definition_id": "fireball"
+            }
+          ],
+          "valid_targets": [
+            1,
+            2
+          ]
+        },
+        "state_revision": 0,
+        "viewer_player_id": 1
+      },
+      "catalog": {
+        "bronze-club": {
+          "attack": 1,
+          "classification": {
+            "definition_class": "owned_card",
+            "use_roles": [
+              "weapon"
+            ]
+          },
+          "definition_id": "bronze-club",
+          "display_name": "銅のこん棒",
+          "kind": "weapons",
+          "price": 1
+        },
+        "fireball": {
+          "additional_attack": true,
+          "attack": 2,
+          "attribute": "fire",
+          "classification": {
+            "definition_class": "owned_card",
+            "miracle_subclass": "additional_weapon",
+            "use_roles": [
+              "miracle:additional_weapon",
+              "additional_attack"
+            ]
+          },
+          "definition_id": "fireball",
+          "display_name": "＜火の玉＞",
+          "kind": "miracles",
+          "mp_cost": 2
+        }
+      },
+      "history_end": null,
+      "observation": {
+        "action_schema_version": 2,
+        "actionable": true,
+        "active_player": 1,
+        "card_ref_scheme": "aes256-card-ref-v1",
+        "current_player": 1,
+        "end_times": false,
+        "first_player": 1,
+        "observation_schema_version": "2",
+        "opponent": {
+          "ascended": false,
+          "hp": 40,
+          "learned_miracles": [],
+          "money": 20,
+          "mp": 10,
+          "player_id": 2,
+          "status": {
+            "dark_cloud": false,
+            "disease": null,
+            "dream": false,
+            "flash": false,
+            "fog": false
+          }
+        },
+        "own": {
+          "ascended": false,
+          "cards": [
+            {
+              "card_ref": "c1_00000000000000000000000000000001",
+              "definition_id": "bronze-club",
+              "kind": "artifact"
+            },
+            {
+              "card_ref": "c1_00000000000000000000000000000002",
+              "definition_id": "fireball",
+              "kind": "miracle",
+              "state": "unused"
+            },
+            {
+              "card_ref": "c1_00000000000000000000000000000003",
+              "definition_id": "fireball",
+              "kind": "miracle",
+              "state": "learned"
+            }
+          ],
+          "guardian": null,
+          "hp": 40,
+          "money": 20,
+          "mp": 10,
+          "player_id": 1,
+          "status": {
+            "dark_cloud": false,
+            "disease": null,
+            "dream": false,
+            "flash": false,
+            "fog": false
+          }
+        },
+        "phase": "awaiting_action",
+        "required_choice": "turn_action",
+        "result": null,
+        "rule_set_version": "true-match-1v1-v2",
+        "state_revision": 0,
+        "turn": 1,
+        "turns_until_end_of_world": 149,
+        "typed_action_schema": [
+          {
+            "additional_fields": false,
+            "optional_fields": {},
+            "required_fields": {},
+            "type": "pray"
+          },
+          {
+            "additional_fields": false,
+            "optional_fields": {},
+            "required_fields": {
+              "ordered_card_refs": {
+                "items": {
+                  "pattern": "^c1_[0-9a-f]{32}$",
+                  "sources": [
+                    "own.cards[].card_ref"
+                  ],
+                  "type": "string"
+                },
+                "ordered": true,
+                "type": "array",
+                "unique": true
+              },
+              "target": {
+                "enum": [
+                  1,
+                  2
+                ],
+                "sources": [
+                  "own.player_id",
+                  "opponent.player_id"
+                ],
+                "type": "integer"
+              }
+            },
+            "type": "play_sequence"
+          },
+          {
+            "additional_fields": false,
+            "optional_fields": {},
+            "required_fields": {
+              "card_refs": {
+                "items": {
+                  "pattern": "^c1_[0-9a-f]{32}$",
+                  "sources": [
+                    "own.cards[].card_ref"
+                  ],
+                  "type": "string"
+                },
+                "ordered": true,
+                "type": "array",
+                "unique": true
+              }
+            },
+            "type": "discard"
+          },
+          {
+            "additional_fields": false,
+            "optional_fields": {},
+            "required_fields": {
+              "card_refs": {
+                "items": {
+                  "pattern": "^c1_[0-9a-f]{32}$",
+                  "sources": [
+                    "own.cards[].card_ref"
+                  ],
+                  "type": "string"
+                },
+                "ordered": true,
+                "type": "array",
+                "unique": true
+              }
+            },
+            "type": "sacrifice"
+          },
+          {
+            "additional_fields": false,
+            "optional_fields": {},
+            "required_fields": {
+              "card_ref": {
+                "pattern": "^c1_[0-9a-f]{32}$",
+                "sources": [
+                  "own.cards[].card_ref"
+                ],
+                "type": "string"
+              },
+              "hp": {
+                "maximum": 2147483647,
+                "minimum": -2147483648,
+                "type": "integer"
+              },
+              "money": {
+                "maximum": 4294967295,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "mp": {
+                "maximum": 4294967295,
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "type": "exchange"
+          },
+          {
+            "additional_fields": false,
+            "optional_fields": {},
+            "required_fields": {
+              "card_ref": {
+                "pattern": "^c1_[0-9a-f]{32}$",
+                "sources": [
+                  "own.cards[].card_ref"
+                ],
+                "type": "string"
+              },
+              "sold_card_ref": {
+                "pattern": "^c1_[0-9a-f]{32}$",
+                "sources": [
+                  "own.cards[].card_ref"
+                ],
+                "type": "string"
+              },
+              "target": {
+                "enum": [
+                  1,
+                  2
+                ],
+                "sources": [
+                  "own.player_id",
+                  "opponent.player_id"
+                ],
+                "type": "integer"
+              }
+            },
+            "type": "sell"
+          },
+          {
+            "additional_fields": false,
+            "optional_fields": {},
+            "required_fields": {
+              "card_ref": {
+                "pattern": "^c1_[0-9a-f]{32}$",
+                "sources": [
+                  "own.cards[].card_ref"
+                ],
+                "type": "string"
+              },
+              "target": {
+                "enum": [
+                  1,
+                  2
+                ],
+                "sources": [
+                  "own.player_id",
+                  "opponent.player_id"
+                ],
+                "type": "integer"
+              }
+            },
+            "type": "buy"
+          },
+          {
+            "additional_fields": false,
+            "optional_fields": {},
+            "required_fields": {
+              "card_ref": {
+                "pattern": "^c1_[0-9a-f]{32}$",
+                "sources": [
+                  "own.cards[].card_ref"
+                ],
+                "type": "string"
+              }
+            },
+            "type": "invoke_phenomenon"
+          }
+        ],
+        "viewer_player_id": 1
+      },
+      "typed_metadata": [
+        {
+          "additional_fields": false,
+          "optional_fields": {},
+          "required_fields": {},
+          "type": "pray"
+        },
+        {
+          "additional_fields": false,
+          "optional_fields": {},
+          "required_fields": {
+            "ordered_card_refs": {
+              "items": {
+                "pattern": "^c1_[0-9a-f]{32}$",
+                "sources": [
+                  "own.cards[].card_ref"
+                ],
+                "type": "string"
+              },
+              "ordered": true,
+              "type": "array",
+              "unique": true
+            },
+            "target": {
+              "enum": [
+                1,
+                2
+              ],
+              "sources": [
+                "own.player_id",
+                "opponent.player_id"
+              ],
+              "type": "integer"
+            }
+          },
+          "type": "play_sequence"
+        },
+        {
+          "additional_fields": false,
+          "optional_fields": {},
+          "required_fields": {
+            "card_refs": {
+              "items": {
+                "pattern": "^c1_[0-9a-f]{32}$",
+                "sources": [
+                  "own.cards[].card_ref"
+                ],
+                "type": "string"
+              },
+              "ordered": true,
+              "type": "array",
+              "unique": true
+            }
+          },
+          "type": "discard"
+        },
+        {
+          "additional_fields": false,
+          "optional_fields": {},
+          "required_fields": {
+            "card_refs": {
+              "items": {
+                "pattern": "^c1_[0-9a-f]{32}$",
+                "sources": [
+                  "own.cards[].card_ref"
+                ],
+                "type": "string"
+              },
+              "ordered": true,
+              "type": "array",
+              "unique": true
+            }
+          },
+          "type": "sacrifice"
+        },
+        {
+          "additional_fields": false,
+          "optional_fields": {},
+          "required_fields": {
+            "card_ref": {
+              "pattern": "^c1_[0-9a-f]{32}$",
+              "sources": [
+                "own.cards[].card_ref"
+              ],
+              "type": "string"
+            },
+            "hp": {
+              "maximum": 2147483647,
+              "minimum": -2147483648,
+              "type": "integer"
+            },
+            "money": {
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "mp": {
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "type": "exchange"
+        },
+        {
+          "additional_fields": false,
+          "optional_fields": {},
+          "required_fields": {
+            "card_ref": {
+              "pattern": "^c1_[0-9a-f]{32}$",
+              "sources": [
+                "own.cards[].card_ref"
+              ],
+              "type": "string"
+            },
+            "sold_card_ref": {
+              "pattern": "^c1_[0-9a-f]{32}$",
+              "sources": [
+                "own.cards[].card_ref"
+              ],
+              "type": "string"
+            },
+            "target": {
+              "enum": [
+                1,
+                2
+              ],
+              "sources": [
+                "own.player_id",
+                "opponent.player_id"
+              ],
+              "type": "integer"
+            }
+          },
+          "type": "sell"
+        },
+        {
+          "additional_fields": false,
+          "optional_fields": {},
+          "required_fields": {
+            "card_ref": {
+              "pattern": "^c1_[0-9a-f]{32}$",
+              "sources": [
+                "own.cards[].card_ref"
+              ],
+              "type": "string"
+            },
+            "target": {
+              "enum": [
+                1,
+                2
+              ],
+              "sources": [
+                "own.player_id",
+                "opponent.player_id"
+              ],
+              "type": "integer"
+            }
+          },
+          "type": "buy"
+        },
+        {
+          "additional_fields": false,
+          "optional_fields": {},
+          "required_fields": {
+            "card_ref": {
+              "pattern": "^c1_[0-9a-f]{32}$",
+              "sources": [
+                "own.cards[].card_ref"
+              ],
+              "type": "string"
+            }
+          },
+          "type": "invoke_phenomenon"
+        }
+      ]
+    },
+    "revision": 0
+  },
+  "scope": "literal Python common-only corrected frame; no Source or runtime qualification"
+}

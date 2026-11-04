@@ -1,0 +1,653 @@
+{
+  "algorithm_recipe": {
+    "adam": {
+      "amsgrad": false,
+      "betas": [
+        0.9,
+        0.999
+      ],
+      "capturable": false,
+      "decoupled_weight_decay": false,
+      "differentiable": false,
+      "eps": 1e-08,
+      "foreach": null,
+      "fused": null,
+      "lr": 0.0003,
+      "maximize": false,
+      "name": "Adam",
+      "weight_decay": 0
+    },
+    "advantage_normalization": {
+      "ddof": 0,
+      "epsilon_added_to_std": 1e-08,
+      "output_dtype": "float32",
+      "scope": "whole_16_game_batch_selected_learner_endpoints"
+    },
+    "content_sha256": "318eab51e51ab242c629111634ff25e986c1a0a0ece0d246694fd72a27c90cc9",
+    "gae": {
+      "bootstrap_natural_terminal": 0.0,
+      "gamma": 1.0,
+      "intermediate_reward": 0.0,
+      "lambda": 0.95,
+      "raw_dtype": "float64",
+      "target": "saved_value_plus_raw_advantage"
+    },
+    "kernel_digest_recipe": "python3.14-ast-dump-annotate_fields_true-include_attributes_false-sha256-v1",
+    "kernel_sha256": {
+      "gf_training.collection.training_groups": "d59f0055d6922b58884fd73fc2fabb2aa5539feb0037a4d2483189662218356c",
+      "gf_training.collection.validation_groups": "8aa95a6e1796d40fac5833ffa341416663b3e3a79910eaeed769bddb14d751d9",
+      "gf_training.ppo.gae": "cf778ea4b37d56c1e33ee66442c5f9a6cfae897835be40f5480d39a2ac289e00",
+      "gf_training.ppo.normalize_advantages": "e36a87c5155d37ca14118951f1274bfe09b7adebe86a32f8ae5a9ce0e101caa5",
+      "gf_training.ppo_math.losses": "181b9e5dda24fe19818580e2329a1b6a05dd0b76796961ae2622f337f8c806da",
+      "gf_training.ppo_run._controls": "4cb0c37919e82305435e5a545a9de8d5e1b47084f809d1f7fcccba4caff34d70",
+      "gf_training.structured_numeric.Learner.__init__": "a31dc196a3b51e8c61721752cfd756c76f71993ae3e723e23b83dc0654ca5ed0",
+      "gf_training.structured_numeric.Learner.update": "e7dcdb6c1c0e14ae27e1311e8cb2409835504424f8fad1748f475fc8814a4449"
+    },
+    "loss": {
+      "clip_max": 1.2,
+      "clip_min": 0.8,
+      "entropy_coefficient": 0.01,
+      "policy": "negative_mean_minimum_unclipped_clipped_ratio_times_advantage",
+      "ratio": "exp(current_selected_logprob-minus_saved_logprob)",
+      "value": "unclipped_mean_squared_error",
+      "value_coefficient": 0.5
+    },
+    "recipe_id": "card-instance-ppo-algorithm-v1",
+    "retention": {
+      "active_pool_newest_milestones": 5,
+      "evicted_milestones": "retain",
+      "initial_generation": 0,
+      "other_predecessors": "owned_prune_after_successful_commit",
+      "retained": "generation0_all_every10_milestones_latest",
+      "snapshot_every_generations": 10
+    },
+    "schedule": {
+      "game_seed_recipe": "uuid5(namespace,ppo-train-v1/{seed}/{batch}/{pair})",
+      "ordered_pair_opponents": [
+        "random",
+        "random",
+        "heuristic",
+        "heuristic",
+        "snapshot",
+        "snapshot",
+        "snapshot",
+        "snapshot"
+      ],
+      "policy_stream_fields": [
+        "recipe",
+        "seed",
+        "batch",
+        "pair",
+        "role"
+      ],
+      "policy_stream_projection": "first16hex_of_canonical_sha256_as_uint64",
+      "policy_stream_recipe": "ppo-policy-stream-v1",
+      "policy_stream_roles": [
+        "learner",
+        "opponent"
+      ],
+      "rng": "independent_numpy_PCG64_learning_seed_persisted_across_batches",
+      "seats": "same_seed_and_role_streams_swapped",
+      "snapshot_selection": "four_independent_uniform_rng.integers(pool_length)",
+      "train_namespace": "2de8b1c1-6db1-5cc9-a2e7-933ce3d10001"
+    },
+    "updates": {
+      "epochs": 4,
+      "error_if_nonfinite": true,
+      "logical_minibatch_endpoints": 128,
+      "max_gradient_norm": 0.5,
+      "scalar_endpoint_accumulation": "loss_divided_by_actual_logical_size",
+      "shuffle": "independent_numpy_PCG64_learning_seed_permutation_each_epoch"
+    },
+    "validation": {
+      "game_seeds": "UUID_int_1_through_32",
+      "heuristic_opponent_pairs": 16,
+      "pairs": 32,
+      "policy_stream_fields": [
+        "recipe",
+        "learning_seed",
+        "pair",
+        "role"
+      ],
+      "policy_stream_recipe": "ppo-final-validation-stream-v1",
+      "random_opponent_pairs": 16,
+      "role_streams_and_seats": "same_pair_streams_swapped"
+    }
+  },
+  "allowed_inference_devices": [
+    "cpu",
+    "cuda:0"
+  ],
+  "allowed_reader_backends": [
+    "python",
+    "rust"
+  ],
+  "allowed_seed_slots": [
+    17,
+    29,
+    43
+  ],
+  "base_config": {
+    "actions": {
+      "action_contract": {
+        "card_ref_scheme": "aes256-card-ref-v1",
+        "catalog_schema_version": 2,
+        "catalog_sha256": "f51a3c73feb8b3f01837e65768aafb5a3aa805a33483308130244b33b16a8ad6",
+        "catalog_version": "public-ja-v3",
+        "gameplay_api": "v2",
+        "input_recipe": "participant-structured-v2",
+        "policy_input_version": "player-card-refs-v2",
+        "profile_id": "card-instance-simulator-v2-20261104",
+        "rule_set_version": "true-match-1v1-v2",
+        "simulator_revision": "91d5926a7572db327eaea3751e7c24f428120996",
+        "spec_inventory_sha256": "131890dfe579bc6951f5189e460971d33658339106e219a2e00b1a289a0534d0"
+      },
+      "channel_weights": [
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1
+      ],
+      "count_milliseconds": 50,
+      "count_states": 16384,
+      "generator": "public-card-instance-diverse-v5",
+      "max_candidates": 32768,
+      "max_expansions": 262144,
+      "max_sequence_length": 18,
+      "max_temporary_candidates": 262144,
+      "search_milliseconds": 1000,
+      "targets": [
+        "opponent",
+        "self"
+      ],
+      "use_action_options": true,
+      "version": "3"
+    },
+    "evaluation": {
+      "bootstrap_samples": 2000,
+      "bootstrap_seed": 0
+    },
+    "kind": "experiment",
+    "opponent": {
+      "checkpoint": null,
+      "encoder": {
+        "hash_buckets": 32,
+        "history": "none",
+        "history_window": 128,
+        "max_elements": 3
+      },
+      "initialization": {
+        "recipe": "seed-derived-v1"
+      },
+      "model_id": "random",
+      "network": {
+        "num_leaves": 31
+      },
+      "version": "1"
+    },
+    "preprocessing": {
+      "backend": "python",
+      "cache_budget_mib": 512,
+      "chunk_target_mib": 64,
+      "cleanup_seconds": 5,
+      "max_in_flight": 1,
+      "max_record_mib": 8,
+      "max_source_file_mib": 64,
+      "memory_budget_mib": 8192,
+      "reader": "participant-structured-v2",
+      "scratch_budget_mib": 8192,
+      "wall_seconds": 7200,
+      "workers": 1
+    },
+    "run": {
+      "admission_seconds": 5400,
+      "concurrency": 2,
+      "execution_seconds": 7140,
+      "finalization_seconds": 60,
+      "global_cuda_budget_bytes": 12884901888,
+      "max_decisions": 20000,
+      "max_participant_workers": 4,
+      "pairs_per_seed": 1,
+      "report_reserve_seconds": 1,
+      "sampling_seeds": [
+        0,
+        1,
+        2
+      ],
+      "seeds": [
+        "00000000-0000-0000-0000-000000000001"
+      ],
+      "split": "train",
+      "wall_seconds": 7200
+    },
+    "schema_version": 1,
+    "server": {
+      "cleanup_reserve_seconds": 2,
+      "expected_fingerprint": null,
+      "external_url": null,
+      "fixed_seed_experiment": true,
+      "gameplay_api": "v2",
+      "request_seconds": 10,
+      "shutdown_seconds": 30,
+      "simulator_revision": "91d5926a7572db327eaea3751e7c24f428120996",
+      "startup_seconds": 15,
+      "transport_retries": 2,
+      "worker_seconds": 10
+    },
+    "training": {
+      "admission_reservation_bytes": 1073741824,
+      "algorithm": "ppo",
+      "cleanup_seconds": 30,
+      "device": "cuda:0",
+      "max_log_bytes": 1048576,
+      "max_owned_bytes": 10737418240,
+      "max_updates": 1000
+    }
+  },
+  "declaration_requirement": "bound before generation0; never retrofitted",
+  "games_per_update": 16,
+  "input_binding": {
+    "action_contract": {
+      "card_ref_scheme": "aes256-card-ref-v1",
+      "catalog_schema_version": 2,
+      "catalog_sha256": "f51a3c73feb8b3f01837e65768aafb5a3aa805a33483308130244b33b16a8ad6",
+      "catalog_version": "public-ja-v3",
+      "gameplay_api": "v2",
+      "input_recipe": "participant-structured-v2",
+      "policy_input_version": "player-card-refs-v2",
+      "profile_id": "card-instance-simulator-v2-20261104",
+      "rule_set_version": "true-match-1v1-v2",
+      "simulator_revision": "91d5926a7572db327eaea3751e7c24f428120996",
+      "spec_inventory_sha256": "131890dfe579bc6951f5189e460971d33658339106e219a2e00b1a289a0534d0"
+    },
+    "layout_signature": "ed0c61152b78fa984aad342be22c6b9d6ef49b12b8f0d1c0f0de89724468002f",
+    "purpose": "qualified_game",
+    "rule_signature": "3f55f044225fb20c63d683145cdceb397c36f0b7161c7b16793f72210db3e86d",
+    "synthetic_capacity": false
+  },
+  "kind": "card-instance-formal-ppo-recipe",
+  "model_profiles": {
+    "gru": {
+      "card": {
+        "ability_embedding": 16,
+        "activation": "relu",
+        "definition_embedding": 32,
+        "output_size": 64
+      },
+      "checkpoint": null,
+      "cuda_visible_devices": null,
+      "dropout": 0,
+      "event": {
+        "aggregate_recipe": "public-exact-card-refs-v3",
+        "aggregate_window": 128,
+        "hidden_size": 32,
+        "max_episode": 262144,
+        "max_interval": 4096,
+        "num_layers": 1
+      },
+      "hand": {
+        "activation": "relu",
+        "attention_feedforward": 128,
+        "attention_heads": 4,
+        "attention_layers": 2,
+        "hidden_sizes": [
+          128
+        ],
+        "kind": "attention",
+        "latent_size": 128,
+        "pooling": "mean"
+      },
+      "heads": {
+        "activation": "relu",
+        "actor_hidden_sizes": [
+          128
+        ],
+        "critic_hidden_sizes": [
+          128
+        ]
+      },
+      "inference": {
+        "candidate_chunk": 256,
+        "device": "cpu",
+        "managed_budget_bytes": 12884901888,
+        "max_candidates": 32768
+      },
+      "initialization": "orthogonal-structured-v1",
+      "input_recipe": "participant-structured-v2",
+      "max_positions": 18,
+      "model_id": "gru",
+      "precision": "ieee-fp32",
+      "resources": {
+        "cuda_context_bytes": 536870912,
+        "max_owned_bytes": 12884901888,
+        "max_parameters": 16000000,
+        "max_tensor_bytes": 67108864,
+        "workspace_bytes": 268435456
+      },
+      "state": {
+        "activation": "relu",
+        "hidden_sizes": [
+          128
+        ],
+        "kind": "mlp",
+        "output_size": 64
+      },
+      "temporal": {
+        "activation": "relu",
+        "feedforward_size": 256,
+        "hidden_size": 128,
+        "kind": "gru",
+        "max_decisions": 1024,
+        "num_heads": 4,
+        "num_layers": 1,
+        "sequence_length": 32
+      },
+      "version": "3"
+    },
+    "mlp": {
+      "card": {
+        "ability_embedding": 16,
+        "activation": "relu",
+        "definition_embedding": 32,
+        "output_size": 64
+      },
+      "checkpoint": null,
+      "cuda_visible_devices": null,
+      "dropout": 0,
+      "event": {
+        "aggregate_recipe": "public-exact-card-refs-v3",
+        "aggregate_window": 128,
+        "hidden_size": 32,
+        "max_episode": 262144,
+        "max_interval": 4096,
+        "num_layers": 1
+      },
+      "hand": {
+        "activation": "relu",
+        "attention_feedforward": 128,
+        "attention_heads": 4,
+        "attention_layers": 2,
+        "hidden_sizes": [
+          128
+        ],
+        "kind": "attention",
+        "latent_size": 128,
+        "pooling": "mean"
+      },
+      "heads": {
+        "activation": "relu",
+        "actor_hidden_sizes": [
+          128
+        ],
+        "critic_hidden_sizes": [
+          128
+        ]
+      },
+      "inference": {
+        "candidate_chunk": 256,
+        "device": "cpu",
+        "managed_budget_bytes": 12884901888,
+        "max_candidates": 32768
+      },
+      "initialization": "orthogonal-structured-v1",
+      "input_recipe": "participant-structured-v2",
+      "max_positions": 18,
+      "model_id": "mlp",
+      "precision": "ieee-fp32",
+      "resources": {
+        "cuda_context_bytes": 536870912,
+        "max_owned_bytes": 12884901888,
+        "max_parameters": 16000000,
+        "max_tensor_bytes": 67108864,
+        "workspace_bytes": 268435456
+      },
+      "state": {
+        "activation": "relu",
+        "hidden_sizes": [
+          128
+        ],
+        "kind": "mlp",
+        "output_size": 64
+      },
+      "temporal": {
+        "activation": "relu",
+        "feedforward_size": 256,
+        "hidden_size": 128,
+        "kind": "mlp",
+        "max_decisions": 1024,
+        "num_heads": 4,
+        "num_layers": 1,
+        "sequence_length": 32
+      },
+      "version": "3"
+    },
+    "transformer": {
+      "card": {
+        "ability_embedding": 16,
+        "activation": "relu",
+        "definition_embedding": 32,
+        "output_size": 64
+      },
+      "checkpoint": null,
+      "cuda_visible_devices": null,
+      "dropout": 0,
+      "event": {
+        "aggregate_recipe": "public-exact-card-refs-v3",
+        "aggregate_window": 128,
+        "hidden_size": 32,
+        "max_episode": 262144,
+        "max_interval": 4096,
+        "num_layers": 1
+      },
+      "hand": {
+        "activation": "relu",
+        "attention_feedforward": 128,
+        "attention_heads": 4,
+        "attention_layers": 2,
+        "hidden_sizes": [
+          128
+        ],
+        "kind": "attention",
+        "latent_size": 128,
+        "pooling": "mean"
+      },
+      "heads": {
+        "activation": "relu",
+        "actor_hidden_sizes": [
+          128
+        ],
+        "critic_hidden_sizes": [
+          128
+        ]
+      },
+      "inference": {
+        "candidate_chunk": 256,
+        "device": "cpu",
+        "managed_budget_bytes": 12884901888,
+        "max_candidates": 32768
+      },
+      "initialization": "orthogonal-structured-v1",
+      "input_recipe": "participant-structured-v2",
+      "max_positions": 18,
+      "model_id": "transformer",
+      "precision": "ieee-fp32",
+      "resources": {
+        "cuda_context_bytes": 536870912,
+        "max_owned_bytes": 12884901888,
+        "max_parameters": 16000000,
+        "max_tensor_bytes": 67108864,
+        "workspace_bytes": 268435456
+      },
+      "state": {
+        "activation": "relu",
+        "hidden_sizes": [
+          128
+        ],
+        "kind": "mlp",
+        "output_size": 64
+      },
+      "temporal": {
+        "activation": "relu",
+        "feedforward_size": 256,
+        "hidden_size": 128,
+        "kind": "transformer",
+        "max_decisions": 1024,
+        "num_heads": 4,
+        "num_layers": 2,
+        "sequence_length": 32
+      },
+      "version": "3"
+    }
+  },
+  "normal_completion_reasons": [
+    "max_updates",
+    "admission_deadline",
+    "storage_admission"
+  ],
+  "qualification_scope": "full prescribed original recipe and owned source; not training quality",
+  "recipe_id": "card-instance-formal-ppo-v1",
+  "relocatable_or_identity_fields": [
+    "run.name",
+    "run.output_dir",
+    "server.source_dir",
+    "server.binary",
+    "server.config",
+    "training.seeds"
+  ],
+  "schema_version": 1,
+  "server_config_sha256": "905511d944046d1429776ad1e89154ced37ef049d7d1746f648e2334889a32c1",
+  "static_semantics": {
+    "gru": {
+      "catalog": {
+        "catalog_schema_version": 2,
+        "catalog_version": "public-ja-v3",
+        "content_sha256": "f51a3c73feb8b3f01837e65768aafb5a3aa805a33483308130244b33b16a8ad6",
+        "definition_count": 296,
+        "locale": "ja",
+        "rule_set_version": "true-match-1v1-v2"
+      },
+      "end_projection_version": "simulator-closure-v1",
+      "generator_version": "public-card-instance-diverse-v5",
+      "input_recipe": "participant-structured-v2",
+      "numeric_transform": "signed-log1p-fp32-v1",
+      "numerics": {
+        "amp": false,
+        "cublas_workspace_config": ":4096:8",
+        "deterministic": true,
+        "precision": "ieee-fp32",
+        "tf32": false,
+        "threads": 1
+      },
+      "policy_input_version": "player-card-refs-v2",
+      "reviewed_spec_hashes": {
+        "docs/spec/00-specification-overview.md": "674346a7b3f798a4c02e5241e7c760170224670e52bf81f5fe0acf46c8189a3e",
+        "docs/spec/01-server-spec.md": "4ab2072fafef4a7b400527cafaf933de8896c045da1e5943ed6d7e1dd1c655ba",
+        "docs/spec/02-software-design.md": "74fb313ebd0322d39e359b192b07bc6b702952b10b8a8345720b11a5b6409533",
+        "docs/spec/03-game-engine.md": "2441745566f553d8ce01806b64f88d4978209cd75e2ba0699fe71dc1fa022a04",
+        "docs/spec/04-random-system.md": "54ace9374f8d6ba93612a35548e33ce542b6ae9271ebac5dde9aad6fbe847a19",
+        "docs/spec/05-observation.md": "6a1cf52eab8e88f588020955bd281052eb2ac6b19612f5229ce4f86f178d6e8b",
+        "docs/spec/06-persistence-history.md": "3ac16199cb0a15289a1324f1f375a581a32e7889bcb73efa142dc24235853f64",
+        "docs/spec/07-external-interfaces-adapters.md": "5a179c97ef116d52ab1a4e52b82726fb45fb025cc6a6cbeeec4cf639718e9664",
+        "docs/spec/08-test-requirements.md": "ad1b275112c1c019ca78be48831e8a5e4f1bf1472c0db0645c2359e3895c9e09",
+        "docs/spec/09-gameplay-rules.md": "6a11ad81e5df99d4962a57f7cf45b620f46624c7bb04628514600930e9543d5d",
+        "docs/spec/10-cli-client.md": "7394dddb8498bfead6f91a47b7cfdbd0b9179bc40dba1416e25acabe9b99734a",
+        "docs/spec/card-definition-classification-v2.md": "62e6b88b237d46e808758f30e3964b4811c4e5f73786595840fda206fc79885c",
+        "docs/spec/godfield_rule_verification_register.md": "d892bafb621be33dc24455af2ab07d173f1127736e78da3e86a72134520084da"
+      },
+      "reward_policy_version": "natural-terminal-v1",
+      "rule_signature": "3f55f044225fb20c63d683145cdceb397c36f0b7161c7b16793f72210db3e86d",
+      "simulator_revision": "91d5926a7572db327eaea3751e7c24f428120996",
+      "spec_inventory_sha256": "131890dfe579bc6951f5189e460971d33658339106e219a2e00b1a289a0534d0",
+      "token_signature": "ed0c61152b78fa984aad342be22c6b9d6ef49b12b8f0d1c0f0de89724468002f"
+    },
+    "mlp": {
+      "catalog": {
+        "catalog_schema_version": 2,
+        "catalog_version": "public-ja-v3",
+        "content_sha256": "f51a3c73feb8b3f01837e65768aafb5a3aa805a33483308130244b33b16a8ad6",
+        "definition_count": 296,
+        "locale": "ja",
+        "rule_set_version": "true-match-1v1-v2"
+      },
+      "end_projection_version": "simulator-closure-v1",
+      "generator_version": "public-card-instance-diverse-v5",
+      "input_recipe": "participant-structured-v2",
+      "numeric_transform": "signed-log1p-fp32-v1",
+      "numerics": {
+        "amp": false,
+        "cublas_workspace_config": ":4096:8",
+        "deterministic": true,
+        "precision": "ieee-fp32",
+        "tf32": false,
+        "threads": 1
+      },
+      "policy_input_version": "player-card-refs-v2",
+      "reviewed_spec_hashes": {
+        "docs/spec/00-specification-overview.md": "674346a7b3f798a4c02e5241e7c760170224670e52bf81f5fe0acf46c8189a3e",
+        "docs/spec/01-server-spec.md": "4ab2072fafef4a7b400527cafaf933de8896c045da1e5943ed6d7e1dd1c655ba",
+        "docs/spec/02-software-design.md": "74fb313ebd0322d39e359b192b07bc6b702952b10b8a8345720b11a5b6409533",
+        "docs/spec/03-game-engine.md": "2441745566f553d8ce01806b64f88d4978209cd75e2ba0699fe71dc1fa022a04",
+        "docs/spec/04-random-system.md": "54ace9374f8d6ba93612a35548e33ce542b6ae9271ebac5dde9aad6fbe847a19",
+        "docs/spec/05-observation.md": "6a1cf52eab8e88f588020955bd281052eb2ac6b19612f5229ce4f86f178d6e8b",
+        "docs/spec/06-persistence-history.md": "3ac16199cb0a15289a1324f1f375a581a32e7889bcb73efa142dc24235853f64",
+        "docs/spec/07-external-interfaces-adapters.md": "5a179c97ef116d52ab1a4e52b82726fb45fb025cc6a6cbeeec4cf639718e9664",
+        "docs/spec/08-test-requirements.md": "ad1b275112c1c019ca78be48831e8a5e4f1bf1472c0db0645c2359e3895c9e09",
+        "docs/spec/09-gameplay-rules.md": "6a11ad81e5df99d4962a57f7cf45b620f46624c7bb04628514600930e9543d5d",
+        "docs/spec/10-cli-client.md": "7394dddb8498bfead6f91a47b7cfdbd0b9179bc40dba1416e25acabe9b99734a",
+        "docs/spec/card-definition-classification-v2.md": "62e6b88b237d46e808758f30e3964b4811c4e5f73786595840fda206fc79885c",
+        "docs/spec/godfield_rule_verification_register.md": "d892bafb621be33dc24455af2ab07d173f1127736e78da3e86a72134520084da"
+      },
+      "reward_policy_version": "natural-terminal-v1",
+      "rule_signature": "3f55f044225fb20c63d683145cdceb397c36f0b7161c7b16793f72210db3e86d",
+      "simulator_revision": "91d5926a7572db327eaea3751e7c24f428120996",
+      "spec_inventory_sha256": "131890dfe579bc6951f5189e460971d33658339106e219a2e00b1a289a0534d0",
+      "token_signature": "ed0c61152b78fa984aad342be22c6b9d6ef49b12b8f0d1c0f0de89724468002f"
+    },
+    "transformer": {
+      "catalog": {
+        "catalog_schema_version": 2,
+        "catalog_version": "public-ja-v3",
+        "content_sha256": "f51a3c73feb8b3f01837e65768aafb5a3aa805a33483308130244b33b16a8ad6",
+        "definition_count": 296,
+        "locale": "ja",
+        "rule_set_version": "true-match-1v1-v2"
+      },
+      "end_projection_version": "simulator-closure-v1",
+      "generator_version": "public-card-instance-diverse-v5",
+      "input_recipe": "participant-structured-v2",
+      "numeric_transform": "signed-log1p-fp32-v1",
+      "numerics": {
+        "amp": false,
+        "cublas_workspace_config": ":4096:8",
+        "deterministic": true,
+        "precision": "ieee-fp32",
+        "tf32": false,
+        "threads": 1
+      },
+      "policy_input_version": "player-card-refs-v2",
+      "reviewed_spec_hashes": {
+        "docs/spec/00-specification-overview.md": "674346a7b3f798a4c02e5241e7c760170224670e52bf81f5fe0acf46c8189a3e",
+        "docs/spec/01-server-spec.md": "4ab2072fafef4a7b400527cafaf933de8896c045da1e5943ed6d7e1dd1c655ba",
+        "docs/spec/02-software-design.md": "74fb313ebd0322d39e359b192b07bc6b702952b10b8a8345720b11a5b6409533",
+        "docs/spec/03-game-engine.md": "2441745566f553d8ce01806b64f88d4978209cd75e2ba0699fe71dc1fa022a04",
+        "docs/spec/04-random-system.md": "54ace9374f8d6ba93612a35548e33ce542b6ae9271ebac5dde9aad6fbe847a19",
+        "docs/spec/05-observation.md": "6a1cf52eab8e88f588020955bd281052eb2ac6b19612f5229ce4f86f178d6e8b",
+        "docs/spec/06-persistence-history.md": "3ac16199cb0a15289a1324f1f375a581a32e7889bcb73efa142dc24235853f64",
+        "docs/spec/07-external-interfaces-adapters.md": "5a179c97ef116d52ab1a4e52b82726fb45fb025cc6a6cbeeec4cf639718e9664",
+        "docs/spec/08-test-requirements.md": "ad1b275112c1c019ca78be48831e8a5e4f1bf1472c0db0645c2359e3895c9e09",
+        "docs/spec/09-gameplay-rules.md": "6a11ad81e5df99d4962a57f7cf45b620f46624c7bb04628514600930e9543d5d",
+        "docs/spec/10-cli-client.md": "7394dddb8498bfead6f91a47b7cfdbd0b9179bc40dba1416e25acabe9b99734a",
+        "docs/spec/card-definition-classification-v2.md": "62e6b88b237d46e808758f30e3964b4811c4e5f73786595840fda206fc79885c",
+        "docs/spec/godfield_rule_verification_register.md": "d892bafb621be33dc24455af2ab07d173f1127736e78da3e86a72134520084da"
+      },
+      "reward_policy_version": "natural-terminal-v1",
+      "rule_signature": "3f55f044225fb20c63d683145cdceb397c36f0b7161c7b16793f72210db3e86d",
+      "simulator_revision": "91d5926a7572db327eaea3751e7c24f428120996",
+      "spec_inventory_sha256": "131890dfe579bc6951f5189e460971d33658339106e219a2e00b1a289a0534d0",
+      "token_signature": "ed0c61152b78fa984aad342be22c6b9d6ef49b12b8f0d1c0f0de89724468002f"
+    }
+  }
+}

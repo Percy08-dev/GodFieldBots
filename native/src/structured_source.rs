@@ -7,6 +7,9 @@ use crate::{
 };
 use std::sync::Arc;
 
+#[path = "card_instance_source.rs"]
+mod card_instance;
+use crate::structured_controls::SourceFormat;
 pub(crate) fn episode_digest(
     classification: &Value,
     actor: &Value,
@@ -18,6 +21,33 @@ pub(crate) fn episode_digest(
     reason: &Value,
     budget: &Arc<Budget>,
     control: &Control,
+) -> Result<String> {
+    episode_digest_context(
+        classification,
+        actor,
+        episode,
+        boundary,
+        frames,
+        end_kind,
+        outcome,
+        reason,
+        budget,
+        control,
+        SourceFormat::Engineering,
+    )
+}
+fn episode_digest_context(
+    classification: &Value,
+    actor: &Value,
+    episode: &Value,
+    boundary: &Value,
+    frames: &[Value],
+    end_kind: &Value,
+    outcome: &Value,
+    reason: &Value,
+    budget: &Arc<Budget>,
+    control: &Control,
+    format: SourceFormat,
 ) -> Result<String> {
     control.check()?;
     let mut raw = 65536usize;
@@ -59,9 +89,19 @@ pub(crate) fn episode_digest(
         ("outcome", json::copy(outcome, control)?),
         ("reason", json::copy(reason, control)?),
     ]);
-    for key in ["action_contract", "purpose", "synthetic_capacity"] {
+    for key in if format.corrected() {
+        &[
+            "action_contract",
+            "purpose",
+            "synthetic_capacity",
+            "rule_signature",
+            "layout_signature",
+        ][..]
+    } else {
+        &["action_contract", "purpose", "synthetic_capacity"][..]
+    } {
         value.as_object_mut().unwrap().insert(
-            key.into(),
+            (*key).into(),
             json::copy(classification.require(key)?, control)?,
         );
     }
@@ -603,7 +643,35 @@ pub(crate) fn inspect_collection(
     budget: Arc<Budget>,
     control: Control,
 ) -> Result<CollectionScan> {
-    inspect_collection_inner(directory, parent, limits, stage, budget, control, None)
+    inspect_collection_inner(
+        directory,
+        parent,
+        limits,
+        stage,
+        budget,
+        control,
+        None,
+        SourceFormat::Engineering,
+    )
+}
+pub(crate) fn inspect_card_instance_collection(
+    directory: &Path,
+    parent: (&Path, &Value),
+    limits: &CollectionLimits,
+    stage: Option<&mut Stage>,
+    budget: Arc<Budget>,
+    control: Control,
+) -> Result<CollectionScan> {
+    inspect_collection_inner(
+        directory,
+        Some(parent),
+        limits,
+        stage,
+        budget,
+        control,
+        None,
+        SourceFormat::Corrected,
+    )
 }
 #[derive(Clone, Copy)]
 pub(crate) enum TreeSourceKind {
@@ -628,6 +696,7 @@ pub(crate) fn inspect_tree_collection(
         budget,
         control,
         Some((kind, window)),
+        SourceFormat::Engineering,
     )
 }
 fn inspect_collection_inner(
@@ -638,6 +707,7 @@ fn inspect_collection_inner(
     budget: Arc<Budget>,
     control: Control,
     tree: Option<(TreeSourceKind, usize)>,
+    format: SourceFormat,
 ) -> Result<CollectionScan> {
     control.check()?;
     let mut sources = Sources::new(
@@ -649,134 +719,154 @@ fn inspect_collection_inner(
     let root = sources.root.clone();
     let manifest = sources.json(&root.join("manifest.json"))?;
     let m = &manifest.root;
-    let schema = m.require("schema_version")?.integer(3, 4)?;
-    require(
-        ["complete", "incomplete", "interrupted"].contains(&field(m, "status")?),
-        "finalized original collection required",
-    )?;
-    if let Some((kind, window)) = tree {
-        require(
-            (1..=65536).contains(&window),
-            "TreeDataset projection window invalid",
-        )?;
-        require(
-            schema == 4 && field(m, "status")? == "complete",
-            "TreeDataset requires complete original Collection4",
-        )?;
-        let (expected_kind, expected_split) = match kind {
-            TreeSourceKind::Train => ("ppo_batch", "train"),
-            TreeSourceKind::FinalValidation => ("ppo_validation", "validation"),
-        };
-        require(
-            field(m, "collection_kind")? == expected_kind && field(m, "split")? == expected_split,
-            "TreeDataset collection kind/split mismatch",
-        )?;
-    }
-    let cfg = m.require("effective_config")?;
-    crate::structured_controls::actions(cfg)?;
+    let corrected = format.corrected();
+    let schema = m
+        .require("schema_version")?
+        .integer(if corrected { 5 } else { 3 }, if corrected { 5 } else { 4 })?;
+    let cfg = m.require(if corrected {
+        "config"
+    } else {
+        "effective_config"
+    })?;
     let actions = cfg.require("actions")?;
-    input_classification(m, actions.require("action_contract")?)?;
-    for (key, expected) in [
-        ("feature_version", "participant-structured-v1"),
-        ("input_recipe", "participant-structured-v1"),
-        ("reward_policy_version", "natural-terminal-v1"),
-        ("end_projection_version", "simulator-closure-v1"),
-        ("policy_input_version", "player-atomic-options-v1"),
-        (
-            "simulator_contract_revision",
-            "ffcffa0966dbf6d7ce1d982f4ee6444e291d42d6",
-        ),
-        ("observation_schema_version", "1"),
-    ] {
-        require(
-            field(m, key)? == expected,
-            "original collection semantic identity differs",
-        )?;
-    }
-    m.require("journal_schema_version")?.integer(5, 5)?;
-    m.require("action_schema_version")?.integer(1, 1)?;
-    crate::journal::catalog_meta(m.require("catalog")?)?;
-    require(
-        digest(
-            m.require("reviewed_simulator_spec_sha256")?,
-            &budget,
-            &control,
-        )? == "17dc86ba14c8fac378e352acd5c7c55429e910b37482954f74ca3673f8b1767d",
-        "original collection reviewed specification differs",
-    )?;
-    require(
-        digest(cfg, &budget, &control)?
-            == crate::structured_controls::checksum(m.require("config_sha256")?)?,
-        "original collection Config hash differs",
-    )?;
-    let split = field(m, "split")?;
-    require(
-        ["train", "validation", "test"].contains(&split)
-            && cfg.require("run")?.require("split")? == m.require("split")?,
-        "original collection split differs",
-    )?;
-    let elapsed = m.require("elapsed_seconds")?.number()?;
-    let wall = cfg.require("run")?.require("wall_seconds")?.number()?;
-    require(
-        elapsed.is_finite() && wall.is_finite() && elapsed >= 0.0 && elapsed <= wall,
-        "original collection clock provenance invalid",
-    )?;
-    if let Some((parent_directory, state)) = parent {
-        let projected;
-        let expected_config = if matches!(tree, Some((TreeSourceKind::FinalValidation, _))) {
-            projected = {
-                let mut value = json::copy(state.require("effective_config")?, &control)?;
-                value
-                    .get_mut("run")
-                    .unwrap()
-                    .as_object_mut()
-                    .unwrap()
-                    .insert("split".into(), json::text("validation"));
-                value
-            };
-            &projected
-        } else {
-            state.require("effective_config")?
-        };
-        require(
-            m.require("config_sha256")?.string()? == digest(expected_config, &budget, &control)?
-                && cfg == expected_config
-                && m.require("config_inputs")? == state.require("config_inputs")?,
-            "original collection full frozen Config/input origins differ",
-        )?;
-        let integration = state.require("identity")?.require("integration")?;
-        for key in ["binary_sha256", "server_config_sha256"] {
-            require(
-                m.require(key)? == integration.require(key)?,
-                "recorded original binary/server provenance differs",
-            )?;
-        }
-        require(
-            m.require("simulator_contract_revision")?
-                == integration.require("declared_simulator_revision")?
-                && m.require("code")? == state.require("identity")?.require("code")?
-                && m.require("simulator")?.require("revision")?
-                    == integration.require("source_revision")?
-                && m.require("simulator")?.require("spec_sha256")?
-                    == integration.require("source_spec_sha256")?,
-            "recorded code/Simulator provenance differs",
-        )?;
-        if schema == 4 {
-            let link = m.require("ppo")?;
-            require(
-                link.require("parent_run_id")? == state.require("run_id")?
-                    && field(link, "parent_run_path")?
-                        == parent_directory
-                            .to_str()
-                            .ok_or_else(|| Error::contract("nonUTF8 parent directory"))?,
-                "original parent linkage differs",
-            )?;
-        }
+    let split = if corrected {
+        field(cfg.require("run")?, "split")?
+    } else {
+        field(m, "split")?
+    };
+    if corrected {
+        card_instance::manifest(&mut sources, m, parent, limits, &budget, &control)?;
     } else {
         require(
-            schema == 3,
-            "PPO collection requires its original parent context",
+            ["complete", "incomplete", "interrupted"].contains(&field(m, "status")?),
+            "finalized original collection required",
         )?;
+        if let Some((kind, window)) = tree {
+            require(
+                (1..=65536).contains(&window),
+                "TreeDataset projection window invalid",
+            )?;
+            require(
+                schema == 4 && field(m, "status")? == "complete",
+                "TreeDataset requires complete original Collection4",
+            )?;
+            let (expected_kind, expected_split) = match kind {
+                TreeSourceKind::Train => ("ppo_batch", "train"),
+                TreeSourceKind::FinalValidation => ("ppo_validation", "validation"),
+            };
+            require(
+                field(m, "collection_kind")? == expected_kind
+                    && field(m, "split")? == expected_split,
+                "TreeDataset collection kind/split mismatch",
+            )?;
+        }
+        let cfg = m.require("effective_config")?;
+        crate::structured_controls::actions(cfg)?;
+        let actions = cfg.require("actions")?;
+        input_classification(m, actions.require("action_contract")?)?;
+        for (key, expected) in [
+            ("feature_version", "participant-structured-v1"),
+            ("input_recipe", "participant-structured-v1"),
+            ("reward_policy_version", "natural-terminal-v1"),
+            ("end_projection_version", "simulator-closure-v1"),
+            ("policy_input_version", "player-atomic-options-v1"),
+            (
+                "simulator_contract_revision",
+                "ffcffa0966dbf6d7ce1d982f4ee6444e291d42d6",
+            ),
+            ("observation_schema_version", "1"),
+        ] {
+            require(
+                field(m, key)? == expected,
+                "original collection semantic identity differs",
+            )?;
+        }
+        m.require("journal_schema_version")?.integer(5, 5)?;
+        m.require("action_schema_version")?.integer(1, 1)?;
+        crate::journal::catalog_meta(m.require("catalog")?)?;
+        require(
+            digest(
+                m.require("reviewed_simulator_spec_sha256")?,
+                &budget,
+                &control,
+            )? == "17dc86ba14c8fac378e352acd5c7c55429e910b37482954f74ca3673f8b1767d",
+            "original collection reviewed specification differs",
+        )?;
+        require(
+            digest(cfg, &budget, &control)?
+                == crate::structured_controls::checksum(m.require("config_sha256")?)?,
+            "original collection Config hash differs",
+        )?;
+        let split = field(m, "split")?;
+        require(
+            ["train", "validation", "test"].contains(&split)
+                && cfg.require("run")?.require("split")? == m.require("split")?,
+            "original collection split differs",
+        )?;
+        let elapsed = m.require("elapsed_seconds")?.number()?;
+        let wall = cfg.require("run")?.require("wall_seconds")?.number()?;
+        require(
+            elapsed.is_finite() && wall.is_finite() && elapsed >= 0.0 && elapsed <= wall,
+            "original collection clock provenance invalid",
+        )?;
+        if let Some((parent_directory, state)) = parent {
+            let projected;
+            let expected_config = if matches!(tree, Some((TreeSourceKind::FinalValidation, _))) {
+                projected = {
+                    let mut value = json::copy(state.require("effective_config")?, &control)?;
+                    value
+                        .get_mut("run")
+                        .unwrap()
+                        .as_object_mut()
+                        .unwrap()
+                        .insert("split".into(), json::text("validation"));
+                    value
+                };
+                &projected
+            } else {
+                state.require("effective_config")?
+            };
+            require(
+                m.require("config_sha256")?.string()?
+                    == digest(expected_config, &budget, &control)?
+                    && cfg == expected_config
+                    && m.require("config_inputs")? == state.require("config_inputs")?,
+                "original collection full frozen Config/input origins differ",
+            )?;
+            let integration = state.require("identity")?.require("integration")?;
+            for key in ["binary_sha256", "server_config_sha256"] {
+                require(
+                    m.require(key)? == integration.require(key)?,
+                    "recorded original binary/server provenance differs",
+                )?;
+            }
+            require(
+                m.require("simulator_contract_revision")?
+                    == integration.require("declared_simulator_revision")?
+                    && m.require("code")? == state.require("identity")?.require("code")?
+                    && m.require("simulator")?.require("revision")?
+                        == integration.require("source_revision")?
+                    && m.require("simulator")?.require("spec_sha256")?
+                        == integration.require("source_spec_sha256")?,
+                "recorded code/Simulator provenance differs",
+            )?;
+            if schema == 4 || corrected {
+                let link = m.require(if corrected { "linkage" } else { "ppo" })?;
+                require(
+                    link.require("parent_run_id")? == state.require("run_id")?
+                        && field(link, "parent_run_path")?
+                            == parent_directory
+                                .to_str()
+                                .ok_or_else(|| Error::contract("nonUTF8 parent directory"))?,
+                    "original parent linkage differs",
+                )?;
+            }
+        } else {
+            require(
+                schema == 3,
+                "PPO collection requires its original parent context",
+            )?;
+        }
     }
     let mut _metadata = BudgetVec::new(&budget);
     _metadata.push(budget.reserve(65536)?)?;
@@ -827,12 +917,12 @@ fn inspect_collection_inner(
         names == episode_names,
         "original result/schedule population differs",
     )?;
-    if schema == 4 {
+    if schema == 4 || corrected {
         require(
-            ["ppo_batch", "ppo_validation"].contains(&field(m, "collection_kind")?),
+            corrected || ["ppo_batch", "ppo_validation"].contains(&field(m, "collection_kind")?),
             "unknown PPO collection kind",
         )?;
-        let link = m.require("ppo")?;
+        let link = m.require(if corrected { "linkage" } else { "ppo" })?;
         link.closed(
             &[
                 "parent_run_id",
@@ -841,13 +931,17 @@ fn inspect_collection_inner(
                 "collection_generation",
                 "learner_seats",
             ],
-            &[],
+            if corrected {
+                &["schedule_digest", "policy_registry_digest"]
+            } else {
+                &[]
+            },
         )?;
         link.require("collection_generation")?.integer(0, 1000)?;
         for key in ["parent_run_id", "parent_run_path", "batch_id"] {
             link.require(key)?.string()?;
         }
-        if field(m, "collection_kind")? == "ppo_batch" {
+        if corrected || field(m, "collection_kind")? == "ppo_batch" {
             require(
                 specs.len() == 16 && m.require("schedule")?.array()?.len() == 8,
                 "PPO batch requires all eight original swapped pairs",
@@ -1003,16 +1097,35 @@ fn inspect_collection_inner(
                 "original saved result differs from manifest",
             )?;
         }
-        let groups = m
-            .require("groups")?
-            .array()?
-            .iter()
-            .filter(|g| {
-                g.get("episode_ids")
-                    .and_then(Value::as_array)
-                    .is_some_and(|a| a.iter().any(|v| v.as_str() == Some(name)))
-            })
-            .collect::<Vec<_>>();
+        let groups = if corrected {
+            let index = m
+                .require("schedule")?
+                .array()?
+                .iter()
+                .position(|g| {
+                    g.get("episodes")
+                        .and_then(Value::as_array)
+                        .is_some_and(|a| {
+                            a.iter().any(|row| {
+                                row.get("episode_id").and_then(Value::as_str) == Some(name)
+                            })
+                        })
+                })
+                .ok_or_else(|| Error::contract("original schedule group missing"))?;
+            vec![&m.require("groups")?.array()?[index]]
+        } else {
+            let old_groups = m
+                .require("groups")?
+                .array()?
+                .iter()
+                .filter(|g| {
+                    g.get("episode_ids")
+                        .and_then(Value::as_array)
+                        .is_some_and(|a| a.iter().any(|v| v.as_str() == Some(name)))
+                })
+                .collect::<Vec<_>>();
+            old_groups
+        };
         require(
             groups.len() == 1,
             "original group health missing/duplicated",
@@ -1040,15 +1153,35 @@ fn inspect_collection_inner(
             }
             let h = json::parse(header_bytes, &budget, &control)?;
             drop(raw);
-            let (identity, model) = role_identity(&h.root, m, ep, spec, viewer, &budget, &control)?;
-            let declaration = OriginalHeader::new(model, &identity, &budget, &control)?;
-            let selected = schema == 4 && spec.require("learner_viewer")?.integer(1, 2)? == viewer;
+            let (identity, model) = if corrected {
+                card_instance::role(&h.root, m, ep, spec, viewer, &budget, &control)?
+            } else {
+                role_identity(&h.root, m, ep, spec, viewer, &budget, &control)?
+            };
+            let declaration = if corrected {
+                OriginalHeader::new_corrected(model, &identity, &budget, &control)?
+            } else {
+                OriginalHeader::new(model, &identity, &budget, &control)?
+            };
+            let selected = (schema == 4 || corrected)
+                && spec.require("learner_viewer")?.integer(1, 2)? == viewer;
             let selected_stage = if selected {
                 stage.as_deref_mut().map(|s| (s, digests.len()))
             } else {
                 None
             };
-            let input = if let Some((_, window)) = tree {
+            let input = if corrected {
+                Journal::original_corrected(
+                    &dir,
+                    &file,
+                    budget.clone(),
+                    control.clone(),
+                    limits.source_bytes,
+                    limits.record_bytes,
+                    &declaration,
+                    selected_stage,
+                )?
+            } else if let Some((_, window)) = tree {
                 if selected {
                     Journal::original_tree(
                         &dir,
@@ -1106,15 +1239,28 @@ fn inspect_collection_inner(
             let replay_name = format!("{name}/replay-player-{viewer}.json");
             if replays.contains(&replay_name) {
                 let replay = sources.json(&root.join(&replay_name))?;
-                validation::reconcile_replay_controlled(
-                    &replay.root,
-                    viewer,
-                    &input.accepted_actions()?,
-                    nullable(ep, "outcome"),
-                    &control,
-                )?;
-                let closure =
-                    validation::replay_closure(&replay.root, field(ep, "game_id")?, viewer)?;
+                let closure = if corrected {
+                    crate::structured_journal::card_instance::reconcile_replay2(
+                        &replay.root,
+                        field(ep, "game_id")?,
+                        viewer,
+                        &input.accepted_actions()?,
+                        nullable(ep, "outcome"),
+                        &budget,
+                        &control,
+                    )?
+                } else {
+                    validation::reconcile_replay_controlled(
+                        &replay.root,
+                        viewer,
+                        &input.accepted_actions()?,
+                        nullable(ep, "outcome"),
+                        &control,
+                    )?;
+                    let old_closure =
+                        validation::replay_closure(&replay.root, field(ep, "game_id")?, viewer)?;
+                    old_closure
+                };
                 if let Some(c) = closure {
                     if field(c, "type")? == "terminal" {
                         require(
@@ -1152,7 +1298,8 @@ fn inspect_collection_inner(
             accepted_total += input.accepted_count();
             if selected {
                 require(
-                    field(input.header_value(), "model_version")? == "2"
+                    field(input.header_value(), "model_version")?
+                        == if corrected { "3" } else { "2" }
                         && ["mlp", "gru", "transformer"]
                             .contains(&field(input.header_value(), "model_id")?),
                     "learner role must be a neural model2",
@@ -1166,7 +1313,7 @@ fn inspect_collection_inner(
                 }
                 let frames = input.correspondence_frames()?;
                 let h = input.header_value();
-                digests.push(episode_digest(
+                digests.push(episode_digest_context(
                     h,
                     h.require("viewer")?,
                     h.require("bank_episode")?,
@@ -1177,6 +1324,7 @@ fn inspect_collection_inner(
                     &reason,
                     &budget,
                     &control,
+                    format,
                 )?);
                 accepted_learner += input.accepted_count();
                 if let Some(stage) = stage.as_deref_mut() {
@@ -1243,7 +1391,7 @@ fn inspect_collection_inner(
                     }
             } else {
                 digests.len() == 16
-                    && field(m, "collection_kind")? == "ppo_batch"
+                    && (corrected || field(m, "collection_kind")? == "ppo_batch")
                     && split == "train"
             },
             "selected cohort must preserve its full original16/64 neural-role population",
@@ -1268,7 +1416,14 @@ fn inspect_collection_inner(
     let manifest_sha = field(files.require("manifest.json")?, "sha256")?;
     let mut proof = json::object([
         ("schema_version", json::integer(1)),
-        ("kind", json::text("structured-component-source-proof")),
+        (
+            "kind",
+            json::text(if corrected {
+                "card-instance-original-source-proof"
+            } else {
+                "structured-component-source-proof"
+            }),
+        ),
         ("qualified", Value::Bool(false)),
         ("parent_qualification", json::text("not_performed")),
         ("manifest_sha256", json::text(manifest_sha)),
@@ -1282,11 +1437,21 @@ fn inspect_collection_inner(
         ("missing_replays", json::array(missing_replays)),
         ("files", json::copy(files, &control)?),
     ]);
-    for key in ["action_contract", "purpose", "synthetic_capacity"] {
+    for key in if corrected {
+        &[
+            "action_contract",
+            "purpose",
+            "synthetic_capacity",
+            "rule_signature",
+            "layout_signature",
+        ][..]
+    } else {
+        &["action_contract", "purpose", "synthetic_capacity"][..]
+    } {
         proof
             .as_object_mut()
             .unwrap()
-            .insert(key.into(), json::copy(m.require(key)?, &control)?);
+            .insert((*key).into(), json::copy(m.require(key)?, &control)?);
     }
     let proof = doc(&proof, &budget, &control)?;
     let metadata = doc(&json::array(staged), &budget, &control)?;
@@ -1682,6 +1847,11 @@ pub(crate) struct OriginalInputs {
     pub stage: Option<Stage>,
     pub budget: Arc<Budget>,
     pub control: Control,
+    pub(crate) format: SourceFormat,
+    pub(crate) source_bytes: usize,
+    pub(crate) record_bytes: usize,
+    pub(crate) scratch_bytes: usize,
+    pub(crate) chunk_bytes: usize,
     _plan: Document,
     _metadata: BudgetVec<Lease>,
 }
@@ -1708,6 +1878,47 @@ impl OriginalInputs {
         scratch_bytes: usize,
         chunk_bytes: usize,
     ) -> Result<Self> {
+        Self::open_context(
+            encoded,
+            budget,
+            control,
+            source_bytes,
+            record_bytes,
+            scratch_bytes,
+            chunk_bytes,
+            SourceFormat::Engineering,
+        )
+    }
+    pub(crate) fn open3(
+        encoded: &[u8],
+        budget: Arc<Budget>,
+        control: Control,
+        source_bytes: usize,
+        record_bytes: usize,
+        scratch_bytes: usize,
+        chunk_bytes: usize,
+    ) -> Result<Self> {
+        Self::open_context(
+            encoded,
+            budget,
+            control,
+            source_bytes,
+            record_bytes,
+            scratch_bytes,
+            chunk_bytes,
+            SourceFormat::Corrected,
+        )
+    }
+    fn open_context(
+        encoded: &[u8],
+        budget: Arc<Budget>,
+        control: Control,
+        source_bytes: usize,
+        record_bytes: usize,
+        scratch_bytes: usize,
+        chunk_bytes: usize,
+        format: SourceFormat,
+    ) -> Result<Self> {
         control.check()?;
         require(
             encoded.len() <= 65536,
@@ -1720,7 +1931,10 @@ impl OriginalInputs {
                 || !p.require("collections")?.array()?.is_empty(),
             "structured Source plan cannot be entirely empty",
         )?;
-        p.require("schema_version")?.integer(2, 2)?;
+        p.require("schema_version")?.integer(
+            if format.corrected() { 3 } else { 2 },
+            if format.corrected() { 3 } else { 2 },
+        )?;
         let live = match field(p, "mode")? {
             "live_cohort" => true,
             "historical_parent" => false,
@@ -1737,6 +1951,26 @@ impl OriginalInputs {
         if live {
             p.require("cohort_collection_index")?;
         }
+        if format.corrected() {
+            require(
+                p.require("parents")?.array()?.len() == 1,
+                "plan3 requires exactly one original parent",
+            )?;
+            require(
+                if live {
+                    p.require("collections")?.array()?.len() == 1
+                        && p.require("cohort_collection_index")?.integer(0, 0)? == 0
+                        && p.require("collections")?.array()?[0]
+                            .require("parent_index")?
+                            .integer(0, 0)?
+                            == 0
+                } else {
+                    p.require("collections")?.array()?.is_empty()
+                },
+                "plan3 live/historical cardinality mismatch",
+            )?;
+        }
+
         let mut metadata = BudgetVec::new(&budget);
         metadata.push(budget.reserve(65536)?)?;
         let mut parents = BudgetVec::new(&budget);
@@ -1755,9 +1989,38 @@ impl OriginalInputs {
                 parent_paths.insert(sources.root.clone()),
                 "duplicate original parent directory",
             )?;
-            let summary = crate::structured_controls::parent(&mut sources)?;
+            let summary = if format.corrected() {
+                crate::structured_controls::parent3(&mut sources)?
+            } else {
+                crate::structured_controls::parent(&mut sources)?
+            };
             let directory = sources.root.clone();
             let state = sources.json(&directory.join("run.json"))?;
+            if format.corrected() {
+                let settings = state
+                    .root
+                    .require("effective_config")?
+                    .require("preprocessing")?;
+                for (key, actual) in [
+                    ("memory_budget_mib", budget.limit()),
+                    ("scratch_budget_mib", scratch_bytes),
+                    ("max_source_file_mib", source_bytes),
+                    ("max_record_mib", record_bytes),
+                    ("chunk_target_mib", chunk_bytes),
+                ] {
+                    require(
+                        actual <= integer(settings, key, 1, 12288)? * 1024 * 1024,
+                        "native settings exceed original frozen resource bounds",
+                    )?;
+                }
+                require(
+                    source_bytes <= 64 * 1024 * 1024
+                        && record_bytes <= source_bytes
+                        && chunk_bytes <= 64 * 1024 * 1024,
+                    "native source/record/chunk hard bounds",
+                )?;
+            }
+
             if value.require("require_complete")?.boolean()? {
                 require(
                     field(&state.root, "status")? == "complete",
@@ -1863,6 +2126,20 @@ impl OriginalInputs {
                 "live cohort requires running original parent",
             )?;
             let generation = integer(&parent.state.root, "updates", 0, 999)?;
+            if format.corrected() {
+                require(
+                    field(
+                        parent
+                            .state
+                            .root
+                            .require("effective_config")?
+                            .require("preprocessing")?,
+                        "backend",
+                    )? == "rust",
+                    "live corrected native provider requires recorded Rust backend",
+                )?;
+            }
+
             require(
                 requests[index].0
                     == parent
@@ -1900,7 +2177,9 @@ impl OriginalInputs {
             control.check()?;
             let mut peek = Sources::new(directory, budget.clone(), control.clone(), source_bytes)?;
             let first = peek.json(&peek.root.join("manifest.json"))?;
-            if first.root.get("schema_version").and_then(Value::as_i64) == Some(4) {
+            if first.root.get("schema_version").and_then(Value::as_i64)
+                == Some(if format.corrected() { 5 } else { 4 })
+            {
                 require(
                     selected == Some(index)
                         || committed
@@ -1915,21 +2194,42 @@ impl OriginalInputs {
                 ));
             }
             let parent = pi.map(|pi| (&*parents[pi].directory, &parents[pi].state.root));
-            let mut scan = inspect_collection(
-                directory,
-                parent,
-                &CollectionLimits {
-                    source_bytes,
-                    record_bytes,
-                },
-                if selected == Some(index) {
-                    stage.as_mut()
-                } else {
-                    None
-                },
-                budget.clone(),
-                control.clone(),
-            )?;
+            let mut scan = if format.corrected() {
+                inspect_card_instance_collection(
+                    directory,
+                    parent.ok_or_else(|| {
+                        Error::contract("corrected collection lacks original parent")
+                    })?,
+                    &CollectionLimits {
+                        source_bytes,
+                        record_bytes,
+                    },
+                    if selected == Some(index) {
+                        stage.as_mut()
+                    } else {
+                        None
+                    },
+                    budget.clone(),
+                    control.clone(),
+                )?
+            } else {
+                let old_scan = inspect_collection(
+                    directory,
+                    parent,
+                    &CollectionLimits {
+                        source_bytes,
+                        record_bytes,
+                    },
+                    if selected == Some(index) {
+                        stage.as_mut()
+                    } else {
+                        None
+                    },
+                    budget.clone(),
+                    control.clone(),
+                )?;
+                old_scan
+            };
             require(
                 first.root == scan.manifest.root,
                 "original collection changed between selection and scan",
@@ -1953,7 +2253,7 @@ impl OriginalInputs {
                 require(
                     scan.manifest
                         .root
-                        .require("ppo")?
+                        .require(if format.corrected() { "linkage" } else { "ppo" })?
                         .require("collection_generation")?
                         .integer(0, 999)?
                         == entry.update.root.require("generation")?.integer(1, 1000)? - 1,
@@ -1974,6 +2274,11 @@ impl OriginalInputs {
             stage,
             budget,
             control,
+            format,
+            source_bytes,
+            record_bytes,
+            scratch_bytes,
+            chunk_bytes,
             _plan: plan,
             _metadata: metadata,
         };
@@ -2064,6 +2369,9 @@ pub(crate) struct Controls {
 }
 impl OriginalInputs {
     pub(crate) fn controls(&mut self) -> Result<Controls> {
+        if self.format.corrected() {
+            return self.controls3();
+        }
         self.recheck()?;
         let b = &self.budget;
         let c = &self.control;
@@ -2649,4 +2957,435 @@ pub(crate) fn compact_parent(
         ),
     ]);
     Ok((item, ack))
+}
+
+impl OriginalInputs {
+    fn controls3(&mut self) -> Result<Controls> {
+        self.recheck()?;
+        let b = &self.budget;
+        let c = &self.control;
+        let parent = self
+            .parents
+            .first_mut()
+            .ok_or_else(|| Error::contract("plan3 parent missing"))?;
+        let (compact, parent_ack) = compact_parent(0, parent, b, c)?;
+        let mut collections = Vec::new();
+        let mut collection_ack = Vec::new();
+        let mut declarations = Vec::new();
+        let mut correspondences = Vec::new();
+        let _base = b.reserve(65536)?;
+        for (index, source) in self.collections.iter().enumerate() {
+            c.check()?;
+            let m = &source.manifest.root;
+            let link = m.require("linkage")?;
+            let generation = integer(link, "collection_generation", 0, 999)?;
+            let record = &parent.summary.root.require("generations")?.array()?[generation];
+            let inference = parent.sources.verified_sha(
+                &parent
+                    .directory
+                    .join("artifacts")
+                    .join(format!("{generation:06}"))
+                    .join("inference.json"),
+            )?;
+            require(
+                inference == field(record, "inference_sha256")?,
+                "original inference generation differs",
+            )?;
+            // Retain the SAME original Sources snapshots while rereading the
+            // bounded declaration; never open an independent fresh baseline.
+            let original = parent.sources.checked_json(
+                &parent
+                    .directory
+                    .join("artifacts")
+                    .join(format!("{generation:06}"))
+                    .join("inference.json"),
+                record.require("inference_sha256")?,
+            )?;
+            let declaration = crate::structured_controls::semantic3_declaration(&original.root, c)?;
+            let immutable = json::object([]);
+            let mut immutable = immutable;
+            for relative in [
+                format!("generations/{generation:06}.json"),
+                format!("artifacts/{generation:06}/inference.json"),
+            ] {
+                immutable.as_object_mut().unwrap().insert(
+                    relative.clone(),
+                    json::text(
+                        parent
+                            .sources
+                            .verified_sha(&parent.directory.join(relative))?,
+                    ),
+                );
+            }
+            let fingerprint = digest(
+                &json::object([
+                    (
+                        "run_id",
+                        json::copy(parent.state.root.require("run_id")?, c)?,
+                    ),
+                    (
+                        "config_sha256",
+                        json::copy(parent.state.root.require("config_sha256")?, c)?,
+                    ),
+                    (
+                        "identity",
+                        json::copy(parent.state.root.require("identity")?, c)?,
+                    ),
+                    (
+                        "execution",
+                        json::copy(parent.state.root.require("execution")?, c)?,
+                    ),
+                    ("plan", json::copy(link, c)?),
+                    ("files", immutable),
+                    (
+                        "source_set_sha256",
+                        json::copy(source.proof.root.require("source_set_sha256")?, c)?,
+                    ),
+                ]),
+                b,
+                c,
+            )?;
+            let mut correspondence =
+                cohort_binding(&fingerprint, &declaration, &source.digests, b, c)?;
+            correspondence.as_object_mut().unwrap().insert(
+                "recipe".into(),
+                json::text("structured-source-cohort-correspondence-v2"),
+            );
+            correspondence
+                .as_object_mut()
+                .unwrap()
+                .remove("binding_sha256");
+            let binding = digest(&correspondence, b, c)?;
+            correspondence
+                .as_object_mut()
+                .unwrap()
+                .insert("binding_sha256".into(), json::text(&binding));
+            let committed = self.committed.iter().find(|v| v.collection_index == index);
+            let numeric = if let Some(entry) = committed {
+                json::object([
+                    (
+                        "directory",
+                        json::text(
+                            owned_relative(
+                                &parent.directory,
+                                entry.update.root.require("numeric")?,
+                            )?
+                            .to_str()
+                            .ok_or_else(|| Error::contract("nonUTF8 numeric path"))?,
+                        ),
+                    ),
+                    (
+                        "sha256",
+                        json::copy(entry.update.root.require("numeric_sha256")?, c)?,
+                    ),
+                    (
+                        "files",
+                        json::copy(entry.update.root.require("numeric_files")?, c)?,
+                    ),
+                ])
+            } else {
+                Value::Null
+            };
+            let item = json::object([
+                ("collection_index", json::integer(index as i128)),
+                (
+                    "directory",
+                    json::text(
+                        source
+                            .directory
+                            .to_str()
+                            .ok_or_else(|| Error::contract("nonUTF8 collection path"))?,
+                    ),
+                ),
+                ("generation", json::integer(generation as i128)),
+                (
+                    "manifest_sha256",
+                    json::copy(source.proof.root.require("manifest_sha256")?, c)?,
+                ),
+                ("config_sha256", json::copy(m.require("config_hash")?, c)?),
+                ("linkage", json::copy(link, c)?),
+                ("schedule_sha256", json::text(&source.schedule_sha256)),
+                ("bindings_sha256", json::text(&source.bindings_sha256)),
+                ("source_proof", json::copy(&source.proof.root, c)?),
+                ("semantics", json::copy(&declaration, c)?),
+                (
+                    "learner_label",
+                    json::text(
+                        source
+                            .learner_label
+                            .as_deref()
+                            .ok_or_else(|| Error::contract("original learner label missing"))?,
+                    ),
+                ),
+                (
+                    "learner_decisions",
+                    json::integer(source.accepted_learner as i128),
+                ),
+                ("correspondence", json::copy(&correspondence, c)?),
+                ("numeric", numeric),
+            ]);
+            collections.push(item);
+            collection_ack.push(json::object([
+                ("collection_index", json::integer(index as i128)),
+                (
+                    "manifest_sha256",
+                    json::copy(source.proof.root.require("manifest_sha256")?, c)?,
+                ),
+                (
+                    "expected_schedule_sha256",
+                    json::text(&source.schedule_sha256),
+                ),
+                (
+                    "expected_bindings_sha256",
+                    json::text(&source.bindings_sha256),
+                ),
+                (
+                    "source_set_sha256",
+                    json::copy(source.proof.root.require("source_set_sha256")?, c)?,
+                ),
+                ("correspondence_sha256", json::text(&binding)),
+                (
+                    "numeric_sha256",
+                    committed
+                        .map(|u| json::copy(u.update.root.require("numeric_sha256")?, c))
+                        .transpose()?
+                        .unwrap_or(Value::Null),
+                ),
+            ]));
+            declarations.push(Some(doc(&declaration, b, c)?));
+            correspondences.push(Some(doc(&correspondence, b, c)?));
+        }
+        let mut authorization = json::object([
+            ("schema_version", json::integer(3)),
+            ("summary_sha256", json::text(&"0".repeat(64))),
+            ("parent", parent_ack),
+            ("collections", json::array(collection_ack)),
+        ]);
+        let auth_len = json::canonical(&authorization, b, c)?.len();
+        let mut summary = json::object([
+            ("schema_version", json::integer(3)),
+            ("kind", json::text("card-instance-source-controls")),
+            ("reader_contract", json::text("participant-structured-v2")),
+            (
+                "mode",
+                json::text(match self.mode {
+                    ScanMode::Live { .. } => "live_cohort",
+                    ScanMode::Historical => "historical_parent",
+                }),
+            ),
+            ("parent", compact),
+            ("collections", json::array(collections)),
+            ("authorization_max_bytes", json::integer(auth_len as i128)),
+            ("qualified", Value::Bool(false)),
+            ("parent_qualification", json::text("not_performed")),
+        ]);
+        for key in [
+            "action_contract",
+            "purpose",
+            "synthetic_capacity",
+            "rule_signature",
+            "layout_signature",
+        ] {
+            summary
+                .as_object_mut()
+                .unwrap()
+                .insert(key.into(), json::copy(parent.state.root.require(key)?, c)?);
+        }
+        let fingerprint = digest(&summary, b, c)?;
+        authorization["summary_sha256"] = json::text(&fingerprint);
+        self.recheck()?;
+        Ok(Controls {
+            summary: doc(&summary, b, c)?,
+            authorization: doc(&authorization, b, c)?,
+            declarations,
+            correspondences,
+            fingerprint,
+        })
+    }
+}
+
+#[cfg(test)]
+impl OriginalInputs {
+    /// UNADMITTED private storage/phase fixture. It has no Run3, generations,
+    /// C5/J6, runtime receipts, Source proof or online issuer and cannot pass
+    /// open3. This exercises owned primitives only, never executed learning.
+    pub(crate) fn unadmitted_component_lifecycle(
+        root: &Path,
+        state: &Value,
+        manifest: &Value,
+        model: &Value,
+        declaration: &Value,
+        episodes: &Value,
+        stage: Stage,
+        budget: Arc<Budget>,
+        control: Control,
+    ) -> Result<Self> {
+        let mut parent_source =
+            Sources::new(root, budget.clone(), control.clone(), 64 * 1024 * 1024)?;
+        parent_source.hash(&root.join("original-control.bin"))?;
+        parent_source.inventory(&root.join("artifacts"), vec!["000000".into()], true)?;
+        let mut original = Sources::new(
+            &root.join("unadmitted-originals"),
+            budget.clone(),
+            control.clone(),
+            64 * 1024 * 1024,
+        )?;
+        original.pin_tree(&root.join("unadmitted-originals"))?;
+        let mut parents = BudgetVec::new(&budget);
+        parents.push(ParentScan {
+            directory: root.into(),
+            sources: parent_source,
+            summary: doc(
+                &json::object([(
+                    "scope",
+                    json::text("unadmitted component control primitive"),
+                )]),
+                &budget,
+                &control,
+            )?,
+            state: doc(state, &budget, &control)?,
+        })?;
+        let mut sources = BudgetVec::new(&budget);
+        sources.push(original)?;
+        let proof = doc(
+            &json::object([
+                ("scope", json::text("not a Source proof")),
+                ("manifest_sha256", json::text(&"0".repeat(64))),
+                ("qualified", Value::Bool(false)),
+            ]),
+            &budget,
+            &control,
+        )?;
+        let mut collections = BudgetVec::new(&budget);
+        collections.push(CollectionScan {
+            directory: root.join("unadmitted-originals"),
+            manifest: doc(manifest, &budget, &control)?,
+            sources,
+            proof,
+            schedule_sha256: "not a schedule".into(),
+            bindings_sha256: "not a registry".into(),
+            episodes: doc(episodes, &budget, &control)?,
+            digests: vec![],
+            learner_label: Some("unadmitted-not-a-policy".into()),
+            model: Some(doc(model, &budget, &control)?),
+            accepted_learner: 1,
+            _metadata: BudgetVec::new(&budget),
+        })?;
+        let _ = declaration; // Caller installs this separately in its private Controls fixture.
+        Ok(Self {
+            parents,
+            collections,
+            committed: BudgetVec::new(&budget),
+            mode: ScanMode::Live {
+                collection: 0,
+                parent: 0,
+                generation: 0,
+            },
+            stage: Some(stage),
+            budget: budget.clone(),
+            control: control.clone(),
+            format: SourceFormat::Corrected,
+            source_bytes: 64 * 1024 * 1024,
+            record_bytes: 8 * 1024 * 1024,
+            scratch_bytes: 1024 * 1024,
+            chunk_bytes: 1024 * 1024,
+            _plan: doc(
+                &json::object([("scope", json::text("not an admitted plan3"))]),
+                &budget,
+                &control,
+            )?,
+            _metadata: BudgetVec::new(&budget),
+        })
+    }
+}
+
+impl OriginalInputs {
+    /// Reparse each selected participant through its SAME retained Sources.
+    /// No owner, file identity baseline or original record is adopted/replaced.
+    pub(crate) fn restage_recorded3(&mut self, index: usize) -> Result<Document> {
+        self.recheck()?;
+        let source = self
+            .collections
+            .get_mut(index)
+            .ok_or_else(|| Error::contract("recorded collection index outside committed prefix"))?;
+        let stage = self.stage.as_mut().ok_or(Error::Closed)?;
+        let b = &self.budget;
+        let c = &self.control;
+        let m = &source.manifest.root;
+        let mut episodes = Vec::new();
+        let mut digests = Vec::new();
+        let _metadata = b.reserve(65536)?;
+        for group in m.require("schedule")?.array()? {
+            for spec in group.require("episodes")?.array()? {
+                c.check()?;
+                let viewer = spec.require("learner_viewer")?.integer(1, 2)?;
+                let name = field(spec, "episode_id")?;
+                let ep = m
+                    .require("episodes")?
+                    .array()?
+                    .iter()
+                    .find(|v| v.get("episode_id") == spec.get("episode_id"))
+                    .ok_or_else(|| Error::contract("original episode absent"))?;
+                let dir = source.directory.join(name);
+                let file = format!("player-{viewer}.jsonl");
+                let path = dir.join(&file);
+                let owner = source
+                    .sources
+                    .iter_mut()
+                    .find(|owner| owner.owns_original(&path))
+                    .ok_or_else(|| Error::contract("recorded participant original owner absent"))?;
+                let raw = owner.bytes(&path, self.source_bytes)?;
+                let first = raw
+                    .split_inclusive(|b| *b == b'\n')
+                    .next()
+                    .ok_or_else(|| Error::contract("original J6 header absent"))?;
+                if first.len() > self.record_bytes {
+                    return Err(Error::resource("original header record cap"));
+                }
+                let header = json::parse(first, b, c)?;
+                drop(raw);
+                let (identity, model) =
+                    card_instance::role(&header.root, m, ep, spec, viewer, b, c)?;
+                let declaration = OriginalHeader::new_corrected(model, &identity, b, c)?;
+                let parsed = Journal::restage_corrected(
+                    owner,
+                    &file,
+                    self.source_bytes,
+                    self.record_bytes,
+                    &declaration,
+                    stage,
+                    episodes.len(),
+                )?;
+                let facts = parsed.correspondence_frames(owner)?;
+                let h = parsed.header_value();
+                let end = parsed.end_value();
+                require(
+                    field(end, "end_kind")? == "natural"
+                        && end.require("outcome")? == ep.require("outcome")?,
+                    "recorded restage original closure differs",
+                )?;
+                digests.push(episode_digest_context(
+                    h,
+                    h.require("viewer")?,
+                    h.require("bank_episode")?,
+                    &parsed.boundary_value(),
+                    facts.root.array()?,
+                    end.require("end_kind")?,
+                    end.require("outcome")?,
+                    &Value::Null,
+                    b,
+                    c,
+                    SourceFormat::Corrected,
+                )?);
+                episodes.push(parsed.staged_episode(owner, stage, episodes.len(), &Value::Null)?);
+            }
+        }
+        require(
+            digests == source.digests && episodes.len() == 16,
+            "recorded restage ordered original correspondence differs",
+        )?;
+        let result = doc(&json::array(episodes), b, c)?;
+        self.recheck()?;
+        Ok(result)
+    }
 }

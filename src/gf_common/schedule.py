@@ -7,7 +7,9 @@ from gf_common.domain import EpisodeGroup, EpisodeSpec, digest, integer
 
 
 def baseline_policy_labels(actions_version: int = 1) -> tuple[str, str]:
-    integer(actions_version, 1, 2)
+    integer(actions_version, 1, 3)
+    if actions_version == 3:
+        return 'random-card-instance-v2', 'heuristic-card-instance-v2'
     return (("random", "heuristic") if actions_version == 1
             else ("random-structured-v1", "heuristic-structured-v1"))
 

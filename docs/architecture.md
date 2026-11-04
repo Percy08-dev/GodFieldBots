@@ -32,9 +32,38 @@ qualify a learning Source or establish strength. The source-matched134module
 wheel also passes mandatory-only installed baseline-worker checks.
 Corrected neural game inference now also passes both reviews and all six real
 MLP/GRU/Transformer×CPU/CUDA conditions (12natural games), plus a complete24journal
-audit and source-matched135module wheel/mandatory-only baseline checks. This is
-initial-policy inference evidence; Source, numeric rollout/learner4, PPO updates/
-resume, native-v2 and Tree integration remain pending.
+audit and source-matched135module wheel/mandatory-only baseline checks. These are
+initial-policy inference results and do not establish training acceptance.
+The later §16 Source/numeric4/lineage3 implementation now passes both independent
+reviews, focused actual CUDA checks and all six MLP/GRU/Transformer×CPU/CUDA
+inference conditions with CUDA learner: continuous2 and pause1→resume2 each
+complete32natural games. CPU-learner, direct and DeepSets real MLP smokes also
+complete16games each,432natural games/27actual updates overall. Ten final audit
+receipts pass, reusing the independently completed12parent Source validation and
+refreshing sealed originals/numerics, six saved-state reports and three extras.
+Independent game trajectories have different first-batch candidates and fail
+final-state equality; this failure is preserved. Separately predeclared same-input
+controls restore G0 and replay each reference's two verified numeric batches:
+all234MLP/250GRU/362Transformer saved final arrays match exactly, including named
+Adam/CPU-CUDA RNG. Reviewed helper scalar/PCG/derived-buffer checks also pass;
+final auditors rehash persisted arrays without rerunning numerical learning.
+Root accepts scoped Python runtime/resume, not independent trajectory determinism,
+formal Source qualification or strength. The137source freeze is complete.
+Native lifecycle/provider fixes pass both independent rechecks; the private
+release candidate also completes MLP CPU/CUDA inference with CUDA learner,
+continuous2 and pause1→resume2:128natural games/8updates across four parents.
+Root's four complete-original Source checks and two saved-state audits pass;
+both same-input controls have60G0/234G2 persisted arrays exact. This accepts
+the scoped native PPO runtime. The candidate remains private; installed ELF
+is unchanged. Tree3 pure features, fixture Source/Dataset3 and artifact4/fresh
+component fitting pass both reviews after full-Booster/terminal-release fixes.
+The durable default component fit uses96train/192validation rows and retains30
+of500configured rounds. The private native fixture-token diagnostic also passes
+both reviews,194FFI cases and68Python-reference cases; its marker stays absent.
+Tree workers/RAW, the SAME fixture-owner native adapter,512ordinary-decision
+performance and final combined checks remain pending. ADR0024§18.2 separately pins
+reachable formal-parent/64validation/qualified Dataset3/GameTree3 interfaces;
+formal experimental execution stays deferred.
 Exact conditions are in the [new ledger](verification/card-instance-v2-adoption.md).
 Legacy and ADR0023 engineering identities remain unchanged; historical evidence
 below does not qualify the new contract.
@@ -461,7 +490,7 @@ Wire DTOs may resolve representation details; no engine dependency is allowed.
 | --- | --- | --- |
 | `gf_common` | JSON-safe domain types, protocols, public action space, lazy search, pure scheduling | stdlib, NumPy |
 | `gf_simulator_client` | validated HTTP, attestation, subprocess/game ownership, worker transport | common, httpx; v2 stdlib-only model binding/config/cost metadata |
-| `gf_training` | journals/projection, split/feasibility, owned numeric training, generation lineage and frozen datasets | common, model adapters, optional PyArrow; v2 stdlib-only client.structured_resources owner |
+| `gf_training` | journals/projection, split/feasibility, owned numeric training, generation lineage and frozen datasets | common, model adapters, optional PyArrow; stdlib-only client.structured_resources owner and corrected-runtime preflight-only client.card_instance_runtime |
 | `gf_evaluation` | paired scheduling, aggregation and costs | common |
 | `gf_models` | participant-local Random/heuristic/LightGBM/MLP/GRU/Transformer, common encoder/config and artifacts | common, lazy extras |
 | `gf_cli` | strict config, composition, commands, manifest | application packages |

@@ -10,10 +10,16 @@ use std::sync::Arc;
 
 const EXACT_RECIPE: &[u8] =
     include_bytes!("../assets/structured-token-recipe-public-exact-v2.json");
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Context {
+    Engineering,
+    CorrectedCardInstance,
+}
 pub struct Recipe {
     document: Document,
     pub window: usize,
     pub signature: String,
+    context: Context,
 }
 pub struct OwnedTokens {
     pub value: Value,
@@ -37,7 +43,42 @@ impl Recipe {
             document,
             window,
             signature,
+            context: Context::Engineering,
         })
+    }
+    /// Explicit corrected diagnostic context, never inferred from input keys.
+    pub(crate) fn corrected(
+        window: usize,
+        budget: &Arc<Budget>,
+        control: &Control,
+    ) -> Result<Self> {
+        let signature =
+            crate::structured_controls::card_instance_token_signature(window, budget, control)?;
+        let mut document = json::parse(
+            crate::structured_controls::CARD_INSTANCE_RECIPE,
+            budget,
+            control,
+        )?;
+        document
+            .root
+            .as_object_mut()
+            .expect("pinned recipe")
+            .insert("history_window".into(), json::integer(window as i128));
+        Ok(Self {
+            document,
+            window,
+            signature,
+            context: Context::CorrectedCardInstance,
+        })
+    }
+    pub(crate) fn is_corrected(&self) -> bool {
+        self.context == Context::CorrectedCardInstance
+    }
+    pub(crate) fn guardian_ids(&self) -> Result<&[Value]> {
+        self.list("state_categories")?[7].array()
+    }
+    pub(crate) fn definition_ids(&self) -> Result<&[Value]> {
+        self.list("card_categories")?[0].array()
     }
     fn list(&self, field: &str) -> Result<&[Value]> {
         self.document.root.require(field)?.array()
@@ -176,6 +217,13 @@ pub fn frame_tokens(
     if end - start > 65536 {
         return Err(Error::contract("structured interval token capacity"));
     }
+    if recipe.is_corrected() {
+        // Validate only this participant's original prefix. A later tail is
+        // never read to construct an earlier frame's tokens.
+        for value in &events[..end] {
+            crate::structured_journal::card_instance::event(value, recipe, budget, control)?;
+        }
+    }
     let scalar_count = (end - start)
         .checked_mul(34)
         .and_then(|n| n.checked_add(2048))
@@ -258,31 +306,48 @@ pub fn frame_tokens(
     }
     let state_cats = recipe.categories("state_categories", &cats)?;
     let own = obs.require("own")?;
-    let hand = own.require("hand")?.array()?;
-    let learned = own.require("learned_miracles")?.array()?;
-    if hand.len() + learned.len() > 18 {
+    let mut cards = Vec::with_capacity(18);
+    if recipe.is_corrected() {
+        let originals = own.require("cards")?.array()?;
+        if originals.len() > 18 {
+            return Err(Error::contract("own card token capacity"));
+        }
+        for (index, card) in originals.iter().enumerate() {
+            cards.push((
+                card.require("definition_id")?,
+                card.require("kind")?.string()?,
+                card.require("card_ref")?,
+                index + 1,
+                card.get("state"),
+            ));
+        }
+    } else {
+        let hand = own.require("hand")?.array()?;
+        let learned = own.require("learned_miracles")?.array()?;
+        if hand.len() + learned.len() > 18 {
+            return Err(Error::contract("own card token capacity"));
+        }
+        for card in hand {
+            cards.push((
+                card.require("definition_id")?,
+                "hand_artifact",
+                card.require("instance_id")?,
+                0,
+                None,
+            ));
+        }
+        for (index, name) in learned.iter().enumerate() {
+            cards.push((name, "learned_miracle", name, index + 1, None));
+        }
+    }
+    if cards.len() > 18 {
         return Err(Error::contract("own card token capacity"));
     }
     let mut card_numbers = Vec::with_capacity(18);
     let mut card_present = Vec::with_capacity(18);
     let mut card_cats = Vec::with_capacity(18);
-    for i in 0..hand.len() + learned.len() {
+    for (name, source, reference, order, state) in cards {
         control.check()?;
-        let (name, source, reference, order) = if i < hand.len() {
-            (
-                hand[i].require("definition_id")?,
-                "hand_artifact",
-                hand[i].require("instance_id")?,
-                0,
-            )
-        } else {
-            (
-                &learned[i - hand.len()],
-                "learned_miracle",
-                &learned[i - hand.len()],
-                i - hand.len() + 1,
-            )
-        };
         let definition = payload.require("catalog")?.require(name.string()?)?;
         let mut numbers_value = json::object([]);
         for field in recipe.list("card_numeric")? {
@@ -293,61 +358,109 @@ pub fn frame_tokens(
                     .insert(field.string()?.into(), json::copy(value, control)?);
             }
         }
-        numbers_value.as_object_mut().unwrap().insert(
-            "usable".into(),
-            Value::Bool(
-                options
-                    .require(if source == "hand_artifact" {
-                        "usable_hand_elements"
-                    } else {
-                        "usable_learned_miracles"
-                    })?
-                    .array()?
-                    .contains(reference),
-            ),
-        );
+        let available = |key: &str| -> Result<bool> {
+            let rows = options.require(key)?.array()?;
+            if recipe.is_corrected() {
+                Ok(rows
+                    .iter()
+                    .any(|row| row.get("card_ref") == Some(reference)))
+            } else {
+                Ok(rows.contains(reference))
+            }
+        };
+        let usable = if recipe.is_corrected() {
+            available("usable_cards")?
+        } else {
+            available(if source == "hand_artifact" {
+                "usable_hand_elements"
+            } else {
+                "usable_learned_miracles"
+            })?
+        };
         numbers_value
             .as_object_mut()
             .unwrap()
-            .insert("learned_order".into(), json::integer(order as i128));
+            .insert("usable".into(), Value::Bool(usable));
+        numbers_value.as_object_mut().unwrap().insert(
+            if recipe.is_corrected() {
+                "possession_position"
+            } else {
+                "learned_order"
+            }
+            .into(),
+            json::integer(order as i128),
+        );
         for key in ["exchange", "sell", "buy"] {
+            let enabled = if recipe.is_corrected() {
+                available(&format!("{key}_cards"))?
+            } else {
+                source == "hand_artifact" && available(&format!("{key}_artifacts"))?
+            };
+            numbers_value
+                .as_object_mut()
+                .unwrap()
+                .insert(key.into(), Value::Bool(enabled));
+        }
+        if recipe.is_corrected() {
             numbers_value.as_object_mut().unwrap().insert(
-                key.into(),
-                Value::Bool(
-                    source == "hand_artifact"
-                        && options
-                            .require(&format!("{key}_artifacts"))?
-                            .array()?
-                            .contains(reference),
-                ),
+                "phenomenon".into(),
+                Value::Bool(available("phenomenon_cards")?),
             );
+            let roles = definition
+                .require("classification")?
+                .require("use_roles")?
+                .array()?;
+            for field in &recipe.list("card_numeric")?[13..] {
+                let key = field.string()?;
+                let role = key
+                    .strip_prefix("role.")
+                    .ok_or_else(|| Error::contract("corrected role recipe mismatch"))?;
+                numbers_value.as_object_mut().unwrap().insert(
+                    key.into(),
+                    Value::Bool(roles.iter().any(|v| v.as_str() == Some(role))),
+                );
+            }
         }
         let (n, p) = numbers(&numbers_value, recipe.list("card_numeric")?)?;
         card_numbers.push(ints(n));
         card_present.push(flags(p));
-        card_cats.push(ints(
-            recipe.categories(
-                "card_categories",
-                &[
-                    Some(json::copy(name, control)?),
-                    definition.get("ability").cloned(),
-                    definition.get("kind").cloned(),
-                    definition.get("attribute").cloned(),
-                    definition.get("curse").and_then(|v| v.get("id")).cloned(),
-                    definition
-                        .get("guardian")
-                        .and_then(|v| v.get("id"))
-                        .cloned(),
-                    Some(json::text(source)),
-                ],
-            )?,
-        ));
+        let mut categories = vec![
+            Some(json::copy(name, control)?),
+            definition.get("ability").cloned(),
+            definition.get("kind").cloned(),
+            definition.get("attribute").cloned(),
+            definition.get("curse").and_then(|v| v.get("id")).cloned(),
+            definition
+                .get("guardian")
+                .and_then(|v| v.get("id"))
+                .cloned(),
+        ];
+        categories.push(Some(json::text(source)));
+        if recipe.is_corrected() {
+            let classification = definition.require("classification")?;
+            categories.extend([
+                state.cloned(),
+                classification.get("definition_class").cloned(),
+                classification.get("miracle_subclass").cloned(),
+                Some(json::text(&if source == "artifact" {
+                    "artifact".into()
+                } else {
+                    format!(
+                        "miracle_{}",
+                        state
+                            .ok_or_else(|| Error::contract("miracle state missing"))?
+                            .string()?
+                    )
+                })),
+            ]);
+        }
+        card_cats.push(ints(recipe.categories("card_categories", &categories)?));
     }
     let own_count = card_numbers.len();
     while card_numbers.len() < 18 {
-        card_numbers.push(ints([0; 12]));
-        card_present.push(flags([false; 12]));
-        card_cats.push(ints([0; 7]));
+        card_numbers.push(ints(vec![0; recipe.list("card_numeric")?.len()]));
+        card_present.push(flags(vec![false; recipe.list("card_numeric")?.len()]));
+        card_cats.push(ints(vec![0; recipe.list("card_categories")?.len()]));
     }
     let mut opponent = Vec::with_capacity(18);
     for name in obs
@@ -371,28 +484,36 @@ pub fn frame_tokens(
         interval_present.push(flags(p));
         interval_cats.push(ints(c));
     }
-    let mut history = vec![0i64; 376];
+    let event_count = recipe.list("event_categories")?[0].array()?.len();
+    let numeric_start = event_count + 16;
+    let definition_start = numeric_start + 2 * recipe.list("event_numeric")?.len();
+    let definition_vocab = &recipe.list("event_categories")?[1];
+    let window_index = definition_start + definition_vocab.array()?.len();
+    let actor_start = window_index + 2;
+    let mut history = vec![0i64; actor_start + 16];
     let window_start = end.saturating_sub(recipe.window);
-    let definition_vocab = &recipe.list("card_categories")?[0];
     for value in &events[window_start..end] {
         control.check()?;
         let (n, p, c) = event(value, actor, recipe)?;
         add(&mut history[(c[0] - 2) as usize], 1)?;
         for (role, &category) in c[4..].iter().enumerate() {
             if category >= 2 {
-                add(&mut history[24 + 2 * role + (category - 2) as usize], 1)?;
+                add(
+                    &mut history[event_count + 2 * role + (category - 2) as usize],
+                    1,
+                )?;
             }
         }
         for (i, (&number, &exists)) in n.iter().zip(&p).enumerate() {
-            add(&mut history[40 + 2 * i], number)?;
-            add(&mut history[41 + 2 * i], i64::from(exists))?;
+            add(&mut history[numeric_start + 2 * i], number)?;
+            add(&mut history[numeric_start + 2 * i + 1], i64::from(exists))?;
         }
         if let Some(name) = value.get("definition_id") {
             let category = recipe.category(Some(name), definition_vocab)?;
             if category < 2 {
                 return Err(Error::contract("missing exact event definition ID"));
             }
-            add(&mut history[62 + (category - 2) as usize], 1)?;
+            add(&mut history[definition_start + (category - 2) as usize], 1)?;
         }
         let player = value
             .get("player")
@@ -400,7 +521,7 @@ pub fn frame_tokens(
             .or_else(|| value.get("active_player"));
         if let Some(player) = player.filter(|v| !v.is_null()) {
             let player = player.integer(1, 2)?;
-            let base = 360 + if player == actor { 0 } else { 8 };
+            let base = actor_start + if player == actor { 0 } else { 8 };
             add(&mut history[base], 1)?;
             for (i, key) in [
                 "amount",
@@ -420,8 +541,8 @@ pub fn frame_tokens(
             }
         }
     }
-    history[358] = (end - window_start) as i64;
-    history[359] = i64::from(end > recipe.window);
+    history[window_index] = (end - window_start) as i64;
+    history[window_index + 1] = i64::from(end > recipe.window);
     let value = json::object([
         (
             "frame_hash",

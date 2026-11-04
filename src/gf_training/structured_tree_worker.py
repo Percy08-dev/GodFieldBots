@@ -28,8 +28,9 @@ def main()->None:
         runtime_metadata,
         save_provisional_trained,
     )
-    from gf_models.structured_tree_encoder import feature_layout
     from gf_models.structured_tree_pairing import (
+        TREE2_RECORDS,
+        TREE3_RECORDS,
         fit_admission,
         inspect_fit_inputs,
         tree_fit_producer,
@@ -40,19 +41,22 @@ def main()->None:
     root=Path(_ARGUMENTS[0]);expected=checksum(_ARGUMENTS[1]);deadline=float(_ARGUMENTS[2])
     if not math.isfinite(deadline):raise ContractError('Tree2 bounded child deadline required')
     scan=SealedScan(max_owned_bytes=2*1024**3,deadline=deadline)
-    request=validate_request(scan.object(root/'request.json',expected))
+    raw=scan.object(root/'request.json',expected)
+    if type(raw.get('schema_version')) is not int or raw['schema_version'] not in (3,4):
+        raise ContractError('closed Tree fit record schema required')
+    context=TREE3_RECORDS if raw['schema_version']==4 else TREE2_RECORDS
+    request=validate_request(raw,_context=context)
     if request['producer']!=tree_fit_producer(request['producer']['code_revision']):raise ContractError('Tree2 actual fit producer differs')
     if request['runtime']!=runtime_metadata(deadline=deadline):raise ContractError('Tree2 actual fit runtime differs')
-    from gf_models.structured_tree_config import configured_tree_v2
-    model=configured_tree_v2({**request['model'],'checkpoint':None,**request['execution']})
+    model=context.configured({**request['model'],'checkpoint':None,**request['execution']})
     scan.limit=min(scan.limit,model.resources.max_owned_bytes)
-    fit_admission(model,request['fit_settings'],request['row_counts'],retained_bytes=scan.retained)
-    envelope,blocks,targets=inspect_fit_inputs(root,request,scan,retain=True)
+    fit_admission(model,request['fit_settings'],request['row_counts'],retained_bytes=scan.retained,_context=context)
+    envelope,blocks,targets=inspect_fit_inputs(root,request,scan,retain=True,_context=context)
     # Source is never available here. This is consumed own numeric evidence only.
     scan.finalize()
-    fit=request['fit_settings'];layout=feature_layout(model.encoder)
+    fit=request['fit_settings'];layout=context.layout(model.encoder)
     import numpy as np
-    fit_admission(model,fit,request['row_counts'],retained_bytes=scan.retained)
+    fit_admission(model,fit,request['row_counts'],retained_bytes=scan.retained,_context=context)
     labels={split:np.concatenate(values) for split,values in targets.items()}
     derived=int(digest({'recipe':model.initialization.recipe,'model_seed':request['seed']})[:8],16)%(2**31-1)
     params={**NATIVE_PARAMETERS,'metric':'l2','learning_rate':fit['learning_rate'],'num_leaves':model.network.num_leaves,
@@ -76,16 +80,17 @@ def main()->None:
     metrics={'configured_rounds':fit['num_boost_round'],'consumed_iterations':consumed,'best_iteration':booster.best_iteration,
         'retained_tree_count':booster.num_trees(),'validation_l2':float(booster.best_score['validation']['l2'])}
     if not math.isfinite(metrics['validation_l2']):raise ContractError('Tree2 child nonfinite validation loss')
-    manifest=save_provisional_trained(root/'artifact',booster,model,request,expected,envelope['action_config_hash'],deadline=deadline)
+    manifest=save_provisional_trained(root/'artifact',booster,model,request,expected,envelope['action_config_hash'],deadline=deadline,_context=context)
     from gf_common.action_contract import parse_action_contract
     inspect_artifact(root/'artifact',expected_digest=digest_bytes(root/'artifact'/'inference.json',scan),model=model,
-        action_config_hash=envelope['action_config_hash'],action_contract=parse_action_contract(envelope['input_binding']['action_contract']),
-        purpose=envelope['input_binding']['purpose'],synthetic_capacity=envelope['input_binding']['synthetic_capacity'],deadline=deadline)
+        action_config_hash=envelope['action_config_hash'],action_contract=(context.features.layout.action_contract if context.modern else parse_action_contract(envelope['input_binding']['action_contract'])),
+        purpose=envelope['input_binding']['purpose'],synthetic_capacity=envelope['input_binding']['synthetic_capacity'],deadline=deadline,_context=context,
+        _expected_source=None if not context.modern else (request['source_kind'],request['source_origin']))
     scan.finalize()
-    receipt={'schema_version':3,'kind':'structured-tree-fit-result','request_sha256':expected,'input_files':request['input_files'],
+    receipt={'schema_version':context.schema,'kind':'structured-tree-fit-result','request_sha256':expected,'input_files':request['input_files'],
         'metrics':metrics,'inference_sha256':digest_bytes(root/'artifact'/'inference.json',scan),
-        'model_sha256':manifest['model_file']['sha256']}
-    publisher=_ChainScan(directory=root,max_owned_bytes=model.resources.max_owned_bytes-fit_admission(model,fit,request['row_counts'],retained_bytes=0)['raw_bytes'],deadline=deadline)
+        'model_sha256':manifest['model_file']['sha256'],**{key:request[key] for key in context.extra_fields}}
+    publisher=_ChainScan(directory=root,max_owned_bytes=model.resources.max_owned_bytes-fit_admission(model,fit,request['row_counts'],retained_bytes=0,_context=context)['raw_bytes'],deadline=deadline)
     _write(root/'child-result.json',receipt,scan=publisher,immutable=True)
     publisher.finalize();scan.finalize()
     # Keep every consumed numeric field observable, and no console payload.

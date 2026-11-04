@@ -16,6 +16,7 @@ from gf_common.card_instance import (
     ActionConfigV3,
     action_config_v3,
     card_instance_contract,
+    corrected_card_instance_contract,
     parse_card_instance_contract,
 )
 from gf_common.domain import (
@@ -377,7 +378,10 @@ def load_config(path: str | Path, overrides: Json | None = None) -> LoadedConfig
         validate_capacity(model, effective["actions"]["max_sequence_length"])
     if card_instance_actions:
         actions_v3 = action_config_v3(effective["actions"])
-        if preprocessing.backend != "python" or preprocessing.reader != "legacy":
+        game_reader = (preprocessing.backend in ("python", "rust") and preprocessing.reader == "participant-structured-v2"
+            and actions_v3.action_contract == corrected_card_instance_contract()
+            and isinstance(models["model"], ConfiguredNeuralModelV3) and isinstance(training, PPOTrainingConfig))
+        if not game_reader and (preprocessing.backend != "python" or preprocessing.reader != "legacy"):
             raise ContractError("actions3 preprocessing is not implemented; only inert Python/legacy settings are supported")
         if any(not isinstance(model, ConfiguredNeuralModelV3)
                and (type(model) is not ModelConfig or model.model_id not in ("random", "heuristic"))
@@ -395,6 +399,8 @@ def load_config(path: str | Path, overrides: Json | None = None) -> LoadedConfig
         if any(isinstance(model, (ConfiguredNeuralModelV2, ConfiguredTreeModelV2)) and actions_v2.max_candidates > model.inference.max_candidates for model in models.values()):
             raise ContractError("action presentation limit exceeds configured model admission")
     else:
+        if preprocessing.reader == "participant-structured-v2":
+            raise ContractError("card-instance reader requires corrected actions3/model3")
         if preprocessing.reader == "structured-v1" or any(isinstance(model, (ConfiguredNeuralModelV2, ConfiguredTreeModelV2)) for model in models.values()):
             raise ContractError("structured model/reader requires actions2")
         actions = effective["actions"]

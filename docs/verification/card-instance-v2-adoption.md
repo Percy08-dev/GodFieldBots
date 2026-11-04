@@ -706,3 +706,233 @@ PPO and its bounded design addendum are independently READY but implementation/
 real training/resume remain pending. §17native design is READY, gated on stable
 §16Python interfaces. Tree/fixed Dataset3, performance, original-data/native
 proofs and final combined whole-project/package acceptance remain pending.
+
+## Source/PPO implementation and first real updates — 2026-11-04
+
+The later §16 implementation passes independent correctness and architecture
+conformance reviews. The same `_run_ppo` coordinator now selects explicit corrected
+Source/rollout4/wire4/lineage3 operations. Original C5/J6 records, complete cohorts,
+live parent/learner/lease ownership, numeric correspondence, transaction identity,
+pre-commit cleanup and post-commit memory-only release remain required. Registry
+retention supports the current policy and five pool policies without relaxing the
+two-policy standalone game owner. Full Ruff and mypy137 PASS; focused actual CUDA
+numeric25 PASS. The immutable legacy/component coordinator trace still matches
+SHA586d3c55…f4669d exactly.
+
+Actual acceptance uses seed17, default attention,16games/update and unchanged
+7200/5400/7140second budgets. Frozen conditions and137source hashes are recorded in
+`runs/assessments/card-instance-ppo-acceptance-20261104/conditions-2.json`.
+The first MLP/CPU-inference parent fails before its first game because an internal
+registry producer retained tuples instead of closed JSON lists. It is preserved
+with zero updates/decisions and quarantine; it is not resumed or made eligible.
+The producer-only repair keeps canonical hashes/labels and strict consumers exact.
+
+MLP/CPU inference with CUDA learner then completes both continuous2 and
+pause1→resume2 parents: each32natural games,419learner decisions,16Adam steps.
+Complete-parent validation rereads originals, numeric correspondence and lineage.
+The independent trajectories do NOT have identical final weights: their first
+batch already contains different candidate ordering/counts at the same visible
+input. The original comparison remains FAIL. Adaptive wall-clock search can vary;
+these observations do not prove timing was the cause and do not authorize a new
+legality rule or a smaller search domain.
+
+ADR0024§16.1 separately predeclares each condition's completed pause/resume parent
+as the reference for a same-input learner restoration diagnostic. It restores
+that parent's G0 and continuously consumes its verified numeric0+1 using the
+unchanged learner, then compares against its actual resumed G2. It creates no
+PPO parent/generation/Source authority. For MLP/CPU inference this control PASS:
+G0's60 saved arrays and G2's234 saved arrays are exactly equal, including weights,
+named Adam, counters, Torch CPU/owned CUDA RNG and PCG64 shuffle. The derived
+nonpersistent position buffer and final original-file rechecks also pass. The
+initial diagnostic's incorrect buffer-inventory expectation is preserved as FAIL;
+only the assessment helper was corrected. Independent read-only result audit
+revalidates the complete parent,29parent snapshots and1041original C5/J6 snapshots.
+Opaque server files are hashed only.
+
+Receipts include `continuous-resume-state-audit.json`,
+`continuous-resume-public-divergence.json`, `mlp-cpu-fixed-input-1.json` (FAIL),
+`mlp-cpu-fixed-input-2.json` (PASS), `fixed-input-result-audit-final.json` and the
+predeclared `fixed-input-reference-rule.json`. The six-condition helper is
+independently reviewed; its closed reference map cannot select a parent after
+seeing diagnostic results. The original independent-trajectory failure is never
+relabelled as equality. These results establish scoped same-input normal-boundary
+restoration, not trajectory determinism, formal parent qualification or strength.
+
+MLP/CUDA inference's continuous2 parent also completes32natural games,
+419learner decisions and16steps; its separate parent reaches the normal paused
+boundary after one update. Its resumed update and same-input comparison, all four
+GRU/Transformer conditions, CPU-learner smoke, direct/DeepSets real checks and final
+combined acceptance remain pending at this entry.
+
+Subsequent MLP/CUDA resume also completes32natural games/419decisions/16steps.
+Its predeclared same-input control PASS in100.944s, again exact G0's60and G2's234
+saved arrays plus derived positions/scalars/RNG. Independent read-only audit
+matches all29parent/1041collection file snapshots and all saved-bundle hashes;
+`validate_game_parent(require_complete=True)` passes. Receipt
+`mlp-cuda-fixed-input-result-audit-final2.json` preserves earlier audit-only hash
+failures caused by a scalar-array shape conversion. No original or production
+data was changed and no additional learner was run by that audit.
+GRU/CPU-inference continuous2 also completes32natural games/419decisions/16steps
+in359.333s; its pause/resume acceptance is in progress. Remaining actual conditions
+run sequentially under the same frozen137source hashes and budgets; the Root
+orchestrator stops on the first nonzero child, unexpected boundary or failed
+same-input control. Its progress is in `remaining-matrix-1.log`.
+
+GRU/CPU resume completes2updates/32natural games/419learner decisions/16steps.
+Its same-input control PASS in231.909s: G0's64and G2's250saved arrays are exactly
+equal, all17scalar checks pass, with the additional derived position buffer
+verified. Receipt `gru-cpu-fixed-input-1.json` retains original-file snapshots and
+complete Source/numeric correspondence. This brings actual execution plus scoped
+same-input restoration to3of6conditions; GRU/CUDA and both Transformer inference
+conditions remain in progress. No independent-game-trajectory equality or formal
+parent qualification is inferred.
+
+## Native corrected DTO diagnostic — implementation in progress
+
+The first §17 increment implements only private closed corrected recipe/DTO and
+shared token/journal primitives. Both independent reviews are READY for that
+bounded diagnostic scope;11targeted Rust tests PASS. The Python golden frame hash
+is4a6ccf18…040c7e, including the full corrected contract/input recipe/policy version.
+An earlier partial binding hash is corrected with its failing reproduction kept.
+Existing native capability markers and installed ELF remain unchanged. Native
+Source/session/staging, exact Python/native token parity and capability activation
+have NOT yet passed; this increment cannot process a corrected training Source.
+
+The next bounded pure-validator/token increment is independently accepted:
+17corrected Rust tests plus2old token/1old control/1old16-role Source goldens pass.
+Independent Python/NumPy regeneration matches all10literal frame/table arrays,
+dtypes/shapes/codec bytes; all9model×hand metadata/shape/label/resource cases and
+four full synthetic J6 transactions agree with the Python reader. Source/current
+PID/actual NPZ values/session/staging/ABI/capability authority is outside this
+pure diagnostic scope. Common-only fixture extraction leaves137Python sources
+unchanged and imports no Torch.
+
+The reviewer-requested reward coverage adds viewer1/2×win/loss/draw literals.
+All six valid J6s pass both readers;18wrong reward and4fully rebound opposite-
+viewer cases reach the intended reward refusal. Target Rust count is now19PASS.
+Both independent test-only rechecks are READY, with no production-kernel change.
+Stable DTO hash ea0bd91e…6008bb and reward fixture01a971cd…77ed4; logs and extraction
+helpers are in `/tmp/card-instance-rust-diagnostic-20261104`. Root accepts this
+restricted scope. New native capability/installed ELF remain unchanged; full
+§17.1 Source/session/staging/provider implementation and acceptance are pending.
+
+The subsequent source investigation reads only the completed actual MLP/CPU
+reference parent for genuine historical parity. Its initial Python reference
+extraction refuses a conservatively supplied2GiB allowance before decoding;
+the recorded Source limit is8GiB, so comparison is rerun under that same recorded
+limit. The refusal is preserved and is not a failed game or a raised experiment
+budget. Opaque server/canonical files remain hash-only. No original is rewritten
+or rebased and no actual record is promoted to formal eligibility.
+
+## Remaining production interfaces — design accepted, implementation pending
+
+ADR0024§§18–18.2 now have independent architecture DESIGN READY. In addition to
+the declared component3-population Dataset3/fresh-fit/pair4/worker/RAW and actual
+512decision performance panel, implementation must supply reachable corrected
+formal-parent, actor-only64final-validation, three-parent qualified Dataset3,
+fresh fit and GameTree3 routing. A component-only implementation would leave the
+old engineering-only interfaces unconnected.
+
+The new formal recipe is a literal specification, not executed evidence:
+`docs/contracts/card-instance-formal-ppo-v1.json`, SHA871fc8d4…ecd67b2, algorithm
+content SHA318eab51…c90cc9. It freezes full1000max-update settings and requires a
+non-circular pre-G0 declaration plus healthy original-source ownership. Existing
+two-update acceptance parents cannot be retrofitted. Separate bounded actor
+validation deadlines preserve training's original completed deadlines; normal
+admission/storage-reservation completion remains valid without requiring1000
+actual updates. Formal runs, Dataset3 qualification, real3-parent fitting,
+multi-seed comparisons, HPO and final test remain NOT RUN as requested.
+
+## Python PPO runtime acceptance complete — 2026-11-04
+
+All six seed17/default-attention conditions complete both continuous2 and
+pause1→resume2 with CUDA learner,32natural games/419learner decisions/16Adam
+steps per parent. All six predeclared same-input restoration controls PASS;
+G0/G2 saved-array counts are60/234MLP,64/250GRU and92/362Transformer, all exact.
+The CPU-learner MLP smoke and direct/DeepSets MLP cases each complete16natural
+games/1update/234decisions/8steps under the original budgets. Actual execution
+totals15parents,432natural games,27updates,5730learner decisions and216Adam steps.
+No diagnostic replay creates another parent or generation.
+
+The independent verifier completes all12main-parent Source validations at the
+recorded8GiB allowance. The following assessment snapshot glue raises NameError
+after those successful checks; its pass is preserved separately as
+`six-main-pair-source-validation-interim.json`/`.log`. A subsequent unexecuted
+replacement script also has harness errors. Those are assessment errors, not
+game/data failures. Root escalates the repeated repair, then supplies small frozen
+programs and an explicit case manifest for independent review and execution.
+The corrected frozen programs pass syntax/Ruff and cheap six-case preflight;
+independent review is READY. The verifier executes them without editing them.
+
+All10new receipts PASS: `root-audit-source-evidence-v1.json`, six
+`root-audit-report-*-v1.json`, and three `root-audit-extra-*-v1.json`.
+The12Source decodes are not repeated: current sealed generation, manifest,
+numeric and inventory hashes corroborate the preserved full pass. The historical
+pass did not contain a full stat inventory, so that narrower freshness scope is
+explicit. Each same-input audit checks29parent/1041collection file snapshots,
+exact model-specific parameter names/shapes and every persisted G0/G2 array's
+dtype/shape/full-byte SHA against both helper actual/expected hashes. Scalar,
+PCG and derived-position equality remain reviewed-helper results; positions are
+not independently reconstructed by the NumPy-only final auditor. Opaque
+server/canonical files are hashed only. No GPU learner or game is rerun.
+
+Final Root receipt `python-ppo-acceptance-final-1.json`, SHA
+`d8b99b5a137517afab74f3d3ca4ea4fd407cc4fdc64dd0ab4d64a088b3540202`,
+binds all10receipts. All137Python source hashes stay exact from conditions2
+through actual execution and final audits; the freeze is now lifted. Root accepts
+ADR0024§16/16.1 Python runtime scope. The original independent-trajectory FAIL,
+initial pre-game failed parent, diagnostic buffer-inventory FAIL and assessment
+errors remain preserved. These short parents stay permanently nonformal; no
+Source promotion or model-strength claim follows.
+
+Native internal historical parity now matches both actual MLP cohorts and all
+4744batch0 raw arrays, but independent review finds a blocking failed-phase
+lifecycle issue: corrected finalization methods can retain operational states
+after reportable errors. The focused fix must poison admitted attempts before
+fallible work while preserving cleanup ownership and old component semantics.
+Native Source/provider/ABI/capabilities/actual live acceptance, Tree/fitting and
+512ordinary-decision performance, final whole-project/native/old-data/package/
+installation checks and local final commits remain required.
+
+## Native PPO runtime acceptance complete — 2026-11-04
+
+The failed-phase lifecycle issue and three provider preallocation/binary/query
+findings are fixed, with both independent rechecks READY. The shared Rust bridge
+and corrected provider retain the original Source/numeric4/wire4/common PPO
+coordinator. A separately built private release exposes the reviewed three
+corrected-game capability markers. Its ELF SHA is
+06054171c358deff4828e7de4896bd66f860e7e11af225ed33c039b5bd6c9019;
+the installed main-environment ELF remains unchanged.
+
+Actual native MLP/default-attention CPU and CUDA inference, both with CUDA
+learner, each complete continuous2 and pause1→resume2 under the original
+7200/5400/7140/60 budgets and16games/update. Four parents complete32natural games,
+419learner decisions and16Adam steps each:128games/8updates/1676decisions/64steps
+overall. Code executes from a frozen141module snapshot so independent later
+Tree changes do not alter child/coordinator imports. Git revision/dirty metadata
+is null for that copied runtime; its full inventory is pinned by snapshot SHA
+3f794e089a1e5018da9e88c11facf7f112a356334752949b5382bfa44dfbecec.
+
+Both predeclared native same-input controls PASS. They validate each original
+Rust parent unchanged, restore G0 and replay its two actual verified batches
+with an independent Python reference reader. They capture state before reading
+expected G2; no new parent, generation or eligible Source is created. All60G0
+and234G2 saved weights/Adam/RNG arrays are exact. The prior independent-game
+trajectory failure remains historical and no trajectory determinism is claimed.
+
+Root executes six bounded final checks: four complete original native parent
+Source validations at the recorded8GiB allowance and two saved-report audits
+reusing the reviewed NumPy reference-array auditor. All PASS. Snapshot/ELF,
+predeclared parent/config membership, original stat/hash inventories and saved
+G0/G2 arrays are checked. Scalar/PCG/derived-position equality remains the
+reviewed helper's result; the final auditor rehashes persisted arrays without
+rerunning numerical learning. Opaque server/canonical files are hashed only.
+These final executions are Root checks, not an additional independent code review.
+
+Root receipt `runs/assessments/card-instance-native-ppo-acceptance-20261104/
+native-ppo-acceptance-final-1.json`, SHA
+ee0cc693dcaf905a0660c35a6dfae096da4f52e11b9465f90a7aa9046f39e075,
+binds all six receipts. Root accepts§17's native PPO runtime scope; these short
+parents remain permanently nonformal. Native fixture-token diagnostic, Tree3
+workers/RAW and formal production interfaces,512ordinary-decision performance,
+whole-project/package/old-data checks, installation and commits remain pending.

@@ -39,7 +39,7 @@ def preparation_config(value: Json) -> PreparationConfig:
             raise ContractError(f"preprocessing.{key}: positive finite number required")
     if values["backend"] not in ("python", "rust"):
         raise ContractError("unsupported preprocessing backend")
-    if values["reader"] not in ("legacy", "typed-borrowed-v1", "structured-v1"):
+    if values["reader"] not in ("legacy", "typed-borrowed-v1", "structured-v1", "participant-structured-v2"):
         raise ContractError("unsupported preprocessing reader")
     if values["backend"] == "python" and values["reader"] == "typed-borrowed-v1":
         raise ContractError("typed preprocessing reader requires the Rust backend")

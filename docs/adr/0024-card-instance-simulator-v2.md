@@ -1418,15 +1418,25 @@ smokes only: no result becomes a formal training parent, 512train performance
 panel or PPO/resume acceptance by relabelling. Independent correctness and
 implementation-conformance reviews remain required before this increment opens.
 
-## 16. Qualified Python Source, numeric4 and shared PPO (design accepted)
+## 16. Corrected Python Source, numeric4 and shared PPO (accepted runtime scope)
 
 Independent architecture DESIGN READY after pinning online ownership, exact
 reader/PPO-collection variants, Source-issued wire expectation, RNG-neutral
 recorded-output parity, early combined admission and compatibility/pruning
-verification. Root accepts this bounded Python scope. Dependent implementation,
-independent reviews and the real acceptance matrix remain required; native and
-Tree remain separate gates. One implementer may capture bounded assessment-only
-pre-edit compatibility evidence while current production source is frozen.
+verification. Implementation now passes both independent reviews and all six
+real continuous2/pause1→resume2 conditions plus the CPU-learner/direct/DeepSets
+smokes. Ten final independent audit receipts pass: all12main Source parents,
+six saved-state reports and three extras;432natural games/27actual updates.
+Same-input G0/G2 saved arrays match exactly (MLP60/234, GRU64/250,
+Transformer92/362). The earlier independent-trajectory comparison remains FAIL;
+§16.1 defines the distinct, predeclared same-input restoration claim. Derived
+buffers/scalars are checked by the reviewed helpers; final NumPy-only auditors
+independently rehash saved arrays and original snapshots without replaying them.
+Root accepts this bounded Python runtime scope. Final receipt
+`python-ppo-acceptance-final-1.json` SHA d8b99b5a…3540202 is in the verification
+ledger. Native/Tree and final combined checks remain separate gates. These short
+parents are nonformal and gain no declaration or Source qualification by this
+acceptance. The original137Python source freeze is complete and lifted.
 
 After §15, connect the corrected neural game path to the existing single
 `ppo_run._run_ppo` lifecycle. Implement the explicitly selected Python reference
@@ -1485,13 +1495,21 @@ frozen label→serialized RuntimePolicyBinding registry respectively. Per-batch
 run_id remains the actual collection ID. No lock token, live process object or
 Source authorization is serialized into this metadata.
 
-The collector keeps §15's inference-owner constructor. It reconstructs configured
-neural3 entries only from closed validated frozen safe options (pure model,
-checkpoint, inference and visibility), creates the retained owner, then requires
+The collector uses a separately named RetainedGameArtifacts.for_registry entry
+over the same sealed owner/storage stack. It admits at most6NNidentities (current
+learner plus active pool5) and the two canonical baseline bindings. The standalone
+§15constructor keeps its two-input bound; concurrent games/workers remain2/4.
+The registry entry reconstructs configured neural3 only from closed validated
+safe options (pure model, checkpoint, inference and visibility), then requires
 exact original options, registry key/policy label and expected manifest digest
-agreement before output/Popen. A valid but different current artifact cannot be
-silently rebound. This creates inference-file ownership only; the separate SAME
-live parent/learner/ledger check authorizes online use. No permissive owner flag.
+agreement before returning or output/Popen. Unknown/noncanonical baselines and a
+seventh NN reject. A valid but different current artifact cannot silently rebind.
+This is inference-file ownership only; the SAME live parent/learner/ledger check
+still precedes it and authorizes online use. No permissive owner flag or generic
+capacity override. Independent architecture review accepts this amendment after
+both reviewers identify the otherwise failing generation11 three-artifact case.
+Test that case, all six current+five artifacts, and seventh refusal through the
+actual owner/collector path, not only registry/pruning metadata fixtures.
 
 Reuse existing owned Source snapshot/file inventory, retention accounting and
 deadline mechanisms with explicit closed layout/reader context, rather than
@@ -1622,6 +1640,15 @@ normal resume performs recorded identity validation before spawning anything.
 Keep legacy/component2 ordering/outputs unchanged; this is concrete corrected
 entry preflight, not a new resource manager or trainer loop.
 
+Independent dependency review accepts one narrow additional control-plane
+exception: training may reuse the stdlib/common-only
+gf_simulator_client.card_instance_runtime owner for bounded pre-lock filesystem/
+source metadata preflight. No HTTP/environment/CLI dependency or new process
+ownership follows; the collector still verifies its actual executed PID before
+Create, and a receipt alone is not Source authority. This avoids duplicating
+attestation or moving the established owner for one consumer. Revisit the module
+location/boundary if it gains HTTP/orchestration imports or broader consumers.
+
 Run/generation/update/registry3 bind repaired input, full execution/Config/code/
 Simulator/preprocessing/reward identity, original source proof and numeric4
 hashes. Shared file ownership/lineage validation/pair save/retention are reused
@@ -1684,6 +1711,72 @@ acceptance runs are not shortened formal training parents or qualified real-data
 three-parent Tree fitting evidence. New native-v2, Tree3/fixed Dataset3 component
 fit, fixed512train-decision performance and whole-project/package checks remain
 required subsequent migration acceptance.
+
+## 16.1 Actual-input resume verification distinction (design accepted)
+
+Independent advisor recommendation and architecture DESIGN READY; Root accepts
+this bounded verification distinction. Helper conformance/results remain
+required; the independent-trajectory equality failure is never relabelled PASS.
+
+The first real MLP/CPU-inference/CUDA-learner continuous and pause/resume parents
+both complete32natural games/two updates/419learner decisions/16Adam steps and
+pass complete original Source/lineage validation. Their independent-trajectory
+state-equality comparison FAILS and remains retained as such: final weights/Adam
+moments differ, despite exact initial state, coordinator controls and final RNG.
+Public records show different candidate tables before the first update at equal
+visible inputs/search RNG; different ordered responses then change event order.
+Adaptive wall-clock search can produce different cutoff positions. This is not
+evidence that restoring an identical learner state is wrong, and seed alone never
+promised identical adaptive real trajectories.
+
+Independent advisor recommends keeping real execution health and same-input
+state restoration separate. Root proposes the following bounded verification
+addendum, with no production Python/source-authority change, reduced input domain,
+budget change, tolerance relaxation or replacement of either original parent.
+
+Predeclare the existing actual paused/resumed parent
+runs/card-instance-v2-91d5926/ppo-acceptance/mlp-cpu-resume-1 as the first reference.
+For every remaining prescribed model/device condition, use its actual paused/
+resumed parent as the reference, chosen before diagnostic results. Independently
+validate that complete parent's originals, both numeric4 cohorts, lineage and
+paired G0/G2 artifacts; preserve all bytes, candidates, recorded values and
+correspondence. Do not reconstruct pruned G1 and call it original evidence.
+
+In an isolated assessment-only numerical process, restore that reference's EXACT
+G0 paired state into the unchanged GameLearner, then apply its verified numeric
+batch0 and batch1 continuously through existing parity/update kernels. Compare
+the diagnostic final state against the actual restarted reference G2: every named
+parameter/buffer, Adam moment/step/configuration, Torch CPU/all owned CUDA RNG,
+PCG64 shuffle and learner counters. Keep current numerical tolerances, require
+exact discrete state and separately report exact array equality. Coordinator
+schedule/pool/generation/control restoration remains the real/coordinator test
+evidence; process elapsed time and run-specific provenance are not learner state.
+
+Retain the ORIGINAL complete-parent, numeric0/1 and G0/G2 manifest/shard/control
+identity snapshots through replay and comparison, then recheck them without
+resetting a replacement baseline. Use the recorded learner binding, CUDA
+visibility and pinned runtime under the same bounded memory/array limits.
+Immediately after diagnostic update2, capture all diagnostic tensors/counters,
+Torch CPU/owned CUDA RNG and PCG64 state BEFORE loading any expected-G2 model or
+constructing comparison networks that could mutate global RNG. Expected state
+should be read-only metadata/arrays. A changed original or contaminated capture
+fails the diagnostic rather than silently taking a new expected baseline.
+
+The helper consumes originals only through the existing READ-ONLY complete-parent
+Source/numeric-correspondence path. It cannot issue an online projection, invoke
+a public update with forged authority, patch owner checks, create a PPO run/
+generation, register its output as policy or claim Source qualification. Prefer
+in-memory comparison; any scratch artifact is explicitly diagnostic, outside
+parent publication/eligibility. Full input hashes and results are retained.
+
+The two real runs establish execution/Source health only. The original independent
+equality check remains FAIL; a successful fixed-input diagnostic can establish
+scoped normal-boundary learner-state restoration, not identical independent
+adaptive-game trajectories or strength. Apply this rule consistently across all
+six conditions. If the same-input control fails, stop acceptance and localize
+the first state difference; search timing is no explanation once inputs are
+identical. A separate demand for deterministic successful search would require
+its own design rather than shrinking the migration acceptance domain.
 
 ## 17. Corrected native Source/token/staging parity (design accepted)
 
@@ -1791,3 +1884,980 @@ comparing state to the Python reference conditions. These supplement the
 requested full §16 six-condition real acceptance; they cannot relabel a synthetic
 fit, source fixture or short smoke as a formal parent. Final combined package/
 whole-project/performance acceptance and Tree3 remain required.
+
+### 17.1 Concrete native provider and private ABI (design accepted)
+
+Independent architecture DESIGN READY after the numeric append permit and
+live/historical plan cardinalities are explicit. Root accepts this exact handoff
+after the accepted private DTO diagnostic. Implementation and conformance review
+remain required before ABI/capability activation.
+Preserve `_GameOperations`, the SAME `_GameBatchSource` and exact
+`IssuedGameProjection`; no operations subclass, second public Source issuer or
+relaxed process/wire4 authority check. Add one mutually exclusive concrete native
+inputs representation behind the existing Source. It supplies verified proof,
+ordered episode digests, learner decision count, original rechecks and final
+preparation; it never fabricates empty Python EpisodeRecords/_SourceSnapshot.
+Replace only record-dependent count/digest access with these explicit accessors.
+The existing common numeric4 reader and issued expectation remain authoritative.
+
+The private `CardInstanceNativeSession` constructor fixes the corrected context;
+it accepts no caller recipe/qualification selector or Python callback. Plan3 is
+closed: schema_version3, mode live_cohort|historical_parent, parents
+[{directory,require_complete}], collections[{directory,parent_index}], and
+cohort_collection_index only in live mode. This increment requires exactly one
+parent and one selected16-game current cohort in live mode (collections length1,
+parent_index0, cohort_collection_index0). Historical mode requires collections[]
+and no cohort_collection_index; it derives all committed collections in generation
+order from the single parent. It may read a complete or still-running/paused
+committed prefix with require_complete false for ordinary resume validation;
+it cannot issue a live update. No standalone
+unlinked collection, baseline or Tree export. Settings keep the existing exact
+memory_bytes/scratch_bytes/max_source_file_bytes/max_record_bytes/
+chunk_target_bytes budgets and cumulative admission/cancellation infrastructure.
+
+Methods: control_summary, original_config_inputs, authorize, export_cohort,
+retire_payload, bind_numeric, begin_update, prepare_commit, finalize_read,
+recheck, used_bytes, peak_bytes and close. Retained-Python-byte accounting follows
+the existing concrete FFI ownership. `authorize` and `begin_update` only validate
+originals; neither grants learner permission. Summary3 is closed with kind
+card-instance-source-controls, reader_contract participant-structured-v2, mode,
+full five-field binding, parent, collections, authorization_max_bytes,
+qualified false and parent_qualification not_performed. The five game-binding
+fields are FLAT at summary top level, with no nested binding key. Parent uses existing
+compact-parent fields/lineage3/model3/artifact4 descriptors. Each collection binds
+index/directory/generation/manifest/config/linkage/schedule/bindings digests,
+source_proof/semantics/learner_label/learner_decisions/correspondence and numeric.
+Numeric is null for unpublished current projection, otherwise exact
+directory/sha256/files. Preserve Python's §16 exact correspondence fingerprint;
+do not reuse the old native composite fingerprint.
+The compact parent replaces journal5_validated with literal
+journal6_validated=false: control metadata alone cannot claim whole-journal
+validation; collection validation has its own separately checked evidence.
+
+The acknowledgement3 closes schema_version, summary_sha256, parent and collections.
+Python independently checks retained/pruned sealed game artifacts, recorded
+execution, schedule/pool/PCG/cadence, registry labels and prior numeric links using
+existing game lineage/snapshot kernels. It then acknowledges the full summary.
+No summary flag substitutes for those checks. The complete corrected Source
+validator must validate all J6/C5/codec2/runtime/role/label/closure semantics; the
+earlier DiagnosticHeaderExpected remains explicitly partial and cannot be used
+as its completion proof.
+
+Export metadata2 closes schema_version/kind card-instance-cohort-payload/
+collection_index/metadata/arrays/source_proof/correspondence. Metadata is the
+existing prepared rollout4 metadata with SEMANTIC_KEYS_V3/full game binding;
+array descriptors stay key/dtype/shape/bank_index/element_offset/element_count.
+Return the existing metadata-bytes plus readonly uint8/int64/float32 bank tuple.
+Preserve full JSON selection precision for shared GAE/correspondence; typed
+old-logprob/value remain FP32. Reuse `_payload_views`, `_attach_gae`,
+`_publish_payload` and the existing prepared writer via a closed rollout context,
+keeping old wrappers/serialized outputs exact. Do not parse native-owned original
+journals again in Python. A native path still performs common Python numeric4
+readback and exact correspondence checks.
+
+Lifecycle: Scanned→Authorized→Exported→PayloadRetired→NumericBound→Updating→
+Prepared. Numeric publication targets only the derived fresh parent
+numeric/batch-NNNNNN path. Original inventory checks must explicitly distinguish
+this one owned append from all original files/directories. Before returning any
+payload, `export_cohort` requires the derived target absent, snapshots the already
+existing numeric-root directory identity and its complete prior membership/
+subtree identities, and opens a one-use permit for that exact target only.
+The common coordinator creates numeric-root during initial parent allocation;
+the native session cannot create/replace it. During publication the root's own
+membership/mtime may reflect only that single append; its identity and every
+prior subtree remain pinned. No existing, replaced or mutated prior subtree is
+ignored. `bind_numeric` closes the permit, requires exact new target membership
+and retains the target directory plus every file identity/hash. Its input has
+exactly directory/manifest_sha256/files; it verifies derived path, manifest4/context/
+file map and snapshots every persisted file before common readback or issue.
+Release exported array views and retire their native payload before that handoff.
+`begin_update` rechecks all originals/numeric and permits only the existing
+next-artifact append rule. Snapshot/issuer checks repeat before wire/Adam/RNG use.
+
+At the existing precommit hook verify completed transaction and exact optimizer
+advancement, native originals/numeric, Python sealed/server/control owners and the
+one next artifact append. Complete spool retirement, native core handoff/join and
+FFI executor shutdown before marking the same projection prepared. Its small
+immutable proof/expectation/receipt and borrowed live parent/process/lease/ledger
+remain through lineage publication. No native close, task submission, join,
+rehash or old-control check follows commit; release is memory-only. Pre-prepare
+failures keep a reachable cleanup owner and preserve the initiating error. Old
+component finalize/close stays exact.
+
+Rust-only internal full validators/session/staging/tests may proceed while Python
+is frozen after this design gate; no lib.rs export/marker/installed ELF change.
+Later adapter files are card_instance_source.py, native_structured_session.py,
+structured_rollout.py, card_instance_ppo.py, structured_lineage.py and
+native_backend.py, with Root's CLI/config integration. No change to numerical
+learner/wire4/PPO coordinator is expected. Final preflight requires exact new
+capability/signature/model set plus existing binary identity and Rust-source
+identity evidence. Recorded preprocessing identity includes backend rust,
+reader_contract participant-structured-v2, implementation
+rust-player-card-refs-v2, full game binding and native source/binary identity;
+resume cannot switch backend or binary/source identity. Capability remains closed
+until complete Python/native arrays/metadata/ownership parity and both reviews.
+The exact identity keys are backend, reader_contract, implementation, binary
+and the existing five game-binding keys. `binary` is the unchanged binary_identity
+record (backend/extension_path/extension_sha256/build/python_abi/gil_disabled);
+build.native_source_sha256 supplies its source hash. Historical native inspection
+may read a recorded Python-reference parent as that closed original identity;
+this does not authorize changing its backend on resume. Live native composition
+requires the original recorded Rust variant.
+
+### 17.2 Read-only recorded-cohort export for bridge diagnostics (design accepted)
+
+Independent architecture DESIGN READY; Root accepts the bounded recorded-export
+interface and its explicit restaging/retirement handoff. Implementation and
+conformance remain required before using its positive bridge tests as evidence.
+
+The internal Rust tests can stage historical cohorts directly, but the approved
+FFI's export_cohort is live-only. Genuine completed Python-reference parents
+cannot enter a Rust-live plan; they must not be relabelled or rewritten merely
+to exercise the Python array/GAE/persistence bridge before capability activation.
+Root proposes one bounded read-only method on the SAME concrete native session:
+export_recorded_cohort(collection_index, retained_python_bytes=0).
+
+It requires historical_parent, successful existing summary3/ack3 authorization,
+an exact derived committed-collection index and no outstanding exported payload.
+Reuse the same token/staging/bank/export-lifetime/budget kernels; add no plan mode,
+callback, Source owner or issuer. Return payload2 with distinct kind
+card-instance-recorded-cohort-payload plus the unchanged ordered metadata/arrays/
+source proof/correspondence. Live provider rejects this diagnostic packet kind.
+Original source files, path and recorded preprocessing identity stay unchanged.
+Historical open retains metadata/digests rather than a resident staged cohort.
+On export, re-read J6/columns into a bounded temporary Stage under the SAME
+original source snapshot owners, with rechecks before/after. Compare the staged
+proof, ordered episode digests, semantics and correspondence to the acknowledged
+collection; do not open/adopt a fresh identity baseline. Source/record/scratch/
+chunk limits are immutable open-time limits, not per-export narrowed or refreshed
+settings. Retain original identity snapshots while freeing each export's
+descriptors/banks after view release and successful reportable Stage cleanup,
+before returning Authorized or allowing the next collection export.
+
+After pure mode/phase/index/view checks enter Failed before reportable work;
+first success enters a distinct RecordedExported phase. Only after every array
+view is released may retire_payload perform reportable cleanup (Failed first),
+returning to historical Authorized on success so the next committed cohort can
+be inspected. Failure permits cleanup only, never a repaired retry. finalize_read
+requires no outstanding payload and retains existing final checks/retirement.
+Historical bind_numeric/begin_update/prepare_commit remain forbidden before I/O;
+there is no numeric-target append permit and no live projection permission.
+
+The diagnostic Python bridge may persist an ordinary numeric4 comparison ONLY
+to a fresh owned assessment path outside every original parent/collection. It
+retains the same original snapshot owners through NumPy/GAE/write/readback and
+final recheck. Exact original correspondence and array/metadata equality remain
+required. The output is comparison evidence, not an eligible Source: the same
+live issuer/path/lease/ledger checks still refuse it. No private authority flag,
+fake runtime chain or metadata-based Source promotion is added. Capability and
+installed ELF stay closed until full §17 acceptance. Review this interface before
+implementation; positive admitted live update/precommit remains a later test.
+
+## 18. Corrected Tree3 and component fixed-data acceptance (design accepted)
+
+Independent architecture DESIGN READY after the explicit policy IDs, declared
+viewer label recipe, loader-purpose split, fixture cleanup phase and separate
+token entry/capability are pinned. Root accepts this bounded design. Production
+Python edits were gated on §16's source-frozen acceptance, now completed; dependent
+implementation follows the separate native gate and explicit file ownership.
+Formal real
+three-parent fitting, multiple-seed comparisons, HPO and final-test remain outside
+this migration acceptance. A component fit never satisfies those gates.
+
+### Configuration, feature and artifact responsibility
+
+Add closed Tree Model3 configuration dispatched before old Config construction;
+do not add default fields to Model1/2. Use recipe
+`participant-structured-tree-v2`, corrected player-card-refs-v2/participant-
+structured-v2 input, corrected action/rule signatures and an ordered feature
+signature. Keep existing CPU-only LightGBM parameters, fresh-fit algorithm,
+prediction kernels, resource estimates and no-overwrite publishers shared.
+Parameterize pure feature/layout and artifact/fit kernels with an explicit closed
+old/corrected context rather than copying the whole Tree workflow. Old Tree2
+defaults/feature names/transform operation order/artifact bytes remain exact.
+
+Tree3 derives all widths/codebooks from the corrected layout. Preserve signed
+FP32 log1p transforms, numeric/presence/category/mask order and original candidate
+order: state fields,18ordered possession cards,18opponent learned IDs, corrected
+history, then each candidate's kind/target/resources/presence/length/18slot-use
+counts/ordered selected-card positions. No opaque refs are encoded numerically.
+Current corrected card width64, context1629 and candidate-fixed29 imply
+feature width1658+64*positions (2810at18); these are assertions over the derived
+recipe, not separately maintained architecture constants. Feature metadata binds
+exact names, transforms, categorical indices/limits, input/window/rule signatures.
+Selected-row features must equal the same row from full ordered candidate scoring.
+Prepared Tree3 context/cards must remain bound to the exact validated tokens and
+model from which they were derived. A public dataclass replacement or direct
+constructor may not attach another actor's tokens or another window/model to an
+old cache. The bounded corrective design is a factory-created, immutable concrete
+V3 prepared value with one private token/model/cache binding and readonly public
+accessors; direct cached-state construction and dataclasses.replace are refused.
+The factory validates closed recipe/window/signature and admits bytes before
+allocation; iteration verifies the retained binding and candidate frame identity
+before allocating row chunks. Preserve cumulative resident/model/array byte
+accounting explicitly when the V3 container is no longer a dataclass. Existing Tree2 constructor/dataclass behavior stays
+exact. No new Source/fit authority or general cache framework is introduced.
+
+New inference/training/request/result format4, Fixed Dataset manifest3 and
+version3 worker options are distinct from Tree2 formats. NumPy bundle1, per-array/
+shard64MiB limits, native LightGBM model representation and existing bounded
+fresh-fit process remain shared. A paired trained artifact requires the actual
+owned request/completion/model hashes and immutable provenance. `fit_origin`
+trained means a real fresh fit occurred; it does not imply qualified game data.
+Resaving/relabeling cannot replace origin. Source and pair readers fail before
+allocating a model on mixed contract/layout/version or missing pair evidence.
+Production qualified-game readers/factories additionally reject fixture origin;
+explicitly component readers/workers and the scores-only diagnostic below require
+the exact verified component-fixture origin instead.
+
+### A real component fixture, without fabricated execution evidence
+
+The current hand-authored §16 test records are not executed sources and cannot
+be promoted with flags or copied runtime receipts. Introduce a narrowly typed
+`TreeFixtureSource` owner and a distinct closed component-original envelope.
+It stores immutable raw participant frames, original own event prefixes,
+codec2 candidate columns in original order, selected indices, declared terminal
+outcomes from that viewer's perspective and exact declared policy/artifact
+identities. Its distinct label recipe is
+`card-instance-declared-terminal-v1`: a closed declared result names winner
+participant1|2 or draw, using the SAME participant IDs as frame.actor. Each
+endpoint gets+1for that viewer winning,-1for that viewer losing,0for draw.
+No implicit zero-based slot conversion is allowed.
+It contains no invented server acknowledgements, natural-game
+execution receipts, PPO updates, Adam history, C5/J6 runtime publication or live
+online-learner authority. Outcome origin is explicitly
+`declared-component-fixture`, not observed Simulator termination.
+
+For acceptance freeze before construction: three homogeneous MLP populations
+with construction seeds17/29/43, declared train-policy generations0and1,
+16train episodes per generation per population and64validation episodes using
+declared final-policy generation2 per
+population (96train/192validation, nine cohorts). Preserve the full population,
+including predeclared zero-endpoint episodes; do not drop empty games, role/seat
+swaps or missing files. Construction seeds are not claimed as Simulator GameSeeds.
+Fixture generation counts are a component verification fixture, not a shortened
+formal parent. Bind the same corrected contract/action/model/input/execution
+descriptors across the three populations; policies and final validation identities
+must match their declared generation. Fixtures exercise all Action families,
+duplicate/unused/learned instances, historical perceived definitions and both
+viewer reward perspectives. Typed own-view frame/column/token validators and
+selected-row projection are reused without simulating game rules.
+
+The concrete active fixture owner snapshots the complete original inventory,
+manifest/population/policy/role/ordering/identity and checks all cohort closure.
+It admits cumulative decoded/persisted bytes before reading and stays open through
+feature preparation, fitting, pair validation and reportable cleanup. Reuse
+existing bounded filesystem snapshots/array writers/fit-child ownership and
+completion publication; no second PPO lineage or whole Source lifecycle.
+A summary, JSON flag or numeric checksum cannot construct that owner. Its closed
+origin propagates through Dataset3, fit request/completion, paired artifact4 and
+component worker/RAW receipts: purpose component, qualified false,
+parent_qualification not_performed and synthetic_capacity false. The latter only
+describes the18-position capacity; it does not claim a game occurred.
+All fixture-original final guards and reportable owner close complete BEFORE
+paired complete publication; later context release is memory-only.
+
+Qualified game Source composition and public real fitting continue to require
+all three complete formally eligible parents and prescribed final-policy
+validation sources. They explicitly reject TreeFixtureSource and fixture-origin
+Dataset/artifacts before source collection, fitting or real-game worker creation.
+Online `_GameBatchSource`/`IssuedGameProjection` cannot be issued by this owner.
+The requested component fresh-fit→paired artifact→component worker/RAW path is
+private and explicitly typed. Native token/RAW support uses a separate bounded
+per-episode diagnostic entry, `CardInstanceFixtureTokens`, over an explicitly
+component envelope1. Its separate marker
+`card_instance_fixture_tokens=component-envelope1;participant-structured-v2;codec2`
+and corrected token signature attest only this exact validation/token/export
+entry. §17's J6Source marker alone cannot attest the fixture envelope. Reuse pure
+corrected Rust DTO/token/column kernels and owned-array/export/cancel machinery;
+do not add a second Sources/CohortSession/PPO-lineage stack. Python's SAME concrete
+TreeFixtureSource retains all original/policy/role snapshots, validates ordered
+hashes/selected rows and compares native arrays against the Python reference.
+This token entry returns structural data only and grants no Source/fit permission.
+Codec validation uses a closed corrected component context; fixture tables are
+never rewritten to qualified_game. Old native cannot process this entry by
+changing a recipe. Capability/extension installation remains gated on both
+reviews, complete token parity and source/binary packaging checks.
+
+### Performance panel with independently bound actual inputs
+
+Predeclare a512endpoint seed17 train-side panel from normally completed corrected
+acceptance parents before timing; retain every endpoint's original ordered
+candidates and complete own recurrent prefix. Selection records parent/cohort/
+episode/participant/decision and original input hashes, includes no failed
+population, validation/test records, hidden server state or future event.
+Use the exact same endpoint inputs for all three NN models and Tree.
+
+A separate read-only diagnostic scorer may evaluate the component-trained paired
+Tree on these verified actual inputs. It checks artifact component origin and
+input contract/layout/rules/feature signatures independently, returns only scores/
+timings and exposes no Selection, sendable Action or game policy factory. It does
+not change either input or artifact purpose, promote a Source or weaken the
+production Tree purpose check. Compare its scores with component RAW/worker
+results on identical tokens. Report that timing used component weights; no
+learning strength or real-data fitting claim follows. Count full candidate and
+history work, cache/startup separately, and preserve CPU ordinary-decision
+p95≤3seconds,2games/4workers,12GiB GPU and all existing per-array limits.
+
+### Acceptance and compatibility
+
+Require exact Python-reference feature names/categories/values and selected/full
+row correspondence, all three populations and all192validation records, zero-row
+cohort accounting, label-perspective checks, fresh fit and healthy paired format4
+artifact, component worker/RAW score equality and immutable-origin round trips.
+Refuse missing episodes, crossed policy/split/viewer/roles, mixed versions,
+over-budget arrays and original/numeric/request/pair mutation before/after child
+execution. Exercise cancellation, timeout/reap, rollback and final cleanup before
+completion; no fallible work follows committed complete publication.
+Keep all Tree2/native old-data proofs, no-new-dependency startup and old Config
+hashes. Independent correctness/conformance reviews, final Rust/Python/CUDA/static/
+wheel checks and the pinned512decision panel remain required. Passing this scope
+must leave formal real-data three-parent fitting and test evaluation NOT RUN.
+
+### 18.1 Performance population and timing boundary (design accepted)
+
+Independent architecture DESIGN READY; Root accepts this bounded measurement
+design. Harness implementation/conformance and actual results remain required.
+
+Existing history376/Tree2 panels include generation, conversion, scoring,
+sampling and parent/worker communication in ordinary-decision latency. Their
+old component inputs/results cannot stand in for this corrected panel. A
+fixed-table score-only timing cannot satisfy ordinary CPU p95≤3seconds.
+
+Before collecting timings, freeze a panel recipe and its complete eligible input
+pool: the six predeclared §16 pause/resume parents, ordered mlp-cpu, mlp-cuda,
+gru-cpu, gru-cuda, transformer-cpu, transformer-cuda, each complete with normally
+ended32train games and passing same-input resume control. No replacement parent
+after failures. Within each parent, order committed generations0then1, original
+manifest schedule order, exact learner seat, then original decision order. Select
+512distinct endpoint identities without replacement using PCG64seed17, persist
+the selected identities/indices/hashes before any timing, and retain all earlier
+own-decision inputs/events needed by each selected endpoint. Do not claim input
+uniqueness merely because different source identities happen to have equal bytes.
+All source owners remain open/read-only through extraction and final rechecks;
+only public acting-view frames and original learner rows enter model input.
+
+Freeze one final G2 artifact from each model's CPU-inference reference parent for
+NN comparison, retaining exact digests/execution bindings. Use the first healthy
+default fresh component Tree fit and paired artifact for Tree; no model selection
+or refit based on measured latency. All four scorers receive the same512acting
+inputs/full recurrent prefixes. The Tree diagnostic independently verifies its
+component artifact and actual input binding and still returns only scores/timings.
+
+Report two explicitly separate measurements:
+
+1. **Original-table diagnostic.** All four models score every candidate in the
+   exact same original order at each endpoint, with the same own input/event
+   prefix. Compare raw feature/token identities and score parity where applicable.
+   Include tokenization/history/cache work; report cold/full-prefix and cached
+   behavior separately. This is a fixed-input scoring comparison, not the ordinary
+   decision acceptance statistic. Never substitute a selected-row-only or smaller
+   candidate sample.
+2. **Ordinary pipeline.** Reuse the actual corrected worker generation/selection
+   path for NN, and an isolated assessment worker for the scores-only Tree
+   diagnostic. For each identical original acting input, run the real generator
+   with unchanged18positions/32768candidates/262144expansions/50mscount/1ssearch
+   and exact model resource admission. Include input validation/frame construction,
+   generator work, conversion, full scoring, sampling/argmax calculation and
+   parent/worker round trip. The Tree assessment may calculate/discard an index
+   for timing, but its scorer/worker exposes no Selection, sendable Action or game
+   policy factory. Submit nothing to Simulator. Retain full generated tables and
+   counts rather than forcing them to equal the original table or reducing them
+   to meet latency. Adaptive search can yield different tables between models/
+   trials; record that limit and do not use it to replace the original-table
+   diagnostic. Replay complete original own prefixes to establish each recurrent
+   cache and charge work at the same real decision boundary.
+
+Run at most2concurrent episode streams/4workers under the unchanged management
+budgets and pinned CPU/thread settings. Record all512ordinary endpoint samples;
+no failed/slow endpoint replacement. Startup, Simulator communication (absent in
+this offline panel), storage/publication and explicit128position stress are
+separate. Worker/cache startup and prefix warmup costs are separately reported,
+not silently erased. Final ordinary p95 must include all specified decision work
+and meet3seconds for each model. Failure, timeout or budget overflow is retained
+and addressed, never converted to a pass by dropping rows or changing the panel.
+
+### 18.2 Reachable formal-parent, validation and game-Tree interfaces (design accepted)
+
+Independent architecture DESIGN READY after the literal algorithm recipe,
+closed declaration/stop fields, finalization reserve, separate validation budget,
+joint multi-owner admission and GameTree init/journal handoffs are pinned. Root
+accepts this bounded design. Implementation/conformance and the stated controlled
+checks remain required; no formal campaign or qualified real-data fit is run.
+
+Read-only implementation mapping finds a real production gap: old
+FinalValidationContext is actions2/Model2/engineering-only; the corrected Source
+accepts only16-game PPO batches; corrected64-game validation/Dataset3/public fit
+and game-Tree3 routing are absent. Component fixture success alone cannot finish
+the migration. Implement the following guarded interfaces while leaving actual
+formal three-parent generation/fitting, comparison, HPO and final test NOT RUN.
+The independent advisor recommends the small combination of a fixed formal
+recipe and an immutable pre-G0 declaration; Root adopts that direction for design
+review. No campaign manager or second coordinator is introduced.
+
+#### Formal recipe and declaration
+
+The literal [formal recipe](../contracts/card-instance-formal-ppo-v1.json), SHA256
+871fc8d4591e62d302bb2f79d98d474da15cbdb19c86506e5a70557f4ecd67b2,
+freezes actual full model/action/optimizer/schedule/reward/retention/preparation/
+storage/admission settings. It uses max_updates1000,16games/update,
+7200/5400/7140/60second budgets, corrected signatures and default attention.
+Closed supported variants are the three NN models, CPU|cuda:0 inference,
+CUDA learner and explicit Python|Rust readers. Rust remains subject to §17
+capability/preflight acceptance. CPU-learner and direct/DeepSets smokes do not
+belong to this formal recipe. Matching three arbitrarily shortened configurations
+is insufficient. Runtime readers use the frozen literal, never mutable defaults.
+Its closed algorithm recipe has canonical content SHA
+318eab51e51ab242c629111634ff25e986c1a0a0ece0d246694fd72a27c90cc9:
+Adam3e-4/betas.9,.999/eps1e-8 and all captured named optimizer options; natural
+GAE gamma1/lambda.95/float64; whole-batch population-standard-deviation advantage
+normalization with added1e-8 and FP32 output; clipped ratio.8..1.2, value.5 and
+entropy.01; four epochs/logical128/grad norm.5; exact UUID/PCG/role-stream and
+paired schedule recipes; retain0/all every10milestones/latest and newest5active
+milestones. Eight unchanged shared learning/schedule function AST digests freeze
+their existing operation order without hashing the coordinator's new formal
+control branch. The recipe declares the exact Python3.14 AST digest method.
+Formal preflight checks those kernel digests and the planned optimizer recipe;
+existing initialization/save checks compare the actual optimizer metadata before
+G0 publication. Source qualification checks the originals against the literal recipe. Changing
+these semantics requires a new formal recipe, not updated mutable defaults.
+
+The recipe lists the only relocatable/identity fields: run name/output path,
+Simulator source/binary/config paths and the single training seed slot. Actual
+paths/inputs remain recorded and source-owned; relocation does not relax approved
+Simulator binary/spec/config hashes. Require exactly one declared seed17|29|43.
+Model inference device and reader backend may vary only over their explicit
+closed recipe variants; all three Dataset parents must use the same variant.
+Compare every other field, including inactive canonical settings and capacities.
+Materialize a variant by selecting its literal model profile, changing only its
+inference.device and base preprocessing.backend to the explicitly listed values,
+and supplying the checked seed/path identity fields. This is a closed comparison,
+not a general overlay or fallback to current defaults.
+
+Add an explicit corrected-only formal training entry over `_run_ppo` and the
+same `_GameOperations`. Before G0 write a closed declaration1 binding recipe ID/
+literal SHA, seed slot, original effective-config SHA/input-inventory SHA and
+full input/execution identity. Bind its digest into original run/resume/lineage
+identity. Use a distinct closed formal Run3/control variant; current ordinary
+Run3, Model2/legacy formats/defaults/hashes stay exact. A declaration is intended
+use plus immutable bindings, not a formal=true flag or sufficient authority.
+Missing/backfilled declarations, old profiles, fixtures, paused/failed parents
+and shortened configurations cannot be formal parents. Existing accepted two-
+update records remain read-only-valid and permanently nonformal; do not rewrite
+or retrofit them. Resume must use the same declaration/recipe/seed/original
+deadlines and ownership. Pure preflight refuses mismatches before child/model/
+collection allocation. The formal entry does not execute during this acceptance.
+The pre-G0 execution identity is the planned canonical binding/visibility,
+numerics/code/native/runtime integration metadata available before any learner
+allocation. Actual child hardware is recorded and checked separately by the
+existing initialization/Source controls; do not postpone declaration until after
+G0 weights exist in order to obtain it.
+
+Declaration1 has exactly schema_version, kind, recipe_id, recipe_sha256,
+algorithm_recipe_sha256, seed_slot, config_sha256, config_inputs_sha256,
+input_binding, execution_identity_sha256 and identity_sha256. Its kind is
+card-instance-formal-parent-declaration; all identity/config digests use the
+existing canonical digest, and recipe_sha256 is the literal file-byte SHA.
+identity_sha256 covers the pre-formal code/runtime/integration/preprocessing
+identity; execution_identity_sha256 covers the planned execution object.
+The formal Run3 variant adds exactly run_variant=formal-parent-v1,
+formal_declaration and formal_stop; ordinary Run3 has none of them. The closed
+formal_declaration reference stores relative_path=formal-declaration.json,
+file-byte sha256, recipe_id, recipe_sha256, algorithm_recipe_sha256 and seed_slot.
+The SAME reference is included in identity.formal_parent before calculating
+resume_identity and creating G0. Verify the sidecar, its base identity and its
+G0/resume/generation binding; a later-added sidecar/reference is insufficient.
+formal_stop is null while running/paused and a closed receipt when complete.
+
+For this new variant only, persist a closed successful-stop receipt at the
+existing between-update stop branch: recipe/declaration identity, reason,
+committed generation, observed elapsed/admission state and owned-storage usage/
+reservation/limit. Eligible reasons are max_updates, admission_deadline or
+storage_admission; preserve the existing branch priority/meaning. Bind the
+receipt into healthy run completion and verify its arithmetic against original
+limits and the last committed generation. It is not inferred later from cleanup
+storage size. Do not require1000completed updates or invent a minimum update
+count: any positive healthy committed prefix under the full recipe may complete
+normally at admission/storage reservation. Execution/wall/storage overruns,
+interrupted batches, bad cleanup and zero updates fail. Pauses remain resumable,
+not complete. Historical coordinator traces must remain unchanged; no new fields
+or extra semantic behavior in ordinary/legacy branches.
+The stop receipt keys are schema_version, kind, recipe_id, recipe_sha256,
+declaration_sha256, reason, generation, clock, elapsed_seconds, owned_bytes,
+admission_reservation_bytes, max_owned_bytes and max_updates; kind is
+card-instance-formal-stop. Clock keys are invocation_started_unix,
+invocation_started_monotonic, observed_monotonic, admission_deadline_monotonic,
+execution_deadline_monotonic and wall_deadline_monotonic. Derive each deadline
+using the existing exact operation order
+(invocation_started_monotonic + original_deadline_unix) - invocation_started_unix.
+Derive elapsed at stop from that invocation's anchor and original created_unix,
+so earlier paused time is included. Preserve the existing rollback guard and
+clock tolerances; do not substitute post-cleanup last_unix/storage measurements.
+At the captured decision point: execution/wall/actual-storage overrun fails first;
+otherwise select max_updates iff generation>=1000, else admission_deadline iff
+observed_monotonic>=admission_deadline_monotonic, else storage_admission iff
+owned_bytes+admission_reservation_bytes>max_owned_bytes. All earlier predicates
+must be false for a later reason; otherwise there is no stop receipt. Require
+positive generation equal to final committed updates and original recipe/limits.
+Work and the captured stop decision must finish before the original execution
+deadline. Subsequent confirmed reap/reportable finalization may use the original
+60second reserve up to the wall deadline, under the existing cleanup/storage
+bounds. Do not require cleanup itself before7140or discard that reserve.
+
+#### Concrete original owners and final validation
+
+A concrete FormalGameParent owner first validates declaration, literal recipe,
+complete original Run3/generation3/update3/registry3 and every committed C5/J6/
+numeric4 correspondence under existing lock/snapshot/native ownership. Require
+healthy completion, positive updates and the exact final retained inference4
+artifact. Keep original qualification metadata not_performed untouched. This
+owner allows final-validation collection; it does not yet qualify a Dataset.
+
+Corrected actor-only final validation borrows that SAME parent owner and the
+same empty actor ledger, with no learner/lease/update permission. Reuse
+validation_groups(seed, final_label, actions_version=3):32pairs/64games, final
+policy versus prescribed opponents, seats and final policy bound exactly. Caller
+configuration/input origins must equal the parent's originals, apart from the
+explicit projection run.split=train→validation. This equality is PER PARENT,
+not equality between the seed17/29/43 input files. A freshly admitted validation
+invocation gets its OWN bounded7200/5400/7140/60second wall/admission/execution/
+finalization deadlines, capped by its caller's fresh deadline. Those same budget
+amounts do not reuse already-spent training deadlines. Training creation/deadlines/
+stop receipt remain immutable. Record validation start/deadlines/cost separately;
+never reset a deadline per game/group. Use existing corrected runtime/Environment/
+policy sealing/worker admission.
+Hold parent/final artifact/server-config snapshots through collection/reap and
+final source validation. No callback or flag may bypass the normal Environment.
+
+Collection5 gains a distinct closed final-validation variant, not a changed
+batch cardinality parameter. Keep collection_role ppo-batch and its seven-field
+linkage exact. The new role ppo-final-validation binds parent run ID/path,
+batch_id validation-final, exact final_generation/final inference SHA/policy
+label, learner-seat map, schedule digest and registry digest. It requires split
+validation and all64natural healthy games, permits final generation1000, has no
+invented PPO numeric update, and uses Journal6/protocol3/codec2 unchanged.
+The exact final-validation linkage key set is parent_run_id, parent_run_path,
+batch_id, final_generation, final_inference_sha256, policy_label, learner_seats,
+schedule_digest and policy_registry_digest. batch_id is literally
+validation-final. final_inference_sha256 names the original final inference.json
+file, not the generation record; policy_label is its exact retained neural
+binding. learner_seats maps every scheduled episode to its selected final-policy
+participant1|2, without implying a resident learner. Parent-original snapshot/
+declaration ownership remains with the same FormalGameParent; linkage supplies
+no authority alone. Do not accept collection_generation or extra/missing keys
+in this variant, or add any final-validation keys to the ordinary batch variant.
+Share raw inventory/runtime/Replay/frame/event/candidate/selection validators
+through a closed collection-role context. The original16batch path and old
+engineering validation remain exact. Returned/persisted report timing ordering,
+late success, cancellation, reap and final cleanup retain the existing owners.
+Native receipts are structural evidence, not formal or Dataset authority.
+
+A concrete VerifiedGameTreeDataset3 composes exactly the ordered formal seeds
+17/29/43 and their three complete final64validation Sources. Require distinct
+original parent identities, homogeneous model/action/input/execution/recipe/code
+conditions, allowing only explicit seed/name/path/run identities. Include ALL
+committed16-game training cohorts and all192validation games, including empty
+endpoint games. Project only the original selected learner-view facts, preserving
+row order and terminal±1/0 perspective. Observed natural-outcome label provenance
+is distinct from the component declared-terminal recipe. Retain originals through
+row preparation, fitting/reap, numeric/pair checks and reportable final cleanup.
+Only this concrete verified owner authorizes qualified fresh fitting; no summary,
+dataset hash, component owner or edited origin flag can substitute for it.
+Acquire original parent/validation locks in deterministic order by resolved
+filesystem path bytes, deduplicating physical roots and borrowing only a SAME
+already-held lock token; release in reverse order. No raw decoding or output
+allocation precedes the required ownership. Admit the cumulative native/Python
+metadata, active episode/tokens, arrays/shards, fit rows and child workspace over
+ALL retained owners under one caller allowance. Sequential staging does not
+permit charging every parent its own full budget; reuse existing shared-budget/
+retained-byte mechanisms and stream bounded episode/cohort views. Keep lock and
+snapshot ownership through reportable close before completion publication.
+
+Reuse the shared Dataset/Tree3 features, fit child, paired format4 publication,
+copy/load and inference kernels with a closed real-source context. Add reachable
+CLI/config/library routing for formal declaration, actor validation, Dataset3,
+fresh fit and qualified game Tree3 worker/evaluation. GameTree3 requires the
+verified real-source trained paired origin; component/toy/diagnostic origins
+refuse before allocation. Fixture and real-source Dataset3 remain disjoint
+closed variants. This supplies future production interfaces without generating
+formal parents or promoting the acceptance fixtures.
+
+Qualified GameTree3 uses the SAME corrected worker/environment/transport loop,
+with a closed lightgbm/version3 init/options discriminator and retained paired-
+artifact owner. The controller checks qualified real-source trained provenance
+and seals the complete pair before model/worker allocation; retain it through
+reap/final publication. Send the child only own model/config/feature descriptor,
+artifact hashes and small paired digest references, never raw Dataset/parent
+controls, GameSeed/RNG, other-private originals or training feature arrays.
+The child validates that bounded own-policy declaration against its sealed model
+files; it cannot issue Source/fit permission. Journal6 adds a distinct closed
+Tree metadata branch (model_id lightgbm, model_version3, tree own-policy metadata,
+logprob/value both None). Existing baseline and finite-valued NN branches remain
+exact. Tree metadata binds safe options/inference4/paired digest references/
+owned file identities without copying raw Source controls into journals or
+features. The pure recipe/cost/feature validators and native RAW parser must
+recognize this separate branch. Formal NN/PPO Source continues to require an
+explicit NN learner and rejects Tree as learner. Component/diagnostic workers
+use their separate input/origin contract; no second game or learning loop.
+
+#### Remaining concrete fixture choices and checks
+
+Use one explicit selected viewer per fixture envelope, with both viewers covered
+across the frozen populations. Declared policy IDs are the digest of the fixed
+fixture-policy recipe, fixture/population IDs, declared generation and actual
+component inference-manifest SHA; no fake PPO update or elapsed generation cost.
+Tree3 leaf feature-name components percent-encode UTF8 bytes outside ASCII
+letters/digits/_/- as uppercase%HH, then join known hierarchy segments with dots.
+This is injective, keeps colon-bearing role fields legal for LightGBM, and leaves
+Tree2 names exact. Bind raw-field mapping and ordered escaped names in the new
+feature signature. Component worker/RAW accepts original ordered tables without
+new search; ordinary performance generation remains the separate §18.1 path.
+
+Before any formal execution test exact full-recipe admission; shortened budgets/
+max_updates2, absent/backfilled declaration, wrong seed/profile/origin/caller
+refusal; every normal stop/overrun/pause branch; exact final policy/64membership/
+generation1000; actor-only ownership and mutations; three-parent completeness/
+all train rows/split-role integrity; fixture rejection and paired-origin
+preservation. Controlled I/O positives verify interfaces/predicates only and
+remain component evidence. Independent architecture review is required before
+this addendum's dependent implementation; formal production collection, Dataset3
+qualification and real-data fitting remain NOT RUN.
+
+### 18.3 Component artifact4 and fresh-fit record handoff (design accepted)
+
+Independent architecture DESIGN READY; Root accepts these concrete details for
+the shared Tree2/Tree3 artifact, pairing and fixture-fit kernels. Old public
+wrappers/defaults/field sets/bytes, native prediction/text parsing and fit-child/
+publisher algorithms remain exact. New explicit *_v3 wrappers use a closed stdlib
+Tree context (schema3|4, exact model/config classes, architecture parser/identity,
+feature/category layout and input/label/provenance validators); no second workflow.
+
+Tree3 inference/request/input/result/training records retain existing kinds with
+schema_version4 and add exact source_kind/source_origin fields. Actually trained
+fixture records require source_kind card-instance-tree-fixture-originals and the
+exact immutable fixture origin, bound to Dataset3 manifest/content/source-set
+hashes and the actual request. TrainedProvenanceV4 uses kind
+structured-fixed-dataset3-fit and retains source kind/origin through request SHA
+and paired save/copy/load. A toy component artifact has BOTH source fields null,
+fit_origin toy, provenance null and no training binding. It cannot be resaved or
+renamed into a Source-backed trained artifact. Trained fixture loading requires
+the actual healthy exact pair before Booster allocation; purpose flags or numeric
+hashes cannot authorize fitting or change origin. No qualified-game toy/factory
+is introduced by this increment.
+
+Artifact4 also binds rule_signature/layout_signature and the FULL accepted
+feature_layout (raw-field mapping, escaped names, transforms, category limits/
+indices, token/rule/layout/window signatures). Closed semantics4 keys are
+input_recipe, policy_input_version, generator_version, simulator_revision,
+catalog, reviewed_spec_hashes, spec_inventory_sha256, rule_signature,
+layout_signature, token_signature, numeric_transform and label_recipe.
+numeric_transform is TREE_NUMERICS, the actual Tree feature transform. Trained
+fixture label_recipe is card-instance-declared-terminal-v1; toy label_recipe is
+component-toy-labels-v1. Do not add natural-outcome/reward/end-projection claims
+to declared fixture labels. Future real-game source semantics are a separate
+closed following context.
+
+The same _PreparedTreeFit/_prepare_request/_TreeFitRun/worker/paired publisher
+accept only the actual active concrete VerifiedFixtureTreeDataset3 for this new
+private fit entry. Preserve fresh initialization, no init_model/warmstart, and
+500rounds/50early-stop/.05learning-rate/min20/thread defaults. Derive admission
+from Tree3 layout widths instead of legacy1042/32 constants. Child sees owned
+request/numeric shards only, never raw Dataset/Source originals. Hold SAME original
+Source/index through preparation, fitting/reap, numeric/request/pair checks and
+reportable final close BEFORE complete publication. Capture immutable manifest/
+provenance before Source release clears metadata; after commit release is
+memory-only. Preserve cancellation, late-child, rollback and reachable cleanup
+owners; no failing postcommit I/O.
+
+New completion costs use shared_fixture_construction {seconds,cost_key,scope},
+deduplicated from the immutable original fixture-manifest SHA and its actual
+construction cost; no PPO elapsed time. Old shared_generation stays unchanged.
+Request4 also carries the exact shared_fixture_construction receipt derived from
+the SAME active Dataset before close; completion costs must canonically equal
+that request receipt. Request SHA transitively binds the stable construction cost
+into paired provenance. New metadata cannot supply a different cost after fitting.
+Per-fit preparation/child/validation/cleanup costs remain completion measurements,
+not Dataset semantic identity. ComponentStructuredTreePolicyV3 may share scoring
+through PreparedTreeFrameV3 with a component-only label lightgbm-tree-v3; no
+registry/HTTP/game worker or qualified-fit stub is claimed complete here.
+Durable3population originals→Dataset3→fresh fit→paired artifact→worker/RAW and
+formal/game interfaces remain required following this bounded implementation.
+
+### 18.4 Native component-envelope token diagnostic (design accepted)
+
+Independent architecture DESIGN READY after the zero-decision/record bounds and
+constructor/export failure-ownership handoffs are explicit. Root accepts this
+bounded diagnostic design. Implementation/parity/conformance and later separate
+fixture capability publication remain required.
+
+Root accepts the proposed responsibility split for design review: native checks
+only the exact envelope's structural/internal facts; the SAME TreeFixtureSource
+owns frozen declaration/cohort membership, actual artifact-policy IDs, complete
+inventories and fitting permission. Envelope bytes cannot establish those external
+facts. Add one bounded CardInstanceFixtureTokens class, no second Sources/
+CohortSession/PPO stack and no Python production changes in this native increment.
+
+Constructor accepts owned envelope bytes, ordered codec2 payload tuple, the
+existing closed five-key settings bytes, deadline/optional CancelHandle, explicit
+aggregate_window(default128) and retained_python_bytes. Methods are export_tokens,
+used_bytes, peak_bytes, control_reserved_bytes, cancel_handle and close. Individual
+envelope/payload/record/array limits remain≤64MiB; cumulative original input,
+decoded/staging/caller/scratch/exported ownership is charged before allocation.
+All borrowed Python bytes retain owned lifetimes during GIL detachment.
+
+Input is exactly existing component envelope1: schema_version, kind, fixture_id,
+declaration_sha256, population_id, cohort_id, episode, viewer, split, generation,
+roles, selected_policy_id, outcome, outcome_origin, events and decisions. Decisions
+are exactly frame/columns/selected_index; the payload tuple matches descriptor
+filenames/order/sizes/hashes and all original candidate columns.
+The tuple is immutable bytes, exactly one payload per ordered decision; a
+declared zero-decision episode uses an empty tuple and correctly empty decision/
+token arrays. The whole envelope is one JSON record, so max_record_bytes also
+applies in addition to source-file/cumulative limits.
+Validate component
+kind/origin/identifiers/SHA syntax/train-validation generation/internal roles/
+viewer/declaration consistency; viewer-relative declared±1/0; corrected frame
+revision and contiguous own intervals; every prefix and final bank closure;
+real18/codebook2/selected bounds and complete corrected raw tokens. Reject J6,
+HTTP/game Source envelopes, foreign/future prefixes and wrong purposes.
+Introduce a distinct corrected-component codec/Stage context, leaving corrected
+game and engineering branches exact. Never relabel component tables qualified.
+
+Output reuses readonly metadata-bytes/uint8/int64/float32 banks and existing
+array descriptors. Metadata1 kind is card-instance-component-token-payload;
+exact keys are schema_version, kind, envelope_sha256, fixture_id,
+declaration_sha256, population_id, cohort_id, episode, viewer, split, generation,
+roles, selected_policy_id, outcome, outcome_origin, label_recipe, label,
+input_binding, layout_signature, aggregate_window, token_signature, boundary,
+decisions and arrays. Each ordered decision has decision, revision,
+interval_start, interval_start_hash, boundary, frame_hash, table_hash,
+columns_file, columns_sha256, selected_index, token_prefix and event_token_prefix.
+Original table_hash+selected_index binds the selected row; invent no new selection
+hash. Raw state/card/history/interval/candidate shapes/dtypes are the accepted
+corrected layout, full original candidate order. No qualification/Source proof/
+issuer/update/fit-permission field is returned.
+
+Reuse Stage, shared token/event-prefix kernels, budgets/cancellation/retirement
+and ndarray ExportLease. Constructor validates/stages one episode. export_tokens
+is one-use: complete banks, retire spool and parsed-core ownership/join BEFORE
+returning readonly arrays. Exported base-owner leases independently retain their
+bytes/budgets after object close/drop. Any admitted failure is cleanup-only;
+before-export close completes reportable cleanup, after successful export close
+releases memory only. No second payload-retirement cycle is introduced.
+Constructor-time validation/staging failure must retire/join every partial owned
+Stage/core, or preserve a reachable cleanup owner/quarantine if confirmed close
+is unavailable before returning the error; silent Drop is insufficient. An
+export-side Python wrapper/quota failure after core retirement exposes no partial
+arrays and remains cleanup-only. Reuse existing reachable retirement ownership.
+
+Private candidate builds may expose this diagnostic for tests. Separate marker
+card_instance_fixture_tokens=component-envelope1;participant-structured-v2;codec2
+and corrected signature remain absent until full structural/token/export/
+persistence parity and both reviews. Existing three corrected-game markers and
+all old markers stay exact; do not replace the release ELF used by actual native
+PPO. Require Python-reference full arrays/metadata/dtype/shape/bytes, all action/
+state/viewer/label/Guardian/Fog/ref-order cases, malformed/mixed/prefix/resource/
+cancel/lifetime tests and old codec/Stage goldens. No fitting, GPU, Simulator or
+new dependency is part of this increment. Architecture review precedes code.
+
+### 18.5 Component Tree scoring process handoff (design accepted)
+
+Independent architecture DESIGN READY after single-operation ownership,
+pre-spawn packet admission and complete reply checks are pinned below. Root
+accepts this bounded private component-worker and actual-input performance
+scorer design. It does not introduce a game-policy registry route or authorize
+a component artifact for game inference. Implementation/parity and both final
+reviews remain required.
+
+Use a small scores-only facade over the existing framed exchange, owned process,
+reservation, cancellation and reap machinery. Reuse those lifecycle methods with
+a private transport owner; do not expose inherited participant selection methods
+on the scoring facade or clone the worker lifecycle. A fixed clean bootstrap
+accepts a closed protocol3 scoring discriminator and a closed initialization
+payload. The facade exposes initialize, score-original, generate-and-score and
+close, plus health/timing data. It never returns Selection, Action, logprob or
+critic value and is absent from production game factories.
+Allow only one in-flight initialize/score/generate operation. Reject an overlap
+before touching the event bank, RNG, lease or pipe. Internal lazy initialization
+belongs to that same admitted operation. Close may interrupt a pending request:
+first forbid new operations, cancel the pending operation and use the same fixed
+cleanup budget/owner to reap/join; no pending or late reply may escape as success.
+Any admitted operational failure is sticky cleanup-only; an overlap rejected
+before admission does not poison the existing operation. Successful state/RNG/
+prefix updates happen only after the entire reply validates.
+
+The controller retains the actual healthy paired component artifact4 and its
+original file guards through startup, all scoring and confirmed worker close.
+Require exact fixture source kind/origin and full architecture/feature/input/
+rule bindings before reserving/spawning. Keep the actual pair/source path checks
+on the controller. The child receives only owned bounded inference metadata,
+native model text and CPU inference/resource/action settings, not raw Dataset,
+parent controls, labels, private other-player records or source directories.
+Both metadata and model text are at most64MiB individually and cumulatively
+admitted with retained host/model/caller buffers before copying or spawning.
+Also admit the entire actual encoded initialization JSON, including metadata,
+escaped model text and controls, under framing.MAX_FRAME_BYTES=64MiB BEFORE
+Popen. Conservatively reserve encoding/copy/decoded peak before constructing
+that packet; if its actual encoded size exceeds the unchanged framing limit,
+reject before spawn. Do not introduce chunked initialization or increase limits.
+Child parsing/loading reuses pure artifact/text/native prediction kernels and
+the corrected actual-Booster binding. Its private in-memory loading path grants
+only diagnostic scoring, not a paired artifact or Source/fit permission.
+
+Fix the input scope at construction: component-originals or actual-own-input
+diagnostic. Both require the corrected contract/layout/rule recipe and real18
+capacity. Component scope accepts the original component table; diagnostic scope
+accepts the original qualified-game table without rewriting its purpose or the
+artifact's component origin. Only the latter may request normal candidate
+generation. Each actor process binds one participant/episode, exact increasing
+revisions and contiguous event deltas; it checks the whole own prefix and all
+frame/table hashes before scoring. Candidate columns/order, masks and full prior
+own history remain intact. No packet contains hidden simulation state or another
+participant's private input.
+Keep artifact action-config identity and caller generation action-config identity
+separate. They must match for fixture-original scoring. Actual-input diagnostic
+scoring may use the original full-budget game configuration independently of
+the fixture's64-candidate construction configuration; record and check each
+exactly without relabeling either. Contract/layout/rule/feature recipe and real18
+capacity must still agree, and inference must admit the full original/generated
+table. This exception yields scores only and grants no game-policy authority.
+
+Score-original takes the full original ordered table and returns finite scores
+in that order, its exact table hash and measured token/prediction time.
+Generate-and-score reuses PublicCandidateGeneratorV3, the existing sampling-
+derived search stream and Tree numeric-cost model with all original18/32768/
+262144/50ms/16384/1s/256 budgets. It returns the full generated table/report,
+finite scores and generation/conversion/scoring timings; the assessment computes
+argmax as an index only. It does not create a sendable action. Framing/decoded
+input, interval/event/decision, per-array64MiB and cumulative resource bounds
+precede allocation. Timeout10seconds and shared lease/reap behavior remain.
+Ready and every reply must match the controller's immutable artifact/inference
+digest, full model/window/feature identity, input scope, original action settings,
+rule/layout and CPU execution identity. Score-original replies bind the exact
+request frame/table hash, row count/order and finite scores. Generation replies
+also bind original generation config and Tree numeric-cost hashes, the parent's
+expected search RNG-before and all candidate/search bounds. Validate the whole
+reply before advancing parent RNG, event-prefix or decision state. A malformed,
+crossed or late admitted result is cleanup-only; framing alone is insufficient.
+
+The SAME active TreeFixtureSource stays retained by the component acceptance
+caller while its original episode/ordered-table facts are scored. The separate
+native fixture-token diagnostic validates and exports that same envelope; a
+bounded acceptance adapter compares all metadata/raw arrays with the Python
+reference, persists and reloads the shared NumPy bundle1 representation, then
+compares selected/full Tree features and native CPU scores. No cached token or
+diagnostic output substitutes for the concrete fixture owner or changes its
+fitting permission. Formal GameTree3/Journal6/RAW routing remains the following
+separate production increment under§18.2.
+
+Verify healthy fresh fixture pair→clean child→scores and native/persisted raw
+reference equality across all nine cohorts, including zero-endpoint episodes;
+mixed origins/contracts, changed windows/text/metadata, wrong actors/prefixes,
+reordered tables, timeout/cancellation/startup failure and cleanup ownership.
+Check ordinary diagnostic generation uses unchanged budgets, returns no action
+or Selection and cannot enter a game factory. Preserve old worker packets,
+factories, journals, artifacts and numeric outputs. No new dependency, Simulator
+execution, real-data fit or performance claim is part of implementation tests.
+
+Root accepts the concrete§18.5 packet handoff subject to architecture review of
+two narrow sharing hooks: numeric_costs_v3 shares the existing Tree2 arithmetic
+kernel using derived Tree3 widths and actual descriptor, while old Tree2 outputs
+remain exact; StructuredParticipantWorker gains one private _read_reply hook
+whose default is the existing read_frame call. Only the scoring transport
+overrides that hook to admit declared wire bytes and conservative decoded/copy
+ownership before reading/decoding the reply. Share framing validation rather than
+copying exchange/reap or increasing MAX_FRAME_BYTES. The fixed bootstrap applies
+the same predecode admission to initialization and requests. Scorer caps retain
+Tree2 max_decisions=None, interval4096, episode262144 and real18 positions;
+candidate capacity comes from the exact caller configuration. Do not introduce
+a1024-decision cutoff into the stateless Tree scorer.
+The fixed bootstrap receives exactly one sanitized decimal CPU managed-byte
+limit as a control argument, derived from the controller's validated configured
+resources. Parse its1..2^63-1bound before reading any frame, then clear argv to
+the fixed scorer name and sanitize the environment. That limit admits the
+initial header/body/encoding/decoded peak before JSON decoding. After decoding,
+require exact equality with initialization's model.resources.max_owned_bytes
+before loading a native model; a mismatch is cleanup-only. Include that same
+initial peak in the controller's admission. No private state, labels or seed
+is passed through this resource argument.
+
+### 18.6 SAME fixture-owner native parity adapter (design accepted)
+
+Independent architecture DESIGN READY after outer acceptance-commit ownership
+is pinned. Root accepts the remaining native/persistence/feature adapter below;
+implementation, full parity and both final reviews remain required.
+The existing TreeFixtureSource owns all declaration, policy, cohort, role and
+original-file authority. Add diagnostic_episode_count and a Source-owned
+borrow_diagnostic_episode(ordinal, extra_owned_bytes=0) context. Only Source
+resolves ordinal membership. Callers never walk its private scan/declaration/
+policy tables. Do not change ordinary selected_inputs streaming, allocation,
+single-pass completion or fit permission.
+
+A borrow exposes guarded immutable envelope bytes, ordered tuple[bytes,...]
+column payloads, closed Source-expected metadata, retained_bytes, guard and
+admit_external. Its reference_decisions iterator streams the original frame,
+bounded own bank view, full table, selected index/viewer label and existing
+FixtureSelectedInput one decision at a time. Factor existing envelope/column
+validation narrowly; do not decode/retain every table for Python-only fitting.
+Read/hash/admit all files through SAME snapshots, with no open descriptor across
+yield. Reject overlap with ordinary iteration or another borrow. Exit invalidates
+borrow operations; admitted errors poison operational use while preserving
+cleanup, original error and final Source guards. Diagnostic borrowing changes
+neither _complete, population counts nor fitting permission; the original
+selected-input worklist remains required for complete Source verification.
+Source-expected metadata consists of§18.4's exact nonstorage metadata fields:
+exclude schema_version, kind and arrays, and exclude token_prefix and
+event_token_prefix from each decision. The adapter independently validates the
+diagnostic schema/kind and storage-prefix/array descriptors against the shared
+staging/token recipe. Source supplies original semantic facts and common token
+signatures, not native bank offsets or a native permission object.
+
+A new private native_card_instance_fixture module composes the diagnostic,
+persistence and parity report. Default native loading requires the separate
+fixture marker/signature, exact API/cancel ABI and binary identity BEFORE any
+borrow or output allocation. Explicit isolated diagnostic-module injection may
+inspect e390 with its marker absent; this grants no Source authority. Hold its
+actual binary/file identity through verification. Process all288ordinals/nine
+cohorts in original order, including declared zero-endpoint episodes.
+
+Joint admission includes Source/borrow/caller ownership, original bytes, native
+staging/export leases, reference tokens, encoding, reload buffers, model storage
+and feature chunks BEFORE allocation. Neither Python nor native receives a
+separate full allowance that can exceed the caller's total. Account cumulative
+persisted bytes against scratch; write only fresh paths outside all originals.
+Compare closed native metadata and every array/dtype/shape/byte against
+Source-owned Python references before persistence. Persist native metadata plus
+shared NumPy bundle1, release exported views/native owner before reload buffers,
+then reconstruct immutable FrameTokens/CandidateTokens and run existing corrected
+layout/real18 validators. Extract only low-level tuple/mask reconstruction from
+the legacy native_tree_dataset helper; its selected-only/observed-outcome wrapper
+and successful output stay exact. Never fabricate EpisodeRecords or observed
+Selection/outcomes for the fixture.
+
+Bundle1 rejects an empty array mapping. A zero-endpoint diagnostic stores its
+real empty decision/array metadata with bundle=null, without sentinel arrays or
+a bundle-schema change. Nonempty array mappings retain ordinary bundle1 rules,
+including correctly zero-length slot arrays. The closed diagnostic container
+keys are schema_version=1, kind=card-instance-fixture-token-diagnostic,
+source_manifest_sha256, native_binary, metadata and bundle. This container is
+structural evidence only; it cannot construct a Dataset or grant fitting rights.
+
+Compare selected/full2810-column features using existing token/Tree kernels,
+chunked in original candidate order; compare bound native CPU predictor scores
+and§18.5 facade replies for the SAME paired model/frame/table/selected identity.
+Source and borrow guards bracket export, persistence, reload, feature/scoring and
+diagnostic result construction. Per-episode persisted containers are structural
+evidence only, with no healthy final-acceptance status. The adapter returns
+guarded diagnostic results under the live Source; it does not publish the final
+acceptance report. The outer acceptance caller owns that final commit: consume/
+verify the entire ordinary Source worklist, finish all original/binary/pair guards,
+close all borrows, and complete reportable scorer/pair/Source close and reap
+BEFORE publishing a healthy final report. Later release is memory-only. Reuse
+existing no-overwrite/invalidation helpers if publication itself fails; no new
+publisher framework. Native fixture
+capability publication stays closed until this full pipeline and both reviews
+pass. Require zero/multiple decisions, both viewers, labels, duplicates/order/
+Guardian/Fog, changed originals/policies/metadata/shards, malformed arrays,
+overlap/after-exit/close/error, cancellation and cumulative-budget failures.
+No new dependency, Source lineage, PPO authority, real fitting, Simulator or
+performance claim belongs to this increment.

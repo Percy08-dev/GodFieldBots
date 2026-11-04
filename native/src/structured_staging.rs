@@ -20,6 +20,11 @@ use std::{
 };
 const LIMIT: usize = 64 * 1024 * 1024;
 static NEXT: AtomicU64 = AtomicU64::new(0);
+#[derive(Clone, Copy)]
+enum FrameContext {
+    Original,
+    CorrectedComponent,
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Dtype {
     U8,
@@ -452,6 +457,10 @@ impl Stage {
     pub fn scratch_bytes(&self) -> usize {
         self.scratch.used()
     }
+    #[cfg(test)]
+    pub(crate) fn fixture_test_directory(&self) -> &std::path::Path {
+        &self.directory
+    }
     pub fn export(&mut self) -> Result<Banks> {
         self.work()?;
         let metadata = self.budget.reserve(1024 * (1 + self.banks.len()))?;
@@ -572,6 +581,15 @@ impl Stage {
         self.metadata.clear();
         self.keys.clear();
         Ok(())
+    }
+    pub(crate) fn close_fixture(&mut self) -> Result<()> {
+        self.close().map_err(|primary| Error::Cleanup {
+            primary: Box::new(primary),
+            cleanup: format!(
+                "fixture spool owner retained at {}",
+                self.directory.display()
+            ),
+        })
     }
     pub(crate) fn export_retiring_disk(&mut self) -> Result<Banks> {
         let banks = self.export()?;
@@ -799,19 +817,75 @@ impl Stage {
         events: &[Value],
         recipe: &crate::structured_tokens::Recipe,
     ) -> Result<Value> {
+        self.frame_context(
+            episode_index,
+            position,
+            frame,
+            table,
+            events,
+            recipe,
+            FrameContext::Original,
+        )
+    }
+    pub(crate) fn fixture_frame(
+        &mut self,
+        episode_index: usize,
+        position: usize,
+        frame: &Value,
+        table: &Value,
+        events: &[Value],
+        recipe: &crate::structured_tokens::Recipe,
+    ) -> Result<Value> {
+        if !recipe.is_corrected() {
+            return Err(Error::contract("fixture requires corrected token recipe"));
+        }
+        self.frame_context(
+            episode_index,
+            position,
+            frame,
+            table,
+            events,
+            recipe,
+            FrameContext::CorrectedComponent,
+        )
+    }
+    fn frame_context(
+        &mut self,
+        episode_index: usize,
+        position: usize,
+        frame: &Value,
+        table: &Value,
+        events: &[Value],
+        recipe: &crate::structured_tokens::Recipe,
+        context: FrameContext,
+    ) -> Result<Value> {
+        let component = matches!(context, FrameContext::CorrectedComponent);
         self.work()?;
         if table.require("synthetic_capacity")?.boolean()?
-            || table.require("purpose")?.string()? != "component"
+            || table.require("purpose")?.string()?
+                != if recipe.is_corrected() && !component {
+                    "qualified_game"
+                } else {
+                    "component"
+                }
         {
             return Err(Error::contract(
                 "native gameplay payload rejects synthetic capacity",
             ));
         }
+        if recipe.is_corrected() {
+            crate::structured_controls::contract3(
+                table.require("action_contract")?,
+                &self.budget,
+                &self.control,
+            )?;
+        }
         let fp = format!("e.{episode_index}.f.{position}");
         let ep = format!("e.{episode_index}.event-tokens.{position}");
-        let payload = json::canonical(frame.require("payload")?, &self.budget, &self.control)?;
-        self.bytes(&(fp.clone() + ".payload"), &payload)?;
-        drop(payload);
+        if !component {
+            let payload = json::canonical(frame.require("payload")?, &self.budget, &self.control)?;
+            self.bytes(&(fp.clone() + ".payload"), &payload)?;
+        }
         let tokens = crate::structured_tokens::frame_tokens(
             frame,
             events,
@@ -898,11 +972,23 @@ impl Stage {
                 .unwrap()
                 .insert(key.into(), json::copy(table.require(key)?, &self.control)?);
         }
-        for (key, value) in [
-            ("payload_key", fp.clone() + ".payload"),
-            ("token_prefix", fp),
-            ("event_token_prefix", ep),
-        ] {
+        if recipe.is_corrected() {
+            let binding =
+                crate::structured_controls::corrected_game_binding(&self.budget, &self.control)?;
+            for key in ["rule_signature", "layout_signature"] {
+                result.as_object_mut().unwrap().insert(
+                    key.into(),
+                    json::copy(binding.require(key)?, &self.control)?,
+                );
+            }
+        }
+        if !component {
+            result
+                .as_object_mut()
+                .unwrap()
+                .insert("payload_key".into(), json::text(&(fp.clone() + ".payload")));
+        }
+        for (key, value) in [("token_prefix", fp), ("event_token_prefix", ep)] {
             result
                 .as_object_mut()
                 .unwrap()
@@ -1033,5 +1119,12 @@ impl Stage {
             self.array(&(prefix.clone() + "." + name), dtype, &values)?;
         }
         Ok(blocks)
+    }
+}
+
+#[cfg(test)]
+impl Stage {
+    pub(crate) fn unadmitted_test_directory(&self) -> &std::path::Path {
+        &self.directory
     }
 }

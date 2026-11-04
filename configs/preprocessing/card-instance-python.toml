@@ -1,0 +1,8 @@
+schema_version = 1
+kind = "preprocessing"
+
+[preprocessing]
+backend = "python"
+reader = "participant-structured-v2"
+workers = 1
+max_in_flight = 1

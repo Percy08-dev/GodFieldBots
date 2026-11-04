@@ -16,10 +16,13 @@ from gf_common.preprocessing import PreparationConfig
 
 TYPED_READER = 'typed-borrowed-v1'
 STRUCTURED_CONTRACT = 'participant-structured-v1;journal=5;rollout=3;generation=2;model=2'
+CARD_INSTANCE_CONTRACT = 'participant-structured-v2;journal6;rollout4;generation3;model3'
 
 
 def reader_settings(config: PreparationConfig, native: ModuleType | None = None) -> Json:
     """Closed reader preflight before handles/source owners; old wheels keep old DTOs."""
+    if config.reader == 'participant-structured-v2':
+        return card_instance_reader_settings(config, native)
     if config.reader not in ('legacy', TYPED_READER, 'structured-v1'):
         raise ContractError('unsupported preprocessing reader')
     if config.backend != 'rust':
@@ -108,3 +111,53 @@ def require_ppo_model(model_id: str, native: ModuleType) -> None:
             raise ContractError('malformed native PPO model capability')
     if model_id not in supported:
         raise ContractError(f'native binary does not support PPO model {model_id}')
+
+
+def card_instance_reader_settings(config: PreparationConfig, native: ModuleType | None = None) -> Json:
+    """Public corrected preflight; an additive class alone is never capability."""
+    from gf_common.structured_layout import CORRECTED_CARD_INSTANCE_LAYOUT
+    from gf_common.structured_tokens import signature
+    from gf_models.structured_sealed import checksum
+    if config.backend != 'rust' or config.reader != 'participant-structured-v2':
+        raise ContractError('explicit corrected native reader required')
+    information = dict((native or load_native()).build_info())
+    if (information.get('card_instance_contract') != CARD_INSTANCE_CONTRACT
+            or information.get('card_instance_signature') != signature(128, layout=CORRECTED_CARD_INSTANCE_LAYOUT)
+            or information.get('card_instance_models') != 'mlp,gru,transformer'):
+        raise ContractError('native binary lacks accepted card-instance capability/signature/models')
+    checksum(information.get('native_source_sha256'))
+    module = native or load_native()
+    session = getattr(module, 'CardInstanceNativeSession', None)
+    required = ('control_summary', 'original_config_inputs', 'authorize', 'export_cohort', 'retire_payload',
+        'bind_numeric', 'begin_update', 'prepare_commit', 'finalize_read', 'recheck', 'close', 'used_bytes', 'peak_bytes', 'cancel_handle', 'control_reserved_bytes')
+    if (not callable(session) or not callable(getattr(module, 'CancelHandle', None))
+            or not callable(getattr(module.CancelHandle, 'cancel', None))
+            or any(not callable(getattr(session, name, None)) for name in required)):
+        raise ContractError('native corrected class/cancellation ABI is incomplete')
+    identity = binary_identity(module)
+    if identity['build'] != information or identity['gil_disabled'] is not False:
+        raise ContractError('native corrected loaded binary/source identity differs')
+    return asdict(config)
+
+
+def recorded_card_instance_preprocessing(value: Json, *, binding: Json) -> None:
+    """Validate recorded identity only; never import/load a historical extension."""
+    from gf_common.domain import closed
+    from gf_models.structured_sealed import checksum
+    closed(value, {'backend', 'reader_contract', 'implementation', 'binary'} | set(binding))
+    if (value['backend'] != 'rust' or value['reader_contract'] != 'participant-structured-v2'
+            or value['implementation'] != 'rust-player-card-refs-v2'
+            or any(value[key] != expected for key, expected in binding.items())):
+        raise ContractError('recorded corrected native preprocessing context differs')
+    binary = closed(value['binary'], {'backend', 'extension_path', 'extension_sha256', 'build', 'python_abi', 'gil_disabled'})
+    if (binary['backend'] != 'native' or type(binary['extension_path']) is not str
+            or not Path(binary['extension_path']).is_absolute() or binary['python_abi'] != 'cpython-314'
+            or binary['gil_disabled'] is not False or type(binary['build']) is not dict):
+        raise ContractError('recorded corrected native binary identity differs')
+    checksum(binary['extension_sha256'])
+    info = binary['build']
+    if (info.get('card_instance_contract') != CARD_INSTANCE_CONTRACT
+            or info.get('card_instance_signature') != binding['layout_signature']
+            or info.get('card_instance_models') != 'mlp,gru,transformer' or info.get('abi') != 'cp314-gil'):
+        raise ContractError('recorded native lacks corrected capability/signature/models')
+    checksum(info.get('native_source_sha256'))

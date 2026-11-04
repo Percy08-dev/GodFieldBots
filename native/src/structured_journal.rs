@@ -10,6 +10,17 @@ use crate::{
 use sha2::{Digest, Sha256};
 use std::{collections::BTreeSet, sync::Arc};
 
+// Pure corrected DTOs only. No public Python ABI or Source authority.
+#[path = "card_instance_dto.rs"]
+pub(crate) mod card_instance;
+
+#[derive(Clone, Copy)]
+enum ColumnContext {
+    Engineering,
+    Corrected,
+    CorrectedComponent,
+}
+
 pub const KINDS: &[&str] = &[
     "pray",
     "play_sequence",
@@ -326,7 +337,30 @@ pub fn columns(
     budget: &Arc<Budget>,
     control: &Control,
 ) -> Result<Table> {
+    columns_context(
+        payload,
+        descriptor,
+        frame,
+        max_positions,
+        synthetic,
+        budget,
+        control,
+        ColumnContext::Engineering,
+    )
+}
+
+fn columns_context(
+    payload: &[u8],
+    descriptor: &Value,
+    frame: &Value,
+    max_positions: usize,
+    synthetic: bool,
+    budget: &Arc<Budget>,
+    control: &Control,
+    context: ColumnContext,
+) -> Result<Table> {
     control.check()?;
+    let corrected = !matches!(context, ColumnContext::Engineering);
     descriptor.closed(
         &[
             "schema_version",
@@ -343,11 +377,25 @@ pub fn columns(
             "purpose",
             "synthetic_capacity",
         ],
-        &[],
+        if corrected { &["codebook_sha256"] } else { &[] },
     )?;
-    if descriptor.require("schema_version")?.integer(1, 1)? != 1
-        || descriptor.require("codec")?.string()? != "candidate-columns-v1"
-        || descriptor.require("purpose")?.string()? != "component"
+    let schema = if corrected { 2 } else { 1 };
+    if descriptor
+        .require("schema_version")?
+        .integer(schema, schema)?
+        != schema
+        || descriptor.require("codec")?.string()?
+            != if corrected {
+                "candidate-columns-v2"
+            } else {
+                "candidate-columns-v1"
+            }
+        || descriptor.require("purpose")?.string()?
+            != if matches!(context, ColumnContext::Corrected) {
+                "qualified_game"
+            } else {
+                "component"
+            }
         || descriptor.require("synthetic_capacity")?.boolean()? != synthetic
     {
         return fail("candidate column recipe/classification mismatch");
@@ -356,7 +404,14 @@ pub fn columns(
     if !descriptor.require("file")?.string()?.as_bytes()[0].is_ascii_alphanumeric() {
         return fail("candidate column basename must begin with ASCII alphanumeric");
     }
-    crate::structured_controls::contract(descriptor.require("action_contract")?)?;
+    if corrected {
+        if synthetic {
+            return fail("codec2 diagnostic requires real18 references");
+        }
+        card_instance::column_binding(descriptor, budget, control)?;
+    } else {
+        crate::structured_controls::contract(descriptor.require("action_contract")?)?;
+    }
     for key in ["sha256", "frame_hash", "table_hash"] {
         checksum(descriptor.require(key)?)?;
     }
@@ -446,16 +501,24 @@ pub fn columns(
     if offsets[0] != 0 || offsets[count] != elements as i64 {
         return fail("candidate offsets endpoints mismatch");
     }
-    let refs = references(frame, control)?;
+    let refs = if corrected {
+        card_instance::references(frame, control)?
+    } else {
+        references(frame, control)?
+    };
     let mut kinds = Vec::with_capacity(count);
     let mut targets = Vec::with_capacity(count);
     let mut numerics = Vec::with_capacity(count);
     let mut presence = Vec::with_capacity(count);
     for i in 0..count {
         control.check()?;
-        let kind = *KINDS
-            .get(parts[0][i] as usize)
-            .ok_or_else(|| Error::contract("unknown raw candidate kind"))?;
+        let kind = *(if corrected {
+            card_instance::KINDS
+        } else {
+            KINDS
+        })
+        .get(parts[0][i] as usize)
+        .ok_or_else(|| Error::contract("unknown raw candidate kind"))?;
         let target = *TARGETS
             .get(parts[1][i] as usize)
             .ok_or_else(|| Error::contract("unknown raw relative target"))?;
@@ -487,7 +550,11 @@ pub fn columns(
             }
             exists[j] = bit == 1;
         }
-        action(kind, target, &values, &exists, row, frame, &refs, control)?;
+        if corrected {
+            card_instance::action(kind, target, &values, &exists, row, frame, &refs, control)?;
+        } else {
+            action(kind, target, &values, &exists, row, frame, &refs, control)?;
+        }
         kinds.push(json::text(kind));
         targets.push(json::text(target));
         numerics.push(json::array(
@@ -516,7 +583,14 @@ pub fn columns(
             "action_contract",
             json::copy(descriptor.require("action_contract")?, control)?,
         ),
-        ("purpose", json::text("component")),
+        (
+            "purpose",
+            json::text(if matches!(context, ColumnContext::Corrected) {
+                "qualified_game"
+            } else {
+                "component"
+            }),
+        ),
         ("synthetic_capacity", Value::Bool(synthetic)),
     ]);
     if digest(&value, budget, control)? != descriptor.require("table_hash")?.string()? {
@@ -530,7 +604,20 @@ pub fn columns(
 }
 
 fn selected_action(table: &Value, index: usize, frame: &Value, control: &Control) -> Result<Value> {
-    let refs = references(frame, control)?;
+    selected_action_context(table, index, frame, control, false)
+}
+fn selected_action_context(
+    table: &Value,
+    index: usize,
+    frame: &Value,
+    control: &Control,
+    corrected: bool,
+) -> Result<Value> {
+    let refs = if corrected {
+        card_instance::references(frame, control)?
+    } else {
+        references(frame, control)?
+    };
     let offsets = table.require("offsets")?.array()?;
     let start = offsets[index].integer(0, i64::MAX as i128)? as usize;
     let end = offsets[index + 1].integer(start as i128, i64::MAX as i128)? as usize;
@@ -545,7 +632,11 @@ fn selected_action(table: &Value, index: usize, frame: &Value, control: &Control
             .integer(i32::MIN as i128, u32::MAX as i128)? as i64;
         exists[j] = table.require("presence")?.array()?[index].array()?[j].boolean()?;
     }
-    action(
+    (if corrected {
+        card_instance::action
+    } else {
+        action
+    })(
         table.require("kinds")?.array()?[index].string()?,
         table.require("targets")?.array()?[index].string()?,
         &values,
@@ -732,6 +823,17 @@ fn report(
     budget: &Arc<Budget>,
     control: &Control,
 ) -> Result<()> {
+    report_context(value, header, table, expected_rng, budget, control, false)
+}
+fn report_context(
+    value: &Value,
+    header: &Value,
+    table: &Value,
+    expected_rng: &Value,
+    budget: &Arc<Budget>,
+    control: &Control,
+    corrected: bool,
+) -> Result<()> {
     value.closed(
         &[
             "action_contract",
@@ -758,7 +860,7 @@ fn report(
             "search_ms",
             "selection_ms",
         ],
-        &[],
+        if corrected { &["rule_signature"] } else { &[] },
     )?;
     if value.require("action_contract")? != header.require("action_contract")?
         || value.require("generator_version")? != header.require("generator_version")?
@@ -766,6 +868,19 @@ fn report(
         || value.require("table_hash")? != table.require("table_hash")?
     {
         return fail("search report identity mismatch");
+    }
+    if corrected {
+        if value.require("rule_signature")? != header.require("rule_signature")? {
+            return fail("report rule signature mismatch");
+        }
+        let actions = header.require("actions")?;
+        if n(value, "attempts", 0, i64::MAX as i128)?
+            > n(actions, "max_expansions", 1, i32::MAX as i128)?
+            || n(value, "discovered", 0, i64::MAX as i128)?
+                > n(actions, "max_temporary_candidates", 1, i32::MAX as i128)?
+        {
+            return fail("report exceeds frozen action budgets");
+        }
     }
     for key in ["config_hash", "numeric_costs_hash", "table_hash"] {
         checksum(value.require(key)?)?;
@@ -860,10 +975,15 @@ fn report(
         }
     }
     let omissions = value.require("omissions")?.array()?;
-    if omissions.len() != OMISSIONS.len()
+    let expected_omissions = if corrected {
+        &["unlisted direct-use utility definitions"][..]
+    } else {
+        OMISSIONS
+    };
+    if omissions.len() != expected_omissions.len()
         || !omissions
             .iter()
-            .zip(OMISSIONS)
+            .zip(expected_omissions)
             .all(|(v, &s)| v.as_str() == Some(s))
     {
         return fail("search omission recipe mismatch");
@@ -959,6 +1079,7 @@ fn acknowledgement(response: &Value, command: &Value) -> Result<()> {
 pub(crate) struct OriginalHeader<'a> {
     pub(crate) model: Option<&'a Value>,
     identity: &'a Value,
+    corrected: bool,
 }
 impl<'a> OriginalHeader<'a> {
     pub(crate) fn new(
@@ -1012,6 +1133,7 @@ impl<'a> OriginalHeader<'a> {
                 return Ok(Self {
                     model: Some(model),
                     identity,
+                    corrected: false,
                 });
             }
             crate::structured_controls::model(model, budget, control)?;
@@ -1059,7 +1181,67 @@ impl<'a> OriginalHeader<'a> {
                 return fail("unknown original baseline token descriptor");
             }
         }
-        Ok(Self { model, identity })
+        Ok(Self {
+            model,
+            identity,
+            corrected: false,
+        })
+    }
+    pub(crate) fn new_corrected(
+        model: Option<&'a Value>,
+        identity: &'a Value,
+        b: &Arc<Budget>,
+        c: &Control,
+    ) -> Result<Self> {
+        let base = [
+            "run_id",
+            "game_id",
+            "episode_id",
+            "viewer",
+            "policy",
+            "model_id",
+            "model_version",
+            "generation_schema",
+            "action_config_hash",
+            "sampling_seed",
+            "caps",
+            "aggregate_window",
+            "token_signature",
+            "action_contract",
+            "purpose",
+            "synthetic_capacity",
+            "rule_signature",
+            "layout_signature",
+        ];
+        identity.closed(&base, &[])?;
+        crate::structured_controls::game_binding3(identity, b, c)?;
+        if !identity.require("generation_schema")?.is_null() {
+            return fail("J6 generation schema must remain null");
+        }
+        let window = n(identity, "aggregate_window", 1, 65536)?;
+        if identity.require("token_signature")?.string()?
+            != crate::structured_controls::card_instance_token_signature(window, b, c)?
+        {
+            return fail("corrected original token identity mismatch");
+        }
+        if let Some(model) = model {
+            crate::structured_controls::model3(model, b, c)?;
+            if identity.require("model_version")?.string()? != "3"
+                || identity.require("model_id")? != model.require("model_id")?
+                || window != n(model.require("event")?, "aggregate_window", 1, 65536)?
+            {
+                return fail("corrected original neural role differs");
+            }
+        } else if identity.require("model_version")?.string()? != "1"
+            || !["random", "heuristic"].contains(&identity.require("model_id")?.string()?)
+        {
+            return fail("corrected original baseline role differs");
+        }
+        Ok(Self {
+            model,
+            identity,
+            corrected: true,
+        })
     }
     fn check(&self, header: &Value, _budget: &Arc<Budget>, _control: &Control) -> Result<()> {
         for (key, value) in self.identity.object()? {
@@ -1072,6 +1254,7 @@ impl<'a> OriginalHeader<'a> {
 }
 enum Destination<'a, 'm> {
     Diagnostic,
+    CorrectedDiagnostic,
     Original {
         declaration: &'a OriginalHeader<'m>,
         stage: Option<(&'a mut crate::structured_staging::Stage, usize)>,
@@ -1246,6 +1429,9 @@ struct Decision {
 }
 pub struct Journal {
     pub sources: crate::structured_session::Sources,
+    data: ParsedJournal,
+}
+pub(crate) struct ParsedJournal {
     documents: crate::budget::BudgetVec<json::Document>,
     bank: crate::budget::BudgetVec<Value>,
     prefixes: crate::budget::BudgetVec<[u8; 32]>,
@@ -1253,6 +1439,7 @@ pub struct Journal {
     accepted: crate::budget::BudgetVec<usize>,
     end: usize,
     max_json: usize,
+    corrected: bool,
 }
 fn hash_bytes(text: &str) -> Result<[u8; 32]> {
     if text.len() != 64 {
@@ -1268,7 +1455,62 @@ fn hash_bytes(text: &str) -> Result<[u8; 32]> {
 fn hash_text(bytes: &[u8; 32]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
+pub(crate) fn event_prefix_initial(
+    actor: i128,
+    episode: &Value,
+    contract: Option<&Value>,
+    budget: &Arc<Budget>,
+    control: &Control,
+) -> Result<[u8; 32]> {
+    let mut binding = vec![
+        json::text(if contract.is_some() {
+            "participant-structured-v2"
+        } else {
+            "participant-structured-v1"
+        }),
+        json::text("event-bank"),
+        json::integer(actor),
+        json::copy(episode, control)?,
+    ];
+    if let Some(contract) = contract {
+        binding.push(json::copy(contract, control)?);
+    }
+    hash_bytes(&digest(&json::array(binding), budget, control)?)
+}
+pub(crate) fn event_prefix_next(
+    previous: &[u8; 32],
+    event: &Value,
+    budget: &Arc<Budget>,
+    control: &Control,
+) -> Result<[u8; 32]> {
+    let encoded = json::canonical(event, budget, control)?;
+    let mut hash = Sha256::new();
+    hash.update(previous);
+    hash.update(&*encoded);
+    Ok(hash.finalize().into())
+}
+pub(crate) fn event_prefix_text(prefix: &[u8; 32]) -> String {
+    hash_text(prefix)
+}
 impl Journal {
+    pub(crate) fn open_corrected(
+        directory: &std::path::Path,
+        journal_file: &str,
+        budget: Arc<Budget>,
+        control: Control,
+        max_json: usize,
+        max_record: usize,
+    ) -> Result<Self> {
+        Self::open_destination(
+            directory,
+            journal_file,
+            budget,
+            control,
+            max_json,
+            max_record,
+            Destination::CorrectedDiagnostic,
+        )
+    }
     pub fn open(
         directory: &std::path::Path,
         journal_file: &str,
@@ -1287,6 +1529,33 @@ impl Journal {
             Destination::Diagnostic,
         )
     }
+    pub(crate) fn original_corrected(
+        directory: &std::path::Path,
+        journal_file: &str,
+        budget: Arc<Budget>,
+        control: Control,
+        max_json: usize,
+        max_record: usize,
+        declaration: &OriginalHeader<'_>,
+        stage: Option<(&mut crate::structured_staging::Stage, usize)>,
+    ) -> Result<Self> {
+        if !declaration.corrected || stage.is_some() && declaration.model.is_none() {
+            return fail("corrected original entry requires its closed declaration");
+        }
+        Self::open_destination(
+            directory,
+            journal_file,
+            budget,
+            control,
+            max_json,
+            max_record,
+            Destination::Original {
+                declaration,
+                stage,
+                tree_window: None,
+            },
+        )
+    }
     pub(crate) fn original(
         directory: &std::path::Path,
         journal_file: &str,
@@ -1297,6 +1566,9 @@ impl Journal {
         declaration: &OriginalHeader<'_>,
         stage: Option<(&mut crate::structured_staging::Stage, usize)>,
     ) -> Result<Self> {
+        if declaration.corrected {
+            return fail("old original Journal entry rejects corrected declarations");
+        }
         if stage.is_some()
             && (declaration.model.is_none()
                 || declaration.model.unwrap().require("model_id")?.string()? == "lightgbm"
@@ -1369,19 +1641,44 @@ impl Journal {
         control: Control,
         max_json: usize,
         max_record: usize,
-        mut destination: Destination<'_, '_>,
+        destination: Destination<'_, '_>,
     ) -> Result<Self> {
-        let diagnostic = matches!(&destination, Destination::Diagnostic);
-        crate::structured_controls::basename(journal_file)?;
-        if max_record == 0 || max_record > max_json {
-            return fail("journal5 record bound invalid");
-        }
         let mut sources = crate::structured_session::Sources::new(
             directory,
             budget.clone(),
             control.clone(),
             max_json,
         )?;
+        let data = Self::parse_destination(
+            &mut sources,
+            journal_file,
+            budget,
+            control,
+            max_json,
+            max_record,
+            destination,
+        )?;
+        Ok(Self { sources, data })
+    }
+    fn parse_destination(
+        sources: &mut crate::structured_session::Sources,
+        journal_file: &str,
+        budget: Arc<Budget>,
+        control: Control,
+        max_json: usize,
+        max_record: usize,
+        mut destination: Destination<'_, '_>,
+    ) -> Result<ParsedJournal> {
+        let diagnostic = matches!(
+            &destination,
+            Destination::Diagnostic | Destination::CorrectedDiagnostic
+        );
+        let corrected = matches!(&destination, Destination::CorrectedDiagnostic)
+            || matches!(&destination,Destination::Original{declaration,..} if declaration.corrected);
+        crate::structured_controls::basename(journal_file)?;
+        if max_record == 0 || max_record > max_json {
+            return fail("journal5 record bound invalid");
+        }
         let bytes = sources.bytes(&sources.root.join(journal_file), max_json)?;
         let mut documents = crate::budget::BudgetVec::new(&budget);
         for line in bytes.split_inclusive(|&v| v == b'\n') {
@@ -1395,52 +1692,66 @@ impl Journal {
         if documents.is_empty() {
             return fail("journal5 header required");
         }
-        header(
-            &documents[0].root,
-            &budget,
-            &control,
-            match &destination {
-                Destination::Diagnostic => None,
-                Destination::Original { declaration, .. } => Some(declaration),
-            },
-        )?;
+        if corrected {
+            card_instance::header6(&documents[0].root, &budget, &control)?;
+            if let Destination::Original { declaration, .. } = &destination {
+                declaration.check(&documents[0].root, &budget, &control)?;
+            }
+        } else {
+            header(
+                &documents[0].root,
+                &budget,
+                &control,
+                match &destination {
+                    Destination::Diagnostic | Destination::CorrectedDiagnostic => None,
+                    Destination::Original { declaration, .. } => Some(declaration),
+                },
+            )?;
+        }
         let viewer = documents[0].root.require("viewer")?.integer(1, 2)?;
         if journal_file != format!("player-{viewer}.jsonl") {
             return fail("journal filename/viewer mismatch");
         }
-        let initial = digest(
-            &json::array([
-                json::text("participant-structured-v1"),
-                json::text("event-bank"),
-                json::integer(viewer),
-                json::copy(documents[0].root.require("bank_episode")?, &control)?,
-            ]),
+        let initial = event_prefix_initial(
+            viewer,
+            documents[0].root.require("bank_episode")?,
+            if corrected {
+                Some(documents[0].root.require("action_contract")?)
+            } else {
+                None
+            },
             &budget,
             &control,
         )?;
         let mut prefixes = crate::budget::BudgetVec::new(&budget);
-        prefixes.push(hash_bytes(&initial)?)?;
+        prefixes.push(initial)?;
         let seed = documents[0]
             .root
             .require("sampling_seed")?
             .integer(0, u64::MAX as i128)? as u64;
         let mut expected_rng = initial_rng(seed, &budget, &control)?;
-        let recipe =
-            if diagnostic || matches!(&destination, Destination::Original { stage: Some(_), .. }) {
-                Some(crate::structured_tokens::Recipe::new(
-                    match &destination {
-                        Destination::Original {
-                            tree_window: Some(window),
-                            ..
-                        } => *window,
-                        _ => n(&documents[0].root, "aggregate_window", 1, 65536)?,
-                    },
-                    &budget,
-                    &control,
-                )?)
+        let recipe = if corrected
+            || diagnostic
+            || matches!(&destination, Destination::Original { stage: Some(_), .. })
+        {
+            Some((if corrected {
+                crate::structured_tokens::Recipe::corrected
             } else {
-                None
-            };
+                crate::structured_tokens::Recipe::new
+            })(
+                match &destination {
+                    Destination::Original {
+                        tree_window: Some(window),
+                        ..
+                    } => *window,
+                    _ => n(&documents[0].root, "aggregate_window", 1, 65536)?,
+                },
+                &budget,
+                &control,
+            )?)
+        } else {
+            None
+        };
         let _rng_metadata = budget.reserve(65536)?;
         let mut bank = crate::budget::BudgetVec::new(&budget);
         let mut decisions: crate::budget::BudgetVec<Decision> =
@@ -1494,7 +1805,13 @@ impl Journal {
                 {
                     return fail("journal5 event capacity exceeded");
                 }
-                validation::validate_events_controlled(delta.require("events")?, &control)?;
+                if corrected {
+                    for event in events {
+                        card_instance::event(event, recipe.as_ref().unwrap(), &budget, &control)?;
+                    }
+                } else {
+                    validation::validate_events_controlled(delta.require("events")?, &control)?;
+                }
                 let count = events.len();
                 for event_index in 0..count {
                     control.check()?;
@@ -1507,11 +1824,12 @@ impl Journal {
                         .as_array_mut()
                         .unwrap()[event_index]
                         .take();
-                    let encoded = json::canonical(&event, &budget, &control)?;
-                    let mut hash = Sha256::new();
-                    hash.update(prefixes.last().unwrap());
-                    hash.update(&*encoded);
-                    prefixes.push(hash.finalize().into())?;
+                    prefixes.push(event_prefix_next(
+                        prefixes.last().unwrap(),
+                        &event,
+                        &budget,
+                        &control,
+                    )?)?;
                     bank.push(event)?;
                 }
                 let boundary = documents[index].root.require("boundary")?;
@@ -1561,7 +1879,11 @@ impl Journal {
                     }
                     awaiting_next = None;
                     let f = row.require("frame")?;
-                    frame(f, &budget, &control)?;
+                    if corrected {
+                        card_instance::frame(f, &budget, &control)?;
+                    } else {
+                        frame(f, &budget, &control)?;
+                    }
                     let start = n(f, "interval_start", 0, bank.len() as i128)?;
                     let previous = decisions
                         .last()
@@ -1603,7 +1925,7 @@ impl Journal {
                     }
                     let raw =
                         sources.bytes(&sources.root.join(&expected_file), 64 * 1024 * 1024)?;
-                    let table = columns(
+                    let table = columns_context(
                         &raw,
                         descriptor,
                         f,
@@ -1611,15 +1933,21 @@ impl Journal {
                         false,
                         &budget,
                         &control,
+                        if corrected {
+                            ColumnContext::Corrected
+                        } else {
+                            ColumnContext::Engineering
+                        },
                     )?;
                     drop(raw);
-                    report(
+                    report_context(
                         row.require("search_report")?,
                         h,
                         &table.value,
                         &expected_rng,
                         &budget,
                         &control,
+                        corrected,
                     )?;
                     expected_rng = json::copy(
                         row.require("search_report")?.require("rng_after")?,
@@ -1644,7 +1972,8 @@ impl Journal {
                     for key in ["logprob", "value"] {
                         let v = selection.require(key)?;
                         if v.is_null() {
-                            if h.require("model_version")?.string()? == "2"
+                            if (h.require("model_version")?.string()? == "2"
+                                || corrected && h.require("model_version")?.string()? == "3")
                                 && h.require("model_id")?.string()? != "lightgbm"
                             {
                                 return fail(
@@ -1652,7 +1981,9 @@ impl Journal {
                                 );
                             }
                         } else {
-                            if h.require("model_id")?.string()? == "lightgbm" {
+                            if h.require("model_id")?.string()? == "lightgbm"
+                                || corrected && h.require("model_version")?.string()? == "1"
+                            {
                                 return fail(
                                     "Tree2 RAW Selection must have null policy statistics",
                                 );
@@ -1663,7 +1994,8 @@ impl Journal {
                             }
                         }
                     }
-                    let selected = selected_action(&table.value, selected, f, &control)?;
+                    let selected =
+                        selected_action_context(&table.value, selected, f, &control, corrected)?;
                     command(row.require("command")?, f, &selected, &budget, &control)?;
                     timings(row.require("timings")?)?;
                     let (frame_tokens, candidate_tokens) = if diagnostic {
@@ -1878,7 +2210,11 @@ impl Journal {
                             return fail("natural reward perspective mismatch");
                         }
                         let final_obs = row.require("final_observation")?;
-                        validation::observation_controlled(final_obs, Some(viewer), &control)?;
+                        if corrected {
+                            card_instance::observation(final_obs, Some(viewer), &budget, &control)?;
+                        } else {
+                            validation::observation_controlled(final_obs, Some(viewer), &control)?;
+                        }
                         if final_obs.require("phase")?.string()? != "terminal"
                             || final_obs.require("result")? != outcome
                         {
@@ -1925,8 +2261,7 @@ impl Journal {
         }
         let end = end.ok_or_else(|| Error::contract("journal5 final closure required"))?;
         sources.recheck()?;
-        Ok(Self {
-            sources,
+        Ok(ParsedJournal {
             documents,
             bank,
             prefixes,
@@ -1934,8 +2269,241 @@ impl Journal {
             accepted,
             end,
             max_json,
+            corrected,
         })
     }
+    pub(crate) fn header_value(&self) -> &Value {
+        self.data.header_value()
+    }
+    pub(crate) fn end_value(&self) -> &Value {
+        self.data.end_value()
+    }
+    pub(crate) fn accepted_count(&self) -> usize {
+        self.data.accepted_count()
+    }
+    pub(crate) fn boundary_value(&self) -> Value {
+        self.data.boundary_value()
+    }
+    pub(crate) fn accepted_actions(&self) -> Result<Vec<&Value>> {
+        self.data.accepted_actions()
+    }
+    pub(crate) fn correspondence_frames(&self) -> Result<json::Document> {
+        self.data.correspondence_frames(&self.sources)
+    }
+    pub(crate) fn staged_episode(
+        &self,
+        stage: &mut crate::structured_staging::Stage,
+        index: usize,
+        reason: &Value,
+    ) -> Result<Value> {
+        self.data
+            .staged_episode(&self.sources, stage, index, reason)
+    }
+    pub(crate) fn staged_tree_episode(
+        &self,
+        stage: &mut crate::structured_staging::Stage,
+        index: usize,
+        reason: &Value,
+    ) -> Result<Value> {
+        self.data
+            .staged_tree_episode(&self.sources, stage, index, reason)
+    }
+    pub(crate) fn restage_corrected(
+        sources: &mut crate::structured_session::Sources,
+        journal_file: &str,
+        max_json: usize,
+        max_record: usize,
+        declaration: &OriginalHeader<'_>,
+        stage: &mut crate::structured_staging::Stage,
+        index: usize,
+    ) -> Result<ParsedJournal> {
+        if !declaration.corrected {
+            return fail("recorded restage requires corrected original declaration");
+        }
+        Self::parse_destination(
+            sources,
+            journal_file,
+            sources.budget.clone(),
+            sources.control.clone(),
+            max_json,
+            max_record,
+            Destination::Original {
+                declaration,
+                stage: Some((stage, index)),
+                tree_window: None,
+            },
+        )
+    }
+    pub(crate) fn into_sources(self) -> crate::structured_session::Sources {
+        self.sources
+    }
+    pub fn diagnostic(&self) -> Result<crate::budget::BudgetVec<u8>> {
+        let s = &self.sources;
+        s.control.check()?;
+        s.recheck()?;
+        let scratch = s.budget.reserve(
+            s.budget
+                .used()
+                .checked_mul(2)
+                .and_then(|n| n.checked_add(65536))
+                .ok_or_else(|| Error::resource("diagnostic copy overflow"))?,
+        )?;
+        let mut decisions = Vec::with_capacity(self.data.decisions.len());
+        for (index, decision) in self.data.decisions.iter().enumerate() {
+            s.control.check()?;
+            let row = &self.data.documents[decision.document].root;
+            decisions.push(json::object([
+                ("decision", json::integer(index as i128)),
+                ("frame", json::copy(row.require("frame")?, &s.control)?),
+                (
+                    "table",
+                    json::copy(
+                        &decision
+                            .table
+                            .as_ref()
+                            .ok_or(crate::error::Error::Closed)?
+                            .value,
+                        &s.control,
+                    )?,
+                ),
+                (
+                    "selection",
+                    json::copy(row.require("selection")?, &s.control)?,
+                ),
+                (
+                    "search_report",
+                    json::copy(row.require("search_report")?, &s.control)?,
+                ),
+                (
+                    "frame_tokens",
+                    json::copy(
+                        &decision
+                            .frame_tokens
+                            .as_ref()
+                            .ok_or(crate::error::Error::Closed)?
+                            .value,
+                        &s.control,
+                    )?,
+                ),
+                (
+                    "candidate_tokens",
+                    json::copy(
+                        &decision
+                            .candidate_tokens
+                            .as_ref()
+                            .ok_or(crate::error::Error::Closed)?
+                            .value,
+                        &s.control,
+                    )?,
+                ),
+            ]));
+        }
+        let result = json::object([
+            ("kind", json::text("structured-journal-tokens")),
+            (
+                "validation_scope",
+                json::text(if self.data.corrected {
+                    "journal6-codec2-rawtokens-only"
+                } else {
+                    "journal5-columns-rawtokens-only"
+                }),
+            ),
+            ("qualified", Value::Bool(false)),
+            ("parent_qualification", json::text("not_performed")),
+            (
+                "projection",
+                json::object([
+                    (
+                        "aggregate_recipe",
+                        json::text(if self.data.corrected {
+                            "public-exact-card-refs-v3"
+                        } else {
+                            "public-exact-v2"
+                        }),
+                    ),
+                    (
+                        "aggregate_window",
+                        json::copy(
+                            self.data.documents[0].root.require("aggregate_window")?,
+                            &s.control,
+                        )?,
+                    ),
+                    (
+                        "declaration",
+                        json::text(
+                            if self.data.documents[0]
+                                .root
+                                .require("model_version")?
+                                .string()?
+                                == "1"
+                            {
+                                "baseline-corrected128"
+                            } else if self.data.documents[0].root.require("model_id")?.string()?
+                                == "lightgbm"
+                            {
+                                "tree-raw-corrected-own-header"
+                            } else {
+                                "neural-own-header"
+                            },
+                        ),
+                    ),
+                ]),
+            ),
+            (
+                "header",
+                json::copy(&self.data.documents[0].root, &s.control)?,
+            ),
+            (
+                "bank",
+                json::object([
+                    (
+                        "actor",
+                        json::copy(self.data.documents[0].root.require("viewer")?, &s.control)?,
+                    ),
+                    (
+                        "episode",
+                        json::copy(
+                            self.data.documents[0].root.require("bank_episode")?,
+                            &s.control,
+                        )?,
+                    ),
+                    (
+                        "events",
+                        json::array(
+                            self.data
+                                .bank
+                                .iter()
+                                .map(|v| json::copy(v, &s.control))
+                                .collect::<Result<Vec<_>>>()?,
+                        ),
+                    ),
+                    (
+                        "prefixes",
+                        json::array(self.data.prefixes.iter().map(|v| json::text(&hash_text(v)))),
+                    ),
+                ]),
+            ),
+            ("decisions", json::array(decisions)),
+            (
+                "accepted",
+                json::array(self.data.accepted.iter().map(|&v| json::integer(v as i128))),
+            ),
+            (
+                "end",
+                json::copy(&self.data.documents[self.data.end].root, &s.control)?,
+            ),
+        ]);
+        let encoded = json::canonical(&result, &s.budget, &s.control)?;
+        if encoded.len() > self.data.max_json {
+            return fail("diagnostic JSON wire cap exceeded; no truncation");
+        }
+        s.recheck()?;
+        drop(scratch);
+        Ok(encoded)
+    }
+}
+
+impl ParsedJournal {
     pub(crate) fn header_value(&self) -> &Value {
         &self.documents[0].root
     }
@@ -1968,8 +2536,10 @@ impl Journal {
             })
             .collect()
     }
-    pub(crate) fn correspondence_frames(&self) -> Result<json::Document> {
-        let s = &self.sources;
+    pub(crate) fn correspondence_frames(
+        &self,
+        s: &crate::structured_session::Sources,
+    ) -> Result<json::Document> {
         s.control.check()?;
         let mut raw = 65536usize;
         for &i in self.accepted.iter() {
@@ -2021,13 +2591,14 @@ impl Journal {
     }
     pub(crate) fn staged_episode(
         &self,
+        s: &crate::structured_session::Sources,
         stage: &mut crate::structured_staging::Stage,
         index: usize,
         reason: &Value,
     ) -> Result<Value> {
-        let s = &self.sources;
         s.control.check()?;
-        if self.header_value().require("model_version")?.string()? != "2"
+        if self.header_value().require("model_version")?.string()?
+            != if self.corrected { "3" } else { "2" }
             || self.header_value().require("model_id")?.string()? == "lightgbm"
         {
             return fail("baseline raw role cannot be a PPO payload");
@@ -2076,21 +2647,31 @@ impl Journal {
             ("outcome", json::copy(end.require("outcome")?, &s.control)?),
             ("reason", json::copy(reason, &s.control)?),
         ]);
-        for key in ["action_contract", "purpose", "synthetic_capacity"] {
+        for key in if self.corrected {
+            &[
+                "action_contract",
+                "purpose",
+                "synthetic_capacity",
+                "rule_signature",
+                "layout_signature",
+            ][..]
+        } else {
+            &["action_contract", "purpose", "synthetic_capacity"][..]
+        } {
             result
                 .as_object_mut()
                 .unwrap()
-                .insert(key.into(), json::copy(header.require(key)?, &s.control)?);
+                .insert((*key).into(), json::copy(header.require(key)?, &s.control)?);
         }
         Ok(result)
     }
     pub(crate) fn staged_tree_episode(
         &self,
+        s: &crate::structured_session::Sources,
         stage: &mut crate::structured_staging::Stage,
         index: usize,
         reason: &Value,
     ) -> Result<Value> {
-        let s = &self.sources;
         s.control.check()?;
         let _copy = s.budget.reserve(65536 + self.accepted.len() * 16384)?;
         let mut frames = Vec::new();
@@ -2140,150 +2721,6 @@ impl Journal {
                 .insert(key.into(), json::copy(header.require(key)?, &s.control)?);
         }
         Ok(value)
-    }
-    pub(crate) fn into_sources(self) -> crate::structured_session::Sources {
-        self.sources
-    }
-    pub fn diagnostic(&self) -> Result<crate::budget::BudgetVec<u8>> {
-        let s = &self.sources;
-        s.control.check()?;
-        s.recheck()?;
-        let scratch = s.budget.reserve(
-            s.budget
-                .used()
-                .checked_mul(2)
-                .and_then(|n| n.checked_add(65536))
-                .ok_or_else(|| Error::resource("diagnostic copy overflow"))?,
-        )?;
-        let mut decisions = Vec::with_capacity(self.decisions.len());
-        for (index, decision) in self.decisions.iter().enumerate() {
-            s.control.check()?;
-            let row = &self.documents[decision.document].root;
-            decisions.push(json::object([
-                ("decision", json::integer(index as i128)),
-                ("frame", json::copy(row.require("frame")?, &s.control)?),
-                (
-                    "table",
-                    json::copy(
-                        &decision
-                            .table
-                            .as_ref()
-                            .ok_or(crate::error::Error::Closed)?
-                            .value,
-                        &s.control,
-                    )?,
-                ),
-                (
-                    "selection",
-                    json::copy(row.require("selection")?, &s.control)?,
-                ),
-                (
-                    "search_report",
-                    json::copy(row.require("search_report")?, &s.control)?,
-                ),
-                (
-                    "frame_tokens",
-                    json::copy(
-                        &decision
-                            .frame_tokens
-                            .as_ref()
-                            .ok_or(crate::error::Error::Closed)?
-                            .value,
-                        &s.control,
-                    )?,
-                ),
-                (
-                    "candidate_tokens",
-                    json::copy(
-                        &decision
-                            .candidate_tokens
-                            .as_ref()
-                            .ok_or(crate::error::Error::Closed)?
-                            .value,
-                        &s.control,
-                    )?,
-                ),
-            ]));
-        }
-        let result = json::object([
-            ("kind", json::text("structured-journal-tokens")),
-            (
-                "validation_scope",
-                json::text("journal5-columns-rawtokens-only"),
-            ),
-            ("qualified", Value::Bool(false)),
-            ("parent_qualification", json::text("not_performed")),
-            (
-                "projection",
-                json::object([
-                    ("aggregate_recipe", json::text("public-exact-v2")),
-                    (
-                        "aggregate_window",
-                        json::copy(
-                            self.documents[0].root.require("aggregate_window")?,
-                            &s.control,
-                        )?,
-                    ),
-                    (
-                        "declaration",
-                        json::text(
-                            if self.documents[0].root.require("model_version")?.string()? == "1" {
-                                "baseline-corrected128"
-                            } else if self.documents[0].root.require("model_id")?.string()?
-                                == "lightgbm"
-                            {
-                                "tree-raw-corrected-own-header"
-                            } else {
-                                "neural-own-header"
-                            },
-                        ),
-                    ),
-                ]),
-            ),
-            ("header", json::copy(&self.documents[0].root, &s.control)?),
-            (
-                "bank",
-                json::object([
-                    (
-                        "actor",
-                        json::copy(self.documents[0].root.require("viewer")?, &s.control)?,
-                    ),
-                    (
-                        "episode",
-                        json::copy(self.documents[0].root.require("bank_episode")?, &s.control)?,
-                    ),
-                    (
-                        "events",
-                        json::array(
-                            self.bank
-                                .iter()
-                                .map(|v| json::copy(v, &s.control))
-                                .collect::<Result<Vec<_>>>()?,
-                        ),
-                    ),
-                    (
-                        "prefixes",
-                        json::array(self.prefixes.iter().map(|v| json::text(&hash_text(v)))),
-                    ),
-                ]),
-            ),
-            ("decisions", json::array(decisions)),
-            (
-                "accepted",
-                json::array(self.accepted.iter().map(|&v| json::integer(v as i128))),
-            ),
-            (
-                "end",
-                json::copy(&self.documents[self.end].root, &s.control)?,
-            ),
-        ]);
-        let encoded = json::canonical(&result, &s.budget, &s.control)?;
-        if encoded.len() > self.max_json {
-            return fail("diagnostic JSON wire cap exceeded; no truncation");
-        }
-        s.recheck()?;
-        drop(scratch);
-        Ok(encoded)
     }
 }
 
@@ -2413,9 +2850,15 @@ mod original_source_tests {
         )
         .unwrap();
         assert_eq!(journal.accepted_count(), 1);
-        assert!(journal.decisions.iter().all(|d| d.frame_tokens.is_none()
-            && d.candidate_tokens.is_none()
-            && d.table.is_none()));
+        assert!(
+            journal
+                .data
+                .decisions
+                .iter()
+                .all(|d| d.frame_tokens.is_none()
+                    && d.candidate_tokens.is_none()
+                    && d.table.is_none())
+        );
         assert!(
             Journal::open(
                 &root,

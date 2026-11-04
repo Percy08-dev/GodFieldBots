@@ -37,6 +37,7 @@ from gf_common.domain import (
 )
 from gf_common.preprocessing import PreparationConfig, preparation_config
 from gf_common.structured import ActionConfigV2, action_config_v2
+from gf_common.structured_layout import CORRECTED_CARD_INSTANCE_LAYOUT
 from gf_common.validation import projected_abort_kind, reconcile_replay, replay_closure
 from gf_models.sharded_arrays import _pairs
 from gf_models.structured_binding import (
@@ -170,6 +171,38 @@ class _SourceOwner:
 
     def _inventory_names(self, pattern: str, *, retain: bool) -> tuple[str, ...]:
         self.check()
+        if pattern == '**/*':
+            all_names = []
+            pending = [self.root]
+            storage = 1024
+            while pending:
+                folder = pending.pop()
+                self._safe(folder)
+                with os.scandir(folder) as entries:
+                    while True:
+                        self.check()
+                        self._temporary(storage + 1024)
+                        try:
+                            entry = next(entries)
+                        except StopIteration:
+                            break
+                        path = Path(entry.path)
+                        self._safe(path)
+                        relative = path.relative_to(self.root).as_posix()
+                        cost = 512 + 4 * len(relative)
+                        if retain:
+                            self.charge(cost)
+                        else:
+                            storage += cost
+                            self._temporary(storage)
+                        if entry.is_dir(follow_symlinks=False):
+                            pending.append(path)
+                        elif entry.is_file(follow_symlinks=False):
+                            all_names.append(relative)
+                        else:
+                            raise ContractError('nonregular original collection inventory entry')
+            self._temporary(storage + 512 * len(all_names))
+            return tuple(sorted(all_names))
         if pattern not in ('*/player-*.jsonl', '*/player-*.partial.jsonl', '*/*.columns', '*/replay-player-*.json', '*/result.json'):
             raise ContractError('unsupported private source inventory pattern')
         storage = 1024
@@ -455,11 +488,21 @@ def _component_source_snapshot(directory: Path, *, actions: ActionConfigV2, sett
         snapshot.recheck()
 
 
-def _inspect_component_collection(owner: _SourceOwner, actions: ActionConfigV2,
-                                  expected_split: str | None) -> ComponentCollection:
+def _inspect_component_collection(owner: _SourceOwner, actions: Any,
+                                  expected_split: str | None, *, _game: bool = False) -> ComponentCollection:
     settings, deadline = owner.settings, owner.deadline
     manifest = owner.object(owner.root / 'manifest.json')
-    episodes, specs = _manifest(manifest, actions, expected_split)
+    if _game:
+        from gf_common.candidate_columns import validate_descriptor_v2
+        from gf_common.card_instance_rules import card_instance_rules
+        from gf_common.card_instance_validation import reconcile_replay as game_reconcile
+        from gf_common.card_instance_validation import replay_closure as game_closure
+        from gf_training.card_instance_journal import read_card_instance_journal
+        from gf_training.card_instance_source import _game_header, _game_manifest
+        from gf_training.structured_rollout import game_episode_records
+        episodes, specs = _game_manifest(owner, manifest, actions, expected_split)
+    else:
+        episodes, specs = _manifest(manifest, actions, expected_split)
     report = owner.object(owner.root / 'report.json')
     if (type(report.get('schema_version')) is not int or report['schema_version'] != 1
             or type(report.get('planned_games')) is not int or type(report.get('natural_denominator')) is not int
@@ -499,7 +542,8 @@ def _inspect_component_collection(owner: _SourceOwner, actions: ActionConfigV2,
         result = owner.object(owner.root / name / 'result.json')
         if any(canonical(result.get(key)) != canonical(value) for key, value in episode.items()):
             raise ContractError('original saved result differs from collection manifest')
-        groups = [item for item in manifest.get('groups', []) if name in item.get('episode_ids', [])]
+        groups = ([manifest['groups'][next(index for index, item in enumerate(manifest['schedule']) if any(row['episode_id'] == name for row in item['episodes']))]] if _game else
+                  [item for item in manifest.get('groups', []) if name in item.get('episode_ids', [])])
         if len(groups) != 1:
             raise ContractError('original episode group health missing/duplicated')
         if episode['end_kind'] == 'natural' and (episode.get('failure') or any(episode.get('health', {}).values()) or group_health_failures(groups[0])):
@@ -516,17 +560,28 @@ def _inspect_component_collection(owner: _SourceOwner, actions: ActionConfigV2,
                 raise ContractError('original journal objects required')
             if not rows or rows[0].get('kind') != 'header':
                 raise ContractError('original journal header required')
-            _header_identity(rows[0], manifest, episode, spec, actions, viewer)
+            if _game:
+                _game_header(rows[0], manifest, episode, spec, actions, viewer)
+            else:
+                _header_identity(rows[0], manifest, episode, spec, actions, viewer)
             for row in rows:
                 if row.get('kind') == 'decision':
                     descriptor = row.get('table', {})
-                    _, size = validate_descriptor(descriptor, expected_file=candidate_basename(viewer, row['decision']),
-                        expected_frame_hash=row.get('frame', {}).get('frame_hash'), action_contract=actions.action_contract,
-                        purpose='component', synthetic_capacity=False)
+                    options: dict[str, Any] = {'expected_file': candidate_basename(viewer, row['decision']),
+                        'expected_frame_hash': row.get('frame', {}).get('frame_hash'), 'action_contract': actions.action_contract,
+                        'purpose': 'qualified_game' if _game else 'component', 'synthetic_capacity': False}
+                    if _game:
+                        _, size = validate_descriptor_v2(descriptor, layout=CORRECTED_CARD_INSTANCE_LAYOUT, **options)
+                    else:
+                        _, size = validate_descriptor(descriptor, **options)
                     owner.charge(32 * size + 4096 * descriptor['count'] + 128 * descriptor['elements'] + 65536)
-            data = read_structured_journal(path, records=rows, deadline=deadline,
-                max_jsonl_bytes=settings.max_source_file_mib * 1024**2, max_record_bytes=settings.max_record_mib * 1024**2,
-                action_contract=actions.action_contract, purpose='component', synthetic_capacity=False)
+            if _game:
+                data = read_card_instance_journal(path, actions=actions, records=rows, deadline=deadline,
+                    max_jsonl_bytes=settings.max_source_file_mib * 1024**2, max_record_bytes=settings.max_record_mib * 1024**2)
+            else:
+                data = read_structured_journal(path, records=rows, deadline=deadline,
+                    max_jsonl_bytes=settings.max_source_file_mib * 1024**2, max_record_bytes=settings.max_record_mib * 1024**2,
+                    action_contract=actions.action_contract, purpose='component', synthetic_capacity=False)
             header = data.header
             if data.end['end_kind'] != episode['end_kind'] or data.end['outcome'] != episode.get('outcome') or data.end['simulator_abort_reason'] != episode.get('simulator_abort_reason'):
                 raise ContractError('original closure/result mismatch')
@@ -542,8 +597,8 @@ def _inspect_component_collection(owner: _SourceOwner, actions: ActionConfigV2,
             replay_path = owner.root / name / f'replay-player-{viewer}.json'
             if replay_path.exists() or replay_path.is_symlink():
                 replay = owner.object(replay_path)
-                reconcile_replay(replay, viewer, [item.command['action'] for item in decisions], episode.get('outcome'))
-                closure = replay_closure(replay, header['game_id'], viewer)
+                (game_reconcile if _game else reconcile_replay)(replay, viewer, [item.command['action'] for item in decisions], episode.get('outcome'))
+                closure = (game_closure if _game else replay_closure)(replay, header['game_id'], viewer)
                 if closure is not None and closure['type'] == 'terminal' and episode.get('outcome') is None:
                     raise ContractError('Replay cannot invent unknown natural outcome')
                 closures.append((True, closure))
@@ -553,9 +608,10 @@ def _inspect_component_collection(owner: _SourceOwner, actions: ActionConfigV2,
                 closures.append((False, None))
                 missing_replays.append(f'{name}/replay-player-{viewer}.json')
             reason = None if episode['end_kind'] == 'natural' else episode.get('simulator_abort_reason') or episode.get('failure') or episode['end_kind']
-            records = EpisodeRecords(data.bank, tuple(item.frame for item in decisions), tuple(item.generated.table for item in decisions),
-                tuple(item.selection for item in decisions), episode['end_kind'], episode.get('outcome'), reason,
-                action_contract=actions.action_contract, purpose='component', synthetic_capacity=False)
+            parts = (data.bank, tuple(item.frame for item in decisions), tuple(item.generated.table for item in decisions),
+                tuple(item.selection for item in decisions), episode['end_kind'], episode.get('outcome'), reason)
+            records = (game_episode_records(*parts, actions=actions, rules=card_instance_rules()) if _game else
+                EpisodeRecords(*parts, action_contract=actions.action_contract, purpose='component', synthetic_capacity=False))
             outputs.append(ComponentEpisode(name, viewer, header['model_id'], header['model_version'], records))
             accepted_count += len(decisions)
         present = [closure for exists, closure in closures if exists]
@@ -570,8 +626,9 @@ def _inspect_component_collection(owner: _SourceOwner, actions: ActionConfigV2,
     if referenced != all_columns:
         raise ContractError('missing/extra original candidate sidecars')
     owner.finalize()
-    proof = {'schema_version': 1, 'kind': 'structured-component-source-proof',
-             **input_binding(actions.action_contract, 'component', False), 'qualified': False,
+    from gf_models.structured_binding import input_binding_game_v3
+    proof = {'schema_version': 1, 'kind': 'card-instance-original-source-proof' if _game else 'structured-component-source-proof',
+             **(input_binding_game_v3(actions.action_contract, card_instance_rules()) if _game else input_binding(actions.action_contract, 'component', False)), 'qualified': False,
              'parent_qualification': 'not_performed', 'manifest_sha256': owner.files['manifest.json']['sha256'],
              'source_set_sha256': digest(owner.files), 'files': owner.files, 'games': len(specs),
              'accepted_decisions': accepted_count, 'closure_counts': closure_counts, 'missing_replays': missing_replays}

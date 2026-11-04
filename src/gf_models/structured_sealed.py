@@ -461,11 +461,12 @@ def _inspect_retained_artifact(directory: Path, *, expected_inference_digest: st
 
 
 def inspect_pruned_inference(directory: Path, *, expected_inference_digest: str, expected_resume_digest: str,
-                             original_files: Json, deletion_receipt: Json, action_contract: ActionContract,
-                             purpose: str, synthetic_capacity: bool, scan: SealedScan) -> SealedArtifact:
+                             original_files: Json, deletion_receipt: Json, action_contract: Any,
+                             purpose: str, synthetic_capacity: bool, scan: SealedScan,
+                             _context: _SealedContextV3 | None = None) -> SealedArtifact:
     checksum(expected_inference_digest)
     checksum(expected_resume_digest)
-    inference, _, _ = _inference_metadata(directory, expected_inference_digest, action_contract, purpose, synthetic_capacity, scan)
+    inference, _, _ = _inference_metadata(directory, expected_inference_digest, action_contract, purpose, synthetic_capacity, scan, _context)
     if not isinstance(original_files, dict):
         raise ContractError('original sealed file map required')
     scan.charge(512 + len(original_files) * 256)
@@ -543,3 +544,33 @@ def inspect_retained_game_inference_v3(directory: Path, *, expected_inference_di
     files = {"inference.json": expected_inference_digest, **inference["weights"]["files"]}
     scan.finalize()
     return SealedArtifact(inference, None, files, True)
+
+
+def inspect_retained_game_artifact_v3(directory: Path, *, expected_inference_digest: str,
+                                      actions: ActionConfigV3, rules: CardInstanceRules,
+                                      scan: SealedScan) -> SealedArtifact:
+    from dataclasses import asdict
+
+    from gf_common.domain import digest
+    input_binding_game_v3(actions.action_contract, rules)
+    context = _SealedContextV3(layout_for_contract(actions.action_contract), actions.action_contract,
+        rules, 'qualified_game', False, digest(asdict(actions)), True)
+    return _inspect_retained_artifact(directory, expected_inference_digest=expected_inference_digest,
+        action_contract=actions.action_contract, purpose='qualified_game', synthetic_capacity=False,
+        scan=scan, context=context)
+
+
+def inspect_pruned_game_inference_v3(directory: Path, *, expected_inference_digest: str,
+                                    expected_resume_digest: str, original_files: Json, deletion_receipt: Json,
+                                    actions: ActionConfigV3, rules: CardInstanceRules,
+                                    scan: SealedScan) -> SealedArtifact:
+    from dataclasses import asdict
+
+    from gf_common.domain import digest
+    input_binding_game_v3(actions.action_contract, rules)
+    context = _SealedContextV3(layout_for_contract(actions.action_contract), actions.action_contract,
+        rules, 'qualified_game', False, digest(asdict(actions)), True)
+    return inspect_pruned_inference(directory, expected_inference_digest=expected_inference_digest,
+        expected_resume_digest=expected_resume_digest, original_files=original_files,
+        deletion_receipt=deletion_receipt, action_contract=actions.action_contract,
+        purpose='qualified_game', synthetic_capacity=False, scan=scan, _context=context)

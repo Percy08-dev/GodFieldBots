@@ -21,6 +21,7 @@ from gf_common.structured_layout import layout_for_contract
 from gf_models.structured_binding import (
     ConfiguredNeuralModelV3,
     child_cuda_visibility,
+    configured_model_v3,
     input_binding_game_v3,
     policy_label_game_v3,
     safe_options_game_v3,
@@ -82,6 +83,58 @@ class RetainedGameArtifacts:
                 or any(type(model) is not ConfiguredNeuralModelV3 for model in models)
                 or actions.max_sequence_length > 18):
             raise ContractError("one or two explicit real18 neural roles required")
+        self._initialize(models, actions, rules=rules, max_owned_bytes=max_owned_bytes,
+            preflight_deadline=preflight_deadline, finalization_deadline=finalization_deadline)
+
+    @classmethod
+    def for_registry(cls, frozenbindings: dict[str, RuntimePolicyBinding], actions: ActionConfigV3, *,
+                     rules: CardInstanceRules, max_owned_bytes: int, preflight_deadline: float,
+                     finalization_deadline: float) -> RetainedGameArtifacts:
+        """Own the exact current/pool registry; grants no live run or Source authority."""
+        input_binding_game_v3(actions.action_contract, rules)
+        if type(frozenbindings) is not dict or not frozenbindings or len(frozenbindings) > 8:
+            raise ContractError('closed frozen game policy registry required')
+        if any(type(value) is not RuntimePolicyBinding for value in frozenbindings.values()):
+            raise ContractError('closed frozen runtime policy bindings required')
+        neural = [value for value in frozenbindings.values() if value.policy_options is not None]
+        if not 1 <= len(neural) <= 6 or len(frozenbindings) > len(neural) + 2:
+            raise ContractError('registry requires one to six exact neural identities and canonical baselines')
+        models = []
+        expected: dict[str, tuple[str, Json]] = {}
+        layout = layout_for_contract(actions.action_contract)
+        for label, value in frozenbindings.items():
+            if value.policy_options is None:
+                if value.model_id not in ('random', 'heuristic') or label != value.model_id + '-card-instance-v2':
+                    raise ContractError('noncanonical registry baseline binding')
+                continue
+            safe = safe_options_game_v3(value.policy_options, actions=actions, rules=rules)
+            configured = configured_model_v3({**safe['model'], 'checkpoint': safe['checkpoint'],
+                'inference': safe['inference'], 'cuda_visible_devices': safe['cuda_visible_devices']}, layout=layout)
+            model = configured.architecture(layout=layout)
+            actual_label = policy_label_game_v3(model, configured.inference, safe['expected_manifest_digest'],
+                action_contract=actions.action_contract, rules=rules, action_config_hash=digest(asdict(actions)),
+                cuda_visible_devices=safe['cuda_visible_devices'])
+            if label != actual_label or value.model_id != model.model_id:
+                raise ContractError('frozen registry label/model differs from exact game options')
+            key = digest(asdict(configured))
+            if key in expected:
+                raise ContractError('duplicate frozen registry neural identity')
+            expected[key] = (label, safe)
+            models.append(configured)
+        owner = cls.__new__(cls)
+        try:
+            owner._initialize(tuple(models), actions, rules=rules, max_owned_bytes=max_owned_bytes,
+                preflight_deadline=preflight_deadline, finalization_deadline=finalization_deadline,
+                expected=expected)
+            return owner
+        except BaseException:
+            if hasattr(owner, '_scan'):
+                owner.release()  # In-memory retirement only; preserve the initiating failure.
+            raise
+
+    def _initialize(self, models: tuple[ConfiguredNeuralModelV3, ...], actions: ActionConfigV3, *,
+                    rules: CardInstanceRules, max_owned_bytes: int, preflight_deadline: float,
+                    finalization_deadline: float, expected: dict[str, tuple[str, Json]] | None = None) -> None:
         for deadline in (preflight_deadline, finalization_deadline):
             if type(deadline) not in (int, float) or not math.isfinite(deadline) or deadline <= 0:
                 raise ContractError("original finite artifact deadlines required")
@@ -101,13 +154,15 @@ class RetainedGameArtifacts:
             model = configured.architecture(layout=layout)
             # The expected digest is taken from the original manifest read and
             # retained under the same scan; children receive that exact digest.
-            manifest = self._scan.object(directory / "inference.json")
-            expected = self._scan.files[directory / "inference.json"][1]
-            artifact = inspect_retained_game_inference_v3(directory, expected_inference_digest=expected,
+            frozen = None if expected is None else expected[digest(asdict(configured))]
+            manifest = self._scan.object(directory / "inference.json",
+                None if frozen is None else frozen[1]['expected_manifest_digest'])
+            manifest_digest = self._scan.files[directory / "inference.json"][1]
+            artifact = inspect_retained_game_inference_v3(directory, expected_inference_digest=manifest_digest,
                 actions=actions, rules=rules, scan=self._scan)
             if canonical(manifest["model"]) != canonical(asdict(model)):
                 raise ContractError("external artifact differs from configured Model3")
-            options = {"version": "3", "checkpoint": str(directory), "expected_manifest_digest": expected,
+            options = {"version": "3", "checkpoint": str(directory), "expected_manifest_digest": manifest_digest,
                 "model": asdict(model), "inference": asdict(configured.inference),
                 "cuda_visible_devices": child_cuda_visibility(configured.inference.device, configured.cuda_visible_devices),
                 **input_binding_game_v3(actions.action_contract, rules), "action_config_hash": digest(asdict(actions))}
@@ -116,6 +171,8 @@ class RetainedGameArtifacts:
                     {"path": name, "sha256": checksum, "identity": list(self._scan.files[directory / name][0])}
                     for name, checksum in sorted(artifact.files.items())]}
             _, label = validate_neural_metadata(entry, actions=actions, rules=rules)
+            if frozen is not None and (label != frozen[0] or canonical(options) != canonical(frozen[1])):
+                raise ContractError('retained artifact differs from exact frozen registry label/options/digest')
             self._scan.charge(32 * len(canonical(entry).encode()) + 65536)
             if label in self._entries and canonical(self._entries[label]) != canonical(entry):
                 raise ContractError("one policy label cannot name distinct external originals")
