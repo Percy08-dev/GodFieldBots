@@ -95,6 +95,9 @@ class StructuredParticipantWorker(ParticipantWorker):
                 error._structured_startup_owner = self  # type: ignore[attr-defined]
             raise
 
+    def _read_reply(self, source: Any) -> Json:
+        return read_frame(source)
+
     async def _roundtrip(self, payload: Json) -> Json:
         if self.closed:
             raise RuntimeError("structured worker closed")
@@ -105,7 +108,7 @@ class StructuredParticipantWorker(ParticipantWorker):
             def exchange() -> None:
                 try:
                     write_frame(destination, payload)
-                    messages.put(read_frame(source))
+                    messages.put(self._read_reply(source))
                 except BaseException as exc:  # noqa: BLE001 - owned thread reports exact failure to parent
                     messages.put(exc)
             self.io_thread = threading.Thread(target=exchange, daemon=True)

@@ -142,7 +142,79 @@ nine-cohort pipeline and capability publication remain pending. Forced Python
 allocator-failure injection is NOT RUN. This grants no Source or fitting
 permission; no game/GPU/timing or formal experiment runs.
 
-## Performance population fixed; measurement pending
+## Scores-only component/actual-input worker — accepted
+
+ADR0024§18.5's eight staged files are applied to main only after exact baseline/
+staged hash checks. The public facade composes the existing private exchange/
+reap owner, exposing scores and full generated tables without Selection/Action
+or a game-factory route. Controller retains the actual fixture pair; the clean
+CPU child receives only bounded own-model metadata/text. The separate artifact64
+and actual-input32768action hashes are checked independently without purpose
+rewriting. Full binding/request/prefix/table/order/RNG/cost/bounds checks precede
+parent state advancement. One in-flight operation, sticky failure, cancellation,
+retirement and explicit original session/per-operation deadlines are enforced.
+Encoded initialization and header-announced decoded/copy ownership are admitted
+before spawn/body allocation under unchanged64MiB framing.
+
+Implementer main integration98PASS/30old artifacts/1old framing, Ruff8/mypy7/diff
+PASS. Independent correctness31new+37old+1framing=69PASS; conformance31new+
+30old=61PASS, eight hashes exact, old numeric-cost outputs exact across12variants.
+Both reviews are SCOPED READY; Root accepts§18.5. This grants no Source or
+qualified-game policy permission. Frozen manifest is
+`/tmp/gfb-card-instance-tree-scoring-work-20261104-v1/owned-changes-sha256.json`.
+
+The isolated§18.6 adapter now reports genuine durable all288/nine-cohort raw,
+bundle reload, selected/full2810-feature and native/facade score parity. All nine
+zero-endpoint episodes remain accounted without fake frames/workers;279component
+workers initialize, score, close and reap, with empty final ledger. Original
+Tree pair hashes stay exact. Normal Source worklist verification remains
+separately required and passes afterward. Its earlier redundant-guard attempt
+was interrupted with exit130 and is preserved. These are implementer results;
+owned-only main apply and both independent adapter reviews remain pending.
+Native fixture capability publication remains closed.
+
+The five owned adapter paths are now applied to main after exact baseline/hash
+checks. Main bounded198PASS/2genuine tests deselected and static checks pass.
+Independent review first finds omitted diagnostic caller ownership before JSON/
+envelope decoding. The diagnostic-only correction also retains immutable
+envelope bytes before column decoding; ordinary streaming stays exact. Exact
+logical-boundary reproduction now rejects before the decoder (8independent
+targeted PASS). A second review finds crossed healthy pairs with identical model
+bytes but different request/provenance. Exact actual-Booster/origin/provenance/
+architecture/feature checks now reject those crosses before Source/output while
+preserving execution overrides. Readonly actual return codes and strict close
+health checks reject abnormal/unknown service evidence before counting success.
+Independent correctness26targeted PASS and conformance28targeted PASS; both
+reviews are READY. Root accepts the scoped§18.6 implementation. Durable outer
+reporting still needs fixed Source-proof/pair identity, pre-open external memory
+reservation and owned-inode publication; its first script's three review failures
+are preserved. No final full-pipeline receipt or capability publication is claimed.
+
+## Durable native/worker acceptance — accepted component scope
+
+The first outer execution fails before scorer startup because the adapter
+incorrectly collapses Source and model allowance into the smaller2GiB model
+allowance. Its partial output and failure receipt e60ad607…849e remain preserved.
+The reviewed correction retains the original8GiB joint Source/caller allowance
+and each original2GiB predictor/controller/child allowance. Full4GiB facade
+ownership is added to the Source-lifetime reservation before allocation; it is
+not released on an uncertain borrow or reap. No limits, populations, weights or
+rules change. Both independent budget rechecks are READY.
+
+The second durable execution passes all288episodes/nine cohorts, including all
+nine zero-endpoint episodes without fake frames or workers. All576full feature/
+native CPU/persisted/facade score rows agree. All279workers close and reap
+normally; Source selected-input closure independently confirms96train and
+192validation episodes/288selected rows. Publication follows all reportable
+cleanup, final original guards and Source closure. Receipt
+`runs/card-instance-v2-91d5926/tree-component-acceptance/fixture-default-1/native-acceptance-3/acceptance.json`,
+SHA c88760c19077723d221e5151759e84a40d74d9526073a31391298576dd639c29,
+binds the frozen default pair and Source-set0ac2ee5a…fffe. Elapsed268.212seconds.
+Root accepts this component pipeline. Qualified=false, declared fixture outcome
+origin and parent qualification not performed remain exact; capability
+publication and qualified-game interfaces are separate work.
+
+## Performance population fixed; measurements in progress
 
 Six accepted Python reference parents supply all2514 learner endpoints from12
 complete train cohorts. PCG64seed17 selects512without replacement, sorted by
@@ -157,9 +229,52 @@ frozen141module reader without Torch. Root separately recomputes selection.
 The first healthy default Tree pair and three NN G2 artifacts are frozen before
 any measurement: `frozen-artifacts-1.json` SHA
 2ea047f36daa250e44d6053837e1430e198bec7544a6c673849c3031fbc24cf1.
-No timing has happened; no performance pass is claimed.
+The ordinary v2 harness
+passes independent19inert probes after barriers, frozen training binding,
+all512cancellation evidence and healthy-retirement corrections. Required internal
+facade artifact guards remain inside latency; only outer Source/storage/startup
+work is excluded. An additive returncode-health compatibility check preserves
+normal0/-SIGTERM and rejects mismatches. Root's all-input read-only admission
+preflight passes332model/lane pairs over all12cohorts and four models, with no
+workers/scoring/timing. Receipt `admission-preflight-1.json` SHA
+e280aef7ad8a32e297ded4110fd00b2b9cd121da0b5c5c1adf64bf0fa776c6ea.
+The fixed8GiB joint Source/controller slices fit; maximum original retained
+Source charge is2,583,569,236bytes within2560MiB. Child limits remain separate
+and unchanged; declared envelopes are not measured RSS or a global CPU cap.
 
-Component worker/RAW/FixtureSource-native adapter,512actual-input timing,
+The first ordinary condition, MLP, passes all512fixed endpoint samples with
+zero failures, two peak workers and confirmed cleanup. CPU p95=64.798ms,
+p99=266.514ms and maximum343.630ms, under the unchanged3second p95 goal.
+Result `runs/assessments/card-instance-v2-latency-20261104/ordinary-mlp-1/result.json`,
+SHA f3fd4aadf3474dbe940ad826c5278216eb57aa2ba8124c278d2ba145a1c9a9c5.
+The frozen149module/one asset runtime prevents later interface work from changing
+coordinator or child imports. GRU also passes all512samples, zero failures, two
+workers and confirmed cleanup: p95=64.827ms, p99=302.278ms and maximum381.698ms.
+Transformer also passes all512samples with zero failures, two workers and
+confirmed cleanup: p95=64.545ms, p99=272.461ms and maximum382.995ms.
+Tree also passes all512samples with zero failures, two workers and confirmed
+cleanup: p95=76.756ms, p99=252.662ms and maximum298.147ms. Its exact frozen
+component pair remains unqualified. Tree result SHA
+e1601a70a7752c677452fb40431dfbcb3b94b82bda1b707743bca9024d7b07ad;
+GRU result SHA72aa3708…0d561, Transformer SHA37ccbdd5…e627f.
+
+Root's separate read-only auditor recomputes PCG64selection and all512quantiles,
+checks every saved full generated table/typed bounds/frame/input identity and
+exact complete own-prefix coverage. Each condition covers161original streams,
+1321excluded warmup decisions and161healthy reaped workers. Every generated
+table happens to equal its original table; equality is observed, never forced
+or used to replace a failing endpoint. Actual full table sizes range1–2809;
+the unchanged32768candidate limit remains available. These normal-input timings
+do not establish worst-case saturated/stress latency. All150frozen runtime files, current
+parent/cohort manifests and frozen artifact/pair manifests remain exact.
+Receipt `runs/assessments/card-instance-v2-latency-20261104/ordinary-audit-root-1.json`
+SHA7b677468df0430f5d8e02d5bc3c2b85c7d1ce5b8fc63d24047ebaf6254857bea
+PASSes for all four conditions. This is a Root audit, not an additional
+independent code review, original Source re-decoding or inference replay.
+Root accepts the scoped ordinary CPU goal for all four models. The separate
+original-table/cache/cold-prefix diagnostic remains pending.
+
+Remaining512actual-input timing,
 reachable formal-parent/64final-validation/qualified Dataset3/GameTree3
 interfaces, whole-project/package/old-data checks and final installation/commits
 remain required. Actual formal three-parent generation/fitting, comparisons,

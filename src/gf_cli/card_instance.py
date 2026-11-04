@@ -3,12 +3,13 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import math
 import stat
 import time
 import uuid
 from dataclasses import asdict
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
 
 from gf_cli.config import LoadedConfig, RunConfigV2
 from gf_common.card_instance import ActionConfigV3, corrected_card_instance_contract
@@ -33,10 +34,14 @@ from gf_simulator_client.structured_resources import ReservationLedger
 from gf_training.card_instance_collection import (
     CollectionPublication,
     collection_metadata,
+    final_validation_collection_metadata,
     ppo_collection_metadata,
 )
 from gf_training.card_instance_journal import CardInstanceJournal, read_card_instance_journal
 from gf_training.collection import CollectionPlan, FinalizedCollection
+
+if TYPE_CHECKING:
+    from gf_training.card_instance_final_validation import GameFinalValidationPlan
 
 
 def _check(deadline: float) -> None:
@@ -184,8 +189,9 @@ async def _run_corrected(loaded: LoadedConfig, command: str,
                          started: float | None = None, artifact_inputs: Any = None,
                          runtime_evidence: CardInstanceRuntimeEvidence | None = None,
                          resource_admission: Json | None = None,
-                         collection: CollectionPlan | None = None,
-                         owned_ledger: ReservationLedger | None = None) -> tuple[Path, Json]:
+                         collection: CollectionPlan | GameFinalValidationPlan | None = None,
+                         owned_ledger: ReservationLedger | None = None,
+                         _final_validation_context: Any = None) -> tuple[Path, Any]:
     config = loaded.config
     assert isinstance(config.actions, ActionConfigV3)
     if config.server.external_url is not None or config.server.source_dir is None:
@@ -203,7 +209,10 @@ async def _run_corrected(loaded: LoadedConfig, command: str,
                if collection is None else collection.groups)
     if collection is not None:
         assert owned_ledger is not None
-        _validate_online_collection(loaded, collection, owned_ledger, preflight_deadline)
+        if _final_validation_context is None:
+            _validate_online_collection(loaded, cast(CollectionPlan, collection), owned_ledger, preflight_deadline)
+        else:
+            _validate_final_collection(loaded, collection, owned_ledger, _final_validation_context, preflight_deadline)
     run_id = str(uuid.uuid4())
     directory = (Path(config.run.output_dir) / (config.run.name + "-" + run_id)
                  if collection is None else collection.output)
@@ -214,7 +223,8 @@ async def _run_corrected(loaded: LoadedConfig, command: str,
         startup_seconds=config.server.startup_seconds, request_seconds=config.server.request_seconds,
         worker_seconds=config.server.worker_seconds, shutdown_seconds=config.server.shutdown_seconds,
         transport_retries=config.server.transport_retries, max_decisions=config.run.max_decisions,
-        admission_deadline=started + config.run.admission_seconds if collection is None else execution_deadline,
+        admission_deadline=(cast("GameFinalValidationPlan", collection).admission_deadline if _final_validation_context is not None
+                            else started + config.run.admission_seconds if collection is None else execution_deadline),
         execution_deadline=execution_deadline,
         wall_deadline=wall_deadline, work_deadline=work_deadline, replay_deadline=replay_deadline,
         policy_bindings=bindings)
@@ -258,7 +268,10 @@ async def _run_corrected(loaded: LoadedConfig, command: str,
             if ledger.workers or ledger.learner is not None or ledger.updating or ledger.cuda_bytes:
                 raise ContractError("corrected collection has unreaped resource ownership before publication")
         else:
-            _validate_online_collection(loaded, collection, ledger, work_deadline)
+            if _final_validation_context is None:
+                _validate_online_collection(loaded, cast(CollectionPlan, collection), ledger, work_deadline)
+            else:
+                _validate_final_collection(loaded, collection, ledger, _final_validation_context, work_deadline)
             if ledger.workers or ledger.updating:
                 raise ContractError("PPO collection has unreaped participant/update ownership")
         expected = {spec.episode_id: (spec, group.health["runtime_evidence"])
@@ -275,7 +288,13 @@ async def _run_corrected(loaded: LoadedConfig, command: str,
         receipts = [group.health["runtime_evidence"] for group in groups]
         metadata_options: dict[str, Any] = ({} if neural_inputs is None else
             {"policy_bindings": bindings, "neural_inputs": neural_inputs})
-        metadata_producer = collection_metadata if collection is None else ppo_collection_metadata
+        metadata_producer: Any = collection_metadata if collection is None else ppo_collection_metadata
+        if _final_validation_context is not None:
+            summary.update(healthy=summary["comparison_valid"], artifact_bytes=sum(row["bytes"] for row in inventory))
+            summary["wall_seconds"] = time.monotonic() - started
+            metadata_producer = final_validation_collection_metadata
+            metadata_options.update(config_projection=cast("GameFinalValidationPlan", collection).config_projection,
+                validation_invocation=cast("GameFinalValidationPlan", collection).validation_invocation, elapsed_seconds=time.monotonic() - started)
         if collection is not None:
             metadata_options["linkage"] = collection.linkage
         manifest = metadata_producer(actions=config.actions, config=loaded.effective,
@@ -287,16 +306,23 @@ async def _run_corrected(loaded: LoadedConfig, command: str,
             status="complete" if summary["comparison_valid"] else "incomplete", schedule_schema_version=4,
             code=producer, inputs=loaded.inputs, groups=[group.health for group in groups],
             episodes=[asdict(episode) for episode in episodes])
-        summary.update(healthy=summary["comparison_valid"], artifact_bytes=sum(row["bytes"] for row in inventory))
-        summary["wall_seconds"] = time.monotonic() - started
+        if _final_validation_context is None:
+            summary.update(healthy=summary["comparison_valid"], artifact_bytes=sum(row["bytes"] for row in inventory))
+            summary["wall_seconds"] = time.monotonic() - started
         if not summary["healthy"]:
             # Diagnostic outputs have no healthy manifest/report completion names.
             _write_diagnostic(directory, "incomplete.json", {"manifest": manifest, "report": summary})
             return directory, summary
         manifest["report_sha256"] = hashlib.sha256((canonical(summary) + "\n").encode()).hexdigest()
-        CollectionPublication(directory, work_deadline=work_deadline, cleanup_deadline=wall_deadline).commit(summary, manifest)
+        publication = CollectionPublication(directory, work_deadline=work_deadline, cleanup_deadline=wall_deadline)
+        if _final_validation_context is not None:
+            issued = _final_validation_context.begin_collection(publication, summary, manifest)
+            return directory, issued  # Actual pending owner; canonical manifest remains absent.
+        publication.commit(summary, manifest)
         return directory, summary  # no reportable checks after publication owner releases.
     except BaseException as error:
+        if _final_validation_context is not None:
+            _final_validation_context._record_failure(error)  # Invalidate FIRST, before reap/diagnostics.
         from gf_cli import _join_owned_groups
         await _join_owned_groups(tasks, wall_deadline, diagnostics)
         try:
@@ -377,3 +403,130 @@ async def collect_ppo(loaded: LoadedConfig, plan: CollectionPlan,
         return FinalizedCollection(directory, summary)
     finally:
         owner.release()
+
+
+
+def _validate_final_collection(loaded: LoadedConfig, plan: Any, ledger: ReservationLedger,
+                               context: Any, deadline: float) -> None:
+    from gf_training.card_instance_final_validation import (
+        GameFinalValidationContext,
+        GameFinalValidationPlan,
+    )
+    if type(context) is not GameFinalValidationContext or type(plan) is not GameFinalValidationPlan:
+        raise ContractError('concrete actor-only final validation context/plan required')
+    context.validate_collection(plan, ledger, loaded, deadline=deadline)
+
+
+async def collect_owned_final_validation(context: Any) -> Any:
+    """Normal corrected Environment under the SAME final-only actor context."""
+    from gf_training.card_instance_final_validation import (
+        GameFinalValidationContext,
+        require_actor_backend,
+    )
+    if type(context) is not GameFinalValidationContext:
+        raise ContractError('concrete actor-only final validation context required')
+    loaded, plan, ledger = context.projected, context.plan, context.ledger
+    _validate_final_collection(loaded, plan, ledger, context, plan.execution_deadline)
+    require_actor_backend(loaded)
+    config = loaded.config
+    work_deadline = plan.wall_deadline - config.run.report_reserve_seconds
+    preflight_deadline = min(plan.execution_deadline, work_deadline - config.server.cleanup_reserve_seconds)
+    evidence = CardInstanceRuntimeEvidence(Path(config.server.binary), Path(config.server.source_dir), deadline=preflight_deadline)
+    evidence.preflight()
+    from gf_common.card_instance_rules import card_instance_rules
+    from gf_models.card_instance_artifacts import RetainedGameArtifacts
+    from gf_models.structured_runtime import admit_game_workers_v3
+    rules = card_instance_rules()
+    owner = RetainedGameArtifacts.for_registry(plan.bindings, config.actions, rules=rules,
+        max_owned_bytes=context.artifact_budget, preflight_deadline=preflight_deadline,
+        finalization_deadline=work_deadline)
+    try:
+        admissions = [admit_game_workers_v3(config.actions,
+            (plan.bindings[spec.policies[0]], plan.bindings[spec.policies[1]]), rules=rules,
+            game_concurrency=config.run.concurrency, global_cuda_bytes=config.run.global_cuda_budget_bytes,
+            max_workers=config.run.max_participant_workers, learner_cuda_bytes=0)
+            for group in plan.groups for spec in group.episodes]
+        directory, issued = await _run_corrected(loaded, 'collect', plan.bindings, tuple(plan.bindings),
+            started=plan.started_monotonic, artifact_inputs=owner, runtime_evidence=evidence,
+            resource_admission=max(admissions, key=lambda value: value['peak_cuda_bytes']), collection=plan,
+            owned_ledger=ledger, _final_validation_context=context)
+        from gf_training.card_instance_final_validation import _IssuedFinalValidationCollection
+        if type(issued) is not _IssuedFinalValidationCollection or issued.directory != directory:
+            raise ContractError('collector did not retain the actual pending publication')
+        return issued
+    finally:
+        owner.release()  # In-memory only; parent retains final artifact originals.
+
+
+async def collect_formal_final_validation(loaded: LoadedConfig, parent: Path, output: Path,
+                                          *, deadline: float | None = None) -> Json:
+    """Explicit formal-only CLI/library composition; no legacy validation route."""
+    from gf_training.card_instance_final_validation import GameFinalValidationContext, _loaded
+    from gf_training.card_instance_formal import FormalGameParent
+    _loaded(loaded)  # Includes early Rust64 refusal, before ownership/runtime/output/model.
+    deadline = time.monotonic() + loaded.config.run.wall_seconds if deadline is None else deadline
+    if (type(deadline) not in (float, int) or not math.isfinite(deadline)
+            or deadline <= time.monotonic() + loaded.config.run.finalization_seconds):
+        raise ContractError('caller final validation duration cannot preserve finalization reserve')
+    config = loaded.config
+    assert isinstance(config.training, PPOTrainingConfig) and type(config.model) is ConfiguredNeuralModelV3
+    assert isinstance(config.run, RunConfigV2)
+    limit = min(config.training.max_owned_bytes, config.model.resources.max_owned_bytes,
+        config.preprocessing.memory_budget_mib * 1024**2)
+    original = FormalGameParent(parent, max_owned_bytes=limit, deadline=deadline)
+    original.__enter__()
+    context = None
+    try:
+        ledger = ReservationLedger(config.run.global_cuda_budget_bytes, config.run.max_participant_workers)
+        context = GameFinalValidationContext(loaded, original, output, ledger, deadline=deadline)
+        await context.__aenter__()
+        result = await collect_owned_final_validation(context)
+        source = context.accept_collection(result)
+        facts = source.facts
+        await context._retire_for_owned_parent(original)
+    except BaseException as error:
+        if context is not None:
+            context._record_failure(error)  # Revoke pending/complete manifest FIRST.
+            try:
+                await context._retire_for_owned_parent(original)
+            except BaseException as cleanup:  # noqa: BLE001 - actual Source/actor owners stay reachable
+                context._record_failure(cleanup)
+            if not context.loan_cleanup_complete:
+                vars(error)['_game_final_validation_cleanup_owner'] = context
+                vars(error)['_game_final_validation_parent_owner'] = original
+                raise
+        elif getattr(error, '_game_final_validation_cleanup_parent', None) is original:
+            vars(error)['_game_final_validation_parent_owner'] = original
+            raise
+        try:
+            original.__exit__(type(error), error, error.__traceback__)
+        except BaseException as cleanup:  # noqa: BLE001 - parent owns native/lock retry, preserve original
+            vars(error)['_game_final_validation_parent_owner'] = original
+            if context is not None:
+                context._record_failure(cleanup)
+        if context is not None:
+            if original.cleanup_complete:
+                try:
+                    context._finish_after_owned_parent(original)
+                except BaseException as cleanup:  # noqa: BLE001 - initiating error remains primary
+                    context._record_failure(cleanup)
+            else:
+                vars(error)['_game_final_validation_cleanup_owner'] = context
+                vars(error)['_game_final_validation_parent_owner'] = original
+        raise
+    else:
+        try:
+            original.__exit__(None, None, None)  # OWNED parent release precedes canonical exposure.
+        except BaseException as error:
+            context._record_failure(error)
+            if original.cleanup_complete:
+                try:
+                    context._finish_after_owned_parent(original)
+                except BaseException as cleanup:  # noqa: BLE001 - keep original release failure
+                    context._record_failure(cleanup)
+            else:
+                vars(error)['_game_final_validation_cleanup_owner'] = context
+                vars(error)['_game_final_validation_parent_owner'] = original
+            raise
+        context._finish_after_owned_parent(original)
+    return facts

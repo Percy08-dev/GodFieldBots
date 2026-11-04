@@ -315,6 +315,9 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
             ops._implementation = 'native-structured-v2'
         else:
             ops = _structured_ops if _structured_ops is not None else structured_ppo
+    formal = ops.formal if game else None
+    if formal is not None:
+        formal.preflight(loaded)
     model, training = ops.validate_config(config) if ops else config.model, config.training
     if not ops and (not isinstance(model, (MLPModelConfig, GRUModelConfig, TransformerModelConfig)) or not isinstance(training, PPOTrainingConfig) or model.checkpoint is not None or config.run.split != 'train'):
         raise ContractError('PPO requires fresh supported model recipe and train split')
@@ -351,6 +354,8 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
         identity["preprocessing"] = preprocessing
         if ops:
             ops.decorate_identity(identity)
+        if formal is not None:
+            formal.attach_identity(directory, identity, ops.execution(config), mode=mode, deadline=identity_deadline, ownership=ownership)
         invocation_started = operation_started
         now = operation_unix
         if mode == 'fresh':
@@ -397,7 +402,7 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
         if pause_after_update is not None and (type(pause_after_update) is not int or pause_after_update <= state['updates'] or pause_after_update > training.max_updates):
             raise ContractError('pause target must exceed current absolute committed-update count')
         remaining = state['wall_deadline_unix'] - now
-        wall = invocation_started + remaining
+        wall = ((invocation_started + state['wall_deadline_unix']) - now) if formal is not None else invocation_started + remaining
         execution = invocation_started + state['execution_deadline_unix'] - now
         admission = invocation_started + state['admission_deadline_unix'] - now
         # Even initialization and source-identity work consume the original clock.
@@ -441,12 +446,17 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
             while True:
                 check_clock()
                 usage = owned_bytes(directory, execution)
-                if usage > training.max_owned_bytes or time.monotonic() >= execution:
-                    raise RuntimeError('PPO actual execution/storage limit exceeded')
-                if state['updates'] >= training.max_updates or time.monotonic() >= admission or usage + training.admission_reservation_bytes > training.max_owned_bytes:
-                    if not state['updates']:
-                        raise ContractError('zero-update PPO run ineligible')
-                    break
+                if formal is not None:
+                    observed = time.monotonic()
+                    if formal.observe_stop(state, operation_unix, invocation_started, observed, usage):
+                        break
+                else:
+                    if usage > training.max_owned_bytes or time.monotonic() >= execution:
+                        raise RuntimeError('PPO actual execution/storage limit exceeded')
+                    if state['updates'] >= training.max_updates or time.monotonic() >= admission or usage + training.admission_reservation_bytes > training.max_owned_bytes:
+                        if not state['updates']:
+                            raise ContractError('zero-update PPO run ineligible')
+                        break
                 with ExitStack() as generation_scope:
                     generation = state['updates']
                     registry = ({'random-card-instance-v2': RuntimePolicyBinding('random'), 'heuristic-card-instance-v2': RuntimePolicyBinding('heuristic')} if game else
@@ -621,6 +631,8 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
             else:
                 atomic_json(directory / 'run.json', state)
             if time.monotonic() >= wall or owned_bytes(directory, wall) > training.max_owned_bytes:
+                if formal is not None:
+                    raise RuntimeError('formal post-persistence wall/storage overrun')
                 state.update(status='failed', failure='FinalPersistenceOverrun', quarantine=True)
                 if ops:
                     ops.persist_control(directory / 'run.json', state, config, deadline=wall)

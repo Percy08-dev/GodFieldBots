@@ -509,14 +509,14 @@ def main(argv: list[str] | None = None) -> int:
     command_started = time.monotonic()
     parser = argparse.ArgumentParser(prog="gf-bots", description="Public-information GodField baselines")
     subcommands = parser.add_subparsers(dest="command", required=True)
-    for command in ("smoke", "collect", "evaluate", "benchmark", "validate", "train", "validate-policy"):
+    for command in ("smoke", "collect", "evaluate", "benchmark", "validate", "train", "train-formal", "validate-policy", "validate-formal-policy"):
         child = subcommands.add_parser(command)
         child.add_argument("--config", required=True, type=Path)
-        if command == "train":
+        if command in ("train", "train-formal"):
             child.add_argument("--mode", choices=("fresh", "resume"), default="fresh")
             child.add_argument("--run-dir", type=Path)
             child.add_argument("--pause-after-update", type=int)
-        if command == "validate-policy":
+        if command in ("validate-policy", "validate-formal-policy"):
             child.add_argument("--parent-run", required=True, type=Path)
             child.add_argument("--output", required=True, type=Path)
         child.add_argument("--set", action="append", default=[], metavar="TABLE.FIELD=TOML_VALUE")
@@ -578,7 +578,7 @@ def main(argv: list[str] | None = None) -> int:
             for part in parts[:-1]:
                 current = current.setdefault(part, {})
             current[parts[-1]] = tomllib.loads("value=" + raw_value)["value"]
-        if args.command == "train" and args.mode != "fresh" and args.run_dir is None:
+        if args.command in ("train", "train-formal") and args.mode != "fresh" and args.run_dir is None:
             raise ValueError("resume is unsupported without --run-dir; no work performed")
         loaded = load_config(args.config, overrides)
         if args.command == "validate":
@@ -589,11 +589,15 @@ def main(argv: list[str] | None = None) -> int:
         from gf_models.structured_binding import ConfiguredNeuralModelV3
         if not (isinstance(loaded.config.actions, ActionConfigV3)
                 and loaded.config.actions.action_contract == corrected_card_instance_contract()
-                and (args.command in ("smoke", "collect", "evaluate")
-                     or args.command == "train" and type(loaded.config.model) is ConfiguredNeuralModelV3)):
+                and (args.command in ("smoke", "collect", "evaluate", "validate-formal-policy")
+                     or args.command in ("train", "train-formal") and type(loaded.config.model) is ConfiguredNeuralModelV3)):
             _require_implemented_pipeline(loaded.config.actions)
         if isinstance(loaded.config.actions, ActionConfigV2):
             require_qualified_contract(loaded.config.actions.action_contract)
+        if args.command == "validate-formal-policy":
+            from gf_cli.card_instance import collect_formal_final_validation
+            print(canonical(asyncio.run(collect_formal_final_validation(loaded, args.parent_run, args.output))))
+            return 0
         if args.command == "validate-policy":
             from gf_training.fixed_data import validate_policy
             config = replace(loaded.config, run=replace(loaded.config.run, split="validation"))
@@ -606,18 +610,24 @@ def main(argv: list[str] | None = None) -> int:
                 return await collect_ppo(validation_loaded, plan)
             print(canonical(asyncio.run(validate_policy(validation_loaded, args.parent_run, args.output, collect_validation))))
             return 0
-        if args.command == "train":
+        if args.command in ("train", "train-formal"):
             from gf_models.structured_tree_config import ConfiguredTreeModelV2
+            if args.command == "train-formal" and (type(loaded.config.actions) is not ActionConfigV3 or type(loaded.config.model) is not ConfiguredNeuralModelV3):
+                raise ContractError("formal training requires corrected NN3 only")
             if isinstance(loaded.config.actions, ActionConfigV3):
                 if args.run_dir is None:
                     raise ValueError("card-instance PPO train requires --run-dir")
                 from gf_cli.card_instance import collect_ppo as collect_card_instance_ppo
-                from gf_training.card_instance_ppo import train_card_instance_ppo
+                from gf_training.card_instance_ppo import (
+                    train_card_instance_ppo,
+                    train_formal_card_instance_ppo,
+                )
 
                 async def collect_game_batch(plan: CollectionPlan, ledger: Any) -> FinalizedCollection:
                     return await collect_card_instance_ppo(loaded, plan, ledger)
 
-                result = asyncio.run(train_card_instance_ppo(loaded, collect_game_batch, args.run_dir,
+                train = train_formal_card_instance_ppo if args.command == "train-formal" else train_card_instance_ppo
+                result = asyncio.run(train(loaded, collect_game_batch, args.run_dir,
                     mode=args.mode, pause_after_update=args.pause_after_update))
                 print(canonical(result))
                 return 0

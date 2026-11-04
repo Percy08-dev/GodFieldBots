@@ -319,6 +319,16 @@ def policy_label(model: ConfiguredTreeModelV2, descriptor: TreeDescriptor, manif
 def numeric_costs(model: ConfiguredTreeModelV2, descriptor: TreeDescriptor) -> Any:
     if type(model) is not ConfiguredTreeModelV2:
         raise ContractError('closed configured Tree2 model required')
+    return _numeric_costs(model, descriptor)
+
+
+def numeric_costs_v3(model: ConfiguredTreeModelV3, descriptor: TreeDescriptor) -> Any:
+    if type(model) is not ConfiguredTreeModelV3:
+        raise ContractError('closed configured Tree3 model required')
+    return _numeric_costs(model, descriptor)
+
+
+def _numeric_costs(model: ConfiguredTreeModelV2 | ConfiguredTreeModelV3, descriptor: TreeDescriptor) -> Any:
     from gf_common.diverse_actions import NumericCosts
     estimate = resource_estimate(model, model_bytes=descriptor.model_bytes)
     width = estimate['feature_width']

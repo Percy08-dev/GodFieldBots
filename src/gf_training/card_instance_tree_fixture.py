@@ -1,17 +1,19 @@
 """Snapshot-owned declared Tree fixtures, distinct from executed learning Sources."""
 from __future__ import annotations
 
+import hashlib
 import math
 import stat
 import time
 from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any, Self
 
 from gf_common import card_instance_fixture as fixture
 from gf_common.candidate_columns import decode_candidate_columns_v2, validate_descriptor_v2
-from gf_common.card_instance import action_config_v3
+from gf_common.card_instance import ActionConfigV3, action_config_v3
 from gf_common.card_instance_rules import card_instance_rules
 from gf_common.domain import ContractError, Json, canonical, clone, closed, digest, integer
 from gf_common.preprocessing import PreparationConfig, preparation_config
@@ -19,6 +21,7 @@ from gf_common.structured_layout import CORRECTED_CARD_INSTANCE_LAYOUT as LAYOUT
 from gf_common.structured_tokens import (
     CandidateTokens,
     FrameTokens,
+    signature,
     tokenize_frame,
     tokenize_table,
     validate_candidate_tokens,
@@ -122,6 +125,7 @@ class TreeFixtureSource:
         self._active = self._closed = self._released = self._iterating = self._complete = False
         self._failed = False; self._sink = 0; self._current_bytes = 0
         self._counts: Json = {}; self._receipts: list[Json] = []
+        self._diagnostic_borrow: _FixtureEpisodeBorrow | None = None
 
     def _live(self) -> None:
         if not self._active or self._closed or self._released or self._failed:
@@ -267,9 +271,81 @@ class TreeFixtureSource:
         model = ConfiguredTreeModelV3(encoder=self.encoder, resources=TreeResourcesV2(max_owned_bytes=self.limit))
         resource_estimate(model, extra_bytes=self._scan.retained + size)
 
+    def _read_episode(self, cohort: Json, spec: Json, item: Json) -> tuple[Any, Any, Any, Json]:
+        self._live()
+        expected = self._manifest['files'][item['file']]
+        held = self._current_bytes if self._diagnostic_borrow is not None else 0
+        if self._diagnostic_borrow is not None:
+            # SealedScan owns the JSON admission, but cannot see the live
+            # diagnostic caller/borrow reservation. Include both before parse.
+            self._admit(held+32*expected['bytes']+65536)
+        raw = self._object(self.path.parent/item['file'], expected['sha256'], record=True)
+        self._admit(held+64*expected['bytes']+65536)
+        raw, frames, bank = fixture.envelope(raw, frozen=self._frozen,
+            declaration_sha256=self._manifest['declaration']['sha256'], cohort=cohort, spec=spec,
+            policies=self._policies, check=self._scan.check)
+        model = self._frozen['neural_model']
+        if len(frames) > model['temporal']['max_decisions'] or bank.boundary.end > model['event']['max_episode']:
+            raise ContractError('fixture original exceeds declared neural episode capacity')
+        return raw, frames, bank, expected
+
+    def _column(self, frame: Any, row: Json, file: str) -> tuple[Json, int, Json]:
+        if frame.boundary.end-frame.interval_start > self._frozen['neural_model']['event']['max_interval']:
+            raise ContractError('fixture original exceeds declared neural interval capacity')
+        descriptor = row['columns']
+        _, size = validate_descriptor_v2(descriptor, layout=LAYOUT, action_contract=fixture.CONTRACT,
+            purpose='component', synthetic_capacity=False, expected_file=file, expected_frame_hash=frame.frame_hash,
+            max_bytes=min(64, self.settings.max_source_file_mib)*1024**2)
+        declared = self._manifest['files'][file]
+        if descriptor['count'] > min(self._frozen['actions']['max_candidates'], self._frozen['execution']['max_candidates']):
+            raise ContractError('fixture table exceeds declared action/inference candidate capacity')
+        if descriptor['sha256'] != declared['sha256'] or size != declared['bytes']:
+            raise ContractError('fixture numeric inventory/descriptor mismatch')
+        return descriptor, size, declared
+
+    @property
+    def diagnostic_episode_count(self) -> int:
+        self._live()
+        return sum(len(cohort['episodes']) for cohort in self._frozen['cohorts'])
+
+    @contextmanager
+    def borrow_diagnostic_episode(self, ordinal: int, *, extra_owned_bytes: int = 0) -> Iterator[_FixtureEpisodeBorrow]:
+        self._live()
+        integer(ordinal, 0, self.diagnostic_episode_count-1)
+        integer(extra_owned_bytes, 0, self.limit)
+        if self._iterating or self._diagnostic_borrow is not None:
+            raise ContractError('fixture diagnostic borrow cannot overlap another worklist')
+        borrow = _FixtureEpisodeBorrow(self, extra_owned_bytes)
+        self._diagnostic_borrow = borrow
+        try:
+            self.guard()
+            position = 0
+            for cohort, receipt in zip(self._frozen['cohorts'], self._manifest['cohorts'], strict=True):
+                if ordinal < position+len(cohort['episodes']):
+                    index = ordinal-position
+                    borrow._load(cohort, cohort['episodes'][index], receipt['episodes'][index])
+                    break
+                position += len(cohort['episodes'])
+            borrow.guard()
+            yield borrow
+            if borrow._iterating:
+                raise ContractError('diagnostic reference iterator must retire before borrow closes')
+            borrow.guard()
+        except BaseException as error:
+            try:
+                self.guard()
+            except BaseException as cleanup:  # noqa: BLE001 - initiating cancellation/failure survives
+                error.add_note('fixture diagnostic final guard: '+str(cleanup))
+            self._failed = True
+            raise
+        finally:
+            borrow._invalidate()
+            self._diagnostic_borrow = None
+            self._current_bytes = 0
+
     def selected_inputs(self) -> Iterator[FixtureSelectedInput]:
         self._live()
-        if self._iterating or self._complete:
+        if self._iterating or self._complete or self._diagnostic_borrow is not None:
             raise ContractError('one complete fixture original worklist required')
         self._iterating = True
         counts = {split: {'games': 0, 'participants': 0, 'selected_decisions': 0, 'zero_endpoint_games': 0}
@@ -279,29 +355,10 @@ class TreeFixtureSource:
                 current = {'cohort_id': cohort['cohort_id'], 'games': 0, 'selected_decisions': 0, 'zero_endpoint_games': 0}
                 for spec, item in zip(cohort['episodes'], receipt['episodes'], strict=True):
                     self._live()
-                    expected = self._manifest['files'][item['file']]
-                    raw = self._object(self.path.parent/item['file'], expected['sha256'], record=True)
-                    self._admit(64*expected['bytes']+65536)
-                    raw, frames, bank = fixture.envelope(raw, frozen=self._frozen,
-                        declaration_sha256=self._manifest['declaration']['sha256'], cohort=cohort, spec=spec,
-                        policies=self._policies, check=self._scan.check)
-                    model = self._frozen['neural_model']
-                    if (len(frames) > model['temporal']['max_decisions']
-                            or bank.boundary.end > model['event']['max_episode']):
-                        raise ContractError('fixture original exceeds declared neural episode capacity')
+                    raw, frames, bank, expected = self._read_episode(cohort, spec, item)
                     for decision, (row, frame, file) in enumerate(zip(raw['decisions'], frames, item['columns'], strict=True)):
                         self._live()
-                        if frame.boundary.end-frame.interval_start > model['event']['max_interval']:
-                            raise ContractError('fixture original exceeds declared neural interval capacity')
-                        descriptor = row['columns']
-                        _, size = validate_descriptor_v2(descriptor, layout=LAYOUT, action_contract=fixture.CONTRACT,
-                            purpose='component', synthetic_capacity=False, expected_file=file, expected_frame_hash=frame.frame_hash,
-                            max_bytes=min(64, self.settings.max_source_file_mib)*1024**2)
-                        declared = self._manifest['files'][file]
-                        if descriptor['count'] > min(self._frozen['actions']['max_candidates'], self._frozen['execution']['max_candidates']):
-                            raise ContractError('fixture table exceeds declared action/inference candidate capacity')
-                        if descriptor['sha256'] != declared['sha256'] or size != declared['bytes']:
-                            raise ContractError('fixture numeric inventory/descriptor mismatch')
+                        descriptor, size, declared = self._column(frame, row, file)
                         self._admit(128*size + 64*expected['bytes'] + 65536)
                         with self._scan.file(self.path.parent/file, declared['sha256']) as (source, info):
                             if info.st_size != size:
@@ -368,6 +425,8 @@ class TreeFixtureSource:
     def close(self) -> None:
         if self._closed:
             return
+        if self._diagnostic_borrow is not None:
+            raise ContractError('fixture diagnostic borrow must close before Source close')
         # Even failed/partially consumed Sources retain their original final guard.
         self._scan.check()
         for path, identity in self._ancestors.items():
@@ -405,3 +464,209 @@ class TreeFixtureSource:
             vars(failure)['_fixture_cleanup_owner'] = self
         if value is None and failure is not None:
             raise failure
+
+
+class FixtureDiagnosticDecision:
+    """Guarded immutable facts from one Source-owned diagnostic borrow."""
+    __slots__ = ('_borrow', '_facts')
+
+    def __init__(self, borrow: _FixtureEpisodeBorrow, frame: Any, bank_view: Any,
+                 table: Any, sample: FixtureSelectedInput) -> None:
+        self._borrow, self._facts = borrow, (frame, bank_view, table, sample)
+
+    @property
+    def frame(self) -> Any:
+        self._borrow._live(); return self._facts[0]
+
+    @property
+    def bank_view(self) -> Any:
+        self._borrow._live(); return self._facts[1]
+
+    @property
+    def table(self) -> Any:
+        self._borrow._live(); return self._facts[2]
+
+    @property
+    def sample(self) -> FixtureSelectedInput:
+        self._borrow._live(); return self._facts[3]
+
+
+class _FixtureEpisodeBorrow:
+    """Bounded original bytes/reference stream; never completes a Source."""
+    __slots__ = (
+        '_actions',
+        '_active',
+        '_bank',
+        '_columns',
+        '_envelope',
+        '_expected',
+        '_external',
+        '_extra',
+        '_frames',
+        '_iterating',
+        '_raw',
+        '_reference',
+        '_source',
+        '_started',
+    )
+
+    def __init__(self, source: TreeFixtureSource, extra_owned_bytes: int) -> None:
+        self._source, self._extra = source, extra_owned_bytes
+        self._active, self._started, self._iterating = True, False, False
+        self._raw: Json = {}; self._frames: tuple[Any, ...] = (); self._bank: Any = None
+        self._envelope = self._expected = b''
+        self._columns: tuple[bytes, ...] = ()
+        self._actions: ActionConfigV3 | None = None
+        self._external = 0
+        self._reference: Any = None
+
+    def _live(self) -> None:
+        self._source._live()
+        if not self._active or self._source._diagnostic_borrow is not self:
+            raise ContractError('active SAME fixture diagnostic borrow required')
+
+    def _refresh(self) -> None:
+        self._source._current_bytes = self._extra+self._external+_owned((self._raw, self._frames,
+            None if self._bank is None else self._bank.view(), self._envelope, self._columns, self._expected, self._actions, self._reference))
+        self._source._admit(self._source._current_bytes)
+
+    def _admit_temporary(self, size: int) -> None:
+        self._source._admit(self._source._current_bytes+size)
+
+    def _load(self, cohort: Json, spec: Json, item: Json) -> None:
+        self._live()
+        source = self._source
+        self._refresh()
+        raw, frames, bank, expected = source._read_episode(cohort, spec, item)
+        self._raw, self._frames, self._bank = raw, frames, bank
+        self._actions = action_config_v3(source._frozen['actions'])
+        self._refresh()
+        self._admit_temporary(expected['bytes']+65536)
+        with source._scan.file(source.path.parent/item['file'], expected['sha256']) as (stream, info):
+            if info.st_size != expected['bytes']:
+                raise ContractError('fixture original envelope size changed')
+            self._envelope = stream.read(info.st_size+1)
+            if len(self._envelope) != info.st_size:
+                raise ContractError('fixture original envelope length changed')
+        # Immutable original bytes remain owned during every column decode.
+        self._refresh()
+        payloads: list[bytes] = []
+        for row, frame, file in zip(raw['decisions'], frames, item['columns'], strict=True):
+            descriptor, size, declared = source._column(frame, row, file)
+            self._admit_temporary(_owned(payloads)+128*size+65536)
+            with source._scan.file(source.path.parent/file, declared['sha256']) as (stream, info):
+                if info.st_size != size:
+                    raise ContractError('fixture numeric original size changed')
+                payload = stream.read(size+1)
+                table = decode_candidate_columns_v2(payload, descriptor, layout=LAYOUT, action_contract=fixture.CONTRACT,
+                    purpose='component', synthetic_capacity=False, expected_file=file, expected_frame_hash=frame.frame_hash,
+                    max_positions=18)
+                table.validate(frame)
+                integer(row['selected_index'], 0, len(table.kinds)-1)
+            payloads.append(payload)
+            del table
+        self._columns = tuple(payloads)
+        self._refresh()
+        self._admit_temporary(65536+16384*len(frames))
+        metadata = {key: raw[key] for key in ('fixture_id', 'declaration_sha256', 'population_id', 'cohort_id',
+            'episode', 'viewer', 'split', 'generation', 'roles', 'selected_policy_id', 'outcome', 'outcome_origin')}
+        decisions = []
+        for i, (row, frame) in enumerate(zip(raw['decisions'], frames, strict=True)):
+            decisions.append({'decision': i, 'revision': frame.revision, 'interval_start': frame.interval_start,
+                'interval_start_hash': frame.interval_start_hash, 'boundary': asdict(frame.boundary),
+                'frame_hash': frame.frame_hash, 'table_hash': row['columns']['table_hash'],
+                'columns_file': row['columns']['file'], 'columns_sha256': row['columns']['sha256'],
+                'selected_index': row['selected_index']})
+        metadata.update(envelope_sha256=hashlib.sha256(self._envelope).hexdigest(),
+            label_recipe=fixture.LABEL_RECIPE, label=fixture.label(raw['outcome'], raw['viewer']),
+            input_binding=fixture.input_binding(), layout_signature=self._source._frozen['layout_signature'],
+            aggregate_window=source.encoder.aggregate_window,
+            token_signature=signature(source.encoder.aggregate_window, layout=LAYOUT),
+            boundary=asdict(bank.boundary), decisions=decisions)
+        self._expected = canonical(metadata).encode()
+        self._refresh()
+
+    @property
+    def envelope(self) -> bytes:
+        self._live(); return self._envelope
+
+    @property
+    def columns(self) -> tuple[bytes, ...]:
+        self._live(); return self._columns
+
+    @property
+    def actions(self) -> ActionConfigV3:
+        self._live()
+        assert self._actions is not None
+        return self._actions
+
+    @property
+    def expected_metadata(self) -> bytes:
+        self._live(); return self._expected
+
+    @property
+    def retained_bytes(self) -> int:
+        self._live(); return self._source.retained_bytes
+
+    def guard(self) -> None:
+        self._live()
+        try:
+            self._source.guard()
+        except BaseException:
+            self._source._failed = True
+            raise
+
+    def admit_external(self, total_bytes: int) -> None:
+        self._live(); integer(total_bytes, 0, self._source.limit)
+        previous = self._external
+        self._external = total_bytes
+        try:
+            self._refresh()
+        except BaseException:
+            self._external = previous
+            self._source._failed = True
+            raise
+
+    def reference_decisions(self) -> Iterator[FixtureDiagnosticDecision]:
+        self._live()
+        if self._iterating:
+            raise ContractError('diagnostic reference worklists cannot overlap')
+        self._started = self._iterating = True
+        try:
+            for i, (row, frame, payload) in enumerate(zip(self._raw['decisions'], self._frames, self._columns, strict=True)):
+                self.guard()
+                self._admit_temporary(128*len(payload)+65536)
+                table = decode_candidate_columns_v2(payload, row['columns'], layout=LAYOUT,
+                    action_contract=fixture.CONTRACT, purpose='component', synthetic_capacity=False,
+                    expected_file=row['columns']['file'], expected_frame_hash=frame.frame_hash, max_positions=18)
+                table.validate(frame)
+                tokens = tokenize_frame(frame, self._bank.view(), aggregate_window=self._source.encoder.aggregate_window, layout=LAYOUT)
+                candidates = tokenize_table(table, frame, 18, aggregate_window=self._source.encoder.aggregate_window, layout=LAYOUT)
+                validate_frame_tokens(tokens, layout=LAYOUT)
+                validate_candidate_tokens(candidates, tokens, 18, layout=LAYOUT)
+                sample = FixtureSelectedInput(tokens, candidates, row['selected_index'],
+                    fixture.label(self._raw['outcome'], self._raw['viewer']), self._raw['population_id'],
+                    self._raw['cohort_id'], self._raw['episode'], self._raw['split'], self._raw['viewer'], i,
+                    self._raw['selected_policy_id'])
+                self._reference = (table, sample)
+                self._refresh()
+                yield FixtureDiagnosticDecision(self, frame, frame.bank_view(self._bank.view()), table, sample)
+                self.guard()
+                del sample, candidates, tokens, table
+                self._reference = None
+                self._refresh()
+            self.guard()
+        except BaseException:
+            self._source._failed = True
+            raise
+        finally:
+            self._iterating = False
+            self._reference = None
+            if self._active and not self._source._failed:
+                self._refresh()
+
+    def _invalidate(self) -> None:
+        self._active = False
+        self._raw = {}; self._frames = (); self._bank = None
+        self._envelope = self._expected = b''; self._columns = ()
+        self._reference = None; self._external = 0; self._actions = None

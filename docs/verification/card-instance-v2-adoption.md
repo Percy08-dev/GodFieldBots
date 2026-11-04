@@ -936,3 +936,84 @@ binds all six receipts. Root accepts§17's native PPO runtime scope; these short
 parents remain permanently nonformal. Native fixture-token diagnostic, Tree3
 workers/RAW and formal production interfaces,512ordinary-decision performance,
 whole-project/package/old-data checks, installation and commits remain pending.
+
+## First formal-control interfaces — scoped acceptance
+
+The explicit train-formal/library entry uses the same PPO coordinator and
+closed recipe asset871fc8d4…ecd67b2. Fourteen selected files pass143controlled/
+pure/CLI checks,12old Tree publication checks and exact staged ordinary-loop
+trace comparison. No genuine formal parent or real execution is fabricated.
+Independent review finds two P2s: a.001clock check tightened the original.1s
+tolerance, and public mutable parent state/records plus repairable failures could
+change later bindings. The corrected absolute clock calculation preserves.1s;
+protected canonical originals, cloned public views and sticky admitted failures
+close the owner boundary. Final scoped156PASS, Ruff/mypy149PASS; independent
+correctness21targeted PASS and conformance14targeted PASS, both READY.
+Fix receipt `runs/assessments/card-instance-formal-control-20261104/
+p2-clock-parent-owner-receipt.json` SHA
+99a9dbc32e6342bfc4829c7bb7cb8670203bb1ef8aeeeaf6218cc9bb2287e2df.
+Root accepts only this first Python-control increment. Native formal parser/
+retained-owner adoption and separate capability remain NOT READY; actor64,
+qualified Dataset3/Tree fitting/game routing are following implementations.
+Formal real multi-seed training/comparison, HPO and final test remain NOT RUN.
+
+## Native formal controls and retained-parent seam — scoped acceptance
+
+The separate native increment parses the same literal declaration/stop recipe
+and retains the SAME original native input owner through FormalGameParent.
+Intrinsic parent ownership and external caller reservation share preallocation
+admission; zero release during failed/expired cleanup grants no operational
+permission. Both reviews find and verify fixes for primary-error preservation
+under diagnostic allocation failure, canonical copies before joint admission,
+and uncertain owned-lock close incorrectly becoming confirmed through consumed
+bookkeeping. Failed actual owners remain reachable and cannot revive.
+
+Root selectively accepts the12reviewed paths. MAIN bounded247PASS, Ruff/mypy3/
+diff PASS;20live learner cases are explicitly excluded from that check.
+Receipt `/tmp/gfb-card-instance-native-formal-work-20261104-v1/review-fix-v2/main-verification-receipt.json`,
+SHA c617ccc385ccd811f7a22af2a8b8f20be186e6e4527fa524155b1625144a6bf1.
+Private candidate sourcefc7c62ce…5227/ELFf8e0fea1…37ba match; installed native
+is unchanged. The formal capability marker stays absent, and genuine formal
+Source-positive execution is NOT RUN. This does not attest the separate64-game
+final-validation role.
+
+Actor64 Python's15owned paths and the one shared-manifest alias are now applied
+after exact baseline/dependency hashes. Staged337controlled checks, full Ruff
+and mypy152pass. MAIN hash/AST integration passes with145unowned production files
+unchanged; receipt `runs/assessments/card-instance-actor64-20261104/main-apply-receipt.json`,
+SHA db20ecf2332a402b23098e7104bbf4cbfe9273a9fdd01c534c2394618a168d49.
+MAIN tests and both independent reviews remain pending. Actual formal64games,
+native64adoption, qualified Dataset3/fit/GameTree3 and formal experiments remain
+NOT RUN or unimplemented as appropriate.
+
+## Actor64 Python interfaces — scoped acceptance
+
+Independent review confirms two initial P2s: constructor/read-only materialization
+preceded complete joint admission, and secondary diagnostic formatting could
+replace the primary error before pending publication invalidation. Five bounded
+pre-fix failures reproduce; the guarded protected-byte-size accessor, complete
+preallocation reservation and owner/invalidation-before-formatting fixes close
+them. A later review also finds growth after entry: public nested plan or caller
+Loaded metadata could exceed the original reservation before signature rejection.
+Four pre-fix growth probes fail; retained original size ceilings now reject them
+before signatures/asdict/JSON/parent copies without increasing reservations.
+Exact equality and sticky failure still follow. All failed probes/logs remain.
+
+Correctness independently passes159scoped checks and the original large-plan
+probe with zero signature calls/unchanged reservation/confirmed cleanup;
+conformance passes13targeted checks. Both are READY. Root applies only the
+reviewed four-file cumulative fix after all16hashes and the existing6bf4source
+alias match. The other372source/test data files stay exact. MAIN351PASS23.05s,
+full Ruff and mypy152PASS. Root accepts this Python Actor64 interface scope.
+Main apply receipt SHA d79582ef07a70ad3b497f6bd0287b0062118f6f5148dec5a975c78c81fde0c8c;
+the verification receipt is under
+`runs/assessments/card-instance-actor64-20261104/review-fix-v3-main/`.
+Frozen staged manifest SHA748782e0d06a74fca20d879c7624349f6ddfc337006d0fc52e5347aa01f248c0.
+
+The SAME actual parent/loan, split-only original Config projection, fresh bounded
+invocation, closed64role, all-own originals and pending-manifest terminal owner
+are preserved. No real formal parent,64games, model/GPU/Simulator work or fit is
+fabricated. Native64has a separately accepted design and remains unactivated
+while its implementation/parity/owner integration proceeds. Qualified Dataset3,
+fresh real-source fit and GameTree3 remain following code work; formal multi-seed
+execution/comparison, HPO and final test remain NOT RUN.

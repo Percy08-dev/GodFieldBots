@@ -43,7 +43,12 @@ class _GameOperations:
     actions_version = 3
     registry_schema = 3
 
-    def __init__(self) -> None:
+    def __init__(self, *, formal: Any = None) -> None:
+        if formal is not None:
+            from gf_training.card_instance_formal import FormalControl
+            if type(formal) is not FormalControl:
+                raise ContractError('one concrete formal control context required')
+        self.formal = formal
         self.online: _OnlineGameOwner | None = None
         self.ownership: Any = None
         self.state: Json | None = None
@@ -53,7 +58,7 @@ class _GameOperations:
         self.native: Any = None
 
     def __getattr__(self, name: str) -> Any:
-        if name in {'cap', 'read_control', 'saved_deadline', 'persist_control', 'execution', 'decorate_identity'}:
+        if name in {'cap', 'read_control', 'saved_deadline', 'execution', 'decorate_identity'}:
             return getattr(structured_ppo, name)
         raise AttributeError(name)
 
@@ -108,7 +113,15 @@ class _GameOperations:
         state.update(schema_version=3, model_id=config.model.model_id, model_version='3', input_recipe=LAYOUT.input_recipe,
             execution=structured_ppo.execution(config), **input_binding_game_v3(config.actions.action_contract, card_instance_rules()))
         classification = input_binding_game_v3(config.actions.action_contract, card_instance_rules())
+        if self.formal is not None:
+            self.formal.initialize_state(state)
         state['resume_identity'] = resume_identity(state['config_sha256'], state['identity'], state['execution'], classification)
+
+    def persist_control(self, path: Path, value: Json, config: Any, *, deadline: float, original: Any = None) -> None:
+        if (self.formal is not None and path.name == 'run.json'
+                and self.formal.persist(path, value, deadline=deadline, max_owned_bytes=structured_ppo.cap(config))):
+            return
+        structured_ppo.persist_control(path, value, config, deadline=deadline, original=original)
 
     def bind_run(self, ownership: Any, state: Json) -> None:
         self.ownership, self.state = ownership, state
@@ -120,6 +133,7 @@ class _GameOperations:
             digest(asdict(config.actions)), state['resume_identity'], actions=config.actions, ledger=ledger,
             cuda_visible_devices=state['execution']['learner']['cuda_visible_devices'], cleanup_deadline=deadline)
         self.online = _OnlineGameOwner(self.ownership, state, child, ledger)
+        self.online.formal_control = self.formal
         child.online_owner = self.online
         self.ledger = ledger
         return child, ledger
@@ -178,6 +192,12 @@ class _GameOperations:
 
     def commit(self, directory: Path, state: Json, config: Any, *, generation: int, update: Json | None,
                controls: Json, acknowledgement: Json, deadline: float) -> Json:
+        if self.formal is not None:
+            from gf_training.card_instance_formal import read_formal_control
+            scan = _ChainScan(directory=directory, max_owned_bytes=structured_ppo.cap(config), deadline=deadline)
+            read_formal_control(directory, state, scan, self.formal.recipe)
+            scan.finalize()
+            self.formal.originals.finalize()
         return commit_game_generation(directory, state, generation=generation, update=update, controls=controls,
             artifact_files=acknowledgement['artifact']['files'], max_owned_bytes=structured_ppo.cap(config),
             deadline=deadline, projection=self.projection if generation else None)
@@ -193,3 +213,20 @@ async def train_card_instance_ppo(loaded: Any, collector: Any, directory: Path, 
     from gf_training.ppo_run import _run_ppo
     return await _run_ppo(loaded, collector, directory, mode=mode, pause_after_update=pause_after_update,
                           _game_ops=operations)
+
+
+async def train_formal_card_instance_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 'fresh',
+                                         pause_after_update: int | None = None) -> Json:
+    """Explicit full-recipe entry, keeping completion revocable through lock exit."""
+    from gf_training.card_instance_formal import FormalControl
+    from gf_training.ppo_run import _run_ppo
+    control = FormalControl(loaded)
+    operations = _GameOperations(formal=control)
+    try:
+        result = await _run_ppo(loaded, collector, directory, mode=mode, pause_after_update=pause_after_update,
+                              _game_ops=operations)
+        control.finish()
+        return result
+    except BaseException as error:
+        control.fail(error)  # FIRST: invalidate an exposed owned completion.
+        raise

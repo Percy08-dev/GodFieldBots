@@ -391,29 +391,13 @@ def _bind_origin(booster: Any, origin: TreeOrigin | TreeOriginV3, *, fresh: bool
         raise ContractError('Tree2 native model has no validated original binding')
 
 
-def inspect_artifact(directory: Path, *, expected_digest: str, model: Any,
-                     action_config_hash: str, action_contract: Any,
-                     purpose: str, synthetic_capacity: bool, deadline: float = float('inf'),
-                     expected_tree_descriptor: TreeDescriptor | None = None,
-                     expected_feature_signature: str | None = None,
-                     _scan: SealedScan | None = None, _context: _TreeRecords = TREE2_RECORDS,
-                     _expected_source: tuple[Any, Any] | None = None) -> tuple[Json, str]:
-    context = _records(_context); context.require_model(model)
+def _inspect_document(manifest: Json, *, model: Any, action_config_hash: str, action_contract: Any,
+                      purpose: str, synthetic_capacity: bool, deadline: float,
+                      expected_tree_descriptor: TreeDescriptor | None, expected_feature_signature: str | None,
+                      context: _TreeRecords, expected_source: tuple[Any, Any] | None,
+                      retained_bytes: int) -> tuple[Json, TreeDescriptor]:
     classification = _classification(action_contract, purpose, synthetic_capacity, context)
-    if context.modern:
-        if _expected_source is None:
-            raise ContractError('Tree3 loader requires explicit expected component source origin')
-        context.source(dict(zip(('source_kind', 'source_origin'), _expected_source, strict=True)), toy=_expected_source == (None, None))
-    checksum(expected_digest)
-    checksum(action_config_hash)
-    if expected_tree_descriptor is not None and type(expected_tree_descriptor) is not TreeDescriptor:
-        raise ContractError('closed expected Tree2 descriptor required')
-    if expected_feature_signature is not None:
-        checksum(expected_feature_signature)
-    scan = _scan if _scan is not None else SealedScan(max_owned_bytes=model.resources.max_owned_bytes, deadline=deadline)
-    scan.check()
-    scan.inventory(directory, {'inference.json', 'model.txt'})
-    manifest = scan.object(directory / 'inference.json', expected_digest)
+    _expected_source = expected_source
     closed(manifest, FIELDS | (context.extra_fields | {'rule_signature', 'layout_signature', 'feature_layout'} if context.modern else set()))
     if type(manifest['schema_version']) is not int or manifest['schema_version'] != context.schema or manifest['kind'] != 'structured-tree-inference':
         raise ContractError('unsupported Tree2 artifact schema/kind')
@@ -456,7 +440,37 @@ def inspect_artifact(directory: Path, *, expected_digest: str, model: Any,
     checksum(file['sha256'])
     if file['file'] != 'model.txt' or descriptor.model_sha256 != file['sha256'] or descriptor.model_bytes != file['bytes']:
         raise ContractError('Tree2 owned model-file binding mismatch')
-    resource_estimate(model, model_bytes=file['bytes'], extra_bytes=scan.retained)
+    resource_estimate(model, model_bytes=file['bytes'], extra_bytes=retained_bytes)
+    return file, descriptor
+
+
+def inspect_artifact(directory: Path, *, expected_digest: str, model: Any,
+                     action_config_hash: str, action_contract: Any,
+                     purpose: str, synthetic_capacity: bool, deadline: float = float('inf'),
+                     expected_tree_descriptor: TreeDescriptor | None = None,
+                     expected_feature_signature: str | None = None,
+                     _scan: SealedScan | None = None, _context: _TreeRecords = TREE2_RECORDS,
+                     _expected_source: tuple[Any, Any] | None = None) -> tuple[Json, str]:
+    context = _records(_context); context.require_model(model)
+    _classification(action_contract, purpose, synthetic_capacity, context)
+    if context.modern:
+        if _expected_source is None:
+            raise ContractError('Tree3 loader requires explicit expected component source origin')
+        context.source(dict(zip(('source_kind', 'source_origin'), _expected_source, strict=True)), toy=_expected_source == (None, None))
+    checksum(expected_digest)
+    checksum(action_config_hash)
+    if expected_tree_descriptor is not None and type(expected_tree_descriptor) is not TreeDescriptor:
+        raise ContractError('closed expected Tree2 descriptor required')
+    if expected_feature_signature is not None:
+        checksum(expected_feature_signature)
+    scan = _scan if _scan is not None else SealedScan(max_owned_bytes=model.resources.max_owned_bytes, deadline=deadline)
+    scan.check()
+    scan.inventory(directory, {'inference.json', 'model.txt'})
+    manifest = scan.object(directory / 'inference.json', expected_digest)
+    file, descriptor = _inspect_document(manifest, model=model, action_config_hash=action_config_hash,
+        action_contract=action_contract, purpose=purpose, synthetic_capacity=synthetic_capacity, deadline=deadline,
+        expected_tree_descriptor=expected_tree_descriptor, expected_feature_signature=expected_feature_signature,
+        context=context, expected_source=_expected_source, retained_bytes=scan.retained)
     with scan.file(directory / 'model.txt', file['sha256']) as (source, info):
         if info.st_size != file['bytes']:
             raise ContractError('Tree2 native model file length changed')
@@ -796,3 +810,49 @@ def save_artifact_v3(directory:Path,tree:LoadedTreeV3,*,deadline:float=float('in
 
 def fit_toy_v3(blocks:list[Any],labels:Any,validation_blocks:list[Any],validation_labels:Any,**options:Any)->LoadedTreeV3:
     return fit_toy(blocks,labels,validation_blocks,validation_labels,_context=TREE3_RECORDS,**options)
+
+
+@dataclass(frozen=True)
+class _ScoringTreeV3:
+    """In-memory diagnostic handle; cannot carry paired artifact/Source authority."""
+    booster: Any
+    model: ConfiguredTreeModelV3
+    origin: TreeOriginV3
+    descriptor: TreeDescriptor
+
+
+def _load_scoring_tree_v3(metadata: str, text: str, *, expected_digest: str,
+                          model: ConfiguredTreeModelV3, action_config_hash: str,
+                          retained_bytes: int, deadline: float) -> _ScoringTreeV3:
+    from gf_common.card_instance_fixture import CONTRACT
+    from gf_common.card_instance_fixture import origin as fixture_origin
+    TREE3_RECORDS.require_model(model)
+    if type(metadata) is not str or type(text) is not str:
+        raise ContractError('owned Tree scoring metadata/text strings required')
+    for value in (metadata, text):
+        if len(value.encode()) > MAX_ARRAY_BYTES:
+            raise ContractError('Tree scoring metadata/text exceeds64MiB')
+    if hashlib.sha256(metadata.encode()).hexdigest() != checksum(expected_digest):
+        raise ContractError('Tree scoring exact inference bytes differ')
+    resource_estimate(model, model_bytes=len(text.encode()),
+        extra_bytes=retained_bytes + 34*(len(metadata.encode())+len(text.encode())) + 65536)
+    manifest = json.loads(metadata)
+    file, descriptor = _inspect_document(manifest, model=model, action_config_hash=action_config_hash,
+        action_contract=CONTRACT, purpose='component', synthetic_capacity=False, deadline=deadline,
+        expected_tree_descriptor=None, expected_feature_signature=None, context=TREE3_RECORDS,
+        expected_source=('card-instance-tree-fixture-originals', fixture_origin()), retained_bytes=retained_bytes)
+    TREE3_RECORDS.source(manifest)
+    if manifest['fit_origin'] != 'trained' or file['sha256'] != hashlib.sha256(text.encode()).hexdigest() or file['bytes'] != len(text.encode()):
+        raise ContractError('Tree scoring requires exact trained fixture metadata/text')
+    if _text_descriptor(text, model, file['sha256'], deadline) != descriptor:
+        raise ContractError('Tree scoring native text descriptor differs')
+    if manifest['runtime'] != runtime_metadata(deadline=deadline):
+        raise ContractError('Tree scoring actual runtime differs')
+    booster = _native(deadline=deadline).Booster(model_str=text)
+    _, actual = _validate_booster(booster, model, deadline=deadline)
+    if actual != descriptor:
+        raise ContractError('Tree scoring actual Booster differs')
+    origin = _origin_from_fields(manifest, CONTRACT, TREE3_RECORDS)
+    _bind_origin(booster, origin, fresh=True)
+    _bind_model_v3(booster, model, origin, fresh=True)
+    return _ScoringTreeV3(booster, model, origin, descriptor)

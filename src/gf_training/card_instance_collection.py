@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import os
 import stat
 import time
@@ -141,6 +142,45 @@ def ppo_collection_metadata(*, actions: ActionConfigV3, config: Json,
     return {**value, "collection_role": "ppo-batch", "linkage": clone(raw)}
 
 
+def final_validation_collection_metadata(*, actions: ActionConfigV3, config: Json,
+                                        runtime_evidence: list[Json], schedule: list[Json],
+                                        inventory: list[Json], policies: list[str], bots_revision: str,
+                                        policy_bindings: dict[str, RuntimePolicyBinding], neural_inputs: Json,
+                                        linkage: Json, config_projection: Json,
+                                        validation_invocation: Json, elapsed_seconds: float) -> Json:
+    """Closed final64 metadata; neither linkage nor receipt supplies authority."""
+    from gf_common.card_instance_collection import (
+        FINAL_VALIDATION,
+        PROJECTION_KEYS,
+        PROJECTION_RECIPE,
+        checked_invocation,
+        checked_linkage,
+    )
+    value = collection_metadata(actions=actions, config=config, runtime_evidence=runtime_evidence,
+        schedule=schedule, inventory=inventory, policies=policies, bots_revision=bots_revision,
+        policy_bindings=policy_bindings, neural_inputs=neural_inputs)
+    if config.get('run', {}).get('split') != 'validation':
+        raise ContractError('final validation requires validation split')
+    link = checked_linkage(linkage, role=FINAL_VALIDATION, schedule=schedule, registry=value['policy_bindings'])
+    projection = closed(config_projection, PROJECTION_KEYS)
+    if (projection['recipe'] != PROJECTION_RECIPE or projection['projected_config_sha256'] != value['config_hash']
+            or any(type(projection[key]) is not str or len(projection[key]) != 64
+                or any(char not in '0123456789abcdef' for char in projection[key])
+                for key in PROJECTION_KEYS - {'recipe'})):
+        raise ContractError('closed final validation effective Config projection required')
+    invocation = checked_invocation(validation_invocation, run=config['run'])
+    if (type(elapsed_seconds) not in (float, int) or not math.isfinite(elapsed_seconds)
+            or not 0 <= elapsed_seconds <= invocation['wall_deadline_monotonic'] - invocation['started_monotonic']):
+        raise ContractError('final validation cost exceeds original capped invocation')
+    label = link['policy_label']
+    if (set(value['policy_bindings']) != {label, 'random-card-instance-v2', 'heuristic-card-instance-v2'}
+            or set(value['neural_inputs']['policies']) != {label}
+            or value['policy_bindings'][label]['policy_options']['expected_manifest_digest'] != link['final_inference_sha256']):
+        raise ContractError('final validation exact final neural binding required')
+    return {**value, 'collection_role': FINAL_VALIDATION.role, 'linkage': clone(link),
+        'config_projection': clone(projection), 'validation_invocation': clone(invocation), 'elapsed_seconds': elapsed_seconds}
+
+
 @dataclass
 class _OwnedHandle:
     descriptor: int | None
@@ -191,6 +231,8 @@ class CollectionPublication:
         self.outputs: list[_OwnedOutput] = []
         self.committed = False
         self.quarantined = False
+        self._final_staged = False
+        self._final_memory_retired = False
 
     @property
     def directory_fd(self) -> int | None:
@@ -272,7 +314,9 @@ class CollectionPublication:
         errors: list[BaseException] = []
         # Failure for one record never prevents an independent attempt for the
         # other record, within the same original cleanup allowance.
-        for output in self.outputs:
+        invalidations = (sorted(self.outputs, key=lambda output: output.name != 'manifest.json')
+                         if self._final_staged else self.outputs)
+        for output in invalidations:
             try:
                 self._invalidate_output(output)
             except BaseException as error:  # noqa: BLE001 - retain all independent cleanup failures.
@@ -304,7 +348,7 @@ class CollectionPublication:
                 unconfirmed.add_note(type(failure).__name__ + ": " + str(failure))
             raise unconfirmed
 
-    def _write(self, name: str, value: Json) -> None:
+    def _write(self, name: str, value: Json, *, _stage_manifest: bool = False) -> None:
         self._check()
         assert self.directory_fd is not None
         raw = (canonical(value) + "\n").encode()
@@ -325,6 +369,8 @@ class CollectionPublication:
                 raise OSError("collection publication incomplete write")
         os.fsync(descriptor)
         self._verify(name + ".tmp", descriptor, raw)
+        if _stage_manifest:
+            return
         os.link(
             name + ".tmp",
             name,
@@ -361,23 +407,43 @@ class CollectionPublication:
         ):
             raise ContractError("collection held output/path/content changed")
 
-    def commit(self, report: Json, manifest: Json) -> None:
+    def _publish(self, report: Json, manifest: Json, *, final: bool) -> None:
         if self.committed or self.outputs or self._directory_handle is not None:
             raise ContractError("collection publication owner already consumed")
         if report.get("healthy") is not True or manifest.get("schema_version") != 5:
             raise ContractError("collection healthy report and manifest5 required")
-        try:
-            descriptor = os.open(self.directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-            self._directory_handle = self._own_handle(descriptor)
-            self.directory_identity = _inode(os.fstat(descriptor))
-            self._write("report.json", report)
+        descriptor = os.open(self.directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        self._directory_handle = self._own_handle(descriptor)
+        self.directory_identity = _inode(os.fstat(descriptor))
+        self._write("report.json", report)
+        if final:
+            from gf_common.card_instance_collection import INVOCATION_KEYS
+            clock = closed(manifest['validation_invocation'], INVOCATION_KEYS)
+            elapsed = time.monotonic() - clock['started_monotonic']
+            if (not math.isfinite(elapsed) or not report['wall_seconds'] <= elapsed
+                    <= clock['wall_deadline_monotonic'] - clock['started_monotonic']):
+                raise ContractError('final validation post-report cost exceeds original capped invocation')
+            manifest = {**manifest, 'elapsed_seconds': elapsed}
+        if final:
+            self._write("manifest.json", manifest, _stage_manifest=True)
+        else:
             self._write("manifest.json", manifest)
-            for output in self.outputs:
-                assert output.handle.descriptor is not None
-                self._verify(output.name, output.handle.descriptor, output.raw)
-            assert self.directory_fd is not None
-            os.fsync(self.directory_fd)
-            self._check()  # final check while both original output descriptors are live.
+        for output in self.outputs:
+            assert output.handle.descriptor is not None
+            self._verify(output.recorded_name, output.handle.descriptor, output.raw)
+        assert self.directory_fd is not None
+        os.fsync(self.directory_fd)
+        self._check()  # final check while both original output descriptors are live.
+
+    def commit(self, report: Json, manifest: Json) -> None:
+        if manifest.get('collection_role') == 'ppo-final-validation' or self._final_staged:
+            raise ContractError('final validation requires its concrete retained publication owner')
+        if self.committed or self.outputs or self._directory_handle is not None:
+            raise ContractError('collection publication owner already consumed')
+        if report.get('healthy') is not True or manifest.get('schema_version') != 5:
+            raise ContractError('collection healthy report and manifest5 required')
+        try:
+            self._publish(report, manifest, final=False)
             self._release()  # close errors are publication failures, even after actual release.
         except BaseException as error:
             try:
@@ -391,3 +457,89 @@ class CollectionPublication:
             raise
         # No fallible operation follows successful release.
         self.committed = True
+
+    @property
+    def cleanup_complete(self) -> bool:
+        released = all(handle.state == 'released' for handle in self._handles)
+        return released and (self.committed or all(output.invalidated for output in self.outputs))
+
+    @property
+    def final_pending(self) -> bool:
+        return self._final_staged and not self.committed and not self.quarantined and not any(
+            output.invalidated for output in self.outputs)
+
+    @property
+    def resident_bytes(self) -> int:
+        return sum(32 * len(output.raw) + 65536 for output in self.outputs) + 65536
+
+    def fail_final_validation(self, initiating: BaseException) -> None:
+        if self.cleanup_complete and not self.committed:
+            return
+        try:
+            self.revoke()  # Owned pending/published manifest is invalidated FIRST.
+        except BaseException as cleanup:  # noqa: BLE001 - no stale descriptor retries or primary replacement
+            self.quarantined = True
+            vars(initiating)['_card_instance_collection_cleanup_owner'] = self
+            try:
+                initiating.add_note('final validation publication retirement: ' + str(cleanup))
+            except BaseException:  # noqa: BLE001, S110 - diagnostic failure cannot replace primary
+                pass
+
+    def begin_final_validation(self, report: Json, manifest: Json) -> None:
+        if manifest.get('collection_role') != 'ppo-final-validation' or self._final_staged:
+            raise ContractError('one closed final validation role/lifetime required for retained publication')
+        if self.committed or self.outputs or self._directory_handle is not None:
+            raise ContractError('collection publication owner already consumed')
+        self._final_staged = True
+        try:
+            self._publish(report, manifest, final=True)
+        except BaseException as error:
+            self.fail_final_validation(error)
+            raise
+
+    def pending_manifest(self) -> str:
+        if not self.final_pending:
+            raise ContractError('SAME pending final validation publication required')
+        self._check()
+        try:
+            (self.directory / 'manifest.json').lstat()
+        except FileNotFoundError:
+            pass
+        else:
+            raise ContractError('canonical final validation manifest must remain absent before closure')
+        for output in self.outputs:
+            if output.handle.state != 'live' or output.handle.descriptor is None:
+                raise ContractError('pending control descriptor no longer owned')
+            self._verify(output.recorded_name, output.handle.descriptor, output.raw)
+        return 'manifest.json.tmp'
+
+    def finish_final_validation(self) -> None:
+        if not self.final_pending:
+            raise ContractError('one active pending final publication required for finish')
+        try:
+            self.pending_manifest()
+            output = next(value for value in self.outputs if value.name == 'manifest.json')
+            assert self.directory_fd is not None and output.handle.descriptor is not None
+            os.link('manifest.json.tmp', 'manifest.json', src_dir_fd=self.directory_fd,
+                dst_dir_fd=self.directory_fd, follow_symlinks=False)
+            output.published = True
+            self._verify('manifest.json', output.handle.descriptor, output.raw)
+            self._verify('manifest.json.tmp', output.handle.descriptor, output.raw)
+            os.unlink('manifest.json.tmp', dir_fd=self.directory_fd)
+            self._verify('manifest.json', output.handle.descriptor, output.raw)
+            os.fsync(self.directory_fd)
+            self._check()
+            self._release()
+            if time.monotonic() >= self.work_deadline:
+                raise TimeoutError('final validation terminal release exceeded original deadline')
+        except BaseException as error:
+            self.fail_final_validation(error)
+            raise
+        self.committed = True  # All reportable terminal work has finished.
+
+    def retire_final_memory(self) -> None:
+        if not self.cleanup_complete:
+            raise ContractError('confirmed final publication cleanup required before memory retirement')
+        for output in self.outputs:
+            output.raw = b''
+        self._final_memory_retired = True

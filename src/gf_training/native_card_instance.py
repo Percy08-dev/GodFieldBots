@@ -57,6 +57,13 @@ def _authorize_game_controls(summary: Json, native: Any, actions: ActionConfigV3
     if remaining <= 0:
         raise ContractError('joint native/sealed ownership exhausted before game inspection')
     scan = SealedScan(max_owned_bytes=remaining, deadline=deadline)
+    if 'run_variant' in parent['state']:
+        from gf_common.card_instance_formal import FORMAL_RUN_FIELDS
+        from gf_training.card_instance_formal import read_formal_control
+        original = scan.object(Path(parent['directory'])/'run.json', parent['run_sha256'])
+        read_formal_control(Path(parent['directory']), original, scan)
+        if any(canonical(parent['state'].get(key)) != canonical(original[key]) for key in FORMAL_RUN_FIELDS):
+            raise ContractError('native formal control summary differs from SAME original Run3')
     parents, models, schedules, registries = _verify_parent_controls([parent], actions.action_contract,
         scan, game_actions=actions)
     collections = []
@@ -188,6 +195,17 @@ class _NativeGameInputs(NativeStructuredSource):
                 or type(raw['config_inputs']) is not list):
             raise ContractError('corrected original input-origin query differs from retained Source')
         return raw['config_inputs']
+
+    @property
+    def cleanup_complete(self) -> bool:
+        """Concrete cleanup confirmation, available even when failed/expired."""
+        return (self._closed and (self._session is None or self._session_closed)
+            and (self._executor is None or (self._executor._closed and self._executor._active is None)))
+
+    @property
+    def joint_owned_bytes(self) -> int:
+        self._check()
+        return self.extra+self.base+(0 if self._session is None else int(self._session.used_bytes()))
 
     def _session_class_name(self) -> str:
         return 'CardInstanceNativeSession'

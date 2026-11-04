@@ -60,8 +60,26 @@ component fitting pass both reviews after full-Booster/terminal-release fixes.
 The durable default component fit uses96train/192validation rows and retains30
 of500configured rounds. The private native fixture-token diagnostic also passes
 both reviews,194FFI cases and68Python-reference cases; its marker stays absent.
-Tree workers/RAW, the SAME fixture-owner native adapter,512ordinary-decision
-performance and final combined checks remain pending. ADR0024§18.2 separately pins
+The scores-only Tree worker and SAME fixture-owner native adapter now pass both
+reviews after pair/provenance, joint-admission and close-health fixes. The staged
+full288episode pipeline agrees on raw/persisted/features/native/facade scores.
+The durable outer acceptance now passes all288episodes/576full score rows,
+279healthy retired workers and ordinary Source closure before publication;
+fixture origin remains unqualified and capability activation remains pending.
+All512 performance inputs and weights are frozen; read-only admission passes
+all12cohorts. All four ordinary CPU conditions pass all512samples, zero failures
+and two workers: p95=64.798ms MLP,64.827ms GRU,64.545ms Transformer and76.756ms
+Tree. Root's complete saved-table/input/own-prefix/quantile/reap audit passes;
+the separate original-table diagnostic and final combined checks remain pending.
+The first formal Python-control/owner increment also passes both reviews and
+156controlled tests. Its native formal parser/retained-parent increment now
+also passes both reviews after primary-error, preallocation and uncertain-lock
+retirement fixes;247bounded MAIN checks pass. The separate formal marker remains
+absent pending activation. Actor64 Python interfaces now pass both independent
+reviews and351MAIN scoped checks/Ruff/mypy152after early-admission, protected
+diagnostics and repeated-mutation growth fixes. Native Actor64 implementation
+and qualified Dataset3/GameTree3 remain pending.
+ADR0024§18.2 separately pins
 reachable formal-parent/64validation/qualified Dataset3/GameTree3 interfaces;
 formal experimental execution stays deferred.
 Exact conditions are in the [new ledger](verification/card-instance-v2-adoption.md).
@@ -490,7 +508,7 @@ Wire DTOs may resolve representation details; no engine dependency is allowed.
 | --- | --- | --- |
 | `gf_common` | JSON-safe domain types, protocols, public action space, lazy search, pure scheduling | stdlib, NumPy |
 | `gf_simulator_client` | validated HTTP, attestation, subprocess/game ownership, worker transport | common, httpx; v2 stdlib-only model binding/config/cost metadata |
-| `gf_training` | journals/projection, split/feasibility, owned numeric training, generation lineage and frozen datasets | common, model adapters, optional PyArrow; stdlib-only client.structured_resources owner and corrected-runtime preflight-only client.card_instance_runtime |
+| `gf_training` | journals/projection, split/feasibility, owned numeric training, generation lineage and frozen datasets | common, model adapters, optional PyArrow; shared client.structured_resources owner, corrected-runtime preflight-only client.card_instance_runtime, and the private component-diagnostic Tree scores facade |
 | `gf_evaluation` | paired scheduling, aggregation and costs | common |
 | `gf_models` | participant-local Random/heuristic/LightGBM/MLP/GRU/Transformer, common encoder/config and artifacts | common, lazy extras |
 | `gf_cli` | strict config, composition, commands, manifest | application packages |
@@ -501,10 +519,19 @@ Common never imports upper layers. Models never handle HTTP or management
 configuration. CLI constructs concrete policies/environments for evaluation.
 A bounded v2 exception lets training import the one stdlib-only
 `gf_simulator_client.structured_resources` ledger/learner reservation shared with
-participant workers. It adds no HTTP, environment or transport import and no
-reverse resource-module dependency. Revisit its package location if additional
+participant workers. That resource module adds no HTTP, environment or transport
+dependency and no reverse resource-module dependency. Revisit its location if additional
 unrelated consumers appear or that module gains client I/O dependencies; do not
 duplicate the ledger or introduce a process framework to avoid this narrow edge.
+ADR0024§18.6 adds one separate component-diagnostic edge from
+`gf_training.native_card_instance_fixture` to
+`gf_simulator_client.card_instance_tree_scoring_worker`. It composes the accepted
+scores-only child facade for original-fixture parity, with the SAME Source and
+paired-model owners retained by the controller. This imports no HTTP client,
+Environment or game orchestration into training and grants no Source/fitting/
+game-policy authority. Revisit placement if another independent training workflow
+needs that transport or the facade gains management/game responsibilities; do not
+duplicate its process/reap protocol inside training.
 Runtime is CPython 3.14, GIL enabled, uv; baseline dependencies httpx/NumPy.
 Extras are `data` (PyArrow), `lightgbm`, mutually exclusive `torch` (CPU) and
 `torch-cuda` (cu132); dev is pytest/ruff/mypy. NumPy is pinned to 2.5.4, Torch to

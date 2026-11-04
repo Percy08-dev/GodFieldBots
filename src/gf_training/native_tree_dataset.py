@@ -367,17 +367,10 @@ def _selected_payload(payload:Any)->tuple[Json,dict[str,Any]]:
 
 
 def _selected_input(episode:Json,frame:Json,selection:Json,arrays:dict[str,Any],projection:Json)->SelectedInput:
+    from gf_training._raw_token_arrays import raw_token_tuple
     from gf_training.journal import _reward
     def row(key:str,boolean:bool=False)->tuple[Any,...]:
-        array=arrays[key]
-        def convert(values:Any)->Any:
-            if isinstance(values,list):return tuple(convert(value) for value in values)
-            if boolean:
-                if type(values) is not int or values not in (0,1):raise ContractError('TreeDataset mask/presence is not binary')
-                return bool(values)
-            if type(values) is not int:raise ContractError('TreeDataset int64 token required')
-            return values
-        return convert(array.tolist())
+        return raw_token_tuple(arrays[key], boolean=boolean)
     prefix=frame['token_prefix'];event=frame['event_token_prefix']
     fields={name:row(prefix+'.'+name,'present' in name or 'mask' in name) for name in (
         'state_numerics','state_present','state_categories','state_category_present','card_numerics','card_present',

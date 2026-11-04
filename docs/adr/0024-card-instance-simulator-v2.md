@@ -2277,6 +2277,33 @@ not silently erased. Final ordinary p95 must include all specified decision work
 and meet3seconds for each model. Failure, timeout or budget overflow is retained
 and addressed, never converted to a pass by dropping rows or changing the panel.
 
+The ordinary assessment uses round barriers across its two episode lanes:
+construct/start both workers before any timed round, await both round results
+before excluded table serialization/storage/hash work, and retire both before
+admitting replacements. Source/startup/storage work cannot run on the event loop
+inside a sibling's ordinary timer. Bind the frozen request/completion hashes to
+every Tree worker, not just an outer before/after artifact check. Interrupted
+assessments retain completed samples and explicit failed/unexecuted rows for all
+512identities. Unconfirmed reap stops further admission and retains the SAME
+Source, artifact, transport and buffer owners until confirmed cleanup.
+
+Root adopts the advisor's CPU ownership interpretation:8GiB is the joint
+Source/controller allowance, not a newly imposed aggregate CPU-process cap.
+Original records/controls, independent retained artifact scans, both controller/
+transport slices and caller-created frame/event/table/result/publication buffers
+share that allowance. Child processes retain their existing validated limits
+separately. Record the combined declared envelopes as limits, not measured RSS.
+Reserve fixed, complete owner slices before Source/spawn; Tree's existing2GiB
+controller allowance per live facade is a conservative starting bound. A bounded
+assessment-only NN reply hook may check the announced size before body/JSON
+decode under its reserved slice while retaining the64MiB protocol maximum.
+Outgoing construction, decoded/parsed overlap and caller copies still require
+separate preallocation admission. Derive bounds from all frozen prefixes and
+typed candidate maxima before timing; do not substitute observed successful-run
+maxima. Insufficient complete admission fails explicitly without domain/weight/
+cache/concurrency changes or silently increased limits. This interpretation
+changes no production model, inference setting or GPU12GiB policy.
+
 ### 18.2 Reachable formal-parent, validation and game-Tree interfaces (design accepted)
 
 Independent architecture DESIGN READY after the literal algorithm recipe,
@@ -2452,6 +2479,25 @@ engineering validation remain exact. Returned/persisted report timing ordering,
 late success, cancellation, reap and final cleanup retain the existing owners.
 Native receipts are structural evidence, not formal or Dataset authority.
 
+Formal-control completion additionally owns a retained invalidation boundary.
+The explicit formal training entry keeps one private completion owner around
+the SAME coordinator call, including its post-persistence wall/storage checks,
+run-lock exit and reportable final release. Publishing formal complete uses a
+known owned temporary descriptor/inode and atomic replacement, retaining that
+ownership/snapshot until every reportable terminal operation has succeeded.
+A late failure first invalidates that owned completion and retains any uncertain
+cleanup owner before returning the initiating error; a best-effort failed-state
+rewrite alone is insufficient. Close errors obey§14's one-attempt rule; never
+inspect/retry an uncertain numeric descriptor. Recover only through a fresh
+O_NOFOLLOW writable regular descriptor matching the known original inode.
+Ordinary/legacy completion paths and traces remain exact. This is one closed
+formal JSON-control owner, not another training loop or publisher framework.
+The existing two terminal-descriptor/invalidation helpers may move byte-exact
+to a stdlib-only common leaf, with Tree's existing private names retained as
+aliases. Share that low-level behavior without importing Tree workflow code
+into PPO or changing old successful bytes. Architecture review of this concrete
+handoff is required before dependent formal-control implementation.
+
 A concrete VerifiedGameTreeDataset3 composes exactly the ordered formal seeds
 17/29/43 and their three complete final64validation Sources. Require distinct
 original parent identities, homogeneous model/action/input/execution/recipe/code
@@ -2472,6 +2518,18 @@ ALL retained owners under one caller allowance. Sequential staging does not
 permit charging every parent its own full budget; reuse existing shared-budget/
 retained-byte mechanisms and stream bounded episode/cohort views. Keep lock and
 snapshot ownership through reportable close before completion publication.
+
+Concrete validation-lock mechanism remains an implementation design question:
+creating a root .lock would violate final64's exact original inventory. Root
+proposes resource-only read locking through an independently opened no-follow
+canonical manifest descriptor with exclusive advisory flock and retained
+device/inode evidence. This preserves the original inventory; parent roots keep
+the existing run_lock. Any same-process borrow must use the SAME actual retained
+lock token, and all six roots still acquire in deterministic resolved-path byte
+order and release in reverse order. The manifest lock is resource ownership,
+never Source authority. Architecture review must settle this mechanism and its
+one-attempt close/uncertainty handling before Dataset3 implementation; do not
+silently ignore arbitrary .lock files or widen the Native Actor64 request.
 
 Reuse the shared Dataset/Tree3 features, fit child, paired format4 publication,
 copy/load and inference kernels with a closed real-source context. Add reachable
@@ -2522,6 +2580,216 @@ preservation. Controlled I/O positives verify interfaces/predicates only and
 remain component evidence. Independent architecture review is required before
 this addendum's dependent implementation; formal production collection, Dataset3
 qualification and real-data fitting remain NOT RUN.
+
+Native formal-control adoption reuses CardInstanceNativeSession and the SAME
+Sources/CohortSession traversal. A closed formal Run3 discriminator validates
+the original declaration sidecar through Sources with byte hash/stat identity,
+the SAME run/identity/G0 reference, base identity excluding ONLY formal_parent,
+the packaged literal recipe/full materialized configuration and normal-stop
+clock/limit/counter rules, including the original.1second allowance. Native
+numbers retain their Python-compatible representation/arithmetic order.
+The compact summary adds only the three formal fields inside parent.state for
+the formal variant; ordinary and legacy summary bytes remain exact. It remains
+structural evidence without qualification authority.
+
+One private _open_game_parent_inputs context in card_instance_source extracts
+the existing complete-parent traversal. It yields protected state/records and
+the actual retained _NativeGameInputs when backend is Rust. Existing
+validate_game_parent enters/exits it with the same return/ordinary-close
+behavior. FormalGameParent enters it through its own ExitStack and retains the
+SAME native owner through all use; recheck/final_binding require its live
+original/numeric guards plus protected Python originals and lock. Joint caller/
+sidecar/materialization ownership is admitted before native allocation. Final
+guards, native final-read/retirement, executor join and reportable close precede
+lock release, with sticky failure and reachable cleanup ownership. No ownership
+is reconstructed from a compact summary.
+A single ExitStack would continue to release the lock after input-close failure.
+Use separate private input and lock stacks inside the SAME parent: finish native
+final-read/retire/join/close first, release the existing lock stack only after
+concrete cleanup confirmation. Otherwise retain both SAME owners through the
+cleanup exception for retry. A narrow guarded native cleanup_complete accessor
+reports actual closed/session/executor state, never a summary flag. Preserve the
+successful Python-only path and avoid a new Source or lifecycle framework.
+The separate native marker card_instance_formal_controls has exact value
+run3-formal-parent-v1;declaration1;stop1 and stays absent until parser/sidecar/
+source-retention parity and both reviews pass. It attests structural support,
+never formal/Dataset eligibility. Same-backend/binary resume and early capability
+refusal remain; no Python fallback. Actor64 role adoption is separate and may
+borrow this seam without widening the16game PPO role. Architecture confirmation
+of this concrete handoff precedes dependent implementation; no genuine formal
+Source, learning run or game is invented for verification.
+
+Actor64's concrete handoff uses a distinct GameFinalValidationContext/Plan and
+retained GameFinalValidationSource. A live SAME FormalGameParent supplies its
+protected final binding and originals, with an empty SAME actor ledger and no
+learner/issuer/update role. Reuse the existing split-only LoadedConfig projection:
+replace run.split with validation, recompute effective JSON/config digest, retain
+the original input byte-origin inventory unchanged. CLI is explicitly
+validate-formal-policy; ordinary validation/training commands remain exact.
+
+Only the closed final-validation C5 variant adds config_projection,
+validation_invocation and elapsed_seconds. The nine linkage keys stay exact.
+config_projection has exactly recipe, parent_config_sha256,
+parent_config_inputs_sha256 and projected_config_sha256; recipe is
+run-split-train-to-validation-v1. validation_invocation has exactly started_unix,
+started_monotonic, caller_deadline_monotonic, admission_deadline_monotonic,
+execution_deadline_monotonic and wall_deadline_monotonic. Derive the fresh capped
+7200/5400/7140/60 budgets once; caller duration insufficient for finalization
+reserve rejects before allocation. Preserve training clocks unchanged.
+Reuse the report wall_seconds/C5 elapsed_seconds cost kernel and ordering:
+persisted report wall <= manifest elapsed <= returned report wall <= actual
+capped invocation duration, every other report field equal. Returned final-role
+report may advance only wall_seconds after collection publication. This records
+a validation invocation cost, not a rewritten TOML or training cost.
+Capture final-role C5 elapsed_seconds inside the existing publication after the
+report write/hash and before the manifest write, using the frozen invocation
+start. Do not substitute a precommit value that omits report storage cost.
+The ordinary/engineering commit branches stay byte/control-order exact.
+The final-role collection must retain the SAME existing publication/invalidation
+owner through the returned-wall budget check, live complete-Source acceptance,
+parent/original final guards and reportable actor-context cleanup/reap. A private
+nonserialized finalized-collection token may carry that actual owner to the
+concrete context; a caller callback or persisted flag cannot replace it. The
+parent lock and resource-exclusion slot stay held through terminal retirement.
+On late failure, invalidate the owned complete manifest before propagating the
+primary error, preserving uncertain cleanup ownership and§14 descriptor rules.
+The ordinary collection commit/retirement path remains exact. This extends the
+existing closed final-role lifetime only; it adds no publisher framework,
+sidecar or authority path. Readonly reopening must never revive a failed live
+completion. Architecture confirmation precedes this terminal-lifetime hook.
+Canonical manifest.json must remain absent while final-role acceptance is
+pending. Use existing manifest.json.tmp as the actual owned pending control
+file. Live validation borrows its exact descriptor/inode/bytes through the SAME
+nonserialized publisher token and applies the shared raw validator; no caller
+JSON, permission flag or fabricated16-game view is substituted. Readonly
+completed-source opening accepts only canonical manifest.json. Expose that name
+exclusively after Source/context guards and cleanup. CLI also completes its
+OWNED formal-parent release before publisher.finish; a library borrowed-parent
+path never closes its caller's parent and finishes only its own loan/control/
+Source lifetime plus final parent guards. Retain owned invalidation through
+publication's last reportable steps. Exposing canonical healthy C5 before owned
+parent release leaves a lock-gap reader race and is not accepted. Architecture
+confirmation precedes this concrete pending-control/terminal composition.
+
+Common pure closed role descriptors carry16/seven-key PPO batch or64/nine-key
+final validation structure only, never authority. Share existing raw/header/
+Replay/runtime/health validators under the explicit closed role; preserve the
+old ordinary/engineering branches. New validation modules and structured_source
+may compose this role without editing the native parent's retained-context files.
+A readonly completed-validation opener must borrow the SAME active formal parent
+and verify original role/schedule/final-policy/config/health/inventory closure;
+later Dataset3 cannot depend on a past live collection callback or a metadata flag.
+It exposes cloned facts/selected own records and recheck/close only, with no PPO
+numeric/update or Dataset qualification authority. Collection acceptance and
+readonly reopening share that one original validator. Pure/controlled positives
+remain unadmitted evidence; no real formal64 games are executed here. Native
+actor64 role adoption is a following separate parser/retained-source increment,
+without widening PPO16. Split-only projection retains its original reader
+backend. Until distinct native64 support is adopted, a Rust-reader Actor64 entry
+must reject BEFORE runtime/output/model/actor allocation, not after64games or
+by silently checking Python under a Rust identity. Its separate planned marker
+is card_instance_final_validation=collection5-final64;journal6;codec2 with the
+existing corrected signature; it stays absent until closed-role parsing,
+retained collection ownership, parity and both reviews pass. Formal-control
+capability alone never attests this role. Python-reader Actor64 may proceed.
+Architecture review of this concrete handoff precedes
+dependent implementation.
+
+Actor borrowing additionally needs a guarded parent budget seam, proposed before
+implementation. FormalGameParent.resident_bytes reports intrinsic retained
+Python/native/control/sidecar/canonical-original and bounded guard ownership,
+excluding only its separately tracked external reservation; it is not RSS or
+qualification. admit_external(n) sets that nonnegative external reservation and
+checks intrinsic+n+guard scratch BEFORE caller allocation. Callers may lower or
+release it only after the previously charged buffers/owners have retired. For
+Rust, a narrow NativeGameInputs joint-owned counter combines existing extra/base
+and actual session used_bytes; subtract only the known tracked external amount,
+never original sidecar/control charges. Updating native caller growth includes
+original scan/materialization changes plus n, then rechecks SAME originals.
+After caller buffers have retired, strict admit_external(0) is a cleanup-only
+release of the tracked external reservation even on failed/expired parents.
+It performs no guard/native I/O, clears no poison and restores no operational
+permission. A failed native caller lease may remain conservatively charged until
+actual native close. Nonzero admission still requires an active owner; releasing
+the actor's exclusion slot additionally requires confirmed associated cleanup.
+Failures poison the same parent and preserve cleanup ownership; neither summary
+reconstruction nor a larger original allowance is permitted. Architecture
+confirmation precedes these cross-module accessors.
+
+Actor64 implementation review finds that an exact reservation after building
+the plan is too late. Root and architecture accept a narrow guarded read-only
+byte-size accessor derived directly from protected canonical parent originals,
+without parsing, mutation or additional authority. Before parent-state clones,
+projected Config, the64-game schedule/registry and signature serialization,
+admit their complete conservative simultaneous-copy/scratch bound through the
+SAME parent.admit_external. Retain the later exact checks and unchanged limits;
+a near-cap refusal must precede those materializations. Diagnostic formatting
+also belongs inside its best-effort guard: attach the SAME cleanup owner and
+preserve/invalidate from the first failure before formatting any secondary
+exception. A throwing __str__ or add_note must not skip pending-publication
+invalidation or replace the initiating error. Both initial blocking findings
+are now independently reproduced and closed. A further repeated-validation
+growth finding is also closed: retain original size-only ceilings and refuse
+mutated internal/caller controls before every signature/asdict/JSON/copy or
+re-admission, without enlarging reservations. Exact equality remains mandatory.
+Both final reviews are READY;351MAIN scoped checks, Ruff and mypy152pass.
+This accepts the Python interface, not genuine formal Source/game execution.
+
+To avoid a second collection validator, Actor64 may extract _game_manifest to
+new card_instance_collection_source with a closed role argument and unchanged
+PPO16 default behavior. The native-parent writer keeps card_instance_source
+ownership and merges only a small alias/removal patch after its retained-parent
+seam is stable. Actor code imports the shared leaf directly meanwhile. Final
+production has one validator, no normalized/fabricated16-record view and no
+caller-provided validation callback. Architecture confirmation precedes this
+narrow responsibility extraction.
+
+#### Native final64 retained-source handoff (design accepted)
+
+Root adopts the bounded proposal after independent architecture DESIGN READY:
+`/tmp/gfb-card-instance-native-actor64-design-v1.md`, SHA
+85ab7d3521a0957e76ab552a16281986915e469f4cc2d7c8ab97413623b343f2.
+Implementation and both final reviews remain required. Extend the SAME corrected
+native
+parent/session with one closed final-validation slot; existing PPO16 and legacy
+defaults stay exact. Four private methods inspect_final_validation,
+export_final_validation(episode_index), recheck_final_validation and
+close_final_validation retain the original Sources/budget/Control, use ordered
+per-episode exports and grant no numeric/update/issuer/Dataset authority.
+
+The closed schema1 request binds retained parent run SHA, directory, exact
+expected linkage/projection/invocation/schedule/registry and optional returned
+report. Recorded invocation deadlines are historical evidence on canonical
+reopen; active inspection/export uses the retained Control/caller deadline.
+Canonical mode reads manifest.json. Issued-pending mode reads only the
+SAME publisher's actual manifest.json.tmp, requires canonical absence, and
+independently checks fixed directory/file identities, size and SHA evidence
+obtained through a separate no-follow read handle. Serialized evidence supplies
+no publisher authority; Python retains the actual issued token. The native
+slot validates original equality/parent/final artifact while Python computes
+the prescribed schedule. Neither side implements a second scheduler or reader.
+
+Existing raw token banks omit original frame/codec documents. Reuse the existing
+SAME-Sources Rust journal restaging pattern for one selected episode at a time,
+bracketed by original guards and exact inspected correspondence. At its existing
+accepted-decision staging point, additionally spool only original own event
+bytes/prefixes, frame_dict bytes, exact codec2 descriptor/columns, full-precision
+Selection and natural endpoint. Export those plus existing typed token banks
+under one bounded descriptor inventory. Reconstruct genuine immutable64
+EpisodeRecords through common constructors, comparing correspondence and
+tokens; do not add a Python journal reader, dummy records or padded PPO16 views.
+
+Admit request/control/decode overlap, all earlier retained own DTOs, current
+packet/Stage/export lease and next DTO growth jointly before allocation under
+the existing parent allowance. Source/record/array/shard64MiB bounds remain.
+Export each ordinal once; only one packet may be live, and its views must retire
+before the next export or healthy slot close. Stage retirement/join precedes
+packet return. An admitted failure latches cleanup-only state; final original
+guards and confirmed slot retirement precede external reservation/borrow/parent
+release and pending publication. Uncertain close retains the SAME reachable
+owners and primary failure. Separate final64 capability stays absent until
+parser/DTO/raw parity, fault checks and both independent reviews pass. Genuine
+formal parents/games remain NOT RUN during this implementation acceptance.
 
 ### 18.3 Component artifact4 and fresh-fit record handoff (design accepted)
 
@@ -2780,6 +3048,14 @@ require exact equality with initialization's model.resources.max_owned_bytes
 before loading a native model; a mismatch is cleanup-only. Include that same
 initial peak in the controller's admission. No private state, labels or seed
 is passed through this resource argument.
+The scorer constructor also requires an explicit finite absolute monotonic
+deadline for the original session/pair owner. Retain that cap through startup,
+every operation and close; do not construct a retained pair scan with now+10
+or extend its original deadline. A fresh per-operation/exchange10second budget
+is clipped to the same original session cap. Checks may narrow an operation's
+budget, but never raise the base cap; reject late results before committing
+state. Close/reap retains its first cleanup budget and original session cap.
+This argument stays on the controller and changes no packet or resource argv.
 
 ### 18.6 SAME fixture-owner native parity adapter (design accepted)
 
@@ -2795,7 +3071,12 @@ single-pass completion or fit permission.
 
 A borrow exposes guarded immutable envelope bytes, ordered tuple[bytes,...]
 column payloads, closed Source-expected metadata, retained_bytes, guard and
-admit_external. Its reference_decisions iterator streams the original frame,
+admit_external. A proposed guarded readonly actions accessor returns the exact
+immutable ActionConfigV3 constructed inside Source from its already-validated
+declaration, allowing the scores facade to check artifact/caller configuration
+without private-table access or inferred caps. It changes no completion/count/
+permission state; bounded architecture confirmation precedes its implementation.
+Its reference_decisions iterator streams the original frame,
 bounded own bank view, full table, selected index/viewer label and existing
 FixtureSelectedInput one decision at a time. Factor existing envelope/column
 validation narrowly; do not decode/retain every table for Python-only fitting.
@@ -2861,3 +3142,39 @@ Guardian/Fog, changed originals/policies/metadata/shards, malformed arrays,
 overlap/after-exit/close/error, cancellation and cumulative-budget failures.
 No new dependency, Source lineage, PPO authority, real fitting, Simulator or
 performance claim belongs to this increment.
+
+Concrete facade composition remains synchronous: create one owned event loop
+for this diagnostic session, reject an already-running caller loop BEFORE a
+borrow/output allocation, and initialize/close/reap one component worker per
+nonempty original episode. Zero-endpoint episodes spawn no worker. No facade
+or framing loop is duplicated. Reserve the child's full managed runtime limit
+jointly with Source, parent/native buffers, model and feature ownership. A
+declared execution-only resource override may bound that child limit by the
+remaining original total; record it explicitly, retain all architecture/weights/
+inference/action identities and full candidate tables, and fail if the required
+workspace cannot fit. Never increase the original total or trim inputs to fit.
+Architecture confirmation of these bounded composition details precedes their
+dependent code.
+
+The first durable outer run reveals an ownership-scope error, not permission to
+raise budgets. The diagnostic's joint limit is min(caller limit, Source limit),
+8GiB for this acceptance. Do not reduce that whole limit to the2GiB model
+runtime limit. Keep the parent predictor/feature runtime, facade controller and
+facade child at their original2GiB limits; reserve the full controller+child4GiB
+jointly before construction, using the unchanged model. Local feature admission
+counts its predictor/tokens/prepared/chunk/score overlap under2GiB. Global
+Source/borrow admission additionally includes original/control/caller/native/
+reload/persistence/facade ownership under8GiB. Neither check replaces the other.
+Retain conservative duplicate headroom unless a specific allocation's owner is
+identified; no arbitrary subtraction from Source retention or bypass flag.
+The outer caller's predictor envelope and adapter estimate must identify any
+intentional overlap explicitly. All64MiB limits remain.
+Before a fresh run, a metadata-only worksheet must list original model/inference
+identities, caller reservation breakdown, Source intrinsic charge, native/export/
+reload/local-feature overlap, full4GiB facade reservation and actual unchanged
+initialization formula. Explain each retained duplicate or its replacement
+owner. Architecture review and fitting/one-byte-over admission tests precede
+another fresh acceptance attempt. The failed first run and its two containers
+remain preserved with no healthy report, refit, reduced input or runtime-cap
+change. Ordinary performance retains its separate Source/controller-plus-child
+interpretation; this paragraph concerns the explicitly joint fixture diagnostic.

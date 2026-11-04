@@ -14,7 +14,6 @@ from typing import Any
 
 from gf_common.card_instance import ActionConfigV3
 from gf_common.card_instance_rules import card_instance_rules
-from gf_common.card_instance_runtime import validate_runtime_receipt
 from gf_common.domain import (
     ContractError,
     Json,
@@ -22,13 +21,10 @@ from gf_common.domain import (
     canonical,
     closed,
     digest,
-    integer,
 )
 from gf_common.preprocessing import PreparationConfig, preparation_config
 from gf_common.schedule import serialize_schedule
-from gf_common.structured_layout import CORRECTED_CARD_INSTANCE_LAYOUT as LAYOUT
-from gf_common.structured_tokens import signature
-from gf_models.card_instance_artifacts import EXTERNAL_INPUT_CONTRACT, validate_neural_metadata
+from gf_models.card_instance_artifacts import validate_neural_metadata
 from gf_models.structured_binding import (
     input_binding_game_v3,
     policy_label_game_v3,
@@ -36,6 +32,7 @@ from gf_models.structured_binding import (
 )
 from gf_models.structured_config import InferenceBindingV2
 from gf_models.structured_sealed import SEMANTIC_KEYS_V3, SealedScan, checksum
+from gf_training.card_instance_collection_source import inspect_game_manifest as _game_manifest  # noqa: F401 - retained private compatibility alias
 from gf_training.collection import CollectionPlan, training_groups
 from gf_training.lineage import _OWNED_LOCKS, checkpoint_path
 from gf_training.structured_lineage import _ChainScan, _state, _validate_component_chain
@@ -50,7 +47,6 @@ from gf_training.structured_rollout import (
 )
 from gf_training.structured_source import (
     _inspect_component_collection,
-    _name,
     _SourceOwner,
     _SourceSnapshot,
 )
@@ -68,94 +64,6 @@ def frozen_linkage(state: Json, directory: Path, generation: int, groups: Any, r
         'learner_seats': {spec.episode_id: spec.learner_viewer for group in groups for spec in group.episodes},
         'schedule_digest': digest(serialize_schedule(groups, 4)),
         'policy_registry_digest': digest({key: asdict(value) for key, value in registry.items()})}
-
-
-def _game_manifest(owner: _SourceOwner, manifest: Json, actions: ActionConfigV3,
-                   expected_split: str | None) -> tuple[Json, list[tuple[Json, Json]]]:
-    expected = input_binding_game_v3(actions.action_contract, card_instance_rules())
-    if (manifest.get('schema_version') != 5 or type(manifest['schema_version']) is not int
-            or manifest.get('status') != 'complete' or manifest.get('collection_role') != 'ppo-batch'
-            or manifest.get('model_version') != '3' or manifest.get('journal_schema_version') != 6
-            or manifest.get('derived_schema_version') != 6 or manifest.get('participant_protocol_version') != 3
-            or manifest.get('candidate_codec') != 'candidate-columns-v2'
-            or manifest.get('input_recipe') != LAYOUT.input_recipe
-            or manifest.get('token_signature') != signature(128, layout=LAYOUT)
-            or manifest.get('action_config_hash') != digest(asdict(actions))
-            or any(canonical(manifest.get(key)) != canonical(value) for key, value in expected.items())):
-        raise ContractError('complete corrected PPO collection5 context required')
-    config = manifest.get('config')
-    if (type(config) is not dict or digest(config) != manifest.get('config_hash')
-            or canonical(config.get('actions')) != canonical(asdict(actions))
-            or config.get('run', {}).get('split') != expected_split):
-        raise ContractError('original collection5 frozen Config/split mismatch')
-    link = closed(manifest.get('linkage'), LINKAGE_KEYS)
-    integer(link['collection_generation'], 0, 999)
-    if link['batch_id'] != f"batch-{link['collection_generation']:06}" or not Path(link['parent_run_path']).is_absolute():
-        raise ContractError('original PPO batch linkage mismatch')
-    specs = [(group, spec) for group in manifest.get('schedule', []) for spec in group.get('episodes', [])]
-    names = [_name(spec.get('episode_id')) for _, spec in specs]
-    episodes = manifest.get('episodes')
-    if (len(specs) != 16 or len(set(names)) != 16 or type(episodes) is not list or len(episodes) != 16
-            or {row.get('episode_id') for row in episodes} != set(names)
-            or len({row.get('game_id') for row in episodes}) != 16
-            or len(manifest.get('groups', [])) != len(manifest['schedule'])
-            or len(manifest.get('runtime_evidence', [])) != len(manifest['schedule'])
-            or link['learner_seats'] != {spec['episode_id']: integer(spec.get('learner_viewer'), 1, 2) for _, spec in specs}
-            or link['schedule_digest'] != digest(manifest['schedule'])
-            or link['policy_registry_digest'] != digest(manifest.get('policy_bindings'))):
-        raise ContractError('whole16 original collection roles/schedule/registry required')
-    registry = manifest.get('policy_bindings')
-    neural = closed(manifest.get('neural_inputs'), {'input_contract', 'policies'})
-    if (type(registry) is not dict or set(manifest.get('policies', [])) != set(registry)
-            or neural['input_contract'] != EXTERNAL_INPUT_CONTRACT or type(neural['policies']) is not dict):
-        raise ContractError('complete original neural registry metadata required')
-    expected_neural = set()
-    for label, binding in registry.items():
-        closed(binding, {'model_id', 'policy_options'})
-        if binding['policy_options'] is None:
-            if binding['model_id'] not in ('random', 'heuristic') or label != binding['model_id'] + '-card-instance-v2':
-                raise ContractError('original baseline registry binding mismatch')
-        else:
-            expected_neural.add(label)
-            raw = neural['policies'].get(label)
-            if not isinstance(raw, dict):
-                raise ContractError('missing original neural registry metadata')
-            safe, expected_label = validate_neural_metadata(raw, actions=actions, rules=card_instance_rules())
-            if expected_label != label or canonical(safe) != canonical(binding['policy_options']) or safe['model']['model_id'] != binding['model_id']:
-                raise ContractError('original neural registry binding mismatch')
-    if set(neural['policies']) != expected_neural:
-        raise ContractError('extra/missing original neural registry metadata')
-    for group, receipt in zip(manifest['groups'], manifest['runtime_evidence'], strict=True):
-        validate_runtime_receipt(receipt, require_executed=True)
-        if group.get('runtime_evidence_failure') or canonical(group.get('runtime_evidence')) != canonical(receipt):
-            raise ContractError('original group/runtime evidence mismatch')
-    for _, spec in specs:
-        streams = spec.get('sampling_seeds')
-        if type(streams) is not list or len(streams) != 2:
-            raise ContractError('original participant sampling streams required')
-        for seed in streams:
-            integer(seed, 0, 2**64 - 1)
-    files = manifest.get('files')
-    if type(files) is not list:
-        raise ContractError('original complete inventory required')
-    expected_names = set()
-    for entry in files:
-        closed(entry, {'path', 'sha256', 'bytes'})
-        path = Path(entry['path'])
-        if path.is_absolute() or any(part in ('.', '..') for part in path.parts) or not path.parts:
-            raise ContractError('foreign original inventory path')
-        name = path.as_posix()
-        if name in expected_names or name in ('manifest.json', 'report.json'):
-            raise ContractError('duplicate/foreign original inventory entry')
-        expected_names.add(name)
-        # Opaque diagnostics are owned/hashes only; never become learner input.
-        owner.read(owner.root / path)
-        if owner.files[name]['sha256'] != checksum(entry['sha256']) or owner.files[name]['bytes'] != entry['bytes']:
-            raise ContractError('original collection inventory hash/size mismatch')
-    actual = owner.inventory('**/*')
-    if set(actual) != expected_names | {'manifest.json', 'report.json'}:
-        raise ContractError('complete original collection inventory changed')
-    return {row['episode_id']: row for row in episodes}, specs
 
 
 def _game_header(header: Json, manifest: Json, episode: Json, spec: Json,
@@ -223,6 +131,7 @@ class _OnlineGameOwner:
     issued: Any = None
     collection_controls: Any = None
     collection_generation: int | None = None
+    formal_control: Any = None
 
     def check(self, *, steps: int | None = None) -> None:
         child, ledger = self.process, self.ledger
@@ -234,6 +143,9 @@ class _OnlineGameOwner:
                 or child.steps != (self.state['optimizer_steps'] if steps is None else steps)
                 or canonical(child.hardware) != canonical(self.state['hardware'])):
             raise ContractError('SAME live game parent lock/learner/process/lease/ledger required')
+
+        if self.formal_control is not None:
+            self.formal_control.originals.finalize()
 
 
 def validate_owned_collection(plan: CollectionPlan, ledger: Any, *, max_owned_bytes: int,
@@ -575,10 +487,13 @@ def game_batch_source(plan: CollectionPlan, ledger: Any, *, max_owned_bytes: int
         yield source
 
 
-def validate_game_parent(directory: Path, *, require_complete: bool = True, max_owned_bytes: int,
-                         deadline: float, extra_owned_bytes: int = 0) -> tuple[Json, list[Json]]:
+@contextmanager
+def _open_game_parent_inputs(directory: Path, *, require_complete: bool = True, max_owned_bytes: int,
+                         deadline: float, extra_owned_bytes: int = 0, _scan: _ChainScan | None = None) -> Iterator[tuple[Json, list[Json], Any]]:
     directory = directory.resolve()
-    scan = _ChainScan(directory=directory, max_owned_bytes=max_owned_bytes - extra_owned_bytes, deadline=deadline)
+    scan = _scan or _ChainScan(directory=directory, max_owned_bytes=max_owned_bytes - extra_owned_bytes, deadline=deadline)
+    if type(scan) is not _ChainScan or scan.root != directory or scan.limit > max_owned_bytes - extra_owned_bytes:
+        raise ContractError("same bounded original game-parent snapshot required")
     state, records = _validate_component_chain(directory, require_complete=require_complete,
         require_retained=False, scan=scan, _game=True)
     import numpy as np
@@ -588,6 +503,10 @@ def validate_game_parent(directory: Path, *, require_complete: bool = True, max_
         raise ContractError('original generation0 PCG64 differs from frozen seed')
     settings = preparation_config(state['effective_config']['preprocessing'])
     if settings.backend == 'rust':
+        if 'run_variant' in state:
+            from gf_training.card_instance_formal import require_native_formal_controls
+            from gf_training.native_backend import load_native
+            require_native_formal_controls(load_native())
         from gf_training.native_card_instance import _NativeGameInputs
         native_plan = {'schema_version': 3, 'mode': 'historical_parent',
             'parents': [{'directory': str(directory), 'require_complete': require_complete}], 'collections': []}
@@ -599,8 +518,9 @@ def validate_game_parent(directory: Path, *, require_complete: bool = True, max_
                     or parent['run_sha256'] != scan.files[directory / 'run.json'][1]
                     or any(canonical(state[key]) != canonical(value) for key, value in parent['state'].items())):
                 raise ContractError('native historical parent differs from original game control state')
+            yield state, records, inputs
             scan.finalize()
-        return state, records
+        return
     source_inventories = []
     for number in range(1, len(records)):
         plan, _, after = recorded_plan(directory, state, records, number - 1, deadline)
@@ -627,9 +547,31 @@ def validate_game_parent(directory: Path, *, require_complete: bool = True, max_
                 scan.files[path] = snapshot
             scan.charge(_owned_bytes(original.inventories) + 512 + 4 * len(str(original.root)))
             source_inventories.append((original.root, tuple(original.inventories)))
+    scan._game_source_inventories = source_inventories
+    scan._game_source_settings = settings
+    scan._game_source_extra_bytes = extra_owned_bytes
+    scan._game_source_max_owned_bytes = max_owned_bytes
+    try:
+        yield state, records, None
+    finally:
+        recheck_game_parent_snapshot(scan)
+
+
+def validate_game_parent(directory: Path, *, require_complete: bool = True, max_owned_bytes: int,
+                         deadline: float, extra_owned_bytes: int = 0, _scan: _ChainScan | None = None) -> tuple[Json, list[Json]]:
+    """Existing one-shot validator; the private context also supports retained owners."""
+    with _open_game_parent_inputs(directory, require_complete=require_complete, max_owned_bytes=max_owned_bytes,
+            deadline=deadline, extra_owned_bytes=extra_owned_bytes, _scan=_scan) as (state, records, _inputs):
+        return state, records
+
+
+def recheck_game_parent_snapshot(scan: Any) -> None:
+    """Retain exactly the original Source inventories for an outer read-only owner."""
     def inventories() -> None:
-        for root, patterns in source_inventories:
-            comparison = _SourceOwner(root, settings, deadline, extra_owned_bytes=scan.retained + extra_owned_bytes, max_owned_bytes=max_owned_bytes)
+        for original_root, patterns in getattr(scan, '_game_source_inventories', ()):
+            comparison = _SourceOwner(original_root, scan._game_source_settings, scan.deadline,
+                extra_owned_bytes=scan.retained + scan._game_source_extra_bytes,
+                max_owned_bytes=scan._game_source_max_owned_bytes)
             for pattern, names in patterns:
                 if comparison._inventory_names(pattern, retain=False) != names:
                     raise ContractError('original Source inventory changed across batches')
@@ -641,4 +583,3 @@ def validate_game_parent(directory: Path, *, require_complete: bool = True, max_
         scan.check()
         if _stat_identity(path.lstat()) != identity:
             raise ContractError('original Source changed after final inventory sweep')
-    return state, records

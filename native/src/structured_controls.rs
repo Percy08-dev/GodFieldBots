@@ -94,6 +94,9 @@ const EXACT_RECIPE: &[u8] =
     include_bytes!("../assets/structured-token-recipe-public-exact-v2.json");
 pub(crate) const CARD_INSTANCE_RECIPE: &[u8] =
     include_bytes!("../assets/card-instance-token-recipe-corrected-v2.json");
+#[path = "card_instance_formal.rs"]
+pub(crate) mod formal;
+
 pub(crate) const CARD_INSTANCE_SIGNATURE: &str =
     "ed0c61152b78fa984aad342be22c6b9d6ef49b12b8f0d1c0f0de89724468002f";
 
@@ -1725,6 +1728,7 @@ fn parent_context(s: &mut Sources, format: SourceFormat) -> Result<Document> {
     let control = s.control.clone();
     let state = s.json(&root.join("run.json"))?;
     let r = &state.root;
+    let formal = format.corrected() && self::formal::discriminator(r)?;
     let run_fields = "schema_version algorithm run_id status config_sha256 effective_config config_inputs identity seed device created_unix last_unix wall_deadline_unix admission_deadline_unix execution_deadline_unix updates accepted_decisions optimizer_steps generation_sha256 collection_seconds update_seconds invocations completed_updates model_id model_version input_recipe action_contract purpose synthetic_capacity resume_identity execution";
     let optional = "hardware elapsed_seconds artifact_bytes peak_coordinator_memory_bytes coordinator_memory_scope timing_scope failure quarantine cleanup_failure budget_overrun_seconds";
     r.closed(
@@ -1732,6 +1736,11 @@ fn parent_context(s: &mut Sources, format: SourceFormat) -> Result<Document> {
             run_fields.split_whitespace().collect::<Vec<_>>(),
             if format.corrected() {
                 vec!["rule_signature", "layout_signature"]
+            } else {
+                vec![]
+            },
+            if formal {
+                self::formal::EXTRA.to_vec()
             } else {
                 vec![]
             },
@@ -1776,6 +1785,9 @@ fn parent_context(s: &mut Sources, format: SourceFormat) -> Result<Document> {
                 "structured parent contains failure evidence",
             ));
         }
+    }
+    if formal {
+        self::formal::validate(s, r)?;
     }
     let cfg = r.require("effective_config")?;
     let action_contract = cfg.require("actions")?.require("action_contract")?;
@@ -2254,7 +2266,7 @@ fn parent_context(s: &mut Sources, format: SourceFormat) -> Result<Document> {
         ],
         &control,
     )?;
-    let state_summary = clone_fields(
+    let mut state_summary = clone_fields(
         r,
         &[
             "run_id",
@@ -2272,6 +2284,14 @@ fn parent_context(s: &mut Sources, format: SourceFormat) -> Result<Document> {
         ],
         &control,
     )?;
+    if formal {
+        for key in self::formal::EXTRA {
+            state_summary
+                .as_object_mut()
+                .unwrap()
+                .insert((*key).into(), json::copy(r.require(key)?, &control)?);
+        }
+    }
     let mut generation_values = Vec::new();
     for item in summaries.iter() {
         control.check()?;

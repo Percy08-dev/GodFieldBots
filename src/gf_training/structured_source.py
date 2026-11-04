@@ -489,18 +489,31 @@ def _component_source_snapshot(directory: Path, *, actions: ActionConfigV2, sett
 
 
 def _inspect_component_collection(owner: _SourceOwner, actions: Any,
-                                  expected_split: str | None, *, _game: bool = False) -> ComponentCollection:
+                                  expected_split: str | None, *, _game: bool = False,
+                                  _game_role: Any = None, _game_pending: Any = None) -> ComponentCollection:
     settings, deadline = owner.settings, owner.deadline
-    manifest = owner.object(owner.root / 'manifest.json')
+    manifest_name = 'manifest.json'
+    if _game_pending is not None:
+        from gf_common.card_instance_collection import FINAL_VALIDATION
+        from gf_training.card_instance_final_validation import _IssuedFinalValidationCollection
+        if not _game or _game_role is not FINAL_VALIDATION or type(_game_pending) is not _IssuedFinalValidationCollection:
+            raise ContractError('actual final-only pending collection token required')
+        manifest_name = _game_pending.manifest_name()
+    manifest = owner.object(owner.root / manifest_name)
+    if not _game and _game_role is not None:
+        raise ContractError('corrected role cannot cross the engineering Source boundary')
     if _game:
         from gf_common.candidate_columns import validate_descriptor_v2
+        from gf_common.card_instance_collection import PPO_BATCH
         from gf_common.card_instance_rules import card_instance_rules
         from gf_common.card_instance_validation import reconcile_replay as game_reconcile
         from gf_common.card_instance_validation import replay_closure as game_closure
+        from gf_training.card_instance_collection_source import inspect_game_manifest
         from gf_training.card_instance_journal import read_card_instance_journal
-        from gf_training.card_instance_source import _game_header, _game_manifest
+        from gf_training.card_instance_source import _game_header
         from gf_training.structured_rollout import game_episode_records
-        episodes, specs = _game_manifest(owner, manifest, actions, expected_split)
+        episodes, specs = inspect_game_manifest(owner, manifest, actions, expected_split,
+            role=PPO_BATCH if _game_role is None else _game_role, _pending=_game_pending)
     else:
         episodes, specs = _manifest(manifest, actions, expected_split)
     report = owner.object(owner.root / 'report.json')
@@ -629,7 +642,7 @@ def _inspect_component_collection(owner: _SourceOwner, actions: Any,
     from gf_models.structured_binding import input_binding_game_v3
     proof = {'schema_version': 1, 'kind': 'card-instance-original-source-proof' if _game else 'structured-component-source-proof',
              **(input_binding_game_v3(actions.action_contract, card_instance_rules()) if _game else input_binding(actions.action_contract, 'component', False)), 'qualified': False,
-             'parent_qualification': 'not_performed', 'manifest_sha256': owner.files['manifest.json']['sha256'],
+             'parent_qualification': 'not_performed', 'manifest_sha256': owner.files[manifest_name]['sha256'],
              'source_set_sha256': digest(owner.files), 'files': owner.files, 'games': len(specs),
              'accepted_decisions': accepted_count, 'closure_counts': closure_counts, 'missing_replays': missing_replays}
     return ComponentCollection(owner.root, tuple(outputs), canonical(manifest).encode(), canonical(proof).encode())

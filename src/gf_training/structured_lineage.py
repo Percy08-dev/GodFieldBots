@@ -76,6 +76,10 @@ class _ChainScan(SealedScan):
         self.root = directory
         self.artifact_snapshot: tuple[int, ...] | None = None
         self.artifact_count = 0
+        self._game_source_inventories: list[Any] = []
+        self._game_source_settings: Any = None
+        self._game_source_extra_bytes = 0
+        self._game_source_max_owned_bytes = max_owned_bytes
 
     def finalize(self) -> None:
         if self.artifact_snapshot is not None:
@@ -182,7 +186,11 @@ def _classification(record: Json, state: Json) -> None:
 
 
 def _state(state: Json, *, recorded_signature: str | None = None, _game: bool = False) -> tuple[Any, Any]:
-    closed(state, RUN_REQUIRED | (GAME_EXTRA if _game else set()), RUN_OPTIONAL)
+    from gf_common.card_instance_formal import FORMAL_RUN_FIELDS, RUN_VARIANT, validate_formal_state
+    formal = _game and state.get('run_variant') == RUN_VARIANT
+    closed(state, RUN_REQUIRED | (GAME_EXTRA if _game else set()) | (FORMAL_RUN_FIELDS if formal else set()), RUN_OPTIONAL)
+    if formal:
+        validate_formal_state(state)
     if (type(state['schema_version']) is not int or state['schema_version'] != (3 if _game else 2) or state['algorithm'] != 'ppo'
             or state['status'] not in ('running', 'paused', 'complete') or state['model_version'] != ('3' if _game else '2')
             or state['input_recipe'] != (GAME_LAYOUT.input_recipe if _game else INPUT_RECIPE) or state['purpose'] != ('qualified_game' if _game else 'component') or state['synthetic_capacity'] is not False):
@@ -426,6 +434,9 @@ def _validate_component_chain(directory: Path, *, require_complete: bool, requir
         raise ContractError('generation0 bootstrap inference/map mismatch')
     first_inference = scan.object(checkpoint_path(directory, 0) / 'inference.json', bootstrap['inference_sha256'])
     actions, model = _state(state, recorded_signature=first_inference['token_signature'], _game=_game)
+    if _game and 'run_variant' in state:
+        from gf_training.card_instance_formal import read_formal_control
+        read_formal_control(directory, state, scan)
     if canonical(first_inference['model']) != canonical(asdict(model)):
         raise ContractError('generation0 bootstrap model differs from original frozen Config')
     if require_complete and (state['status'] != 'complete' or state['updates'] == 0 or state['completed_updates'] != state['updates']):
@@ -477,6 +488,9 @@ def _validate_component_chain(directory: Path, *, require_complete: bool, requir
             artifact = _inspect_pair(path, actions=actions, game=_game, expected_inference_digest=record['inference_sha256'],
                 scan=scan)
             _retained_declaration(artifact, state, model)
+            if _game and 'run_variant' in state:
+                from gf_training.card_instance_formal import verify_actual_optimizer_metadata
+                verify_actual_optimizer_metadata(artifact.resume)
             if (canonical(artifact.files) != canonical(record['artifact_files']) or artifact.files['resume.json'] != record['resume_sha256']
                     or artifact.resume is None or artifact.resume['optimizer_steps'] != record['optimizer_steps']
                     or artifact.resume['resume_identity'] != state['resume_identity']):
@@ -593,6 +607,9 @@ def commit_component_generation(directory: Path, state: Json, *, generation: int
     artifact = _inspect_pair(path, actions=actions, game=_game, expected_inference_digest=checksum(artifact_files.get('inference.json')),
         scan=scan)
     _retained_declaration(artifact, state, model)
+    if _game and 'run_variant' in state:
+        from gf_training.card_instance_formal import verify_actual_optimizer_metadata
+        verify_actual_optimizer_metadata(artifact.resume)
     if (canonical(artifact.files) != canonical(artifact_files) or artifact.resume is None
             or artifact.resume['resume_identity'] != state['resume_identity'] or artifact.resume['optimizer_steps'] != state['optimizer_steps']):
         raise ContractError('component commit artifact/resume identity mismatch')
@@ -603,7 +620,8 @@ def commit_component_generation(directory: Path, state: Json, *, generation: int
         previous = closed(scan.object(generation_path(directory, generation - 1), parent), GEN_FIELDS | (GAME_EXTRA if _game else set()))
         _classification(previous, state)
         durable = scan.object(directory / 'run.json')
-        stable_fields = (RUN_REQUIRED | (GAME_EXTRA if _game else set())) - {'accepted_decisions', 'optimizer_steps', 'collection_seconds', 'update_seconds', 'last_unix', 'invocations', 'completed_updates'}
+        from gf_common.card_instance_formal import FORMAL_RUN_FIELDS
+        stable_fields = (RUN_REQUIRED | (GAME_EXTRA if _game else set()) | (FORMAL_RUN_FIELDS if 'run_variant' in state else set())) - {'accepted_decisions', 'optimizer_steps', 'collection_seconds', 'update_seconds', 'last_unix', 'invocations', 'completed_updates'}
         if any(canonical(durable.get(key)) != canonical(state[key]) for key in stable_fields):
             raise ContractError('component commit differs from durable frozen parent')
         amount = _update(directory, update, state, previous, scan, model, artifact.inference, _game=_game)
