@@ -214,3 +214,8 @@ Evidence directory: `/tmp/godfieldbots-structured-ppo-breakdown-20261109` contai
 `fixtures.csv`, `workflows.csv`. The aggregation checks all126phase reports,
 42case totals and nonoverlapping group arithmetic. This is one measurement with
 diagnostic reporting, not a repeated-run benchmark or a new optimization.
+
+A later representative GRU diagnostic separates collection readiness, selection,
+HTTP, storage/cleanup and per-child import loading in
+[collection detail](structured-ppo-collection-detail.md). Its instrumented
+single-case timings are not a replacement for the ordinary module benchmark.
