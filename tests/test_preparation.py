@@ -16,7 +16,6 @@ from gf_training.fixed_data import (
     prepare_fixed_inputs,
 )
 from gf_training.preparation import PreparationSession, ResourceLimit
-from tests.test_fixed_ppo_data import frozen_sources as frozen_sources  # noqa: PLC0414
 
 
 def test_streaming_summary_and_numeric_match_legacy_samples_and_npz(tmp_path, frozen_sources):

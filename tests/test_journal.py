@@ -18,16 +18,13 @@ from gf_common.domain import (
     digest,
 )
 from gf_training.journal import ParticipantJournal, assign_splits, export_parquet, read_journal
+from tests.journal_support import final_state as final_state  # noqa: PLC0414 - compatibility re-export
+from tests.journal_support import journal_decision as journal_decision  # noqa: PLC0414 - compatibility re-export
 
 
 def new_journal(directory, episode="episode", viewer=1, policy="random", run_id=None):
     return ParticipantJournal(directory, episode, viewer, policy, run_id=run_id or str(uuid.uuid4()),
                               game_id="01M5WN0YQY49FDW5YQ7W4J74H2", action_config_hash=digest(asdict(ActionConfig())))
-
-
-def final_state(value, outcome):
-    return dict(value.observation, result=outcome, phase="terminal", actionable=False,
-                typed_action_schema=[], current_player=None, required_choice=None)
 
 
 def link_manifest(directory, journal, split="train", ancestry=None, seed="seed-a"):
@@ -61,17 +58,6 @@ def link_manifest(directory, journal, split="train", ancestry=None, seed="seed-a
               "turns": [{"decisions": [{"actor": header["viewer"], "visible_action": {"type": "action", "action": a}} for a in accepted]}]}
     (journal.final_path.parent / f"replay-player-{header['viewer']}.json").write_text(json.dumps(replay))
     return manifest
-
-
-def journal_decision(journal, value, command_id=None):
-    command_id = str(uuid.uuid4())
-    candidates = PublicCandidateGenerator(ActionConfig()).generate(value)
-    selection = PolicyDecision(0, "random-v1", -1.0)
-    command = {"command_id": command_id, "expected_revision": value.observation["state_revision"], "action": candidates.actions[0]}
-    index = journal.begin(value, candidates, selection, command, 1.5)
-    acknowledgement = {"command_id": command_id, "previous_revision": value.observation["state_revision"], "state_revision": value.observation["state_revision"] + 1, "status": "active", "result": None}
-    journal.acknowledge(index, acknowledgement)
-    return index
 
 
 def test_roundtrip_exact_candidates_pending_and_next_decision(tmp_path, make_input):

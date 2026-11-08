@@ -19,7 +19,6 @@ from gf_training.fixed_data import (
 )
 from gf_training.native_authorization import NativePreparation
 from gf_training.native_learning import fixed_consumer_layout, fixed_targets
-from tests.test_fixed_ppo_data import frozen_sources as frozen_sources  # noqa: PLC0414
 
 pytest.importorskip('gf_native')
 

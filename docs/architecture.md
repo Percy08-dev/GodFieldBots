@@ -1001,6 +1001,19 @@ journal roundtrip/export/split/compatibility; outcome-health separation and
 seed-cluster statistics. Opt-in real-binary integration covers repeated-create
 independence, baseline natural termination, replay reconciliation and cleanup.
 
+[ADR0025](adr/0025-session-shared-pytest-ppo-sources.md) accepts the design for
+lazy session-generated legacy synthetic PPO test sources, with a private
+regular-file copy for every `frozen_sources` consumer. The untouched template
+must pass full original-source validation before any relocation/resealing;
+finished clones pass the same production readers with independent paths/locks.
+All three learning seeds and original numerical generation remain. This is
+pytest-only ownership, with no cross-run cache, production migration API or
+new learning authority. Both final reviews are READY; the whole suite passes
+3978tests/247skips and the same48-pass/8-skip selection falls from219.08to72.22s.
+One session generation and24private fixture requests pass the final trace and
+original-data revalidation. Root accepts this test-only increment; full Ruff's
+four pre-existing untracked-user-script findings remain outside its changes.
+
 Checks: `uv run pytest`, `uv run ruff check .`, `uv run mypy src`; wheel installed
 in a separate Python 3.14 environment, baseline without ML imports. Verify CPU
 compatibility per implemented extra. Record exact commands and PASS/FAIL/NOT RUN

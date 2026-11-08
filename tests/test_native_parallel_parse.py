@@ -13,7 +13,6 @@ from gf_models.encoder import encode
 from gf_training.fixed_data import build_dataset, inspect_dataset
 from gf_training.native_authorization import NativePreparation
 from gf_training.native_learning import fixed_consumer_layout
-from tests.test_fixed_ppo_data import frozen_sources as frozen_sources  # noqa: PLC0414
 
 pytestmark = pytest.mark.skipif(
     os.environ.get('GFB_TEST_PARALLEL_PARSE') != '1',

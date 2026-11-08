@@ -14,7 +14,6 @@ from gf_common.preprocessing import PreparationConfig
 from gf_models.config import EncoderConfig, ModelConfig, TrainingConfig
 from gf_models.encoder import feature_names
 from gf_training.native_preparation import NativePreparedInputs, _deadlines, _owner
-from tests.test_fixed_ppo_data import frozen_sources as frozen_sources  # noqa: PLC0414
 
 
 def readonly(value, dtype):

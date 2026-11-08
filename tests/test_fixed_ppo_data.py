@@ -9,25 +9,7 @@ from gf_common.domain import ContractError, digest
 from gf_training.fixed_data import build_dataset, index_dataset, inspect_dataset, validate_policy
 from gf_training.journal import atomic_json
 from gf_training.lineage import read_json
-from gf_training.ppo_run import train_ppo
-from tests.test_ppo_lineage import configuration, synthetic_collector
-
-
-@pytest.fixture
-def frozen_sources(tmp_path, make_input):
-    pytest.importorskip('torch')
-    parents, validations = [], []
-    collector = synthetic_collector(make_input, both_viewers=True, outcomes={'win': {'winner': 1}})
-    for seed in (17, 29, 43):
-        loaded = configuration(tmp_path, max_updates=1, seed=seed)
-        parent, validation = tmp_path / f'parent-{seed}', tmp_path / f'validation-{seed}'
-        asyncio.run(train_ppo(loaded, collector, parent))
-        config = replace(loaded.config, run=replace(loaded.config.run, split='validation'))
-        validation_loaded = LoadedConfig(config, asdict(config), digest(asdict(config)), ())
-        asyncio.run(validate_policy(validation_loaded, parent, validation, collector))
-        parents.append(parent)
-        validations.append(validation)
-    return tuple(parents), tuple(validations)
+from tests.ppo_support import configuration
 
 
 def test_frozen_dataset_all_sources_roles_and_regenerable_index(tmp_path, frozen_sources):

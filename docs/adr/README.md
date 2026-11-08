@@ -31,6 +31,10 @@ Magical Stick新契約・catalog v2・遅延認証応答の失敗ラッチと新
 追加: [0020](0020-owned-episode-pipeline-pool.md) — Accepted:
 所有する固定poolと試合単位のworker内処理。実装・同条件48実行の前後比較・採用検証済み。
 
+追加: [0025](0025-session-shared-pytest-ppo-sources.md) — Accepted:
+pytestのセッション内で合成PPO原本を一度生成し、各テストへ独立した検証済みコピーを渡す。
+両独立レビュー・全件検証・同一対象での時間比較を完了。
+
 ## 記録テンプレート
 
 追加: [0023](0023-structured-encoders-and-diverse-search.md) — Accepted (独立実装可能部分):

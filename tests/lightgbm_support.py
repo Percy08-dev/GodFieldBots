@@ -21,8 +21,8 @@ from gf_common.domain import (
 from gf_common.schedule import schedule, serialize_schedule
 from gf_evaluation.evaluation import report
 from gf_training.journal import FEATURE_VERSION, JOURNAL_SCHEMA, REWARD_VERSION, ParticipantJournal
-from tests.conftest import fixture
-from tests.test_journal import final_state, journal_decision
+from tests.input_support import fixture
+from tests.journal_support import final_state, journal_decision
 
 
 def synthetic_run(directory: Path, make_input, *, split="train", seeds=("00000000-0000-0000-0000-000000000001",),
