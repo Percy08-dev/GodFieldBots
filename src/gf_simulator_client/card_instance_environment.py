@@ -28,6 +28,7 @@ from gf_common.domain import (
 from gf_common.structured import DecisionFrame, EventBank, EventDelta, Selection, event_delta
 from gf_common.structured_layout import CORRECTED_CARD_INSTANCE_LAYOUT
 from gf_models.card_instance_artifacts import RetainedGameArtifacts
+from gf_models.card_instance_game_tree_runtime import RetainedGamePolicyArtifacts
 from gf_models.structured_runtime import own_game_worker_settings_v3
 from gf_simulator_client.card_instance_runtime import CardInstanceRuntimeEvidence
 from gf_simulator_client.card_instance_worker import CardInstanceParticipantWorker
@@ -75,7 +76,7 @@ class CardInstanceSimulatorEnvironment(SimulatorEnvironment):
         *,
         ledger: ReservationLedger,
         runtime_evidence: CardInstanceRuntimeEvidence,
-        artifact_inputs: RetainedGameArtifacts | None = None,
+        artifact_inputs: RetainedGameArtifacts | RetainedGamePolicyArtifacts | None = None,
     ) -> None:
         if type(settings.actions) is not ActionConfigV3:
             raise ContractError("corrected environment requires exact actions3")
@@ -95,8 +96,9 @@ class CardInstanceSimulatorEnvironment(SimulatorEnvironment):
                 if label != binding.model_id + "-card-instance-v2":
                     raise ContractError("baseline label differs from fixed execution")
             else:
-                if type(artifact_inputs) is not RetainedGameArtifacts:
+                if type(artifact_inputs) not in (RetainedGameArtifacts, RetainedGamePolicyArtifacts):
                     raise ContractError("neural environment requires retained external inputs")
+                assert artifact_inputs is not None
                 artifact_inputs.require_options(binding.model_id, binding.policy_options)
                 if artifact_inputs.journal_metadata(label)["policy_options"] != binding.policy_options:
                     raise ContractError("neural environment label/options mismatch")
@@ -213,6 +215,7 @@ class CardInstanceSimulatorEnvironment(SimulatorEnvironment):
                 ledger=self.ledger,
                 policy_options=binding.policy_options,
                 artifact_inputs=self.artifact_inputs if binding.policy_options is not None else None,
+                **({"deadline": self.settings.work_deadline} if binding.model_id == "lightgbm" else {}),
             )
         except BaseException as error:
             owner = _startup_cleanup_owner(error, self.ledger)
@@ -244,6 +247,7 @@ class CardInstanceSimulatorEnvironment(SimulatorEnvironment):
             sampling_seed=spec.sampling_seeds[viewer - 1],
             runtime_evidence=self.runtime_evidence.receipt(require_executed=True),
             **({"neural": worker.neural_metadata} if worker.neural_metadata is not None else {}),
+            **({"tree": worker.tree_metadata} if worker.tree_metadata is not None else {}),
         )
 
     async def _ready_actors(

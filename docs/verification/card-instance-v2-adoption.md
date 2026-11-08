@@ -1047,3 +1047,36 @@ through a genuine formal parent, Dataset3 qualified Source/fit, GameTree3 gamepl
 final combined/native/CUDA/package/installation checks remain NOT RUN/pending as
 appropriate. Exact next raw16/resource seam design and runtime schema gates are
 separate; component metadata still grants no Source eligibility.
+
+## Original-history resources and Python GameTree runtime — 2026-11-08
+
+The recorded16/resource increment and the foreign custody leaf pass independent
+correctness and conformance reviews. A final identity fix makes the borrowed
+episode identity read-only and checks the actual bank, Source and custody rather
+than caller-provided labels. Root applies only the reviewed16files. MAIN passes
+183checks,11optional skips, full Ruff and mypy156; the receipt is
+`runs/assessments/card-instance-original-history-20261108/main-apply/verification-receipt.json`
+(SHA5024523a73fc0630b7595d29c90b894fe9e20d0595f0e878ffa4c7f8b2c23e9b).
+The genuine short native parent supplies diagnostic original-history parity only;
+it remains nonformal and cannot qualify a Dataset. The history marker stays absent.
+
+The Python GameTree runtime and three shared artifact helpers separately pass
+both reviews. Main integration passes185checks, including original Config
+goldens, full Ruff and mypy155. Receipt
+`runs/assessments/card-instance-game-tree-runtime-20261108/main-apply/verification-receipt.json`
+has SHAda64a4d9fed3b7009936caee382462335cdde38114ec966f4ab033c1ba908c7b.
+The controller retains actual paired-artifact authority; the child receives only
+the closed inference contract. Tree Selection statistics remain null. Terminal
+guards bracket publication and release, while worker cleanup retains original
+process/thread ownership through uncertain retirement. A Root EOF whitespace
+normalization is recorded separately and changes no AST.
+
+Dataset/shared-fit is frozen after118checks and one optional native skip for
+independent review. CLI code already has both reviews but its Main application
+waits for the Dataset dependency. An initial premature CLI integration failed
+on that absent module and was rolled back exactly; its failed checks and
+dependency-deferral receipt are preserved. No stubs or relaxed checks replace
+the dependency. Native Tree RAW is undergoing final candidate validation and
+independent reviews. None of these statuses asserts genuine qualified Tree
+gameplay, formal Source admission or a real-source fit. Final combined checks,
+capability activation, package/install verification and local commits remain.

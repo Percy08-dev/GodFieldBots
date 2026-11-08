@@ -99,6 +99,15 @@ class _NativeFinalValidationInputs:
         self._cheap()
         return int(self._owner.models[0].event.aggregate_window)
 
+    def _admit_local(self, amount: int) -> None:
+        loan=getattr(self._parent,'_resource_loan',None)
+        if loan is None:self._parent.admit_external(amount)
+        else:loan.admit_local(amount)
+
+    def _other_base(self) -> int:
+        loan=getattr(self._parent,'_resource_loan',None)
+        return 0 if loan is None else loan.base_bytes
+
     def _cheap(self) -> None:
         if self._failure is not None:
             raise ContractError('native final64 loan is permanently poisoned') from self._failure
@@ -184,8 +193,8 @@ class _NativeFinalValidationInputs:
             self.recheck()
             self._packet = self._owner._executor.call(self._owner._session.export_final_validation, index, self._owner._held())
             bound = self._decode_bound(self._packet)
-            self._parent.admit_external(base_external + bound)
-            if self._parent.resident_bytes + base_external + bound > max_owned_bytes:
+            self._admit_local(base_external + bound)
+            if self._parent.resident_bytes + self._other_base() + base_external + bound > max_owned_bytes:
                 raise ContractError('final64 joint decoder admission exhausted before copies')
             def reserve(growth: int) -> None:
                 self._cheap()
@@ -193,7 +202,7 @@ class _NativeFinalValidationInputs:
                     raise ContractError('native final64 decoder exceeded pre-admitted growth')
             return _decode_final_validation_packet(self._packet, summary=self._summary, episode_index=index,
                 actions=self._owner.actions, rules=card_instance_rules(), aggregate_window=aggregate_window,
-                max_owned_bytes=max_owned_bytes, retained_owned_bytes=self._parent.resident_bytes + base_external,
+                max_owned_bytes=max_owned_bytes, retained_owned_bytes=self._parent.resident_bytes + self._other_base() + base_external,
                 max_record_bytes=min(64*1024**2, self._owner.settings.max_record_mib*1024**2),
                 reserve=reserve, check=self._cheap)
         except BaseException as error:
@@ -216,10 +225,10 @@ class _NativeFinalValidationInputs:
         try:
             for i in range(64):
                 held = base_external + _owned_bytes(rows)
-                self._parent.admit_external(held)
+                self._admit_local(held)
                 rows.append(self._next(i, base_external=held, max_owned_bytes=max_owned_bytes,
                     aggregate_window=aggregate_window))
-            self._parent.admit_external(base_external + _owned_bytes(rows) + 65536)
+            self._admit_local(base_external + _owned_bytes(rows) + 65536)
             self._records = tuple(rows)
             self.recheck()
             return self._records
@@ -491,6 +500,48 @@ class _NativeGameInputs(NativeStructuredSource):
     def caller_growth(self, value: int) -> None:
         self._caller_growth = integer(value, 0)
         self._check()
+
+    def _original_episode(self, collection_index: int, episode_index: int, *, parent: Any,
+            budget_loan: Any, episode_id: str, viewer: int, aggregate_window: int,
+            base_local: int) -> tuple[Any, Any]:
+        """Actual-parent private raw16 transport; no session/summary constructor."""
+        from gf_training.native_card_instance_final_validation import (
+            _decode_recorded_episode_packet,
+        )
+        budget_loan.require(parent)
+        self._check_historical()
+        packet = None
+        try:
+            self.recheck()
+            packet = self._executor.call(self._session.export_recorded_episode_payload,
+                collection_index, episode_index, self._held())
+            bound = _NativeFinalValidationInputs._decode_bound(packet)
+            budget_loan.admit_local(base_local + bound)
+            def cheap() -> None:
+                self._check()
+                parent.require_active()
+                budget_loan.require(parent)
+            def reserve(n: int) -> None:
+                cheap()
+                if integer(n, 0) > bound:
+                    raise ContractError('original-history decoder exceeds prior local reservation')
+            assert self.summary is not None
+            record = _decode_recorded_episode_packet(packet, summary=self.summary,
+                collection_index=collection_index, episode_index=episode_index,
+                episode_id=episode_id, viewer=viewer, actions=self.actions, rules=card_instance_rules(),
+                aggregate_window=aggregate_window, max_owned_bytes=parent.limit,
+                retained_owned_bytes=parent.resident_bytes+budget_loan.base_bytes+base_local,
+                max_record_bytes=min(64*1024**2,self.settings.max_record_mib*1024**2),
+                reserve=reserve,check=cheap)
+            return packet, record
+        except BaseException as error:
+            parent._poison(error)
+            try:
+                traceback_module.clear_frames(error.__traceback__)
+            except BaseException:  # noqa: BLE001, S110 - first error/actual cleanup owner survive
+                pass
+            packet = None
+            raise
 
     def _read_game(self, directory: Path, expected_digest: str, collection: Json) -> Any:
         from gf_training.structured_rollout import read_game_rollout

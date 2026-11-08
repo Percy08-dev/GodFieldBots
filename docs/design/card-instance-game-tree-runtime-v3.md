@@ -254,4 +254,11 @@ Guard every retained input owner with admitted scratch and original deadlines.
 Both controlled counterexamples use actual file/cleanup primitives and grant no
 qualified Source/pair evidence. These findings remain blocking until fixed and
 independently rechecked; Tree-only workarounds or overall failure flags do not
-waive individual ownership and publication requirements.
+waive individual ownership and publication requirements. Both are now closed
+after independent reproductions/rechecks, including a further saved-original-
+thread check when cleanup clears current attributes. A third conformance finding
+is also closed: validate the exact raw architecture before merging execution
+controls, so nested checkpoint/inference/resources reject. Final reviews are
+READY; Root MAIN185checks/Ruff/mypy155pass, including the original path golden.
+This accepts guarded Python interfaces, not genuine qualified game execution or
+the separately pending native Tree RAW and Dataset/source workflows.

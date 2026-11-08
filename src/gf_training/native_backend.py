@@ -17,6 +17,23 @@ from gf_common.preprocessing import PreparationConfig
 TYPED_READER = 'typed-borrowed-v1'
 STRUCTURED_CONTRACT = 'participant-structured-v1;journal=5;rollout=3;generation=2;model=2'
 CARD_INSTANCE_CONTRACT = 'participant-structured-v2;journal6;rollout4;generation3;model3'
+CARD_INSTANCE_ORIGINAL_HISTORY = 'journal6;codec2;episode-dto1;recorded16'
+
+
+def original_history_reader_settings(config: PreparationConfig, native: Any = None) -> Json:
+    """Closed original-history capability; class/summary alone grants no Source."""
+    module = native or load_native()
+    result = card_instance_reader_settings(config, module)
+    info = dict(module.build_info())
+    if info.get('card_instance_original_history') != CARD_INSTANCE_ORIGINAL_HISTORY:
+        raise ContractError('native original-history capability unavailable; no fallback')
+    cls = getattr(module, 'CardInstanceNativeSession', None)
+    if not callable(getattr(cls, 'export_recorded_episode_payload', None)):
+        raise ContractError('native original-history episode ABI unavailable; no fallback')
+    identity = binary_identity(module)
+    if identity['build'] != info or identity['gil_disabled'] is not False:
+        raise ContractError('native original-history source/binary/ABI differs')
+    return result
 
 
 def reader_settings(config: PreparationConfig, native: ModuleType | None = None) -> Json:

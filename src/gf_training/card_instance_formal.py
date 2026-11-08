@@ -394,9 +394,164 @@ class FormalControl:
                 pass
 
 
+class FinalSourceBudgetLoan:
+    """Actual-custodian B/L resource ledger, never Source or fitting authority."""
+    def __init__(self, parent: FormalGameParent, *, custodian: Any, base_bytes: int, deadline: float) -> None:
+        from gf_common.domain import integer
+        from gf_training.card_instance_source_locks import GameSourceCustody
+        if type(parent) is not FormalGameParent or type(custodian) is not GameSourceCustody:
+            raise ContractError('actual parent and complete game custody required for resource loan')
+        from math import isfinite
+        if type(deadline) not in (int,float) or not isfinite(deadline) or deadline<=time.monotonic():
+            raise ContractError('finite active resource loan deadline required')
+        parent.require_active()
+        custodian.require()
+        if custodian.ownership_for(parent.directory) is not parent.borrowed or parent._resource_loan is not None:
+            raise ContractError('one resource loan on SAME actual custodian-borrowed parent required')
+        integer(base_bytes, 0, parent.limit)
+        self._parent, self._custodian = parent, custodian
+        self.deadline = min(deadline, parent.deadline, custodian.deadline)
+        self._base, self._local = base_bytes, 0
+        self._source: Any = None
+        self._opening: list[Any] = []
+        self._opening_retired = False
+        self._retired = False
+        self._failure: BaseException | None = None
+        parent._resource_loan = self  # Reachable before the first reservation.
+        try:
+            parent.admit_external(base_bytes)
+        except BaseException as error:
+            self._failure = error
+            vars(error)['_final_source_budget_cleanup_owner'] = self
+            raise
+
+    def require(self, parent: FormalGameParent) -> None:
+        if self._failure is not None:
+            raise ContractError('final Source resource loan is permanently failed') from self._failure
+        if self._retired or parent is not self._parent or parent._resource_loan is not self:
+            raise ContractError('SAME active actual-parent resource loan required')
+        if time.monotonic() >= self.deadline:
+            raise TimeoutError('original resource loan deadline')
+        parent.require_active()
+        self._custodian.require()
+        if self._custodian.ownership_for(parent.directory) is not parent.borrowed:
+            raise ContractError('resource loan custody/parent changed')
+
+    @property
+    def custodian(self) -> Any:
+        self.require(self._parent)
+        return self._custodian
+
+    @property
+    def base_bytes(self) -> int:
+        self.require(self._parent)
+        return self._base
+
+    @property
+    def source_bytes(self) -> int:
+        self.require(self._parent)
+        return self._local
+
+    @property
+    def declared_external_bytes(self) -> int:
+        self.require(self._parent)
+        if self._parent._native_inputs is None:return self._parent._external_bytes
+        return getattr(self._parent, '_declared_external_bytes', self._parent._external_bytes)
+
+    def _admit(self, base: int, local: int) -> None:
+        self.require(self._parent)
+        try:
+            self._parent.admit_external(base+local)
+        except BaseException as error:
+            self._failure = error
+            vars(error)['_final_source_budget_cleanup_owner'] = self
+            raise
+        self._base, self._local = base, local
+
+    def update_base(self, n: int, *, custodian: Any) -> None:
+        from gf_common.domain import integer
+        integer(n, 0, self._parent.limit)
+        if custodian is not self._custodian:
+            raise ContractError('SAME actual Dataset custodian required for base replacement')
+        self._admit(n, self._local)
+
+    def admit_local(self, n: int) -> None:
+        from gf_common.domain import integer
+        integer(n, 0, self._parent.limit)
+        # Local high-water never retires data through a numeric lowering claim.
+        self._admit(self._base, max(self._local, n))
+
+    def _keep_opening(self, value: Any) -> None:
+        self.require(self._parent)
+        if self._source is not None or self._opening_retired:
+            raise ContractError('opening objects belong only to SAME unbound resource loan')
+        self._opening.append(value)
+
+    def _bind_source(self, source: Any) -> None:
+        from gf_training.card_instance_final_validation import GameFinalValidationSource
+        if (type(source) is not GameFinalValidationSource or source._parent is not self._parent
+                or self._source is not None):
+            raise ContractError('one SAME concrete physical Source owner required')
+        self._source = source
+        self._opening.clear()
+        self._opening_retired = True
+
+    def retire_local(self, actual_read_owner: Any) -> None:
+        if self._retired:
+            if actual_read_owner is not self._source:
+                raise ContractError('SAME confirmed retired Source required')
+            return
+        if actual_read_owner is not self._source or self._source is None or not self._source.cleanup_complete:
+            raise ContractError('SAME physically retired Source required before releasing local bytes')
+        if self._parent._unit_borrow is not None:
+            raise ContractError('actual original-episode borrow must retire before local bytes')
+        self._opening.clear()
+        self._opening_retired = True
+        # Failed/expired owner never gains new nonzero cleanup permission. Keep
+        # actual leases conservative; Dataset must fail and close actual owners.
+        if self._parent._poisoned or not self._parent._active or time.monotonic() >= self.deadline:
+            self._retired = True
+            return
+        try:
+            self._parent.admit_external(self._base)
+        except BaseException as error:
+            self._failure = error
+            vars(error)['_final_source_budget_cleanup_owner'] = self
+            raise
+        self._local = 0
+        self._retired = True
+
+    def _retire_failed_opening(self) -> None:
+        if self._source is not None:
+            raise ContractError('actual bound Source must retire its own local data')
+        self._opening.clear()
+        self._opening_retired = self._retired = True
+        # Conservative old declared reservation stays until actual parent close.
+
+    def _retire_from_parent(self) -> None:
+        if self._source is None:
+            self._retire_failed_opening()
+        elif not self._source.cleanup_complete:
+            self._source.close()
+        if self._source is not None and self._source.cleanup_complete and not self._retired:
+            self.retire_local(self._source)
+
+    @property
+    def cleanup_complete(self) -> bool:
+        return (self._retired and self._opening_retired and not self._opening
+            and (self._source is None or self._source.cleanup_complete))
+
+
 class FormalGameParent:
     """Complete original formal parent owner; not Dataset or online permission."""
-    def __init__(self, directory: Path, *, max_owned_bytes: int, deadline: float, ownership: Any = None) -> None:
+    def __init__(self, directory: Path, *, max_owned_bytes: int, deadline: float, ownership: Any = None,
+                 extra_owned_bytes: int = 0) -> None:
+        from gf_common.domain import integer
+        integer(extra_owned_bytes, 0, max_owned_bytes-1)
+        self._entry_extra = extra_owned_bytes
+        self._declared_external_bytes = extra_owned_bytes
+        self._resource_loan: Any = None
+        self._unit_borrow: Any = None
         self.directory = directory.resolve()
         self.limit, self.deadline = max_owned_bytes, deadline
         self.borrowed = ownership
@@ -406,7 +561,7 @@ class FormalGameParent:
         self._owns_lock = False
         self._lock_retired = False
         self._lock_retirement_failure: BaseException | None = None
-        self._external_bytes = 0
+        self._external_bytes = extra_owned_bytes
         self.scan: Any = None
         self._state_bytes: bytes | None = None
         self._records_bytes: bytes | None = None
@@ -468,7 +623,7 @@ class FormalGameParent:
                 owned = self._scope.enter_context(run_lock(self.directory))
                 self._token = owned.token
                 self._owns_lock = True
-            self.scan = _ChainScan(directory=self.directory, max_owned_bytes=self.limit, deadline=self.deadline)
+            self.scan = _ChainScan(directory=self.directory, max_owned_bytes=self.limit-self._entry_extra, deadline=self.deadline)
             initial = self.scan.object(self.directory / 'run.json')
             if initial.get('run_variant') != RUN_VARIANT:
                 raise ContractError('ordinary/fixture/short parent has no original formal declaration')
@@ -478,7 +633,8 @@ class FormalGameParent:
                 from gf_training.native_backend import load_native
                 require_native_formal_controls(load_native())
             state, records, self._native_inputs = self._inputs_scope.enter_context(_open_game_parent_inputs(
-                self.directory, require_complete=True, max_owned_bytes=self.limit, deadline=self.deadline, _scan=self.scan))
+                self.directory, require_complete=True, max_owned_bytes=self.limit, deadline=self.deadline,
+                extra_owned_bytes=self._entry_extra, _scan=self.scan))
             self._native_scan_base = self.scan.retained
             if state['status'] != 'complete' or state['updates'] <= 0:
                 raise ContractError('healthy positive complete formal parent required')
@@ -521,13 +677,25 @@ class FormalGameParent:
 
     def _retire_inputs(self, initiating: BaseException | None = None) -> BaseException | None:
         failure: BaseException | None = None
+        resource_loan=getattr(self,'_resource_loan',None)
+        if resource_loan is not None and not resource_loan.cleanup_complete:
+            try:
+                resource_loan._retire_from_parent()
+            except BaseException as error:  # noqa: BLE001 - parent retains actual Source/resource cleanup
+                failure=error
+                vars(error)['_formal_parent_cleanup_owner']=self
+            if not resource_loan.cleanup_complete:
+                failure=failure or ContractError('actual Source/resource retirement remains unconfirmed')
+                vars(failure)['_formal_parent_cleanup_owner']=self
+                raise failure
         final_inputs = getattr(self, '_native_final_inputs', None)
         if final_inputs is not None and not final_inputs.parent_cleanup_complete:
             try:
                 final_inputs.retire_from_parent(initiating)
             except BaseException as error:  # noqa: BLE001 - SAME child/parent owner survives retirement failure
-                failure = error
-                vars(error)['_formal_parent_cleanup_owner'] = self
+                if failure is None:failure=error
+                elif failure is not error:self._note(failure,'formal child retirement: ',error)
+                vars(failure)['_formal_parent_cleanup_owner'] = self
             if not final_inputs.parent_cleanup_complete:
                 failure = failure or ContractError('native final64 collection cleanup remains unconfirmed')
                 vars(failure)['_formal_parent_cleanup_owner'] = self
@@ -584,7 +752,8 @@ class FormalGameParent:
         final_inputs = getattr(self, '_native_final_inputs', None)
         final = final_inputs is None or final_inputs.parent_cleanup_complete
         lock = not self._owns_lock or self._lock_retired
-        return self._closed and self._inputs_retired and native and final and lock
+        resource=getattr(self,'_resource_loan',None)
+        return self._closed and self._inputs_retired and native and final and lock and (resource is None or resource.cleanup_complete)
 
     def _borrow_native_final_inputs(self, *, deadline: float) -> Any:
         """Private actual-owner forwarding; never reopen/construct from a summary."""
@@ -628,13 +797,43 @@ class FormalGameParent:
             raise ContractError('SAME retained native final64 cleanup owner required')
         self._poison(error)
 
+    def _original_history_native_owner(self) -> Any:
+        """Private SAME actual native owner; never create/reopen from summaries."""
+        from gf_common.card_instance_rules import card_instance_rules
+        from gf_models.structured_binding import input_binding_game_v3
+        from gf_training.native_backend import (
+            binary_identity,
+            original_history_reader_settings,
+            recorded_card_instance_preprocessing,
+        )
+        from gf_training.native_card_instance import _NativeGameInputs
+        self.recheck()
+        owner=self._native_inputs
+        if type(owner) is not _NativeGameInputs or owner._explicit_candidate or owner.plan.get('mode')!='historical_parent':
+            raise ContractError('SAME actual retained native parent required for original history')
+        original_history_reader_settings(owner.settings,owner.native)
+        assert self._state_bytes is not None
+        state=json.loads(self._state_bytes)
+        actual=binary_identity(owner.native)
+        recorded=state['identity']['preprocessing']
+        recorded_card_instance_preprocessing(recorded,binding=input_binding_game_v3(owner.actions.action_contract,card_instance_rules()))
+        if canonical(recorded['binary'])!=canonical(actual) or owner._binary_identity!=canonical(actual).encode():
+            raise ContractError('original history must retain SAME recorded backend/binary/source')
+        return owner
+
+    def borrow_original_training_episode(self, generation: int, episode_ordinal: int, *, budget_loan: FinalSourceBudgetLoan) -> Any:
+        from gf_training.card_instance_source import _borrow_original_training_episode
+        return _borrow_original_training_episode(self,generation,episode_ordinal,budget_loan=budget_loan)
+
     def _guard_scratch(self) -> int:
         return 1024**2+1024*(len(self.scan.files)+len(self.scan.inventories))
 
     def _sync_native(self, external: int) -> None:
         if self._native_inputs is not None:
-            self._native_inputs.caller_growth(self.scan.retained-self._native_scan_base+external)
+            initial=getattr(self,'_entry_extra',0)
+            self._native_inputs.caller_growth(self.scan.retained-self._native_scan_base+max(0,external-initial))
             self._native_inputs.recheck()
+            self._declared_external_bytes=max(initial,external)
 
     @property
     def resident_bytes(self) -> int:
@@ -642,7 +841,7 @@ class FormalGameParent:
         try:
             self._sync_native(self._external_bytes)
             if self._native_inputs is not None:
-                return int(self._native_inputs.joint_owned_bytes)-self._external_bytes
+                return int(self._native_inputs.joint_owned_bytes)-getattr(self,'_declared_external_bytes',self._external_bytes)
             return self.scan.retained+65536
         except BaseException as error:
             self._poison(error)
@@ -661,8 +860,9 @@ class FormalGameParent:
         try:
             self._sync_native(extra_owned_bytes)
             intrinsic = (self.scan.retained+65536 if self._native_inputs is None else
-                int(self._native_inputs.joint_owned_bytes)-extra_owned_bytes)
-            if intrinsic+extra_owned_bytes+self._guard_scratch() > self.limit:
+                int(self._native_inputs.joint_owned_bytes)-getattr(self,'_declared_external_bytes',extra_owned_bytes))
+            declared = extra_owned_bytes if self._native_inputs is None else self._declared_external_bytes
+            if intrinsic+declared+self._guard_scratch() > self.limit:
                 raise ContractError('formal parent joint intrinsic/external ownership exhausted before allocation')
             self._external_bytes = extra_owned_bytes
             self.recheck()
@@ -691,8 +891,9 @@ class FormalGameParent:
         try:
             self._sync_native(self._external_bytes)
             intrinsic = (self.scan.retained+65536 if self._native_inputs is None else
-                int(self._native_inputs.joint_owned_bytes)-self._external_bytes)
-            if intrinsic+self._external_bytes+self._guard_scratch() > self.limit:
+                int(self._native_inputs.joint_owned_bytes)-getattr(self,'_declared_external_bytes',self._external_bytes))
+            declared = self._external_bytes if self._native_inputs is None else self._declared_external_bytes
+            if intrinsic+declared+self._guard_scratch() > self.limit:
                 raise ContractError('formal parent joint guard ownership exhausted')
             recheck_game_parent_snapshot(self.scan)
         except BaseException as error:

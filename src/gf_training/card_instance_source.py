@@ -37,6 +37,7 @@ from gf_training.collection import CollectionPlan, training_groups
 from gf_training.lineage import _OWNED_LOCKS, checkpoint_path
 from gf_training.structured_lineage import _ChainScan, _state, _validate_component_chain
 from gf_training.structured_rollout import (
+    EpisodeRecords,
     _episode_correspondence_digest,
     _owned_bytes,
     _predicted_token_bytes,
@@ -53,6 +54,300 @@ from gf_training.structured_source import (
 
 LINKAGE_KEYS = {'parent_run_id', 'parent_run_path', 'batch_id', 'collection_generation',
                 'learner_seats', 'schedule_digest', 'policy_registry_digest'}
+
+
+@dataclass(frozen=True)
+class OriginalGameDecision:
+    frame: Any
+    bank: Any
+    table: Any
+    selection: Any
+
+
+class OriginalGameEpisodeBorrow:
+    """Factory-bound original immutable DTO lease; no public envelope authority."""
+    _parent: Any
+    _source: Any
+    _loan: Any
+    _record: EpisodeRecords | None
+    _packet: Any
+    _read_owner: Any
+    _episode_id: str
+    _original_identity: tuple[int, str, str]
+    _resident: int
+    _export: int
+    _closed: bool
+    _scope_retired: bool
+    _iterating: bool
+    _failure: BaseException | None
+    _iterator: _OriginalDecisionIterator | None
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        raise ContractError('original episode borrows are returned only by actual-owner factories')
+
+    @classmethod
+    def _from_owner(cls, parent: Any, source: Any, budget_loan: Any, *, episode_id: str,
+                 record: EpisodeRecords, packet: Any = None, read_owner: Any = None) -> OriginalGameEpisodeBorrow:
+        self=object.__new__(cls)
+        from gf_training.card_instance_formal import FinalSourceBudgetLoan, FormalGameParent
+        if (type(parent) is not FormalGameParent or type(budget_loan) is not FinalSourceBudgetLoan
+                or parent._unit_borrow is not None or type(record) is not EpisodeRecords):
+            raise ContractError('actual parent, concrete resource loan and original DTO required')
+        budget_loan.require(parent)
+        if source is not budget_loan._source or source is None:
+            raise ContractError('SAME retained Source/custodian loan required for episode borrowing')
+        self._parent, self._source, self._loan = parent, source, budget_loan
+        self._record = record
+        self._packet, self._read_owner = packet, read_owner
+        self._episode_id = episode_id
+        self._original_identity = (record.bank.actor, record.bank.episode,
+            _episode_correspondence_digest(record))
+        shared=source._selected is not None and any(record is row for row in source._selected)
+        self._resident = 1024 if shared else _owned_bytes(record) + 1024
+        self._export = 0 if packet is None else sum(value.nbytes for banks in packet[1:] for value in banks)
+        self._closed = self._iterating = self._scope_retired = False
+        self._failure = None
+        self._iterator = None
+        parent._unit_borrow = self
+        return self
+
+    def recheck(self) -> None:
+        if self._failure is not None:
+            raise ContractError('original episode borrow is permanently failed') from self._failure
+        if self._closed or self._parent._unit_borrow is not self:
+            raise ContractError('SAME active original episode borrow required')
+        try:
+            self._loan.require(self._parent)
+            self._source.recheck()
+            if self._read_owner is not None:
+                self._read_owner.finalize()
+        except BaseException as error:
+            self._failure = error
+            self._parent._poison(error)
+            raise
+
+    @property
+    def episode_id(self) -> str:
+        self.recheck()
+        assert self._record is not None
+        identity = (self._record.bank.actor, self._record.bank.episode,
+            _episode_correspondence_digest(self._record))
+        if identity != self._original_identity:
+            error = ContractError('original episode bank/digest identity changed')
+            self._failure = error
+            self._parent._poison(error)
+            raise error
+        return self._episode_id
+
+    @property
+    def records(self) -> EpisodeRecords:
+        self.recheck()
+        assert self._record is not None
+        return self._record
+
+    @property
+    def viewer(self) -> int:
+        return self.records.bank.actor
+
+    @property
+    def end_kind(self) -> str:
+        return self.records.end_kind
+
+    @property
+    def outcome(self) -> Any:
+        self._loan.admit_local(self._source._reserved_bytes+self._resident+65536)
+        return self.records.outcome
+
+    @property
+    def decision_count(self) -> int:
+        return len(self.records.frames)
+
+    @property
+    def episode_digest(self) -> str:
+        return _episode_correspondence_digest(self.records)
+
+    @property
+    def resident_bytes(self) -> int:
+        self.recheck()
+        return self._resident
+
+    @property
+    def export_bytes(self) -> int:
+        self.recheck()
+        return self._export
+
+    def iter_decisions(self) -> Iterator[OriginalGameDecision]:
+        self.recheck()
+        if self._iterator is not None:
+            raise ContractError('original decision iterators cannot overlap')
+        iterator=_OriginalDecisionIterator(self)
+        self._iterator=iterator
+        return iterator
+
+    @property
+    def cleanup_complete(self) -> bool:
+        return self._closed and self._scope_retired and self._record is None and self._packet is None and self._read_owner is None
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        failure = self._failure
+        try:
+            if failure is None:
+                self.recheck()
+        except BaseException as error:  # noqa: BLE001 - cleanup retains the initiating original guard failure
+            failure = failure or error
+        if self._iterator is not None:
+            self._iterator.close()
+        self._record = self._packet = self._read_owner = None
+        self._resident = self._export = 0
+        if self._parent._unit_borrow is not self:
+            failure = failure or ContractError('actual original unit-borrow exclusion changed')
+        else:
+            self._closed = True
+        if failure is not None:
+            self._failure = failure
+            vars(failure)['_original_game_episode_cleanup_owner'] = self
+            raise failure
+
+
+    def _finish_scope(self) -> None:
+        # Factory's control/record locals have retired before exclusion release.
+        if not self._closed or self._record is not None or self._packet is not None:
+            raise ContractError('actual original borrow graphs must retire before scope release')
+        if self._parent._unit_borrow is not self:
+            raise ContractError('SAME original borrow scope required')
+        self._parent._unit_borrow=None
+        self._scope_retired=True
+
+
+class _OriginalDecisionIterator:
+    def __init__(self, borrow: OriginalGameEpisodeBorrow) -> None:
+        self._borrow: OriginalGameEpisodeBorrow | None=borrow
+        self._index=0
+
+    def __iter__(self) -> _OriginalDecisionIterator:
+        return self
+
+    def __next__(self) -> OriginalGameDecision:
+        borrow=self._borrow
+        if borrow is None:
+            raise StopIteration
+        borrow.recheck()
+        record=borrow.records
+        if self._index>=len(record.frames):
+            self.close()
+            borrow.recheck()
+            raise StopIteration
+        borrow._loan.admit_local(borrow._source._reserved_bytes+borrow._resident+_owned_bytes(record.bank)+65536)
+        frame,table,selection=record.frames[self._index],record.tables[self._index],record.selections[self._index]
+        self._index+=1
+        return OriginalGameDecision(frame,record.bank.prefix(frame.boundary),table,selection)
+
+    def close(self) -> None:
+        if self._borrow is not None:
+            self._borrow._iterator=None
+            self._borrow=None
+
+
+@contextmanager
+def _borrow_original_training_episode(parent: Any, generation: int, ordinal: int, *, budget_loan: Any) -> Iterator[OriginalGameEpisodeBorrow]:
+    from gf_common.domain import integer
+    from gf_common.preprocessing import PreparationConfig
+    from gf_training.card_instance_formal import FinalSourceBudgetLoan, FormalGameParent
+    if type(parent) is not FormalGameParent or type(budget_loan) is not FinalSourceBudgetLoan:
+        raise ContractError('actual formal parent/resource loan required')
+    budget_loan.require(parent)
+    source = budget_loan._source
+    if source is None or not source._active or parent._unit_borrow is not None:
+        raise ContractError('SAME retained final Source and idle unit borrow required')
+    parent.recheck()
+    sizes = parent.canonical_control_sizes
+    base = source._reserved_bytes
+    budget_loan.admit_local(base+8*(32*sum(sizes)+65536))
+    state, records = parent.state, parent.records
+    assert state is not None and records is not None
+    integer(generation,0,state['updates']-1)
+    integer(ordinal,0,15)
+    plan, _, _ = recorded_plan(parent.directory,state,records,generation,min(parent.deadline,budget_loan.deadline))
+    specs = tuple(spec for group in plan.groups for spec in group.episodes)
+    spec = specs[ordinal]
+    actions, model = _state(state,_game=True)
+    raw_settings = closed(state['effective_config']['preprocessing'],set(PreparationConfig.__dataclass_fields__))
+    settings = preparation_config(raw_settings)
+    if canonical(asdict(settings)) != canonical(raw_settings):
+        raise ContractError('original settings must roundtrip without defaults')
+    packet = owner = borrow = None
+    record: Any = None
+    primary: BaseException | None = None
+    try:
+        if settings.backend == 'rust':
+            native = parent._original_history_native_owner()
+            assert native.summary is not None
+            ci = next((i for i,row in enumerate(native.summary['collections']) if row['generation']==generation),-1)
+            if ci<0:
+                raise ContractError('actual committed original collection membership required')
+            packet, record = native._original_episode(ci,ordinal,parent=parent,budget_loan=budget_loan,
+                episode_id=spec.episode_id,viewer=spec.learner_viewer,aggregate_window=model.event.aggregate_window,
+                base_local=base)
+        else:
+            # Reuse exact captured original evidence from SAME parent. This is
+            # a Python backend read; never an alternate reader for Rust.
+            # Whole Python original cohort is the current shared reader unit.
+            # Bound ALL original read/decode ledger growth before the first read,
+            # in addition to protected state/plan copies already admitted.
+            control_copy=8*(32*sum(sizes)+65536)
+            raw_growth=sum(32*identity[2]+65536 for path,(identity,_) in parent.scan.files.items()
+                if path.is_relative_to(plan.output))
+            budget_loan.admit_local(base+control_copy+raw_growth)
+            owner = _SourceOwner(plan.output,settings,min(parent.deadline,budget_loan.deadline),
+                max_owned_bytes=parent.limit,extra_owned_bytes=parent.resident_bytes+budget_loan.base_bytes+base+control_copy)
+            for path,(identity,checksum_value) in parent.scan.files.items():
+                if path.is_relative_to(plan.output):
+                    owner.remember(path,identity,checksum_value)
+            for original_root, patterns in parent.scan._game_source_inventories:
+                if original_root==plan.output:
+                    owner.inventories.extend(patterns)
+            collection = _inspect_component_collection(owner,actions,'train',_game=True)
+            _check_collection_parent(collection.manifest,state,plan)
+            selected = tuple(row for row in collection.episodes if plan.linkage['learner_seats'][row.episode_id]==row.viewer)
+            if len(selected)!=16 or selected[ordinal].episode_id!=spec.episode_id:
+                raise ContractError('whole original sixteen selected roles required')
+            record = selected[ordinal].records
+        if record.end_kind!='natural':
+            raise ContractError('natural original selected endpoint required')
+        budget_loan.admit_local(base+_owned_bytes(record)+65536)
+        borrow = OriginalGameEpisodeBorrow._from_owner(parent,source,budget_loan,episode_id=spec.episode_id,
+            record=record,packet=packet,read_owner=owner)
+        packet = owner = None
+        yield borrow
+    except BaseException as error:
+        primary=error
+        parent._poison(error)
+        if borrow is not None:
+            borrow._failure = borrow._failure or error
+        raise
+    finally:
+        packet = owner = None
+        del state,records,plan,specs
+        record=None
+        if borrow is not None:
+            try:
+                borrow.close()
+            except BaseException as cleanup:  # actual graph cleanup cannot replace initiating failure
+                if primary is None:
+                    raise
+                vars(primary)['_original_game_episode_cleanup_owner']=borrow
+                if cleanup is not primary:
+                    try:
+                        primary.add_note('original episode retirement: '+str(cleanup))
+                    except BaseException:  # noqa: BLE001, S110 - diagnostic failure is best effort
+                        pass
+            finally:
+                if borrow._closed:
+                    borrow._finish_scope()
+
+
 PROJECTION_KEYS = {'recipe', 'parent_run_id', 'batch_id', 'collection_generation', 'expected_optimizer_steps',
                    'expected_policy_version', 'collection_manifest_sha256', 'numeric_manifest_sha256',
                    'numeric_files_sha256', 'source_correspondence'}

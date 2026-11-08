@@ -6,6 +6,7 @@ import json
 import math
 from collections.abc import Callable
 from dataclasses import asdict
+from enum import Enum
 from typing import Any
 
 import numpy as np
@@ -52,10 +53,20 @@ def _json(raw: bytes) -> Json:
     return value
 
 
-def _decode_final_validation_packet(payload: Any, *, summary: Json, episode_index: int,
+class _PacketProfile(Enum):
+    FINAL64 = 'card-instance-final-validation-episode-payload'
+    RECORDED16 = 'card-instance-recorded-episode-payload'
+
+
+RECORDED_PACKET_KEYS = PACKET_KEYS | {'parent_run_sha256','collection_index','collection_generation',
+    'collection_manifest_sha256','source_set_sha256'}
+
+
+def _decode_original_episode_packet(payload: Any, *, summary: Json, episode_index: int,
         actions: ActionConfigV3, rules: CardInstanceRules, aggregate_window: int,
         max_owned_bytes: int, retained_owned_bytes: int, max_record_bytes: int,
-        reserve: Callable[[int], None], check: Callable[[], None]) -> EpisodeRecords:
+        reserve: Callable[[int], None], check: Callable[[], None],
+        _profile: _PacketProfile, _expected: Json | None = None, _collection_index: int = 0) -> EpisodeRecords:
     """Decode one real original episode under caller-owned joint admission/guards.
 
     ``retained_owned_bytes`` includes all caller/native/view/prior-record ownership.
@@ -63,7 +74,9 @@ def _decode_final_validation_packet(payload: Any, *, summary: Json, episode_inde
     is allocated, preserving earlier reservations. This function never releases a
     caller reservation or opens an original, native session or resource loan.
     """
-    integer(episode_index, 0, 63)
+    if _profile is not _PacketProfile.FINAL64 and _profile is not _PacketProfile.RECORDED16:
+        raise ContractError('closed original episode packet profile required')
+    integer(episode_index, 0, 63 if _profile is _PacketProfile.FINAL64 else 15)
     integer(aggregate_window, 1, 65536)
     integer(max_record_bytes, 1, LIMIT)
     integer(retained_owned_bytes, 0, 2**63 - 1)
@@ -85,19 +98,29 @@ def _decode_final_validation_packet(payload: Any, *, summary: Json, episode_inde
         growth = proposed
 
     admit(64 * len(payload[0]) + 65536)
-    metadata = closed(_json(payload[0]), PACKET_KEYS)
+    metadata = closed(_json(payload[0]), PACKET_KEYS if _profile is _PacketProfile.FINAL64 else RECORDED_PACKET_KEYS)
     if (type(metadata['schema_version']) is not int or metadata['schema_version'] != 1
-            or metadata['kind'] != 'card-instance-final-validation-episode-payload'
+            or metadata['kind'] != _profile.value
             or type(metadata['episode_index']) is not int or metadata['episode_index'] != episode_index
             or metadata['summary_sha256'] != digest(summary)):
         raise ContractError('final64 packet differs from retained structural summary')
-    expected = summary['episodes'][episode_index]
+    expected = summary['episodes'][episode_index] if _profile is _PacketProfile.FINAL64 else _expected
+    if expected is None:
+        raise ContractError('actual original episode membership required')
+    if _profile is _PacketProfile.RECORDED16:
+        collection = summary['collections'][integer(_collection_index,0,len(summary['collections'])-1)]
+        if (type(metadata['collection_index']) is not int or metadata['collection_index'] != _collection_index
+                or metadata['parent_run_sha256'] != summary['parent']['run_sha256']
+                or canonical(metadata['collection_generation']) != canonical(collection['generation'])
+                or metadata['collection_manifest_sha256'] != collection['manifest_sha256']
+                or metadata['source_set_sha256'] != collection['source_proof']['source_set_sha256']):
+            raise ContractError('recorded episode differs from SAME parent/cohort/source summary')
     for name in ('episode_id', 'viewer', 'episode_digest'):
         if canonical(metadata[name]) != canonical(expected[name]):
             raise ContractError('final64 ordered episode/role/correspondence differs')
     if canonical(metadata['binding']) != canonical(input_binding_game_v3(actions.action_contract, rules)):
         raise ContractError('final64 original five-field binding differs')
-    if type(metadata['decisions']) is not list or len(metadata['decisions']) != expected['decisions']:
+    if type(metadata['decisions']) is not list or 'decisions' in expected and len(metadata['decisions']) != expected['decisions']:
         raise ContractError('final64 complete original decision population differs')
     groups = dict(zip(('uint8', 'int64', 'float32'), payload[1:], strict=True))
     for dtype, banks in groups.items():
@@ -204,7 +227,7 @@ def _decode_final_validation_packet(payload: Any, *, summary: Json, episode_inde
         tables.append(table)
         selections.append(selection)
     endpoint = closed(metadata['endpoint'], {'end_kind', 'outcome', 'reason'})
-    if endpoint['end_kind'] != 'natural' or endpoint['reason'] is not None or canonical(endpoint['outcome']) != canonical(expected['outcome']):
+    if endpoint['end_kind'] != 'natural' or endpoint['reason'] is not None or 'outcome' in expected and canonical(endpoint['outcome']) != canonical(expected['outcome']):
         raise ContractError('final64 original natural endpoint differs')
     admit(1024 * (len(frames) + 1))
     record = game_episode_records(view, tuple(frames), tuple(tables), tuple(selections), 'natural',
@@ -223,3 +246,27 @@ def _decode_final_validation_packet(payload: Any, *, summary: Json, episode_inde
         raise ContractError('final64 ordered frame/table/selection correspondence differs')
     check()
     return record
+
+
+def _decode_final_validation_packet(payload: Any, *, summary: Json, episode_index: int,
+        actions: ActionConfigV3, rules: CardInstanceRules, aggregate_window: int,
+        max_owned_bytes: int, retained_owned_bytes: int, max_record_bytes: int,
+        reserve: Callable[[int], None], check: Callable[[], None]) -> EpisodeRecords:
+    return _decode_original_episode_packet(payload,summary=summary,episode_index=episode_index,
+        actions=actions,rules=rules,aggregate_window=aggregate_window,max_owned_bytes=max_owned_bytes,
+        retained_owned_bytes=retained_owned_bytes,max_record_bytes=max_record_bytes,reserve=reserve,
+        check=check,_profile=_PacketProfile.FINAL64)
+
+
+def _decode_recorded_episode_packet(payload: Any, *, summary: Json, collection_index: int,
+        episode_index: int, episode_id: str, viewer: int, actions: ActionConfigV3,
+        rules: CardInstanceRules, aggregate_window: int, max_owned_bytes: int,
+        retained_owned_bytes: int, max_record_bytes: int, reserve: Callable[[int],None],
+        check: Callable[[],None]) -> EpisodeRecords:
+    collection=summary['collections'][integer(collection_index,0,len(summary['collections'])-1)]
+    expected={'episode_id':episode_id,'viewer':integer(viewer,1,2),
+        'episode_digest':collection['correspondence']['episode_digests'][integer(episode_index,0,15)]}
+    return _decode_original_episode_packet(payload,summary=summary,episode_index=episode_index,
+        actions=actions,rules=rules,aggregate_window=aggregate_window,max_owned_bytes=max_owned_bytes,
+        retained_owned_bytes=retained_owned_bytes,max_record_bytes=max_record_bytes,reserve=reserve,
+        check=check,_profile=_PacketProfile.RECORDED16,_expected=expected,_collection_index=collection_index)

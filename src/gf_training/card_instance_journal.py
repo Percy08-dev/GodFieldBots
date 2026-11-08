@@ -39,6 +39,7 @@ from gf_common.structured_layout import CORRECTED_CARD_INSTANCE_LAYOUT
 from gf_common.structured_tokens import signature
 from gf_common.structured_wire import parse_report_v3
 from gf_models.card_instance_artifacts import validate_neural_metadata
+from gf_models.card_instance_game_tree_runtime import validate_tree_metadata
 from gf_models.structured_runtime import WorkerCaps, own_game_worker_settings_v3
 from gf_training.candidate_storage import (
     publish_candidates_v2,
@@ -107,7 +108,9 @@ class _Context:
             raise ContractError("journal6 exact baseline game report/config/rules required")
 
     def validate_header(self, header: Json) -> tuple[WorkerCaps, EventBank]:
-        neural = header.get("model_version") == "3"
+        tree = header.get("model_id") == "lightgbm" and header.get("model_version") == "3"
+        neural = header.get("model_version") == "3" and not tree
+        learned = neural or tree
         closed(
             header,
             {
@@ -144,7 +147,7 @@ class _Context:
                 "protocol_version",
                 "actions",
                 "runtime_evidence",
-            } | ({"neural"} if neural else set()),
+            } | ({"neural"} if neural else {"tree"} if tree else set()),
         )
         if (
             type(header["schema_version"]) is not int
@@ -159,10 +162,10 @@ class _Context:
             or header["end_projection_version"] != END_PROJECTION_VERSION
             or header["catalog"] != CATALOG_META
             or header["generator_version"] != GENERATOR_VERSION
-            or not neural and (header["model_id"] not in ("random", "heuristic") or header["model_version"] != "1")
+            or not learned and (header["model_id"] not in ("random", "heuristic") or header["model_version"] != "1")
             or header["generation_schema"] is not None
             or header["use_action_options"] is not True
-            or not neural and header["policy"] != header["model_id"] + "-card-instance-v2"
+            or not learned and header["policy"] != header["model_id"] + "-card-instance-v2"
             or action_config_v3(header["actions"]) != self.actions
             or header["action_config_hash"] != digest(asdict(self.actions))
         ):
@@ -177,15 +180,16 @@ class _Context:
         ):
             raise ContractError("journal6 action/capacity mismatch")
         NumericCosts(**closed(header["numeric_costs"], set(NumericCosts.__dataclass_fields__)))
-        if neural:
-            safe, label = validate_neural_metadata(header["neural"], actions=self.actions, rules=self.rules)
+        if learned:
+            key, validator = ("tree", validate_tree_metadata) if tree else ("neural", validate_neural_metadata)
+            safe, label = validator(header[key], actions=self.actions, rules=self.rules)
             expected_caps, expected_costs, _, _ = own_game_worker_settings_v3(
                 header["model_id"], self.actions, safe, rules=self.rules)
             if (header["policy"] != label or header["caps"] != asdict(expected_caps)
                     or header["numeric_costs"] != asdict(expected_costs)
-                    or header["aggregate_window"] != safe["model"]["event"]["aggregate_window"]):
+                    or header["aggregate_window"] != safe["model"]["encoder" if tree else "event"]["aggregate_window"]):
                 raise ContractError("journal6 neural execution/label/capacity mismatch")
-            self.neural = clone(header["neural"])
+            self.neural = clone(header["neural"]) if neural else None
         else:
             self.neural = None
         self.policy = header["policy"]
@@ -226,9 +230,15 @@ class CardInstanceJournal(StructuredJournal):
         sampling_seed: int = 0,
         rules: CardInstanceRules | None = None,
         neural: Json | None = None,
+        tree: Json | None = None,
     ) -> None:
         context = _Context(actions, card_instance_rules() if rules is None else rules)
         aggregate_window = 128
+        if neural is not None and tree is not None:
+            raise ContractError("journal6 neural and tree metadata are mutually exclusive")
+        if tree is not None:
+            safe, _ = validate_tree_metadata(tree, actions=actions, rules=context.rules)
+            aggregate_window = safe["model"]["encoder"]["aggregate_window"]
         if neural is not None:
             safe, _ = validate_neural_metadata(neural, actions=actions, rules=context.rules)
             aggregate_window = safe["model"]["event"]["aggregate_window"]
@@ -253,7 +263,7 @@ class CardInstanceJournal(StructuredJournal):
             "caps": caps,
             "numeric_costs": numeric_costs,
             "model_id": model_id,
-            "model_version": "3" if neural is not None else "1",
+            "model_version": "3" if neural is not None or tree is not None else "1",
             "generation_schema": None,
             "aggregate_window": aggregate_window,
             "token_signature": signature(aggregate_window, layout=context.layout),
@@ -265,6 +275,8 @@ class CardInstanceJournal(StructuredJournal):
         }
         if neural is not None:
             header["neural"] = clone(neural)
+        if tree is not None:
+            header["tree"] = clone(tree)
         _, bank = context.validate_header(header)  # before output creation.
         self._context = context
         self.action_contract, self.purpose = actions.action_contract, "qualified_game"

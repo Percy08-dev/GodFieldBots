@@ -27,6 +27,7 @@ from gf_common.schedule import schedule, serialize_schedule
 from gf_evaluation.evaluation import report
 from gf_models.config import ModelConfig, PPOTrainingConfig
 from gf_models.structured_binding import ConfiguredNeuralModelV3
+from gf_models.structured_tree_config import ConfiguredTreeModelV3
 from gf_simulator_client.card_instance_environment import CardInstanceSimulatorEnvironment
 from gf_simulator_client.card_instance_runtime import CardInstanceRuntimeEvidence
 from gf_simulator_client.environment import EnvironmentSettings
@@ -63,7 +64,7 @@ def _baseline_labels(loaded: LoadedConfig, *, artifact_inputs: Any = None) -> tu
     labels = []
     bindings = {}
     for model in (config.model, config.opponent):
-        if type(model) is ConfiguredNeuralModelV3 and artifact_inputs is not None:
+        if type(model) in (ConfiguredNeuralModelV3, ConfiguredTreeModelV3) and artifact_inputs is not None:
             label, binding = artifact_inputs.binding(model)
             labels.append(label)
             bindings[label] = binding
@@ -102,7 +103,8 @@ def _inventory(directory: Path, deadline: float) -> list[Json]:
 def _validate_recorded_episodes(directory: Path, episodes: list[Any], actions: ActionConfigV3,
                                 run_id: str, deadline: float,
                                 expected: dict[str, tuple[EpisodeSpec, Json]],
-                                neural_metadata: dict[str, Json] | None = None) -> None:
+                                neural_metadata: dict[str, Json] | None = None,
+                                tree_metadata: dict[str, Json] | None = None) -> None:
     import json
 
     for episode in episodes:
@@ -123,6 +125,9 @@ def _validate_recorded_episodes(directory: Path, episodes: list[Any], actions: A
             if (neural_metadata is not None and journal.header["policy"] in neural_metadata
                     and canonical(journal.header.get("neural")) != canonical(neural_metadata[journal.header["policy"]])):
                 raise ContractError("persisted neural journal differs from its retained artifact input")
+            if (tree_metadata is not None and journal.header["policy"] in tree_metadata
+                    and canonical(journal.header.get("tree")) != canonical(tree_metadata[journal.header["policy"]])):
+                raise ContractError("persisted Tree3 journal differs from its retained actual pair")
             accepted = [journal.decisions[index].command["action"] for index in journal.accepted]
             value = json.loads((folder / f"replay-player-{viewer}.json").read_bytes())
             reconcile_replay(value, viewer, accepted, episode.outcome)
@@ -145,12 +150,13 @@ async def run_inference(loaded: LoadedConfig, command: str) -> tuple[Path, Json]
     _require_actions(loaded)
     config = loaded.config
     assert type(config.actions) is ActionConfigV3 and isinstance(config.run, RunConfigV2)
-    neural = tuple(model for model in (config.model, config.opponent)
-                   if type(model) is ConfiguredNeuralModelV3)
+    neural = tuple(cast(ConfiguredNeuralModelV3 | ConfiguredTreeModelV3, model)
+                   for model in (config.model, config.opponent)
+                   if type(model) in (ConfiguredNeuralModelV3, ConfiguredTreeModelV3))
     if not neural or any(model.checkpoint is None for model in neural):
         raise ContractError("corrected neural inference requires an explicit game checkpoint")
     for model in (config.model, config.opponent):
-        if type(model) is ConfiguredNeuralModelV3:
+        if type(model) in (ConfiguredNeuralModelV3, ConfiguredTreeModelV3):
             continue
         if (type(model) is not ModelConfig or model.model_id not in ("random", "heuristic")
                 or asdict(model) != asdict(ModelConfig(model_id=model.model_id))):
@@ -161,27 +167,49 @@ async def run_inference(loaded: LoadedConfig, command: str) -> tuple[Path, Json]
     work_deadline = started + config.run.wall_seconds - config.run.report_reserve_seconds
     preflight_deadline = min(started + config.run.execution_seconds,
                              work_deadline - config.server.cleanup_reserve_seconds)
-    evidence = CardInstanceRuntimeEvidence(Path(config.server.binary), Path(config.server.source_dir),
-                                          deadline=preflight_deadline)
-    evidence.preflight()
+    tree_runtime = any(type(model) is ConfiguredTreeModelV3 for model in neural)
+    evidence = None
+    if not tree_runtime:
+        evidence = CardInstanceRuntimeEvidence(Path(config.server.binary), Path(config.server.source_dir),
+                                              deadline=preflight_deadline)
+        evidence.preflight()
     from gf_common.card_instance_rules import card_instance_rules
     from gf_models.card_instance_artifacts import RetainedGameArtifacts
     from gf_models.structured_runtime import admit_game_workers_v3
     rules = card_instance_rules()
-    owner = RetainedGameArtifacts(neural, config.actions, rules=rules,
-        max_owned_bytes=min(model.resources.max_owned_bytes for model in neural),
-        preflight_deadline=preflight_deadline, finalization_deadline=work_deadline)
+    from gf_models.card_instance_game_tree_runtime import RetainedGamePolicyArtifacts
+    owner: RetainedGamePolicyArtifacts | RetainedGameArtifacts
+    ownership_options: Json = {"max_owned_bytes": min(model.resources.max_owned_bytes for model in neural),
+        "preflight_deadline": preflight_deadline, "finalization_deadline": work_deadline}
+    if tree_runtime:
+        owner = RetainedGamePolicyArtifacts(neural, config.actions, rules=rules, **ownership_options)
+    else:
+        owner = RetainedGameArtifacts(tuple(cast(ConfiguredNeuralModelV3, model) for model in neural),
+            config.actions, rules=rules, **ownership_options)
     try:
+        if evidence is None:
+            evidence = CardInstanceRuntimeEvidence(Path(config.server.binary), Path(config.server.source_dir),
+                                                  deadline=preflight_deadline)
+            evidence.preflight()
         bindings, labels = _baseline_labels(loaded, artifact_inputs=owner)
         admission = admit_game_workers_v3(config.actions, (bindings[labels[0]], bindings[labels[1]]),
             rules=rules, game_concurrency=config.run.concurrency,
             global_cuda_bytes=config.run.global_cuda_budget_bytes,
             max_workers=config.run.max_participant_workers)
-        return await _run_corrected(loaded, command, bindings, labels, started=started,
-                                    artifact_inputs=owner, runtime_evidence=evidence,
-                                    resource_admission=admission)
-    finally:
-        owner.release()  # no filesystem I/O or reportable operation after healthy publication.
+        result = await _run_corrected(loaded, command, bindings, labels, started=started,
+                                      artifact_inputs=owner, runtime_evidence=evidence,
+                                      resource_admission=admission)
+    except BaseException as error:
+        try:
+            owner.release()
+        except BaseException as cleanup:  # noqa: BLE001 - preserve initiating failure with reachable pair custody.
+            vars(error)["_game_artifact_cleanup_owner"] = owner
+            error.add_note("retained game pair cleanup: " + str(cleanup))
+        raise
+    # Confirmed collection ownership has already retired before publication;
+    # this final artifact release is memory-only.
+    owner.release()
+    return result
 
 
 async def _run_corrected(loaded: LoadedConfig, command: str,
@@ -279,15 +307,20 @@ async def _run_corrected(loaded: LoadedConfig, command: str,
         neural_metadata = ({label: artifact_inputs.journal_metadata(label) for label, binding in bindings.items()
                             if binding.model_id in ("mlp", "gru", "transformer")}
                            if artifact_inputs is not None else None)
+        tree_metadata = ({label: artifact_inputs.journal_metadata(label) for label, binding in bindings.items()
+                          if binding.model_id == "lightgbm"} if artifact_inputs is not None else None)
         _validate_recorded_episodes(directory, episodes, config.actions, run_id, work_deadline, expected,
-                                   neural_metadata=neural_metadata)
-        neural_inputs = artifact_inputs.finalize(deadline=work_deadline) if artifact_inputs is not None else None
+                                   neural_metadata=neural_metadata, tree_metadata=tree_metadata)
+        from gf_models.card_instance_game_tree_runtime import RetainedGamePolicyArtifacts
+        typed_inputs = artifact_inputs.finalize_inputs(deadline=work_deadline) if type(artifact_inputs) is RetainedGamePolicyArtifacts else None
+        neural_inputs = (artifact_inputs.finalize(deadline=work_deadline)
+            if artifact_inputs is not None and typed_inputs is None else None)
         inventory = _inventory(directory, work_deadline)
         from gf_cli import _code_provenance
         producer = _code_provenance(work_deadline)
         receipts = [group.health["runtime_evidence"] for group in groups]
-        metadata_options: dict[str, Any] = ({} if neural_inputs is None else
-            {"policy_bindings": bindings, "neural_inputs": neural_inputs})
+        metadata_options: dict[str, Any] = ({"policy_bindings": bindings, **typed_inputs} if typed_inputs is not None else
+            {} if neural_inputs is None else {"policy_bindings": bindings, "neural_inputs": neural_inputs})
         metadata_producer: Any = collection_metadata if collection is None else ppo_collection_metadata
         if _final_validation_context is not None:
             summary.update(healthy=summary["comparison_valid"], artifact_bytes=sum(row["bytes"] for row in inventory))
@@ -318,7 +351,14 @@ async def _run_corrected(loaded: LoadedConfig, command: str,
         if _final_validation_context is not None:
             issued = _final_validation_context.begin_collection(publication, summary, manifest)
             return directory, issued  # Actual pending owner; canonical manifest remains absent.
-        publication.commit(summary, manifest)
+        if type(artifact_inputs) is RetainedGamePolicyArtifacts:
+            # Bound integrity check over the admitted actual owner; the callable
+            # conveys no Source, fit or paired-artifact authority of its own.
+            def retained_input_guard() -> None:
+                artifact_inputs.guard(deadline=work_deadline)
+            publication.commit(summary, manifest, retained_input_guard=retained_input_guard)
+        else:
+            publication.commit(summary, manifest)
         return directory, summary  # no reportable checks after publication owner releases.
     except BaseException as error:
         if _final_validation_context is not None:

@@ -184,6 +184,12 @@ class RetainedGameArtifacts:
         if self._released or self._failed:
             raise ContractError("external artifact input owner has been released or failed")
 
+    @property
+    def retained_bytes(self) -> int:
+        """Actual held scan custody only; grants no new artifact/Source permission."""
+        self._live()
+        return self._scan.retained
+
     def binding(self, model: ConfiguredNeuralModelV3) -> tuple[str, RuntimePolicyBinding]:
         self._live()
         label = self._models.get(digest(asdict(model)))

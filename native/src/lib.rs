@@ -574,7 +574,7 @@ impl StructuredSessionBridge {
     fn release_final_consumer(&self, require_released: bool) -> error::Result<()> {
         let final_packet = {
             let core = self.core.lock().map_err(|_| Error::Closed)?;
-            matches!(core.as_ref(),Some(StructuredBridgeCore::Corrected(v)) if v.final_has_packet())
+            matches!(core.as_ref(),Some(StructuredBridgeCore::Corrected(v)) if v.final_has_packet() || v.original_has_packet())
         };
         if final_packet {
             release_final_packet_consumer(&self.payload, require_released)?;
@@ -920,6 +920,7 @@ impl StructuredSessionBridge {
         .map_err(python_error)
     }
     fn recheck(&self, py: Python<'_>, retained_python_bytes: usize) -> PyResult<()> {
+        self.release_final_consumer(false).map_err(python_error)?;
         py.detach(|| {
             let mut core = self.core.lock().map_err(|_| Error::Closed)?;
             let core = core.as_mut().ok_or(Error::Closed)?;
@@ -1326,6 +1327,64 @@ session_methods!(CardInstanceNativeSession, true, {
         .map_err(python_error)
     }
 
+    #[pyo3(signature=(collection_index,episode_index,retained_python_bytes=0))]
+    fn export_recorded_episode_payload<'py>(
+        &self,
+        py: Python<'py>,
+        collection_index: usize,
+        episode_index: usize,
+        retained_python_bytes: usize,
+    ) -> PyResult<RawTokenPayload> {
+        self.bridge
+            .release_final_consumer(true)
+            .map_err(python_error)?;
+        let payload = py
+            .detach(|| {
+                let mut core = self.bridge.core.lock().map_err(|_| Error::Closed)?;
+                let StructuredBridgeCore::Corrected(value) = core.as_mut().ok_or(Error::Closed)?
+                else {
+                    return Err(Error::Closed);
+                };
+                value.recorded_episode_preconditions(collection_index, episode_index)?;
+                let result = (|| {
+                    self.bridge
+                        .caller
+                        .lock()
+                        .map_err(|_| Error::Closed)?
+                        .resize(retained_python_bytes)?;
+                    value.export_recorded_episode_payload(collection_index, episode_index)
+                })();
+                if result.is_err() {
+                    value.fail_admitted();
+                }
+                result
+            })
+            .map_err(python_error)?;
+        let (metadata, banks, guard, lease) = payload.into_parts();
+        let result = publish_raw_banks(
+            py,
+            &self.bridge.budget,
+            &metadata,
+            banks,
+            Some((guard, lease)),
+        )
+        .and_then(|(packet, consumer)| {
+            *self
+                .bridge
+                .payload
+                .lock()
+                .map_err(|_| python_error(Error::Closed))? = Some(consumer);
+            Ok(packet)
+        });
+        if result.is_err() {
+            if let Ok(mut core) = self.bridge.core.lock() {
+                if let Some(StructuredBridgeCore::Corrected(v)) = core.as_mut() {
+                    v.fail_admitted();
+                }
+            }
+        }
+        result
+    }
     #[pyo3(signature=(collection_index,retained_python_bytes=0))]
     fn export_recorded_cohort<'py>(
         &self,

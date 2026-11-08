@@ -6,6 +6,7 @@ import math
 import os
 import stat
 import time
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -25,6 +26,7 @@ from gf_common.domain import (
 from gf_common.structured_layout import CORRECTED_CARD_INSTANCE_LAYOUT
 from gf_common.structured_tokens import signature
 from gf_models.card_instance_artifacts import EXTERNAL_INPUT_CONTRACT, validate_neural_metadata
+from gf_models.card_instance_game_tree_runtime import TREE_INPUT_CONTRACT, validate_tree_metadata
 
 
 def collection_metadata(
@@ -38,6 +40,7 @@ def collection_metadata(
     bots_revision: str,
     policy_bindings: dict[str, RuntimePolicyBinding] | None = None,
     neural_inputs: Json | None = None,
+    tree_inputs: Json | None = None,
 ) -> Json:
     binding = game_binding(
         actions.action_contract, rule_signature(actions.action_contract, card_instance_rules())
@@ -48,34 +51,43 @@ def collection_metadata(
         validate_runtime_receipt(value, require_executed=True) for value in runtime_evidence
     ]
     neural_fields: Json = {}
-    if (policy_bindings is None) != (neural_inputs is None):
-        raise ContractError("neural collection requires both policy bindings and retained inputs")
-    if neural_inputs is not None:
+    inputs = {"neural_inputs": neural_inputs, "tree_inputs": tree_inputs}
+    supplied = {key: value for key, value in inputs.items() if value is not None}
+    if (policy_bindings is None) != (not supplied):
+        raise ContractError("learned collection requires both policy bindings and retained inputs")
+    if supplied:
         assert policy_bindings is not None
-        closed(neural_inputs, {"input_contract", "policies"})
-        if neural_inputs["input_contract"] != EXTERNAL_INPUT_CONTRACT or not isinstance(neural_inputs["policies"], dict) or not neural_inputs["policies"]:
-            raise ContractError("collection requires sealed retained external neural inputs")
+        for key, raw_inputs in supplied.items():
+            closed(raw_inputs, {"input_contract", "policies"})
+            expected_contract = TREE_INPUT_CONTRACT if key == "tree_inputs" else EXTERNAL_INPUT_CONTRACT
+            if (raw_inputs["input_contract"] != expected_contract or type(raw_inputs["policies"]) is not dict
+                    or not raw_inputs["policies"]):
+                raise ContractError("collection requires closed retained own-policy inputs")
         if set(policy_bindings) != set(policies):
             raise ContractError("collection policy registry differs from declared policy labels")
-        expected_neural = set()
+        expected_by_type: dict[str, set[str]] = {"neural_inputs": set(), "tree_inputs": set()}
         for label, execution in policy_bindings.items():
             if type(execution) is not RuntimePolicyBinding:
                 raise ContractError("closed runtime policy binding required")
             if execution.policy_options is None:
                 if execution.model_id not in ("random", "heuristic") or label != execution.model_id + "-card-instance-v2":
                     raise ContractError("collection baseline binding mismatch")
-            else:
-                expected_neural.add(label)
-                raw = neural_inputs["policies"].get(label)
-                if type(raw) is not dict:
-                    raise ContractError("missing sealed neural policy metadata")
-                safe, expected = validate_neural_metadata(raw, actions=actions, rules=card_instance_rules())
-                if expected != label or canonical(safe) != canonical(execution.policy_options) or safe["model"]["model_id"] != execution.model_id:
-                    raise ContractError("collection sealed neural policy mismatch")
-        if set(neural_inputs["policies"]) != expected_neural:
-            raise ContractError("collection external input inventory differs from neural registry")
+                continue
+            tree = execution.model_id == "lightgbm"
+            key = "tree_inputs" if tree else "neural_inputs"
+            expected_by_type[key].add(label)
+            raw = supplied.get(key, {}).get("policies", {}).get(label)
+            if type(raw) is not dict:
+                raise ContractError("missing retained own-policy metadata")
+            validator = validate_tree_metadata if tree else validate_neural_metadata
+            safe, expected = validator(raw, actions=actions, rules=card_instance_rules())
+            if expected != label or canonical(safe) != canonical(execution.policy_options) or safe["model"]["model_id"] != execution.model_id:
+                raise ContractError("collection retained policy binding mismatch")
+        for key, labels in expected_by_type.items():
+            if set(supplied.get(key, {}).get("policies", {})) != labels:
+                raise ContractError("collection retained input inventory differs from typed registry")
         neural_fields = {"policy_bindings": {label: asdict(value) for label, value in policy_bindings.items()},
-            "neural_inputs": clone(neural_inputs)}
+            **{key: clone(value) for key, value in supplied.items()}}
     elif not policies or any(
         value not in ("random-card-instance-v2", "heuristic-card-instance-v2") for value in policies
     ):
@@ -435,7 +447,7 @@ class CollectionPublication:
         os.fsync(self.directory_fd)
         self._check()  # final check while both original output descriptors are live.
 
-    def commit(self, report: Json, manifest: Json) -> None:
+    def commit(self, report: Json, manifest: Json, *, retained_input_guard: Callable[[], None] | None = None) -> None:
         if manifest.get('collection_role') == 'ppo-final-validation' or self._final_staged:
             raise ContractError('final validation requires its concrete retained publication owner')
         if self.committed or self.outputs or self._directory_handle is not None:
@@ -443,8 +455,14 @@ class CollectionPublication:
         if report.get('healthy') is not True or manifest.get('schema_version') != 5:
             raise ContractError('collection healthy report and manifest5 required')
         try:
+            if retained_input_guard is not None:
+                retained_input_guard()
             self._publish(report, manifest, final=False)
+            if retained_input_guard is not None:
+                retained_input_guard()
             self._release()  # close errors are publication failures, even after actual release.
+            if retained_input_guard is not None:
+                retained_input_guard()
         except BaseException as error:
             try:
                 self.revoke()

@@ -6,14 +6,23 @@ from dataclasses import asdict, dataclass, field
 from typing import Any
 
 from gf_common.domain import ContractError, Json, closed, integer
-from gf_common.structured_layout import LEGACY_LAYOUT, StructuredLayout
+from gf_common.structured_layout import (
+    CORRECTED_CARD_INSTANCE_LAYOUT,
+    LEGACY_LAYOUT,
+    StructuredLayout,
+)
 from gf_models.structured_binding import (
     ConfiguredNeuralModelV2,
     ConfiguredNeuralModelV3,
     configured_model_v2,
     configured_model_v3,
 )
-from gf_models.structured_tree_config import ConfiguredTreeModelV2, configured_tree_v2
+from gf_models.structured_tree_config import (
+    ConfiguredTreeModelV2,
+    ConfiguredTreeModelV3,
+    configured_tree_v2,
+    configured_tree_v3,
+)
 
 
 @dataclass(frozen=True)
@@ -76,8 +85,12 @@ def encoder_config(value: Json) -> EncoderConfig:
     return config
 
 
-def model_config(value: Json, *, layout: StructuredLayout = LEGACY_LAYOUT) -> ModelConfig | MLPModelConfig | SequenceModelConfig | ConfiguredNeuralModelV2 | ConfiguredNeuralModelV3 | ConfiguredTreeModelV2:
+def model_config(value: Json, *, layout: StructuredLayout = LEGACY_LAYOUT) -> ModelConfig | MLPModelConfig | SequenceModelConfig | ConfiguredNeuralModelV2 | ConfiguredNeuralModelV3 | ConfiguredTreeModelV2 | ConfiguredTreeModelV3:
     if value.get("version") == "3":
+        if value.get("model_id") == "lightgbm":
+            if layout is not CORRECTED_CARD_INSTANCE_LAYOUT:
+                raise ContractError("Tree3 Config requires the corrected card-instance layout")
+            return configured_tree_v3(value)
         return configured_model_v3(value, layout=layout)
     if layout is not LEGACY_LAYOUT:
         raise ContractError("legacy model parser rejects card layouts")
@@ -142,8 +155,8 @@ def training_config(value: Json) -> TrainingConfig | PPOTrainingConfig:
     return TrainingConfig(**converted)
 
 
-def validate_capacity(model: ModelConfig | MLPModelConfig | SequenceModelConfig | ConfiguredNeuralModelV2 | ConfiguredNeuralModelV3 | ConfiguredTreeModelV2, max_sequence_length: int) -> None:
-    if isinstance(model, ConfiguredTreeModelV2):
+def validate_capacity(model: ModelConfig | MLPModelConfig | SequenceModelConfig | ConfiguredNeuralModelV2 | ConfiguredNeuralModelV3 | ConfiguredTreeModelV2 | ConfiguredTreeModelV3, max_sequence_length: int) -> None:
+    if isinstance(model, (ConfiguredTreeModelV2, ConfiguredTreeModelV3)):
         if not 1 <= max_sequence_length <= model.encoder.max_positions:
             raise ContractError("generator exceeds Tree2 position capacity")
         return

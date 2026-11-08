@@ -83,8 +83,15 @@ reviews and351MAIN scoped checks/Ruff/mypy152after early-admission, protected
 diagnostics and repeated-mutation growth fixes. Native Actor64/solo-parent
 forwarding now also passes both restricted independent reviews and341MAIN
 checks/Ruff/mypy153. The separate role markers stay unpublished; positive FFI
-through a genuine formal parent is NOT RUN. Qualified Dataset3/GameTree3 and
-their exact resource/original-history seams remain under implementation.
+through a genuine formal parent is NOT RUN. Guarded Python GameTree3 runtime
+also passes independent correctness/conformance and185MAIN checks/Ruff/mypy155,
+including original Config goldens. The separate original-history/resource seam
+also passes both reviews and183MAIN checks (11optional skips), Ruff/mypy156.
+It preserves actual parent/Source/custody identity, recorded16 and final64
+original DTOs, and explicit joint E/S0/F/A plus B/L resource accounting.
+Actual qualified gameplay remains NOT RUN. Dataset3/shared-fit is frozen for
+independent review; native Tree RAW/marker adoption and final CLI integration
+remain pending. New capability markers and the installed native remain unchanged.
 ADR0024§18.2 separately pins
 reachable formal-parent/64validation/qualified Dataset3/GameTree3 interfaces;
 formal experimental execution stays deferred.

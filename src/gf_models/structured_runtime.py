@@ -130,6 +130,9 @@ def own_game_worker_settings_v3(model_id: str, actions: ActionConfigV3, options:
         if options is not None:
             raise ContractError("baseline forbids policy options")
         return WorkerCaps(max_positions=actions.max_sequence_length, max_candidates=actions.max_candidates), NumericCosts(), 0, 0
+    if model_id == "lightgbm" and options is not None:
+        from gf_models.card_instance_game_tree_runtime import game_tree_settings
+        return game_tree_settings(options, actions=actions, rules=rules)
     if model_id not in ("mlp", "gru", "transformer") or options is None:
         raise ContractError("neural game worker requires explicit safe options")
     safe = safe_options_game_v3(options, actions=actions, rules=rules)

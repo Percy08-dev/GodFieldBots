@@ -280,10 +280,14 @@ def test_management_stat_sized_joint_reservation_refuses_before_object_decoder(o
         reader='participant-structured-v2', memory_budget_mib=1024)))
     try:
         with pytest.raises(ContractError, match='reservation'):
-            actor._open_native_original(loaded, parent, root, deadline=parent.deadline,
-                max_owned_bytes=parent.limit, expected_plan=None, returned=None, pending=None,
-                control_bytes=control, state={}, binding=RuntimePolicyBinding('mlp', {'expected_manifest_digest':'a'*64}),
-                projected=None, ancestors={})
+            facts={'parent_run_id':'UNADMITTED','parent_run_path':str(parent.directory),'seed':17,'final_generation':1,
+                'final_binding':{'label':'UNADMITTED','binding':asdict(RuntimePolicyBinding('mlp',{'expected_manifest_digest':'a'*64}))},
+                'code':{},'integration':{}}
+            contract=actor._Final64OriginalContract(parent,b'{}',b'[]',b'{}',originals[3],loaded.config.preprocessing,
+                actor.canonical(facts).encode())
+            actor._inspect_native_final64_originals(contract,parent,root,deadline=parent.deadline,
+                max_owned_bytes=parent.limit,expected_plan=None,returned=None,pending=None,
+                control_bytes=control,ancestors={})
         assert not decoded and loan.cleanup_complete
         assert _require_borrow(parent, token) is token
     finally:
@@ -327,7 +331,7 @@ def test_management_control_handoff_reaches_native_rejection_without_python_jour
     registry = {key: RuntimePolicyBinding(**value) for key, value in manifest['policy_bindings'].items()}
     plan = SimpleNamespace(linkage=manifest['linkage'], config_projection=manifest['config_projection'],
         groups=validation_groups(17, manifest['linkage']['policy_label'], actions_version=3), bindings=registry)
-    monkeypatch.setattr(actor, '_plan', lambda *args: plan)
+    monkeypatch.setattr(actor, '_plan_original_contract', lambda *args: plan)
     python_reads = []
     def forbidden(*args, **kwargs):
         python_reads.append(True)
@@ -347,9 +351,13 @@ def test_management_control_handoff_reaches_native_rejection_without_python_jour
     state = fixture['state']
     try:
         with pytest.raises(RuntimeError) as error:
-            actor._open_native_original(loaded, parent, root, deadline=parent.deadline, max_owned_bytes=parent.limit,
-                expected_plan=None, returned=None, pending=None, control_bytes=4*1024**2, state=state,
-                binding=registry[manifest['linkage']['policy_label']], projected=projected, ancestors={})
+            expected={'parent_run_id':state['run_id'],'parent_run_path':str(parent.directory),'seed':17,'final_generation':1,
+                'final_binding':{'label':manifest['linkage']['policy_label'],'binding':asdict(registry[manifest['linkage']['policy_label']])},
+                'code':state['identity']['code'],'integration':state['identity']['integration']}
+            contract=actor._Final64OriginalContract(parent,actor.canonical(loaded.effective).encode(),b'[]',
+                actor.canonical(projected.effective).encode(),originals[3],loaded.config.preprocessing,actor.canonical(expected).encode())
+            actor._inspect_native_final64_originals(contract,parent,root,deadline=parent.deadline,max_owned_bytes=parent.limit,
+                expected_plan=None,returned=None,pending=None,control_bytes=4*1024**2,ancestors={})
         assert error.value is primary and len(seen) == 1 and not python_reads
         assert seen[0]['manifest'] == {'kind':'canonical'}
         assert seen[0]['expected_plan']['validation_invocation'] == manifest['validation_invocation']

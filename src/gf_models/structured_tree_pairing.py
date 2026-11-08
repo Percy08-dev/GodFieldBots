@@ -28,6 +28,7 @@ from gf_models.structured_tree_config import (
 @dataclass(frozen=True)
 class _TreeRecords:
     modern: bool
+    game: bool = False
 
     @property
     def schema(self) -> int:
@@ -43,11 +44,17 @@ class _TreeRecords:
 
     @property
     def label(self) -> str:
-        return 'card-instance-declared-terminal-v1' if self.modern else 'behavior-selected-natural-return-gamma1-v1'
+        return ('behavior-selected-natural-return-gamma1-v1' if self.game or not self.modern
+                else 'card-instance-declared-terminal-v1')
 
     @property
     def shared_cost(self) -> str:
-        return 'shared_fixture_construction' if self.modern else 'shared_generation'
+        return 'shared_fixture_construction' if self.modern and not self.game else 'shared_generation'
+
+    @property
+    def request_fields(self) -> set[str]:
+        return ({'shared_generation', 'managed_memory'} if self.game else
+                {'shared_fixture_construction'} if self.modern else set())
 
     def architecture(self, raw: Any) -> Any:
         return (architecture_config_v3 if self.modern else architecture_config)(raw)
@@ -69,8 +76,12 @@ class _TreeRecords:
     def binding(self, raw: Any) -> Json:
         if not self.modern:
             return validate_input_binding(raw)
-        from gf_common.card_instance_fixture import input_binding
-        expected = input_binding()
+        if self.game:
+            from gf_common.card_instance_game_tree import input_binding as game_binding
+            expected = game_binding()
+        else:
+            from gf_common.card_instance_fixture import input_binding as fixture_binding
+            expected = fixture_binding()
         closed(raw, set(expected))
         if canonical(raw) != canonical(expected):
             raise ContractError('Tree3 exact corrected component input binding required')
@@ -78,6 +89,12 @@ class _TreeRecords:
 
     def source(self, raw: Json, *, toy: bool = False) -> None:
         if not self.modern:
+            return
+        if self.game:
+            from gf_common.card_instance_game_tree import checked_source
+            if toy:
+                raise ContractError('qualified game Tree cannot be toy/component origin')
+            checked_source(raw)
             return
         if toy:
             if raw['source_kind'] is not None or raw['source_origin'] is not None:
@@ -97,10 +114,11 @@ class _TreeRecords:
 
 TREE2_RECORDS = _TreeRecords(False)
 TREE3_RECORDS = _TreeRecords(True)
+TREE3_GAME_RECORDS = _TreeRecords(True, True)
 
 
 def _records(value: _TreeRecords) -> _TreeRecords:
-    if value is not TREE2_RECORDS and value is not TREE3_RECORDS:
+    if value is not TREE2_RECORDS and value is not TREE3_RECORDS and value is not TREE3_GAME_RECORDS:
         raise ContractError('explicit closed Tree record context required')
     return value
 
@@ -168,9 +186,13 @@ def validate_input_binding(value:Any)->Json:
 
 def validate_request(value:Any,*,_context:_TreeRecords=TREE2_RECORDS)->Json:
     context=_records(_context)
-    raw=closed(value,REQUEST_FIELDS|context.extra_fields|({'shared_fixture_construction'} if context.modern else set()))
+    raw=closed(value,REQUEST_FIELDS|context.extra_fields|context.request_fields)
     context.source(raw)
-    if context.modern:
+    if context.game:
+        from gf_common.card_instance_game_tree import checked_memory, checked_shared
+        checked_shared(raw['shared_generation'])
+        checked_memory(raw['managed_memory'], child_limit_bytes=raw['execution']['resources']['max_owned_bytes'])
+    elif context.modern:
         _fixture_construction_cost(raw['shared_fixture_construction'])
     if type(raw['schema_version']) is not int or raw['schema_version']!=context.schema or raw['kind']!='structured-tree-fit-request':
         raise ContractError('Tree2 immutable fit request3 required')
@@ -242,8 +264,14 @@ def _parse_provenance(cls:Any,value:Any,context:_TreeRecords)->Any:
     return cls(canonical(raw).encode())
 
 
+class GameTrainedProvenanceV4(TrainedProvenanceV4):
+    @classmethod
+    def parse(cls, value: Any) -> GameTrainedProvenanceV4:
+        return _parse_provenance(cls, value, TREE3_GAME_RECORDS)
+
+
 def _provenance(value:Any,context:_TreeRecords)->TrainedProvenance:
-    return (TrainedProvenanceV4 if context.modern else TrainedProvenance).parse(value)
+    return (GameTrainedProvenanceV4 if context.game else TrainedProvenanceV4 if context.modern else TrainedProvenance).parse(value)
 
 
 def provenance_for_request(request:Json,request_sha:str,*,_context:_TreeRecords=TREE2_RECORDS)->TrainedProvenance:
@@ -266,6 +294,19 @@ def fit_admission(model:Any,fit:Json,rows:Json,*,retained_bytes:int,_context:_Tr
     fixed=256*1024**2+threads*64*1024**2+16*envelope['text_bytes']
     packing=model.inference.candidate_chunk*(12*width+32)+(context.features.context_width+18*context.features.card_width)*4+65536
     total=retained_bytes+5*raw+fixed+packing
+    if context.game:
+        arrays=2*sum((count+model.inference.candidate_chunk-1)//model.inference.candidate_chunk for count in rows.values())
+        # Exact configured controls + conservative existing4096B-per-shard
+        # metadata/document overlap; no Source paths or observed maxima.
+        control=len(canonical({'model':asdict(model.architecture()),'execution':{'inference':asdict(model.inference),
+            'resources':asdict(model.resources)},'fit':fit,'rows':rows,'envelope':envelope}).encode())
+        own=32*(control+4096*arrays)+4*65536
+        child=5*raw+fixed+packing+max(own,retained_bytes)
+        if child>model.resources.max_owned_bytes:
+            raise ContractError('game Tree CHILD-LOCAL5raw/fixed/packing/control envelope exceeds configured cap')
+        return {'raw_bytes':raw,'model_envelope':envelope,'fixed_bytes':fixed,'packing_bytes':packing,
+            'retained_bytes':retained_bytes,'total_bytes':retained_bytes+child,'native_threads':threads,
+            'child_local_bytes':child,'child_own_bytes':own}
     if total>model.resources.max_owned_bytes:raise ContractError('Tree2 full Source/raw/Dataset/workspace/model fit admission exceeded')
     return {'raw_bytes':raw,'model_envelope':envelope,'fixed_bytes':fixed,'packing_bytes':packing,'retained_bytes':retained_bytes,'total_bytes':total,'native_threads':threads}
 
@@ -331,7 +372,7 @@ def validate_pair_records(request:Any,completion:Any,inference:Json,*,request_sh
     shared=closed(costs[context.shared_cost],{'seconds','cost_key','scope'});_sha(shared['cost_key'])
     if type(shared['seconds']) not in (int,float) or not math.isfinite(shared['seconds']) or shared['seconds']<0 or type(shared['scope']) is not str:
         raise ContractError('Tree2 shared generation accounting invalid')
-    if context.modern and canonical(shared)!=canonical(request['shared_fixture_construction']):
+    if context.modern and canonical(shared)!=canonical(request[context.shared_cost]):
         raise ContractError('Tree3 completion fixture construction cost differs from immutable request')
     outputs=closed(completion['outputs'],{'files','inference_sha256','model_sha256'})
     if outputs['inference_sha256']!=inference_sha256 or outputs['model_sha256']!=model_sha256:
@@ -820,3 +861,35 @@ def resolve_checkpoint_v3(directory:Any,**options:Any)->tuple[Any,str,TrainingBi
 
 def copy_training_bundle_v3(source:Any,target:Any,**options:Any)->TrainingBinding:
     return copy_training_bundle(source,target,_context=TREE3_RECORDS,**options)
+
+
+
+def game_fit_admission(model: ConfiguredTreeModelV3, fit: Json, rows: Json, *,
+                       retained_bytes: int, total_bytes: int, controller_extra_bytes: int = 0) -> Json:
+    """Two independent equations: full configured child AND joint controller+child."""
+    from gf_common.card_instance_game_tree import managed_memory
+    local = fit_admission(model, fit, rows, retained_bytes=0, _context=TREE3_GAME_RECORDS)
+    integer(controller_extra_bytes, 0, 2**63-1)
+    # Conservative duplicate overlap is intentional: full declared child cap
+    # PLUS controller5raw/fixed/packing, never an observed successful peak.
+    controller = retained_bytes + 5*local['raw_bytes'] + local['fixed_bytes'] + local['packing_bytes'] + controller_extra_bytes
+    memory = managed_memory(total_bytes, controller, model.resources.max_owned_bytes)
+    return {**local, 'retained_bytes': retained_bytes, 'total_bytes': memory['reserved_peak_bytes'],
+        'managed_memory': memory, 'controller_reserved_bytes': controller}
+
+
+def validate_game_request(value: Any) -> Json:
+    return validate_request(value, _context=TREE3_GAME_RECORDS)
+
+
+
+def inspect_training_game_v3(directory: Any, **options: Any) -> PairedTraining:
+    """Retain ACTUAL healthy real pair custody; serialized binding is not its owner."""
+    return inspect_training(directory, _context=TREE3_GAME_RECORDS, **options)
+
+
+def resolve_checkpoint_game_v3(directory: Any, **options: Any) -> tuple[Any, str, TrainingBinding]:
+    artifact, inference_sha256, binding = resolve_checkpoint(directory, _context=TREE3_GAME_RECORDS, **options)
+    if type(binding) is not TrainingBinding:
+        raise ContractError('real game Tree requires a trained complete pair')
+    return artifact, inference_sha256, binding

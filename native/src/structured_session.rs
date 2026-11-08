@@ -2,6 +2,8 @@
 //! No Journal5, ZIP/NPY, authorization or numerical export claims.
 #[path = "card_instance_final_validation.rs"]
 pub(crate) mod final_validation;
+#[path = "card_instance_original_episode.rs"]
+mod original_episode;
 use crate::{
     budget::{Budget, BudgetVec, Control, Lease},
     error::{Error, Result},
@@ -1866,6 +1868,7 @@ pub(crate) struct CardInstanceNativeSession {
     payload: std::sync::Weak<()>,
     receipt: Option<BudgetVec<u8>>,
     final_slot: Option<final_validation::Slot>,
+    original_episode: original_episode::State,
 }
 impl CardInstanceNativeSession {
     pub(crate) fn open(
@@ -1911,6 +1914,7 @@ impl CardInstanceNativeSession {
             payload: std::sync::Weak::new(),
             receipt: None,
             final_slot: None,
+            original_episode: original_episode::State::new(),
         })
     }
     fn core(&self) -> Result<&CohortSession> {
@@ -1956,6 +1960,7 @@ impl CardInstanceNativeSession {
     }
     pub(crate) fn export_recorded_cohort(&mut self, index: usize) -> Result<CardInstancePayload> {
         self.final_slot_operation(CardInstanceOperation::Recorded(index))?;
+        self.original_episode_idle()?;
         self.core()?.recorded_export_preconditions(index)?;
         if self.payload.upgrade().is_some() {
             return Err(Error::contract("outstanding exported packet"));
@@ -2028,7 +2033,11 @@ impl CardInstanceNativeSession {
         Ok(self.receipt.as_ref().unwrap())
     }
     pub(crate) fn close(&mut self) -> Result<()> {
-        let final_result = self.close_final_validation();
+        let episode_result = self.close_original_episode();
+        if !self.original_episode_retired() {
+            return episode_result;
+        }
+        let final_result = episode_result.and(self.close_final_validation());
         if !self.final_slot_retired() {
             return final_result.and(Err(Error::contract(
                 "final64 collection retirement unconfirmed",
@@ -2048,6 +2057,7 @@ impl CardInstanceNativeSession {
 impl Drop for CardInstanceNativeSession {
     fn drop(&mut self) {
         let _ = self.close();
+        self.retire_original_on_drop();
         if self.core.is_some() {
             let _ = self.retire_core();
         }
@@ -2496,6 +2506,7 @@ mod card_instance_lifecycle_primitives {
             payload: std::sync::Weak::new(),
             receipt: None,
             final_slot: None,
+            original_episode: original_episode::State::new(),
         };
         assert!(!root.join("run.json").exists());
         assert!(!root.join("generations").exists());
@@ -3026,6 +3037,7 @@ impl CardInstanceNativeSession {
     /// FFI garbage collection cannot report I/O; use the already-started owned
     /// retirement worker rather than dropping a deep core while holding the GIL.
     pub(crate) fn retire_on_drop(&mut self) {
+        self.retire_original_on_drop();
         let _ = self.retire_core();
     }
 }

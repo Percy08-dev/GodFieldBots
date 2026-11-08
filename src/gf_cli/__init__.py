@@ -227,7 +227,8 @@ async def run_experiment(loaded: LoadedConfig, command: str, *, collection: Coll
         if collection is not None or ledger is not None:
             raise ContractError("corrected PPO/Source collection integration is not implemented")
         from gf_models.structured_binding import ConfiguredNeuralModelV3
-        if any(type(model) is ConfiguredNeuralModelV3 for model in (config.model, config.opponent)):
+        from gf_models.structured_tree_config import ConfiguredTreeModelV3
+        if any(type(model) in (ConfiguredNeuralModelV3, ConfiguredTreeModelV3) for model in (config.model, config.opponent)):
             from gf_cli.card_instance import run_inference
             return await run_inference(loaded, command)
         from gf_cli.card_instance import run_baseline
@@ -283,10 +284,10 @@ async def _run_experiment(loaded: LoadedConfig, command: str, *, collection: Col
         registry, labels = structured_bindings(config.model, config.opponent,actions=config.actions,deadline=preflight_deadline)
     elif collection is None:
         from gf_models.structured_binding import ConfiguredNeuralModelV2, ConfiguredNeuralModelV3
-        from gf_models.structured_tree_config import ConfiguredTreeModelV2
+        from gf_models.structured_tree_config import ConfiguredTreeModelV2, ConfiguredTreeModelV3
         assert isinstance(config.actions, ActionConfig)
-        assert not isinstance(config.model, (ConfiguredNeuralModelV2, ConfiguredNeuralModelV3, ConfiguredTreeModelV2))
-        assert not isinstance(config.opponent, (ConfiguredNeuralModelV2, ConfiguredNeuralModelV3, ConfiguredTreeModelV2))
+        assert not isinstance(config.model, (ConfiguredNeuralModelV2, ConfiguredNeuralModelV3, ConfiguredTreeModelV2, ConfiguredTreeModelV3))
+        assert not isinstance(config.opponent, (ConfiguredNeuralModelV2, ConfiguredNeuralModelV3, ConfiguredTreeModelV2, ConfiguredTreeModelV3))
         registry, labels = bindings(config.model, config.opponent, config.actions, deadline=preflight_deadline)
     else:
         registry, labels = collection.bindings, ("owned", "owned")
@@ -587,6 +588,9 @@ def main(argv: list[str] | None = None) -> int:
                              "inputs": loaded.inputs}))
             return 0
         from gf_models.structured_binding import ConfiguredNeuralModelV3
+        if (args.command in ("train", "train-formal") and isinstance(loaded.config.actions, ActionConfigV3)
+                and type(loaded.config.model) is not ConfiguredNeuralModelV3):
+            raise ContractError("card-instance PPO requires an explicit NN3 learner")
         if not (isinstance(loaded.config.actions, ActionConfigV3)
                 and loaded.config.actions.action_contract == corrected_card_instance_contract()
                 and (args.command in ("smoke", "collect", "evaluate", "validate-formal-policy")
@@ -615,6 +619,8 @@ def main(argv: list[str] | None = None) -> int:
             if args.command == "train-formal" and (type(loaded.config.actions) is not ActionConfigV3 or type(loaded.config.model) is not ConfiguredNeuralModelV3):
                 raise ContractError("formal training requires corrected NN3 only")
             if isinstance(loaded.config.actions, ActionConfigV3):
+                if type(loaded.config.model) is not ConfiguredNeuralModelV3:
+                    raise ContractError("card-instance PPO requires an explicit NN3 learner")
                 if args.run_dir is None:
                     raise ValueError("card-instance PPO train requires --run-dir")
                 from gf_cli.card_instance import collect_ppo as collect_card_instance_ppo

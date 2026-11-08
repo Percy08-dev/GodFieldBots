@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import math
 import os
 import random
@@ -9,7 +10,7 @@ import subprocess
 import sys
 import time
 from dataclasses import asdict
-from typing import cast
+from typing import Any, cast
 
 from gf_common.card_instance import ActionConfigV3
 from gf_common.card_instance_rules import card_instance_rules, rule_signature
@@ -25,6 +26,12 @@ from gf_common.structured_wire import (
     parse_selection,
 )
 from gf_models.card_instance_artifacts import RetainedGameArtifacts
+from gf_models.card_instance_game_tree_runtime import (
+    RetainedGamePolicyArtifacts,
+    _configured,
+    policy_label_tree_game_v3,
+    safe_tree_options_game_v3,
+)
 from gf_models.structured_binding import policy_label_game_v3, safe_options_game_v3
 from gf_models.structured_config import InferenceBindingV2, model_config_v3
 from gf_models.structured_runtime import own_game_worker_settings_v3
@@ -48,25 +55,48 @@ class CardInstanceParticipantWorker(StructuredParticipantWorker):
         *,
         ledger: ReservationLedger,
         policy_options: Json | None = None,
-        artifact_inputs: RetainedGameArtifacts | None = None,
+        artifact_inputs: RetainedGameArtifacts | RetainedGamePolicyArtifacts | None = None,
+        deadline: float | None = None,
     ) -> None:
         self.rules = card_instance_rules()
         self.binding = game_binding(
             actions.action_contract, rule_signature(actions.action_contract, self.rules)
         )
-        options = (safe_options_game_v3(policy_options, actions=actions, rules=self.rules)
-            if policy_options is not None else None)
+        self._tree = model_id == "lightgbm"
+        parser = safe_tree_options_game_v3 if self._tree else safe_options_game_v3
+        options = parser(policy_options, actions=actions, rules=self.rules) if policy_options is not None else None
+        if self._tree and (deadline is None or type(deadline) not in (int, float) or not math.isfinite(deadline) or deadline <= time.monotonic()):
+            raise ContractError("Tree3 worker requires the original finite live session deadline")
+        self._session_deadline = deadline
+        self._operation_deadline = deadline
+        if self._tree:
+            assert deadline is not None
+            if type(timeout) not in (int, float) or not math.isfinite(timeout) or timeout <= 0:
+                raise ContractError("positive protocol3 timeout required")
+            self._construction_deadline = min(deadline, time.monotonic()+min(10., float(timeout)))
+        self._inflight: asyncio.Task[Any] | None = None
+        self._tree_failed = False
         self.caps, self.costs, residency, self.temporary_bytes = own_game_worker_settings_v3(
             model_id, actions, options, rules=self.rules)
         self.artifact_inputs = artifact_inputs
         self.neural_metadata: Json | None = None
+        self.tree_metadata: Json | None = None
         if options is None:
             if artifact_inputs is not None:
                 raise ContractError("baseline worker forbids neural artifact inputs")
             self.expected_policy = model_id + "-card-instance-v2"
+        elif self._tree:
+            if type(artifact_inputs) is not RetainedGamePolicyArtifacts:
+                raise ContractError("Tree3 worker requires its retained actual GAME pair owner")
+            assert options is not None and deadline is not None
+            artifact_inputs.require_options(model_id, options)
+            artifact_inputs.guard(deadline=self._construction_deadline)
+            self.expected_policy = policy_label_tree_game_v3(options, actions=actions, rules=self.rules)
+            self.tree_metadata = artifact_inputs.journal_metadata(self.expected_policy)
         else:
-            if type(artifact_inputs) is not RetainedGameArtifacts:
+            if type(artifact_inputs) not in (RetainedGameArtifacts, RetainedGamePolicyArtifacts):
                 raise ContractError("neural worker requires its retained original artifact owner")
+            assert artifact_inputs is not None
             artifact_inputs.require_options(model_id, options)
             self.expected_policy = policy_label_game_v3(model_config_v3(options["model"], layout=CORRECTED_CARD_INSTANCE_LAYOUT),
                 InferenceBindingV2(**options["inference"]), options["expected_manifest_digest"],
@@ -76,8 +106,9 @@ class CardInstanceParticipantWorker(StructuredParticipantWorker):
         integer(sampling_seed)
         if type(timeout) not in (int, float) or not math.isfinite(timeout) or timeout <= 0:
             raise ContractError("positive protocol3 timeout required")
+        self._tree_timeout = min(10., float(timeout))
         self.model_id, self.actions = model_id, actions
-        self.initial = {
+        self.initial: Json = {
             "protocol_version": 3,
             "model_id": model_id,
             "sampling_seed": sampling_seed,
@@ -106,12 +137,32 @@ class CardInstanceParticipantWorker(StructuredParticipantWorker):
         self._last_frame = None
         self._spawn_started = time.monotonic()
         self.process = cast("subprocess.Popen[bytes]", None)
+        if self._tree:
+            assert options is not None
+            from gf_common.domain import canonical
+            from gf_models.structured_tree_config import resource_estimate
+            from gf_models.structured_tree_encoder import _owned
+            from gf_simulator_client.framing import MAX_FRAME_BYTES, frame_decode_bytes
+            self._tree_model = _configured(options)
+            assert type(artifact_inputs) is RetainedGamePolicyArtifacts
+            self._tree_retained = (artifact_inputs.retained_bytes + artifact_inputs.guard_scratch_bytes
+                + _owned((self.initial, self.tree_metadata)))
+            self._tree_reply_limit = min(MAX_FRAME_BYTES, 65536+actions.max_candidates*(512+18*8))
+            resource_estimate(self._tree_model, model_bytes=options["tree_descriptor"]["model_bytes"],
+                extra_bytes=self._tree_retained+256*_owned(self.initial)+65536)
+            encoded_size = len(canonical(self.initial).encode())
+            resource_estimate(self._tree_model, model_bytes=options["tree_descriptor"]["model_bytes"],
+                extra_bytes=self._tree_retained+frame_decode_bytes(encoded_size)+frame_decode_bytes(self._tree_reply_limit))
+            artifact_inputs.guard(deadline=self._construction_deadline)
         self.lease = ledger.reserve_worker(residency)  # must precede Popen.
         self.lease._cleanup_owner = self
+        if type(artifact_inputs) is RetainedGamePolicyArtifacts:
+            artifact_inputs.retain_worker(self)
         process = None
         try:
             process = subprocess.Popen(
-                [sys.executable, "-E", "-m", "gf_simulator_client.card_instance_bootstrap"],
+                [sys.executable, "-E", "-m", "gf_simulator_client.card_instance_bootstrap"]
+                + ([str(options["resources"]["max_owned_bytes"])] if self._tree and options is not None else []),
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,
@@ -143,7 +194,7 @@ class CardInstanceParticipantWorker(StructuredParticipantWorker):
         if type(received["protocol_version"]) is not int or received["protocol_version"] != 3:
             raise ContractError("protocol3 response required")
 
-    async def initialize(self) -> None:
+    async def _initialize_owned(self) -> None:
         if self.initialized:
             return
         try:
@@ -161,10 +212,10 @@ class CardInstanceParticipantWorker(StructuredParticipantWorker):
         except BaseException as error:  # noqa: BLE001 - reap before preserving original failure.
             await self._abort(error)
 
-    async def select_frame(  # type: ignore[override]
+    async def _select_frame_owned(
         self, frame: DecisionFrame, delta: EventDelta
     ) -> tuple[GameGeneratedCandidatesV3, Selection]:
-        await self.initialize()
+        await self._initialize_owned()
         started = time.monotonic()
         try:
             layout = CORRECTED_CARD_INSTANCE_LAYOUT
@@ -183,6 +234,15 @@ class CardInstanceParticipantWorker(StructuredParticipantWorker):
                 or delta.start != frame.interval_start
             ):
                 raise ContractError("protocol3 original frame/delta identity mismatch")
+            if self._tree:
+                from gf_models.structured_tree_config import resource_estimate
+                from gf_models.structured_tree_encoder import _owned
+                event_bytes = sum(len(value) for value in delta._events)
+                if self._parent_bank is not None:
+                    event_bytes += sum(len(value) for value in self._parent_bank.view()._events)
+                resource_estimate(self._tree_model, model_bytes=self.initial["policy_options"]["tree_descriptor"]["model_bytes"],
+                    extra_bytes=self._tree_retained+4*_owned((frame, delta, None if self._parent_bank is None else vars(self._parent_bank), self._last_frame))
+                    +64*len(frame.payload)+32*event_bytes+65536)
             if self._parent_bank is None:
                 if frame.interval_start:
                     raise ContractError("protocol3 first event prefix must start at zero")
@@ -252,3 +312,96 @@ class CardInstanceParticipantWorker(StructuredParticipantWorker):
             return generated, selected
         except BaseException as error:  # noqa: BLE001 - reap before preserving original failure.
             await self._abort(error)
+
+    def _admit_tree_operation(self) -> None:
+        if self._inflight is not None:
+            raise ContractError("one in-flight Tree3 participant operation required")
+        if self.closed or self._tree_failed:
+            raise ContractError("Tree3 participant is cleanup-only")
+        assert self._session_deadline is not None
+        self._operation_deadline = min(self._session_deadline, time.monotonic()+self._tree_timeout)
+        self._inflight = asyncio.current_task()
+
+    def _tree_guard(self) -> None:
+        if not self._tree:
+            return
+        assert self._operation_deadline is not None
+        if self.closed or time.monotonic() >= self._operation_deadline:
+            raise TimeoutError("Tree3 original operation/session deadline exhausted or closed")
+        assert type(self.artifact_inputs) is RetainedGamePolicyArtifacts
+        self.artifact_inputs.guard(deadline=self._operation_deadline)
+
+    async def initialize(self) -> None:
+        if not self._tree:
+            await self._initialize_owned()
+            return
+        self._admit_tree_operation()
+        try:
+            self._tree_guard()
+            await self._initialize_owned()
+            self._tree_guard()
+        except BaseException as error:  # noqa: BLE001 - preserve cancellation after owned retirement.
+            self._tree_failed = True
+            await self._abort(error)
+        finally:
+            self._inflight = None
+
+    async def select_frame(self, frame: DecisionFrame, delta: EventDelta) -> tuple[GameGeneratedCandidatesV3, Selection]:  # type: ignore[override]
+        if not self._tree:
+            return await self._select_frame_owned(frame, delta)
+        self._admit_tree_operation()
+        try:
+            self._tree_guard()
+            result = await self._select_frame_owned(frame, delta)
+            self._tree_guard()
+            return result
+        except BaseException as error:  # noqa: BLE001 - preserve cancellation after owned retirement.
+            self._tree_failed = True
+            await self._abort(error)
+        finally:
+            self._inflight = None
+
+    def _read_reply(self, source: Any) -> Json:
+        if not self._tree:
+            return super()._read_reply(source)
+        from gf_models.structured_tree_config import resource_estimate
+        from gf_models.structured_tree_encoder import _owned
+        from gf_simulator_client.framing import read_frame_admitted
+        retained = resource_estimate(self._tree_model,
+            model_bytes=self.initial["policy_options"]["tree_descriptor"]["model_bytes"],
+            extra_bytes=self._tree_retained+_owned((None if self._parent_bank is None else vars(self._parent_bank), self._last_frame)))["total_bytes"]
+        return read_frame_admitted(source, max_owned_bytes=self._tree_model.resources.max_owned_bytes,
+            retained_bytes=retained, max_frame_bytes=self._tree_reply_limit)
+
+    async def _roundtrip(self, payload: Json) -> Json:
+        if not self._tree:
+            return await super()._roundtrip(payload)
+        from gf_common.domain import canonical
+        from gf_models.structured_tree_config import resource_estimate
+        from gf_models.structured_tree_encoder import _owned
+        from gf_simulator_client.framing import frame_decode_bytes
+        self._tree_guard()
+        assert self._operation_deadline is not None
+        self.timeout = min(self._tree_timeout, self._operation_deadline-time.monotonic())
+        resource_estimate(self._tree_model,
+            model_bytes=self.initial["policy_options"]["tree_descriptor"]["model_bytes"],
+            extra_bytes=self._tree_retained+256*_owned(payload)+65536)
+        resource_estimate(self._tree_model,
+            model_bytes=self.initial["policy_options"]["tree_descriptor"]["model_bytes"],
+            extra_bytes=self._tree_retained+_owned((None if self._parent_bank is None else vars(self._parent_bank), self._last_frame, payload))
+            +frame_decode_bytes(len(canonical(payload).encode()))+frame_decode_bytes(self._tree_reply_limit))
+        received = await super()._roundtrip(payload)
+        self._tree_guard()
+        return received
+
+    async def close(self, timeout: float = 2.) -> None:
+        if self._tree:
+            assert self._session_deadline is not None
+            timeout = min(timeout, max(0., self._session_deadline-time.monotonic()))
+        await super().close(timeout)
+        if type(self.artifact_inputs) is RetainedGamePolicyArtifacts:
+            self.artifact_inputs.retire_worker(self)
+        if self._tree and not self._tree_failed:
+            assert type(self.artifact_inputs) is RetainedGamePolicyArtifacts
+            assert self._session_deadline is not None
+            self.artifact_inputs.guard(deadline=self._session_deadline)

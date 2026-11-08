@@ -2653,6 +2653,21 @@ exact12-field own-policy options. Native processing additionally requires
 card_instance_tree_raw=journal6;lightgbm3;inference4;codec2 plus the existing
 corrected signature/ABI/API checks. Python gameplay gains no native dependency.
 The marker remains unpublished until RAW checks and both final reviews pass.
+The additive corrected RAW entry in
+`../design/card-instance-journal-raw-entry-v1.md` passes architecture DESIGN READY.
+StructuredJournalTokens.card_instance selects the existing corrected parser
+under the same owner/export path; the old constructor stays Journal5-exact.
+Corrected-only sticky diagnostic/recheck failures and actual close confirmation
+are mandatory; core removal or empty retry cannot erase retirement uncertainty.
+Root adopts the bounded advisor recommendation for new RAW allocation scope:
+portable semantic/execution/cap/cost/identity checks stay exact, while Native
+RAW's actual parse/copy/Stage/export quota is charged to its existing budget.
+RAW allocates no Booster and never attests Python's CPython graph/alias-specific
+allocation admission. Python inference's local guard is unchanged. Inputs
+admitted by both must have semantic/token/output parity; physical boundary
+admission may differ explicitly. This clarification requires narrow architecture
+confirmation before final freeze; no cap increase, guessed reservation or new
+persisted field is permitted while the new capability remains unpublished.
 
 Reuse the shared Dataset/Tree3 features, fit child, paired format4 publication,
 copy/load and inference kernels with a closed real-source context. Add reachable

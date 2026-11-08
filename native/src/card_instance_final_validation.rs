@@ -423,7 +423,8 @@ impl CardInstanceNativeSession {
         )?;
         let p = &i.parents[0];
         require(
-            r.require("parent_run_sha256")? == p.summary.root.require("run_sha256")?,
+            r.require("parent_run_sha256")?.string()?
+                == p.sources.verified_sha(&p.directory.join("run.json"))?,
             "final64 retained parent run differs",
         )?;
         let root = PathBuf::from(field(r, "directory")?);
@@ -822,6 +823,11 @@ mod tests {
             b"UNADMITTED parent primitive, not Run3",
         )
         .unwrap();
+        fs::write(
+            parent.join("run.json"),
+            b"UNADMITTED retained-byte primitive, NOT a Run3",
+        )
+        .unwrap();
         let b = Budget::new(2 * 1024 * 1024 * 1024);
         let c = Control::new(crate::budget::monotonic() + 120.).unwrap();
         let fixture = json::parse(
@@ -851,7 +857,10 @@ mod tests {
         )
         .unwrap();
         let state = &fixture.root["state"];
-        let run_sha = digest(state, &b, &c).unwrap();
+        let run_sha = format!(
+            "{:x}",
+            Sha256::digest(b"UNADMITTED retained-byte primitive, NOT a Run3")
+        );
         let mut inputs = OriginalInputs::unadmitted_component_lifecycle(
             &parent,
             state,
@@ -867,20 +876,21 @@ mod tests {
         inputs.stage.take().unwrap().close().unwrap();
         inputs.mode = ScanMode::Historical;
         inputs.scratch_bytes = 64 * 1024 * 1024;
+        inputs.parents[0]
+            .sources
+            .hash(&parent.join("run.json"))
+            .unwrap();
         inputs.parents[0].summary = doc(
-            &json::object([
-                ("run_sha256", json::text(&run_sha)),
-                (
-                    "generations",
-                    json::array([json::object([
-                        ("generation", json::integer(1)),
-                        (
-                            "inference_sha256",
-                            manifest["linkage"]["final_inference_sha256"].clone(),
-                        ),
-                    ])]),
-                ),
-            ]),
+            &json::object([(
+                "generations",
+                json::array([json::object([
+                    ("generation", json::integer(1)),
+                    (
+                        "inference_sha256",
+                        manifest["linkage"]["final_inference_sha256"].clone(),
+                    ),
+                ])]),
+            )]),
             &b,
             &c,
         )
@@ -914,6 +924,7 @@ mod tests {
             payload: std::sync::Weak::new(),
             receipt: None,
             final_slot: None,
+            original_episode: super::original_episode::State::new(),
         };
         let expected = json::object(
             [
@@ -967,6 +978,13 @@ mod tests {
         assert_eq!(
             request["expected_plan"]["validation_invocation"]["started_monotonic"].as_f64(),
             Some(10.)
+        );
+        assert!(
+            session.core().unwrap().inputs.parents[0]
+                .summary
+                .root
+                .get("run_sha256")
+                .is_none()
         );
         let summary = session
             .inspect_final_validation(&encoded(&session, &request))

@@ -3470,6 +3470,16 @@ impl CollectionScan {
         b: &Arc<Budget>,
         c: &Control,
     ) -> Result<Value> {
+        self.restage_original_episode(index, stage, limits, b, c)
+    }
+    pub(crate) fn restage_original_episode(
+        &mut self,
+        index: usize,
+        stage: &mut Stage,
+        limits: &CollectionLimits,
+        b: &Arc<Budget>,
+        c: &Control,
+    ) -> Result<Value> {
         let m = &self.manifest.root;
         let spec = m
             .require("schedule")?

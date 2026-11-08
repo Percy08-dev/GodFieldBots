@@ -12,7 +12,7 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import asdict
-from typing import Any, cast
+from typing import Any, NoReturn, cast
 
 from gf_common.diverse_actions import GeneratedCandidates
 from gf_common.domain import ContractError, Json, closed, digest, integer
@@ -122,6 +122,8 @@ class StructuredParticipantWorker(ParticipantWorker):
                         await asyncio.sleep(.01)
             if isinstance(received, BaseException):
                 raise received
+            if self.closed:
+                raise RuntimeError("structured worker closed before reply retirement")
             if "worker_error" in received:
                 raise RuntimeError(f"{received['worker_error']}: {received.get('message', '')}")
             return received
@@ -198,21 +200,44 @@ class StructuredParticipantWorker(ParticipantWorker):
         except BaseException as exc:  # noqa: BLE001 - no temporary release while a failed child is still alive
             await self._abort(exc)
 
-    async def _close_owned(self, timeout: float, started: float) -> None:
+    async def _abort(self, original: BaseException) -> NoReturn:
         try:
-            if self.process is None:
-                return
-            # A constructor/start failure can leave an unstarted Thread object.
-            # Never join it; the original setup error survives real child reap.
-            if self.io_thread is not None and self.io_thread.ident is None:
-                self.io_thread = None
-            await super()._close_owned(timeout, started)
+            await super()._abort(original)
         finally:
-            if self.process is None or self.process.poll() is not None:
-                if self.lease.pid is None:
-                    self.lease.cancel_before_spawn()
-                else:
-                    self.lease.reaped(self.process)
+            if not self.lease.released:
+                vars(original)["_structured_cleanup_owner"] = self
+
+    async def _close_owned(self, timeout: float, started: float) -> None:
+        previous = getattr(self, "_structured_cleanup_failure", None)
+        if previous is not None:
+            raise previous
+        if not hasattr(self, "_structured_cleanup_owners"):
+            self._structured_cleanup_owners = (self.process, self.io_thread)
+        try:
+            process, thread = self._structured_cleanup_owners
+            # Pipe close may clear mutable attributes. The SAME admitted thread
+            # must be retired after physical cleanup before its lease can retire.
+            if self.io_thread is not None and self.io_thread.ident is None:
+                if self.io_thread.is_alive():
+                    raise RuntimeError("worker I/O thread retirement is unconfirmed")
+                self.io_thread = None
+            if process is None:
+                if self.lease.pid is not None or self.io_thread is not None:
+                    raise RuntimeError("worker process ownership missing before confirmed cleanup")
+            else:
+                await super()._close_owned(timeout, started)
+                if process is not self.process or process.poll() is None or (
+                    thread is not None and thread.is_alive()
+                ):
+                    raise RuntimeError("worker physical cleanup is unconfirmed")
+            if self.lease.pid is None:
+                self.lease.cancel_before_spawn()
+            else:
+                self.lease.reaped(process)
+        except BaseException as error:
+            self._structured_cleanup_failure = error
+            vars(error)["_structured_cleanup_owner"] = self
+            raise
 
 
 def _startup_cleanup_owner(error: BaseException, ledger: ReservationLedger) -> StructuredParticipantWorker | None:
