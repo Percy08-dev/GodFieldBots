@@ -1014,6 +1014,17 @@ One session generation and24private fixture requests pass the final trace and
 original-data revalidation. Root accepts this test-only increment; full Ruff's
 four pre-existing untracked-user-script findings remain outside its changes.
 
+[ADR0026](adr/0026-structured-ppo-test-reference-reuse.md) separately accepts the
+design for reusing one completed default CPU MLP reference execution across
+structured PPO assertions. A fresh pause/resume parent uses the actual canonical
+configuration, while recorded reference evidence remains read-only and fully
+reaped. GRU/Transformer/CUDA default paths retain fresh references, and all
+original scenarios/budgets/assertions remain. Both final reviews retain READY
+after the raw-source comparison correction;42module tests pass, including all35
+originals, and measured wall falls546.87to455.41s. Related/selective219passes/
+6unchanged CUDA skips and full4232collection pass. Root accepts this bounded
+test-only change; no new whole-suite runtime or actual CUDA execution is claimed.
+
 Checks: `uv run pytest`, `uv run ruff check .`, `uv run mypy src`; wheel installed
 in a separate Python 3.14 environment, baseline without ML imports. Verify CPU
 compatibility per implemented extra. Record exact commands and PASS/FAIL/NOT RUN

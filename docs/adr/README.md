@@ -35,6 +35,10 @@ Magical Stick新契約・catalog v2・遅延認証応答の失敗ラッチと新
 pytestのセッション内で合成PPO原本を一度生成し、各テストへ独立した検証済みコピーを渡す。
 両独立レビュー・全件検証・同一対象での時間比較を完了。
 
+追加: [0026](0026-structured-ppo-test-reference-reuse.md) — Accepted:
+構造化PPOテストの完了済みCPU MLP参照実行を共有し、独立した一時停止・再開実行と比較する。
+両レビュー・対象42件・関連219件を通過。対象モジュールの経過時間を約17%削減。
+
 ## 記録テンプレート
 
 追加: [0023](0023-structured-encoders-and-diverse-search.md) — Accepted (独立実装可能部分):

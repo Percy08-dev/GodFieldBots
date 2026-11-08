@@ -2,8 +2,12 @@
 from __future__ import annotations
 
 import itertools
+import json
+import stat
 import time
-from dataclasses import asdict, replace
+from dataclasses import asdict, dataclass, replace
+from pathlib import Path
+from typing import Any
 
 import httpx
 
@@ -19,6 +23,58 @@ from gf_simulator_client.process import server_effective
 from gf_training.collection import FinalizedCollection
 from tests.episode_support import PublicScript
 from tests.ppo_support import synthetic_server_identity
+
+
+def component_inventory(parent):
+    """Fingerprint the original reference, including directory membership."""
+    from gf_models.arrays import sha256
+    assert parent.is_dir()
+    inventory = []
+    for path in sorted(parent.rglob('*')):
+        mode = path.lstat().st_mode
+        assert stat.S_ISDIR(mode) or stat.S_ISREG(mode)
+        inventory.append((str(path.relative_to(parent)), None if stat.S_ISDIR(mode) else sha256(path)))
+    return tuple(inventory)
+
+
+@dataclass(frozen=True)
+class CompletedComponentExecution:
+    """Only completed artifacts and closed diagnostic owners; never live work."""
+
+    loaded: LoadedConfig
+    parent: Path
+    result: dict[str, Any]
+    scripts: tuple[Any, ...]
+    workers: tuple[Any, ...]
+    ledgers: tuple[Any, ...]
+    inventory: tuple[tuple[str, str | None], ...]
+
+    def assert_closed(self):
+        assert len(self.workers) == 64 and len(self.scripts) == 16 and self.ledgers
+        assert all(worker.closed and worker.process.poll() is not None
+                   and (worker.io_thread is None or not worker.io_thread.is_alive())
+                   and worker.lease.released for worker in self.workers)
+        assert all(script.deleted for script in self.scripts)
+        assert all(ledger is self.ledgers[0] and ledger.learner is None
+                   and not ledger.workers and not ledger.updating and ledger.cuda_bytes == 0
+                   for ledger in self.ledgers)
+
+    def assert_unchanged(self):
+        assert component_inventory(self.parent) == self.inventory
+
+    def assert_default_cpu_reference(self, *, kind, learning_device, inference_device):
+        assert (kind, learning_device, inference_device) == ('mlp', 'cpu', 'cpu'), 'reference requires default CPU MLP'
+        assert self.loaded.config.model == model_defaults_v2('mlp'), 'reference model must be default CPU MLP'
+        assert self.loaded.config.training == PPOTrainingConfig(seeds=(17,), device='cpu', max_updates=2), 'reference training configuration differs'
+        assert self.loaded.effective == asdict(self.loaded.config), 'reference configuration differs'
+        assert self.loaded.sha256 == digest(self.loaded.effective), 'reference configuration digest differs'
+        assert self.result['status'] == 'complete' and self.result['updates'] == 2 and self.result['accepted_decisions'] == 64
+        self.assert_closed()
+        self.assert_unchanged()
+        state = json.loads((self.parent / 'run.json').read_text())
+        assert digest(state['effective_config']) == self.loaded.sha256, 'recorded reference configuration differs'
+        assert state['config_sha256'] == self.loaded.sha256, 'recorded reference configuration digest differs'
+        assert state['status'] == 'complete' and state['updates'] == 2
 
 
 def configuration(tmp_path, *, kind='mlp', learning_device='cpu', inference_device='cpu', max_updates=2, hand=None):

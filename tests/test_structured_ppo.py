@@ -21,15 +21,20 @@ from gf_training.structured_ppo_source import (
     validate_component_parent,
     validate_owned_collection,
 )
-from tests.structured_ppo_support import clone_component_parent, component_http, configuration
+from tests.structured_ppo_support import (
+    CompletedComponentExecution,
+    clone_component_parent,
+    component_http,
+    component_inventory,
+    configuration,
+)
 
 
-def test_default_mlp_cpu_original16game_two_update_common_loop(tmp_path, monkeypatch):
-    loaded = configuration(tmp_path)
-    collector, scripts, workers, ledgers = component_http(monkeypatch, loaded)
-    result = asyncio.run(_train_component_ppo(loaded, collector, tmp_path / 'parent'))
+def test_default_mlp_cpu_original16game_two_update_common_loop(completed_execution):
+    parent, result = completed_execution.parent, completed_execution.result
+    scripts, workers, ledgers = completed_execution.scripts, completed_execution.workers, completed_execution.ledgers
     assert result['status'] == 'complete' and result['updates'] == 2 and result['accepted_decisions'] == 64
-    state, generations = validate_component_parent(tmp_path / 'parent', max_owned_bytes=2 * 1024**3,
+    state, generations = validate_component_parent(parent, max_owned_bytes=2 * 1024**3,
                                                     deadline=time.monotonic() + 60)
     assert state['schema_version'] == 2 and len(generations) == 3
     assert state['identity']['process_envelope_recipe'] == 'structured-process-envelope-v1'
@@ -38,7 +43,7 @@ def test_default_mlp_cpu_original16game_two_update_common_loop(tmp_path, monkeyp
     assert len(workers) == 64 and all(worker.process.poll() is not None and worker.closed for worker in workers)
     assert len(scripts) == 16 and all(script.deleted for script in scripts)
     for number in (1, 2):
-        update = json.loads((tmp_path / 'parent/updates' / f'{number:06}.json').read_text())
+        update = json.loads((parent / 'updates' / f'{number:06}.json').read_text())
         assert update['actual_games'] == update['planned_games'] == 16
         assert update['source_proof']['qualified'] is False and update['source_proof']['parent_qualification'] == 'not_performed'
         assert update['accepted_decisions'] == 32 and len(update['learner_seats']) == 16
@@ -96,15 +101,27 @@ def test_original_full_config_and_recorded_provenance_guard(tmp_path, mutation):
 
 
 @pytest.fixture(scope='module')
-def completed_component(tmp_path_factory):
+def completed_execution(tmp_path_factory):
     directory = tmp_path_factory.mktemp('component-parent-template')
     loaded = configuration(directory)
+    parent = directory / 'parent'
     with pytest.MonkeyPatch.context() as patch:
-        collector, _, workers, ledgers = component_http(patch, loaded)
-        asyncio.run(_train_component_ppo(loaded, collector, directory / 'parent'))
+        collector, scripts, workers, ledgers = component_http(patch, loaded)
+        result = asyncio.run(_train_component_ppo(loaded, collector, parent))
         assert all(worker.process.poll() is not None for worker in workers)
         assert all(ledger.learner is None and not ledger.workers for ledger in ledgers)
-    return directory / 'parent'
+    execution = CompletedComponentExecution(loaded, parent, result, tuple(scripts), tuple(workers), tuple(ledgers),
+                                            component_inventory(parent))
+    execution.assert_default_cpu_reference(kind='mlp', learning_device='cpu', inference_device='cpu')
+    validate_component_parent(parent, max_owned_bytes=2 * 1024**3, deadline=time.monotonic() + 60)
+    yield execution
+    execution.assert_closed()
+    execution.assert_unchanged()
+
+
+@pytest.fixture(scope='module')
+def completed_component(completed_execution):
+    return completed_execution.parent
 
 
 @pytest.mark.parametrize('mutation', ['report', 'journal', 'sidecar', 'inventory'])
@@ -312,10 +329,17 @@ def test_extra_parent_metadata_and_lower_source_cap_apply_before_first_json(tmp_
     assert calls == []
 
 
-def run_continuous_and_resume(tmp_path, monkeypatch, *, kind, learning_device, inference_device):
+def run_continuous_and_resume(tmp_path, monkeypatch, *, kind, learning_device, inference_device,
+                              completed_reference=None):
     from gf_models.arrays import sha256
     from tests.test_structured_numeric_worker import assert_artifacts_equal
-    loaded = configuration(tmp_path, kind=kind, learning_device=learning_device, inference_device=inference_device)
+    if completed_reference is None:
+        loaded = configuration(tmp_path, kind=kind, learning_device=learning_device, inference_device=inference_device)
+    else:
+        assert isinstance(completed_reference, CompletedComponentExecution)
+        completed_reference.assert_default_cpu_reference(kind=kind, learning_device=learning_device,
+                                                         inference_device=inference_device)
+        loaded = completed_reference.loaded
     assert loaded.config.model.hand.kind == 'attention'
     if kind == 'transformer':
         assert loaded.config.model.temporal.num_layers == 2
@@ -324,7 +348,10 @@ def run_continuous_and_resume(tmp_path, monkeypatch, *, kind, learning_device, i
     assert loaded.config.training.admission_reservation_bytes == 1024**3
     collector, scripts, workers, ledgers = component_http(monkeypatch, loaded)
     continuous, resumed = tmp_path / 'continuous', tmp_path / 'resumed'
-    first = asyncio.run(_train_component_ppo(loaded, collector, continuous))
+    if completed_reference is None:
+        first = asyncio.run(_train_component_ppo(loaded, collector, continuous))
+    else:
+        continuous, first = completed_reference.parent, completed_reference.result
     paused = asyncio.run(_train_component_ppo(loaded, collector, resumed, pause_after_update=1))
     assert first['updates'] == 2 and paused['status'] == 'paused' and paused['updates'] == 1
     paused_state = json.loads((resumed / 'run.json').read_text())
@@ -377,15 +404,58 @@ def run_continuous_and_resume(tmp_path, monkeypatch, *, kind, learning_device, i
         assert registry['generations']['1']['status'] == 'deleted'
         assert {path.name for path in (parent / 'artifacts/000001').iterdir()} == {'inference.json'}
         assert registry['generations']['1']['original_files']['inference.json'] == sha256(parent / 'artifacts/000001/inference.json')
-    assert len(workers) == 128 and len(scripts) == 32
-    assert all(worker.closed and worker.process.poll() is not None for worker in workers)
-    assert len({id(ledger) for ledger in ledgers}) == 3  # one continuous +fresh paused +resume invocation.
-    assert all(not ledger.workers and ledger.learner is None and not ledger.updating for ledger in ledgers)
+    pair_workers, pair_scripts, pair_ledgers = tuple(workers), tuple(scripts), tuple(ledgers)
+    if completed_reference is not None:
+        completed_reference.assert_closed()
+        completed_reference.assert_unchanged()
+        pair_workers += completed_reference.workers
+        pair_scripts += completed_reference.scripts
+        pair_ledgers += completed_reference.ledgers
+    assert len(pair_workers) == 128 and len(pair_scripts) == 32
+    assert all(worker.closed and worker.process.poll() is not None for worker in pair_workers)
+    assert len({id(ledger) for ledger in pair_ledgers}) == 3  # one continuous +fresh paused +resume invocation.
+    assert all(not ledger.workers and ledger.learner is None and not ledger.updating for ledger in pair_ledgers)
 
 
 @pytest.mark.parametrize('kind', ['mlp', 'gru', 'transformer'])
-def test_default_cpu_three_models_exact_continuous_vs_pause_resume(tmp_path, monkeypatch, kind):
-    run_continuous_and_resume(tmp_path, monkeypatch, kind=kind, learning_device='cpu', inference_device='cpu')
+def test_default_cpu_three_models_exact_continuous_vs_pause_resume(tmp_path, monkeypatch, kind, request):
+    reference = request.getfixturevalue('completed_execution') if kind == 'mlp' else None
+    run_continuous_and_resume(tmp_path, monkeypatch, kind=kind, learning_device='cpu', inference_device='cpu',
+                              completed_reference=reference)
+
+
+@pytest.mark.parametrize('mutation', ['kind', 'learning_device', 'inference_device', 'recorded_model',
+                                     'recorded_device', 'recorded_config', 'recorded_result'])
+def test_completed_reference_mismatch_rejects_before_any_activity(completed_execution, tmp_path, monkeypatch, mutation):
+    from gf_cli.config import LoadedConfig
+    from gf_models.structured_binding import model_defaults_v2
+
+    reference = completed_execution
+    options = {'kind': 'mlp', 'learning_device': 'cpu', 'inference_device': 'cpu'}
+    if mutation in options:
+        options[mutation] = 'gru' if mutation == 'kind' else 'cuda:0'
+    elif mutation == 'recorded_result':
+        reference = replace(reference, result={**reference.result, 'status': 'paused'})
+    else:
+        config = reference.loaded.config
+        if mutation == 'recorded_model':
+            config = replace(config, model=model_defaults_v2('gru'))
+        elif mutation == 'recorded_device':
+            config = replace(config, training=replace(config.training, device='cuda:0'))
+        else:
+            config = replace(config, run=replace(config.run, wall_seconds=config.run.wall_seconds - 1))
+        reference = replace(reference, loaded=LoadedConfig(config, asdict(config), digest(asdict(config)), ()))
+    calls = []
+    def forbidden(*args, **kwargs):
+        calls.append(1)
+        raise AssertionError('reference mismatch reached collection or training')
+    monkeypatch.setattr(sys.modules[__name__], 'component_http', forbidden)
+    monkeypatch.setattr(sys.modules[__name__], '_train_component_ppo', forbidden)
+    with pytest.raises(AssertionError):
+        run_continuous_and_resume(tmp_path, monkeypatch, **options, completed_reference=reference)
+    assert calls == [] and not list(tmp_path.iterdir())
+    completed_execution.assert_closed()
+    completed_execution.assert_unchanged()
 
 
 def test_whole_interrupted_cohort_never_updates_or_salvages_healthy_rows(tmp_path, monkeypatch):
