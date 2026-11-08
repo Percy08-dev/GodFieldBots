@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from gf_cli.config import LoadedConfig, load_config
-from gf_common.action_contract import require_qualified_contract
+from gf_common.action_contract import engineering_contract, require_qualified_contract
 from gf_common.card_instance import ActionConfigV3, corrected_card_instance_contract
 from gf_common.domain import (
     CATALOG_META,
@@ -241,7 +241,8 @@ async def run_experiment(loaded: LoadedConfig, command: str, *, collection: Coll
 
 async def _run_experiment(loaded: LoadedConfig, command: str, *, collection: CollectionPlan | None = None,
                           ledger: Any = None, _structured_factory: Any = None,
-                          _structured_source_ops: Any = None, _structured_validation_context: Any = None) -> tuple[Path, Json]:
+                          _structured_source_ops: Any = None, _structured_validation_context: Any = None,
+                          _pytest_worker_finalizer: Any = None) -> tuple[Path, Json]:
     """Private composition body; the normal environment factory remains guarded."""
     config = loaded.config
     actions = _require_implemented_pipeline(config.actions)
@@ -254,6 +255,14 @@ async def _run_experiment(loaded: LoadedConfig, command: str, *, collection: Col
     preflight_deadline = min(execution_deadline, replay_deadline)
     structured = isinstance(config.actions, ActionConfigV2)
     supplied_ledger = ledger
+    if _pytest_worker_finalizer is not None and (
+                not callable(_pytest_worker_finalizer) or _structured_factory is None
+                or not isinstance(config.actions, ActionConfigV2)
+                or config.actions.action_contract != engineering_contract() or collection is None
+                or collection.kind != 'ppo_batch' or supplied_ledger is None
+                or _structured_source_ops is not None or _structured_validation_context is not None
+                or config.run.split != 'train' or command != 'collect'):
+        raise ContractError('pytest finalizer requires private owned engineering train collection')
     if _structured_source_ops is not None:
         from gf_training.structured_ppo import _NativeComponentOps
         if (type(_structured_source_ops) is not _NativeComponentOps or _structured_factory is None
@@ -417,6 +426,13 @@ async def _run_experiment(loaded: LoadedConfig, command: str, *, collection: Col
         scheduled_tasks = [asyncio.create_task(group_run(group)) for group in planned]
         groups = await asyncio.gather(*scheduled_tasks)
         episodes = [episode for group in groups for episode in group.episodes]
+        if _pytest_worker_finalizer is not None:
+            receipt = await _pytest_worker_finalizer()
+            if type(receipt) is not dict or len(canonical(receipt).encode()) > 16384:
+                raise ContractError('bounded pytest worker lifecycle receipt required')
+            if receipt.get('closed') is not True or ledger is not supplied_ledger or ledger.workers:
+                raise ContractError('pytest worker finalizer must confirm closed SAME empty ledger')
+            manifest['pytest_worker_lifecycle'] = receipt
         _check_budget(wall_deadline)
         summary = report(episodes, planned, bootstrap_samples=config.evaluation.bootstrap_samples,
                          bootstrap_seed=config.evaluation.bootstrap_seed, wall_seconds=time.monotonic() - started,

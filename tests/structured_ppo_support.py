@@ -4,6 +4,7 @@ from __future__ import annotations
 import itertools
 import json
 import stat
+import sys
 import time
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
@@ -91,10 +92,11 @@ def configuration(tmp_path, *, kind='mlp', learning_device='cpu', inference_devi
     return LoadedConfig(config, asdict(config), digest(asdict(config)), ())
 
 
-def component_http(monkeypatch, loaded, *, mode='natural', source_ops=None, validation_context=None, outcome='draw', actors=(2,1,2,1)):
+def component_http(monkeypatch, loaded, *, mode='natural', source_ops=None, validation_context=None, outcome='draw', actors=(2,1,2,1), pool_cpu=False):
     import gf_cli
     from gf_models.structured_baselines import make_structured_policy
     from gf_simulator_client import structured_environment
+    from gf_simulator_client.structured_worker import StructuredParticipantWorker
     from gf_training.structured_journal import StructuredJournal
     # Only this test-owned subclass uses private bodies and fixed I/O doubles.
     # Public/direct Environment guards remain entirely unpatched.
@@ -114,7 +116,17 @@ def component_http(monkeypatch, loaded, *, mode='natural', source_ops=None, vali
             return {'exit_code': 0, 'shutdown': 'stdin_eof', 'log_error': None}
     def client(url, **kwargs):
         return AttestedClient(url, transport=httpx.MockTransport(by_url[url].handle), **kwargs)
-    original_worker = structured_environment.StructuredParticipantWorker
+    if pool_cpu:
+        from tests.pooled_structured_worker import (
+            CURRENT_POOL,
+            CURRENT_VIEWER,
+            CpuParticipantPool,
+            PooledStructuredParticipantWorker,
+        )
+        if (source_ops is not None or validation_context is not None or loaded.config.training.device != 'cpu'
+                or loaded.config.model.inference.device != 'cpu'):
+            raise ValueError('pytest CPU pool requires ordinary CPU engineering training')
+    original_worker = PooledStructuredParticipantWorker if pool_cpu else StructuredParticipantWorker
     class Worker(original_worker):
         def __init__(self, *args, **kwargs):
             super().__init__(*args, **kwargs)
@@ -127,6 +139,14 @@ def component_http(monkeypatch, loaded, *, mode='natural', source_ops=None, vali
                 assert ledger is validation_context.ledger and ledger.learner is None and not ledger.updating
             seen_ledgers.append(ledger)
             self._initialize_structured(settings, make_structured_policy, StructuredJournal, ledger=ledger)
+        def _create_actor(self, directory, spec, viewer, game, journals, actors, contexts, result):
+            if not pool_cpu:
+                return super()._create_actor(directory, spec, viewer, game, journals, actors, contexts, result)
+            token = CURRENT_VIEWER.set(viewer)
+            try:
+                return super()._create_actor(directory, spec, viewer, game, journals, actors, contexts, result)
+            finally:
+                CURRENT_VIEWER.reset(token)
         def _new_server(self, *args, **kwargs):
             return Server(*args, **kwargs)
         def _new_client(self, *args, **kwargs):
@@ -138,9 +158,32 @@ def component_http(monkeypatch, loaded, *, mode='natural', source_ops=None, vali
     monkeypatch.setattr(structured_environment, 'StructuredParticipantWorker', Worker)
     async def collector(plan, ledger):
         before = time.monotonic()
-        directory, report = await gf_cli._run_experiment(loaded, 'collect', collection=plan, ledger=ledger,
-                                                      _structured_factory=FakeEnvironment, _structured_source_ops=source_ops,
-                                                      _structured_validation_context=validation_context)
+        pool = CpuParticipantPool(ledger, cleanup_deadline=plan.wall_deadline - loaded.config.run.report_reserve_seconds) if pool_cpu else None
+        token = CURRENT_POOL.set(pool) if pool_cpu else None
+        try:
+            directory, report = await gf_cli._run_experiment(loaded, 'collect', collection=plan, ledger=ledger,
+                _structured_factory=FakeEnvironment, _structured_source_ops=source_ops,
+                _structured_validation_context=validation_context,
+                _pytest_worker_finalizer=None if pool is None else pool.close)
+        finally:
+            pending = sys.exception()
+            try:
+                if pool is not None:
+                    await pool.close()
+            except BaseException as cleanup_error:
+                if pending is None:
+                    raise
+                pending.add_note(f'pytest pool finalization: {type(cleanup_error).__name__}: {cleanup_error}')
+            finally:
+                if token is not None:
+                    CURRENT_POOL.reset(token)
+        if pool is not None:
+            receipt = json.loads((directory / 'manifest.json').read_text()).get('pytest_worker_lifecycle')
+            # Minimal/failure paths may have no receipt; they cannot become a healthy Source.
+            if report.get('comparison_valid'):
+                assert receipt == await pool.close()
+                assert receipt['closed'] and receipt['resets'] == receipt['logical_participants']
+                assert receipt['physical_workers'] <= 4 and not ledger.workers
         assert time.monotonic() >= before and not ledger.workers
         assert (ledger.learner is not None) == (validation_context is None)
         return FinalizedCollection(directory, report)

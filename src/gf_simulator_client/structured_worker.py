@@ -77,6 +77,11 @@ class StructuredParticipantWorker(ParticipantWorker):
         environment = {"PATH": os.defpath, "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8", "PYTHONHASHSEED": "0",
                        "OPENBLAS_NUM_THREADS": "1", "OMP_NUM_THREADS": "1", "MKL_NUM_THREADS": "1"}
         arguments = [sys.executable, "-E", "-m", "gf_simulator_client.structured_bootstrap"]
+        self._spawn(ledger, residency, arguments, environment)
+
+    def _spawn(self, ledger: ReservationLedger, residency: int, arguments: list[str],
+               environment: dict[str, str]) -> None:
+        """Own the ordinary reservation/spawn boundary; test transports may borrow."""
         # A failed constructor remains a complete close owner, even before a
         # returned Popen has been registered with its reservation.
         self.process = cast("subprocess.Popen[bytes]", None)

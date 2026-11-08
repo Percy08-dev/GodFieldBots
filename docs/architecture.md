@@ -1025,6 +1025,20 @@ originals, and measured wall falls546.87to455.41s. Related/selective219passes/
 6unchanged CUDA skips and full4232collection pass. Root accepts this bounded
 test-only change; no new whole-suite runtime or actual CUDA execution is claimed.
 
+[ADR0027](adr/0027-pytest-cpu-participant-pool.md) accepts the design for an
+explicit pytest-only CPU collection pool. Normal collection/CUDA/native helpers
+and the cold MLP reference stay fresh. The test exception partitions real owners
+by viewer, uses versioned episode epochs/original bootstrap semantics, revalidates
+and resets cached policies, and keeps physical reservations until actual reap.
+A private guarded prepublication finalizer records diagnostic lifecycle evidence;
+no policy inputs, Journal schema or Source authority is expanded. Both final
+reviews are READY after stale-loan/error-precedence/deadline fixes. Original42
+cases pass and measured wall falls455.89to241.87s. The4280-case whole run has
+4032passes/247skips/one NEW test-expectation failure; a precise test-only correction
+and48pool-case rerun pass with implementation hashes unchanged. Root accepts
+that documented full-plus-delta evidence, not a new fully green whole invocation.
+Source-matched157module wheel and optional-free normal-worker checks also pass.
+
 Checks: `uv run pytest`, `uv run ruff check .`, `uv run mypy src`; wheel installed
 in a separate Python 3.14 environment, baseline without ML imports. Verify CPU
 compatibility per implemented extra. Record exact commands and PASS/FAIL/NOT RUN

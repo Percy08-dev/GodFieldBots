@@ -24,10 +24,19 @@ from gf_training.structured_ppo_source import (
 from tests.structured_ppo_support import (
     CompletedComponentExecution,
     clone_component_parent,
-    component_http,
     component_inventory,
     configuration,
 )
+from tests.structured_ppo_support import (
+    component_http as fresh_component_http,
+)
+
+
+def component_http(monkeypatch, loaded, **kwargs):
+    """This module alone explicitly opts ordinary CPU engineering collectors in."""
+    cpu = (loaded.config.training.device == 'cpu' and loaded.config.model.inference.device == 'cpu'
+           and kwargs.get('source_ops') is None and kwargs.get('validation_context') is None)
+    return fresh_component_http(monkeypatch, loaded, pool_cpu=kwargs.pop('pool_cpu', cpu), **kwargs)
 
 
 def test_default_mlp_cpu_original16game_two_update_common_loop(completed_execution):
@@ -106,7 +115,7 @@ def completed_execution(tmp_path_factory):
     loaded = configuration(directory)
     parent = directory / 'parent'
     with pytest.MonkeyPatch.context() as patch:
-        collector, scripts, workers, ledgers = component_http(patch, loaded)
+        collector, scripts, workers, ledgers = component_http(patch, loaded, pool_cpu=False)
         result = asyncio.run(_train_component_ppo(loaded, collector, parent))
         assert all(worker.process.poll() is not None for worker in workers)
         assert all(ledger.learner is None and not ledger.workers for ledger in ledgers)
@@ -412,6 +421,14 @@ def run_continuous_and_resume(tmp_path, monkeypatch, *, kind, learning_device, i
         pair_scripts += completed_reference.scripts
         pair_ledgers += completed_reference.ledgers
     assert len(pair_workers) == 128 and len(pair_scripts) == 32
+    pooled = [worker for worker in pair_workers if hasattr(worker, 'owner')]
+    if learning_device == inference_device == 'cpu':
+        assert len(pooled) == (64 if completed_reference is not None else 128)
+        assert 0 < len({id(worker.owner) for worker in pooled}) <= (8 if completed_reference is not None else 16)
+        for worker in pooled:
+            assert worker.owner.viewer == worker.viewer and worker.lease.released
+    else:
+        assert not pooled
     assert all(worker.closed and worker.process.poll() is not None for worker in pair_workers)
     assert len({id(ledger) for ledger in pair_ledgers}) == 3  # one continuous +fresh paused +resume invocation.
     assert all(not ledger.workers and ledger.learner is None and not ledger.updating for ledger in pair_ledgers)
