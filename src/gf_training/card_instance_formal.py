@@ -417,6 +417,7 @@ class FormalGameParent:
         self._failure: BaseException | None = None
         self._token: str | None = None
         self._native_inputs: Any = None
+        self._native_final_inputs: Any = None
         self._native_scan_base = 0
 
     @property
@@ -520,11 +521,27 @@ class FormalGameParent:
 
     def _retire_inputs(self, initiating: BaseException | None = None) -> BaseException | None:
         failure: BaseException | None = None
+        final_inputs = getattr(self, '_native_final_inputs', None)
+        if final_inputs is not None and not final_inputs.parent_cleanup_complete:
+            try:
+                final_inputs.retire_from_parent(initiating)
+            except BaseException as error:  # noqa: BLE001 - SAME child/parent owner survives retirement failure
+                failure = error
+                vars(error)['_formal_parent_cleanup_owner'] = self
+            if not final_inputs.parent_cleanup_complete:
+                failure = failure or ContractError('native final64 collection cleanup remains unconfirmed')
+                vars(failure)['_formal_parent_cleanup_owner'] = self
+                raise failure
         try:
-            self._inputs_scope.__exit__(None if initiating is None else type(initiating),
-                initiating, None if initiating is None else initiating.__traceback__)
+            retirement_error = initiating or failure
+            self._inputs_scope.__exit__(None if retirement_error is None else type(retirement_error),
+                retirement_error, None if retirement_error is None else retirement_error.__traceback__)
         except BaseException as error:  # noqa: BLE001 - final guard may fail after confirmed retirement
-            failure = error
+            if failure is None:
+                failure = error
+            elif failure is not error:
+                vars(failure)['_formal_parent_cleanup_owner'] = self
+                self._note(failure, 'formal parent original inputs retirement: ', error)
             candidate = getattr(error, '_structured_source_cleanup_owner', None)
             if candidate is not None:
                 self._native_inputs = candidate
@@ -564,8 +581,52 @@ class FormalGameParent:
     def cleanup_complete(self) -> bool:
         """No active-use permission; safe to query after poisoning/deadline."""
         native = self._native_inputs is None or self._native_inputs.cleanup_complete
+        final_inputs = getattr(self, '_native_final_inputs', None)
+        final = final_inputs is None or final_inputs.parent_cleanup_complete
         lock = not self._owns_lock or self._lock_retired
-        return self._closed and self._inputs_retired and native and lock
+        return self._closed and self._inputs_retired and native and final and lock
+
+    def _borrow_native_final_inputs(self, *, deadline: float) -> Any:
+        """Private actual-owner forwarding; never reopen/construct from a summary."""
+        self.require_active()
+        from gf_common.card_instance_rules import card_instance_rules
+        from gf_models.structured_binding import input_binding_game_v3
+        from gf_training.card_instance_final_validation import _require_borrow
+        from gf_training.native_backend import binary_identity, recorded_card_instance_preprocessing
+        from gf_training.native_card_instance import (
+            _NativeFinalValidationInputs,
+            _NativeGameInputs,
+            _require_final_validation_native,
+        )
+        token = _require_borrow(self)
+        owner = self._native_inputs
+        if (type(owner) is not _NativeGameInputs or owner._explicit_candidate
+                or owner.plan.get('mode') != 'historical_parent'
+                or getattr(self, '_native_final_inputs', None) is not None):
+            raise ContractError('one SAME actual retained native parent/collection loan required')
+        module = _require_final_validation_native(owner.settings, owner.native)
+        self.recheck()
+        # Existing Actor control admission covers these protected state/identity
+        # copies; the caller never supplies a native module, session or flag.
+        assert self._state_bytes is not None
+        state = json.loads(self._state_bytes)
+        identity = binary_identity(module)
+        recorded = state['identity']['preprocessing']
+        recorded_card_instance_preprocessing(recorded,
+            binding=input_binding_game_v3(owner.actions.action_contract, card_instance_rules()))
+        if (canonical(recorded['binary']) != canonical(identity)
+                or owner._binary_identity != canonical(identity).encode()
+                or owner.summary is None or Path(owner.summary['parent']['directory']) != self.directory):
+            raise ContractError('final64 original backend/binary/source differs from SAME native parent')
+        loan = _NativeFinalValidationInputs(owner, self, token, deadline=deadline)
+        self._native_final_inputs = loan  # Reachable BEFORE inspection/packet work.
+        return loan
+
+    def _native_final_failure(self, loan: Any, error: BaseException) -> None:
+        # Cleanup-only association; no guard/I/O or operational revival.
+        if getattr(self, '_native_final_inputs', None) is not loan:
+            raise ContractError('SAME retained native final64 cleanup owner required')
+        self._poison(error)
 
     def _guard_scratch(self) -> int:
         return 1024**2+1024*(len(self.scan.files)+len(self.scan.inventories))

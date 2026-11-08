@@ -2531,6 +2531,129 @@ never Source authority. Architecture review must settle this mechanism and its
 one-attempt close/uncertainty handling before Dataset3 implementation; do not
 silently ignore arbitrary .lock files or widen the Native Actor64 request.
 
+Root's initial concrete Dataset/fit proposal for architecture review was
+`../design/card-instance-game-tree-dataset-v1.md`, SHA
+d9f671aeed08877301276ebba06a1025a0a441761a6bcc6900b852b156a437b8.
+Production implementation was withheld at v1 pending the complete v2 seams
+below. Root pins the following directions:
+
+- Keep all six logical memberships, deterministic physical-root lock dedup and
+  reverse retirement. Support borrowing only a COMPLETE already-ordered custody
+  set, never an arbitrary subset or copied token. Validation uses the independently
+  owned canonical manifest flock; parent run_lock stays unchanged.
+- Real Dataset3 kind is card-instance-game-fixed-sources, source_kind is
+  card-instance-formal-ppo-originals, selection is
+  all-explicit-learner-accepted-natural-return-v3 and label_recipe remains
+  behavior-selected-natural-return-gamma1-v1. Real source_origin has exactly
+  purpose=qualified_game, synthetic_capacity=false,
+  outcome_origin=observed-natural-simulator and
+  qualification_recipe=three-formal-parents-final64-v1. No qualified=true flag
+  supplies authority. Adopt the proposal's closed parent/generation/collection/
+  counts/source/cost fields subject to final correspondence below.
+- Final64 correspondence has exactly recipe, input_binding, manifest_sha256,
+  episode_count, episode_digests and binding_sha256. Recipe is
+  card-instance-final-validation-correspondence-v1; count is64 and digests are
+  ordered selected original _episode_correspondence_digest values, including
+  empty episodes. binding_sha256 hashes the other fields. Training keeps its
+  existing original-versus-Num4 correspondence. No validation numeric update or
+  artificial GAE/declaration is introduced.
+- The effective Dataset/controller/fit allowance is at most8GiB and includes
+  ALL retained owners, active views, controller rows/packing/publication and
+  the full declared fit-child allowance. Keep the default child/model2GiB cap;
+  an explicit configured cap is never silently lowered to the remaining space.
+  Refuse before allocation if it cannot fit. A game-only request managed_memory
+  object has exactly recipe=joint-game-tree-fit-v1, total_bytes,
+  controller_reserved_bytes, child_limit_bytes and reserved_peak_bytes. These
+  are conservative envelopes, not RSS. Preserve the existing5*raw/fixed/packing
+  arithmetic, name conservative overlap and enforce it in the same fit child.
+  Local feature/model checks charge their relevant live objects; unrelated
+  Source residency remains charged to the joint governor, avoiding accidental
+  collapse of the8GiB source allowance into the local2GiB model cap.
+- Use explicit game-dataset build/inspect and fit-game-tree composition, with
+  corrected Tree3 configuration dispatch before legacy defaults. Reuse current
+  training settings and add no second learner. GameTree3 runtime routing is the
+  following required increment, not a claimed implemented stub.
+
+Paths-only Dataset reopening cannot import CLI Config types or reload historical
+configuration through mutable defaults. Prefer a guarded parent-derived readonly
+contract/opener over the SAME lower final64 validator: derive exact config,
+actions/settings/projection/input origins from the actual retained formal
+parent. Live actor collection still checks its original caller LoadedConfig and
+keeps its existing API. This seam, pre-entry other-owner accounting, base-versus-
+loan release and guarded train/final raw borrowing must pass architecture review
+before dependent Dataset code. A hash/summary/contract value alone remains no
+Source or fitting permission.
+
+Refinement v2, accepted after independent architecture DESIGN READY, is
+`../design/card-instance-game-tree-dataset-v2.md`, SHA
+2a0d227eff97129999105696976db7dd300027a7c766772d0daee40081b4b8c1.
+Root selects complete original-history DTO borrowing, using the SAME retained
+native Sources/restaging/whitelist, rather than reusing an NN-window aggregate.
+An additive historical-only export_recorded_episode_payload takes collection
+and selected-episode ordinals plus retained Python ownership; the existing
+cohort API stays exact. It may be checked against genuine short historical
+parents as a read-only diagnostic without granting formal/Dataset eligibility.
+Private actual-parent forwarding supplies source membership and custody.
+Exact training-packet metadata and new gate remain subject to the native seam
+design, not a reason for a Python journal fallback or narrowed Tree window.
+
+The game-only fit bootstrap receives a fourth sanitized decimal child-cap
+argument, admitted before request decoding/heavy library initialization and
+checked exactly against request/model resources. The old three-argument path
+and bytes stay exact; another context with that extra argument rejects. This
+is resource control, not Source/fit permission. V2's full-keyset/roundtrip
+parent-derived readonly contract, pre-entry other-owner charge, base/local
+resource loan, exclusive intrinsic counters and complete custody mechanism
+are accepted for implementation. Exact native training-packet metadata remains
+a separate pre-code gate before that dependent ABI implementation. Root assigns
+new pure Dataset/lock/shared-Tree files separately from the native owner's
+existing parent/final/source seams, in isolated copies with selective handoffs.
+No missing dependency or permanent stub counts as completed migration.
+
+Independent v2 review additionally pins a distinct early child-local check:
+controller_reserved+full child cap fitting8GiB does not prove the preserved
+child5*raw/fixed/packing/own metadata/decode/log/model envelope fits its configured
+cap. The controller derives and refuses that bound from VERIFIED row counts and
+settings BEFORE private row preparation/spawn, and the SAME worker repeats it
+before numeric decoding/Dataset/Booster allocation. Keep both equations, original
+formula/default2GiB and explicit conservative overlap; no new field, automatic
+cap adjustment or row reduction is permitted.
+
+The concrete original-history/resource handoff is proposed in
+`../design/card-instance-dataset-native-source-seams-v1.md`, SHA
+ee2f924eddbc4bf6ae6ce330b338d86c573ca3cfaadb19a65427ee14f3bff050,
+accepted after independent architecture DESIGN READY. Its explicit recorded16
+envelope has18keys; the enumerated keyset governs without an extra filler field.
+It pins the closed recorded16 packet1,
+unchanged final64 body, actual logical DTO borrowing, initial-external native
+floor and exclusive actual-declared counters, base/local custody and physical
+opening/Source retirement. Root chooses native preflight marker
+card_instance_original_history=journal6;codec2;episode-dto1;recorded16 with the
+existing corrected signature/ABI/new-method checks; publication is separately
+gated on validation/parity and both final reviews. It grants no Source permission.
+
+The following required runtime increment has a separate bounded Root proposal,
+`../design/card-instance-game-tree-runtime-v3.md`, accepted after architecture
+review. It reuses the corrected participant/environment/
+generator and Tree kernels, with actual qualified-pair custody in the controller,
+strict source-free own-policy declaration/private child handle, null Tree
+selection statistics, distinct Journal6/Collection5 metadata and native RAW
+branch. Public Tree3 Config dispatch and exact compatibility stay in scope.
+Genuine qualified Tree gameplay cannot be claimed from component fit/scoring;
+formal sources/real fitting and their positive game execution remain deferred.
+The v2 dependency is acyclic: request/provenance binds inference/model,
+completion hashes those outputs, then the runtime declaration/journal/collection
+binds completion. Inference never embeds completion_sha256. Only the controller
+validates actual paired completion; the child treats that supplied digest as an
+opaque binding and checks local inference request/source/model/features.
+Tree-only sanitized argv capacity admits the first frame before JSON decoding;
+baseline/NN argv and defaults stay exact. Journal6's tree branch and Collection5
+tree_inputs use the closed four-field own external metadata record, with the
+exact12-field own-policy options. Native processing additionally requires
+card_instance_tree_raw=journal6;lightgbm3;inference4;codec2 plus the existing
+corrected signature/ABI/API checks. Python gameplay gains no native dependency.
+The marker remains unpublished until RAW checks and both final reviews pass.
+
 Reuse the shared Dataset/Tree3 features, fit child, paired format4 publication,
 copy/load and inference kernels with a closed real-source context. Add reachable
 CLI/config/library routing for formal declaration, actor validation, Dataset3,
@@ -2747,7 +2870,7 @@ narrow responsibility extraction.
 #### Native final64 retained-source handoff (design accepted)
 
 Root adopts the bounded proposal after independent architecture DESIGN READY:
-`/tmp/gfb-card-instance-native-actor64-design-v1.md`, SHA
+`../design/card-instance-native-actor64-v1.md`, SHA
 85ab7d3521a0957e76ab552a16281986915e469f4cc2d7c8ab97413623b343f2.
 Implementation and both final reviews remain required. Extend the SAME corrected
 native
@@ -2768,6 +2891,15 @@ obtained through a separate no-follow read handle. Serialized evidence supplies
 no publisher authority; Python retains the actual issued token. The native
 slot validates original equality/parent/final artifact while Python computes
 the prescribed schedule. Neither side implements a second scheduler or reader.
+Canonical forwarding may use the existing retained SourceOwner/SealedScan for
+the bounded management-only C5 manifest read needed to recover its historical
+invocation and prescribed plan. Admit stat-sized decode/control ownership before
+reading or parsing, retain original hash/stat, and require its SHA to equal the
+native summary through final cleanup. Native alone traverses J6/codec/Replay/raw
+inputs; this management read is not a Python journal fallback. Pending forwarding
+also retains the actual issued token and independently owned fixed-name evidence.
+The existing Python-compatible pure numeric arithmetic helper may be reused
+crate-internally with unchanged operations and tie behavior.
 
 Existing raw token banks omit original frame/codec documents. Reuse the existing
 SAME-Sources Rust journal restaging pattern for one selected episode at a time,

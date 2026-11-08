@@ -321,6 +321,26 @@ use std::{
     path::{Path, PathBuf},
 };
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CorrectedCollectionRole {
+    PpoBatch16,
+    Final64 { pending: bool },
+}
+impl CorrectedCollectionRole {
+    pub(crate) fn final64(self) -> bool {
+        matches!(self, Self::Final64 { .. })
+    }
+    pub(crate) fn games(self) -> usize {
+        if self.final64() { 64 } else { 16 }
+    }
+    pub(crate) fn manifest(self) -> &'static str {
+        if matches!(self, Self::Final64 { pending: true }) {
+            "manifest.json.tmp"
+        } else {
+            "manifest.json"
+        }
+    }
+}
 pub(crate) struct CollectionLimits {
     pub source_bytes: usize,
     pub record_bytes: usize,
@@ -652,6 +672,7 @@ pub(crate) fn inspect_collection(
         control,
         None,
         SourceFormat::Engineering,
+        CorrectedCollectionRole::PpoBatch16,
     )
 }
 pub(crate) fn inspect_card_instance_collection(
@@ -671,6 +692,27 @@ pub(crate) fn inspect_card_instance_collection(
         control,
         None,
         SourceFormat::Corrected,
+        CorrectedCollectionRole::PpoBatch16,
+    )
+}
+pub(crate) fn inspect_final64_collection(
+    directory: &Path,
+    parent: (&Path, &Value),
+    limits: &CollectionLimits,
+    budget: Arc<Budget>,
+    control: Control,
+    pending: bool,
+) -> Result<CollectionScan> {
+    inspect_collection_inner(
+        directory,
+        Some(parent),
+        limits,
+        None,
+        budget,
+        control,
+        None,
+        SourceFormat::Corrected,
+        CorrectedCollectionRole::Final64 { pending },
     )
 }
 #[derive(Clone, Copy)]
@@ -697,6 +739,7 @@ pub(crate) fn inspect_tree_collection(
         control,
         Some((kind, window)),
         SourceFormat::Engineering,
+        CorrectedCollectionRole::PpoBatch16,
     )
 }
 fn inspect_collection_inner(
@@ -708,6 +751,7 @@ fn inspect_collection_inner(
     control: Control,
     tree: Option<(TreeSourceKind, usize)>,
     format: SourceFormat,
+    role: CorrectedCollectionRole,
 ) -> Result<CollectionScan> {
     control.check()?;
     let mut sources = Sources::new(
@@ -717,7 +761,7 @@ fn inspect_collection_inner(
         limits.source_bytes,
     )?;
     let root = sources.root.clone();
-    let manifest = sources.json(&root.join("manifest.json"))?;
+    let manifest = sources.json(&root.join(role.manifest()))?;
     let m = &manifest.root;
     let corrected = format.corrected();
     let schema = m
@@ -735,7 +779,7 @@ fn inspect_collection_inner(
         field(m, "split")?
     };
     if corrected {
-        card_instance::manifest(&mut sources, m, parent, limits, &budget, &control)?;
+        card_instance::manifest(&mut sources, m, parent, limits, &budget, &control, role)?;
     } else {
         require(
             ["complete", "incomplete", "interrupted"].contains(&field(m, "status")?),
@@ -923,31 +967,35 @@ fn inspect_collection_inner(
             "unknown PPO collection kind",
         )?;
         let link = m.require(if corrected { "linkage" } else { "ppo" })?;
-        link.closed(
-            &[
-                "parent_run_id",
-                "parent_run_path",
-                "batch_id",
-                "collection_generation",
-                "learner_seats",
-            ],
-            if corrected {
-                &["schedule_digest", "policy_registry_digest"]
-            } else {
-                &[]
-            },
-        )?;
-        link.require("collection_generation")?.integer(0, 1000)?;
+        if !role.final64() {
+            link.closed(
+                &[
+                    "parent_run_id",
+                    "parent_run_path",
+                    "batch_id",
+                    "collection_generation",
+                    "learner_seats",
+                ],
+                if corrected {
+                    &["schedule_digest", "policy_registry_digest"]
+                } else {
+                    &[]
+                },
+            )?;
+            link.require("collection_generation")?.integer(0, 1000)?;
+        }
         for key in ["parent_run_id", "parent_run_path", "batch_id"] {
             link.require(key)?.string()?;
         }
-        if corrected || field(m, "collection_kind")? == "ppo_batch" {
+        if (corrected && !role.final64())
+            || (!corrected && field(m, "collection_kind")? == "ppo_batch")
+        {
             require(
                 specs.len() == 16 && m.require("schedule")?.array()?.len() == 8,
                 "PPO batch requires all eight original swapped pairs",
             )?;
         }
-        if matches!(tree, Some((TreeSourceKind::FinalValidation, _))) {
+        if role.final64() || matches!(tree, Some((TreeSourceKind::FinalValidation, _))) {
             require(
                 specs.len() == 64 && m.require("schedule")?.array()?.len() == 32,
                 "TreeDataset final validation requires all32 swapped pairs/64 games",
@@ -1327,6 +1375,18 @@ fn inspect_collection_inner(
                     format,
                 )?);
                 accepted_learner += input.accepted_count();
+                if role.final64() {
+                    staged.push(json::object([
+                        ("episode_index", json::integer((digests.len() - 1) as i128)),
+                        ("episode_id", json::text(name)),
+                        ("game_id", json::copy(ep.require("game_id")?, &control)?),
+                        ("viewer", json::integer(viewer)),
+                        ("decisions", json::integer(input.accepted_count() as i128)),
+                        ("end_kind", json::copy(end.require("end_kind")?, &control)?),
+                        ("outcome", json::copy(end.require("outcome")?, &control)?),
+                        ("episode_digest", json::text(digests.last().unwrap())),
+                    ]));
+                }
                 if let Some(stage) = stage.as_deref_mut() {
                     staged.push(if tree.is_some() {
                         input.staged_tree_episode(stage, digests.len() - 1, &reason)?
@@ -1381,6 +1441,12 @@ fn inspect_collection_inner(
         referenced == all_columns,
         "missing/extra original candidate sidecars",
     )?;
+    if role.final64() {
+        require(
+            digests.len() == 64 && natural == 64,
+            "complete selected final64 population required",
+        )?;
+    }
     if stage.is_some() {
         require(
             if let Some((kind, _)) = tree {
@@ -1390,9 +1456,14 @@ fn inspect_collection_inner(
                         TreeSourceKind::FinalValidation => 64,
                     }
             } else {
-                digests.len() == 16
+                digests.len() == role.games()
                     && (corrected || field(m, "collection_kind")? == "ppo_batch")
-                    && split == "train"
+                    && split
+                        == if role.final64() {
+                            "validation"
+                        } else {
+                            "train"
+                        }
             },
             "selected cohort must preserve its full original16/64 neural-role population",
         )?;
@@ -1413,7 +1484,7 @@ fn inspect_collection_inner(
             }
         }
     }
-    let manifest_sha = field(files.require("manifest.json")?, "sha256")?;
+    let manifest_sha = field(files.require(role.manifest())?, "sha256")?;
     let mut proof = json::object([
         ("schema_version", json::integer(1)),
         (
@@ -3387,5 +3458,93 @@ impl OriginalInputs {
         let result = doc(&json::array(episodes), b, c)?;
         self.recheck()?;
         Ok(result)
+    }
+}
+
+impl CollectionScan {
+    pub(crate) fn restage_final64(
+        &mut self,
+        index: usize,
+        stage: &mut Stage,
+        limits: &CollectionLimits,
+        b: &Arc<Budget>,
+        c: &Control,
+    ) -> Result<Value> {
+        let m = &self.manifest.root;
+        let spec = m
+            .require("schedule")?
+            .array()?
+            .iter()
+            .flat_map(|g| {
+                g.get("episodes")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+            })
+            .nth(index)
+            .ok_or_else(|| Error::contract("final64 ordinal absent"))?;
+        let viewer = spec.require("learner_viewer")?.integer(1, 2)?;
+        let name = field(spec, "episode_id")?;
+        let ep = m
+            .require("episodes")?
+            .array()?
+            .iter()
+            .find(|ep| ep.get("episode_id") == spec.get("episode_id"))
+            .ok_or(Error::Closed)?;
+        let file = format!("player-{viewer}.jsonl");
+        let path = self.directory.join(name).join(&file);
+        let owner = self
+            .sources
+            .iter_mut()
+            .find(|s| s.owns_original(&path))
+            .ok_or(Error::Closed)?;
+        let raw = owner.bytes(&path, limits.source_bytes)?;
+        let first = raw
+            .split_inclusive(|v| *v == b'\n')
+            .next()
+            .ok_or(Error::Closed)?;
+        if first.len() > limits.record_bytes {
+            return Err(Error::resource("final64 header cap"));
+        }
+        let h = json::parse(first, b, c)?;
+        drop(raw);
+        let (identity, model) = card_instance::role(&h.root, m, ep, spec, viewer, b, c)?;
+        let declaration = OriginalHeader::new_corrected(model, &identity, b, c)?;
+        stage.enable_final_dto(limits.record_bytes)?;
+        let parsed = Journal::restage_corrected(
+            owner,
+            &file,
+            limits.source_bytes,
+            limits.record_bytes,
+            &declaration,
+            stage,
+            0,
+        )?;
+        let frames = parsed.correspondence_frames(owner)?;
+        let h = parsed.header_value();
+        let end = parsed.end_value();
+        require(
+            field(end, "end_kind")? == "natural"
+                && end.require("outcome")? == ep.require("outcome")?,
+            "final64 restage closure differs",
+        )?;
+        let digest = episode_digest_context(
+            h,
+            h.require("viewer")?,
+            h.require("bank_episode")?,
+            &parsed.boundary_value(),
+            frames.root.array()?,
+            end.require("end_kind")?,
+            end.require("outcome")?,
+            &Value::Null,
+            b,
+            c,
+            SourceFormat::Corrected,
+        )?;
+        require(
+            self.digests.get(index) == Some(&digest),
+            "final64 restage original correspondence differs",
+        )?;
+        parsed.staged_final_episode(owner, stage, &frames.root, &digest)
     }
 }

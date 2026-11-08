@@ -89,6 +89,8 @@ pub struct Stage {
     failed: bool,
     exported: bool,
     _owner: Lease,
+    final_dto_limit: Option<usize>,
+    final_decisions: BudgetVec<Value>,
 }
 struct NewDirectory {
     path: PathBuf,
@@ -198,7 +200,7 @@ impl Stage {
             descriptors: BudgetVec::new(&budget),
             keys: std::collections::BTreeSet::new(),
             metadata: BudgetVec::new(&budget),
-            budget,
+            budget: budget.clone(),
             scratch: Budget::new(scratch_bytes),
             control,
             directory: guard.path.clone(),
@@ -209,6 +211,8 @@ impl Stage {
             failed: false,
             exported: false,
             _owner: owner,
+            final_dto_limit: None,
+            final_decisions: BudgetVec::new(&budget),
         };
         result.current_directory()?;
         guard.armed = false;
@@ -578,6 +582,7 @@ impl Stage {
         self.closed = true;
         self.banks.clear();
         self.descriptors.clear();
+        self.final_decisions.clear();
         self.metadata.clear();
         self.keys.clear();
         Ok(())
@@ -1126,5 +1131,118 @@ impl Stage {
 impl Stage {
     pub(crate) fn unadmitted_test_directory(&self) -> &std::path::Path {
         &self.directory
+    }
+}
+
+impl Stage {
+    pub(crate) fn enable_final_dto(&mut self, limit: usize) -> Result<()> {
+        if limit == 0 || limit > LIMIT || self.final_dto_limit.is_some() {
+            return Err(Error::contract("one bounded final64 DTO spool"));
+        }
+        self.final_dto_limit = Some(limit);
+        Ok(())
+    }
+    pub(crate) fn final_dto_enabled(&self) -> bool {
+        self.final_dto_limit.is_some()
+    }
+    pub(crate) fn final_decision(
+        &mut self,
+        frame: &Value,
+        descriptor: &Value,
+        selection: &Value,
+        columns: &[u8],
+    ) -> Result<()> {
+        let limit = self.final_dto_limit.ok_or(Error::Closed)?;
+        let raw = json::canonical(frame, &self.budget, &self.control)?;
+        if raw.len() > limit || columns.len() > LIMIT {
+            return Err(Error::resource("final64 DTO record/source cap"));
+        }
+        let i = self.final_decisions.len();
+        let fk = format!("dto.frame.{i}");
+        let ck = format!("dto.columns.{i}");
+        self.bytes(&fk, &raw)?;
+        self.bytes(&ck, columns)?;
+        let _admission = self.budget.reserve(
+            json::canonical(descriptor, &self.budget, &self.control)?
+                .len()
+                .checked_mul(32)
+                .and_then(|n| n.checked_add(65536))
+                .ok_or_else(|| Error::resource("final64 decision metadata overflow"))?,
+        )?;
+        self.final_decisions.push(json::object([
+            ("frame_array_key", json::text(&fk)),
+            (
+                "candidate_descriptor",
+                json::copy(descriptor, &self.control)?,
+            ),
+            ("candidate_array_key", json::text(&ck)),
+            ("selection", json::copy(selection, &self.control)?),
+        ]))?;
+        self.metadata.push(_admission)?;
+        Ok(())
+    }
+    pub(crate) fn final_bank(
+        &mut self,
+        actor: &Value,
+        episode: &Value,
+        events: &[Value],
+        prefixes: &[[u8; 32]],
+    ) -> Result<Value> {
+        let limit = self.final_dto_limit.ok_or(Error::Closed)?;
+        let mut rows = Vec::new();
+        self.metadata.push(
+            self.budget.reserve(
+                1024usize
+                    .checked_mul(events.len() + 1)
+                    .ok_or_else(|| Error::resource("final64 event metadata overflow"))?,
+            )?,
+        )?;
+        for (i, event) in events.iter().enumerate() {
+            let raw = json::canonical(event, &self.budget, &self.control)?;
+            if raw.len() > limit {
+                return Err(Error::resource("final64 event record cap"));
+            }
+            let key = format!("dto.event.{i}");
+            self.bytes(&key, &raw)?;
+            rows.push(json::object([
+                ("array_key", json::text(&key)),
+                (
+                    "prefix_hash",
+                    json::text(
+                        &prefixes[i + 1]
+                            .iter()
+                            .map(|v| format!("{v:02x}"))
+                            .collect::<String>(),
+                    ),
+                ),
+            ]));
+        }
+        let hash = |v: &[u8; 32]| v.iter().map(|v| format!("{v:02x}")).collect::<String>();
+        Ok(json::object([
+            ("actor", json::copy(actor, &self.control)?),
+            ("episode", json::copy(episode, &self.control)?),
+            ("initial_prefix_hash", json::text(&hash(&prefixes[0]))),
+            ("event_records", json::array(rows)),
+            (
+                "terminal_prefix_hash",
+                json::text(&hash(prefixes.last().unwrap())),
+            ),
+        ]))
+    }
+    pub(crate) fn final_decisions(&self) -> Result<Value> {
+        self.control.check()?;
+        Ok(json::array(
+            self.final_decisions
+                .iter()
+                .map(|v| json::copy(v, &self.control))
+                .collect::<Result<Vec<_>>>()?,
+        ))
+    }
+}
+
+#[cfg(test)]
+impl Stage {
+    pub(crate) fn unadmitted_fault_directory(&self) -> std::path::PathBuf {
+        self.directory.clone()
     }
 }

@@ -233,7 +233,7 @@ fn finite(v: &Value) -> Result<f64> {
 }
 // Preserve Python's numeric type and operation order. Normal runtime anchors
 // are binary64; integer-controlled fixtures retain integer arithmetic/echoes.
-fn arithmetic(a: &Value, b: &Value, subtract: bool) -> Result<Value> {
+pub(crate) fn arithmetic(a: &Value, b: &Value, subtract: bool) -> Result<Value> {
     if a.as_number().is_some_and(json::integer_token)
         && b.as_number().is_some_and(json::integer_token)
     {

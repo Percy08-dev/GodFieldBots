@@ -1,5 +1,7 @@
 //! Additive diagnostic ownership for original structured parent controls.
 //! No Journal5, ZIP/NPY, authorization or numerical export claims.
+#[path = "card_instance_final_validation.rs"]
+pub(crate) mod final_validation;
 use crate::{
     budget::{Budget, BudgetVec, Control, Lease},
     error::{Error, Result},
@@ -176,6 +178,17 @@ impl Sources {
             digest,
             _lease: lease,
         })
+    }
+    /// Cached original byte bound for preallocation; never establishes new evidence.
+    pub(crate) fn original_len(&self, path: &Path) -> Result<usize> {
+        self.control.check()?;
+        let file = self
+            .files
+            .iter()
+            .find(|e| e.path == path)
+            .ok_or_else(|| Error::contract("retained original file required for admission"))?;
+        usize::try_from(file.identity.2)
+            .map_err(|_| Error::resource("original byte bound overflow"))
     }
     pub fn hash(&mut self, path: &Path) -> Result<String> {
         let (mut file, identity) = self.open(path)?;
@@ -1852,6 +1865,7 @@ pub(crate) struct CardInstanceNativeSession {
     budget: Arc<Budget>,
     payload: std::sync::Weak<()>,
     receipt: Option<BudgetVec<u8>>,
+    final_slot: Option<final_validation::Slot>,
 }
 impl CardInstanceNativeSession {
     pub(crate) fn open(
@@ -1896,6 +1910,7 @@ impl CardInstanceNativeSession {
             budget,
             payload: std::sync::Weak::new(),
             receipt: None,
+            final_slot: None,
         })
     }
     fn core(&self) -> Result<&CohortSession> {
@@ -1940,6 +1955,7 @@ impl CardInstanceNativeSession {
         })
     }
     pub(crate) fn export_recorded_cohort(&mut self, index: usize) -> Result<CardInstancePayload> {
+        self.final_slot_operation(CardInstanceOperation::Recorded(index))?;
         self.core()?.recorded_export_preconditions(index)?;
         if self.payload.upgrade().is_some() {
             return Err(Error::contract("outstanding exported packet"));
@@ -2001,16 +2017,27 @@ impl CardInstanceNativeSession {
         Ok(self.receipt.as_ref().unwrap())
     }
     pub(crate) fn finalize_read(&mut self) -> Result<&[u8]> {
+        if !self.final_slot_retired() {
+            return Err(Error::contract(
+                "final64 loan must retire before parent finalize",
+            ));
+        }
         let receipt = self.core_mut()?.finalize_read3()?;
         self.retire_core()?;
         self.receipt = Some(receipt);
         Ok(self.receipt.as_ref().unwrap())
     }
     pub(crate) fn close(&mut self) -> Result<()> {
-        if self.core.is_none() {
-            return Ok(());
+        let final_result = self.close_final_validation();
+        if !self.final_slot_retired() {
+            return final_result.and(Err(Error::contract(
+                "final64 collection retirement unconfirmed",
+            )));
         }
-        let result = self.core_mut()?.close();
+        if self.core.is_none() {
+            return final_result;
+        }
+        let result = final_result.and(self.core_mut()?.close());
         if self.core.as_ref().is_some_and(CohortSession::is_closed) {
             let retired = self.retire_core();
             return result.and(retired);
@@ -2468,6 +2495,7 @@ mod card_instance_lifecycle_primitives {
             budget: b.clone(),
             payload: std::sync::Weak::new(),
             receipt: None,
+            final_slot: None,
         };
         assert!(!root.join("run.json").exists());
         assert!(!root.join("generations").exists());
@@ -2939,6 +2967,7 @@ pub(crate) enum CardInstanceOperation {
 }
 impl CardInstanceNativeSession {
     pub(crate) fn preflight(&self, op: CardInstanceOperation) -> Result<()> {
+        self.final_slot_operation(op)?;
         let core = self.core()?;
         match op {
             CardInstanceOperation::Export => {

@@ -571,6 +571,17 @@ fn retire_structured_session(core: structured_session::CohortSession) -> error::
     Ok(())
 }
 impl StructuredSessionBridge {
+    fn release_final_consumer(&self, require_released: bool) -> error::Result<()> {
+        let final_packet = {
+            let core = self.core.lock().map_err(|_| Error::Closed)?;
+            matches!(core.as_ref(),Some(StructuredBridgeCore::Corrected(v)) if v.final_has_packet())
+        };
+        if final_packet {
+            release_final_packet_consumer(&self.payload, require_released)?;
+        }
+        Ok(())
+    }
+
     fn owned_wire(b: &Arc<Budget>, bytes: &[u8]) -> error::Result<budget::BudgetVec<u8>> {
         let mut result = budget::BudgetVec::with_capacity(b, bytes.len())?;
         for value in bytes {
@@ -792,6 +803,9 @@ impl StructuredSessionBridge {
         retained_python_bytes: usize,
         recorded: Option<usize>,
     ) -> PyResult<(Py<PyBytes>, Py<PyTuple>, Py<PyTuple>, Py<PyTuple>)> {
+        if recorded.is_some() {
+            self.release_final_consumer(true).map_err(python_error)?;
+        }
         let (metadata, banks, card_guard) = py
             .detach(|| {
                 self.mutating(
@@ -907,16 +921,29 @@ impl StructuredSessionBridge {
     }
     fn recheck(&self, py: Python<'_>, retained_python_bytes: usize) -> PyResult<()> {
         py.detach(|| {
+            let mut core = self.core.lock().map_err(|_| Error::Closed)?;
+            let core = core.as_mut().ok_or(Error::Closed)?;
+            if let StructuredBridgeCore::Corrected(v) = core {
+                if v.final_loan_open() {
+                    v.final_recheck_preconditions()?;
+                    let result = (|| {
+                        self.caller
+                            .lock()
+                            .map_err(|_| Error::Closed)?
+                            .resize(retained_python_bytes)?;
+                        v.recheck_final_validation()
+                    })();
+                    if let Err(e) = &result {
+                        v.fail_final_validation(e.clone());
+                    }
+                    return result;
+                }
+            }
             self.caller
                 .lock()
                 .map_err(|_| Error::Closed)?
                 .resize(retained_python_bytes)?;
-            self.core
-                .lock()
-                .map_err(|_| Error::Closed)?
-                .as_ref()
-                .ok_or(Error::Closed)?
-                .recheck()
+            core.recheck()
         })
         .map_err(python_error)
     }
@@ -1040,6 +1067,7 @@ impl StructuredSessionBridge {
         }
     }
     fn close(&self, py: Python<'_>) -> PyResult<()> {
+        self.release_final_consumer(true).map_err(python_error)?;
         py.detach(|| {
             let mut core = self.core.lock().map_err(|_| Error::Closed)?;
             let Some(owned) = core.as_mut() else {
@@ -1142,6 +1170,162 @@ session_methods!(StructuredNativeSession, false, {
     }
 });
 session_methods!(CardInstanceNativeSession, true, {
+    #[pyo3(signature=(request,retained_python_bytes=0))]
+    fn inspect_final_validation<'py>(
+        &self,
+        py: Python<'py>,
+        request: &[u8],
+        retained_python_bytes: usize,
+    ) -> PyResult<Bound<'py, PyBytes>> {
+        // Check pure mode/phase before any caller/wire allocation or poison.
+        {
+            let core = self
+                .bridge
+                .core
+                .lock()
+                .map_err(|_| python_error(Error::Closed))?;
+            match core.as_ref().ok_or_else(|| python_error(Error::Closed))? {
+                StructuredBridgeCore::Corrected(v) => {
+                    v.final_parent_preconditions().map_err(python_error)?
+                }
+                _ => return Err(python_error(Error::contract("corrected parent required"))),
+            }
+        }
+        // Reserve/bound/copy the Python borrow while the GIL is held. Only
+        // this owned wire crosses detach, matching the shared corrected ABI.
+        let raw = (|| -> error::Result<_> {
+            let mut core = self.bridge.core.lock().map_err(|_| Error::Closed)?;
+            let StructuredBridgeCore::Corrected(v) = core.as_mut().ok_or(Error::Closed)? else {
+                return Err(Error::Closed);
+            };
+            let result = (|| {
+                v.final_request_bound(request.len())?;
+                self.bridge
+                    .caller
+                    .lock()
+                    .map_err(|_| Error::Closed)?
+                    .resize(retained_python_bytes)?;
+                StructuredSessionBridge::owned_wire(&self.bridge.budget, request)
+            })();
+            if let Err(e) = &result {
+                v.fail_final_validation(e.clone());
+            }
+            result
+        })()
+        .map_err(python_error)?;
+        let result = py
+            .detach(|| {
+                let mut core = self.bridge.core.lock().map_err(|_| Error::Closed)?;
+                let StructuredBridgeCore::Corrected(v) = core.as_mut().ok_or(Error::Closed)? else {
+                    return Err(Error::Closed);
+                };
+                v.inspect_final_validation(&raw)
+            })
+            .map_err(python_error)?;
+        Ok(PyBytes::new(py, &result))
+    }
+    #[pyo3(signature=(episode_index,retained_python_bytes=0))]
+    fn export_final_validation<'py>(
+        &self,
+        py: Python<'py>,
+        episode_index: usize,
+        retained_python_bytes: usize,
+    ) -> PyResult<(Py<PyBytes>, Py<PyTuple>, Py<PyTuple>, Py<PyTuple>)> {
+        self.bridge
+            .release_final_consumer(true)
+            .map_err(python_error)?;
+        let payload = py
+            .detach(|| {
+                let mut core = self.bridge.core.lock().map_err(|_| Error::Closed)?;
+                let StructuredBridgeCore::Corrected(v) = core.as_mut().ok_or(Error::Closed)? else {
+                    return Err(Error::Closed);
+                };
+                v.final_export_preconditions(episode_index)?;
+                let result = (|| {
+                    self.bridge
+                        .caller
+                        .lock()
+                        .map_err(|_| Error::Closed)?
+                        .resize(retained_python_bytes)?;
+                    v.export_final_validation(episode_index)
+                })();
+                if let Err(e) = &result {
+                    v.fail_final_validation(e.clone());
+                }
+                result
+            })
+            .map_err(python_error)?;
+        let (metadata, banks, guard, lease) = payload.into_parts();
+        let result = publish_raw_banks(
+            py,
+            &self.bridge.budget,
+            &metadata,
+            banks,
+            Some((guard, lease)),
+        )
+        .and_then(|(packet, consumer)| {
+            *self
+                .bridge
+                .payload
+                .lock()
+                .map_err(|_| python_error(Error::Closed))? = Some(consumer);
+            Ok(packet)
+        });
+        if result.is_err() {
+            if let Ok(mut core) = self.bridge.core.lock() {
+                if let Some(StructuredBridgeCore::Corrected(v)) = core.as_mut() {
+                    v.fail_final_validation(Error::resource(
+                        "final64 Python payload publication failed",
+                    ));
+                }
+            }
+        }
+        result
+    }
+    #[pyo3(signature=(retained_python_bytes=0))]
+    fn recheck_final_validation(
+        &self,
+        py: Python<'_>,
+        retained_python_bytes: usize,
+    ) -> PyResult<()> {
+        self.bridge
+            .release_final_consumer(false)
+            .map_err(python_error)?;
+        py.detach(|| {
+            let mut core = self.bridge.core.lock().map_err(|_| Error::Closed)?;
+            let StructuredBridgeCore::Corrected(v) = core.as_mut().ok_or(Error::Closed)? else {
+                return Err(Error::Closed);
+            };
+            v.final_recheck_preconditions()?;
+            let result = (|| {
+                self.bridge
+                    .caller
+                    .lock()
+                    .map_err(|_| Error::Closed)?
+                    .resize(retained_python_bytes)?;
+                v.recheck_final_validation()
+            })();
+            if let Err(e) = &result {
+                v.fail_final_validation(e.clone());
+            }
+            result
+        })
+        .map_err(python_error)
+    }
+    fn close_final_validation(&self, py: Python<'_>) -> PyResult<()> {
+        self.bridge
+            .release_final_consumer(true)
+            .map_err(python_error)?;
+        py.detach(|| {
+            let mut core = self.bridge.core.lock().map_err(|_| Error::Closed)?;
+            let StructuredBridgeCore::Corrected(v) = core.as_mut().ok_or(Error::Closed)? else {
+                return Err(Error::Closed);
+            };
+            v.close_final_validation()
+        })
+        .map_err(python_error)
+    }
+
     #[pyo3(signature=(collection_index,retained_python_bytes=0))]
     fn export_recorded_cohort<'py>(
         &self,
@@ -3019,5 +3203,64 @@ mod lifecycle_tests {
             .join()
             .unwrap();
         assert_eq!(budget.used(), 0);
+    }
+}
+
+/// The bridge itself retains even a zero-bank packet's quota until the next
+/// boundary. NumPy base owners share this SAME existing ExportLease Arc.
+fn release_final_packet_consumer(
+    payload: &Mutex<Option<Arc<ExportLease>>>,
+    required: bool,
+) -> error::Result<()> {
+    let mut payload = payload.lock().map_err(|_| Error::Closed)?;
+    if let Some(consumer) = payload.as_ref() {
+        if Arc::strong_count(consumer) != 1 {
+            if required {
+                return Err(Error::contract(
+                    "final64 packet array views must retire before next export/close",
+                ));
+            }
+        } else {
+            payload.take();
+        }
+    }
+    Ok(())
+}
+#[cfg(test)]
+mod final64_export_lease_tests {
+    use super::*;
+    #[test]
+    fn card_instance_final64_shared_base_owner_and_zero_bank_packet_keep_quota_until_release() {
+        for has_view in [false, true] {
+            let b = Budget::new(65536);
+            let guard = Arc::new(());
+            let weak = Arc::downgrade(&guard);
+            let consumer = Arc::new(ExportLease {
+                _consumer: b.reserve(4096).unwrap(),
+                _metadata: b.reserve(2048).unwrap(),
+                _index: None,
+                _card_guard: Some((guard, b.reserve(1024).unwrap())),
+                stats: Arc::new(telemetry::Telemetry::default()),
+            });
+            let view = if has_view {
+                Some(consumer.clone())
+            } else {
+                None
+            };
+            let payload = Mutex::new(Some(consumer));
+            assert_eq!(b.used(), 7168);
+            assert!(weak.upgrade().is_some());
+            if has_view {
+                assert!(release_final_packet_consumer(&payload, true).is_err());
+                release_final_packet_consumer(&payload, false).unwrap();
+                assert_eq!(b.used(), 7168);
+                assert!(weak.upgrade().is_some());
+            }
+            drop(view);
+            release_final_packet_consumer(&payload, true).unwrap();
+            assert_eq!(b.used(), 0);
+            assert!(weak.upgrade().is_none());
+            release_final_packet_consumer(&payload, true).unwrap();
+        }
     }
 }

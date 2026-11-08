@@ -6,6 +6,8 @@ update. Native flags/DTOs/arrays never supply the live Python issuer authority.
 from __future__ import annotations
 
 import json
+import time
+import traceback as traceback_module
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Self
@@ -26,6 +28,254 @@ from gf_training.native_structured_session import (
 COLLECTION_FIELDS = {'collection_index', 'directory', 'generation', 'manifest_sha256', 'config_sha256',
     'linkage', 'schedule_sha256', 'bindings_sha256', 'source_proof', 'semantics', 'learner_label',
     'learner_decisions', 'correspondence', 'numeric'}
+
+
+def _require_final_validation_native(settings: Any, native: Any = None) -> Any:
+    """Full closed capability/API/binary preflight; no parent or Source allocation."""
+    from gf_common.card_instance_collection import NATIVE_FINAL_VALIDATION_MARKER
+    from gf_common.card_instance_formal import NATIVE_FORMAL_MARKER
+    from gf_training.native_backend import (
+        binary_identity,
+        card_instance_reader_settings,
+        load_native,
+    )
+    module = load_native() if native is None else native
+    if settings.backend != 'rust' or settings.reader != 'participant-structured-v2':
+        raise ContractError('explicit corrected native final64 reader required')
+    card_instance_reader_settings(settings, module)
+    info = dict(module.build_info())
+    if (info.get('card_instance_final_validation') != NATIVE_FINAL_VALIDATION_MARKER
+            or info.get('card_instance_formal_controls') != NATIVE_FORMAL_MARKER):
+        raise ContractError('Rust final64 capability unavailable; formal-control marker is insufficient; no fallback')
+    cls = getattr(module, 'CardInstanceNativeSession', None)
+    if any(not callable(getattr(cls, name, None)) for name in ('inspect_final_validation',
+            'export_final_validation', 'recheck_final_validation', 'close_final_validation')):
+        raise ContractError('native final64 four-method ABI is incomplete; no fallback')
+    identity = binary_identity(module)
+    if identity['build'] != info or identity['gil_disabled'] is not False:
+        raise ContractError('native final64 loaded binary/source/ABI differs')
+    return module
+
+
+FINAL_SUMMARY_FIELDS = {'schema_version', 'kind', 'parent_run_sha256', 'directory', 'manifest_kind',
+    'manifest_sha256', 'source_set_sha256', 'linkage', 'config_projection', 'validation_invocation',
+    'elapsed_seconds', 'games', 'selected_decisions', 'zero_endpoint_games', 'episodes',
+    'qualified', 'parent_qualification'}
+
+
+class _NativeFinalValidationInputs:
+    """One private collection loan from the parent's ACTUAL existing issuer owner.
+
+    Only FormalGameParent creates and retains this object. It owns neither a new
+    session/executor nor Source/fit permission; Actor64 owns the resource token.
+    """
+    def __init__(self, owner: _NativeGameInputs, parent: Any, token: object, *, deadline: float) -> None:
+        if type(owner) is not _NativeGameInputs:
+            raise ContractError('SAME concrete retained corrected native inputs required')
+        self._owner, self._parent, self._token = owner, parent, token
+        self.deadline = min(deadline, parent.deadline, owner.deadline)
+        self._source: Any = None
+        self._summary: Json | None = None
+        self._packet: Any = None
+        self._records: tuple[Any, ...] | None = None
+        self._started = self._closed = False
+        self._failure: BaseException | None = None
+
+    def bind_source(self, source: Any) -> None:
+        from gf_training.card_instance_final_validation import GameFinalValidationSource
+        if (self._source is not None or type(source) is not GameFinalValidationSource
+                or source._parent is not self._parent or source._native is not self):
+            raise ContractError('SAME actual final64 Source cleanup owner required')
+        self._source = source
+
+    @property
+    def parent_run_sha256(self) -> str:
+        self._cheap()
+        assert self._owner.summary is not None
+        return str(self._owner.summary['parent']['run_sha256'])
+
+    @property
+    def aggregate_window(self) -> int:
+        self._cheap()
+        return int(self._owner.models[0].event.aggregate_window)
+
+    def _cheap(self) -> None:
+        if self._failure is not None:
+            raise ContractError('native final64 loan is permanently poisoned') from self._failure
+        if self._closed:
+            raise ContractError('native final64 loan is closed')
+        if time.monotonic() >= self.deadline:
+            raise TimeoutError('native final64 retained caller deadline')
+        self._parent.require_active()
+        from gf_training.card_instance_final_validation import _require_borrow
+        _require_borrow(self._parent, self._token)
+        self._owner._check()
+
+    def _remember(self, error: BaseException) -> None:
+        self._failure = self._failure or error
+        self._parent._native_final_failure(self, self._failure)
+        vars(self._failure)['_game_final_validation_cleanup_owner'] = self._source or self._parent
+        vars(self._failure)['_game_final_validation_parent_owner'] = self._parent
+
+    def inspect(self, encoded: bytes) -> Json:
+        self._cheap()
+        if self._started:
+            raise ContractError('native final64 inspection has one lifetime')
+        try:
+            self._owner.recheck()
+            self._started = True  # Reachable through SAME parent/Source before I/O.
+            raw = self._owner._executor.call(self._owner._session.inspect_final_validation, encoded, self._owner._held())
+            # Native retains its concrete summary/control reservation before this
+            # JSON decode; no second per-parent allowance is constructed.
+            summary = closed(json.loads(raw), FINAL_SUMMARY_FIELDS)
+            if (type(summary['schema_version']) is not int or summary['schema_version'] != 1
+                    or summary['kind'] != 'card-instance-final-validation-summary'
+                    or summary['games'] != 64 or summary['qualified'] is not False
+                    or summary['parent_qualification'] != 'not_performed'
+                    or type(summary['episodes']) is not list or len(summary['episodes']) != 64):
+                raise ContractError('native final64 closed structural summary differs')
+            for i, row in enumerate(summary['episodes']):
+                closed(row, {'episode_index', 'episode_id', 'game_id', 'viewer', 'decisions', 'end_kind', 'outcome', 'episode_digest'})
+                if type(row['episode_index']) is not int or row['episode_index'] != i or row['end_kind'] != 'natural':
+                    raise ContractError('native final64 ordered natural endpoints differ')
+                integer(row['viewer'], 1, 2)
+                integer(row['decisions'], 0)
+            self._summary = summary
+            self.recheck()
+            return summary
+        except BaseException as error:
+            self._remember(error)
+            raise
+
+    def recheck(self) -> None:
+        self._cheap()
+        try:
+            self._parent.recheck()
+            self._owner._executor.call(self._owner._session.recheck_final_validation, self._owner._held())
+        except BaseException as error:
+            self._remember(error)
+            raise
+
+    @staticmethod
+    def _decode_bound(packet: Any) -> int:
+        """Use the actual native prepaid metadata lease; no raw DTO copy here."""
+        if type(packet) is not tuple or len(packet) != 4 or type(packet[0]) is not bytes:
+            raise ContractError('closed native final64 packet required')
+        # publish_raw_banks pre-admits >=64*metadata bytes plus32MiB before
+        # returning. This bounded management preview is within that SAME lease.
+        metadata = json.loads(packet[0])
+        frames = len(metadata['decisions'])
+        events = len(metadata['bank']['event_records'])
+        uint8 = sum(value.nbytes for value in packet[1])
+        all_bytes = sum(value.nbytes for banks in packet[1:] for value in banks)
+        # Covers the decoder's metadata/index containers, all owned JSON/codec
+        # copies, reference-token temporaries and per-record sizing scratch.
+        return (64 * (len(packet[0]) + uint8 + all_bytes)
+            + 65536 * (1 + events + 4 * frames)
+            + 1024 * (len(metadata['arrays']) + events + frames + 3))
+
+    def _next(self, index: int, *, base_external: int, max_owned_bytes: int, aggregate_window: int) -> Any:
+        from gf_training.native_card_instance_final_validation import (
+            _decode_final_validation_packet,
+        )
+        self._cheap()
+        assert self._summary is not None
+        try:
+            self.recheck()
+            self._packet = self._owner._executor.call(self._owner._session.export_final_validation, index, self._owner._held())
+            bound = self._decode_bound(self._packet)
+            self._parent.admit_external(base_external + bound)
+            if self._parent.resident_bytes + base_external + bound > max_owned_bytes:
+                raise ContractError('final64 joint decoder admission exhausted before copies')
+            def reserve(growth: int) -> None:
+                self._cheap()
+                if integer(growth, 0) > bound:
+                    raise ContractError('native final64 decoder exceeded pre-admitted growth')
+            return _decode_final_validation_packet(self._packet, summary=self._summary, episode_index=index,
+                actions=self._owner.actions, rules=card_instance_rules(), aggregate_window=aggregate_window,
+                max_owned_bytes=max_owned_bytes, retained_owned_bytes=self._parent.resident_bytes + base_external,
+                max_record_bytes=min(64*1024**2, self._owner.settings.max_record_mib*1024**2),
+                reserve=reserve, check=self._cheap)
+        except BaseException as error:
+            self._remember(error)
+            # Retire completed decoder frames' NumPy views before native close;
+            # the initiating exception/traceback and SAME cleanup owner survive.
+            try:
+                traceback_module.clear_frames(error.__traceback__)
+            except BaseException:  # noqa: BLE001, S110 - diagnostic/cleanup allocation cannot replace primary
+                pass
+            raise
+        finally:
+            self._packet = None
+
+    def records(self, *, base_external: int, max_owned_bytes: int, aggregate_window: int) -> tuple[Any, ...]:
+        from gf_training.structured_rollout import _owned_bytes
+        if self._records is not None:
+            raise ContractError('native final64 records have one materialization')
+        rows: list[Any] = []
+        try:
+            for i in range(64):
+                held = base_external + _owned_bytes(rows)
+                self._parent.admit_external(held)
+                rows.append(self._next(i, base_external=held, max_owned_bytes=max_owned_bytes,
+                    aggregate_window=aggregate_window))
+            self._parent.admit_external(base_external + _owned_bytes(rows) + 65536)
+            self._records = tuple(rows)
+            self.recheck()
+            return self._records
+        except BaseException as error:
+            rows.clear()
+            self._records = None
+            self._remember(error)
+            raise
+
+    @property
+    def cleanup_complete(self) -> bool:
+        return self._closed and self._packet is None and self._records is None
+
+    @property
+    def parent_cleanup_complete(self) -> bool:
+        """Physical slot plus associated Source buffers/exclusion, without guards."""
+        return self.cleanup_complete and (self._source is None or self._source.cleanup_complete)
+
+    def retire_from_parent(self, initiating: BaseException | None = None) -> None:
+        if initiating is not None:
+            self._failure = self._failure or initiating
+        if self._source is not None and not self._source.cleanup_complete:
+            self._source._failure = self._source._failure or self._failure
+            self._source.close()
+        else:
+            self.close()
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._packet = self._records = None
+        failure = self._failure
+        if self._started:
+            for _ in range(2):
+                try:
+                    self._owner._executor.call(self._owner._session.close_final_validation)
+                    self._closed = True
+                    break
+                except BaseException as error:  # noqa: BLE001 - SAME reachable owner confirms cleanup vs error
+                    failure = failure or error
+                    vars(failure)['_game_final_validation_cleanup_owner'] = self._source or self._parent
+                    vars(failure)['_game_final_validation_parent_owner'] = self._parent
+                    if failure is not error:
+                        try:
+                            failure.add_note('native final64 cleanup: ' + str(error))
+                        except BaseException:  # noqa: BLE001, S110 - diagnostics never replace first error/owner
+                            pass
+        else:
+            self._closed = True
+        if not self._closed:
+            failure = failure or ContractError('native final64 cleanup remains unconfirmed')
+        else:
+            self._summary = None
+        if failure is not None:
+            self._remember(failure)
+            raise failure
 
 
 def _authorize_game_controls(summary: Json, native: Any, actions: ActionConfigV3, *,

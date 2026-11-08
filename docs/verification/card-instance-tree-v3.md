@@ -274,6 +274,48 @@ independent code review, original Source re-decoding or inference replay.
 Root accepts the scoped ordinary CPU goal for all four models. The separate
 original-table/cache/cold-prefix diagnostic remains pending.
 
+The separate diagnostic harness now passes both independent reviews after two
+inertly reproduced defects are fixed: actual Tree timing payloads are canonical
+JSON bytes, and retirement-invalidated rows must remain failed when completed
+numeric evidence drains. Warmup identities now retain full parent/generation/
+episode/viewer/decision scope. Both reviewers independently pass47inert probes;
+R1files and failing controls remain archived. The R2panel SHA is
+a90979d2751d63d439c9ba567c0e81d76c7849633da7e929cbab43996997edfe.
+An isolated interpreter's .pth prioritizes the frozen149module runtime for
+controller and absolute-script -E children; seven import origins and optional
+dependency versions are checked without importing Torch (proof SHA6794f2ad…71d14).
+
+Actual NN diagnostic execution completes all512endpoints per model, each with
+161healthy retired workers and zero failures. Cache/full-token/independently
+rebuilt full-prefix normalized log probabilities agree under the unchanged
+1e-5absolute/relative tolerance: maximum difference0MLP and
+4.76837158203125e-7GRU/Transformer. Exact result SHAs are
+ec143b0bd77ea7fc6e717a4e0f02a14ef2b4f1a82f715ed849f23a22f130308f,
+1158ba27530741c56459c1e7a2a8c948020e7800d0a705d829e104b59a140a9c and
+4188e829e0d7e4c5ef3085fb36d88264e824dd16b903b55bfc309d0003a39e2e.
+NN parent wall is explicitly combined cached/full/cold work; individual child
+stages are reported separately, without subtracting them into an ordinary
+decision claim. Tree then also completes all512warm/cold pairs with exactly
+equal full ordered regression vectors and1024healthy retired workers; maximum
+simultaneous workers remains2. Result SHA
+59e8719602d2eeee9ab7deba0442a88f8bfb909c0c553ba4a37bcadadeb43afb.
+Cold full-prefix p95=1.179340seconds is a separate diagnostic; ordinary Tree
+p95 remains76.756ms. All150frozen runtime files remain exact after execution.
+
+Root's saved-data auditor checks all2560audit files/5632full score vectors,
+original endpoint/raw input/current table and entire own frame/table prefixes.
+It reconstructs24350own prefix frames, common-kernel NN tokens, normalization,
+fixed-tolerance parity and timing quantiles without rerunning model inference.
+All four PASS. An initial audit error confuses scheduled episode identity with
+the frame/event-bank identity; that failure log/code is preserved. Correcting
+the bank constructor retains every original binding/check and changes no
+measurement or data. Root audit is a scoped recomputation, not whole Source
+archive revalidation or another independent code review. Ordinary and diagnostic
+Root audits now complete this performance scope. No Source qualification or
+learning comparison follows; actual full table sizes1–2809 do not establish a
+saturated/stress worst case. Final receipt is
+`runs/assessments/card-instance-v2-latency-20261104/performance-acceptance-final-1.json`.
+
 Remaining512actual-input timing,
 reachable formal-parent/64final-validation/qualified Dataset3/GameTree3
 interfaces, whole-project/package/old-data checks and final installation/commits

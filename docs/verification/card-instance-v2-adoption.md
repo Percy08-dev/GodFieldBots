@@ -1017,3 +1017,33 @@ fabricated. Native64has a separately accepted design and remains unactivated
 while its implementation/parity/owner integration proceeds. Qualified Dataset3,
 fresh real-source fit and GameTree3 remain following code work; formal multi-seed
 execution/comparison, HPO and final test remain NOT RUN.
+
+## Durable recovery and restricted native Actor64 acceptance — 2026-11-08
+
+After environment restart, temporary workspaces/sites are absent. Exact design
+documents and scoped code are recovered from the session's own recorded patches,
+without executing recorded shell/build commands. Native sourcebf252e6b…16c07
+and all three saved forwarding-module hashes match; old temporary logs/ELFs are
+historical evidence only. New durable workspaces live under runs/workspaces.
+All61protected legacy files and eight performance result files rehash unchanged;
+the old measurements are not rerun or upgraded to current full-suite evidence.
+Locked optional dependencies are restored without changing project/lock files
+or the installed native ELF.
+
+The recovered16file native-final64/solo-parent increment passes both restricted
+reviews. Correctness independently passes100Python/64unit-export→DTO/8Rust;
+conformance passes100Python/9Rust. Unit/native parser outputs and genuine common
+DTO reconstruction, actual parent/session/lease, pending-evidence, admission and
+cleanup are covered. No fake admitted parent or successful four-method formal
+FFI is inferred. Fresh candidate391Python, affectedRust67/2explicitopt-ins ignored,
+fixture5 andlease1 also pass. New wheel/ELF are recorded independently of lost
+temporary artifacts; formal/final64/fixture markers remain absent.
+
+Root applies exactly16frozen files after baseline/hash checks, preserving the
+existing6bf4source alias. MAIN341PASS27.29s, full Ruff and mypy153PASS. Receipt
+`runs/assessments/card-instance-native-actor64-20261108/main-apply/verification-receipt.json`
+binds this restricted acceptance. Installed native is unchanged. Positive FFI
+through a genuine formal parent, Dataset3 qualified Source/fit, GameTree3 gameplay,
+final combined/native/CUDA/package/installation checks remain NOT RUN/pending as
+appropriate. Exact next raw16/resource seam design and runtime schema gates are
+separate; component metadata still grants no Source eligibility.

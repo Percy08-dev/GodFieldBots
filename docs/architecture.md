@@ -69,16 +69,22 @@ fixture origin remains unqualified and capability activation remains pending.
 All512 performance inputs and weights are frozen; read-only admission passes
 all12cohorts. All four ordinary CPU conditions pass all512samples, zero failures
 and two workers: p95=64.798ms MLP,64.827ms GRU,64.545ms Transformer and76.756ms
-Tree. Root's complete saved-table/input/own-prefix/quantile/reap audit passes;
-the separate original-table diagnostic and final combined checks remain pending.
+Tree. Root's complete saved-table/input/own-prefix/quantile/reap audit passes.
+The separate all512original-table diagnostics and saved-input/token/vector
+reconstruction audit also pass: MLP/Tree exact, GRU/Transformer maximum
+4.76837158203125e-7 under unchanged1e-5tolerances. Final combined checks and the
+remaining production interfaces stay pending.
 The first formal Python-control/owner increment also passes both reviews and
 156controlled tests. Its native formal parser/retained-parent increment now
 also passes both reviews after primary-error, preallocation and uncertain-lock
 retirement fixes;247bounded MAIN checks pass. The separate formal marker remains
 absent pending activation. Actor64 Python interfaces now pass both independent
 reviews and351MAIN scoped checks/Ruff/mypy152after early-admission, protected
-diagnostics and repeated-mutation growth fixes. Native Actor64 implementation
-and qualified Dataset3/GameTree3 remain pending.
+diagnostics and repeated-mutation growth fixes. Native Actor64/solo-parent
+forwarding now also passes both restricted independent reviews and341MAIN
+checks/Ruff/mypy153. The separate role markers stay unpublished; positive FFI
+through a genuine formal parent is NOT RUN. Qualified Dataset3/GameTree3 and
+their exact resource/original-history seams remain under implementation.
 ADR0024§18.2 separately pins
 reachable formal-parent/64validation/qualified Dataset3/GameTree3 interfaces;
 formal experimental execution stays deferred.

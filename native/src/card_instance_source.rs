@@ -11,11 +11,17 @@ pub(super) fn manifest(
     limits: &CollectionLimits,
     b: &Arc<Budget>,
     c: &Control,
+    role: CorrectedCollectionRole,
 ) -> Result<()> {
     require(
         m.require("schema_version")?.integer(5, 5)? == 5
             && field(m, "status")? == "complete"
-            && field(m, "collection_role")? == "ppo-batch",
+            && field(m, "collection_role")?
+                == if role.final64() {
+                    "ppo-final-validation"
+                } else {
+                    "ppo-batch"
+                },
         "complete corrected PPO Collection5 required",
     )?;
     controls::game_binding3(m, b, c)?;
@@ -43,48 +49,65 @@ pub(super) fn manifest(
         field(m, "token_signature")? == controls::CARD_INSTANCE_SIGNATURE
             && field(m, "config_hash")? == digest(cfg, b, c)?
             && field(m, "action_config_hash")? == digest(actions, b, c)?
-            && field(cfg.require("run")?, "split")? == "train",
+            && field(cfg.require("run")?, "split")?
+                == if role.final64() {
+                    "validation"
+                } else {
+                    "train"
+                },
         "corrected collection Config/input mismatch",
     )?;
     let (parent_root, state) = parent
         .ok_or_else(|| Error::contract("corrected PPO Source requires its original parent"))?;
     require(
-        cfg == state.require("effective_config")?
+        (role.final64() || cfg == state.require("effective_config")?)
             && m.require("inputs")? == state.require("config_inputs")?
             && m.require("code")? == state.require("identity")?.require("code")?,
         "corrected collection differs from frozen parent",
     )?;
     let link = m.require("linkage")?;
-    link.closed(
-        &[
-            "parent_run_id",
-            "parent_run_path",
-            "batch_id",
-            "collection_generation",
-            "learner_seats",
-            "schedule_digest",
-            "policy_registry_digest",
-        ],
-        &[],
-    )?;
-    let generation = integer(link, "collection_generation", 0, 999)?;
-    require(
-        link.require("parent_run_id")? == state.require("run_id")?
-            && field(link, "parent_run_path")?
-                == parent_root
-                    .to_str()
-                    .ok_or_else(|| Error::contract("nonUTF8 parent root"))?
-            && field(link, "batch_id")? == format!("batch-{generation:06}")
-            && field(link, "schedule_digest")? == digest(m.require("schedule")?, b, c)?
-            && field(link, "policy_registry_digest")?
-                == digest(m.require("policy_bindings")?, b, c)?,
-        "corrected collection linkage mismatch",
-    )?;
+    if role.final64() {
+        crate::structured_session::final_validation::manifest_controls(
+            m,
+            parent_root,
+            state,
+            b,
+            c,
+        )?;
+    } else {
+        link.closed(
+            &[
+                "parent_run_id",
+                "parent_run_path",
+                "batch_id",
+                "collection_generation",
+                "learner_seats",
+                "schedule_digest",
+                "policy_registry_digest",
+            ],
+            &[],
+        )?;
+        let generation = integer(link, "collection_generation", 0, 999)?;
+        require(
+            link.require("parent_run_id")? == state.require("run_id")?
+                && field(link, "parent_run_path")?
+                    == parent_root
+                        .to_str()
+                        .ok_or_else(|| Error::contract("nonUTF8 parent root"))?
+                && field(link, "batch_id")? == format!("batch-{generation:06}")
+                && field(link, "schedule_digest")? == digest(m.require("schedule")?, b, c)?
+                && field(link, "policy_registry_digest")?
+                    == digest(m.require("policy_bindings")?, b, c)?,
+            "corrected collection linkage mismatch",
+        )?;
+    }
     let schedule = m.require("schedule")?.array()?;
     let groups = m.require("groups")?.array()?;
     let receipts = m.require("runtime_evidence")?.array()?;
     require(
-        schedule.len() == 8 && groups.len() == 8 && receipts.len() == 8,
+        schedule.len() == role.games() / 2
+            && groups.len() == role.games() / 2
+            && receipts.len() == role.games() / 2,
         "complete eight swapped original pairs required",
     )?;
     for (group, receipt) in groups.iter().zip(receipts) {
@@ -162,7 +185,10 @@ pub(super) fn manifest(
             .ok_or_else(|| Error::contract("nonUTF8 Source inventory"))?
             .to_owned();
         require(
-            name != "manifest.json" && name != "report.json" && expected_files.insert(name),
+            name != "manifest.json"
+                && name != "manifest.json.tmp"
+                && name != "report.json"
+                && expected_files.insert(name),
             "duplicate/foreign original inventory",
         )?;
         let size = std::fs::symlink_metadata(&normalized)?.len();
@@ -183,7 +209,7 @@ pub(super) fn manifest(
         .keys()
         .cloned()
         .collect::<BTreeSet<_>>();
-    expected_files.extend(["manifest.json".into(), "report.json".into()]);
+    expected_files.extend([role.manifest().into(), "report.json".into()]);
     require(
         actual == expected_files,
         "complete original Collection5 inventory differs",

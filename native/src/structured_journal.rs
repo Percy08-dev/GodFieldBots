@@ -2111,6 +2111,20 @@ impl Journal {
                                     recipe.as_ref().unwrap(),
                                 )?
                             };
+                            if stage.final_dto_enabled() {
+                                let original = &documents[d.document].root;
+                                let descriptor = original.require("table")?;
+                                let payload = sources.bytes(
+                                    &sources.root.join(descriptor.require("file")?.string()?),
+                                    64 * 1024 * 1024,
+                                )?;
+                                stage.final_decision(
+                                    original.require("frame")?,
+                                    descriptor,
+                                    original.require("selection")?,
+                                    &payload,
+                                )?;
+                            }
                             decisions[decision].staged_frame = Some(meta);
                         }
                         decisions[decision].table.take();
@@ -2895,5 +2909,61 @@ mod original_source_tests {
         journal.sources.recheck().unwrap();
         drop(journal);
         std::fs::remove_dir_all(root).unwrap();
+    }
+}
+
+impl ParsedJournal {
+    pub(crate) fn staged_final_episode(
+        &self,
+        s: &crate::structured_session::Sources,
+        stage: &mut crate::structured_staging::Stage,
+        frames: &Value,
+        digest: &str,
+    ) -> Result<Value> {
+        let h = self.header_value();
+        let end = self.end_value();
+        // Reuse full original raw frame/table tokens; no advantages/targets are computed.
+        let bank = stage.final_bank(
+            h.require("viewer")?,
+            h.require("bank_episode")?,
+            &self.bank,
+            &self.prefixes,
+        )?;
+        let mut binding = json::object([]);
+        for key in [
+            "action_contract",
+            "purpose",
+            "synthetic_capacity",
+            "rule_signature",
+            "layout_signature",
+        ] {
+            binding
+                .as_object_mut()
+                .unwrap()
+                .insert(key.into(), json::copy(h.require(key)?, &s.control)?);
+        }
+        Ok(json::object([
+            ("binding", binding),
+            ("bank", bank),
+            ("decisions", stage.final_decisions()?),
+            (
+                "endpoint",
+                json::object([
+                    (
+                        "end_kind",
+                        json::copy(end.require("end_kind")?, &s.control)?,
+                    ),
+                    ("outcome", json::copy(end.require("outcome")?, &s.control)?),
+                    ("reason", Value::Null),
+                ]),
+            ),
+            (
+                "correspondence",
+                json::object([
+                    ("episode_digest", json::text(digest)),
+                    ("frames", json::copy(frames, &s.control)?),
+                ]),
+            ),
+        ]))
     }
 }

@@ -6,6 +6,7 @@ import math
 import stat
 import threading
 import time
+import traceback as traceback_module
 import weakref
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -16,7 +17,6 @@ from typing import Any, Self
 from gf_common.card_instance import ActionConfigV3
 from gf_common.card_instance_collection import (
     FINAL_VALIDATION,
-    NATIVE_FINAL_VALIDATION_MARKER,
     checked_invocation,
     checked_linkage,
     checked_projection,
@@ -72,6 +72,17 @@ def _release_borrow(parent: FormalGameParent, token: object) -> None:
         del _BORROWS[parent]
 
 
+def _require_borrow(parent: FormalGameParent, token: object | None = None) -> object:
+    """Actual resource exclusion only; no session/Source permission is returned."""
+    if type(parent) is not FormalGameParent:
+        raise ContractError('SAME concrete retained formal parent required')
+    with _BORROW_LOCK:
+        current = _BORROWS.get(parent)
+        if current is None or token is not None and current is not token:
+            raise ContractError('SAME actual actor64 resource borrow required')
+        return current
+
+
 @dataclass(frozen=True)
 class GameFinalValidationPlan:
     groups: tuple[Any, ...]
@@ -96,14 +107,8 @@ def require_actor_backend(loaded: Any) -> None:
         return
     if config.preprocessing.backend != 'rust':
         raise ContractError('explicit final validation Python/Rust backend required')
-    from gf_training.native_backend import card_instance_reader_settings, load_native
-    native = load_native()
-    card_instance_reader_settings(config.preprocessing, native)
-    if dict(native.build_info()).get('card_instance_final_validation') != NATIVE_FINAL_VALIDATION_MARKER:
-        raise ContractError('Rust final64 capability unavailable; formal-control marker is insufficient; no fallback')
-    # Capability is deliberately absent until this separate parser AND retained
-    # owner are implemented/reviewed. A forged marker cannot select Python here.
-    raise ContractError('Rust final64 retained Source adoption is NOT READY; no fallback')
+    from gf_training.native_card_instance import _require_final_validation_native
+    _require_final_validation_native(config.preprocessing)
 
 
 def _caller_contract(loaded: Any) -> None:
@@ -355,10 +360,22 @@ class _IssuedFinalValidationCollection:
 
 class GameFinalValidationSource:
     """Retained completed originals; no update, numeric or Dataset permission."""
-    def __init__(self, parent: FormalGameParent, snapshot: _SourceSnapshot, selected: tuple[EpisodeRecords, ...],
+    def __init__(self, parent: FormalGameParent, snapshot: _SourceSnapshot | None, selected: tuple[EpisodeRecords, ...] | None,
                  facts: Json, *, ancestors: dict[Path, tuple[int, int]] | None = None,
-                 pending: _IssuedFinalValidationCollection | None = None, reservation: int = 0) -> None:
+                 pending: _IssuedFinalValidationCollection | None = None, reservation: int = 0,
+                 native: Any = None) -> None:
+        if native is not None:
+            from gf_training.native_card_instance import _NativeFinalValidationInputs
+            if (snapshot is not None or type(native) is not _NativeFinalValidationInputs
+                    or getattr(parent, '_native_final_inputs', None) is not native):
+                raise ContractError('mutually exclusive SAME-parent native final64 loan required')
+        elif snapshot is None:
+            raise ContractError('original Python snapshot or actual native loan required')
         self._parent, self._selected = parent, selected
+        self._native = native
+        self._management: _SourceOwner | None = None
+        self._management_retained = 0
+        self._native_facts_reservation = 0
         self._reserved_bytes = reservation
         self._snapshot: _SourceSnapshot | None = snapshot
         self._ancestors = {} if ancestors is None else dict(ancestors)
@@ -371,7 +388,7 @@ class GameFinalValidationSource:
     def _require(self) -> None:
         if self._failure is not None:
             raise ContractError('final validation Source permanently poisoned') from self._failure
-        if not self._active or self._closed:
+        if not self._active or self._closed or self._selected is None:
             raise ContractError('SAME active retained final validation Source required')
 
     @property
@@ -380,11 +397,23 @@ class GameFinalValidationSource:
         try:
             if self._reserved_bytes:
                 self._parent.admit_external(self._reserved_bytes)
+            if self._native is not None:
+                needed = 32*len(self._facts) + 65536
+                proposed = self._reserved_bytes + max(0, needed-self._native_facts_reservation)
+                assert self._management is not None
+                if self._parent.resident_bytes + proposed > self._management.limit:
+                    raise ContractError('native final64 caller facts allowance exhausted before decode')
+                self._parent.admit_external(proposed)
+                self._reserved_bytes = proposed
+                self._native_facts_reservation = needed
+                return json.loads(self._facts)
             assert self._snapshot is not None
             self._snapshot.reserve(32 * len(self._facts) + 65536)
             return json.loads(self._facts)
         except BaseException as error:
             self._failure = error
+            if self._native is not None:
+                self._native._remember(error)
             raise
 
     @property
@@ -392,7 +421,19 @@ class GameFinalValidationSource:
         self.recheck()
         # All records/bank/frame/table/Selection containers are the shared
         # immutable byte-backed own-participant DTOs, never management controls.
+        assert self._selected is not None
         return self._selected
+
+    def _management_guard(self) -> None:
+        if self._management is not None:
+            # Preserve the actual native ownership and all actor/caller charges
+            # before any repeated management hash/read scratch is admitted.
+            extra = self._parent.resident_bytes + self._reserved_bytes - self._management_retained
+            self._management.used += extra - self._management.extra_owned_bytes
+            self._management.extra_owned_bytes = extra
+            if self._management.used > self._management.limit:
+                raise ContractError('final64 management joint ownership exhausted before recheck')
+            self._management.finalize()
 
     def recheck(self) -> None:
         self._require()
@@ -401,19 +442,29 @@ class GameFinalValidationSource:
             if self._pending is not None:
                 self._pending.manifest_name()
             self._parent.recheck()
-            assert self._snapshot is not None
-            self._snapshot.recheck()
+            if self._native is not None:
+                self._management_guard()
+                self._native.recheck()
+            else:
+                assert self._snapshot is not None
+                self._snapshot.recheck()
             _check_ancestors(self._ancestors)
         except BaseException as error:
             self._failure = error
+            if self._native is not None:
+                self._native._remember(error)
             raise
 
     @property
     def cleanup_complete(self) -> bool:
-        return self._closed and self._snapshot is None and self._borrow_token is None
+        return (self._closed and self._snapshot is None and self._borrow_token is None
+            and self._native is None and self._management is None)
 
     def close(self) -> None:
         if self._closed:
+            return
+        if self._native is not None:
+            self._close_native()
             return
         failure = self._failure
         if self._snapshot is not None:
@@ -448,6 +499,60 @@ class GameFinalValidationSource:
                 vars(failure)['_game_final_validation_cleanup_owner'] = self
             raise failure
 
+    def _close_native(self) -> None:
+        failure = self._failure
+        if failure is not None:
+            self._native._remember(failure)
+        for guard in (self._parent.recheck, self._management_guard,
+                lambda: _check_ancestors(self._ancestors)):
+            try:
+                guard()
+            except BaseException as error:  # noqa: BLE001 - every retained original guard is reportable
+                previous = failure
+                failure = failure or error
+                self._failure = failure
+                vars(failure)['_game_final_validation_cleanup_owner'] = self
+                vars(failure)['_game_final_validation_parent_owner'] = self._parent
+                if previous is not None and previous is not error:
+                    _note(previous, 'native final64 Source guard: ', error)
+        self._active = False
+        # Own DTOs retire before the slot/loan; never present fake empty records.
+        self._selected, self._facts = None, b''
+        native = self._native
+        try:
+            native.close()
+        except BaseException as error:  # noqa: BLE001 - confirmed retirement can still report the first failure
+            previous = failure
+            failure = failure or error
+            self._failure = failure
+            vars(failure)['_game_final_validation_cleanup_owner'] = self
+            vars(failure)['_game_final_validation_parent_owner'] = self._parent
+            if previous is not None and previous is not error:
+                _note(previous, 'native final64 retirement: ', error)
+        if not native.cleanup_complete:
+            failure = failure or ContractError('native final64 actual slot retirement remains unconfirmed')
+            self._failure = failure
+            vars(failure)['_game_final_validation_cleanup_owner'] = self
+            vars(failure)['_game_final_validation_parent_owner'] = self._parent
+            raise failure
+        self._native = self._management = None
+        self._pending = None
+        self._ancestors.clear()
+        if self._borrow_token is not None:
+            try:
+                self._parent.admit_external(0)
+                _release_borrow(self._parent, self._borrow_token)
+                self._borrow_token = None
+            except BaseException as error:  # noqa: BLE001 - keep actual exclusion when release is uncertain
+                failure = failure or error
+        self._closed = self._borrow_token is None
+        if failure is not None:
+            self._failure = failure
+            vars(failure)['_game_final_validation_cleanup_owner'] = self
+            vars(failure)['_game_final_validation_parent_owner'] = self._parent
+            native._remember(failure)
+            raise failure
+
 
 def _open_original(loaded: Any, parent: FormalGameParent, directory: Path, *, deadline: float,
                    max_owned_bytes: int, expected_plan: GameFinalValidationPlan | None = None,
@@ -465,6 +570,11 @@ def _open_original(loaded: Any, parent: FormalGameParent, directory: Path, *, de
     actual_controls = extra_owned_bytes + _owned_bytes((loaded, projected, state, label, binding, {str(path): value for path, value in ancestors.items()}))
     if actual_controls > control_bytes:
         raise ContractError('final validation materialized controls exceed prior reservation')
+    if loaded.config.preprocessing.backend == 'rust':
+        return _open_native_original(loaded, parent, directory, deadline=deadline,
+            max_owned_bytes=max_owned_bytes, expected_plan=expected_plan, returned=returned,
+            pending=pending, control_bytes=control_bytes, state=state, binding=binding,
+            projected=projected, ancestors=ancestors)
     owner = _SourceOwner(directory, loaded.config.preprocessing, deadline,
         extra_owned_bytes=parent.resident_bytes + control_bytes, max_owned_bytes=max_owned_bytes)
     manifest_name = 'manifest.json' if pending is None else pending.manifest_name()
@@ -531,6 +641,137 @@ def _open_original(loaded: Any, parent: FormalGameParent, directory: Path, *, de
         raise
 
 
+def _open_native_original(loaded: Any, parent: FormalGameParent, directory: Path, *, deadline: float,
+        max_owned_bytes: int, expected_plan: GameFinalValidationPlan | None, returned: Json | None,
+        pending: _IssuedFinalValidationCollection | None, control_bytes: int, state: Json,
+        binding: RuntimePolicyBinding, projected: Any,
+        ancestors: dict[Path, tuple[int, int]]) -> GameFinalValidationSource:
+    """Management C5 only in Python; SAME native owner validates all raw originals."""
+    assert binding.policy_options is not None
+    native = parent._borrow_native_final_inputs(deadline=deadline)
+    source: GameFinalValidationSource | None = None
+    try:
+        source = GameFinalValidationSource(parent, None, None, {}, ancestors=ancestors,
+            pending=pending, reservation=control_bytes, native=native)
+        native.bind_source(source)
+        manifest_name = 'manifest.json' if pending is None else pending.manifest_name()
+        if manifest_name != ('manifest.json' if pending is None else 'manifest.json.tmp'):
+            raise ContractError('fixed actual final64 manifest variant required')
+        path = directory / manifest_name
+        before = path.lstat()
+        if (not stat.S_ISREG(before.st_mode)
+                or before.st_size > min(64*1024**2, loaded.config.preprocessing.max_source_file_mib*1024**2)):
+            raise ContractError('bounded regular final64 management control required')
+        # Admit native/Python/control/decode overlap before reading this ONE
+        # management object. No Python participant journal/columns/Replay read.
+        management_bound = 32*before.st_size + 65536
+        parent.admit_external(control_bytes + management_bound)
+        source._reserved_bytes = control_bytes + management_bound
+        owner = _SourceOwner(directory, loaded.config.preprocessing, min(deadline, parent.deadline),
+            extra_owned_bytes=parent.resident_bytes + control_bytes, max_owned_bytes=max_owned_bytes)
+        source._management = owner  # Actual snapshots reachable BEFORE read/parse.
+        manifest = owner.object(path)
+        source._management_retained = owner.used - owner.extra_owned_bytes
+        if source._management_retained > management_bound:
+            raise ContractError('final64 management growth exceeds prior original-size admission')
+        invocation = checked_invocation(manifest['validation_invocation'], run=loaded.effective['run'])
+        plan = _plan(loaded, parent, directory, invocation)
+        if expected_plan is not None and _signature(plan) != _signature(expected_plan):
+            raise ContractError('native final64 differs from SAME frozen live plan')
+        checked_projection(manifest['config_projection'], parent=loaded.effective,
+            inputs=list(loaded.inputs), projected=manifest['config'])
+        checked_linkage(manifest['linkage'], role=FINAL_VALIDATION,
+            schedule=manifest['schedule'], registry=manifest['policy_bindings'])
+        if (canonical(manifest['config']) != canonical(projected.effective)
+                or manifest['config_hash'] != projected.sha256
+                or canonical(manifest.get('inputs')) != canonical(list(loaded.inputs))
+                or canonical(manifest.get('code')) != canonical(state['identity']['code'])
+                or canonical(manifest['linkage']) != canonical(plan.linkage)
+                or canonical(manifest['schedule']) != canonical(serialize_schedule(plan.groups, 4))
+                or canonical(manifest['policy_bindings']) != canonical({key: asdict(value) for key, value in plan.bindings.items()})
+                or manifest.get('status') != 'complete'):
+            raise ContractError('native final64 original controls differ from SAME parent/plan')
+        mode: Json = {'kind': 'canonical'}
+        if pending is not None:
+            # owner.object used and closed its independent no-follow read FD.
+            # Its recorded fstat facts/hash MUST still match the fixed path;
+            # never inspect/seek/duplicate/close the publisher write descriptor.
+            pending.manifest_name()
+            entry = owner.files[manifest_name]
+            current = path.lstat()
+            identity = [current.st_dev, current.st_ino, current.st_size, current.st_mtime_ns, current.st_ctime_ns]
+            if not stat.S_ISREG(current.st_mode) or identity != entry['identity']:
+                raise ContractError('pending final64 independent read evidence changed')
+            root_stat = directory.lstat()
+            mode = {'kind': 'issued-pending', 'evidence': {
+                'directory_identity': {'device': root_stat.st_dev, 'inode': root_stat.st_ino},
+                'file_identity': {'device': current.st_dev, 'inode': current.st_ino,
+                    'mode': current.st_mode, 'size': current.st_size,
+                    'mtime_ns': current.st_mtime_ns, 'ctime_ns': current.st_ctime_ns},
+                'bytes': entry['bytes'], 'sha256': entry['sha256']}}
+        request: Json = {'schema_version': 1, 'kind': 'card-instance-final-validation-request',
+            'parent_run_sha256': native.parent_run_sha256, 'directory': str(directory), 'manifest': mode,
+            'expected_plan': {'linkage': plan.linkage, 'config_projection': plan.config_projection,
+                'validation_invocation': invocation, 'schedule': serialize_schedule(plan.groups, 4),
+                'policy_bindings': {key: asdict(value) for key, value in plan.bindings.items()}},
+            'returned_report': returned}
+        # Protect further request/asdict/encoding work with the same prior
+        # complete Actor bound, plus already-owned management snapshots.
+        if _wire_upper(request) > control_bytes:
+            raise ContractError('native final64 request exceeds prior complete control admission')
+        encoded = canonical(request).encode()
+        if len(encoded) > min(64*1024**2, loaded.config.preprocessing.max_record_mib*1024**2):
+            raise ContractError('native final64 request exceeds record/source bound')
+        summary = native.inspect(encoded)
+        if (summary['parent_run_sha256'] != request['parent_run_sha256']
+                or summary['directory'] != str(directory)
+                or summary['manifest_kind'] != mode['kind']
+                or summary['manifest_sha256'] != owner.files[manifest_name]['sha256']):
+            raise ContractError('native final64 differs from retained management byte origins')
+        for key in ('linkage', 'config_projection', 'validation_invocation'):
+            if canonical(summary[key]) != canonical(request['expected_plan'][key]):
+                raise ContractError('native final64 original summary/plan differs')
+        if canonical(summary['elapsed_seconds']) != canonical(manifest['elapsed_seconds']):
+            raise ContractError('native final64 original elapsed cost differs')
+        base = source._reserved_bytes + _owned_bytes((summary, encoded, request))
+        parent.admit_external(base)
+        source._reserved_bytes = base
+        selected = native.records(base_external=base, max_owned_bytes=max_owned_bytes,
+            aggregate_window=native.aggregate_window)
+        if (len(selected) != 64 or any(type(row) is not EpisodeRecords or row.end_kind != 'natural' for row in selected)
+                or sum(len(row.frames) for row in selected) != summary['selected_decisions']
+                or sum(not row.frames for row in selected) != summary['zero_endpoint_games']):
+            raise ContractError('native final64 genuine original record population differs')
+        parent.admit_external(base + _owned_bytes(selected) + 65536)
+        source._reserved_bytes = base + _owned_bytes(selected) + 65536
+        source._selected = selected
+        facts = {'directory': str(directory), 'manifest_sha256': summary['manifest_sha256'],
+            'parent_run_id': state['run_id'], 'final_generation': state['updates'],
+            'final_inference_sha256': binding.policy_options['expected_manifest_digest'],
+            'config_projection': summary['config_projection'], 'validation_invocation': summary['validation_invocation'],
+            'elapsed_seconds': summary['elapsed_seconds'], 'games': 64,
+            'selected_decisions': summary['selected_decisions'], 'zero_endpoint_games': summary['zero_endpoint_games'],
+            'qualified': False, 'parent_qualification': 'not_performed'}
+        source._facts = canonical(facts).encode()
+        source.recheck()
+        return source
+    except BaseException as error:
+        if source is not None:
+            source._failure = error
+        native._remember(error)
+        vars(error)['_game_final_validation_cleanup_owner'] = source or parent
+        vars(error)['_game_final_validation_parent_owner'] = parent
+        try:
+            if source is None:
+                native.close()
+            else:
+                source.close()
+        except BaseException as cleanup:  # noqa: BLE001 - SAME Source/parent keeps uncertain native cleanup
+            if cleanup is not error:
+                _note(error, 'native final64 admission retirement: ', cleanup)
+        raise
+
+
 @contextmanager
 def open_game_final_validation(loaded: Any, parent: FormalGameParent, directory: Path, *,
                                deadline: float, max_owned_bytes: int) -> Iterator[GameFinalValidationSource]:
@@ -546,6 +787,20 @@ def open_game_final_validation(loaded: Any, parent: FormalGameParent, directory:
         yield source
     except BaseException as error:
         primary = error
+        if source is None and loaded.config.preprocessing.backend == 'rust':
+            # Initialization has unwound before yield; retire its completed
+            # management/DTO copy frames before releasing caller accounting.
+            # Do not clear user-body frames after a successfully yielded Source.
+            try:
+                traceback_module.clear_frames(error.__traceback__)
+            except BaseException:  # noqa: BLE001, S110 - first error/cleanup owner must survive
+                pass
+        if source is None:
+            candidate = getattr(error, '_game_final_validation_cleanup_owner', None)
+            if (type(candidate) is GameFinalValidationSource and candidate._parent is parent
+                    and not candidate.cleanup_complete):
+                source = candidate
+                source._borrow_token = token
         if source is not None:
             source._failure = source._failure or error
         raise
@@ -633,6 +888,8 @@ class GameFinalValidationContext:
                     or _wire_upper(self._loaded) > self._loaded_wire
                     or _wire_upper(self._projected) > self._projected_wire):
                 raise ContractError('final validation controls grew beyond immutable admitted originals')
+            if self._source is not None:
+                self._reserved_bytes = max(self._reserved_bytes, self._source._reserved_bytes)
             self._parent.admit_external(self._reserved_bytes)
         except BaseException as error:
             self._record_failure(error)
@@ -768,6 +1025,16 @@ class GameFinalValidationContext:
             self._accepted = True
             return self._source
         except BaseException as error:
+            if self._source is None:
+                if self._loaded.config.preprocessing.backend == 'rust':
+                    try:
+                        traceback_module.clear_frames(error.__traceback__)
+                    except BaseException:  # noqa: BLE001, S110 - diagnostic failure cannot replace primary
+                        pass
+                candidate = getattr(error, '_game_final_validation_cleanup_owner', None)
+                if (type(candidate) is GameFinalValidationSource and candidate._parent is self._parent
+                        and not candidate.cleanup_complete):
+                    self._source = candidate
             self._record_failure(error)
             raise
 
