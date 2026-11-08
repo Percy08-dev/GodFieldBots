@@ -35,6 +35,32 @@ Simulator契約はrevision `ffcffa0966dbf6d7ce1d982f4ee6444e291d42d6`、HTTP `/v
 `true-match-1v1-v1`、Observation `"1"`、Action metadata `1`、catalog `public-ja-v2` に固定します。
 実行にはlocalhostのlistenerを起動できる環境が必要です。
 
+## カード個体モデルのサーバv2経路
+
+新しい経路はSimulator `91d5926a7572db327eaea3751e7c24f428120996`、
+Gameplay `/v2`、`true-match-1v1-v2`、catalog schema2／`public-ja-v3`を使います。
+[専用pilot設定](configs/experiments/card-instance-pilot.toml)と専用保存先を使用し、
+旧Config・記録・重みの意味を維持します。入力は本人の`own.cards`の順序・個体参照・状態と
+可視履歴で、送信時にも元のopaque参照を保持します。Flashは1枚まで、奇跡の破棄は
+unused／learned両方、utilityは自分・相手の対象を扱います。
+受入結果と未実行の範囲は[移行検証記録](docs/verification/card-instance-v2-adoption.md)にあります。
+
+新しいTree3の固定データ作成・検査・fresh fitには、
+[専用設定](configs/experiments/card-instance-tree-fixed-data.toml)を一つ渡します。
+`P17 P29 P43`は順に正式PPO親、`V17 V29 V43`は各親の完全な最終方策validation、
+`SHA`は生成したmanifestファイルのSHA-256です。すべての原記録を検証し、
+合計8GiBの資源管理にfit子プロセスの宣言上限も含めます。
+
+```console
+gf-bots game-dataset build --config configs/experiments/card-instance-tree-fixed-data.toml --parents P17 P29 P43 --validations V17 V29 V43 --output DATASET
+gf-bots game-dataset inspect DATASET/manifest.json --config configs/experiments/card-instance-tree-fixed-data.toml --expected-digest SHA
+gf-bots fit-game-tree --config configs/experiments/card-instance-tree-fixed-data.toml --manifest DATASET/manifest.json --expected-digest SHA --output FIT --seed 17
+```
+
+fitにはLightGBM extraが必要です。正式3seedの実行・実データfit・比較・HPO・最終testは後続です。
+短いPPO受入runとcomponent fixtureは、これらの適格Sourceには昇格しません。
+nativeの各capabilityは形式の実装対応を示し、個々のSource適格性は原記録から別途検証します。
+
 ## 設定と実行
 
 - [experiments](configs/experiments): 設定の選択、seed、split、予算、保存先、接続。

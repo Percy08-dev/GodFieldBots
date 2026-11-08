@@ -126,42 +126,7 @@ pub(super) fn manifest(
         )?;
     }
     let registry = m.require("policy_bindings")?.object()?;
-    let neural = m.require("neural_inputs")?;
-    neural.closed(&["input_contract", "policies"], &[])?;
-    require(
-        field(neural, "input_contract")? == "retained-external-inference-v1",
-        "original retained neural contract required",
-    )?;
-    let named = neural.require("policies")?.object()?;
-    let mut expected = BTreeSet::new();
-    for (label, binding) in registry {
-        c.check()?;
-        binding.closed(&["model_id", "policy_options"], &[])?;
-        let options = binding.require("policy_options")?;
-        if options.is_null() {
-            require(
-                ["random", "heuristic"].contains(&field(binding, "model_id")?)
-                    && *label == format!("{}-card-instance-v2", field(binding, "model_id")?),
-                "original baseline registry mismatch",
-            )?;
-        } else {
-            let raw = named
-                .get(label)
-                .ok_or_else(|| Error::contract("original neural declaration missing"))?;
-            require(
-                controls::neural_metadata3(raw, actions, b, c)? == *label
-                    && raw.require("policy_options")? == options
-                    && options.require("model")?.require("model_id")?
-                        == binding.require("model_id")?,
-                "original neural registry mismatch",
-            )?;
-            expected.insert(label.as_str());
-        }
-    }
-    require(
-        expected.len() <= 6 && expected == named.keys().map(String::as_str).collect(),
-        "extra/missing original retained neural declarations",
-    )?;
+    retained_registry(m, actions, b, c)?;
     let policies = m
         .require("policies")?
         .array()?
@@ -215,6 +180,87 @@ pub(super) fn manifest(
         "complete original Collection5 inventory differs",
     )
 }
+// Typed registry validation never selects a PPO learner.
+fn retained_registry(m: &Value, actions: &Value, b: &Arc<Budget>, c: &Control) -> Result<()> {
+    let registry = m.require("policy_bindings")?.object()?;
+    let mut expected_neural = BTreeSet::new();
+    let mut expected_tree = BTreeSet::new();
+    for (key, contract) in [
+        ("neural_inputs", "retained-external-inference-v1"),
+        ("tree_inputs", "player-card-refs-v2"),
+    ] {
+        if let Some(raw) = m.get(key) {
+            raw.closed(&["input_contract", "policies"], &[])?;
+            require(
+                field(raw, "input_contract")? == contract,
+                "original typed retained input contract differs",
+            )?;
+            let policies = raw.require("policies")?.object()?;
+            if key == "tree_inputs" {
+                require(
+                    !policies.is_empty(),
+                    "supplied Tree registry must be nonempty",
+                )?;
+            }
+        }
+    }
+    for (label, binding) in registry {
+        c.check()?;
+        binding.closed(&["model_id", "policy_options"], &[])?;
+        let options = binding.require("policy_options")?;
+        if options.is_null() {
+            require(
+                ["random", "heuristic"].contains(&field(binding, "model_id")?)
+                    && *label == format!("{}-card-instance-v2", field(binding, "model_id")?),
+                "original baseline registry mismatch",
+            )?;
+        } else {
+            let tree = field(binding, "model_id")? == "lightgbm";
+            let key = if tree { "tree_inputs" } else { "neural_inputs" };
+            let raw = m.require(key)?.require("policies")?.require(label)?;
+            let actual = if tree {
+                controls::tree3::metadata(raw, actions, b, c)?
+            } else {
+                controls::neural_metadata3(raw, actions, b, c)?
+            };
+            require(
+                actual == *label
+                    && raw.require("policy_options")? == options
+                    && options.require("model")?.require("model_id")?
+                        == binding.require("model_id")?,
+                "original typed learned registry mismatch",
+            )?;
+            if tree {
+                expected_tree.insert(label.as_str());
+            } else {
+                expected_neural.insert(label.as_str());
+            }
+        }
+    }
+    require(
+        expected_neural.len() <= 6,
+        "original neural registry capacity exceeded",
+    )?;
+    for (key, expected) in [
+        ("neural_inputs", expected_neural),
+        ("tree_inputs", expected_tree),
+    ] {
+        let actual = match m.get(key) {
+            Some(raw) => raw
+                .require("policies")?
+                .object()?
+                .keys()
+                .map(String::as_str)
+                .collect(),
+            None => BTreeSet::new(),
+        };
+        require(
+            actual == expected,
+            "extra/missing original typed retained declarations",
+        )?;
+    }
+    Ok(())
+}
 pub(super) fn role<'a>(
     header: &Value,
     m: &'a Value,
@@ -263,12 +309,13 @@ pub(super) fn role<'a>(
     let model = if binding.require("policy_options")?.is_null() {
         None
     } else {
+        let tree = field(binding, "model_id")? == "lightgbm";
         let raw = m
-            .require("neural_inputs")?
+            .require(if tree { "tree_inputs" } else { "neural_inputs" })?
             .require("policies")?
             .require(label)?;
         require(
-            header.require("neural")? == raw
+            header.require(if tree { "tree" } else { "neural" })? == raw
                 && raw.require("policy_options")? == binding.require("policy_options")?,
             "original neural role differs from registry",
         )?;
@@ -306,6 +353,128 @@ pub(super) fn role<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn card_instance_tree3_typed_mixed_registry_never_reinterprets_neural_or_baseline() {
+        let b = Budget::new(512 << 20);
+        let c = Control::new(crate::budget::monotonic() + 60.).unwrap();
+        let neural = json::parse(
+            include_bytes!("../tests/fixtures/card_instance_journal6.json"),
+            &b,
+            &c,
+        )
+        .unwrap();
+        let h = &neural.root["journals"][1]["rows"][0];
+        let actions = &h["actions"];
+        let tree = json::parse(
+            include_bytes!("../tests/fixtures/card_instance_tree3_raw_metadata.json"),
+            &b,
+            &c,
+        )
+        .unwrap();
+        let mut raw = tree.root["tree"].clone();
+        let hash = json::text(&digest(actions, &b, &c).unwrap());
+        raw["policy_options"]["action_config_hash"] = hash.clone();
+        raw["inference_manifest"]["action_config_hash"] = hash;
+        let label = controls::tree3::metadata(&raw, actions, &b, &c).unwrap();
+        let mut registry = json::object([]);
+        registry.as_object_mut().unwrap().insert(
+            label.clone(),
+            json::object([
+                ("model_id", json::text("lightgbm")),
+                ("policy_options", raw["policy_options"].clone()),
+            ]),
+        );
+        registry.as_object_mut().unwrap().insert(
+            h["policy"].string().unwrap().into(),
+            json::object([
+                ("model_id", h["model_id"].clone()),
+                ("policy_options", h["neural"]["policy_options"].clone()),
+            ]),
+        );
+        registry.as_object_mut().unwrap().insert(
+            "random-card-instance-v2".into(),
+            json::object([
+                ("model_id", json::text("random")),
+                ("policy_options", Value::Null),
+            ]),
+        );
+        let mut policies = json::object([]);
+        policies
+            .as_object_mut()
+            .unwrap()
+            .insert(label.clone(), raw.clone());
+        let mut nn = json::object([]);
+        nn.as_object_mut()
+            .unwrap()
+            .insert(h["policy"].string().unwrap().into(), h["neural"].clone());
+        let m = json::object([
+            ("policy_bindings", registry),
+            (
+                "tree_inputs",
+                json::object([
+                    ("input_contract", json::text("player-card-refs-v2")),
+                    ("policies", policies),
+                ]),
+            ),
+            (
+                "neural_inputs",
+                json::object([
+                    (
+                        "input_contract",
+                        json::text("retained-external-inference-v1"),
+                    ),
+                    ("policies", nn),
+                ]),
+            ),
+        ]);
+        retained_registry(&m, actions, &b, &c).unwrap();
+        for mutation in 0..7 {
+            let mut bad = m.clone();
+            match mutation {
+                0 => {
+                    bad["tree_inputs"]["policies"]
+                        .as_object_mut()
+                        .unwrap()
+                        .clear();
+                }
+                1 => {
+                    bad["tree_inputs"]["input_contract"] =
+                        json::text("retained-external-inference-v1")
+                }
+                2 => {
+                    bad["neural_inputs"]["policies"]
+                        .as_object_mut()
+                        .unwrap()
+                        .insert(label.clone(), raw.clone());
+                }
+                3 => bad["policy_bindings"][&label]["model_id"] = json::text("mlp"),
+                4 => {
+                    bad["policy_bindings"]["random-card-instance-v2"]["model_id"] =
+                        json::text("lightgbm")
+                }
+                5 => {
+                    bad["tree_inputs"]
+                        .as_object_mut()
+                        .unwrap()
+                        .insert("authority".into(), Value::Bool(true));
+                }
+                _ => {
+                    bad["tree_inputs"]["policies"]
+                        .as_object_mut()
+                        .unwrap()
+                        .clear();
+                    bad["policy_bindings"]
+                        .as_object_mut()
+                        .unwrap()
+                        .remove(&label);
+                }
+            }
+            assert!(
+                retained_registry(&bad, actions, &b, &c).is_err(),
+                "mutation{mutation}"
+            );
+        }
+    }
     #[test]
     #[ignore = "bounded genuine read-only acceptance parent; run explicitly"]
     fn actual_card_instance_parent3_and_collection5_originals() {

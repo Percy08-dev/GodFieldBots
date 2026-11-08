@@ -215,22 +215,33 @@ struct StructuredJournalTokens {
     control: budget::Control,
     python: Mutex<control_memory::ControlMemory>,
     caller: Mutex<budget::Lease>,
+    corrected: bool,
+    phase: Mutex<JournalRawPhase>,
 }
 fn retire_structured_journal(core: structured_journal::Journal) -> error::Result<()> {
     drop(core);
     Ok(())
 }
-#[pymethods]
+// This phase belongs only to the additive corrected entry. Engineering J5
+// keeps its historical refusal/export/close behavior.
+#[derive(Debug)]
+enum JournalRawPhase {
+    Active,
+    Exported,
+    Publishing,
+    Failed(Error),
+    Closed(Option<Error>),
+    Uncertain(Error),
+}
 impl StructuredJournalTokens {
-    #[new]
-    #[pyo3(signature=(directory,journal_file,settings,deadline,cancel_handle=None))]
-    fn new(
+    fn open_shared(
         py: Python<'_>,
         directory: &str,
         journal_file: &str,
         settings: &[u8],
         deadline: f64,
         cancel_handle: Option<PyRef<'_, CancelHandle>>,
+        corrected: bool,
     ) -> PyResult<Self> {
         stack::ensure_minimum_stack().map_err(python_error)?;
         if settings.len() > 65536 {
@@ -265,7 +276,12 @@ impl StructuredJournalTokens {
                     .integer(1, max_json as i128)? as usize;
                 let budget = budget::Budget::new(memory);
                 let retirement = retirement::Retirement::start(&budget, retire_structured_journal)?;
-                let core = structured_journal::Journal::open(
+                let open = if corrected {
+                    structured_journal::Journal::open_corrected
+                } else {
+                    structured_journal::Journal::open
+                };
+                let core = open(
                     std::path::Path::new(directory),
                     journal_file,
                     budget.clone(),
@@ -284,7 +300,223 @@ impl StructuredJournalTokens {
             control,
             python: Mutex::new(control_memory::ControlMemory::default()),
             caller: Mutex::new(caller),
+            corrected,
+            phase: Mutex::new(JournalRawPhase::Active),
         })
+    }
+    fn raw_phase(&self) -> error::Result<std::sync::MutexGuard<'_, JournalRawPhase>> {
+        self.phase
+            .lock()
+            .map_err(|_| Error::contract("corrected RAW phase poisoned"))
+    }
+    fn admitted_phase(phase: &JournalRawPhase, export: bool) -> error::Result<()> {
+        match phase {
+            JournalRawPhase::Active => Ok(()),
+            JournalRawPhase::Exported if !export => Ok(()),
+            JournalRawPhase::Failed(error)
+            | JournalRawPhase::Uncertain(error)
+            | JournalRawPhase::Closed(Some(error)) => Err(error.clone()),
+            _ => Err(Error::Closed),
+        }
+    }
+    fn corrected_diagnostic(&self, retained: usize) -> error::Result<budget::BudgetVec<u8>> {
+        let mut phase = self.raw_phase()?;
+        Self::admitted_phase(&phase, true)?;
+        // Latch BEFORE quota, source/hash, decode or export work. Publication is
+        // completed separately under the GIL; no partially published bytes escape.
+        *phase = JournalRawPhase::Publishing;
+        let result: error::Result<budget::BudgetVec<u8>> = (|| {
+            self.control.check()?;
+            self.caller
+                .lock()
+                .map_err(|_| Error::Closed)?
+                .resize(retained)?;
+            let core = self.core.lock().map_err(|_| Error::Closed)?;
+            let core = core.as_ref().ok_or(Error::Closed)?;
+            core.sources.recheck()?;
+            let bytes = core.diagnostic()?;
+            self.python
+                .lock()
+                .map_err(|_| Error::Closed)?
+                .summary(&self.budget, bytes.len(), 0)?;
+            Ok(bytes)
+        })();
+        if let Err(error) = &result {
+            *phase = JournalRawPhase::Failed(error.clone());
+        }
+        result
+    }
+    fn raw_publication_guard(&self) -> error::Result<()> {
+        let mut phase = self.raw_phase()?;
+        if !matches!(*phase, JournalRawPhase::Publishing) {
+            return Err(Error::Closed);
+        }
+        let result = self.control.check();
+        if let Err(error) = &result {
+            *phase = JournalRawPhase::Failed(error.clone());
+        }
+        result
+    }
+    fn raw_final_source_guard(&self) -> error::Result<()> {
+        let mut phase = self.raw_phase()?;
+        if !matches!(*phase, JournalRawPhase::Publishing) {
+            return Err(Error::Closed);
+        }
+        let result = (|| {
+            self.control.check()?;
+            let core = self.core.lock().map_err(|_| Error::Closed)?;
+            core.as_ref().ok_or(Error::Closed)?.sources.recheck()?;
+            self.control.check()
+        })();
+        if let Err(error) = &result {
+            *phase = JournalRawPhase::Failed(error.clone());
+        }
+        // Keep Publishing across detached I/O and its GIL reacquisition.
+        result
+    }
+    fn finish_raw_publication(&self, success: bool) -> error::Result<()> {
+        let mut phase = self.raw_phase()?;
+        if !matches!(*phase, JournalRawPhase::Publishing) {
+            return Err(Error::Closed);
+        }
+        if !success {
+            *phase =
+                JournalRawPhase::Failed(Error::resource("corrected RAW Python publication failed"));
+            return Ok(());
+        }
+        // Called with the GIL AFTER the final detached Source guard. The final
+        // GIL reacquisition can itself expire or cancel an otherwise valid copy.
+        let result = self.control.check();
+        *phase = match &result {
+            Ok(()) => JournalRawPhase::Exported,
+            Err(error) => JournalRawPhase::Failed(error.clone()),
+        };
+        result
+    }
+    fn corrected_recheck(&self, retained: usize) -> error::Result<()> {
+        let mut phase = self.raw_phase()?;
+        Self::admitted_phase(&phase, false)?;
+        let exported = matches!(*phase, JournalRawPhase::Exported);
+        *phase = JournalRawPhase::Failed(Error::Closed);
+        let result = (|| {
+            self.control.check()?;
+            self.caller
+                .lock()
+                .map_err(|_| Error::Closed)?
+                .resize(retained)?;
+            let core = self.core.lock().map_err(|_| Error::Closed)?;
+            core.as_ref().ok_or(Error::Closed)?.sources.recheck()
+        })();
+        *phase = match &result {
+            Ok(()) if exported => JournalRawPhase::Exported,
+            Ok(()) => JournalRawPhase::Active,
+            Err(error) => JournalRawPhase::Failed(error.clone()),
+        };
+        result
+    }
+    fn corrected_close(&self) -> error::Result<()> {
+        let mut phase = self.raw_phase()?;
+        let primary = match &*phase {
+            JournalRawPhase::Closed(None) => return Ok(()),
+            JournalRawPhase::Closed(Some(error)) | JournalRawPhase::Uncertain(error) => {
+                return Err(error.clone());
+            }
+            JournalRawPhase::Failed(error) => Some(error.clone()),
+            // The same object may be reached while another Python thread is
+            // publishing. It must finish or fail before cleanup can transfer it.
+            JournalRawPhase::Publishing => {
+                return Err(Error::contract("corrected RAW publication in progress"));
+            }
+            _ => None,
+        };
+        *phase = JournalRawPhase::Failed(primary.clone().unwrap_or(Error::Closed));
+        let result = (|| {
+            // Acquire EVERY fallible ownership lock before taking the core.
+            // Poison/absent cleanup owners remain reachable; an empty retry is
+            // never interpreted as confirmed retirement.
+            let mut core = self.core.lock().map_err(|_| Error::Closed)?;
+            let mut worker = self.retirement.lock().map_err(|_| Error::Closed)?;
+            let mut python = self.python.lock().map_err(|_| Error::Closed)?;
+            let mut caller = self.caller.lock().map_err(|_| Error::Closed)?;
+            let owned = core.as_ref().ok_or(Error::Closed)?;
+            let checked = owned.sources.recheck();
+            if worker.is_none() {
+                return Err(Error::contract(
+                    "corrected RAW retirement owner unavailable",
+                ));
+            }
+            let retirement = worker.take().unwrap();
+            let retired = retirement.retire(core.take());
+            if let Err(cleanup) = retired {
+                let error = match primary.clone().or_else(|| checked.err()) {
+                    Some(primary) => Error::Cleanup {
+                        primary: Box::new(primary),
+                        cleanup: format!("{cleanup:?}"),
+                    },
+                    None => cleanup,
+                };
+                *phase = JournalRawPhase::Uncertain(error.clone());
+                return Err(error);
+            }
+            python.release();
+            caller.resize(0)?;
+            let failure = primary.clone().or_else(|| checked.err());
+            *phase = JournalRawPhase::Closed(failure.clone());
+            failure.map_or(Ok(()), Err)
+        })();
+        if let Err(error) = &result {
+            if !matches!(
+                *phase,
+                JournalRawPhase::Closed(_) | JournalRawPhase::Uncertain(_)
+            ) {
+                *phase = JournalRawPhase::Failed(primary.unwrap_or_else(|| error.clone()));
+            }
+        }
+        result
+    }
+}
+#[pymethods]
+impl StructuredJournalTokens {
+    #[new]
+    #[pyo3(signature=(directory,journal_file,settings,deadline,cancel_handle=None))]
+    fn new(
+        py: Python<'_>,
+        directory: &str,
+        journal_file: &str,
+        settings: &[u8],
+        deadline: f64,
+        cancel_handle: Option<PyRef<'_, CancelHandle>>,
+    ) -> PyResult<Self> {
+        Self::open_shared(
+            py,
+            directory,
+            journal_file,
+            settings,
+            deadline,
+            cancel_handle,
+            false,
+        )
+    }
+    #[classmethod]
+    #[pyo3(signature=(directory,journal_file,settings,deadline,cancel_handle=None))]
+    fn card_instance(
+        _cls: &Bound<'_, pyo3::types::PyType>,
+        py: Python<'_>,
+        directory: &str,
+        journal_file: &str,
+        settings: &[u8],
+        deadline: f64,
+        cancel_handle: Option<PyRef<'_, CancelHandle>>,
+    ) -> PyResult<Self> {
+        Self::open_shared(
+            py,
+            directory,
+            journal_file,
+            settings,
+            deadline,
+            cancel_handle,
+            true,
+        )
     }
     #[pyo3(signature=(retained_python_bytes=0))]
     fn diagnostic<'py>(
@@ -292,6 +524,30 @@ impl StructuredJournalTokens {
         py: Python<'py>,
         retained_python_bytes: usize,
     ) -> PyResult<Bound<'py, PyBytes>> {
+        if self.corrected {
+            let bytes = py
+                .detach(|| self.corrected_diagnostic(retained_python_bytes))
+                .map_err(python_error)?;
+            self.raw_publication_guard().map_err(python_error)?;
+            let result = PyBytes::new_with(py, bytes.len(), |output| {
+                output.copy_from_slice(&bytes);
+                Ok(())
+            });
+            // Allocation failure exposes no bytes and permanently prevents a
+            // second operational attempt. The actual original owner is retained.
+            match result {
+                Ok(value) => {
+                    py.detach(|| self.raw_final_source_guard())
+                        .map_err(python_error)?;
+                    self.finish_raw_publication(true).map_err(python_error)?;
+                    return Ok(value);
+                }
+                Err(error) => {
+                    let _ = self.finish_raw_publication(false);
+                    return Err(error);
+                }
+            }
+        }
         let bytes = py
             .detach(|| {
                 self.control.check()?;
@@ -317,6 +573,11 @@ impl StructuredJournalTokens {
     }
     #[pyo3(signature=(retained_python_bytes=0))]
     fn recheck(&self, py: Python<'_>, retained_python_bytes: usize) -> PyResult<()> {
+        if self.corrected {
+            return py
+                .detach(|| self.corrected_recheck(retained_python_bytes))
+                .map_err(python_error);
+        }
         py.detach(|| {
             self.control.check()?;
             self.caller
@@ -347,6 +608,9 @@ impl StructuredJournalTokens {
         }
     }
     fn close(&self, py: Python<'_>) -> PyResult<()> {
+        if self.corrected {
+            return py.detach(|| self.corrected_close()).map_err(python_error);
+        }
         py.detach(|| {
             let mut core = self
                 .core
@@ -378,6 +642,19 @@ impl StructuredJournalTokens {
 }
 impl Drop for StructuredJournalTokens {
     fn drop(&mut self) {
+        if self.corrected {
+            let core = self.core.get_mut().unwrap_or_else(|p| p.into_inner());
+            let worker = self.retirement.get_mut().unwrap_or_else(|p| p.into_inner());
+            if let Some(owned) = core.take() {
+                if let Some(worker) = worker.take() {
+                    let _ = worker.retire(Some(owned));
+                } else {
+                    // An uncertain owner is quarantined, never dropped on the caller stack.
+                    std::mem::forget(owned);
+                }
+            }
+            return;
+        }
         if let Ok(core) = self.core.get_mut() {
             if let Some(owned) = core.take() {
                 if let Ok(retirement) = self.retirement.get_mut() {
@@ -3321,5 +3598,215 @@ mod final64_export_lease_tests {
             assert!(weak.upgrade().is_none());
             release_final_packet_consumer(&payload, true).unwrap();
         }
+    }
+}
+
+#[cfg(test)]
+mod corrected_journal_owner_tests {
+    use super::*;
+    fn owner(
+        failed_retirement: bool,
+    ) -> (StructuredJournalTokens, std::path::PathBuf, Arc<Budget>) {
+        let budget = Budget::new(256 << 20);
+        let control = Control::new(budget::monotonic() + 60.).unwrap();
+        let fixture = json::parse(
+            include_bytes!("../tests/fixtures/card_instance_journal6.json"),
+            &budget,
+            &control,
+        )
+        .unwrap();
+        let case = &fixture.root["journals"][0];
+        let path = std::env::temp_dir().join(format!(
+            "gf-j6-owner-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&path).unwrap();
+        let mut bytes = Vec::new();
+        for row in case["rows"].array().unwrap() {
+            bytes.extend_from_slice(&json::canonical(row, &budget, &control).unwrap());
+            bytes.push(b'\n');
+        }
+        std::fs::write(path.join("player-1.jsonl"), bytes).unwrap();
+        let hex = case["bytes_hex"].string().unwrap();
+        let columns = (0..hex.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
+            .collect::<Vec<_>>();
+        std::fs::write(
+            path.join(case["rows"][2]["table"]["file"].string().unwrap()),
+            columns,
+        )
+        .unwrap();
+        fn failed(core: structured_journal::Journal) -> error::Result<()> {
+            drop(core);
+            Err(Error::contract("injected retirement uncertainty"))
+        }
+        let worker = retirement::Retirement::start(
+            &budget,
+            if failed_retirement {
+                failed
+            } else {
+                retire_structured_journal
+            },
+        )
+        .unwrap();
+        let journal = structured_journal::Journal::open_corrected(
+            &path,
+            "player-1.jsonl",
+            budget.clone(),
+            control.clone(),
+            16 << 20,
+            4 << 20,
+        )
+        .unwrap();
+        let value = StructuredJournalTokens {
+            core: Mutex::new(Some(journal)),
+            retirement: Mutex::new(Some(worker)),
+            budget: budget.clone(),
+            control,
+            python: Mutex::new(control_memory::ControlMemory::default()),
+            caller: Mutex::new(budget.reserve(0).unwrap()),
+            corrected: true,
+            phase: Mutex::new(JournalRawPhase::Active),
+        };
+        (value, path, budget)
+    }
+    #[test]
+    fn corrected_raw_gil_reacquisition_cancel_after_final_source_guard_cannot_publish() {
+        let (owner, path, b) = owner(false);
+        let bytes = owner.corrected_diagnostic(0).unwrap();
+        drop(bytes);
+        owner.raw_final_source_guard().unwrap();
+        assert!(matches!(
+            *owner.phase.lock().unwrap(),
+            JournalRawPhase::Publishing
+        ));
+        owner.control.cancel();
+        assert_eq!(
+            owner.finish_raw_publication(true).unwrap_err(),
+            Error::Cancelled
+        );
+        assert_eq!(owner.corrected_close().unwrap_err(), Error::Cancelled);
+        assert_eq!(b.used(), 0);
+        std::fs::remove_dir_all(path).unwrap();
+    }
+    #[test]
+    fn corrected_raw_late_cancel_or_original_mutation_cannot_publish() {
+        for cancel in [false, true] {
+            let (owner, path, b) = owner(false);
+            let bytes = owner.corrected_diagnostic(0).unwrap();
+            drop(bytes);
+            if cancel {
+                owner.control.cancel();
+            } else {
+                std::fs::write(
+                    path.join("player-1.jsonl"),
+                    b"changed after detached export",
+                )
+                .unwrap();
+            }
+            let error = owner.raw_final_source_guard().unwrap_err();
+            if cancel {
+                assert_eq!(error, Error::Cancelled);
+            }
+            assert_eq!(owner.corrected_recheck(0).unwrap_err(), error);
+            assert!(owner.finish_raw_publication(true).is_err());
+            assert_eq!(owner.corrected_close().unwrap_err(), error);
+            assert_eq!(b.used(), 0);
+            std::fs::remove_dir_all(path).unwrap();
+        }
+    }
+    #[test]
+    fn corrected_raw_global_copy_overlap_failure_exposes_no_packet_and_stays_failed() {
+        let (owner, path, b) = owner(false);
+        let caller = (256usize << 20) - b.used() - 65536;
+        // Caller ownership consumes the SAME quota before diagnostic JSON and
+        // its Python control/copy reservation. No actual huge allocation occurs.
+        let error = owner
+            .corrected_diagnostic(caller)
+            .err()
+            .expect("copy overlap must refuse before publication");
+        assert!(matches!(error, Error::ResourceLimit(_)));
+        assert!(!matches!(
+            *owner.phase.lock().unwrap(),
+            JournalRawPhase::Exported
+        ));
+        assert_eq!(owner.corrected_diagnostic(0).err().unwrap(), error);
+        assert_eq!(owner.corrected_close().unwrap_err(), error);
+        assert_eq!(b.used(), 0);
+        std::fs::remove_dir_all(path).unwrap();
+    }
+    #[test]
+    fn corrected_raw_quota_failure_is_sticky_before_diagnostic_and_recheck() {
+        for diagnostic in [false, true] {
+            let (owner, path, b) = owner(false);
+            let error = if diagnostic {
+                owner.corrected_diagnostic(usize::MAX).err().unwrap()
+            } else {
+                owner.corrected_recheck(usize::MAX).unwrap_err()
+            };
+            assert!(matches!(error, Error::ResourceLimit(_)));
+            assert_eq!(owner.corrected_recheck(0).unwrap_err(), error);
+            assert_eq!(owner.corrected_diagnostic(0).err().unwrap(), error);
+            assert_eq!(owner.corrected_close().unwrap_err(), error);
+            assert_eq!(b.used(), 0);
+            assert_eq!(owner.corrected_close().unwrap_err(), error);
+            std::fs::remove_dir_all(path).unwrap();
+        }
+    }
+    #[test]
+    fn corrected_raw_publication_failure_has_no_late_success_or_operational_retry() {
+        let (owner, path, b) = owner(false);
+        let bytes = owner.corrected_diagnostic(0).unwrap();
+        drop(bytes);
+        assert!(owner.corrected_recheck(0).is_err());
+        assert!(owner.corrected_close().is_err()); // publication owns its one slot
+        owner.finish_raw_publication(false).unwrap();
+        assert!(owner.finish_raw_publication(true).is_err());
+        assert!(owner.corrected_recheck(0).is_err());
+        assert!(owner.corrected_close().is_err());
+        assert_eq!(b.used(), 0);
+        std::fs::remove_dir_all(path).unwrap();
+    }
+    #[test]
+    fn corrected_raw_retirement_error_stays_uncertain_across_empty_close_retry() {
+        let (owner, path, b) = owner(true);
+        let bytes = owner.corrected_diagnostic(0).unwrap();
+        drop(bytes);
+        owner.raw_final_source_guard().unwrap();
+        owner.finish_raw_publication(true).unwrap();
+        let first = owner.corrected_close().unwrap_err();
+        assert_eq!(first, Error::contract("injected retirement uncertainty"));
+        assert!(owner.core.lock().unwrap().is_none());
+        assert!(b.used() > 0); // conservative control lease remains until actual owner release
+        assert_eq!(owner.corrected_close().unwrap_err(), first);
+        assert_eq!(owner.corrected_recheck(0).unwrap_err(), first);
+        drop(owner);
+        assert_eq!(b.used(), 0);
+        std::fs::remove_dir_all(path).unwrap();
+    }
+    #[test]
+    fn corrected_raw_poisoned_lock_keeps_core_reachable_and_gc_joins_real_worker() {
+        let (owner, path, b) = owner(false);
+        let owner = Arc::new(owner);
+        let other = owner.clone();
+        assert!(
+            std::thread::spawn(move || {
+                let _guard = other.core.lock().unwrap();
+                panic!("injected owner lock poison");
+            })
+            .join()
+            .is_err()
+        );
+        assert!(owner.corrected_close().is_err());
+        assert!(owner.core.lock().err().unwrap().into_inner().is_some());
+        assert!(owner.corrected_close().is_err());
+        drop(owner);
+        assert_eq!(b.used(), 0);
+        std::fs::remove_dir_all(path).unwrap();
     }
 }

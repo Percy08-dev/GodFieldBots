@@ -2669,6 +2669,19 @@ admission may differ explicitly. This clarification requires narrow architecture
 confirmation before final freeze; no cap increase, guessed reservation or new
 persisted field is permitted while the new capability remains unpublished.
 
+The bounded activation design in
+`../design/card-instance-native-capability-activation-v1.md` now passes
+architecture DESIGN READY and Root accepts its scoped implementation GO.
+The five existing literal markers declare structural support; all actual
+parent/Source/original-file/custody/pair guards remain mandatory. Root accepts
+explicit coverage debt for successful genuine formal-parent/final64 four-method
+FFI, which remains NOT RUN under the user-deferred formal execution scope.
+The first genuine formal parent must exercise all four methods against complete
+originals, zero endpoints and retained exports before any formal end-to-end
+acceptance claim. Complete64 parser/DTO/owner unit controls do not replace that
+future proof. Activation still requires marked positive preflights/refusals,
+affected regressions, both delta reviews and final package/install verification.
+
 Reuse the shared Dataset/Tree3 features, fit child, paired format4 publication,
 copy/load and inference kernels with a closed real-source context. Add reachable
 CLI/config/library routing for formal declaration, actor validation, Dataset3,

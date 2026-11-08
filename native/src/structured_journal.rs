@@ -1225,12 +1225,19 @@ impl<'a> OriginalHeader<'a> {
             return fail("corrected original token identity mismatch");
         }
         if let Some(model) = model {
-            crate::structured_controls::model3(model, b, c)?;
+            let tree = model.require("model_id")?.string()? == "lightgbm";
+            let encoder = if tree {
+                crate::structured_controls::tree3::model(model)?;
+                model.require("encoder")?
+            } else {
+                crate::structured_controls::model3(model, b, c)?;
+                model.require("event")?
+            };
             if identity.require("model_version")?.string()? != "3"
                 || identity.require("model_id")? != model.require("model_id")?
-                || window != n(model.require("event")?, "aggregate_window", 1, 65536)?
+                || window != n(encoder, "aggregate_window", 1, 65536)?
             {
-                return fail("corrected original neural role differs");
+                return fail("corrected original learned role differs");
             }
         } else if identity.require("model_version")?.string()? != "1"
             || !["random", "heuristic"].contains(&identity.require("model_id")?.string()?)

@@ -850,12 +850,13 @@ pub(crate) fn event(
     Ok(())
 }
 
-/// Deliberately partial: expected neural/runtime declarations are supplied by
-/// the caller. Success never validates their artifacts, files, labels, runtime
-/// attestation, Source eligibility or full neural execution/capacity semantics.
+/// Deliberately partial: expected own-policy/runtime declarations are supplied
+/// by the caller. Success never validates their artifacts, files, labels,
+/// runtime attestation, Source eligibility or full execution/capacity semantics.
 pub(crate) struct DiagnosticHeaderExpected<'a> {
     pub actions: &'a Value,
     pub neural: Option<&'a Value>,
+    pub tree: Option<&'a Value>,
     pub runtime_evidence: &'a Value,
 }
 pub(crate) fn diagnostic_header_envelope(
@@ -865,7 +866,9 @@ pub(crate) fn diagnostic_header_envelope(
     control: &Control,
 ) -> Result<()> {
     control.check()?;
-    let neural = value.require("model_version")?.string()? == "3";
+    let tree = value.require("model_version")?.string()? == "3"
+        && value.require("model_id")?.string()? == "lightgbm";
+    let neural = value.require("model_version")?.string()? == "3" && !tree;
     value.closed(
         &[
             "kind",
@@ -902,7 +905,13 @@ pub(crate) fn diagnostic_header_envelope(
             "actions",
             "runtime_evidence",
         ],
-        if neural { &["neural"] } else { &[] },
+        if neural {
+            &["neural"]
+        } else if tree {
+            &["tree"]
+        } else {
+            &[]
+        },
     )?;
     value.require("schema_version")?.integer(6, 6)?;
     value.require("protocol_version")?.integer(3, 3)?;
@@ -1031,14 +1040,32 @@ pub(crate) fn diagnostic_header_envelope(
         )?;
         is(recorded, "input_contract", "retained-external-inference-v1")?;
         require(
-            expected.neural == Some(recorded),
+            expected.neural == Some(recorded) && expected.tree.is_none(),
             "J6 expected neural declaration mismatch",
+        )?;
+    } else if tree {
+        is(value, "model_version", "3")?;
+        let recorded = value.require("tree")?;
+        recorded.closed(
+            &[
+                "input_contract",
+                "policy_options",
+                "inference_manifest",
+                "files",
+            ],
+            &[],
+        )?;
+        is(recorded, "input_contract", "player-card-refs-v2")?;
+        require(
+            expected.tree == Some(recorded) && expected.neural.is_none(),
+            "J6 expected own Tree declaration mismatch",
         )?;
     } else {
         is(value, "model_version", "1")?;
         require(
             ["random", "heuristic"].contains(&model)
                 && expected.neural.is_none()
+                && expected.tree.is_none()
                 && value.require("policy")?.string()? == format!("{model}-card-instance-v2"),
             "J6 baseline identity mismatch",
         )?;
@@ -1658,6 +1685,7 @@ mod tests {
         diagnostic_header_envelope(
             &header,
             DiagnosticHeaderExpected {
+                tree: None,
                 actions: &actions,
                 neural: None,
                 runtime_evidence: &runtime,
@@ -1671,6 +1699,7 @@ mod tests {
             diagnostic_header_envelope(
                 &header,
                 DiagnosticHeaderExpected {
+                    tree: None,
                     actions: &actions,
                     neural: None,
                     runtime_evidence: &runtime
@@ -1686,6 +1715,7 @@ mod tests {
             diagnostic_header_envelope(
                 &header,
                 DiagnosticHeaderExpected {
+                    tree: None,
                     actions: &actions,
                     neural: None,
                     runtime_evidence: &runtime
@@ -1715,6 +1745,7 @@ mod tests {
             diagnostic_header_envelope(
                 &header,
                 DiagnosticHeaderExpected {
+                    tree: None,
                     actions: &actions,
                     neural: Some(&neural),
                     runtime_evidence: &runtime,
@@ -1728,6 +1759,7 @@ mod tests {
                 diagnostic_header_envelope(
                     &header,
                     DiagnosticHeaderExpected {
+                        tree: None,
                         actions: &actions,
                         neural: Some(&changed),
                         runtime_evidence: &runtime
@@ -1938,13 +1970,33 @@ pub(crate) fn header6(value: &Value, budget: &Arc<Budget>, control: &Control) ->
         DiagnosticHeaderExpected {
             actions,
             neural,
+            tree: value.get("tree"),
             runtime_evidence: value.require("runtime_evidence")?,
         },
         budget,
         control,
     )?;
     runtime_receipt(value.require("runtime_evidence")?, budget, control)?;
-    let (caps, costs) = if value.require("model_version")?.string()? == "3" {
+    let (caps, costs) = if value.require("model_version")?.string()? == "3"
+        && value.require("model_id")?.string()? == "lightgbm"
+    {
+        let raw = value.require("tree")?;
+        let label = crate::structured_controls::tree3::metadata(raw, actions, budget, control)?;
+        require(
+            value.require("policy")?.string()? == label,
+            "J6 Tree3 own policy label mismatch",
+        )?;
+        let safe = raw.require("policy_options")?;
+        require(
+            value.require("aggregate_window")?
+                == safe
+                    .require("model")?
+                    .require("encoder")?
+                    .require("aggregate_window")?,
+            "J6 Tree3 actual window mismatch",
+        )?;
+        crate::structured_controls::tree3::settings(safe, actions, budget, control)?
+    } else if value.require("model_version")?.string()? == "3" {
         let raw = value.require("neural")?;
         let label = crate::structured_controls::neural_metadata3(raw, actions, budget, control)?;
         require(
@@ -2036,6 +2088,92 @@ mod full_validation_tests {
                 &(v.integer(i64::MIN as i128, i64::MAX as i128).unwrap() as i64).to_le_bytes(),
             );
         }
+    }
+    #[test]
+    fn card_instance_tree3_full_j6_raw_tokens_and_closed_header_transactions() {
+        let (b, c) = owners();
+        let all = fixture(
+            include_bytes!("../tests/fixtures/card_instance_tree3_raw_journal.json"),
+            &b,
+            &c,
+        );
+        let case = &all.root["journals"][0];
+        let dir = directory();
+        write_journal(&dir, &case["rows"], case, &b, &c);
+        let journal = super::super::Journal::open_corrected(
+            &dir,
+            "player-1.jsonl",
+            b.clone(),
+            c.clone(),
+            16 << 20,
+            4 << 20,
+        )
+        .unwrap();
+        let encoded = journal.diagnostic().unwrap();
+        let raw = json::parse(&encoded, &b, &c).unwrap();
+        assert_eq!(
+            raw.root["decisions"][0]["frame_tokens"],
+            case["frame_tokens"]
+        );
+        assert_eq!(
+            raw.root["decisions"][0]["candidate_tokens"],
+            case["candidate_tokens"]
+        );
+        assert_eq!(raw.root["header"], case["rows"][0]);
+        assert_eq!(
+            raw.root["projection"]["declaration"],
+            json::text("tree-raw-corrected-own-header")
+        );
+        assert!(!raw.root["qualified"].boolean().unwrap());
+        assert!(
+            controls::model3(&case["rows"][0]["tree"]["policy_options"]["model"], &b, &c).is_err()
+        );
+        drop(journal);
+        for mutation in 0..11 {
+            let mut rows = case["rows"].clone();
+            match mutation {
+                0 => rows[2]["selection"]["logprob"] = json::integer(0),
+                1 => rows[2]["selection"]["value"] = json::integer(0),
+                2 => {
+                    let tree = rows[0]["tree"].clone();
+                    rows[0]
+                        .as_object_mut()
+                        .unwrap()
+                        .insert("neural".into(), tree);
+                }
+                3 => {
+                    rows[0]["tree"]["policy_options"]["source_origin"]["purpose"] =
+                        json::text("component")
+                }
+                4 => rows[0]["model_version"] = json::text("2"),
+                5 => {
+                    rows[0]["tree"]["policy_options"]["training_pair"]["request_sha256"] =
+                        json::text(&"f".repeat(64))
+                }
+                6 => rows[0]["aggregate_window"] = json::integer(1),
+                7 => {
+                    rows[0]["tree"]["inference_manifest"]["feature_layout"]["raw_field_mapping"]
+                        [0]["segments"][0] = json::text("other-private")
+                }
+                8 => rows[0]["viewer"] = json::integer(2),
+                9 => rows[0]["numeric_costs"]["tail_operations_per_candidate"] = json::integer(0),
+                _ => rows[2]["frame"]["boundary"]["prefix_hash"] = json::text(&"0".repeat(64)),
+            }
+            write_journal(&dir, &rows, case, &b, &c);
+            assert!(
+                super::super::Journal::open_corrected(
+                    &dir,
+                    "player-1.jsonl",
+                    b.clone(),
+                    c.clone(),
+                    16 << 20,
+                    4 << 20
+                )
+                .is_err(),
+                "mutation{mutation}"
+            );
+        }
+        std::fs::remove_dir_all(dir).unwrap();
     }
     #[test]
     fn corrected_python_token_arrays_codec_dtypes_shapes_offsets_are_exact() {

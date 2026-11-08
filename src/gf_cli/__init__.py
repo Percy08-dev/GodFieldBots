@@ -540,8 +540,38 @@ def main(argv: list[str] | None = None) -> int:
         dataset_parser.add_argument("--preprocessing-config", type=Path)
         dataset_parser.add_argument("--address-space-limit-mib", type=int,
                                     help="optional process virtual-address limit, not an RSS quota")
+    game_dataset = subcommands.add_parser("game-dataset")
+    game_commands = game_dataset.add_subparsers(dest="game_dataset_command", required=True)
+    game_build = game_commands.add_parser("build")
+    game_build.add_argument("--config", required=True, type=Path)
+    game_build.add_argument("--parents", nargs=3, required=True, type=Path)
+    game_build.add_argument("--validations", nargs=3, required=True, type=Path)
+    game_build.add_argument("--output", required=True, type=Path)
+    game_inspect = game_commands.add_parser("inspect")
+    game_inspect.add_argument("manifest", type=Path)
+    game_inspect.add_argument("--config", required=True, type=Path)
+    game_inspect.add_argument("--expected-digest", required=True)
+    game_fit = subcommands.add_parser("fit-game-tree")
+    game_fit.add_argument("--config", required=True, type=Path)
+    game_fit.add_argument("--manifest", required=True, type=Path)
+    game_fit.add_argument("--expected-digest", required=True)
+    game_fit.add_argument("--output", required=True, type=Path)
+    game_fit.add_argument("--seed", required=True, type=int)
     args = parser.parse_args(argv)
     try:
+        if args.command in ("game-dataset", "fit-game-tree"):
+            from gf_cli.card_instance import build_game_dataset, fit_game_tree, inspect_game_dataset
+            loaded = load_config(args.config)
+            if args.command == "fit-game-tree":
+                result = asyncio.run(fit_game_tree(loaded, args.manifest, args.expected_digest,
+                    args.output, args.seed, started=command_started))
+            elif args.game_dataset_command == "build":
+                result = build_game_dataset(loaded, tuple(args.parents), tuple(args.validations),
+                    args.output, started=command_started)
+            else:
+                result = inspect_game_dataset(loaded, args.manifest, args.expected_digest, started=command_started)
+            print(canonical(result))
+            return 0
         if args.command == "dataset":
             from gf_cli.resource_limits import dataset_address_limit
             from gf_common.preprocessing import load_preprocessing_config

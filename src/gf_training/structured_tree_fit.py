@@ -11,6 +11,7 @@ from gf_models.structured_tree_config import ConfiguredTreeModelV2, ConfiguredTr
 from gf_models.structured_tree_encoder import PreparedTreeFrame, PreparedTreeFrameV3
 from gf_models.structured_tree_pairing import (
     TREE2_RECORDS,
+    TREE3_GAME_RECORDS,
     TREE3_RECORDS,
     _records,
     _TreeRecords,
@@ -22,7 +23,7 @@ from gf_training.structured_tree_data import VerifiedTreeDataset
 
 def _dataset_view(dataset:Any,context:_TreeRecords)->Json:
     raw=dataset.manifest
-    if not context.modern:
+    if not context.modern or context.game:
         return raw
     from gf_common.domain import digest
     proof=raw['source']
@@ -62,12 +63,27 @@ def _fit_scratch_admission(prepared:Any,log_bytes:int)->int:
     return peak
 
 
+def _admit(prepared:Any,*,extra_bytes:int=0)->Json:
+    """SAME numeric envelope; game additionally holds one joint full-child cap."""
+    dataset=prepared.dataset
+    if not prepared.context.game:
+        return fit_admission(prepared.model,prepared.fit,prepared.rows,
+            retained_bytes=dataset.retained_without_sink()+extra_bytes,_context=prepared.context)
+    from gf_models.structured_tree_pairing import game_fit_admission
+    extra_bytes+=getattr(prepared,'_control_extra',0)
+    result=game_fit_admission(prepared.model,prepared.fit,prepared.rows,
+        retained_bytes=dataset.retained_without_sink(),total_bytes=dataset.limit,controller_extra_bytes=extra_bytes)
+    dataset.reserve_fit(result['fixed_bytes']+result['packing_bytes']+extra_bytes)
+    return {**result,'managed_memory':dataset.fit_memory()}
+
+
 class _PreparedTreeFit:
     """Only this concrete active Source owner can create its private fit rows."""
     def __init__(self,dataset:Any,model:Any,fit_settings:Json,*,_context:_TreeRecords=TREE2_RECORDS)->None:
+        from gf_training.card_instance_game_tree_data import VerifiedGameTreeDataset3
         from gf_training.card_instance_tree_data import VerifiedFixtureTreeDataset3
         context=_records(_context)
-        expected=VerifiedFixtureTreeDataset3 if context.modern else VerifiedTreeDataset
+        expected=VerifiedGameTreeDataset3 if context.game else VerifiedFixtureTreeDataset3 if context.modern else VerifiedTreeDataset
         if type(dataset) is not expected or not dataset._active or dataset.source is None or dataset.manifest is None:
             raise ContractError('actual active concrete verified Dataset owner required; arrays/provenance cannot enter')
         context.require_model(model)
@@ -82,10 +98,29 @@ class _PreparedTreeFit:
         self.model,self.fit=model,validate_fit_settings(fit_settings)
         self.context,self.metadata=context,metadata
         self.rows={split:metadata['counts'][split]['selected_decisions'] for split in ('train','validation')}
-        self.admission=fit_admission(model,self.fit,self.rows,retained_bytes=dataset.retained_without_sink(),_context=context)
+        if context.game:
+            from gf_training.card_instance_game_tree_data import _verified_fit_rows
+            assert type(dataset) is VerifiedGameTreeDataset3
+            self.rows=_verified_fit_rows(metadata,dataset._verified_rows)
+        self.admission=_admit(self)
         self.blocks:dict[str,list[np.ndarray[Any,Any]]]={split:[] for split in self.rows}
         self.labels:dict[str,list[np.ndarray[Any,Any]]]={split:[] for split in self.rows}
         self.counts={split:0 for split in self.rows};self._complete=False
+        self._packing_arrays:dict[str,Any]={}
+        self._row_refs:list[Any]=[]
+
+    def retire_rows(self)->None:
+        """Game-only physical row retirement, before ANY sink/accounting release."""
+        if not self.context.game or getattr(self,'_rows_retired',False):return
+        import weakref
+        self._row_refs.extend(weakref.ref(block) for values in (*self.blocks.values(),*self.labels.values()) for block in values)
+        self._packing_arrays.clear()
+        for values in (*self.blocks.values(),*self.labels.values()):values.clear()
+        if any(reference() is not None for reference in self._row_refs):
+            raise ContractError('game fit row/packing views remain alive; sink reservation cannot retire')
+        self._row_refs.clear()
+        self.dataset._retire_fit_sink(self)
+        self._rows_retired=True
 
     def prepare(self)->None:
         if self._complete:raise ContractError('Tree2 private Source rows prepare exactly once')
@@ -94,31 +129,50 @@ class _PreparedTreeFit:
         # Reserve the entire known selected population and Dataset copy allowance
         # before allocation. Never trim rows/chunk/threads to satisfy admission.
         dataset.reserve_sink(5*self.admission['raw_bytes'])
-        for split,sample in dataset.selected_inputs():
-            self.admission=fit_admission(self.model,self.fit,self.rows,retained_bytes=dataset.retained_without_sink(),_context=self.context)
-            index=self.counts[split]
-            if index>=self.rows[split]:raise ContractError('Source produced more selected rows than immutable Dataset2')
-            chunk=self.model.inference.candidate_chunk
-            if index%chunk==0:
-                size=min(chunk,self.rows[split]-index)
-                if size*(width*4+4)>64*1024**2:raise ContractError('private feature+label shard decoded size exceeds64MiB')
-                dataset.reserve_sink(5*self.admission['raw_bytes'])
-                self.blocks[split].append(np.empty((size,width),dtype=np.float32))
-                self.labels[split].append(np.empty(size,dtype=np.float32))
-            source_owned=(dataset.source.retained_bytes if self.context.modern else
-                          dataset.source.base+dataset.source.extra+dataset.source._session.used_bytes())
-            frame=(PreparedTreeFrameV3 if self.context.modern else PreparedTreeFrame).create(
-                sample.tokens if self.context.modern else sample.frame,self.model,extra_owned_bytes=source_owned)
-            parts=frame.iter_chunks(sample.selected_tokens() if self.context.modern else sample.candidate)
-            start,row=next(parts)
-            if start!=0 or row.shape!=(1,width):raise ContractError('Tree2 fit consumes only one actually selected candidate')
-            self.blocks[split][-1][index%chunk]=row[0]
-            self.labels[split][-1][index%chunk]=sample.label
-            self.counts[split]+=1
-            del parts,row,frame,sample
+        worklist=dataset.selected_inputs()
+        parts:Any=None;row:Any=None;frame:Any=None;sample:Any=None
+        failure:BaseException|None=None
+        try:
+            for split,sample in worklist:
+                self.admission=_admit(self)
+                index=self.counts[split]
+                if index>=self.rows[split]:raise ContractError('Source produced more selected rows than immutable Dataset2')
+                chunk=self.model.inference.candidate_chunk
+                if index%chunk==0:
+                    size=min(chunk,self.rows[split]-index)
+                    if size*(width*4+4)>64*1024**2:raise ContractError('private feature+label shard decoded size exceeds64MiB')
+                    dataset.reserve_sink(5*self.admission['raw_bytes'])
+                    self.blocks[split].append(np.empty((size,width),dtype=np.float32))
+                    self.labels[split].append(np.empty(size,dtype=np.float32))
+                source_owned=(dataset.source.current_feature_bytes if self.context.game else
+                    dataset.source.retained_bytes if self.context.modern else
+                    dataset.source.base+dataset.source.extra+dataset.source._session.used_bytes())
+                frame=(PreparedTreeFrameV3 if self.context.modern else PreparedTreeFrame).create(
+                    sample.tokens if self.context.modern else sample.frame,self.model,extra_owned_bytes=source_owned)
+                parts=frame.iter_chunks(sample.selected_tokens() if self.context.modern else sample.candidate)
+                start,row=next(parts)
+                if start!=0 or row.shape!=(1,width):raise ContractError('Tree2 fit consumes only one actually selected candidate')
+                self.blocks[split][-1][index%chunk]=row[0]
+                self.labels[split][-1][index%chunk]=sample.label
+                self.counts[split]+=1
+                del parts,row,frame,sample
+        except BaseException as error:
+            failure=error
+            raise
+        finally:
+            if self.context.game:
+                # Clear the current row/sample before unwinding actual raw
+                # borrows; a failed body must not pin views in its traceback.
+                parts=row=frame=sample=None  # noqa: F841 - explicit traceback-held view retirement before borrow close
+                try:worklist.close()
+                except BaseException as cleanup:
+                    if failure is None:raise
+                    vars(failure)['_game_tree_dataset_cleanup_owner']=dataset
+                    from gf_training.card_instance_game_tree_data import _note
+                    _note(failure,'game original worklist retirement: ',cleanup)
         if self.counts!=self.rows:raise ContractError('Tree2 private preparation omitted original selected rows')
         dataset.verify_complete()
-        self.admission=fit_admission(self.model,self.fit,self.rows,retained_bytes=dataset.retained_without_sink(),_context=self.context)
+        self.admission=_admit(self)
         self._complete=True
 
 
@@ -148,20 +202,22 @@ def _prepare_request(prepared:_PreparedTreeFit,directory:Any,*,seed:int,deadline
     model=prepared.model
     arrays={f'{split}.{kind}.{index:06}':block for split in ('train','validation')
         for kind,values in (('x',prepared.blocks[split]),('y',prepared.labels[split])) for index,block in enumerate(values)}
+    if context.game:prepared._packing_arrays=arrays
     # Existing bundle writer may hold a shard/packing temporary. Reserve its
     # conservative encoded scratch plus metadata while all Source owners remain.
     scratch=32*(prepared.admission['raw_bytes']+4096*len(arrays))+65536+4096*len(arrays)
-    fit_admission(model,prepared.fit,prepared.rows,retained_bytes=dataset.retained_without_sink()+scratch,_context=context)
-    dataset.reserve_sink(5*prepared.admission['raw_bytes']+scratch)
+    _admit(prepared,extra_bytes=scratch)
+    dataset.reserve_sink(5*prepared.admission['raw_bytes']+(0 if context.game else scratch))
     directory.mkdir(mode=0o700)
     directory_identity=directory.stat()
-    publisher:Any=_ChainScan(directory=directory,max_owned_bytes=model.resources.max_owned_bytes-dataset.retained_without_sink()-5*prepared.admission['raw_bytes']-scratch,deadline=deadline)
+    publisher:Any=_ChainScan(directory=directory,max_owned_bytes=(model.resources.max_owned_bytes if context.game else
+        model.resources.max_owned_bytes-dataset.retained_without_sink()-5*prepared.admission['raw_bytes']-scratch),deadline=deadline)
     publisher._tree_fit_directory_identity=(directory_identity.st_dev,directory_identity.st_ino)
     publisher._tree_fit_ancestors=ancestors
     def check()->None:
         publisher.check();_check_output_ancestors(ancestors)
-        fit_admission(model,prepared.fit,prepared.rows,retained_bytes=dataset.retained_without_sink()+scratch+publisher.retained,_context=context)
-        dataset.reserve_sink(5*prepared.admission['raw_bytes']+scratch+publisher.retained)
+        _admit(prepared,extra_bytes=scratch+publisher.retained)
+        dataset.reserve_sink(5*prepared.admission['raw_bytes']+(0 if context.game else scratch+publisher.retained))
     check()
     data=write_bundle(directory/'inputs','features',arrays,_check=check)
     envelope={'schema_version':context.schema,'kind':'structured-tree-fit-inputs',
@@ -179,7 +235,8 @@ def _prepare_request(prepared:_PreparedTreeFit,directory:Any,*,seed:int,deadline
         'input_files':files,'row_counts':prepared.rows,'producer':tree_fit_producer(),
         'runtime':runtime_metadata(deadline=deadline),'model_envelope':prepared.admission['model_envelope'],
         **{key:metadata[key] for key in context.extra_fields},
-        **({'shared_fixture_construction':metadata['shared_fixture_construction']} if context.modern else {})}
+        **({'shared_generation':metadata['shared_generation'],'managed_memory':dataset.fit_memory()} if context.game else
+           {'shared_fixture_construction':metadata['shared_fixture_construction']} if context.modern else {})}
     validate_request(request,_context=context);validate_input_envelope(envelope,request,_context=context)
     check();request_sha=_write(directory/'request.json',request,scan=publisher,immutable=True)
     for name,sha in files.items():
@@ -188,14 +245,19 @@ def _prepare_request(prepared:_PreparedTreeFit,directory:Any,*,seed:int,deadline
     dataset.verify_complete();publisher.finalize();check()
     # Packing scratch is released; retain original numeric blocks and immutable
     # request/file metadata throughout the child and final Source verification.
-    dataset.reserve_sink(5*prepared.admission['raw_bytes']+publisher.retained)
+    dataset.reserve_sink(5*prepared.admission['raw_bytes']+(0 if context.game else publisher.retained))
     assert hashlib.sha256((canonical(request)+'\n').encode()).hexdigest()==request_sha
     return request,request_sha,publisher
 
 
 class _OwnedTreeFitChild:
     """Reachable pending creation/process/drainers; confirmed reap precedes release."""
-    def __init__(self,directory:Any,deadline:float,log_bytes:int)->None:
+    def __init__(self,directory:Any,deadline:float,log_bytes:int,*,child_limit_bytes:int|None=None)->None:
+        if child_limit_bytes is not None:
+            from gf_common.card_instance_game_tree import MAX_OWNED_BYTES
+            from gf_common.domain import integer
+            integer(child_limit_bytes,1,MAX_OWNED_BYTES)
+        self.child_limit_bytes=child_limit_bytes
         self.directory,self.deadline,self.log_bytes=directory,deadline,log_bytes
         self.creation:Any=None;self.process:Any=None;self.drainers:list[Any]=[];self.health:Json={}
         self.closed=False
@@ -208,8 +270,11 @@ class _OwnedTreeFitChild:
         from gf_training.lightgbm_run import _drain
         environment={'PATH':os.defpath,'LANG':'C.UTF-8','LC_ALL':'C.UTF-8','CUDA_VISIBLE_DEVICES':'',
             'OMP_NUM_THREADS':'1','OPENBLAS_NUM_THREADS':'1'}
+        arguments=[str(self.directory),request_sha,str(self.deadline)]
+        if self.child_limit_bytes is not None:
+            arguments.append(str(self.child_limit_bytes))
         self.creation=asyncio.create_task(asyncio.create_subprocess_exec(sys.executable,'-E','-m','gf_training.structured_tree_worker',
-            str(self.directory),request_sha,str(self.deadline),env=environment,stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.PIPE))
+            *arguments,env=environment,stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.PIPE))
         initiating:BaseException|None=None
         try:
             while not self.creation.done():
@@ -291,6 +356,13 @@ class _TreeFitRun:
         self.child:_OwnedTreeFitChild|None=None;self.publisher:Any=None;self.publication:Any=None;self.request:Json|None=None
         self.request_sha:str|None=None;self.completion:Json|None=None;self.prepared:Any=None;self.closed=False
 
+    def _note_failure(self,primary:BaseException,label:str,secondary:BaseException)->None:
+        if self.context.game:
+            from gf_training.card_instance_game_tree_data import _note
+            _note(primary,label,secondary)
+        else:
+            primary.add_note(label+str(secondary))
+
     async def _cleanup_child(self)->None:
         import asyncio
         if self.child is None:return
@@ -299,11 +371,19 @@ class _TreeFitRun:
         while not cleanup.done():
             try:await asyncio.shield(cleanup)
             except asyncio.CancelledError as error:initiating=initiating or error
+            except BaseException as error:  # game task errors preserve original cancellation
+                if not self.context.game:raise
+                if not cleanup.done():
+                    primary=initiating if initiating is not None else error
+                    vars(primary)['_structured_tree_fit_cleanup_owner']=self
+                    if initiating is not None:self._note_failure(primary,'game shield cleanup failure: ',error)
+                    raise primary
+                break  # retrieve task.result below, preserving saved primary
         try:cleanup.result()
         except BaseException as error:
             if not self.child.closed:vars(error)['_structured_tree_fit_cleanup_owner']=self
             if initiating is not None:
-                initiating.add_note('Tree2 cleanup error: '+str(error))
+                self._note_failure(initiating,'Tree2 cleanup error: ',error)
                 if not self.child.closed:vars(initiating)['_structured_tree_fit_cleanup_owner']=self
                 raise initiating
             raise
@@ -318,6 +398,7 @@ class _TreeFitRun:
             if self.child is not None and not self.child.closed:raise
             terminal_error=error
         initiating=terminal_error or RuntimeError('failed fit retirement')
+        if self.context.game and self.prepared is not None:self.prepared.retire_rows()
         if self.dataset._active:self.dataset.__exit__(type(initiating),initiating,None)
         self.closed=not self.dataset._active
         if terminal_error is not None:raise terminal_error
@@ -344,6 +425,9 @@ class _TreeFitRun:
             self.prepared=_PreparedTreeFit(dataset,self.model,{key:getattr(self.training,key) for key in
                 ('num_boost_round','early_stopping_rounds','learning_rate','min_data_in_leaf','num_threads')},_context=context)
             self.prepared.log_bytes=self.training.max_log_bytes
+            if context.game:
+                self.prepared._control_extra=2*self.training.max_log_bytes+4*65536
+                self.prepared.admission=_admit(self.prepared)
             _fit_scratch_admission(self.prepared,self.training.max_log_bytes)
             self.prepared.prepare()
             self.request,self.request_sha,self.publisher=_prepare_request(self.prepared,self.directory,seed=self.seed,deadline=self.work_deadline)
@@ -355,7 +439,8 @@ class _TreeFitRun:
             _write(self.directory/'training.json',self.completion,scan=publisher)
             dataset.verify_complete();publisher.finalize()
             prep_seconds=time.monotonic()-self.started
-            self.child=_OwnedTreeFitChild(self.directory,self.work_deadline,self.training.max_log_bytes)
+            self.child=_OwnedTreeFitChild(self.directory,self.work_deadline,self.training.max_log_bytes,
+                **({'child_limit_bytes':self.model.resources.max_owned_bytes} if context.game else {}))
             child_started=time.monotonic()
             await self.child.start(self.request_sha);await self.child.wait()
             cleanup_started=time.monotonic();await self._cleanup_child();cleanup_seconds=time.monotonic()-cleanup_started
@@ -387,6 +472,7 @@ class _TreeFitRun:
             # Terminal native sweep + post-native original-index verification and
             # confirmed Source cleanup MUST finish before complete is published.
             if context.modern:
+                if context.game:self.prepared.retire_rows()
                 dataset.finalize();dataset.close()
             else:
                 dataset.__exit__(None,None,None)
@@ -416,11 +502,18 @@ class _TreeFitRun:
             original=error
             try:await self._cleanup_child()
             except BaseException as cleanup:  # noqa: BLE001 - keep exact owner and initiating cancellation
-                original.add_note('Tree2 fit cleanup: '+str(cleanup))
+                self._note_failure(original,'Tree2 fit cleanup: ',cleanup)
                 if self.child is not None and not self.child.closed:
                     vars(original)['_structured_tree_fit_cleanup_owner']=self
                     raise original
             if entered:
+                if self.context.game and self.prepared is not None:
+                    try:self.prepared.retire_rows()
+                    except BaseException as retirement:  # noqa: BLE001 - retain live actual arrays/originals
+                        vars(original)['_structured_tree_fit_cleanup_owner']=self
+                        from gf_training.card_instance_game_tree_data import _note
+                        _note(original,'game fit row retirement: ',retirement)
+                        raise original
                 dataset.__exit__(type(original),original,original.__traceback__)
                 if dataset._active:vars(original)['_structured_tree_fit_cleanup_owner']=self
             if self.context.modern and dataset._closed:
@@ -429,7 +522,10 @@ class _TreeFitRun:
                 self.completion['status']='failed'
                 try:_write(self.directory/'training.json',self.completion,scan=self.publisher)
                 except BaseException as publication:  # noqa: BLE001 - preserve initiating fit failure
-                    original.add_note('Tree2 failed record publication: '+type(publication).__name__)
+                    if self.context.game:
+                        self._note_failure(original,'Tree2 failed record publication: ',publication)
+                    else:
+                        original.add_note('Tree2 failed record publication: '+type(publication).__name__)
             raise
 
 
@@ -594,3 +690,31 @@ async def _fit_component_fixture_dataset(manifest:Any,*,expected_digest:str,dire
     dataset=VerifiedFixtureTreeDataset3(Path(manifest),expected_digest,settings,max_owned_bytes=model.resources.max_owned_bytes,
         deadline=time.monotonic()+training.wall_seconds)
     return await _TreeFitRun(dataset,Path(directory).absolute(),model,training,seed,_context=TREE3_RECORDS).execute()
+
+
+async def fit_game_dataset(manifest:Any,*,expected_digest:str,directory:Any,model:ConfiguredTreeModelV3,
+                          settings:Any,training:Any,seed:int,deadline:float,
+                          max_owned_bytes:int=8*1024**3,ownership:Any=None)->Json:
+    """Fresh qualified Tree3 fit over retained actual three-parent originals.
+
+    This uses the SAME prepared rows/worker/pair publication workflow. Metadata,
+    arrays, fixtures and an inference origin alone cannot enter that workflow.
+    """
+    import math
+    import time
+    from pathlib import Path
+
+    from gf_common.domain import integer
+    from gf_models.config import TrainingConfig, training_config
+    from gf_training.card_instance_game_tree_data import VerifiedGameTreeDataset3
+    TREE3_GAME_RECORDS.require_model(model)
+    if type(training) is not TrainingConfig:
+        raise ContractError('existing closed fresh-fit training configuration required')
+    training_config(asdict(training));integer(seed,0,2**31-1)
+    if (model.checkpoint is not None or training.wall_seconds>7200 or type(deadline) not in (int,float)
+            or not math.isfinite(deadline) or deadline<=time.monotonic()):
+        raise ContractError('qualified Tree3 requires fresh bounded configuration and original live caller deadline')
+    dataset=VerifiedGameTreeDataset3(Path(manifest),expected_digest,settings,max_owned_bytes=max_owned_bytes,
+        deadline=min(deadline,time.monotonic()+training.wall_seconds),child_limit_bytes=model.resources.max_owned_bytes,
+        ownership=ownership)
+    return await _TreeFitRun(dataset,Path(directory).absolute(),model,training,seed,_context=TREE3_GAME_RECORDS).execute()

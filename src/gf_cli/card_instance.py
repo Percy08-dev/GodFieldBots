@@ -11,7 +11,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
-from gf_cli.config import LoadedConfig, RunConfigV2
+from gf_cli.config import CorrectedServerConfigV2, LoadedConfig, RunConfigV2
 from gf_common.card_instance import ActionConfigV3, corrected_card_instance_contract
 from gf_common.card_instance_validation import reconcile_replay, replay_closure
 from gf_common.domain import (
@@ -22,12 +22,13 @@ from gf_common.domain import (
     RuntimePolicyBinding,
     canonical,
     digest,
+    integer,
 )
 from gf_common.schedule import schedule, serialize_schedule
 from gf_evaluation.evaluation import report
-from gf_models.config import ModelConfig, PPOTrainingConfig
+from gf_models.config import ModelConfig, PPOTrainingConfig, TrainingConfig
 from gf_models.structured_binding import ConfiguredNeuralModelV3
-from gf_models.structured_tree_config import ConfiguredTreeModelV3
+from gf_models.structured_tree_config import ConfiguredTreeModelV3, TreeEncoderConfigV3
 from gf_simulator_client.card_instance_environment import CardInstanceSimulatorEnvironment
 from gf_simulator_client.card_instance_runtime import CardInstanceRuntimeEvidence
 from gf_simulator_client.environment import EnvironmentSettings
@@ -570,3 +571,77 @@ async def collect_formal_final_validation(loaded: LoadedConfig, parent: Path, ou
             raise
         context._finish_after_owned_parent(original)
     return facts
+
+
+def _game_tree_data_config(loaded: LoadedConfig, started: float, *, fit: bool = False
+                           ) -> tuple[ConfiguredTreeModelV3, TrainingConfig, float]:
+    """Pure current Config admission; neither metadata nor flags qualify Source."""
+    from gf_common.card_instance_game_tree import MAX_OWNED_BYTES
+    _require_actions(loaded)
+    config = loaded.config
+    if (type(config.model) is not ConfiguredTreeModelV3
+            or type(config.training) is not TrainingConfig
+            or type(config.server) is not CorrectedServerConfigV2
+            or config.preprocessing.reader != "participant-structured-v2"):
+        raise ContractError("game Tree data commands require corrected Tree3/actions3/server/participant reader and LightGBM training Config")
+    if config.preprocessing.memory_budget_mib*1024**2 < MAX_OWNED_BYTES:
+        raise ContractError("game Tree data commands retain the full joint8GiB allowance")
+    if type(started) not in (int, float) or not math.isfinite(started):
+        raise ContractError("finite original command start required")
+    seconds = config.preprocessing.wall_seconds
+    if fit:
+        if config.model.checkpoint is not None or config.training.wall_seconds > 7200:
+            raise ContractError("game Tree fitting requires a fresh checkpoint=None and training wall<=7200")
+        integer(config.model.resources.max_owned_bytes, 1, MAX_OWNED_BYTES)
+        seconds = min(seconds, config.training.wall_seconds)
+    deadline = started + seconds
+    if not math.isfinite(deadline) or time.monotonic() >= deadline:
+        raise ContractError("original game Tree command deadline exhausted or nonfinite")
+    return config.model, config.training, deadline
+
+
+def _fresh_game_tree_output(output: Path) -> None:
+    if output.exists() or output.is_symlink():
+        raise ContractError("game Tree output must be a fresh path")
+
+
+def build_game_dataset(loaded: LoadedConfig, parents: tuple[Path, ...], validations: tuple[Path, ...],
+                       output: Path, *, started: float) -> Json:
+    model, _, deadline = _game_tree_data_config(loaded, started)
+    if len(parents) != 3 or len(validations) != 3:
+        raise ContractError("game Dataset requires all three ordered parents and validations")
+    if any(not path.is_dir() for path in (*parents, *validations)):
+        raise ContractError("all original game parent and validation directories must exist")
+    _fresh_game_tree_output(output)
+    from gf_common.card_instance_game_tree import MAX_OWNED_BYTES
+    from gf_training.card_instance_game_tree_data import build_game_tree_dataset
+    return build_game_tree_dataset(parents, validations, output, loaded.config.preprocessing,
+        encoder=cast(TreeEncoderConfigV3, model.encoder), max_owned_bytes=MAX_OWNED_BYTES, deadline=deadline)
+
+
+def inspect_game_dataset(loaded: LoadedConfig, manifest: Path, expected_digest: str, *, started: float) -> Json:
+    _, _, deadline = _game_tree_data_config(loaded, started)
+    from gf_models.structured_sealed import checksum
+    checksum(expected_digest)
+    if not manifest.is_file():
+        raise ContractError("original game Dataset manifest must exist")
+    from gf_common.card_instance_game_tree import MAX_OWNED_BYTES
+    from gf_training.card_instance_game_tree_data import inspect_game_tree_dataset
+    return inspect_game_tree_dataset(manifest, expected_digest=expected_digest,
+        settings=loaded.config.preprocessing, max_owned_bytes=MAX_OWNED_BYTES, deadline=deadline)
+
+
+async def fit_game_tree(loaded: LoadedConfig, manifest: Path, expected_digest: str, output: Path,
+                        seed: int, *, started: float) -> Json:
+    model, training, deadline = _game_tree_data_config(loaded, started, fit=True)
+    from gf_models.structured_sealed import checksum
+    checksum(expected_digest)
+    integer(seed, 0, 2**31-1)
+    if not manifest.is_file():
+        raise ContractError("original game Dataset manifest must exist")
+    _fresh_game_tree_output(output)
+    from gf_common.card_instance_game_tree import MAX_OWNED_BYTES
+    from gf_training.structured_tree_fit import fit_game_dataset
+    return await fit_game_dataset(manifest, expected_digest=expected_digest, directory=output,
+        model=model, settings=loaded.config.preprocessing, training=training, seed=seed,
+        deadline=deadline, max_owned_bytes=MAX_OWNED_BYTES)

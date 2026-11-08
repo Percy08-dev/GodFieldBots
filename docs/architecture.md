@@ -89,9 +89,15 @@ including original Config goldens. The separate original-history/resource seam
 also passes both reviews and183MAIN checks (11optional skips), Ruff/mypy156.
 It preserves actual parent/Source/custody identity, recorded16 and final64
 original DTOs, and explicit joint E/S0/F/A plus B/L resource accounting.
-Actual qualified gameplay remains NOT RUN. Dataset3/shared-fit is frozen for
-independent review; native Tree RAW/marker adoption and final CLI integration
-remain pending. New capability markers and the installed native remain unchanged.
+Actual qualified gameplay remains NOT RUN. Dataset3/shared-fit, CLI and native
+Tree RAW now pass both final reviews and318combined Main checks/Ruff/mypy157.
+Dataset cleanup retires unbound loans through their actual parent; homogeneity
+compares complete hardware and source/runtime identities with only the approved
+per-parent exclusions. New capability activation has a separate accepted design;
+the installed native remains unchanged pending marked-candidate/final checks.
+The genuine formal-parent/final64 four-method FFI success remains explicit
+coverage debt, to be exercised on the first genuine formal parent before a
+formal end-to-end acceptance claim. Structural markers grant no Source authority.
 ADR0024§18.2 separately pins
 reachable formal-parent/64validation/qualified Dataset3/GameTree3 interfaces;
 formal experimental execution stays deferred.

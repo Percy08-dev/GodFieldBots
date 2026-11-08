@@ -18,7 +18,30 @@ TYPED_READER = 'typed-borrowed-v1'
 STRUCTURED_CONTRACT = 'participant-structured-v1;journal=5;rollout=3;generation=2;model=2'
 CARD_INSTANCE_CONTRACT = 'participant-structured-v2;journal6;rollout4;generation3;model3'
 CARD_INSTANCE_ORIGINAL_HISTORY = 'journal6;codec2;episode-dto1;recorded16'
+CARD_INSTANCE_TREE_RAW = 'journal6;lightgbm3;inference4;codec2'
 
+
+
+def tree_raw_reader_settings(config: PreparationConfig, native: Any = None) -> Json:
+    """RAW capability only; never parent, Dataset, fitting or PPO permission."""
+    module = native or load_native()
+    result = card_instance_reader_settings(config, module)
+    info = dict(module.build_info())
+    if info.get('card_instance_tree_raw') != CARD_INSTANCE_TREE_RAW:
+        raise ContractError('native Tree3 RAW capability unavailable; no fallback')
+    if (info.get('abi') != 'cp314-gil' or info.get('recipe_identity') != 'native-preprocessing-v1'
+            or info.get('parser_contract') != 'serde-json-v2'
+            or info.get('json_memory_policy') != 'json-document-32x-plus64kib-v1'):
+        raise ContractError('native Tree3 RAW ABI/parser contract differs')
+    reader = getattr(module, 'StructuredJournalTokens', None)
+    required = ('card_instance', 'diagnostic', 'recheck', 'close', 'cancel_handle',
+        'used_bytes', 'peak_bytes', 'control_reserved_bytes')
+    if (not callable(reader) or any(not callable(getattr(reader, name, None)) for name in required)):
+        raise ContractError('native Tree3 corrected RAW ABI unavailable; no fallback')
+    identity = binary_identity(module)
+    if identity['build'] != info or identity['gil_disabled'] is not False or identity['python_abi'] != 'cpython-314':
+        raise ContractError('native Tree3 RAW source/binary/ABI differs')
+    return result
 
 def original_history_reader_settings(config: PreparationConfig, native: Any = None) -> Json:
     """Closed original-history capability; class/summary alone grants no Source."""

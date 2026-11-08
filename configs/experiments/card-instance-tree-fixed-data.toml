@@ -1,0 +1,45 @@
+# Explicit qualified Dataset3/fresh-fit entry. Source paths/digest are CLI arguments.
+# This Config does not qualify acceptance fixtures or short PPO parents.
+schema_version = 1
+kind = "experiment"
+
+[references]
+actions = "../actions/card-instance-v2-corrected.toml"
+preprocessing = "../preprocessing/card-instance-python.toml"
+
+[model]
+model_id = "lightgbm"
+version = "3"
+
+[model.encoder]
+max_positions = 18
+aggregate_window = 128
+
+[model.inference]
+candidate_chunk = 256
+
+[run]
+name = "card-instance-tree-fixed-data"
+split = "train"
+output_dir = "../../runs/card-instance-v2-91d5926/tree-game"
+
+[server]
+gameplay_api = "v2"
+simulator_revision = "91d5926a7572db327eaea3751e7c24f428120996"
+source_dir = "../../../GodFieldSimurator"
+binary = "../../../GodFieldSimurator/target/release/gf-test-server"
+config = "../test-server.toml"
+fixed_seed_experiment = true
+
+[training]
+algorithm = "lightgbm_mc"
+cost_mode = "fixed_data"
+learning_rate = 0.05
+num_boost_round = 500
+early_stopping_rounds = 50
+min_data_in_leaf = 20
+num_threads = 1
+seeds = [17, 29, 43]
+wall_seconds = 7200
+cleanup_seconds = 2
+max_log_bytes = 1048576

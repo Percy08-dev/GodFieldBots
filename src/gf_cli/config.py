@@ -380,7 +380,8 @@ def load_config(path: str | Path, overrides: Json | None = None) -> LoadedConfig
         actions_v3 = action_config_v3(effective["actions"])
         game_reader = (preprocessing.backend in ("python", "rust") and preprocessing.reader == "participant-structured-v2"
             and actions_v3.action_contract == corrected_card_instance_contract()
-            and isinstance(models["model"], ConfiguredNeuralModelV3) and isinstance(training, PPOTrainingConfig))
+            and (isinstance(models["model"], ConfiguredNeuralModelV3) and isinstance(training, PPOTrainingConfig)
+                 or type(models["model"]) is ConfiguredTreeModelV3 and type(training) is TrainingConfig))
         if not game_reader and (preprocessing.backend != "python" or preprocessing.reader != "legacy"):
             raise ContractError("actions3 preprocessing is not implemented; only inert Python/legacy settings are supported")
         if any(not isinstance(model, (ConfiguredNeuralModelV3, ConfiguredTreeModelV3))

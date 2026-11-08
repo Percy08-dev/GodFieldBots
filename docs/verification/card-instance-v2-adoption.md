@@ -1080,3 +1080,55 @@ the dependency. Native Tree RAW is undergoing final candidate validation and
 independent reviews. None of these statuses asserts genuine qualified Tree
 gameplay, formal Source admission or a real-source fit. Final combined checks,
 capability activation, package/install verification and local commits remain.
+
+## Dataset, CLI and native RAW interfaces — combined scoped acceptance
+
+The first frozen Dataset version fails both independent reviews. One confirmed
+defect checks an unbound loan's retirement before closing the actual parent
+responsible for retiring it; a pre-Source failure strands all six locks. The
+second omits hardware and concrete module/runtime/preprocessing identity from
+cross-parent homogeneity. Both failures and the exact pre-fix source are retained.
+The fixes retire confirmed Sources before parents, then require both parent and
+loan completion before releasing custody. Exact closed hardware and identity
+comparison excludes only the approved per-parent configuration-input digest and
+formal declaration reference. Persisted schemas and Config normalization stay
+unchanged. Both independent rechecks are READY with121PASS/1optional skip,
+Ruff/mypy156. The fixed owned15manifest is e32862a0…35fc3a.
+
+Native RAW's frozen14files independently pass both reviews,110FFI and39Rust
+checks; conformance also checks the shared export-lease primitive. The additive
+corrected Journal6 classmethod retains the old Journal5 constructor. Pure Tree3
+schema/token processing creates no Source, paired-model or gameplay authority.
+Corrected failures stay sticky and publication checks the original Control after
+the final detached guard/GIL reacquisition. The result is owned PyBytes;
+surviving caller bytes remain the consumer's allocation responsibility. Native
+and Python physical-admission boundaries remain explicitly different, with exact
+portable formulas and parity for inputs admitted by both. RAW receipt SHA is
+edf562364c1d2763c22638ed177f156b4ac8815ae05263452e8d772bacabcfca.
+
+Root applies exactly RAW14, the9remaining Dataset mutations and CLI4, preserving
+all reviewed hashes. Main passes318combined tests, including the original Config
+path golden and source-matched candidate FFI; full Ruff/mypy157/diff checks pass.
+Evidence is under
+`runs/assessments/card-instance-final-acceptance-20261108/main-integration-v1/`.
+The new explicit Tree3 example Config parses with the unchanged18positions,
+256chunk,2GiB model cap and500/50-round training settings. Its existence confers
+no Source eligibility, fit or experiment result.
+
+Separate bounded stress retains three unchanged-default real18 generator runs
+and complete32768-row component tables at18and synthetic128positions. All three
+small attention NN kernels return finite full scores; first3dense/chunked controls
+retain1e-5tolerances. Tree feature conversion visits every row, with maximum chunk
+2,877,440/10,086,400bytes under64MiB. Full fixture construction/tokenization takes
+32.175/225.753seconds; this is not an ordinary-decision latency pass or a worker
+measurement. Tree Booster/default-size model/GPU stress is NOT RUN. The initial
+assessment import failure and180second external-watchdog failure are preserved;
+the identical script/full workload completes under a600second assessment cap,
+with every production resource/search/scoring limit unchanged. Root receipt is
+`runs/assessments/card-instance-stress-20261108/root-receipt-v1.json`.
+
+All29,814legacy source files and24protected fit files additionally rehash exactly
+against the original freeze, with actual before/after stat identity retained.
+This reads opaque files only for hashes; it requalifies no Source. Current
+candidate legacy workload/index/PPO proofs, marked candidate activation and
+final whole-project/package/install verification remain pending.

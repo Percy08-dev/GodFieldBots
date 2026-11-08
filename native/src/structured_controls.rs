@@ -8,6 +8,9 @@ use crate::{
 use sha2::{Digest, Sha256};
 use std::{collections::BTreeMap, path::Path, sync::Arc};
 
+#[path = "card_instance_tree_raw.rs"]
+pub(crate) mod tree3;
+
 pub const INPUT: &str = "participant-structured-v1";
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SourceFormat {
