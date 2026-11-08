@@ -157,3 +157,60 @@ execution and a new whole-suite execution are NOT RUN for this bounded test-only
 change. The immediately prior whole suite3978passed/247skipped belongs to
 ADR0025, not this result. No whole-suite speed estimate, model strength or formal
 Source acceptance is inferred from these synthetic component executions.
+
+## Post-commit module breakdown
+
+A fresh HOST measurement at revision
+`5d9824d4eafae328be5013c435bb32d05ed90a76` PASS**42tests**, exit0.
+External wall**455.89s (7:35.89)**; pytest454.94s. A disposable pytest hook
+records exact setup/call/teardown and fixture setup durations; it does not patch
+application or test functions. No tracked code/test changes are made.
+
+Exact command:
+
+```sh
+PYTHONPATH="/tmp/godfieldbots-structured-ppo-breakdown-20261109${PYTHONPATH:+:$PYTHONPATH}" /usr/bin/time -v -o /tmp/godfieldbots-structured-ppo-breakdown-20261109/resource.txt timeout --signal=INT --kill-after=15s 900s uv run pytest tests/test_structured_ppo.py -p pytest_breakdown_probe --setup-show --durations=0 --durations-min=0 --junitxml=/tmp/godfieldbots-structured-ppo-breakdown-20261109/junit.xml > /tmp/godfieldbots-structured-ppo-breakdown-20261109/pytest.log 2>&1
+```
+
+| Phase | Seconds |
+| --- | ---: |
+| Setup | 69.13 |
+| Test call | 384.84 |
+| Teardown | 0.03 |
+| Work outside test phases, including startup/collection/reporting | 1.89 |
+| External wall total | 455.89 |
+
+The setup phase includes `completed_execution`47.87s and `paused_component`21.21s,
+each initialized once. They are nested within their requesting test's setup and
+are not extra costs to add to this table. The ordinary MLP common-loop case's
+48.76s includes shared reference setup47.87s; its own call is0.89s.
+
+These disjoint groups account for every case once, including setup and teardown:
+
+| Workload | Cases | Seconds |
+| --- | ---: | ---: |
+| Transformer continuous/pause-resume comparison | 1 | 91.58 |
+| GRU continuous/pause-resume comparison | 1 | 90.33 |
+| Update/save failure controls | 3 | 62.35 |
+| MLP pause-resume comparison using the shared reference | 1 | 49.15 |
+| Common MLP assertions plus shared reference setup | 1 | 48.76 |
+| Direct/DeepSets hand encoder cases | 2 | 43.42 |
+| Other source/configuration/resource/admission checks | 30 | 25.95 |
+| Rehashed execution refusal plus paused-reference setup | 2 | 23.60 |
+| Interrupted collection control | 1 | 18.86 |
+| Case total | 42 | 454.00 |
+
+GRU and Transformer together consume39.90% of external wall time; all three
+model comparison cases consume50.68%. In the stored successful run records,
+GRU's collection totals72.60s and update requests5.80s; Transformer's72.92s and
+6.47s. The update timers include request/validation/saving, not pure optimizer
+math. These recorded workflow scopes are subsets of the case durations; their
+initialization/source verification/cleanup remainder is not separately profiled
+by this observer. Interrupted/failed runs are not assigned guessed stage costs.
+
+Evidence directory: `/tmp/godfieldbots-structured-ppo-breakdown-20261109` contains
+`pytest_breakdown_probe.py`, `timings.json`, `junit.xml`, `pytest.log`,
+`resource.txt`, `summary.json`, and complete `tests.csv`, `groups.csv`,
+`fixtures.csv`, `workflows.csv`. The aggregation checks all126phase reports,
+42case totals and nonoverlapping group arithmetic. This is one measurement with
+diagnostic reporting, not a repeated-run benchmark or a new optimization.
