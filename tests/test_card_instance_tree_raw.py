@@ -189,12 +189,14 @@ def test_tree_raw_ffi_closed_mutations_before_payload(candidate, tmp_path, mutat
         open_raw(candidate, write_case(tmp_path, rows))
 
 
-def test_tree_raw_marker_absent_and_new_classmethod_never_grants_capability(candidate):
+def test_tree_raw_exact_published_marker_and_live_preflight_grant_no_source(candidate):
     from gf_common.preprocessing import PreparationConfig
-    from gf_training.native_backend import tree_raw_reader_settings
-    assert 'card_instance_tree_raw' not in dict(candidate.build_info())
-    with pytest.raises(ContractError, match='capability'):
-        tree_raw_reader_settings(PreparationConfig(backend='rust', reader='participant-structured-v2'), candidate)
+    from gf_training.native_backend import CARD_INSTANCE_TREE_RAW, tree_raw_reader_settings
+    assert dict(candidate.build_info())['card_instance_tree_raw'] == CARD_INSTANCE_TREE_RAW
+    config = PreparationConfig(backend='rust', reader='participant-structured-v2')
+    assert tree_raw_reader_settings(config, candidate) == asdict(config)
+    assert not hasattr(candidate.StructuredJournalTokens, 'authorize')
+    assert not hasattr(candidate.StructuredJournalTokens, 'export_cohort')
 
 
 @pytest.mark.parametrize('mutation', ['none', 'marker', 'signature', 'abi', 'method', 'cancel', 'binary'])

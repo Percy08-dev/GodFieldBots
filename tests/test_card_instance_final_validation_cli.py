@@ -2,6 +2,7 @@
 import asyncio
 import copy
 import json
+import subprocess
 import sys
 import time
 from dataclasses import replace
@@ -40,18 +41,49 @@ def test_separate_native64_adoption_refuses_before_runtime_output_model_actor(tm
 
 
 @pytest.mark.parametrize('kind', ['short', 'ordinary', 'fixture'])
-def test_explicit_library_short_or_unadmitted_originals_refuse_before_create(tmp_path, monkeypatch, kind):
-    from gf_cli.config import load_config
-    value = (load_config(ROOT / 'configs/experiments/card-instance-mlp-ppo-acceptance.toml')
-        if kind == 'short' else loaded(tmp_path))
-    parent = tmp_path / 'parent'
-    parent.mkdir()
-    (parent / 'run.json').write_text(json.dumps({'scope': kind}))
-    monkeypatch.setattr(cli, 'CardInstanceRuntimeEvidence', lambda *args, **kwargs: pytest.fail('runtime before formal admission'))
-    with pytest.raises(ContractError):
-        asyncio.run(cli.collect_formal_final_validation(value, parent, tmp_path / 'output'))
-    assert not (tmp_path / 'output').exists()
-    assert not ({'torch', 'lightgbm'} & sys.modules.keys())
+def test_explicit_library_short_or_unadmitted_originals_refuse_before_create(tmp_path, kind):
+    script = '''
+import asyncio, importlib.abc, json, sys
+from pathlib import Path
+blocked = ('torch', 'lightgbm', 'gf_native')
+attempts = []
+class BlockOptional(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if any(fullname == name or fullname.startswith(name + '.') for name in blocked):
+            attempts.append(fullname)
+            raise AssertionError('early refusal imported ' + fullname)
+sys.meta_path.insert(0, BlockOptional())
+from gf_cli import card_instance as cli
+from gf_cli.config import load_config
+from gf_common.domain import ContractError
+from tests.test_formal_ppo_control import loaded
+root, tmp, kind = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3]
+value = (load_config(root/'configs/experiments/card-instance-mlp-ppo-acceptance.toml')
+    if kind == 'short' else loaded(tmp))
+parent = tmp/'parent'
+parent.mkdir()
+(parent/'run.json').write_text(json.dumps({'scope': kind}))
+def forbidden(*args, **kwargs):
+    attempts.append('runtime/Create')
+    raise AssertionError('runtime/Create before formal admission')
+cli.CardInstanceRuntimeEvidence = cli.CardInstanceSimulatorEnvironment = forbidden
+try:
+    asyncio.run(cli.collect_formal_final_validation(value, parent, tmp/'output'))
+except ContractError:
+    pass
+else:
+    raise AssertionError('unadmitted originals entered final validation')
+assert not (tmp/'output').exists()
+assert not attempts
+assert not any(name == prefix or name.startswith(prefix + '.') for name in sys.modules for prefix in blocked)
+print(json.dumps({'status': 'REFUSED', 'kind': kind}))
+'''
+    result = subprocess.run([sys.executable, '-E', '-c', script, str(ROOT), str(tmp_path), kind],
+        text=True, capture_output=True, cwd=ROOT, timeout=20, check=False)
+    assert result.returncode == 0, result.stderr
+    assert not result.stderr
+    assert json.loads(result.stdout) == {'status': 'REFUSED', 'kind': kind}
+    assert not (tmp_path/'output').exists()
 
 
 def test_cli_validate_formal_policy_is_separate_and_reachable(monkeypatch, capsys, tmp_path):

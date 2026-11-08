@@ -3435,6 +3435,26 @@ fn build_info() -> Vec<(&'static str, &'static str)> {
             "ed0c61152b78fa984aad342be22c6b9d6ef49b12b8f0d1c0f0de89724468002f",
         ),
         ("card_instance_models", "mlp,gru,transformer"),
+        (
+            "card_instance_formal_controls",
+            "run3-formal-parent-v1;declaration1;stop1",
+        ),
+        (
+            "card_instance_final_validation",
+            "collection5-final64;journal6;codec2",
+        ),
+        (
+            "card_instance_original_history",
+            "journal6;codec2;episode-dto1;recorded16",
+        ),
+        (
+            "card_instance_fixture_tokens",
+            "component-envelope1;participant-structured-v2;codec2",
+        ),
+        (
+            "card_instance_tree_raw",
+            "journal6;lightgbm3;inference4;codec2",
+        ),
     ]
 }
 

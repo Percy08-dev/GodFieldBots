@@ -93,8 +93,16 @@ Actual qualified gameplay remains NOT RUN. Dataset3/shared-fit, CLI and native
 Tree RAW now pass both final reviews and318combined Main checks/Ruff/mypy157.
 Dataset cleanup retires unbound loans through their actual parent; homogeneity
 compares complete hardware and source/runtime identities with only the approved
-per-parent exclusions. New capability activation has a separate accepted design;
-the installed native remains unchanged pending marked-candidate/final checks.
+per-parent exclusions. Five structural native capabilities now pass both delta
+reviews and are installed from the source-matched release/MIMALLOC wheel.
+Final whole pytest passes4034checks/183explicit skips, full Ruff/mypy157, Rust147
+with4explicit ignored tests, and43separate actual CUDA checks. The five full
+legacy corpus/index/saved-PPO proofs,29,838original byte/stat checks, application
+and native package correspondence, and mandatory-only baseline startup pass.
+Installed identity and47live capability/refusal checks pass; old target ELFs
+and the prior-absence rollback plan are retained. Root accepts the migration's
+implementation and scoped acceptance; formal execution/real-source fitting,
+comparison, HPO and final-test evaluation remain deferred.
 The genuine formal-parent/final64 four-method FFI success remains explicit
 coverage debt, to be exercised on the first genuine formal parent before a
 formal end-to-end acceptance claim. Structural markers grant no Source authority.

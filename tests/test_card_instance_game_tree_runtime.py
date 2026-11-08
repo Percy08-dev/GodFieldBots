@@ -252,23 +252,49 @@ def controlled_metadata():
             {'path': 'model.txt', 'sha256': '2'*64, 'identity': [0, 5, 100, 7, 8]}]}
 
 
-def test_pure_tree_options_and_metadata_share_exact_label_and_never_load_native(monkeypatch):
-    from gf_models import structured_tree_artifacts
-    from gf_models.card_instance_game_tree_runtime import (
-        policy_label_tree_game_v3,
-        validate_tree_metadata,
-    )
-    monkeypatch.setattr(structured_tree_artifacts, '_native', lambda **kw: pytest.fail('native allocated'))
-    raw = controlled_metadata()
-    safe, label = validate_tree_metadata(raw, actions=ACTIONS, rules=RULES)
-    assert set(safe) == TREE_OPTIONS_FIELDS and len(safe) == 12
-    assert label == policy_label_tree_game_v3(safe, actions=ACTIONS, rules=RULES)
-    relocated = {**safe, 'checkpoint': '/other/own/artifact'}
-    assert policy_label_tree_game_v3(relocated, actions=ACTIONS, rules=RULES) == label
-    assert 'completion_sha256' not in raw['inference_manifest']
-    assert 'completion_sha256' not in raw['inference_manifest']['provenance']
-    assert safe['training_pair']['completion_sha256'] == '4'*64
-    assert 'gf_training.card_instance_source' not in sys.modules
+def test_pure_tree_options_and_metadata_share_exact_label_and_never_load_native():
+    # Test isolation cannot depend on what unrelated collected tests imported.
+    script = '''
+import builtins, importlib.abc, io, json, os, sys
+blocked = ('gf_training', 'gf_native', 'lightgbm', 'torch')
+attempts = []
+class BlockOptionalAndSource(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if any(fullname == name or fullname.startswith(name + '.') for name in blocked):
+            attempts.append(fullname)
+            raise AssertionError('pure metadata imported ' + fullname)
+sys.meta_path.insert(0, BlockOptionalAndSource())
+from gf_common.card_instance import ActionConfigV3, corrected_card_instance_contract
+from gf_common.card_instance_rules import card_instance_rules
+from gf_common import card_instance_game_tree
+from gf_models import structured_tree_artifacts, structured_tree_pairing
+from gf_models.card_instance_game_tree_runtime import (
+    TREE_OPTIONS_FIELDS, policy_label_tree_game_v3, validate_tree_metadata)
+actions = ActionConfigV3(action_contract=corrected_card_instance_contract())
+rules = card_instance_rules()
+raw = json.loads(sys.stdin.read())
+def forbidden(*args, **kwargs):
+    attempts.append('file I/O or native allocation')
+    raise AssertionError('pure metadata performed file I/O or native allocation')
+structured_tree_artifacts._native = forbidden
+builtins.open = io.open = os.open = os.stat = os.lstat = forbidden
+safe, label = validate_tree_metadata(raw, actions=actions, rules=rules)
+assert set(safe) == TREE_OPTIONS_FIELDS and len(safe) == 12
+assert label == policy_label_tree_game_v3(safe, actions=actions, rules=rules)
+relocated = {**safe, 'checkpoint': '/other/own/artifact'}
+assert policy_label_tree_game_v3(relocated, actions=actions, rules=rules) == label
+assert 'completion_sha256' not in raw['inference_manifest']
+assert 'completion_sha256' not in raw['inference_manifest']['provenance']
+assert safe['training_pair']['completion_sha256'] == '4'*64
+assert not attempts
+assert not any(name == prefix or name.startswith(prefix + '.') for name in sys.modules for prefix in blocked)
+print(json.dumps({'status': 'PASS', 'label': label}))
+'''
+    result = subprocess.run([sys.executable, '-E', '-c', script], input=canonical(controlled_metadata()),
+        text=True, capture_output=True, cwd=ROOT/'src', timeout=10, check=False)
+    assert result.returncode == 0, result.stderr
+    assert not result.stderr
+    assert json.loads(result.stdout)['status'] == 'PASS'
 
 
 @pytest.mark.parametrize('mutation', ['fixture', 'component', 'toy', 'missing_pair', 'source_path',

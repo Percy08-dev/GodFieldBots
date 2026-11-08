@@ -279,7 +279,15 @@ def test_private_candidate_additive_four_methods_and_closed_capabilities_before_
     assert info['card_instance_contract'] == 'participant-structured-v2;journal6;rollout4;generation3;model3'
     assert info['card_instance_signature'] == 'ed0c61152b78fa984aad342be22c6b9d6ef49b12b8f0d1c0f0de89724468002f'
     assert info['card_instance_models'] == 'mlp,gru,transformer'
-    assert all(name not in info for name in ('card_instance_final_validation', 'card_instance_formal_controls', 'card_instance_fixture_tokens'))
+    from gf_common.preprocessing import PreparationConfig
+    from gf_training.card_instance_formal import require_native_formal_controls
+    from gf_training.native_card_instance import _require_final_validation_native
+    assert info['card_instance_final_validation'] == 'collection5-final64;journal6;codec2'
+    assert info['card_instance_formal_controls'] == 'run3-formal-parent-v1;declaration1;stop1'
+    assert info['card_instance_fixture_tokens'] == 'component-envelope1;participant-structured-v2;codec2'
+    config = PreparationConfig(backend='rust', reader='participant-structured-v2')
+    assert _require_final_validation_native(config, native) is native
+    require_native_formal_controls(native)
     settings = canonical({'memory_bytes': 128*1024**2, 'scratch_bytes': 64*1024**2,
         'max_source_file_bytes': 64*1024**2, 'max_record_bytes': 8*1024**2, 'chunk_target_bytes': 1024**2}).encode()
     with pytest.raises((ValueError, RuntimeError)):

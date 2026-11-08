@@ -1132,3 +1132,75 @@ against the original freeze, with actual before/after stat identity retained.
 This reads opaque files only for hashes; it requalifies no Source. Current
 candidate legacy workload/index/PPO proofs, marked candidate activation and
 final whole-project/package/install verification remain pending.
+
+## Final combined acceptance and local installation — 2026-11-08
+
+Root accepts the corrected migration's implementation and the scoped acceptance
+defined above. Five capability literals pass both final delta reviews. Independent
+correctness executes114cases; conformance executes50, with no positive skips.
+The author's598Python cases include fresh controlled64-packet DTO parity, plus
+one complete64 Rust export test. These establish structural support only. The
+accepted genuine formal-parent/final64 four-method positive coverage debt remains
+NOT RUN; first genuine formal originals, including zero endpoints and retained
+exports, must cover all four methods before a formal end-to-end acceptance claim.
+
+The first full pytest run completes with3965PASS/5FAIL/247SKIP in1779.40seconds.
+All five failures are test assertions: the train command's former stage1 error
+message, three CLI checks of globally absent Torch/LightGBM, and one pure Tree
+check of a globally absent Source module. Actual early refusal/no-output/native
+allocation guards pass. Three test-only fixes preserve the behavioral assertions
+and add clean-child import/I/O/Runtime/Create blockers with attempted-call checks.
+Both clean10case and preloaded197case independent checks pass. Production code,
+input populations, budgets and numerical tolerances are unchanged. All first-run
+failures and counterexamples remain preserved.
+
+The second single full invocation passes **4034tests/183skips/zero failures** in
+1737.48seconds. It additionally enables the same-source controlled64Rust packets.
+The four warnings are deliberate NumPy dtype/shape mutation controls. Explicit
+opt-in integration/GPU/benchmark/historical-Source conditions stay distinguished
+from passes. Separate actual CUDA validation passes43cases on Torch2.14.1+cu132,
+CUDA13.2 and an RTX5070Ti; current157Python source hashes are recorded. Full Rust
+passes147tests with4explicit ignored cases. Full Ruff and mypy157pass.
+
+All five current-candidate legacy checks pass: full history/observation corpora,
+exact Parquet/index sidecar and saved PPO all-three-reader parity with1/4workers.
+The rebuilt assessment helper first fails independent review on execution/output
+binding, complete original/proof/clone assertions, source inventory and worker
+slot attribution. Its versioned fix passes51inert controls and independent
+recheck before any candidate job. Actual commands then pass exact array/hash,
+source/role/resource/retirement audits. Root rechecks all29,814original files and
+24protected fits against the original complete hash/stat inventory after the
+jobs. The after-result is a Root receipt tied to the original inventory, not a
+second independently executed original-file audit. The proof freeze predates
+the three later test-only fixes; executed source/helper/native bytes remain
+unchanged, and no post-fix all-test-source freeze is inferred from that old plan.
+
+Application wheel/sdist match all157Python modules and the packaged formal
+contract asset. Native wheel/sdist match75source/config/stub/fixture files and
+all six embedded assets. Registered native source SHA is
+65994e45f72c2e6121fcf1b18d1b90ea8587572ead652c5d1e1037511b80079c;
+release/MIMALLOC/cp314-GIL ELF SHA is
+e9c7c08aa83f3ec21a6d7014a085ae7245c508c8189f660d5bbaacb2c8e3737c.
+The separate mandatory-only installed-wheel environment has no Torch, LightGBM,
+PyArrow or native module; legacy/corrected random/heuristic4workers start and
+retire healthily, seven Configs parse and five CLI help entries work.
+
+After all final checks, Root installs native wheel SHA
+d1c036ef7e6ab6fb13dfcd73948d68888447980da28e1928c224cdf9010dc8ea
+into Main's.venv. Actual installed ELF/source identity matches and47installed
+capability/refusal checks pass without skips. The first follow-up command names
+two nonexistent selectors and runs zero tests; its exit4 log is retained, then
+the actual47case module passes. The real prior installation state was ABSENT;
+its removal rollback plan and copies of the unchanged d093/e390target ELFs are
+saved. Rollback was prepared but not executed. No push or publication occurs.
+
+Evidence is under
+`runs/assessments/card-instance-final-acceptance-20261108/`, including
+`pytest-full-final-v2.json`, `cuda-final-v1.json`, `legacy-final-v1.json`, both
+package proofs, `baseline-wheel-smoke-v1.json`, `native-main-installed-v1.json`
+and the independent `evidence-crosscheck-v1/evidence-crosscheck.txt`.
+Historical temporary runtimes/ELFs lost in the restart stay historical; saved
+game/resume/performance results are not silently upgraded to new executions.
+Formal multiple-seed training/comparison, qualified real-data Tree fitting,
+HPO and final-test evaluation remain user-deferred. No strength, independent-game
+trajectory determinism or successful formal Source qualification is claimed.

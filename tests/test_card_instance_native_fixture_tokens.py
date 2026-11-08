@@ -126,9 +126,11 @@ else:assert sys.modules['torch'] is sentinel
     assert result.returncode == 0, result.stderr
 
 
-def test_component_marker_absent_game_markers_exact_and_no_source_methods(native):
+def test_component_marker_exact_live_preflight_and_no_source_methods(native):
     info = dict(native.build_info())
-    assert 'card_instance_fixture_tokens' not in info
+    from gf_training.native_card_instance_fixture import FIXTURE_CONTRACT, _preflight
+    assert info['card_instance_fixture_tokens'] == FIXTURE_CONTRACT
+    assert _preflight(native, diagnostic=False)['build'] == info
     assert info['card_instance_contract'] == 'participant-structured-v2;journal6;rollout4;generation3;model3'
     assert info['card_instance_signature'] == 'ed0c61152b78fa984aad342be22c6b9d6ef49b12b8f0d1c0f0de89724468002f'
     assert info['card_instance_models'] == 'mlp,gru,transformer'

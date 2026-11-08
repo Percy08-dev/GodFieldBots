@@ -622,7 +622,11 @@ def test_root_main_guards_actions3_before_execution(command, monkeypatch, capsys
     if command == "validate-policy":
         args += ["--parent-run", "unused", "--output", "unused"]
     assert gf_cli.main(args) == 2
-    assert "not implemented" in json.loads(capsys.readouterr().err)["message"]
+    message = json.loads(capsys.readouterr().err)["message"]
+    if command == "train":
+        assert message == "card-instance PPO requires an explicit NN3 learner"
+    else:
+        assert "not implemented" in message
 
 
 def test_direct_environment_actions3_guard_precedes_server_or_owner_creation(tmp_path, monkeypatch):

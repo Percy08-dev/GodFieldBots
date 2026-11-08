@@ -2681,6 +2681,14 @@ originals, zero endpoints and retained exports before any formal end-to-end
 acceptance claim. Complete64 parser/DTO/owner unit controls do not replace that
 future proof. Activation still requires marked positive preflights/refusals,
 affected regressions, both delta reviews and final package/install verification.
+Those activation conditions now pass: both delta reviews READY, final whole
+pytest4034PASS/183explicit skips, Rust147PASS/4ignored,43actual CUDA cases, five
+complete legacy proofs and source/package/installed identity checks. Main's
+release/MIMALLOC wheel exposes the exact five literals and passes47installed
+preflight/refusal cases. Root accepts this structural adoption; the genuine
+formal four-method coverage debt and user-deferred experiments above remain.
+See `../verification/card-instance-v2-adoption.md` for preserved failed attempts,
+scope, exact artifacts and rollback evidence.
 
 Reuse the shared Dataset/Tree3 features, fit child, paired format4 publication,
 copy/load and inference kernels with a closed real-source context. Add reachable
