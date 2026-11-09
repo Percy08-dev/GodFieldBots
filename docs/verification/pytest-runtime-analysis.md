@@ -362,3 +362,62 @@ generation to17; the fifteen-copy equivalence comparison remains scoped to the
 two named files. The subsequently accepted change and its controlled comparison
 are recorded in [ADR0025](../adr/0025-session-shared-pytest-ppo-sources.md) and
 [shared-source verification](shared-pytest-ppo-sources.md).
+
+## Current Tree collection profile (2026-11-09)
+
+The current full-run Tree Dataset file takes 199.312s, including 191.87s fixture
+setup and 7.44s Dataset build/inspect. Its saved normal records attribute 72.298s
+to training collection and 100.822s to final-policy validation collection. Those
+173.120s motivate a separate, single diagnostic of the original full Tree test.
+
+At revision `bd6a964`, the disposable parent-only observer wraps original calls
+and preserves arguments, return values, exceptions, environments, process
+ownership, assertions and budgets. It runs all 288 games / 576 episode actors /
+1,024 decisions, plus the original three validation preflight actors. No test or
+application file is modified. All 352 frozen Python/config hashes still match.
+
+```sh
+env -u GFB_RUN_CPU_PRELOAD_SAFETY -u GFB_TREE_DATASET_EXISTING_SOURCE17 -u GFB_TREE_DATASET_EXISTING_SOURCE29 UV_CACHE_DIR=/tmp/godfieldbots-uv-cache /usr/bin/time -v -o /tmp/godfieldbots-tree-collection-profile-20261109/resource.txt timeout --signal=INT --kill-after=15s 480s uv run --no-sync python /tmp/godfieldbots-tree-collection-profile-20261109/profile_tree.py > /tmp/godfieldbots-tree-collection-profile-20261109/pytest.log 2>&1
+```
+
+PASS one test in 200.56s; external wall 201.51s, exit0. This diagnostic is a
+different invocation from the 199.312s normal full-run case, not a speed comparison.
+Intervals below are clipped to collection and merged to remove simultaneous
+calls within each category. Different categories remain nested or overlapping;
+their rows must not be summed.
+
+| Interval | Calls | Merged wall seconds |
+| --- | ---: | ---: |
+| Collection | 9 | 167.616 |
+| Episode actors ready wait | 288 | 148.338 |
+| Validation preflight ready roundtrip | 3 | 2.497 |
+| Both readiness categories, disjoint union | 291 | 150.836 |
+| Selection and decision journal | 1,024 | 11.996 |
+| Episode finalization | 288 | 7.198 |
+| Actor spawn / reservation call | 579 | 0.153 |
+| Decision journal write, nested within selection | 1,024 | 2.708 |
+
+The two readiness categories cover **89.9888%** of measured collection wall.
+The three preflight intervals are pairwise disjoint, occur before episode actor
+creation in their validation collection, and do not overlap episode ready waits.
+The 579 actor/ready samples include 576 episode actors plus three MLP validation
+preflight actors (`gf_cli/structured.py:104`), all inside collection.
+
+Handshake-reported `model_load_ms` medians are MLP **782.421ms** (339 samples),
+random **0.220ms** (120) and heuristic **0.220ms** (120). This child timer covers
+factory import/model creation and loading, reset and generator construction;
+it does not isolate Torch import. Readiness also includes interpreter/bootstrap,
+IPC, scheduling and earlier sequential initialization waits. Summed child times
+are neither elapsed collection wall nor measured CPU consumption.
+
+Existing normal-result decision timers independently sum to 2.352s policy
+calculation and 0.577s candidate generation across all 1,024 decisions. These
+normal-run child sums are separate from the diagnostic merged intervals above.
+The test uses FakeHTTP; these figures do not measure real simulator game-rule
+execution or establish model quality / qualified Source acceptance.
+
+Raw evidence: `/tmp/godfieldbots-tree-collection-profile-20261109`, including
+`metadata.json`, `profile_tree.py`, `profile-one-{events,summary,junit}`,
+`ready-samples.json`, `collection-breakdown.json`, original-result aggregates,
+logs and resources. An independent read-only verifier recomputed counts,
+intersections/unions, readiness ratio, medians and all frozen hashes: PASS.
