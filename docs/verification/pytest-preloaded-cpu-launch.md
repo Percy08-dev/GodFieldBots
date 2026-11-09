@@ -201,3 +201,31 @@ sums, not a new whole-suite timing. Whole pytest, application/wheel and CUDA
 checks were NOT RERUN for this selection-only follow-up. No automatic CI or
 change-triggered execution is introduced. Use the README's explicit command
 when launch/protocol/cleanup, initialization/RNG or Torch changes.
+
+## Current default full run and per-file timings (2026-11-09)
+
+After the selection follow-up at `b2a880c4ae4920af0b1519a577e7dffed52ac043`,
+one fresh HOST default invocation PASS: **4,074 passed / 285 skipped / 4 warnings /
+zero failures**, 4,359 collected cases, exit0. Pytest reports **1,150.17s**;
+external wall is **1,151.24s (19:11.24)**. The 38 heavy safety checks are skipped,
+while CPU PPO preloaded launch remains active.
+
+```sh
+env -u GFB_RUN_CPU_PRELOAD_SAFETY UV_CACHE_DIR=/tmp/godfieldbots-uv-cache /usr/bin/time -v -o /tmp/godfieldbots-current-file-timings-20261109/resource.txt timeout --signal=INT --kill-after=15s 2400s uv run --no-sync pytest --basetemp=/tmp/godfieldbots-current-file-timings-20261109/pytest-temp --setup-show --durations=0 --durations-min=0 --junitxml=/tmp/godfieldbots-current-file-timings-20261109/junit.xml > /tmp/godfieldbots-current-file-timings-20261109/pytest.log 2>&1
+```
+
+[All 167 files, sorted by current duration](pytest-file-timings-20261109.csv)
+include case counts/statuses and the preceding full-run comparison. Times are
+JUnit setup/call/teardown sums. Shared fixture setup belongs to the requesting
+file; collection/import/runner overhead remains outside these per-file sums.
+
+The preceding full run was 1,205.43s, so this observed wall is 54.19s lower.
+The previous population executed the 38 now-skipped cases; the two single runs
+do not isolate the speed of unchanged tests or establish timing variance.
+Evidence, metadata with 352 source/test/config hashes, JUnit, logs/resources and
+per-file JSON/CSV are in `/tmp/godfieldbots-current-file-timings-20261109`.
+All 352 frozen hashes match after execution. The file-time sum is 1,147.310s;
+the longest files are Tree Dataset 199.312s, structured PPO 160.781s and native
+structured session 118.709s. All prior case statuses remain except the intended
+38 pass-to-skip transitions; comparison normalizes only generated HTTP UUIDv1
+display names. No test or application implementation changed during measurement.
