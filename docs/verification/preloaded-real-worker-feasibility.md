@@ -112,3 +112,13 @@ or dependency changed and no full-suite rerun is claimed for this experiment.
 
 Mechanism: [Python3.14 forkserver preload](https://docs.python.org/3.14/library/multiprocessing.html#multiprocessing.set_forkserver_preload).
 Relevant limits: [PyTorch2.14 multiprocessing](https://docs.pytorch.org/docs/2.14/notes/multiprocessing.html).
+
+## Subsequent integration
+
+The owner later requested incorporation. Separately reviewed
+[ADR0030](../adr/0030-pytest-preloaded-cpu-launch.md) adopts a clean direct-fork
+test template with pending ownership, exact wait receipts and terminal status-loss
+quarantine, rather than promoting this multiprocessing facade. Matched42case
+wall195.84→161.16s and whole4359case success/cost are in
+[integration verification](pytest-preloaded-cpu-launch.md). The healthy probe
+above remains historical and is not retroactively a failure-safety proof.

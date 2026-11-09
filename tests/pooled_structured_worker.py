@@ -8,13 +8,14 @@ from pathlib import Path
 
 from gf_common.domain import ContractError, closed, integer
 from gf_simulator_client.structured_worker import StructuredParticipantWorker
+from tests.cpu_preload import CpuPreloadMixin
 from tests.pooled_structured_bootstrap import check_envelope, envelope
 
 CURRENT_POOL = ContextVar('pytest_cpu_participant_pool', default=None)
 CURRENT_VIEWER = ContextVar('pytest_cpu_participant_viewer', default=None)
 
 
-class PhysicalWorker(StructuredParticipantWorker):
+class PhysicalWorker(CpuPreloadMixin, StructuredParticipantWorker):
     def __init__(self, *args, viewer, **kwargs):
         self.viewer, self.epoch, self.loan = viewer, 0, None
         self.poisoned = False
@@ -96,6 +97,9 @@ class CpuParticipantPool:
                             values[key] = int(number)
                     rss += values['Rss:']
                     pss += values['Pss:']
+                    record = getattr(owner, '_preload_record', None)
+                    if record is not None:
+                        record.service.observe_actor(record)
                 except (OSError, KeyError, ValueError):
                     pass  # Optional OS observation, never a resource-admission input.
         self.peak_summed_rss_kib = max(self.peak_summed_rss_kib, rss)

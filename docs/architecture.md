@@ -1064,6 +1064,21 @@ baseline checks pass. Compiled kernels, CPU-only distribution and unrelated new
 context defaults remain explicit limitations, revisited at a new threaded/compiled
 consumer or Torch upgrade. Process lifetimes and simulator contracts stay fixed.
 
+[ADR0030](adr/0030-pytest-preloaded-cpu-launch.md) accepts explicit Linux CPU
+preloaded launch for pytest. A clean-exec single-thread Torch-only template owns
+direct fork/wait; original actor/pool bootstraps retain model/private state.
+Pending creation is guarded before external sends; only real PID/wait receipts
+release actor leases after I/O retirement. Lost status quarantines parents and
+retains reservations even after WNOWAIT-protected group containment. Default/
+CUDA/native/source paths stay unchanged. The MLP reference is explicitly fresh-
+forked with independent normal cold coverage retained. Both reviews are READY;
+same42cases PASS195.84→161.16s and2112arrays/768decisions remain exact. Full4359
+cases PASS4112/247skips, wall1205.43s;54new safety tests make the default suite
+27.47s slower than the prior run, an explicit coverage cost. Related333/6skips,
+actualCUDA6, Ruff/mypy157 and wheel/optional-free baseline checks pass. No new
+data/numerical recipe or Source authority is introduced. OS/pinned-backend and
+soft auxiliary-memory limits remain explicit in verification.
+
 Checks: `uv run pytest`, `uv run ruff check .`, `uv run mypy src`; wheel installed
 in a separate Python 3.14 environment, baseline without ML imports. Verify CPU
 compatibility per implemented extra. Record exact commands and PASS/FAIL/NOT RUN

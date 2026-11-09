@@ -106,15 +106,17 @@ class WorkerReservation:
     serial: int = 0
     released: bool = False
     _cleanup_owner: Any = field(default=None, repr=False, compare=False)
+    creation_pending: bool = False
 
     def spawned(self, process: Any) -> None:
         if self.pid is not None or self.released:
             raise ContractError("worker reservation already consumed")
         integer(process.pid, 1)
         self.pid = process.pid
+        self.creation_pending = False
 
     def cancel_before_spawn(self) -> None:
-        if self.pid is not None or self.released:
+        if self.pid is not None or self.released or self.creation_pending:
             raise ContractError("spawned worker requires confirmed reap")
         process = getattr(self._cleanup_owner, 'process', None)
         if process is not None and process.poll() is None:
@@ -142,7 +144,7 @@ class WorkerReservation:
     def reaped(self, process: Any) -> None:
         if self.released:
             return
-        if self.pid != process.pid or process.poll() is None:
+        if self.creation_pending or self.pid != process.pid or process.poll() is None:
             raise ContractError("participant residency cannot release before confirmed reap")
         self.decisions.clear()
         del self.ledger.workers[self.key]

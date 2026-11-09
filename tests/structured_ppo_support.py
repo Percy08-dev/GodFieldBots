@@ -141,12 +141,31 @@ async def _parallel_ready_actors(workers, result):
             raise outcome
 
 
-def component_http(monkeypatch, loaded, *, mode='natural', source_ops=None, validation_context=None, outcome='draw', actors=(2,1,2,1), pool_cpu=False, parallel_ready=False):
+def component_http(monkeypatch, loaded, *, mode='natural', source_ops=None, validation_context=None, outcome='draw', actors=(2,1,2,1), pool_cpu=False, parallel_ready=False, preload_cpu=False):
     import gf_cli
     from gf_models.structured_baselines import make_structured_policy
     from gf_simulator_client import structured_environment
     from gf_simulator_client.structured_worker import StructuredParticipantWorker
     from gf_training.structured_journal import StructuredJournal
+    from tests.cpu_preload import (
+        CURRENT_LAUNCH,
+        CURRENT_TEMPLATE,
+        CpuPreloadMixin,
+        CpuTemplate,
+        LaunchContext,
+        eligible_configuration,
+        supported,
+    )
+    template = CURRENT_TEMPLATE.get() if preload_cpu else None
+    if preload_cpu and (not supported() or not isinstance(template, CpuTemplate) or source_ops is not None or validation_context is not None
+            or loaded.config.training.device != 'cpu' or loaded.config.model.inference.device != 'cpu'
+            or not eligible_configuration(loaded)):
+        raise ValueError('pytest CPU preload requires a supported bound owner and ordinary CPU engineering training')
+    if template is not None and template.failure is not None:
+        raise template.failure
+    if preload_cpu and (template.state not in ('UNSTARTED', 'RUNNING')
+            or getattr(loaded.config.model, 'model_id', None) not in ('mlp', 'gru', 'transformer')):
+        raise ValueError('pytest CPU preload requires a live supported owner and neural CPU model')
     if parallel_ready and (source_ops is not None or validation_context is not None
             or loaded.config.training.device != 'cpu' or loaded.config.model.inference.device != 'cpu'):
         raise ValueError('pytest parallel readiness requires ordinary CPU engineering training')
@@ -179,6 +198,10 @@ def component_http(monkeypatch, loaded, *, mode='natural', source_ops=None, vali
                 or loaded.config.model.inference.device != 'cpu'):
             raise ValueError('pytest CPU pool requires ordinary CPU engineering training')
     original_worker = PooledStructuredParticipantWorker if pool_cpu else StructuredParticipantWorker
+    if preload_cpu and not pool_cpu:
+        class PreloadedWorker(CpuPreloadMixin, StructuredParticipantWorker):
+            pass
+        original_worker = PreloadedWorker
     class Worker(original_worker):
         def __init__(self, *args, **kwargs):
             super().__init__(*args, **kwargs)
@@ -192,13 +215,16 @@ def component_http(monkeypatch, loaded, *, mode='natural', source_ops=None, vali
             seen_ledgers.append(ledger)
             self._initialize_structured(settings, make_structured_policy, StructuredJournal, ledger=ledger)
         def _create_actor(self, directory, spec, viewer, game, journals, actors, contexts, result):
-            if not pool_cpu:
-                return super()._create_actor(directory, spec, viewer, game, journals, actors, contexts, result)
-            token = CURRENT_VIEWER.set(viewer)
+            launch_token = CURRENT_LAUNCH.set(LaunchContext(template, self.settings.execution_deadline,
+                min(self.settings.wall_deadline, self.settings.work_deadline), viewer)) if preload_cpu else None
+            token = CURRENT_VIEWER.set(viewer) if pool_cpu else None
             try:
                 return super()._create_actor(directory, spec, viewer, game, journals, actors, contexts, result)
             finally:
-                CURRENT_VIEWER.reset(token)
+                if token is not None:
+                    CURRENT_VIEWER.reset(token)
+                if launch_token is not None:
+                    CURRENT_LAUNCH.reset(launch_token)
         def _new_server(self, *args, **kwargs):
             return Server(*args, **kwargs)
         def _new_client(self, *args, **kwargs):
@@ -216,16 +242,44 @@ def component_http(monkeypatch, loaded, *, mode='natural', source_ops=None, vali
         before = time.monotonic()
         pool = CpuParticipantPool(ledger, cleanup_deadline=plan.wall_deadline - loaded.config.run.report_reserve_seconds) if pool_cpu else None
         token = CURRENT_POOL.set(pool) if pool_cpu else None
+        cleanup_deadline = (plan.wall_deadline - loaded.config.run.report_reserve_seconds
+                            if pool is not None or template is not None else float('inf'))
+        finalized = None
+        async def finalizer():
+            nonlocal finalized
+            if finalized is None:
+                candidate = await pool.close() if pool is not None else {'mode': 'pytest-fresh-forked-cpu-v1'}
+                if pool is None:
+                    fresh = [worker for worker in workers if worker.lease.ledger is ledger]
+                    if ledger.workers or any(not worker.closed or not worker.lease.released
+                            or worker.process is None or worker.process.poll() is None
+                            or (worker.io_thread is not None and worker.io_thread.is_alive())
+                            or any(stream is not None and not stream.closed
+                                   for stream in (worker.process.stdin, worker.process.stdout))
+                            for worker in fresh):
+                        raise RuntimeError('pytest fresh-forked SAME ledger/process/stream/thread retirement unconfirmed')
+                if template is not None:
+                    candidate['cpu_preload'] = template.health(cleanup_deadline)
+                if pool is None:
+                    candidate['closed'] = True
+                finalized = candidate
+            return finalized
         try:
+            if template is not None:
+                template.start(plan.execution_deadline)
             directory, report = await gf_cli._run_experiment(loaded, 'collect', collection=plan, ledger=ledger,
                 _structured_factory=FakeEnvironment, _structured_source_ops=source_ops,
                 _structured_validation_context=validation_context,
-                _pytest_worker_finalizer=None if pool is None else pool.close)
+                _pytest_worker_finalizer=finalizer if pool is not None or template is not None else None)
         finally:
             pending = sys.exception()
             try:
-                if pool is not None:
-                    await pool.close()
+                try:
+                    if pool is not None:
+                        await pool.close()
+                finally:
+                    if template is not None and template.failure is not None:
+                        await template.close(deadline=cleanup_deadline)
             except BaseException as cleanup_error:
                 if pending is None:
                     raise

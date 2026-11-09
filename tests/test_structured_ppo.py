@@ -36,8 +36,28 @@ def component_http(monkeypatch, loaded, **kwargs):
     """This module alone explicitly opts ordinary CPU engineering collectors in."""
     cpu = (loaded.config.training.device == 'cpu' and loaded.config.model.inference.device == 'cpu'
            and kwargs.get('source_ops') is None and kwargs.get('validation_context') is None)
+    from tests.cpu_preload import CURRENT_TEMPLATE, CpuTemplate, eligible_configuration, supported
+    preload = cpu and supported() and isinstance(CURRENT_TEMPLATE.get(), CpuTemplate) and eligible_configuration(loaded)
     return fresh_component_http(monkeypatch, loaded, pool_cpu=kwargs.pop('pool_cpu', cpu),
-                                parallel_ready=kwargs.pop('parallel_ready', cpu), **kwargs)
+        parallel_ready=kwargs.pop('parallel_ready', cpu), preload_cpu=kwargs.pop('preload_cpu', preload), **kwargs)
+
+
+@pytest.fixture(scope='module', autouse=True)
+def cpu_template_owner(tmp_path_factory):
+    """Bind an unstarted public-code owner; guards never import Torch or warm it."""
+    from tests.cpu_preload import CURRENT_TEMPLATE, CpuTemplate, supported
+    if not supported():
+        yield None
+        return
+    owner = CpuTemplate(tmp_path_factory.mktemp('structured-ppo-cpu-template'))
+    token = CURRENT_TEMPLATE.set(owner)
+    try:
+        yield owner
+    finally:
+        try:
+            asyncio.run(owner.close())
+        finally:
+            CURRENT_TEMPLATE.reset(token)
 
 
 def test_default_mlp_cpu_original16game_two_update_common_loop(completed_execution):
@@ -112,6 +132,7 @@ def test_original_full_config_and_recorded_provenance_guard(tmp_path, mutation):
 
 @pytest.fixture(scope='module')
 def completed_execution(tmp_path_factory):
+    """Fresh-forked on supported Linux; independent cold exec remains in protocol tests."""
     directory = tmp_path_factory.mktemp('component-parent-template')
     loaded = configuration(directory)
     parent = directory / 'parent'
