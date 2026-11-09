@@ -1051,6 +1051,19 @@ before/after MLP/GRU initial/final916arrays and384decision projections match.
 Application/native/config bytes, process lifetimes and collection-before-update
 real reap stay unchanged. No new whole-suite timing or green-run claim is made.
 
+[ADR0029](adr/0029-lazy-cpu-deterministic-runtime.md) accepts CPU-only compiler
+initialization deferral in the shared pinned Torch runtime. Environment-first
+late defaults, ordinary import-lock joining and public debug-error mode preserve
+core/backend policy and the caller-context compiler override; CUDA keeps its
+original setter. NUMERICS/formats stay unchanged with actual2112G0/G2arrays and
+768decision-content comparisons across all3models. Changed producer/policy IDs
+remain correctly pinned. Both reviews are READY; same42cases PASS231.79to195.84s
+(15.51%). Full4305cases PASS4058/247skips/zero failures, wall1177.96s; separate
+actualCUDA6/mixed-device, Ruff/mypy157, source-matched wheel and optional-free
+baseline checks pass. Compiled kernels, CPU-only distribution and unrelated new
+context defaults remain explicit limitations, revisited at a new threaded/compiled
+consumer or Torch upgrade. Process lifetimes and simulator contracts stay fixed.
+
 Checks: `uv run pytest`, `uv run ruff check .`, `uv run mypy src`; wheel installed
 in a separate Python 3.14 environment, baseline without ML imports. Verify CPU
 compatibility per implemented extra. Record exact commands and PASS/FAIL/NOT RUN

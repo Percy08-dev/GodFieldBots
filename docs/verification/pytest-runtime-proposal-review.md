@@ -157,3 +157,13 @@ Independent verification audits raw results and scope; it does not rerun them.
 Project pytest, actual CUDA, peak-memory study and production changes are NOT RUN
 for this investigation. Root records this assessment without adopting an
 optimization or changing an accepted ADR.
+
+## Subsequent implementation
+
+The owner subsequently requested proceeding. The separately reviewed and accepted
+[ADR0029](../adr/0029-lazy-cpu-deterministic-runtime.md) adopts CPU compiler
+deferral, preserving actual caller-context determinism and the original CUDA
+setter. Same42case wall231.79→195.84s and full4305case PASS4058/247skips are
+recorded in [implementation verification](lazy-cpu-deterministic-runtime.md).
+The exploratory results above remain historical; forkserver/global services
+are not adopted by that increment.

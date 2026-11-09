@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import importlib.metadata
+import os
 import platform
 import sys
 from typing import Any
@@ -22,6 +23,16 @@ def runtime_metadata() -> Json:
     return versions
 
 
+def _cpu_determinism(torch: Any) -> None:
+    # The pinned Inductor config consumes this value on a later ordinary import.
+    os.environ['TORCHINDUCTOR_DETERMINISTIC'] = '1'
+    if 'torch._inductor.config' in sys.modules:
+        # Join real import completion before touching an existing config module.
+        config: Any = importlib.import_module('torch._inductor.config')
+        config.deterministic = True
+    torch.set_deterministic_debug_mode('error')
+
+
 def torch_runtime(device: str) -> Any:
     versions = runtime_metadata()
     import torch
@@ -32,7 +43,10 @@ def torch_runtime(device: str) -> Any:
     if device not in ('cpu', 'cuda:0') or device == 'cuda:0' and not torch.cuda.is_available():
         raise ContractError("configured learner device unavailable")
     torch.set_num_threads(1)
-    torch.use_deterministic_algorithms(True)
+    if device == 'cpu':
+        _cpu_determinism(torch)
+    else:
+        torch.use_deterministic_algorithms(True)
     backends: Any = torch.backends
     backends.fp32_precision = "ieee"
     torch.backends.cuda.matmul.fp32_precision = "ieee"
