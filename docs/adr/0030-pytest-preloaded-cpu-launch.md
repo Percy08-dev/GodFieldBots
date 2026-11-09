@@ -302,3 +302,29 @@ be revisited for another backend, process-spawning policy, dependency upgrade or
 unsupported platform. No formal Source qualification/strength claim follows.
 Exact commands, retained failed iterations, review dispositions and limitations:
 [verification](../verification/pytest-preloaded-cpu-launch.md).
+
+## Follow-up: explicit expensive safety checks (2026-11-09)
+
+The owner subsequently requested removing the expensive new safety checks from
+automatic default execution. This supersedes the initial default-suite coverage
+cost decision above; the launcher design and its completed acceptance evidence
+remain unchanged.
+
+The existing shared `requires_preload` skip condition now also requires the exact
+environment value `GFB_RUN_CPU_PRELOAD_SAFETY=1`, following the existing CUDA
+test convention. It covers 38 real-process/lifecycle and numerical/training
+checks in `test_cpu_preload.py` and `test_cpu_preload_review.py`. The 16 inexpensive
+checks remain enabled. Explicit runs still require supported Linux and Torch;
+there is no fallback that claims unsupported coverage passed.
+
+This local selection change introduces no new dependency, test plugin, execution
+hook or runtime behavior. All tests, assertions, budgets and CPU PPO preloaded
+launch remain intact. The prior 54-case cost was 59.768 JUnit case-seconds; only
+about 0.07 seconds belonged to the 16 default checks. This is an earlier single-run
+aggregate, not a new measured whole-suite speedup.
+
+The tradeoff is deferred detection of launcher lifecycle or model-state
+regressions during ordinary pytest runs. Run the documented explicit suite after
+changes to startup, protocol, cleanup, model initialization, RNG or Torch, and
+before relying on a new launch-equivalence acceptance claim. No automatic
+change-triggered runner or CI scheduling is added by this change.

@@ -312,6 +312,16 @@ uv run mypy src
 uv build
 ```
 
+CPU先読み起動の安全性テストは、軽い16件を通常実行に残し、実プロセスの異常系や
+モデル一致・学習を確認する38件は明示実行にしています。全54件を実行する場合:
+
+```console
+GFB_RUN_CPU_PRELOAD_SAFETY=1 uv run pytest tests/test_cpu_preload.py tests/test_cpu_preload_review.py
+```
+
+起動・通信・終了処理、モデルの初期化やRNG、Torchを変更した際の確認に使用します。
+通常のPPOテストで使うCPU先読み起動の最適化は引き続き有効です。
+
 実バイナリintegrationは通常テストから分離し、実行条件は検証記録に記載します。
 [追加テストとカバレッジの記録](docs/verification/coverage-followup.md)には、異常系・並行実行・
 独立した候補集合の期待値・CLI入口の検証と、計測範囲の制約を記載します。

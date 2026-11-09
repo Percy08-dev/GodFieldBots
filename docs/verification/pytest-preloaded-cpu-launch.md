@@ -3,6 +3,7 @@
 Status: accepted; both independent reviews READY and scoped/full verification
 PASS. The matched PPO target improves; total default pytest increases with the
 54added lifecycle regressions. No whole-suite speedup is claimed for this increment.
+These integration timings precede the explicit-run selection follow-up below.
 
 [ADR0030](../adr/0030-pytest-preloaded-cpu-launch.md) implements an explicitly
 opted-in Linux CPU pytest launcher. A clean-exec `-E -S` template imports Torch
@@ -161,3 +162,42 @@ Root accepts after both final reviews and all checks. Unsupported platforms,
 CPU-only Torch distribution, arbitrary compiler/threaded consumers and formal
 Source/learning acceptance remain unclaimed. Existing numerical and compatibility
 versions and active-resume code-identity refusal policy are unchanged.
+
+## Follow-up: expensive checks require explicit execution (2026-11-09)
+
+After the owner's request, the shared `requires_preload` condition additionally
+requires the exact environment value `GFB_RUN_CPU_PRELOAD_SAFETY=1`. This moves
+38 real-process/heavy checks to explicit execution while keeping 16 inexpensive
+checks in default pytest. The CPU PPO launch optimization remains enabled.
+This is a local test-selection change, with no runtime/concurrency/dependency
+boundary change; no new architecture gate was required.
+
+PASS, with the environment variable unset:
+
+```sh
+timeout 60s env -u GFB_RUN_CPU_PRELOAD_SAFETY UV_CACHE_DIR=/tmp/godfieldbots-uv-cache uv run --no-sync pytest -q tests/test_cpu_preload.py tests/test_cpu_preload_review.py
+```
+
+Result: **16 passed / 38 skipped in 0.56s**. The same command with value `0`
+also gives **16 passed / 38 skipped in 0.57s**. Enabled collect-only retains all
+54 cases. PASS actual HOST execution:
+
+```sh
+GFB_RUN_CPU_PRELOAD_SAFETY=1 UV_CACHE_DIR=/tmp/godfieldbots-uv-cache uv run --no-sync pytest -q -x tests/test_cpu_preload.py tests/test_cpu_preload_review.py
+```
+
+Result: **54 passed in 61.48s**. The retained command additionally uses an outer
+180s timeout, `/usr/bin/time` and JUnit/log output under
+`/tmp/godfieldbots-cpu-preload-optin-20261109/host-enabled-*`.
+An initial restricted-sandbox attempt hit the existing inherited-socket
+`PermissionError` in `cpu_preload_server.py:37` and was interrupted with exit130;
+its separate `enabled.log` is not counted as passing verification.
+
+PASS scoped Ruff and diff checks. The AST/source audit in `selection-audit.json`
+confirms both modules' code is unchanged apart from the shared skip condition:
+all test bodies, assertions and budgets are retained. The historical 16-case
+aggregate is 0.072s and the 38-case aggregate is 59.696s; those are earlier JUnit
+sums, not a new whole-suite timing. Whole pytest, application/wheel and CUDA
+checks were NOT RERUN for this selection-only follow-up. No automatic CI or
+change-triggered execution is introduced. Use the README's explicit command
+when launch/protocol/cleanup, initialization/RNG or Torch changes.

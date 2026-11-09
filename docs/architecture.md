@@ -1078,6 +1078,11 @@ cases PASS4112/247skips, wall1205.43s;54new safety tests make the default suite
 actualCUDA6, Ruff/mypy157 and wheel/optional-free baseline checks pass. No new
 data/numerical recipe or Source authority is introduced. OS/pinned-backend and
 soft auxiliary-memory limits remain explicit in verification.
+Following the owner's subsequent request, 38 real-process/heavy launcher checks
+now require `GFB_RUN_CPU_PRELOAD_SAFETY=1`; the 16 inexpensive checks remain in
+default pytest. This changes test selection only. The CPU PPO launch optimization
+remains enabled, and all assertions and workloads are retained for explicit runs.
+The full-run counts and timings above precede this selection change.
 
 Checks: `uv run pytest`, `uv run ruff check .`, `uv run mypy src`; wheel installed
 in a separate Python 3.14 environment, baseline without ML imports. Verify CPU

@@ -35,8 +35,11 @@ from tests.cpu_preload_actor import AdmissionInput
 from tests.cpu_preload_protocol import FACTORY, MAX_PACKET, receive
 from tests.test_structured_protocol import action_settings, neural_component, own_frame
 
-requires_preload = pytest.mark.skipif(not supported() or importlib.util.find_spec('torch') is None,
-                                    reason='Linux and optional pinned Torch required')
+requires_preload = pytest.mark.skipif(
+    os.environ.get('GFB_RUN_CPU_PRELOAD_SAFETY') != '1'
+    or not supported() or importlib.util.find_spec('torch') is None,
+    reason='set GFB_RUN_CPU_PRELOAD_SAFETY=1; Linux and optional pinned Torch required',
+)
 CONTROL_FAILURES = (EOFError, ConnectionError, RuntimeError, TimeoutError)
 
 
