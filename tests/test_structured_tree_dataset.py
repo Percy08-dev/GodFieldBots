@@ -72,13 +72,36 @@ def check_reused_inventory(inventory):
 
 
 @pytest.fixture(scope='module')
-def original_tree_sources(tmp_path_factory):
+def tree_cpu_template_owner(tmp_path_factory):
+    """Explicit lazy binding; only original source collection requests warmup."""
+    from tests.cpu_preload import CURRENT_TEMPLATE, CpuTemplate, supported
+    if not supported():
+        yield None
+        return
+    owner=CpuTemplate(tmp_path_factory.mktemp('tree-dataset-cpu-template'))
+    token=CURRENT_TEMPLATE.set(owner)
+    try:
+        yield owner
+    finally:
+        try:
+            asyncio.run(owner.close())
+            assert not owner.records
+            if owner.process is not None:
+                assert owner.process.returncode is not None and owner._leader_reaped
+        finally:
+            CURRENT_TEMPLATE.reset(token)
+
+
+@pytest.fixture(scope='module')
+def original_tree_sources(tmp_path_factory,tree_cpu_template_owner):
     # One stable fixture, no recollection for each corruption/reader test.
     root=tmp_path_factory.mktemp('tree-dataset-originals')
     from _pytest.monkeypatch import MonkeyPatch
     parents=[];validations=[];observed=[]
     reused={}
     existing={seed:os.environ.get(f'GFB_TREE_DATASET_EXISTING_SOURCE{seed}') for seed in (17,29)}
+    preload=tree_cpu_template_owner is not None
+    fresh_seeds=0
     for index,seed in enumerate((17,29,43)):
         if existing.get(seed):
             parent,validation,snapshots=reused_source(Path(existing[seed]),seed)
@@ -93,11 +116,12 @@ def original_tree_sources(tmp_path_factory):
             cfg=replace(loaded.config,training=replace(loaded.config.training,seeds=(seed,)))
             loaded=LoadedConfig(cfg,asdict(cfg),digest(asdict(cfg)),loaded.inputs)
             outcome={'win':{'winner':1}} if seed!=29 else 'draw'
-            collector,_,workers,ledgers=component_http(monkeypatch,loaded,outcome=outcome)
+            collector,_,workers,ledgers=component_http(monkeypatch,loaded,outcome=outcome,pool_cpu=False,preload_cpu=preload)
             parent=root/f'parent-{seed}'
             result=asyncio.run(_train_component_ppo(loaded,collector,parent))
             assert result['status']=='complete' and result['updates']==2
-            assert len(workers)==64 and all(worker.closed and worker.process.poll() is not None for worker in workers)
+            assert len(workers)==64 and all(worker.closed and worker.process.poll() is not None and worker.lease.released
+                and (worker.io_thread is None or not worker.io_thread.is_alive()) for worker in workers)
             assert ledgers[0].learner is None and not ledgers[0].workers
             validation=root/f'validation-{seed}'
             source_settings=preparation_config(asdict(replace(cfg.preprocessing,backend='rust',reader='structured-v1')))
@@ -107,15 +131,25 @@ def original_tree_sources(tmp_path_factory):
                         deadline=time.monotonic()+cfg.run.wall_seconds,native=native) as context:
                     assert canonical(asdict(context.projected.config))==canonical({**asdict(cfg),'run':{**asdict(cfg.run),'split':'validation'}})
                     selected,_,actors,seen=component_http(monkeypatch,context.projected,validation_context=context,
-                        outcome=outcome,actors=(2,2) if seed==43 else (2,1,2,1))
+                        outcome=outcome,actors=(2,2) if seed==43 else (2,1,2,1),pool_cpu=False,preload_cpu=preload)
                     collected=await selected(context.plan,ledger)
                     evidence=context.accept_collection(collected.directory,collected.report)
                     assert evidence['qualified'] is False and evidence['scope'].startswith('collection-metadata-only')
-                    assert len(actors)==128 and all(worker.closed and worker.process.poll() is not None for worker in actors)
+                    assert len(actors)==128 and all(worker.closed and worker.process.poll() is not None and worker.lease.released
+                        and (worker.io_thread is None or not worker.io_thread.is_alive()) for worker in actors)
                     assert seen and all(item is ledger for item in seen) and ledger.learner is None
                     return evidence
             evidence=asyncio.run(collect())
             assert not ledger.workers and ledger.learner is None
+            fresh_seeds+=1
+            if preload:
+                assert tree_cpu_template_owner.launches==192*fresh_seeds
+                assert not tree_cpu_template_owner.records and tree_cpu_template_owner.failure is None
+                for directory in (*sorted((parent/'collections').iterdir()),validation):
+                    receipt=json.loads((directory/'manifest.json').read_bytes())['pytest_worker_lifecycle']
+                    assert receipt['mode']=='pytest-fresh-forked-cpu-v1' and receipt['closed']
+                    assert receipt['cpu_preload']['template_pid']==tree_cpu_template_owner.process.pid
+                    assert receipt['cpu_preload']['healthy'] and receipt['cpu_preload']['unretired_tickets']==0
             parents.append(parent);validations.append(validation);observed.append(evidence)
         finally:monkeypatch.undo()
     (root/'fixture-evidence.json').write_text(canonical({'scope':'component originals only','parents':[str(p) for p in parents],

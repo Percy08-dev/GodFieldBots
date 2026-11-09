@@ -229,3 +229,114 @@ the longest files are Tree Dataset 199.312s, structured PPO 160.781s and native
 structured session 118.709s. All prior case statuses remain except the intended
 38 pass-to-skip transitions; comparison normalizes only generated HTTP UUIDv1
 display names. No test or application implementation changed during measurement.
+
+## Tree Dataset preparation extension — ADR0031 (2026-11-09)
+
+Status: accepted; implementation and both independent final reviews READY;
+scoped and final default full checks PASS. Design and ownership are in
+[ADR0031](../adr/0031-tree-pytest-preloaded-cpu-launch.md).
+
+Only the private CLI finalizer admission and test composition change. One explicit
+lazy module fixture binds the existing Torch-only template across all nine Tree
+collections. All 576 episode actors remain fresh, with new model/episode/RNG state;
+the three ordinary cold-exec validation preflight actors remain unchanged. There
+is no participant pool, readiness-order change, format/dependency change, simulator
+edit or new public launch default. Exact concrete validation context, projected
+LoadedConfig identity, actual plan/SAME ledger and CPU/Python engineering scope
+are checked before warmup; actual retirement, template health and the live
+original context are rechecked before report/manifest publication.
+
+The original three seeds, two updates per parent, 96 training + 192 validation
+games, zero-endpoint cases and Dataset build/inspect assertions are retained.
+New 37 lightweight dispatch/ordering/failure checks run in default pytest; the
+existing 38 expensive safety checks retain their explicit environment opt-in.
+Both independent final reviews are READY without findings. The dispatch doubles
+do not establish Source validity; the actual full Tree target below does.
+
+### Matched target and actual originals
+
+Root runs the same disposable observer as the retained cold diagnostic, changing
+only its output directory. The target is the complete original Tree test:
+
+```sh
+env -u GFB_RUN_CPU_PRELOAD_SAFETY -u GFB_TREE_DATASET_EXISTING_SOURCE17 -u GFB_TREE_DATASET_EXISTING_SOURCE29 UV_CACHE_DIR=/tmp/godfieldbots-uv-cache /usr/bin/time -v -o /tmp/godfieldbots-tree-preloaded-cpu-20261109/target-resource.txt timeout --signal=INT --kill-after=15s 480s uv run --no-sync python /tmp/godfieldbots-tree-preloaded-cpu-20261109/profile_tree.py > /tmp/godfieldbots-tree-preloaded-cpu-20261109/target.log 2>&1
+```
+
+PASS one test. Matching pytest time **200.56 -> 80.97s** (119.59s / 59.628% saved);
+external **201.51 -> 81.48s** (120.03s / 59.565% saved). Setup is73.26s, call7.45s,
+teardown0.22s in the rounded duration report; case time is80.926s. First template
+warmup and actual final close are included. The earlier199.312s normal full-run
+case is a separate observation, not the matched diagnostic baseline.
+
+Collection union drops167.616 ->47.030s, episode-ready union148.338 ->35.966s.
+Reported MLP model-load median drops782.421 ->47.373ms. That handshake timer
+includes factory/reset/etc, not pure Torch import. Three cold preflight samples
+remain included in the339MLP samples. In the candidate observer, base `_spawn`
+counts only those three ordinary actors because the fork mixin overrides that
+hook; it is not the total process count. Nine manifest receipts share one actual
+template PID, healthy/closed with zero unretired tickets, cumulative launches
+32/64/192/224/256/384/416/448/576. Template sampled peak RSS is540,884KiB
+(528.207MiB), below its separate1GiBsoft allowance, not a whole-system quota.
+
+Read-only independent comparison against retained actual cold parents confirms
+all12G0/G2weight/resume NPZ files and876arrays exact by keys/dtype/shape/value,
+including optimizer and RNG state. Both complete nine-work Source populations
+validate through NativeTreeDataset. All512actual selected Tree features and
+natural labels match in order and against independent Journal5/tokenization/
+PreparedTreeFrame references. Label counts are -1:192,0:192,+1:128.
+
+All1,024actual decision records also match in real candidate bytes, search RNG,
+numeric selections, frames and actions. Each side's policy/checkpoint binding
+is independently checked; all1,024policy identities and all9inference manifests
+are unchanged. Comparison-only projections remove opaque IDs/linked hashes,
+normalize viewer/cursor suffixes and visible own-hand references, and omit the
+three search timing fields. No original is rewritten, resealed or relabeled.
+
+### Related and package verification
+
+HOST explicit safety + affected protocol/pool/environment/source + candidate
+frozen Tree checks PASS **378 passed / 6 CUDA opt-in skips in163.51s**:
+
+```sh
+GFB_RUN_CPU_PRELOAD_SAFETY=1 GFB_TREE_DATASET_FROZEN_FIXTURE=/tmp/godfieldbots-tree-preloaded-cpu-20261109/pytest-temp/tree-dataset-originals0 UV_CACHE_DIR=/tmp/godfieldbots-uv-cache timeout --signal=INT --kill-after=15s 480s uv run --no-sync pytest -q tests/test_tree_cpu_preload.py tests/test_cpu_preload.py tests/test_cpu_preload_review.py tests/test_pooled_structured_worker.py tests/test_parallel_structured_ready.py tests/test_structured_protocol.py tests/test_structured_environment.py tests/test_structured_source.py tests/test_structured_ppo_source.py tests/test_structured_ppo_cuda.py tests/test_structured_tree_dataset_frozen.py
+```
+
+PASS `ruff check src tests native`, `mypy src`157files, exact157module wheel source
+correspondence/no tests packaged. Mandatory-only installed Python3.14, outside
+checkout and without Torch/LightGBM/PyArrow/native/pytest, PASS normal Random
+structured actor initialization, actual reap/SAME empty ledger and CLI help.
+Actual CUDA opt-ins and Rust tests are NOT RERUN for this CPU-only private
+composition change; transport/learning/native code and default routes are fixed.
+
+Evidence: `/tmp/godfieldbots-tree-preloaded-cpu-20261109`, including baseline/
+candidate hash metadata, matching observer, target logs/resources/JUnit,
+baseline/candidate-equivalence and wire-equivalence reports, related results,
+package/baseline reports and full-run freeze. All353Python/config measured hashes
+match before the full invocation. Sources stay engineering-only; no formal
+qualification or training-quality claim follows.
+
+### Final default full invocation
+
+One final frozen-source HOST run PASS **4,111 passed / 285 skipped / 4 warnings /
+zero failures**, 4,396 cases, exit0. Pytest time1,025.70s; external wall
+**1,026.74s (17:06.74)**. The same38expensive safety checks remain skipped.
+
+```sh
+env -u GFB_RUN_CPU_PRELOAD_SAFETY -u GFB_TREE_DATASET_FROZEN_FIXTURE -u GFB_TREE_DATASET_EXISTING_SOURCE17 -u GFB_TREE_DATASET_EXISTING_SOURCE29 UV_CACHE_DIR=/tmp/godfieldbots-uv-cache /usr/bin/time -v -o /tmp/godfieldbots-tree-preloaded-cpu-20261109/full-resource.txt timeout --signal=INT --kill-after=15s 2400s uv run --no-sync pytest --basetemp=/tmp/godfieldbots-tree-preloaded-cpu-20261109/full-pytest-temp --setup-show --durations=0 --durations-min=0 --junitxml=/tmp/godfieldbots-tree-preloaded-cpu-20261109/full-junit.xml > /tmp/godfieldbots-tree-preloaded-cpu-20261109/full.log2 2>&1
+```
+
+All353frozen code/config hashes match after execution. All4,359previous testcase
+statuses remain, comparing only a generated UUIDv1 HTTP parameter display with
+normalization. Exactly37new lightweight passing nodes are added; no prior
+scenario is removed or reclassified. The current full-run Tree file JUnit sum
+is77.870s versus199.312s in the prior full run. Whole external wall is124.50s
+lower than1,151.24s previously, with different total populations and one sample
+each; no matched whole-run or variance claim follows.
+
+[All168current file times and preceding full-run differences](pytest-file-timings-tree-preload-20261109.csv)
+sum to1,022.676JUnit case-seconds, with shared setup attributed to requesting
+tests. They do not equal whole wall or independent per-file invocations. The
+new37case module has no prior comparison. Full raw log/JUnit/resources, CSV and
+`full-acceptance.json` are retained under the evidence directory above. Root
+accepts after both reviews and all required checks; no code changed during these
+target/related/package/full acceptances.

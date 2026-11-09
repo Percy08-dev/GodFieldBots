@@ -255,14 +255,28 @@ async def _run_experiment(loaded: LoadedConfig, command: str, *, collection: Col
     preflight_deadline = min(execution_deadline, replay_deadline)
     structured = isinstance(config.actions, ActionConfigV2)
     supplied_ledger = ledger
+    pytest_validation = False
+    if _pytest_worker_finalizer is not None and _structured_validation_context is not None:
+        from gf_models.config import PPOTrainingConfig
+        from gf_models.structured_binding import ConfiguredNeuralModelV2
+        from gf_training.structured_tree_validation import FinalValidationContext
+        pytest_validation = (type(_structured_validation_context) is FinalValidationContext
+            and loaded is _structured_validation_context.projected
+            and collection is _structured_validation_context.plan
+            and supplied_ledger is _structured_validation_context.ledger
+            and collection is not None and collection.kind == 'ppo_validation' and config.run.split == 'validation'
+            and isinstance(config.training, PPOTrainingConfig) and isinstance(config.model, ConfiguredNeuralModelV2)
+            and config.training.device == 'cpu' and config.model.inference.device == 'cpu'
+            and getattr(config.model, 'model_id', None) in ('mlp', 'gru', 'transformer')
+            and config.preprocessing.backend == 'python' and config.preprocessing.reader == 'structured-v1')
     if _pytest_worker_finalizer is not None and (
                 not callable(_pytest_worker_finalizer) or _structured_factory is None
                 or not isinstance(config.actions, ActionConfigV2)
                 or config.actions.action_contract != engineering_contract() or collection is None
-                or collection.kind != 'ppo_batch' or supplied_ledger is None
-                or _structured_source_ops is not None or _structured_validation_context is not None
-                or config.run.split != 'train' or command != 'collect'):
-        raise ContractError('pytest finalizer requires private owned engineering train collection')
+                or supplied_ledger is None or _structured_source_ops is not None or command != 'collect'
+                or not (pytest_validation or (collection.kind == 'ppo_batch' and config.run.split == 'train'
+                                              and _structured_validation_context is None))):
+        raise ContractError('pytest finalizer requires private owned engineering train or exact final validation collection')
     if _structured_source_ops is not None:
         from gf_training.structured_ppo import _NativeComponentOps
         if (type(_structured_source_ops) is not _NativeComponentOps or _structured_factory is None
@@ -432,6 +446,17 @@ async def _run_experiment(loaded: LoadedConfig, command: str, *, collection: Col
                 raise ContractError('bounded pytest worker lifecycle receipt required')
             if receipt.get('closed') is not True or ledger is not supplied_ledger or ledger.workers:
                 raise ContractError('pytest worker finalizer must confirm closed SAME empty ledger')
+            if pytest_validation:
+                preload = receipt.get('cpu_preload')
+                if (receipt.get('mode') != 'pytest-fresh-forked-cpu-v1' or type(preload) is not dict
+                        or preload.get('healthy') is not True or preload.get('unretired_tickets') != 0
+                        or ledger.learner is not None or ledger.learner_bytes or ledger.updating or ledger.cuda_bytes):
+                    raise ContractError('pytest final validation requires healthy fresh-forked actors and empty actor-only ledger')
+                if (loaded is not _structured_validation_context.projected
+                        or collection is not _structured_validation_context.plan
+                        or ledger is not _structured_validation_context.ledger):
+                    raise ContractError('pytest final validation exact LoadedConfig/plan/SAME ledger changed')
+                _structured_validation_context.validate_collection(collection, ledger, config, deadline=work_deadline)
             manifest['pytest_worker_lifecycle'] = receipt
         _check_budget(wall_deadline)
         summary = report(episodes, planned, bootstrap_samples=config.evaluation.bootstrap_samples,

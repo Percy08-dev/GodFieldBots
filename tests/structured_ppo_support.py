@@ -147,6 +147,7 @@ def component_http(monkeypatch, loaded, *, mode='natural', source_ops=None, vali
     from gf_simulator_client import structured_environment
     from gf_simulator_client.structured_worker import StructuredParticipantWorker
     from gf_training.structured_journal import StructuredJournal
+    from gf_training.structured_tree_validation import FinalValidationContext
     from tests.cpu_preload import (
         CURRENT_LAUNCH,
         CURRENT_TEMPLATE,
@@ -157,10 +158,12 @@ def component_http(monkeypatch, loaded, *, mode='natural', source_ops=None, vali
         supported,
     )
     template = CURRENT_TEMPLATE.get() if preload_cpu else None
-    if preload_cpu and (not supported() or not isinstance(template, CpuTemplate) or source_ops is not None or validation_context is not None
+    if preload_cpu and (not supported() or not isinstance(template, CpuTemplate) or source_ops is not None
+            or (validation_context is not None and (type(validation_context) is not FinalValidationContext
+                or loaded is not validation_context.projected or loaded.config.run.split != 'validation' or pool_cpu))
             or loaded.config.training.device != 'cpu' or loaded.config.model.inference.device != 'cpu'
             or not eligible_configuration(loaded)):
-        raise ValueError('pytest CPU preload requires a supported bound owner and ordinary CPU engineering training')
+        raise ValueError('pytest CPU preload requires a supported bound owner and ordinary CPU engineering training or exact final validation')
     if template is not None and template.failure is not None:
         raise template.failure
     if preload_cpu and (template.state not in ('UNSTARTED', 'RUNNING')
@@ -245,6 +248,12 @@ def component_http(monkeypatch, loaded, *, mode='natural', source_ops=None, vali
         cleanup_deadline = (plan.wall_deadline - loaded.config.run.report_reserve_seconds
                             if pool is not None or template is not None else float('inf'))
         finalized = None
+        def validate_preloaded_validation():
+            if template is not None and validation_context is not None:
+                if (loaded is not validation_context.projected or plan is not validation_context.plan
+                        or plan.kind != 'ppo_validation' or ledger is not validation_context.ledger):
+                    raise ValueError('pytest CPU preload requires exact final validation LoadedConfig/plan/SAME ledger')
+                validation_context.validate_collection(plan, ledger, loaded.config, deadline=cleanup_deadline)
         async def finalizer():
             nonlocal finalized
             if finalized is None:
@@ -262,10 +271,12 @@ def component_http(monkeypatch, loaded, *, mode='natural', source_ops=None, vali
                     candidate['cpu_preload'] = template.health(cleanup_deadline)
                 if pool is None:
                     candidate['closed'] = True
+                validate_preloaded_validation()
                 finalized = candidate
             return finalized
         try:
             if template is not None:
+                validate_preloaded_validation()
                 template.start(plan.execution_deadline)
             directory, report = await gf_cli._run_experiment(loaded, 'collect', collection=plan, ledger=ledger,
                 _structured_factory=FakeEnvironment, _structured_source_ops=source_ops,

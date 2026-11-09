@@ -328,3 +328,13 @@ regressions during ordinary pytest runs. Run the documented explicit suite after
 changes to startup, protocol, cleanup, model initialization, RNG or Torch, and
 before relying on a new launch-equivalence acceptance claim. No automatic
 change-triggered runner or CI scheduling is added by this change.
+
+## Subsequent Tree validation extension
+
+[ADR0031](0031-tree-pytest-preloaded-cpu-launch.md) supersedes this record's
+validation-context exclusion only for the reviewed private CPU Tree Dataset
+preparation path. It admits the exact live final-validation context/projected
+LoadedConfig/plan/SAME ledger with fresh forked actors and prepublication health,
+retirement and original-parent rechecks. The three ordinary cold preflight actors
+remain. All other template, pooling, default-route, failure and Source boundaries
+in this record continue to apply.

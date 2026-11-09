@@ -1084,6 +1084,19 @@ default pytest. This changes test selection only. The CPU PPO launch optimizatio
 remains enabled, and all assertions and workloads are retained for explicit runs.
 The full-run counts and timings above precede this selection change.
 
+[ADR0031](adr/0031-tree-pytest-preloaded-cpu-launch.md) extends the reviewed
+design to Tree Dataset pytest preparation: one module-scoped Torch-only template,
+fresh episode actors, and exact actor-only final-validation admission with
+prepublication health/retirement and original-context rechecks. Independent
+design and final correctness/conformance reviews are READY; implementation and
+acceptance are complete. Matched target pytest time falls200.56 ->80.97s, with
+876arrays/1,024decisions/512Tree features and labels exact against cold originals.
+Full4,396cases PASS4,111/285skips, external1,026.74s;37new lightweight tests are
+included, while the38heavy safety tests retain explicit opt-in. Related378/6skips,
+Ruff/mypy157 and wheel/optional-free startup checks pass.
+The original three cold preflight actors, dataset/source checks and workloads
+remain required. No validation participant pool or public runtime default changes.
+
 Checks: `uv run pytest`, `uv run ruff check .`, `uv run mypy src`; wheel installed
 in a separate Python 3.14 environment, baseline without ML imports. Verify CPU
 compatibility per implemented extra. Record exact commands and PASS/FAIL/NOT RUN
