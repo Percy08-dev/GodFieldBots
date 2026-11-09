@@ -1,6 +1,7 @@
 """Predetermined public HTTP components; no executable Simulator or engine copy."""
 from __future__ import annotations
 
+import asyncio
 import itertools
 import json
 import stat
@@ -92,12 +93,63 @@ def configuration(tmp_path, *, kind='mlp', learning_device='cpu', inference_devi
     return LoadedConfig(config, asdict(config), digest(asdict(config)), ())
 
 
-def component_http(monkeypatch, loaded, *, mode='natural', source_ops=None, validation_context=None, outcome='draw', actors=(2,1,2,1), pool_cpu=False):
+async def _parallel_ready_actors(workers, result):
+    """Own both same-game initializers until every original call has finished."""
+    from gf_simulator_client.structured_environment import StructuredEpisodeResult
+    from gf_simulator_client.structured_worker import StructuredParticipantWorker
+
+    assert isinstance(result, StructuredEpisodeResult)
+    entries = tuple(workers.items())
+    assert len(entries) <= 2
+    assert all(isinstance(worker, StructuredParticipantWorker) for _, worker in entries)
+    tasks = []
+    creation_error = None
+    try:
+        for _, worker in entries:
+            coroutine = worker.initialize()
+            try:
+                task = asyncio.create_task(coroutine)
+            except BaseException:
+                coroutine.close()
+                raise
+            tasks.append(task)
+    except BaseException as error:  # noqa: BLE001 - re-raised after owned tasks drain.
+        creation_error = error
+    joined = asyncio.gather(*tasks, return_exceptions=True)
+    try:
+        if creation_error is not None:
+            raise creation_error
+        outcomes = await asyncio.shield(joined)
+    except BaseException:
+        # A second caller cancellation must not interrupt a child's abort cleanup.
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        while not joined.done():
+            try:
+                await asyncio.shield(joined)
+            except asyncio.CancelledError:
+                pass
+        joined.result()
+        raise
+    for (viewer, worker), outcome in zip(entries, outcomes, strict=True):
+        if not isinstance(outcome, BaseException):
+            assert worker.startup_elapsed_ms is not None
+            result.model_startup_ms[viewer] = worker.startup_elapsed_ms
+    for outcome in outcomes:
+        if isinstance(outcome, BaseException):
+            raise outcome
+
+
+def component_http(monkeypatch, loaded, *, mode='natural', source_ops=None, validation_context=None, outcome='draw', actors=(2,1,2,1), pool_cpu=False, parallel_ready=False):
     import gf_cli
     from gf_models.structured_baselines import make_structured_policy
     from gf_simulator_client import structured_environment
     from gf_simulator_client.structured_worker import StructuredParticipantWorker
     from gf_training.structured_journal import StructuredJournal
+    if parallel_ready and (source_ops is not None or validation_context is not None
+            or loaded.config.training.device != 'cpu' or loaded.config.model.inference.device != 'cpu'):
+        raise ValueError('pytest parallel readiness requires ordinary CPU engineering training')
     # Only this test-owned subclass uses private bodies and fixed I/O doubles.
     # Public/direct Environment guards remain entirely unpatched.
     by_url, scripts, workers, seen_ledgers = {}, [], [], []
@@ -151,6 +203,10 @@ def component_http(monkeypatch, loaded, *, mode='natural', source_ops=None, vali
             return Server(*args, **kwargs)
         def _new_client(self, *args, **kwargs):
             return client(*args, **kwargs)
+        async def _ready_actors(self, workers, result):
+            if parallel_ready:
+                return await _parallel_ready_actors(workers, result)
+            return await super()._ready_actors(workers, result)
         async def run_group(self, group):
             return await self._run_group_body(group)
         async def _episode(self, client, definitions, group, spec):

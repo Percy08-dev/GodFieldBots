@@ -43,6 +43,10 @@ pytestのセッション内で合成PPO原本を一度生成し、各テスト�
 pytest内のCPU参加者プロセスを収集バッチ内で再利用する。通常収集・CUDAは新規起動を維持。
 対象42件で約47%短縮。両レビュー・全件実行と新規テスト修正後の48件再確認で受入。
 
+追加: [0028](0028-pytest-parallel-participant-readiness.md) — Accepted:
+pytestのCPU収集で同じ対局の参加者初期化を並行化し、元の42件を241.87秒から231.79秒へ短縮。
+両レビュー・関連279件・6件の既存CUDAスキップ・原本配列と行動記録の比較で受入。
+
 ## 記録テンプレート
 
 追加: [0023](0023-structured-encoders-and-diverse-search.md) — Accepted (独立実装可能部分):

@@ -36,7 +36,8 @@ def component_http(monkeypatch, loaded, **kwargs):
     """This module alone explicitly opts ordinary CPU engineering collectors in."""
     cpu = (loaded.config.training.device == 'cpu' and loaded.config.model.inference.device == 'cpu'
            and kwargs.get('source_ops') is None and kwargs.get('validation_context') is None)
-    return fresh_component_http(monkeypatch, loaded, pool_cpu=kwargs.pop('pool_cpu', cpu), **kwargs)
+    return fresh_component_http(monkeypatch, loaded, pool_cpu=kwargs.pop('pool_cpu', cpu),
+                                parallel_ready=kwargs.pop('parallel_ready', cpu), **kwargs)
 
 
 def test_default_mlp_cpu_original16game_two_update_common_loop(completed_execution):

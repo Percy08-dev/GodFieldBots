@@ -1039,6 +1039,18 @@ and48pool-case rerun pass with implementation hashes unchanged. Root accepts
 that documented full-plus-delta evidence, not a new fully green whole invocation.
 Source-matched157module wheel and optional-free normal-worker checks also pass.
 
+[ADR0028](adr/0028-pytest-parallel-participant-readiness.md) additionally accepts
+explicit same-game concurrent readiness in ordinary CPU pytest collection.
+The test-owned helper retains/drains both original initializers using one
+shielded gather, closes unscheduled coroutines and preserves concrete errors
+under repeated cancellation. Default/CUDA/source routes retain serial readiness;
+the cold MLP reference retains fresh physical processes. Both final reviews are
+READY; original42cases PASS with measured241.87to231.79s (4.17%), plus279related
+passes/6unchangedCUDA skips, Ruff/mypy157 and full4301collection. Actual retained
+before/after MLP/GRU initial/final916arrays and384decision projections match.
+Application/native/config bytes, process lifetimes and collection-before-update
+real reap stay unchanged. No new whole-suite timing or green-run claim is made.
+
 Checks: `uv run pytest`, `uv run ruff check .`, `uv run mypy src`; wheel installed
 in a separate Python 3.14 environment, baseline without ML imports. Verify CPU
 compatibility per implemented extra. Record exact commands and PASS/FAIL/NOT RUN
