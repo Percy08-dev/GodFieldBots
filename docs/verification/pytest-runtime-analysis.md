@@ -421,3 +421,87 @@ Raw evidence: `/tmp/godfieldbots-tree-collection-profile-20261109`, including
 `ready-samples.json`, `collection-breakdown.json`, original-result aggregates,
 logs and resources. An independent read-only verifier recomputed counts,
 intersections/unions, readiness ratio, medians and all frozen hashes: PASS.
+
+## Other Torch-startup candidates after ADR0031 (2026-11-09)
+
+Read-only investigation at `fd0ab59`; no optimization or test-selection change.
+The [latest full-run CSV](pytest-file-timings-tree-preload-20261109.csv) supplies
+priorities. Two bounded source audits distinguish clean Torch-owning child
+processes from repeated in-process model creation and isolated no-import checks.
+Only three selected test populations receive an additional diagnostic, with all
+original calls, arguments, assertions, budgets and child environments retained.
+
+```sh
+env -u GFB_RUN_CPU_PRELOAD_SAFETY -u GFB_RUN_CARD_INSTANCE_SOURCE_CUDA UV_CACHE_DIR=/tmp/godfieldbots-uv-cache /usr/bin/time -v -o /tmp/godfieldbots-other-torch-init-audit-20261109/resource.txt timeout --signal=INT --kill-after=15s 480s uv run --no-sync python /tmp/godfieldbots-other-torch-init-audit-20261109/profile_other.py > /tmp/godfieldbots-other-torch-init-audit-20261109/profile.log 2>&1
+```
+
+PASS **41 passed / 10 CUDA skips / zero failures**, 51 selected cases in194.02s,
+external194.87s, exit0. All51node/status pairs match the previous full run.
+Full-file and diagnostic columns below are distinct single observations; the
+numeric-worker diagnostic intentionally selects only its three real CPU wire
+cases, not all28cases in that file.
+
+| File | Latest full-file seconds | Diagnostic case-seconds | Measured repeated startup work |
+| --- | ---: | ---: | --- |
+| `test_native_structured_session.py` | 118.494 | 118.743 | 256 fresh episode participants; eight collections91.829s, episode-ready union82.984s; six learner initializations8.239s |
+| `test_card_instance_source.py` | 60.445 | 61.629 | 19 numerical learner initializations25.423s, closes5.850s |
+| `test_structured_numeric_worker.py` | 16.339 | 12.885 | Six learner initializations8.246s across three CPU tests, closes1.915s |
+
+Native session readiness covers **90.368%** of measured collection wall. Its
+256participants are192MLP/32random/32heuristic, not256Torch loads. Reported MLP
+model-load median is783.996ms, while baseline medians are about0.22ms. The first
+source-export case creates32participants, the two-batch case64, continuous/pause/
+resume128, and late-source-mutation32; marker-only dispatch creates none. All use
+fresh generic `component_http` defaults without template/pool, including native
+source-op paths. This is the strongest next actor-preload candidate.
+
+Card-instance source uses19fresh `GameLearningProcess` children:10CPU projection/
+precommit cases and9live-owner guard cases. Outer initialization accounts for
+41.252% of its diagnostic file. The six CPU wire child initializations account
+for63.996% of their three selected tests; those cases intentionally stop the
+first process and restore in a second actual process. Import-state reuse must
+retain that fresh-process/restore coverage.
+
+The reported numeric initialization spans include startup wait, model/optimizer
+construction or restore, artifact checks and IPC. They are **not pure Torch
+import times or promised savings**. Low-level `LearningProcess.request` samples
+cover IPC/read/JSON parse only; structured reply and artifact verification runs
+after that return and belongs to the outer initialize interval. Child reply
+initialize/save timings are nested, not extra costs to add. Separate categories
+may overlap; per-label unions remove concurrent episode double counting.
+
+Additional static candidates and limits:
+
+- `test_pooled_structured_worker.py` totals57.591s. Its five collection-finalizer
+  cases account for37.250s and use participant pools but do not activate Torch
+  preloading; five numerical children still start independently. Its three-model
+  wire comparisons account for16.454s and deliberately create15cold neural
+  reference participants. Preserve independent cold reference coverage rather
+  than silently routing it through the optimized path.
+- `test_ppo_lineage.py` (35.193s), `test_card_instance_ppo.py` (18.740s) and the
+  legacy native/GRU/Transformer coordinator tests also create numerical workers.
+  Source inspection supports investigation, not a measured import-cost claim
+  for those complete files.
+- `test_structured_lineage.py` (38.282s), `test_card_instance_tree_fixture.py`
+  (21.066s) and `test_card_instance_tree_artifacts.py` (34.921s) mostly construct
+  models/data or inspect sources within the already-imported pytest process.
+  Their isolated no-Torch/no-optional-import subprocess checks have a different
+  purpose; observed duration alone is not evidence for Torch preloading there.
+
+Current helpers explicitly exclude native `source_ops` from preload/finalizer
+admission; an extension must preserve exact native source, learner/ledger and
+before-update original checks under design review. Numerical workers run the
+separate `ppo_worker` protocol, not the existing participant template bootstrap.
+They need a separately reviewed launch design; existing actor flags do not
+activate learner preloading. No such implementation is made in this investigation.
+
+Evidence: `/tmp/godfieldbots-other-torch-init-audit-20261109`, including observer,
+353-file metadata, node-tagged raw events, actual ready/numeric reply samples,
+JUnit/log/resources and `per-file-breakdown.json`. The disposable observer's old
+aggregate error-counter treats `outcome='measured'` request markers as errors;
+its project proxy also lacks exception outcome attribution. Those counters are
+not used as test/failure evidence. The corrected per-file reader retains valid
+intervals and actual reply samples while omitting those counters; raw artifacts
+are preserved. Independent audit recomputed all49label rows, actor counts and
+353current source hashes: PASS, no mismatches. No second profile, full pytest,
+Ruff/mypy or package checks were run for this read-only investigation.
