@@ -127,7 +127,7 @@ def test_offline_and_copied_metadata_cannot_supply_live_learner_authority(tmp_pa
 @pytest.mark.parametrize('mutation', [None, 'after-source', 'after-control', 'after-numeric', 'after-policy',
     'before-source', 'before-control', 'before-numeric', 'before-policy', 'before-config'])
 @pytest.mark.parametrize('device', ['cpu', 'cuda:0'])
-def test_live_projection_real_wire_update_and_precommit_guard(tmp_path, mutation, device):
+def test_live_projection_real_wire_update_and_precommit_guard(tmp_path, mutation, device, numeric_cpu_preload):
     import asyncio
     from dataclasses import asdict
 
@@ -224,7 +224,7 @@ def test_live_projection_real_wire_update_and_precommit_guard(tmp_path, mutation
 
 
 @pytest.mark.parametrize('mutation', ['lock', 'steps', 'wire', 'lease', 'config-replacement', 'last-decrease', 'last-nonfinite', 'foreign-field', 'last-progress'])
-def test_live_collector_guard_rejects_copied_owner_and_control_replacement(tmp_path, mutation):
+def test_live_collector_guard_rejects_copied_owner_and_control_replacement(tmp_path, mutation, numeric_cpu_preload):
     import asyncio
     import os
     from dataclasses import asdict

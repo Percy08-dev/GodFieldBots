@@ -256,6 +256,18 @@ async def _run_experiment(loaded: LoadedConfig, command: str, *, collection: Col
     structured = isinstance(config.actions, ActionConfigV2)
     supplied_ledger = ledger
     pytest_validation = False
+    pytest_native = False
+    if _pytest_worker_finalizer is not None and _structured_source_ops is not None:
+        from gf_models.config import PPOTrainingConfig
+        from gf_models.structured_binding import ConfiguredNeuralModelV2
+        from gf_training.structured_ppo import _NativeComponentOps
+        pytest_native = (type(_structured_source_ops) is _NativeComponentOps
+            and _structured_validation_context is None
+            and collection is not None and collection.kind == 'ppo_batch' and config.run.split == 'train'
+            and isinstance(config.training, PPOTrainingConfig) and isinstance(config.model, ConfiguredNeuralModelV2)
+            and config.training.device == 'cpu' and config.model.inference.device == 'cpu'
+            and getattr(config.model, 'model_id', None) in ('mlp', 'gru', 'transformer')
+            and config.preprocessing.backend == 'rust' and config.preprocessing.reader == 'structured-v1')
     if _pytest_worker_finalizer is not None and _structured_validation_context is not None:
         from gf_models.config import PPOTrainingConfig
         from gf_models.structured_binding import ConfiguredNeuralModelV2
@@ -273,7 +285,7 @@ async def _run_experiment(loaded: LoadedConfig, command: str, *, collection: Col
                 not callable(_pytest_worker_finalizer) or _structured_factory is None
                 or not isinstance(config.actions, ActionConfigV2)
                 or config.actions.action_contract != engineering_contract() or collection is None
-                or supplied_ledger is None or _structured_source_ops is not None or command != 'collect'
+                or supplied_ledger is None or (_structured_source_ops is not None and not pytest_native) or command != 'collect'
                 or not (pytest_validation or (collection.kind == 'ppo_batch' and config.run.split == 'train'
                                               and _structured_validation_context is None))):
         raise ContractError('pytest finalizer requires private owned engineering train or exact final validation collection')
@@ -284,6 +296,9 @@ async def _run_experiment(loaded: LoadedConfig, command: str, *, collection: Col
             raise ContractError('concrete native source composition requires private factory and owned collection/ledger')
         _structured_source_ops.validate_config(config)
         _structured_source_ops.require_live_owner(supplied_ledger)
+        if pytest_native:
+            _structured_source_ops.validate_owned_collection(collection, supplied_ledger, config=config,
+                deadline=preflight_deadline, loaded=loaded)
     if _structured_validation_context is not None:
         from gf_training.structured_tree_validation import FinalValidationContext
         if (type(_structured_validation_context) is not FinalValidationContext or not structured or collection is None
@@ -325,7 +340,8 @@ async def _run_experiment(loaded: LoadedConfig, command: str, *, collection: Col
                 from gf_cli.structured import preflight_final_validation_actor
                 await preflight_final_validation_actor(_structured_validation_context,config,deadline=preflight_deadline)
             elif _structured_source_ops is not None:
-                _structured_source_ops.validate_owned_collection(collection, ledger, config=config, deadline=preflight_deadline)
+                if not pytest_native:
+                    _structured_source_ops.validate_owned_collection(collection, ledger, config=config, deadline=preflight_deadline)
             else:
                 validate_owned_collection(collection, ledger, config, deadline=preflight_deadline)
         elif any(label != binding.model_id + "-structured-v1" for label, binding in registry.items()):
@@ -446,11 +462,18 @@ async def _run_experiment(loaded: LoadedConfig, command: str, *, collection: Col
                 raise ContractError('bounded pytest worker lifecycle receipt required')
             if receipt.get('closed') is not True or ledger is not supplied_ledger or ledger.workers:
                 raise ContractError('pytest worker finalizer must confirm closed SAME empty ledger')
-            if pytest_validation:
+            if pytest_validation or pytest_native:
                 preload = receipt.get('cpu_preload')
                 if (receipt.get('mode') != 'pytest-fresh-forked-cpu-v1' or type(preload) is not dict
-                        or preload.get('healthy') is not True or preload.get('unretired_tickets') != 0
-                        or ledger.learner is not None or ledger.learner_bytes or ledger.updating or ledger.cuda_bytes):
+                        or preload.get('healthy') is not True or preload.get('unretired_tickets') != 0):
+                    raise ContractError('pytest collection requires healthy fresh-forked actors and zero unretired tickets')
+            if pytest_native:
+                _structured_source_ops.validate_config(config)
+                _structured_source_ops.require_live_owner(ledger)
+                _structured_source_ops.validate_owned_collection(collection, ledger, config=config,
+                    deadline=work_deadline, loaded=loaded)
+            if pytest_validation:
+                if ledger.learner is not None or ledger.learner_bytes or ledger.updating or ledger.cuda_bytes:
                     raise ContractError('pytest final validation requires healthy fresh-forked actors and empty actor-only ledger')
                 if (loaded is not _structured_validation_context.projected
                         or collection is not _structured_validation_context.plan

@@ -152,6 +152,17 @@ def validate_reply(reply: Json, command: str, identity: Json) -> None:
             raise ContractError('wire3 parity recipe mismatch')
 
 
+def _select_visibility(initial: Json, binding: InferenceBindingV2, visibility: str | None) -> None:
+    if 'torch' in sys.modules:
+        raise ContractError('wire3 Torch imported before visibility selection')
+    if visibility is None:
+        os.environ.pop('CUDA_VISIBLE_DEVICES', None)
+    else:
+        os.environ['CUDA_VISIBLE_DEVICES'] = visibility
+    if os.environ.get('CUDA_VISIBLE_DEVICES') != visibility:
+        raise ContractError('wire3 actual visibility mismatch before Torch')
+
+
 def serve(initial: Json, lines: Iterable[str]) -> None:
     closed(initial, {'protocol_version', 'command', 'identity', 'model', 'seed', 'output', 'restore'})
     game = initial.get('protocol_version') == 4
@@ -172,15 +183,7 @@ def serve(initial: Json, lines: Iterable[str]) -> None:
         cuda_visible_devices=execution['cuda_visible_devices'], _actions=actions)
     if canonical(identity) != canonical(expected):
         raise ContractError('wire3 initialize binding mismatch')
-    if 'torch' in sys.modules:
-        raise ContractError('wire3 Torch imported before visibility selection')
-    visibility = execution['cuda_visible_devices']
-    if visibility is None:
-        os.environ.pop('CUDA_VISIBLE_DEVICES', None)
-    else:
-        os.environ['CUDA_VISIBLE_DEVICES'] = visibility
-    if os.environ.get('CUDA_VISIBLE_DEVICES') != visibility:
-        raise ContractError('wire3 actual visibility mismatch before Torch')
+    _select_visibility(initial, binding, execution['cuda_visible_devices'])
     integer(initial['seed'], 0, 2**63 - 1)
     for key in ('output', 'restore'):
         if initial[key] is not None and (type(initial[key]) is not str or not initial[key]):

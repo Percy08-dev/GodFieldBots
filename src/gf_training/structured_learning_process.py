@@ -70,8 +70,6 @@ class StructuredLearningProcess(LearningProcess):
                 # this boundary BEFORE startup's own error-cleanup joins close.
                 self._startup_boundary.set()
         except BaseException as error:
-            if self.creation_task is None or self.creation_task.done():
-                self.lease.creation_pending = False
             try:
                 await self.close(self.cleanup_deadline)
             except BaseException as cleanup_error:  # noqa: BLE001 - preserve initiating cancellation/failure
@@ -84,20 +82,24 @@ class StructuredLearningProcess(LearningProcess):
     def _validate_close(self, result: Json) -> None:
         validate_reply(result, 'close', self.identity)
 
+    async def _settle_creation(self, deadline: float) -> None:
+        if self.creation_task is not None and not self.creation_task.done():
+            async with asyncio.timeout_at(deadline):
+                await asyncio.shield(self.creation_task)
+        if self.lease is not None and not self._startup_boundary.is_set():
+            async with asyncio.timeout_at(deadline):
+                await self._startup_boundary.wait()
+        if (self.creation_task is not None and self.creation_task.done()
+                and not self.creation_task.cancelled() and self.creation_task.exception() is None):
+            self._adopt_process(self.creation_task.result())
+        if self.lease is not None and (self._creation_no_child or self.creation_task is None):
+            self.lease.creation_pending = False
+        elif self.process is None and self.lease is not None and self.lease.creation_pending:
+            raise ContractError('numerical creation has no authoritative settlement')
+
     async def _close(self, deadline: float) -> None:
         try:
-            if self.creation_task is not None and not self.creation_task.done():
-                async with asyncio.timeout_at(deadline):
-                    await asyncio.shield(self.creation_task)
-            if self.lease is not None and not self._startup_boundary.is_set():
-                async with asyncio.timeout_at(deadline):
-                    await self._startup_boundary.wait()
-            if (self.process is None and self.creation_task is not None and self.creation_task.done()
-                    and not self.creation_task.cancelled() and self.creation_task.exception() is None):
-                self.process = self.creation_task.result()
-                self._process_created()
-            if self.lease is not None and (self.creation_task is None or self.creation_task.done()):
-                self.lease.creation_pending = False
+            await self._settle_creation(deadline)
             await super()._close(deadline)
         finally:
             if self.lease is not None and not self.lease.released:

@@ -50,7 +50,7 @@ def assert_artifacts_equal(left, right):
 
 
 @pytest.mark.parametrize('kind', ['mlp', 'gru', 'transformer'])
-def test_actual_cpu_wire_initialize_two_updates_restore_and_close(tmp_path, make_input, kind):
+def test_actual_cpu_wire_initialize_two_updates_restore_and_close(tmp_path, make_input, kind, numeric_cpu_preload):
     learner = learner_for(kind, synthetic_capacity=False)
     run_lifecycle(tmp_path, make_input, learner)
 

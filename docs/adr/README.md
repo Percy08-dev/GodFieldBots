@@ -62,6 +62,14 @@ Tree Dataset前処理の学習・最終検証収集にもTorch先読みを適用
 両独立レビュー・原本との一致確認・全4,396件の検証を完了。
 対応する対象テスト計測は200.56秒→80.97秒。重い安全性テストの明示実行を維持。
 
+追加: [0032](0032-native-pytest-preloaded-actors.md) — Accepted:
+native Sourceの構造化収集テストへTorch先読みを拡張。設計・最終レビューと対象検証を通過。
+原本・数値・行動の一致と数値ワーカー対応を含む全4,504件の最終検証を完了。
+
+追加: [0033](0033-pytest-preloaded-numerical-children.md) — Accepted:
+対象のCPU数値ワーカーを独立したTorch先読みテンプレートから新規起動する。
+両レビュー・保存状態一致・通常起動と実CUDA検証を通過。全体は4,177成功・327スキップ。
+
 ## 記録テンプレート
 
 追加: [0023](0023-structured-encoders-and-diverse-search.md) — Accepted (独立実装可能部分):

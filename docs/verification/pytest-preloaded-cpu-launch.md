@@ -340,3 +340,169 @@ new37case module has no prior comparison. Full raw log/JUnit/resources, CSV and
 `full-acceptance.json` are retained under the evidence directory above. Root
 accepts after both reviews and all required checks; no code changed during these
 target/related/package/full acceptances.
+
+## Native actors and numerical children — ADR0032/0033 (2026-11-09)
+
+Status: accepted; both implementation reviews READY, final targeted/equivalence/
+related/CUDA/package and default full checks PASS.
+[ADR0032](../adr/0032-native-pytest-preloaded-actors.md) owns the native actor
+extension; [ADR0033](../adr/0033-pytest-preloaded-numerical-children.md) owns the
+separate numerical template and protected lifecycle/visibility extractions.
+
+### Scope, defaults and lifecycle evidence
+
+Native preparation uses one actor template across the original five-case module,
+retaining128games,256fresh actors (192MLP/32random/32heuristic),512decisions and
+all six ordinary numerical invocations. Exact native operations/learner/ledger,
+complete loaded config and sealed input origins are checked inside the original
+budgeted Source scope before warmup and publication. Source projection, before-
+Adam mutation detection and both intentional failed/quarantined runs remain.
+
+Numerical preload is explicitly activated only for19CPU Game Source starts and
+six starts in the three real CPU wire tests. Canonical exact GameLearningProcess
+objects, original main/serve/math/Source bodies and restart/restore assertions
+remain. Defaults retain exact cold argv/environment/stream limits and strict
+Torch-before-visibility rejection. Only the forked test bootstrap installs CPU
+admission after original model/execution/identity validation. Unsupported runtime,
+CUDA, legacy and other lifecycle/reference cases retain ordinary cold launch.
+
+One separate numerical template admits one pending/live/unretired ticket. It
+uses `pytest-cpu-numeric-preload-v1`, three async pipes and pinned CPython3.14.10
+selector/StreamWriter support. Actor control stays `pytest-cpu-preload-v1`, two
+pipes/capacity4, with separate inventory/publication health. Canonical adoption
+retains actual process before at-most-once notification/drainer creation;
+settlement distinguishes authoritative no-child from unknown creation. Actual
+waitpid status is cached before terminal failure; unknown terminal returncode
+raises to block canonical requests and Source use. Retained first-deadline
+cleanup owns transports, drainer, tickets, reader detachment and containment.
+
+Advisor evidence is the isolated disposable copy in
+`/tmp/godfieldbots-numeric-preload-feasibility-20261109`. Five cold/fork numerical
+and Source cases PASS20.60/13.92s,4,230arrays across18artifacts exact, fault and
+backpressure/log/FD witnesses PASS. Initial copy-isolation and harness corrections
+are preserved and excluded from passing evidence. This is feasibility only; its
+temporary entry path and permissive origin guard are not promoted into defaults.
+
+Independent production review found four actual adapter issues: post-memory
+deadline checking, admission after auxiliary shutdown begins, deferred terminal
+cleanup after retirement errors, and async health timeout poisoning. All were
+fixed with focused8PASS, related60PASS and a combined-error1PASS; both final
+reviews independently rechecked and report READY. Primary errors/deadlines and
+unknown leases remain retained; fixture teardown rejoins the same cleanup.
+Existing38heavy actor checks remain gated; new numeric checks are17light default
+and42heavy explicit opt-in. New native guards add49light default cases.
+
+### Final matched targeted measurement
+
+The final target uses the original node-tagged observer, changing only its output
+directory. It runs all five native cases,43Game Source cases and three real CPU
+wire cases, with original workloads/assertions;10CUDA parameters remain skipped.
+
+```sh
+env -u GFB_RUN_CPU_PRELOAD_SAFETY -u GFB_RUN_CARD_INSTANCE_SOURCE_CUDA UV_CACHE_DIR=/tmp/godfieldbots-uv-cache /usr/bin/time -v -o /tmp/godfieldbots-native-numeric-preload-20261109/final-target/resource.txt timeout --signal=INT --kill-after=15s 480s uv run --no-sync python /tmp/godfieldbots-native-numeric-preload-20261109/final-target/profile_other.py > /tmp/godfieldbots-native-numeric-preload-20261109/final-target/profile.log 2>&1
+```
+
+PASS **41passed/10skipped/zero failures**, pytest **194.02 ->107.57s**, external
+**194.87 ->108.43s**, including first template warmup and final real retirement.
+These are single observations. The earlier107.29s first candidate predates the
+four final review fixes and remains historical, not final acceptance evidence.
+
+| Selected file population | Cold diagnostic case-seconds | Final case-seconds |
+| --- | ---: | ---: |
+| Five native structured session cases | 118.743 | 55.604 |
+| Game Source cases (33pass/10CUDA skips) | 61.629 | 43.216 |
+| Three real CPU numerical-wire cases | 12.885 | 7.999 |
+
+Native collection union falls91.829 ->26.180s and episode-ready union82.984 ->
+15.440s. Its six numerical initializations remain ordinary,8.239 ->8.281s.
+Game Source's19initializations fall25.423 ->11.924s; six CPU-wire initializations
+fall8.246 ->4.016s. These are host intervals containing import/model construction/
+restore/IPC/artifact work, not pure Torch import timings. Label intervals nest
+and overlap; do not sum them. The observer's raw numeric `outcome='measured'`
+error-counter defect is excluded by the corrected per-file reader, as in the
+prior diagnostic. JUnit, actual replies and interval records are authoritative.
+
+### Actual saved data, Source and numerical parity
+
+Read-only native comparison validates three complete parents and preserves both
+failed/quarantined pre-Adam populations as failures. All876G0/G2checkpoint arrays
+and4,416valid rollout arrays match. All512actual journal decisions match projected
+frame, candidate bytes, search RNG/results, numeric selection and action content;
+each side's256policy headers and192MLP checkpoint hashes are checked independently.
+Eight actor receipts share one actual template PID,256cumulative launches,
+healthy/closed with zero tickets. Inference producer digests and derived neural
+policy labels legitimately change; actual old/new identities are retained, not
+rewritten or declared equal.
+
+Read-only numerical comparison covers all22selected CPU case directories:
+10projection/precommit,9live-owner guards and three model wire cases. All94NPZ
+pairs and10,487arrays match by filenames/keys/dtype/shape/value. Resume counters,
+named optimizer/RNG/presence metadata and inference fields other than producer
+match. Both positive Game Source parents pass normal historical validation with
+one update/two chain records. Intentional before/after-policy hash mutations are
+expected rejection diagnostics; they are not eligible Source data. No original
+is repaired/resealed, and no formal Source/quality conclusion follows.
+
+### Related, CUDA and package checks
+
+HOST explicit safety/affected actor-pool/numeric/cold-PPO/cleanup regressions PASS
+**300cases in214.41s**, including the original and new opt-in heavy cases:
+
+```sh
+GFB_RUN_CPU_PRELOAD_SAFETY=1 UV_CACHE_DIR=/tmp/godfieldbots-uv-cache timeout --signal=INT --kill-after=15s 480s uv run --no-sync pytest -q tests/test_native_cpu_preload.py tests/test_tree_cpu_preload.py tests/test_numeric_cpu_preload.py tests/test_cpu_preload.py tests/test_cpu_preload_review.py tests/test_pooled_structured_worker.py tests/test_structured_numeric_worker.py tests/test_ppo_lineage.py tests/test_worker_cleanup.py
+```
+
+Actual HOST CUDA cold smokes PASS **7cases in50.27s**: three participant models,
+three numerical two-update/restore models and the positive Game Source update.
+Flags are `GF_RUN_CUDA=1`, `GFB_RUN_STRUCTURED_PROTOCOL_CUDA=1`,
+`GFB_RUN_STRUCTURED_NUMERIC_CUDA=1`, `CUDA_VISIBLE_DEVICES=0` and
+`CUBLAS_WORKSPACE_CONFIG=:4096:8`. No GPU preloading or fallback is exercised.
+
+PASS scoped Ruff, mypy157, exact157module wheel/no tests packaged and installed
+mandatory-only normal Random actor start/actual reap/SAME empty ledger/CLI help
+outside checkout without optional Torch/LightGBM/PyArrow/native/pytest. Numerical
+and Source algorithms are original; Rust engine/Source code is not modified.
+
+Evidence root: `/tmp/godfieldbots-native-numeric-preload-20261109`. It retains
+baseline/candidate/final358file hashes, native-only intermediate proof, isolated
+proof pointers, all failed/fixed deltas, final-target raw event/sample/JUnit/
+resource/parity reports, related/CUDA/static/package/baseline logs and final full
+freeze. Main-source hashes and identity changes are explicit; no code changes
+are allowed during the final default invocation. The admitted CPU-only Torch
+distribution was not separately measured; unsupported Python patches/asyncio
+backends retain ordinary cold fallback.
+
+### Final default full invocation and file times
+
+HOST final frozen-source command:
+
+```sh
+env -u GFB_RUN_CPU_PRELOAD_SAFETY -u GFB_TREE_DATASET_FROZEN_FIXTURE -u GFB_TREE_DATASET_EXISTING_SOURCE17 -u GFB_TREE_DATASET_EXISTING_SOURCE29 -u GF_RUN_CUDA -u GFB_RUN_STRUCTURED_PROTOCOL_CUDA -u GFB_RUN_STRUCTURED_NUMERIC_CUDA UV_CACHE_DIR=/tmp/godfieldbots-uv-cache /usr/bin/time -v -o /tmp/godfieldbots-native-numeric-preload-20261109/full-resource.txt timeout --signal=INT --kill-after=15s 2400s uv run --no-sync pytest --basetemp=/tmp/godfieldbots-native-numeric-preload-20261109/full-pytest-temp --setup-show --durations=0 --durations-min=0 --junitxml=/tmp/godfieldbots-native-numeric-preload-20261109/full-junit.xml > /tmp/godfieldbots-native-numeric-preload-20261109/full.log 2>&1
+```
+
+PASS **4,177 passed / 327 skipped / 4 warnings / zero failures**,4,504cases,
+exit0. Pytest941.86s, external **942.93s (15:42.93)**. All358frozen hashes match.
+All4,396prior nodes/statuses remain after normalizing only the known generated
+UUIDv1 HTTP parameter display. Added108nodes are49native light passes plus
+17numeric light passes/42new heavy skips; the original38heavy skips remain.
+
+| File | Prior full-run case-seconds | Current case-seconds |
+| --- | ---: | ---: |
+| Native structured session | 118.494 | 55.387 |
+| Game Source | 60.445 | 43.102 |
+| Structured numeric worker (whole file) | 16.339 | 12.187 |
+| Structured PPO | 159.628 | 159.607 |
+| Tree Dataset | 77.870 | 77.709 |
+
+External full time is1,026.74 ->942.93s (83.81s lower), with108addedcases and
+single observations. This is an observed changed-population comparison, not a
+matched whole-suite speed or variance claim. The matched51-case target above
+provides the controlled scope comparison.
+
+[All170current file times and previous differences](pytest-file-timings-native-numeric-preload-20261109.csv)
+sum938.787JUnit case-seconds; shared fixture setup is attributed to requesting
+cases and collection/runner overhead remains separate. They are not independent
+file invocations. `full-acceptance.json`, full log/XML/resources, and all code
+freeze/equivalence/failed-iteration reports are retained under the evidence root.
+Root accepts both bounded private extensions after all reviews and checks.
+No source or test code changed during the final acceptance runs.

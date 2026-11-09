@@ -1097,6 +1097,24 @@ Ruff/mypy157 and wheel/optional-free startup checks pass.
 The original three cold preflight actors, dataset/source checks and workloads
 remain required. No validation participant pool or public runtime default changes.
 
+[ADR0032](adr/0032-native-pytest-preloaded-actors.md) extends the private fresh-actor
+preload path to the native structured Source tests, with complete loaded-envelope/
+sealed-input checks and the SAME live learner/ledger retained through publication.
+[ADR0033](adr/0033-pytest-preloaded-numerical-children.md) adds a separate one-ticket
+numeric template for explicitly selected CPU wire/Source cases. Canonical process
+adoption/creation settlement and strict default visibility remain application-owned;
+the test adapter owns async pipes, real broker statuses and retained retirement.
+Both designs and final independent code reviews are READY after concrete deadline/
+admission/terminal-cleanup fixes. Final integrated verification and acceptance are
+complete:4,177PASS/327skips/zero failures across4,504cases, external942.93s with
+358code/config hashes frozen. The matched51-case probe falls194.02 ->107.57s;
+native and numerical saved arrays/raw decisions/source states match actual cold
+originals under independently validated producer identities. Related300/CUDA7,
+Ruff/mypy157, exact source wheel and optional-free normal startup pass. New66light
+passes and42explicit heavy skips are added; prior4,396statuses are preserved.
+Numerical/Source algorithms and protocols remain original; cold, CUDA, legacy
+and unsupported-runtime defaults are separate. New expensive faults are opt-in.
+
 Checks: `uv run pytest`, `uv run ruff check .`, `uv run mypy src`; wheel installed
 in a separate Python 3.14 environment, baseline without ML imports. Verify CPU
 compatibility per implemented extra. Record exact commands and PASS/FAIL/NOT RUN

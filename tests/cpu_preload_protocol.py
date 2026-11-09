@@ -9,6 +9,7 @@ import socket
 from pathlib import Path
 
 VERSION = 'pytest-cpu-preload-v1'
+NUMERIC_VERSION = 'pytest-cpu-numeric-preload-v1'
 MAX_PACKET = 8192
 RSS_LIMIT_KIB = 1024 * 1024
 MODELS = ('random', 'heuristic', 'mlp', 'gru', 'transformer')

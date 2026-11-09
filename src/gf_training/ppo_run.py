@@ -147,6 +147,9 @@ class LearningProcess:
         self.health: Json = {}
         self.close_task: asyncio.Task[None] | None = None
         self.creation_task: asyncio.Task[Any] | None = None
+        self._creation_no_child = False
+        self._process_notification_attempted = False
+        self._drainer_creation_attempted = False
 
     def _environment(self) -> dict[str, str]:
         return {'PATH': os.defpath, 'LANG': 'C.UTF-8', 'LC_ALL': 'C.UTF-8', 'PYTHONHASHSEED': '0',
@@ -163,11 +166,57 @@ class LearningProcess:
         if result != {'closed': True}:
             raise ContractError('invalid learner close acknowledgement')
 
-    async def start(self) -> None:
+    async def _create_process(self) -> Any:
         environment = self._environment()
-        creation = asyncio.create_task(asyncio.create_subprocess_exec(sys.executable, '-E', '-m', 'gf_training.ppo_worker',
-                                      stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-                                      env=environment, limit=1024 * 1024))
+        try:
+            return await asyncio.create_subprocess_exec(sys.executable, '-E', '-m', 'gf_training.ppo_worker',
+                stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+                env=environment, limit=1024 * 1024)
+        except Exception:
+            # The default stdlib creation operation failed without returning a
+            # process. Alternate launchers must supply their own settlement
+            # evidence; cancellation alone never establishes no child.
+            self._creation_no_child = True
+            raise
+
+    def _adopt_process(self, process: Any) -> None:
+        if process is None:
+            raise ContractError('actual numerical process required for adoption')
+        if self.process is None:
+            self.process = process
+        elif self.process is not process:
+            raise ContractError('cannot replace an owned numerical process')
+        error: BaseException | None = None
+        if not self._process_notification_attempted:
+            self._process_notification_attempted = True
+            try:
+                self._process_created()
+            except BaseException as caught:  # noqa: BLE001 - retain process through partial registration
+                error = caught
+        if not self._drainer_creation_attempted:
+            self._drainer_creation_attempted = True
+            coroutine = None
+            try:
+                coroutine = self._drain()
+                self.drainer = asyncio.create_task(coroutine)
+            except BaseException as caught:  # noqa: BLE001 - no unowned coroutine on failed task creation
+                if coroutine is not None:
+                    coroutine.close()
+                if error is None:
+                    error = caught
+                else:
+                    error.add_note('learner drainer creation: ' + type(caught).__name__)
+        if error is not None:
+            raise error
+
+    async def start(self) -> None:
+        coroutine = self._create_process()
+        try:
+            creation = asyncio.create_task(coroutine)
+        except BaseException:
+            coroutine.close()
+            self._creation_no_child = True
+            raise
         self.creation_task = creation
         cancelled = None
         while not creation.done():
@@ -175,9 +224,7 @@ class LearningProcess:
                 await asyncio.shield(creation)
             except asyncio.CancelledError as error:
                 cancelled = cancelled or error
-        self.process = creation.result()
-        self._process_created()
-        self.drainer = asyncio.create_task(self._drain())
+        self._adopt_process(creation.result())
         if cancelled:
             raise cancelled
 

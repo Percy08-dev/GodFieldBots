@@ -6,6 +6,8 @@ from gf_common.validation import catalog
 from tests.input_support import fixture as fixture  # noqa: PLC0414 - compatibility re-export
 from tests.input_support import input_factory
 from tests.input_support import public_options as public_options  # noqa: PLC0414 - compatibility re-export
+from tests.numeric_preload import _numeric_cpu_template as _numeric_cpu_template  # noqa: PLC0414 - fixture export
+from tests.numeric_preload import numeric_cpu_preload as numeric_cpu_preload  # noqa: PLC0414 - fixture export
 
 
 @pytest.fixture

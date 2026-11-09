@@ -268,15 +268,42 @@ class _NativeComponentOps:
             records = parent['generations']
             return state, records
 
-    def validate_owned_collection(self, plan: CollectionPlan, ledger: ReservationLedger, *, config: Any, deadline: float) -> None:
+    def validate_owned_collection(self, plan: CollectionPlan, ledger: ReservationLedger, *, config: Any,
+                                  deadline: float, loaded: Any | None = None) -> None:
+        from gf_common.domain import canonical
         from gf_training.native_structured_session import _validate_owned_metadata
+        from gf_training.structured_rollout import _owned_bytes
         self.validate_config(config)
+        held = 0
+        if loaded is not None:
+            self.require_live_owner(ledger)
+            actual = asdict(config)
+            actual_encoded = canonical(actual)
+            effective_encoded = canonical(loaded.effective)
+            inputs_encoded = canonical(list(loaded.inputs))
+            # Include the caller envelope and serialization/decode comparison
+            # temporaries in this SAME Source's ownership budget.
+            held = _owned_bytes((loaded, actual, actual_encoded, effective_encoded, inputs_encoded))
+            held += 65536 + 32 * (len(actual_encoded.encode()) + len(effective_encoded.encode()) + len(inputs_encoded.encode()))
+            if (loaded.config is not config or actual_encoded != effective_encoded
+                    or loaded.sha256 != digest(actual)):
+                raise ContractError('owned native collection LoadedConfig envelope differs from actual Config')
         directory = Path(plan.linkage['parent_run_path']).resolve()
-        with self._source(directory, config, deadline) as source:
+        with self._source(directory, config, deadline, extra_owned_bytes=held) as source:
             assert source.summary is not None
-            if source.summary['parents'][0]['state']['config_sha256'] != digest(asdict(config)):
+            parent = source.summary['parents'][0]
+            if parent['state']['config_sha256'] != digest(asdict(config)):
                 raise ContractError('owned native collection Config differs from frozen parent')
-            _validate_owned_metadata(plan, ledger, source.summary['parents'][0], deadline=deadline)
+            if loaded is not None:
+                if loaded.sha256 != parent['state']['config_sha256']:
+                    raise ContractError('owned native collection LoadedConfig hash differs from frozen parent')
+                original_inputs = source.original_config_inputs(0, held)
+                original_encoded = canonical(original_inputs)
+                source.recheck(additional=_owned_bytes((original_inputs, original_encoded))
+                    + 32 * len(original_encoded.encode()))
+                if original_encoded != inputs_encoded:
+                    raise ContractError('owned native collection input origins differ from frozen parent')
+            _validate_owned_metadata(plan, ledger, parent, deadline=deadline)
 
     @contextmanager
     def project(self, plan: CollectionPlan, numeric: Path, config: Any, learner_label: str,

@@ -14,6 +14,7 @@ import traceback
 from pathlib import Path
 
 from cpu_preload_protocol import (
+    NUMERIC_VERSION,
     RSS_LIMIT_KIB,
     VERSION,
     closed,
@@ -25,7 +26,14 @@ from cpu_preload_protocol import (
 )
 
 
-def run():
+def run(*, profile='actor'):
+    if profile not in ('actor', 'numeric'):
+        raise ValueError('unknown fixed pytest CPU profile')
+    numeric = profile == 'numeric'
+    version = NUMERIC_VERSION if numeric else VERSION
+    capacity, descriptor_count = (1, 3) if numeric else (4, 2)
+    last_retired = None
+    dropped_retire = False
     control_fd, purelib, root, session, fault, audit_path = sys.argv[1:]
     assert sys.flags.no_site and sys.flags.ignore_environment
     assert 'sitecustomize' not in sys.modules and 'torch' not in sys.modules
@@ -61,7 +69,7 @@ def run():
         return usage
 
     def send(op, seq=0, **fields):
-        payload = encode({'version': VERSION, 'session': session, 'op': op, 'seq': seq, **fields})
+        payload = encode({'version': version, 'session': session, 'op': op, 'seq': seq, **fields})
         # A stalled control consumer is terminal, not an unbounded server queue.
         if not select.select([], [channel], [], .1)[1]:
             raise TimeoutError('pytest CPU control consumer stalled')
@@ -98,7 +106,7 @@ def run():
         value, descriptors = receive(channel)
         try:
             common = {'version', 'session', 'op', 'seq'}
-            if (type(value) is not dict or value.get('version') != VERSION or value.get('session') != session
+            if (type(value) is not dict or value.get('version') != version or value.get('session') != session
                     or integer(value.get('seq'), 1) <= last_seq):
                 raise ValueError('pytest CPU session/sequence mismatch')
             last_seq = value['seq']
@@ -113,12 +121,13 @@ def run():
                 raise ValueError('unexpected pytest CPU descriptors')
             if op == 'launch':
                 token = integer(value['token'], 1)
-                if (len(descriptors) != 2 or value['bootstrap'] not in ('structured', 'pooled')
-                        or type(value['viewer']) is not int or value['viewer'] not in (1, 2)
+                if (len(descriptors) != descriptor_count
+                        or value['bootstrap'] not in (('numeric',) if numeric else ('structured', 'pooled'))
+                        or type(value['viewer']) is not int or value['viewer'] not in ((0,) if numeric else (1, 2))
                         or token in inventory):
                     raise ValueError('invalid pytest CPU launch descriptor')
                 deadline(value['deadline'])
-                if len(inventory) >= 4 or time.monotonic() >= value['deadline'] or fault == 'no_fork':
+                if len(inventory) >= capacity or time.monotonic() >= value['deadline'] or fault == 'no_fork':
                     send('refused', seq, token=token, reason='capacity/deadline/no-fork')
                     continue
                 attest(value['deadline'])
@@ -138,6 +147,8 @@ def run():
                         try:
                             os.dup2(descriptors[0], 0)
                             os.dup2(descriptors[1], 1)
+                            if numeric:
+                                os.dup2(descriptors[2], 2)
                             for fd in [int(entry.name) for entry in Path('/proc/self/fd').iterdir()]:
                                 if fd > 2:
                                     try:
@@ -167,8 +178,13 @@ def run():
                             sys.stdin = io.TextIOWrapper(os.fdopen(0, 'rb', buffering=0, closefd=False), encoding='utf-8')
                             sys.stdout = io.TextIOWrapper(os.fdopen(1, 'wb', buffering=0, closefd=False), encoding='utf-8', write_through=True)
                             sys.path[:0] = [root, str(Path(root) / 'src')]
-                            from tests.cpu_preload_actor import main
-                            main(value['bootstrap'], value['viewer'])
+                            if numeric:
+                                sys.stderr = io.TextIOWrapper(os.fdopen(2, 'wb', buffering=0, closefd=False), encoding='utf-8', write_through=True)
+                                from tests.numeric_preload_bootstrap import main
+                                main(template_pid, fault)
+                            else:
+                                from tests.cpu_preload_actor import main
+                                main(value['bootstrap'], value['viewer'])
                             os._exit(0)
                         except BaseException:  # noqa: BLE001 - exact child process failure exits nonzero.
                             traceback.print_exc()
@@ -178,6 +194,8 @@ def run():
                     crash_at('after_registration_before_ack', token, pid)
                 finally:
                     signal.pthread_sigmask(signal.SIG_SETMASK, mask)
+                if numeric and fault in ('delayed_ack', 'late_ack'):
+                    time.sleep(.08 if fault == 'delayed_ack' else .2)
                 if fault != 'lost_ack':
                     send('launched', seq, token=token, pid=pid)
                 else:
@@ -199,9 +217,17 @@ def run():
                     os.kill(record['pid'], value['signal'])
             elif op == 'retire':
                 token = integer(value['token'], 1)
+                if numeric and token == last_retired:
+                    send('retired', seq, token=token)
+                    continue
                 if inventory[token]['status'] is None:
                     raise ValueError('cannot retire actor without actual wait receipt')
                 del inventory[token]
+                if numeric:
+                    last_retired = token
+                    if fault == 'lost_retire_ack' and not dropped_retire:
+                        dropped_retire = True
+                        continue
                 send('retired', seq, token=token)
             elif op == 'health':
                 if fault == 'stalled_health':

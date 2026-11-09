@@ -313,15 +313,17 @@ uv build
 ```
 
 CPU先読み起動の安全性テストは、軽い設定・検証経路の確認を通常実行に残し、
-実プロセスの異常系やモデル一致・学習を確認する38件は明示実行にしています。
+実プロセスの異常系やモデル一致・学習の追加確認は明示実行にしています。
 先読み起動に関する一式を実行する場合:
 
 ```console
-GFB_RUN_CPU_PRELOAD_SAFETY=1 uv run pytest tests/test_cpu_preload.py tests/test_cpu_preload_review.py tests/test_tree_cpu_preload.py
+GFB_RUN_CPU_PRELOAD_SAFETY=1 uv run pytest tests/test_cpu_preload.py tests/test_cpu_preload_review.py tests/test_tree_cpu_preload.py tests/test_native_cpu_preload.py tests/test_numeric_cpu_preload.py
 ```
 
 起動・通信・終了処理、モデルの初期化やRNG、Torchを変更した際の確認に使用します。
 通常のPPOテストとTree Dataset前処理では、CPU先読み起動の最適化が有効です。
+native構造化収集テストと、対象のCPU数値ワーカー検証でも先読みを使います。
+通常起動やCUDAの検証、対応外の実行環境は独立した起動経路を使用します。
 
 実バイナリintegrationは通常テストから分離し、実行条件は検証記録に記載します。
 [追加テストとカバレッジの記録](docs/verification/coverage-followup.md)には、異常系・並行実行・

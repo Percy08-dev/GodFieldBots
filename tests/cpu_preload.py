@@ -120,6 +120,9 @@ class ActorProcess:
 
 
 class CpuTemplate:
+    control_version = VERSION
+    server_entry = 'cpu_preload_server.py'
+
     def __init__(self, directory, *, fault=''):
         self.directory = Path(directory)
         self.directory.mkdir(parents=True, exist_ok=True)
@@ -186,7 +189,7 @@ class CpuTemplate:
                 'MKL_NUM_THREADS': '1', 'OPENBLAS_NUM_THREADS': '1', 'CUBLAS_WORKSPACE_CONFIG': ':4096:8'}
             root = Path(__file__).resolve().parents[1]
             self.log = (self.directory / 'template.stderr.log').open('wb')
-            self.process = subprocess.Popen([sys.executable, '-E', '-S', str(root / 'tests/cpu_preload_server.py'),
+            self.process = subprocess.Popen([sys.executable, '-E', '-S', str(root / 'tests' / self.server_entry),
                 str(child.fileno()), sysconfig.get_path('purelib'), str(root), self.session, self.fault,
                 str(self.directory / 'audit.jsonl')], env=environment, pass_fds=(child.fileno(),),
                 start_new_session=True, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=self.log)
@@ -221,7 +224,7 @@ class CpuTemplate:
         self.require_healthy()
         self.sequence += 1
         seq = self.sequence
-        value = {'version': VERSION, 'session': self.session, 'seq': seq, 'op': op, **fields}
+        value = {'version': self.control_version, 'session': self.session, 'seq': seq, 'op': op, **fields}
         if token is not None:
             value['token'] = token
         if op != 'signal':
@@ -241,7 +244,7 @@ class CpuTemplate:
             for fd in descriptors:
                 os.close(fd)
             raise ValueError('unexpected pytest CPU response descriptors')
-        if (type(value) is not dict or value.get('version') != VERSION or value.get('session') != self.session
+        if (type(value) is not dict or value.get('version') != self.control_version or value.get('session') != self.session
                 or type(value.get('seq')) is not int):
             raise ValueError('pytest CPU response version/session/sequence mismatch')
         op, seq = value.get('op'), value['seq']

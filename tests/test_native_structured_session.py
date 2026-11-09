@@ -10,10 +10,36 @@ import pytest
 from gf_common.domain import canonical
 from gf_training.native_structured_session import NativeStructuredSource
 from gf_training.structured_ppo import _train_component_ppo
-from tests.structured_ppo_support import component_http, configuration
+from tests.structured_ppo_support import component_http as fresh_component_http
+from tests.structured_ppo_support import configuration
 
 native = pytest.importorskip('gf_native')
 pytestmark = pytest.mark.skipif(not hasattr(native, 'StructuredNativeSession'), reason='isolated B2 candidate required')
+
+
+@pytest.fixture(scope='module')
+def native_cpu_template(tmp_path_factory):
+    """Only this explicitly requested module owner can preload native actors."""
+    from tests.cpu_preload import CURRENT_TEMPLATE, CpuTemplate, supported
+    if not supported():
+        yield None
+        return
+    owner = CpuTemplate(tmp_path_factory.mktemp('native-structured-cpu-template'))
+    token = CURRENT_TEMPLATE.set(owner)
+    try:
+        yield owner
+    finally:
+        try:
+            asyncio.run(owner.close())
+        finally:
+            CURRENT_TEMPLATE.reset(token)
+
+
+def component_http(monkeypatch, loaded, **kwargs):
+    from tests.cpu_preload import CURRENT_TEMPLATE, CpuTemplate, supported
+    preload = (supported() and isinstance(CURRENT_TEMPLATE.get(), CpuTemplate)
+        and loaded.config.training.device == loaded.config.model.inference.device == 'cpu')
+    return fresh_component_http(monkeypatch, loaded, preload_cpu=preload, **kwargs)
 
 
 class ExportProbeComplete(RuntimeError):
@@ -38,7 +64,7 @@ def arrays_from_payload(value):
     return metadata, arrays
 
 
-def test_live_original16_scan_summary_sealed_schedule_authorize_typed_export(tmp_path, monkeypatch):
+def test_live_original16_scan_summary_sealed_schedule_authorize_typed_export(tmp_path, monkeypatch, native_cpu_template):
     import gf_training.structured_ppo as module
     loaded = configuration(tmp_path)
     collector, _scripts, workers, _ledgers = component_http(monkeypatch, loaded)
@@ -88,7 +114,7 @@ def test_live_original16_scan_summary_sealed_schedule_authorize_typed_export(tmp
     assert not (tmp_path / 'parent/generations/000001.json').exists()
 
 
-def test_native_existing_common_loop_two_original16_batches_and_control_commit(tmp_path, monkeypatch):
+def test_native_existing_common_loop_two_original16_batches_and_control_commit(tmp_path, monkeypatch, native_cpu_template):
     from dataclasses import asdict
 
     from gf_cli.config import LoadedConfig
@@ -125,7 +151,7 @@ def test_native_existing_common_loop_two_original16_batches_and_control_commit(t
         assert update['source_proof']['qualified'] is False and update['source_proof']['parent_qualification'] == 'not_performed'
 
 
-def test_native_exact_continuous_two_vs_one_boundary_pause_resume(tmp_path, monkeypatch):
+def test_native_exact_continuous_two_vs_one_boundary_pause_resume(tmp_path, monkeypatch, native_cpu_template):
     from dataclasses import asdict
 
     from gf_cli.config import LoadedConfig
@@ -207,7 +233,7 @@ def test_actual_structured_marker_reader_settings_and_default_native_dispatch(tm
     assert len(observed) == 1 and not (tmp_path / 'parent').exists()
 
 
-def test_native_late_original_mutation_after_publication_quarantines_before_adam(tmp_path, monkeypatch):
+def test_native_late_original_mutation_after_publication_quarantines_before_adam(tmp_path, monkeypatch, native_cpu_template):
     from dataclasses import asdict
 
     from gf_cli.config import LoadedConfig
