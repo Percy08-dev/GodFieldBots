@@ -195,6 +195,31 @@ An unsealed run may lose recent NORMAL transactions after power failure.
 
 ## Foundation closure details
 
+Seal custody clarification from independent implementation review: the child
+exclusively creates and retains the actual DB inode before SQLite admission;
+the coordinator retains its own FD to that original DB after init ACK. During
+expected writes compare device/inode only; after seal/SQLite retirement capture
+immutable full stat/hash. Preserve the exact seal_transaction result and compare
+it with final validation. Child and parent both compare their held inode with
+the public DB path across close/reap/sync/descriptor publication, and validate
+through the SAME held original. Never adopt a fresh pathname DB as the original
+after Writer retirement. Each new handle follows one-attempt close ownership:
+mark the raw number unavailable BEFORE submitting close, retain uncertainty on
+error, never retry that raw number after it may have been reused. Retire all
+handles and reservations with primary-error preservation. Catalog first-use
+version/schema/update run inside one short BEGIN IMMEDIATE transaction.
+
+Revocation clarification: invalidate a published descriptor through the SAME
+opened O_RDWR inode (or a nofollow recovery FD verified against its captured
+inode), writing/truncating a fixed invalid marker and syncing it. Retain invalid
+diagnostic evidence; do not rely on pathname stat→unlink for atomic conditional
+removal. A foreign pathname swap after FD verification cannot redirect the
+invalidation write. A detected replacement remains untouched and the run stays
+quarantined. Failed invalidation/close retains actual cleanup ownership. Earlier
+"no public descriptor survives" means no valid SAME-owned descriptor remains
+after confirmed invalidation; the pathname need not disappear, and uncertain
+filesystem failure is reported rather than falsely claiming durable revocation.
+
 Add `members(name TEXT PRIMARY KEY, run_id TEXT, group_id TEXT, kind TEXT,
 offset INTEGER, length INTEGER, sha256 TEXT, FOREIGN KEY(run_id,group_id)
 REFERENCES groups(run_id,group_id))` as the global logical-member lookup, with

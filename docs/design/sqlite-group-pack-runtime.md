@@ -1,6 +1,7 @@
 # Group Pack: memory collection and explicit configuration
 
-Date: 2026-11-10. Owner: root. Status: proposed, dependent runtime gate.
+Date: 2026-11-10. Owner: root. Status: runtime design accepted after independent
+architecture review, including the FD-invalidation/optional-predecessor delta.
 Builds on ADR0034 and [foundation](sqlite-group-pack-v1.md). Logical output
 remains Collection5/Journal6/codec2. This document does not authorize changing
 Source proofs or native inputs; those have a separate gate.
@@ -65,8 +66,9 @@ existing managed launch with `--data-dir` and `--http-log-dir` below the RAM
 server root; stdout/stderr drain there. Do not change Simulator source/flags.
 No additional private management data reaches participant workers.
 
-Refactor `StructuredJournal` only at two protected hooks: candidate publication
-and final output publication. Factor closure-row validation/writes from physical
+Refactor `StructuredJournal` at two principal protected seams: candidate
+publication and final output publication, with narrow allocation/existence
+helpers where the current physical-path checks require them. Factor closure-row validation/writes from physical
 fsync/link validation, preserving ordinary behavior and tests. Refactor
 `CardInstanceJournal` output allocation into an overridable protected hook so
 `MemoryCardInstanceJournal` can supply a bounded text/chunk stream and original
@@ -147,11 +149,107 @@ Incomplete runs store failure/incomplete controls and sealed diagnostic evidence
 their logical status is unsuccessful and public training Source rejects them.
 The outer descriptor's physical published state is never a healthy-source flag.
 
-Task2 may enable baseline/evaluation and neural inference only. PPO/final64
+The SAME `CollectionPublication` object owns this composite publication, with
+an optional concrete `GroupPackCollectionPublication` member (not an arbitrary
+callback or descriptor constructor). Default directory mode is unchanged. Its
+packed commit stages report/manifest in the Writer, seals to a nonpublic pending
+physical descriptor, confirms Writer/thread retirement, and retains that pending
+descriptor/DB identity. It then stages the public physical descriptor and envelope
+pointer as separate exclusive owned temporary inodes. Run the retained-policy
+guard before staging, after both byte/path verifications, and after successful
+descriptor/FD retirement, as the current commit requires. Publish the physical
+descriptor first, envelope locator last, sync both directories and reverify all
+held identities. The envelope locator is the consumer-visible commit point;
+fallible post-link checks remain within the actual owner and invalidate that
+owned pointer FIRST on failure/cancellation/late policy mutation, followed by
+the owned physical descriptor. Never remove a foreign replacement or edit the
+sealed DB. Retain a reachable uncertain cleanup owner and initiating exception.
+`committed=True` is set only after all checks/close health; no fallible/reportable
+operation follows the owner's successful return. A sealed DB/physical descriptor
+without a committed locator is diagnostic, not a callback-finalized collection.
+The pending descriptor created by the foundation is retained as nonpublic
+diagnostic evidence and excluded from public descriptor namespace expectations
+only through this concrete composite owner; Source/pending access is the next
+gate. No production caller publishes an envelope pointer using a loose second
+write after `seal(published)`.
+
+Task2 may enable only `smoke`, standalone `collect`, and `evaluate` with
+random/heuristic or existing MLP/GRU/Transformer inference bindings. Configuration
+validation/help may parse/report the new type. Tree3 inference, PPO/formal PPO,
+final64, game-dataset/inspect/fit, benchmark and validate-policy entry points
+explicitly reject storage-bearing Config before optional model/Source imports,
+output or process allocation until their Task3 integration is accepted. No
+command may accept the new Config and silently ignore storage. PPO/final64
 entry points explicitly reject packed mode before allocation until Task3 has
 accepted its Source/lineage/native/pending contracts. This is an implementation
 order guard, not the final requested behavior. The complete plan still requires
 all paths; no partial opt-in is presented as completion.
+
+## Runtime contract closure
+
+All StorageBudget reserve/resize/release, queue and RAM measurements are
+thread-safe under one lock/condition; callbacks never await or call native code
+while holding that lock. The coordinator keeps the actual
+`concurrent.futures.Future` for each synchronous operation, not merely a
+cancelled asyncio wrapper. Cancellation closes admission and records the first
+error, then shield-waits/reaps the actual worker future and owned executor.
+Snapshot/RAM files, Writer and reservations cannot retire until that real work
+has completed. If bounded shutdown cannot confirm it, attach the SAME reachable
+cleanup owner to the initiating failure and retain its data/reservations; elapsed
+deadline or a cancelled wrapper is not evidence that the thread stopped.
+
+Self-validation admission includes decoded records, EventBank, frames, candidate
+arrays and Replay graphs: charge `32*JSON_bytes+65536` per JSON/JSONL before parse,
+then `32*column_bytes+4096*count+128*elements+65536` per validated descriptor
+before candidate decode, matching current Source's conservative local estimates.
+Raw storage account and parse account are jointly charged, with explicit graph
+retirement after validation. Max journal/file and max record checks precede
+JSONL parsing, and a descriptor's count/elements/size must validate before any
+corresponding allocation. Allocation/cancellation failure cannot publish health.
+
+Concrete byte seam:
+`read_card_instance_journal(path: Path, ..., artifacts: ArtifactReader | None =
+None, artifact_prefix: str | None = None) -> StructuredJournalData`.
+`artifacts` must be the immutable `MemoryArtifactSnapshot` (runtime) or later
+verified original-reader adapter (Source), not a live mutable sink. Prefix is
+exactly one safe episode basename, matches `path.parent.name`, and journal
+logical name is `prefix+'/'+path.name`; candidate name is
+`prefix+'/'+candidate_basename(actor,decision)`. No arbitrary prefix, absolute
+name, cross-episode reference or path traversal is accepted. Journal/column
+length/hash checks use exact immutable snapshot bytes and the existing codec2
+decoder; read each sidecar once, derive parse plus evidence from that SAME read.
+Supplying a byte reader cannot disable journal schema/type/reward/identity checks.
+
+Keep `StructuredJournalData.sidecars` as physical evidence for old readers. Add
+`logical_sidecars: tuple[LogicalSidecarEvidence,...]=()` with a frozen dataclass
+whose fields are `kind='logical-candidate-bytes-v1'`, `name`, `sha256`, `bytes`,
+`frame_hash`, `table_hash`, `action_contract`, `purpose`, `synthetic_capacity`.
+Logical reads fill only logical_sidecars; physical reads fill only sidecars.
+There is no fake inode/path identity field. File-only Source explicitly rejects
+logical_sidecars; later packed Source explicitly requires logical mode and binds
+the logical metadata to its own verified DB member evidence. A memory snapshot
+or logical-sidecar value never grants original Source permission.
+
+Composite publication transfers the actual pending-descriptor ownership record
+from `GroupPackWriter` into `GroupPackCollectionPublication`, not just its path.
+That record retains the inode, bytes and handle state created by low-level seal.
+Retain its pending predecessor as evidence rather than conditional pathname
+deletion. Extend the public physical namespace only with the fixed
+`collection.pending.json` predecessor, whose exact canonical bytes must equal
+the public descriptor with only `publication='pending'` changed. It must bind
+the SAME seal/run/DB/controls, be nonsymlink and retained in the namespace/hash
+snapshot. No other sibling is admitted, and adding/removing/replacing even this
+predecessor after admission fails recheck. A public Source still cannot open a
+pending locator or gain authority from that predecessor. Low-level seal(published)
+archives may omit it; composite archives retain it. This explicit rule avoids
+pretending stat→unlink is atomic against an arbitrary concurrent foreign writer.
+Final64 keeps only its pending descriptor until the SAME Source/parent retirement
+reaches publication; Task3 must add its issuing-owner-only access capability.
+Composite failure invalidates SAME owned descriptor/pointer inodes through held
+or verified recovery FDs and preserves foreign replacements, as the foundation
+revocation clarification requires. Temporary run directories have exclusive
+cooperative ownership; no hard security sandbox against same-user filesystem
+mutation is claimed.
 
 ## Verification
 

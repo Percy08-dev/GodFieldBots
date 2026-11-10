@@ -70,12 +70,26 @@ transport/resource helpers may live in their own focused storage modules.
 
 ### Task 2: Memory collection and explicit Config
 
-**Files:** precise ownership and interfaces will be appended by root after the
-runtime integration design review; likely common storage settings, journal6,
-environment output seam, candidate publication and corrected CLI composition.
-Requires an accepted integration design before changing any consumer.
+**Files:** create `src/gf_common/artifacts.py`,
+`src/gf_training/group_pack_memory.py`, `group_pack_collection.py`,
+`group_pack_publication.py`, and `tests/test_group_pack_runtime*.py`.
+Modify only existing `src/gf_training/group_pack_resources.py`,
+`group_pack_writer.py`, `group_pack_source.py` (joint budget, retained pending
+owner and checked optional predecessor), `src/gf_training/card_instance_journal.py`,
+`structured_journal.py`, `card_instance_collection.py`,
+`src/gf_simulator_client/environment.py`, `card_instance_environment.py`,
+`src/gf_cli/config.py`, `card_instance.py`, `__init__.py`, plus directly affected
+existing tests if justified. Runtime design is accepted; implement only after
+foundation independent reviews/acceptance. Root owns docs/project dependency files.
 
-- [ ] Specify and review exact bounded in-memory artifact writer and RAM log seam.
+**Interfaces:** exact config/types, byte-journal seam, memory sink/snapshot,
+joint StorageBudget, composite CollectionPublication and command/model guard
+matrix in `sqlite-group-pack-runtime.md`. Preserve all old defaults and subtype
+serialization. Raw byte input is not Source authority. New production commands
+remain limited to standalone smoke/collect/evaluate baseline/neural inference
+until the subsequent Source/native/final64/Dataset gates are implemented.
+
+- [x] Specify and review exact bounded in-memory artifact writer and RAM log seam.
 - [ ] Add failing compatibility/collection/failure tests, implement reviewed seam.
 - [ ] Test real baseline/evaluation and all incomplete/cancelled group evidence.
 - [ ] Independent task reviews, focused verification and local commit.
