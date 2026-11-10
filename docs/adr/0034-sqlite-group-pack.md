@@ -63,6 +63,13 @@ design's allowed future-parent validation; it cannot reuse retired mutable
 controls or leave its new original owner unretired. Source callbacks/finally
 after preparation remain in-memory only.
 
+The runtime's terminal-control readonly handoff also applies to direct Writer
+published/non-retained-pending descriptor completion. An exact lower helper is
+shared with composite publication; retained pending behavior is unchanged.
+Both reviews and fresh source-matched249checks/fourD:/ext4 probes pass. It
+retains SAME-account/FD custody and strict DB/Source identity; no new DB control
+or original bytes are introduced. External diagnostics record the policy.
+
 The design lists corruption/failure/ownership checks, complete runtime smoke
 coverage, old-data checks and same-HDD comparison requirements. Evidence and
 review dispositions will be recorded in a separate verification ledger.

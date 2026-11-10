@@ -367,3 +367,30 @@ generation/wait/operation p95/p99, checkpoint time, RAM, DB/WAL bytes and
 conditions/cache effects. Do not substitute synthetic timings for that acceptance
 condition. The default remains directory regardless of preliminary results until
 an explicit later adoption decision.
+
+## Direct Writer terminal controls amendment (2026-11-11)
+
+Architecture and both final implementation reviews READY; root integrated
+source-matched verification passes249affected/legacy checks, Ruff/mypy171,
+all8kernel invariants and four fresh D:/ext4 public/pending probes. Actual D:9p direct
+Writer publication reproduced the controlled write-close ctime-only refresh
+previously resolved in the runtime composite. Apply the SAME approved
+`terminal-control-ro-handoff-v1` only to direct non-retained descriptor
+publication (published or pending); retained pending ownership stays unchanged.
+
+Factor the existing exact `_TerminalOriginal` into a lower
+`group_pack_terminal.py` helper depending only on resources and original-file
+checks; composite publication reimports it without changing behavior. Writer
+captures the owned staged descriptor's exact inode/stat/hash, retires its write
+FD once, and admits the readonly handoff under the SAME Writer account. Before
+reading, require the original stable five fields and hash across that controlled
+handoff; then require strict six-field FD/path/hash validation through readonly
+retirement/final path checks. Keep DB and all ordinary Source custody strict6.
+
+Preserve first failure, actual uncertain cleanup owners, one-attempt FD state,
+locator/descriptor revocation and existing return types. The helper cannot admit
+fresh arbitrary originals or silently normalize Source ctime. Record the policy
+only in external diagnostics; do not add/rewrite DB controls or original bytes.
+Verify direct public/non-retained-pending paths on D:/ext4, corruption/substitution
+refusals, exact logical bytes and account/FD retirement. Both independent delta
+reviews and fresh root evidence are required before this API/benchmark gate.

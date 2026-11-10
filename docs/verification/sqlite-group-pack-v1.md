@@ -162,6 +162,25 @@ affected numerical tests cover CPU/CUDA learning/parity. No formal campaign,
 HPO, final test or real-data Tree fit was run. Root receipts/configs/reviews/logs
 are retained in `runs/assessments/sqlite-group-pack-v1-20261111/python-source/`.
 
+## Direct Writer terminal completion (2026-11-11)
+
+Direct published/non-retained-pending sealing now shares the exact reviewed
+terminal-control readonly helper with composite publication. Both independent
+reviews are READY; retained pending behavior, DB/Source strict6 and original
+Pack/control bytes stay unchanged. The isolated worktree first passed163bounded
+cases; its parent/child mixed-path limitation is not presented as package proof.
+
+After all main PPO/resume/audit processes retired, root copied only the exact
+four reviewed files and verified all parent/helper/child imports came from main.
+Fresh source-matched249affected/legacy tests pass27.03s, Ruff/mypy171 and all8
+kernel ASTs pass. Four fresh D:9p/ext4×public/pending probes pass exact logical
+bytes, unchanged controls, healthy Writer and account0; subsequent ordinary
+Source metadata changes correctly refuse. D: mutation changed mtime+ctime;
+ext4's ctime-only mutation is reported separately. No Source ctime relaxation or
+DB control is introduced. Earlier failing/unsupported probe attempts remain
+diagnostic evidence. The benchmark publication gate is now open; timings below
+remain unmeasured until the planned comparison actually runs.
+
 ## Remaining verification
 
 - PASS scoped: standalone in-memory artifacts/RAM logging/joint admission,

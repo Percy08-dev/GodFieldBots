@@ -20,6 +20,7 @@ from gf_common.group_pack import (
     Json,
     StorageSettings,
     canonical_json,
+    digest,
 )
 from gf_training.group_pack_db import (
     descriptor_name,
@@ -43,6 +44,7 @@ from gf_training.group_pack_resources import (
 )
 from gf_training.group_pack_resources import json_bound as _json_bound
 from gf_training.group_pack_source import CollectionLocator, OriginalFile, _stat_key, inspect_packed
+from gf_training.group_pack_terminal import _TerminalOriginal
 
 
 class GroupPackWriter:
@@ -76,6 +78,8 @@ class GroupPackWriter:
         self._published: tuple[Path, tuple[int, int]] | None = None
         self._temporary: tuple[Path, tuple[int, int]] | None = None
         self._publication_fd = -1
+        self._terminal_original: _TerminalOriginal | None = None
+        self._terminal_bytes = 0
         self._uncertain_releases: list[Json] = []
         self._cleanup_children: list[Json] = []
         self._database_original: OriginalFile | None = None
@@ -301,14 +305,20 @@ class GroupPackWriter:
             self._budget.release(WRITER_BASE)
             self._base_released = True
 
+    def _release_terminal(self) -> None:
+        if self._terminal_bytes:
+            self._budget.release(self._terminal_bytes)
+            self._terminal_bytes = 0
+
     def _cleanup_physical(self) -> None:
         self._invalidate_publication()
         self._published = None
         self._unlink_same(self._temporary)
         self._temporary = None
         close_raw_descriptor(self, "_publication_fd")
-        close_resources(self, [self._database_original, self._pending_owner])
+        close_resources(self, [self._database_original, self._pending_owner, self._terminal_original])
         require_certain_releases(self)
+        self._release_terminal()
 
     def _fail(self, cause: BaseException) -> None:
         retain_cleanup(self, cause)
@@ -419,13 +429,21 @@ class GroupPackWriter:
                 self._database_original = None
                 self._published = None
                 return CollectionLocator(FORMAT, target)
-            completion_stat = os.fstat(self._publication_fd)
+            # Admit before allocating/opening the readonly capability or hash buffer.
+            self._budget.acquire(65536 + 4096, self.deadline)
+            self._terminal_bytes = 65536 + 4096
+            self._terminal_original = _TerminalOriginal(target, os.fstat(self._publication_fd),
+                digest(data), self.deadline, write_handoff=True)
             self._database_original.close()
             close_raw_descriptor(self, "_publication_fd")
             require_certain_releases(self)
             self._database_original.check_path_identity()
-            if _stat_key(target.lstat()) != _stat_key(completion_stat):
-                raise ValueError("descriptor changed during terminal retirement")
+            self._terminal_original.open_verified()
+            self._terminal_original.recheck()
+            self._terminal_original.close()
+            self._database_original.check_path_identity()
+            self._terminal_original.check_path_identity()
+            self._release_terminal()
             self._published = None
             return CollectionLocator(FORMAT, target)
         except BaseException as exc:
@@ -436,8 +454,9 @@ class GroupPackWriter:
                 self._unlink_same(self._temporary)
                 self._temporary = None
                 close_raw_descriptor(self, "_publication_fd")
-                close_resources(self, [self._database_original])
+                close_resources(self, [self._database_original, self._terminal_original])
                 require_certain_releases(self)
+                self._release_terminal()
             except BaseException as cleanup:  # noqa: BLE001 -- preserve primary and cleanup owner
                 exc.__dict__["cleanup_owner"] = self
                 exc.add_note(f"descriptor cleanup remains owned ({type(cleanup).__name__})")

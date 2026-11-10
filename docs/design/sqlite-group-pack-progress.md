@@ -288,3 +288,19 @@ public/nonretainedpending probes PASS. Parent used worktree source while -I chil
 loaded byte-identical main worker/dependencies; main hashes stayed exact. Root
 integration/source-matched verification remains pending; no mixed-path wheel or
 production acceptance is inferred. No existing run/Simulator data was modified.
+
+Task3A accepted milestone committedef79ebf. After both actual parents and fresh
+root audits retired, root integrated only the four reviewed terminal files from
+the managed worktree. Both final independent reviews READY; fresh ALL-main
+parent/helper/child source-path check PASS,249affected/legacy checks PASS27.03s,
+Ruff/mypy171/AST8PASS. Four fresh D:/ext4 public/nonretainedpending probes PASS
+exact bytes/unchangedcontrolinventory/strictlaterSource refusal/healthychild/
+account0. Root accepts direct-Writer amendment; earlier mixed-path scope is not
+silently relabelled source-matched. New integrated probe ID21a3aa39…; no existing
+runs or DBs changed. Native3B implementation, final64/Dataset/Tree and full
+comparison remain open. Main ordinarySource Source-reading milestones were
+verified before these code/provenance changes; no old parent is resumed across
+different code identities.
+Staging found one trailing blank line in the new helper (untracked files were
+outside the author's earlier diff-check). Root removed only that blank line;
+module AST is exact and fresh Ruff passes. No behavior/contract/test changed.
