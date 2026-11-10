@@ -65,7 +65,8 @@ def _kind(name: str) -> str:
 
 
 class GroupPackCollection:
-    def __init__(self, settings: StorageSettings, run_id: str, *, deadline: float) -> None:
+    def __init__(self, settings: StorageSettings, run_id: str, *, deadline: float,
+                 owned_directory: Path | None = None) -> None:
         from gf_common.candidate_columns import safe_basename
         from gf_training.group_pack_db import identity_text
         identity_text(run_id)
@@ -76,6 +77,12 @@ class GroupPackCollection:
         self.settings, self.run_id, self.deadline = settings, run_id, deadline
         self.budget = StorageBudget(settings, deadline)
         self.directory, self.ram_root = settings.db_root / run_id, settings.ram_root / run_id
+        if owned_directory is not None:
+            if not owned_directory.is_absolute() or not owned_directory.is_relative_to(settings.db_root):
+                raise ValueError('foreign packed persistent collection root')
+            self.directory = owned_directory
+        self.owned_roots = (self.directory, settings.db_root / 'catalog.sqlite3',
+            settings.db_root / 'catalog.sqlite3-wal', settings.db_root / 'catalog.sqlite3-shm', settings.db_root / 'catalog.sqlite3-journal')
         self.writer: GroupPackWriter | None = None
         self.pending: PendingDescriptorOwner | None = None
         self._executor = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="group-pack")

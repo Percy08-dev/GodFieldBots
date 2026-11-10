@@ -45,14 +45,21 @@ def checksum(value: Any) -> str:
 
 def wire_identity(model: Any, binding: InferenceBindingV2, action_hash: str, resume_identity: str,
                   *, action_contract: Any, purpose: str, synthetic_capacity: bool,
-                  cuda_visible_devices: str | None, _actions: ActionConfigV3 | None = None) -> Json:
+                  cuda_visible_devices: str | None, _actions: ActionConfigV3 | None = None,
+                  storage_binding: Json | None = None) -> Json:
     visibility = child_cuda_visibility(binding.device, cuda_visible_devices)
+    storage = {}
+    if storage_binding is not None:
+        from gf_common.group_pack_game import checked_storage_binding
+        if _actions is None:
+            raise ContractError('wire5 requires corrected actions')
+        storage = {'storage_binding': checked_storage_binding(storage_binding)}
     if _actions is not None:
         from gf_common.domain import digest
         if action_hash != digest(asdict(_actions)):
             raise ContractError("wire4 action Config hash mismatch")
         return {"model_id": model.model_id, "model_version": "3",
-            "architecture_identity": architecture_identity(model, layout=GAME_LAYOUT),
+            "architecture_identity": architecture_identity(model, layout=GAME_LAYOUT), **storage,
             "action_config_hash": checksum(action_hash), "resume_identity": checksum(resume_identity),
             "actions": asdict(_actions), **input_binding_game_v3(_actions.action_contract, card_instance_rules()),
             "execution": {"binding": asdict(binding), "cuda_visible_devices": visibility},
@@ -86,7 +93,7 @@ def validate_reply(reply: Json, command: str, identity: Json) -> None:
         integer(reply.get('expected_optimizer_steps'), 0)
     closed(reply, fields | ({'closed'} if command == 'close' else {'artifact', 'hardware', 'timings'}
                            | ({'metrics'} if command == 'update' else set())))
-    if (type(reply['protocol_version']) is not int or reply['protocol_version'] != (4 if game else 3)
+    if (type(reply['protocol_version']) is not int or reply['protocol_version'] != (5 if 'storage_binding' in identity else 4 if game else 3)
             or reply['command'] != command or canonical(reply['identity']) != canonical(identity)):
         raise ContractError('wire3 acknowledgement identity/command mismatch')
     if command == 'close':
@@ -165,11 +172,13 @@ def _select_visibility(initial: Json, binding: InferenceBindingV2, visibility: s
 
 def serve(initial: Json, lines: Iterable[str]) -> None:
     closed(initial, {'protocol_version', 'command', 'identity', 'model', 'seed', 'output', 'restore'})
-    game = initial.get('protocol_version') == 4
-    if type(initial['protocol_version']) is not int or initial['protocol_version'] != (4 if game else 3) or initial['command'] != 'initialize':
+    packed = initial.get('protocol_version') == 5
+    game = initial.get('protocol_version') in (4, 5)
+    protocol = 5 if packed else 4 if game else 3
+    if type(initial['protocol_version']) is not int or initial['protocol_version'] != protocol or initial['command'] != 'initialize':
         raise ContractError('wire3 initialize required')
     identity = closed(initial['identity'], {'model_id', 'model_version', 'architecture_identity', 'action_config_hash',
-        'resume_identity', 'action_contract', 'purpose', 'synthetic_capacity', 'execution', 'execution_digest'} | ({'actions', 'rule_signature', 'layout_signature'} if game else set()))
+        'resume_identity', 'action_contract', 'purpose', 'synthetic_capacity', 'execution', 'execution_digest'} | ({'actions', 'rule_signature', 'layout_signature'} if game else set()) | ({'storage_binding'} if packed else set()))
     model: Any = model_config_v3(initial['model'], layout=GAME_LAYOUT) if game else model_config_v2(initial['model'])
     execution = closed(identity['execution'], {'binding', 'cuda_visible_devices'})
     binding = InferenceBindingV2(**closed(execution['binding'], set(asdict(InferenceBindingV2()))))
@@ -180,7 +189,7 @@ def serve(initial: Json, lines: Iterable[str]) -> None:
         action_contract=contract, purpose='component', synthetic_capacity=False)
     expected = wire_identity(model, binding, identity['action_config_hash'], identity['resume_identity'],
         action_contract=contract, purpose='component', synthetic_capacity=False,
-        cuda_visible_devices=execution['cuda_visible_devices'], _actions=actions)
+        cuda_visible_devices=execution['cuda_visible_devices'], _actions=actions, storage_binding=identity.get('storage_binding'))
     if canonical(identity) != canonical(expected):
         raise ContractError('wire3 initialize binding mismatch')
     _select_visibility(initial, binding, execution['cuda_visible_devices'])
@@ -214,7 +223,7 @@ def serve(initial: Json, lines: Iterable[str]) -> None:
     actual_hardware = hardware(binding.device)
 
     def acknowledge(command: str, began: float, artifact: Json | None = None, **extra: Any) -> None:
-        reply = {'protocol_version': 4 if game else 3, 'command': command, 'identity': identity, **extra}
+        reply = {'protocol_version': protocol, 'command': command, 'identity': identity, **extra}
         if command != 'close':
             if artifact is None:
                 raise ContractError('wire3 numerical artifact missing')
@@ -231,7 +240,7 @@ def serve(initial: Json, lines: Iterable[str]) -> None:
         command = request.get('command')
         fields = {'protocol_version', 'command', 'identity'}
         closed(request, fields | ({'batch', 'batch_digest', 'expected_policy_version', 'output'} | ({'transaction_id', 'projection'} if game else set()) if command == 'update' else set()))
-        if (type(request['protocol_version']) is not int or request['protocol_version'] != (4 if game else 3)
+        if (type(request['protocol_version']) is not int or request['protocol_version'] != protocol
                 or canonical(request['identity']) != canonical(identity)):
             raise ContractError('wire3 request identity mismatch')
         if command == 'close':
@@ -245,8 +254,8 @@ def serve(initial: Json, lines: Iterable[str]) -> None:
         started = time.monotonic()
         if game:
             assert actions is not None
-            projection = validate_projection(request['projection'], expected_steps=learner.steps, policy=request['expected_policy_version'], batch_digest=request['batch_digest'])
-            if request['transaction_id'] != digest_projection(projection):
+            projection = validate_projection(request['projection'], expected_steps=learner.steps, policy=request['expected_policy_version'], batch_digest=request['batch_digest'], storage_binding=identity.get('storage_binding'))
+            if request['transaction_id'] != digest_projection(projection, storage_binding=identity.get('storage_binding')):
                 raise ContractError('wire4 transaction mismatch')
             from gf_models.structured_artifacts import semantics_v3
             declaration = semantics_v3(model, layout=GAME_LAYOUT, action_contract=contract, rules=card_instance_rules())
@@ -260,7 +269,7 @@ def serve(initial: Json, lines: Iterable[str]) -> None:
             for name, expected_hash in files.items():
                 if sha256(Path(request['batch']) / name) != expected_hash:
                     raise ContractError('wire4 numeric original file hash mismatch')
-            rollout = read_game_rollout(Path(request['batch']), request['batch_digest'], model, actions=actions, rules=card_instance_rules(), declaration=declaration, expected_correspondence=projection['source_correspondence'])
+            rollout = read_game_rollout(Path(request['batch']), request['batch_digest'], model, actions=actions, rules=card_instance_rules(), declaration=declaration, expected_correspondence=projection['source_correspondence'], storage_binding=identity.get('storage_binding'))
         else:
             rollout = read_rollout(Path(request['batch']), request['batch_digest'], model,
                 action_contract=contract, purpose='component', synthetic_capacity=False)
@@ -284,15 +293,21 @@ def digest_files(files: Json) -> str:
     return digest(dict(sorted(files.items())))
 
 
-def digest_projection(projection: Json) -> str:
+def digest_projection(projection: Json, *, storage_binding: Json | None = None) -> str:
     from gf_common.domain import digest
-    return digest({'recipe': 'card-instance-update-transaction-v1', 'projection': projection})
+    if storage_binding is not None:
+        from gf_common.group_pack_game import checked_storage_binding
+        checked_storage_binding(storage_binding)
+    return digest({'recipe': 'card-instance-packed-update-transaction-v1' if storage_binding is not None else 'card-instance-update-transaction-v1', 'projection': projection})
 
 
-def validate_projection(value: Json, *, expected_steps: int, policy: str, batch_digest: str) -> Json:
+def validate_projection(value: Json, *, expected_steps: int, policy: str, batch_digest: str, storage_binding: Json | None = None) -> Json:
     from gf_training.card_instance_source import PROJECTION_KEYS
     closed(value, PROJECTION_KEYS)
-    if (value['recipe'] != 'card-instance-source-update-v1' or value['expected_optimizer_steps'] != expected_steps
+    if storage_binding is not None:
+        from gf_common.group_pack_game import checked_storage_binding
+        checked_storage_binding(storage_binding)
+    if (value['recipe'] != ('card-instance-packed-source-update-v1' if storage_binding is not None else 'card-instance-source-update-v1') or value['expected_optimizer_steps'] != expected_steps
             or type(value['expected_optimizer_steps']) is not int or value['expected_policy_version'] != policy
             or value['numeric_manifest_sha256'] != checksum(batch_digest)):
         raise ContractError('wire4 Source expectation/step/policy mismatch')
@@ -304,6 +319,6 @@ def validate_projection(value: Json, *, expected_steps: int, policy: str, batch_
     # Full semantics binding is checked by the numeric reader before parity.
     correspondence = value['source_correspondence']
     closed(correspondence, {'recipe', 'control_fingerprint', 'semantics_sha256', 'episode_count', 'episode_digests', 'binding_sha256'})
-    if correspondence['recipe'] != 'structured-source-cohort-correspondence-v2' or correspondence['episode_count'] != 16:
+    if correspondence['recipe'] != ('card-instance-packed-source-correspondence-v1' if storage_binding is not None else 'structured-source-cohort-correspondence-v2') or correspondence['episode_count'] != 16:
         raise ContractError('wire4 Source requires complete16 original correspondence')
     return value

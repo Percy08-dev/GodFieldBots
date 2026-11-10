@@ -11,15 +11,16 @@ Design: [ADR0034](../adr/0034-sqlite-group-pack.md),
 
 Foundation implementation passes independent correctness/conformance after two
 bounded fix rounds; root accepts this isolated milestone.
-Standalone runtime is accepted in the separate scope below. Source/lineage/PPO,
-native, final64, Dataset/Tree and whole-plan comparison remain pending. This record distinguishes component
+Standalone runtime and Python original Source/ordinary PPO are accepted in the
+separate scopes below. Native, final64, Dataset/Tree and whole-plan comparison
+remain pending. This record distinguishes component
 evidence from the complete owner's requested outcome.
 
 ## Foundation candidate evidence
 
 Environment: CPython3.14.10, SQLite3.54.1, stdlib compression.zstd. No new dependency.
-Baseline Bots83aa67e; design milestone495ecec; foundation files remain uncommitted
-pending reviews. The implementer's report records64focused cases including real
+Baseline Bots83aa67e; design milestone495ecec. The initial capture below preceded
+foundation acceptance/commitdc9440e. The implementer's report records64focused cases including real
 child/IPC/SQLite failure windows. Root independently ran:
 
 ```console
@@ -108,11 +109,65 @@ max Pack is256MiB; positive smaller limits remain configurable. Minimum193MiB
 is fixed Writer128+inspection64+minimal control slack1, not a promise any game
 fits the minimum. Larger bounds need a reviewed format/Source/budget extension.
 
+## Python original Source and ordinary PPO acceptance (2026-11-11)
+
+Actual retained locator/descriptor/DB/predecessor custody, one-group shared pool,
+proof2, run4/update4, wire5 and Source-issued precommit retirement pass both final
+independent reviews. Source never derives update authority from a Pack/catalog/
+serialized proof. Old directory proofs, Config identities and numerical schemas
+remain separate. Retention is an explicit fresh postcommit parent/pruning check;
+its failure preserves real committed history and invalidates the parent.
+
+Root's frozen HOST affected aggregate with GF_RUN_CUDA=1 passes610checks in
+238.81s; full changed-source Ruff/mypy170 and all8frozen algorithm ASTs pass.
+Reviews required fixes for expired-deadline cleanup, partial constructor owners,
+training-to-CLI coupling and unrelated-exception error masking. A real16game
+collection then exposed duplicated decode reservations; its parent remains
+failed/updates0/ineligible. Full constructor-validated inventory, one strict
+Journal parse and separate raw/graph reservations solve that duplication under
+the unchanged2GiB cap. The saved failed cohort passes structural-only inspection
+at1,565,165,664B admitted peak and cleanup0; it is not rehabilitated. The
+constructor's temporary all-available reservation is not RSS.
+
+Review also reproduced an opaque-file size-cap regression in the new inventory
+path. The same max_source_file_mib guard now applies to ALL members without
+rereading opaque bytes. Both final delta reviews are READY; root's50affected
+admission/Source/ownership checks pass15.00s, alongside fresh Ruff/mypy170/AST8.
+The preceding610pass result is pre-two-line-guard evidence, not falsely rerun.
+
+Actual new parents, CPU inference/CUDA learner, seed17/max2updates, unchanged
+7200/5400/7140/60budgets and2GiB storage:
+
+| Parent | Outcome | Games / updates | Selected decisions / optimizer steps |
+| --- | --- | --- | --- |
+| continuous2579bc3a | complete531.165s | 32natural /2 | 419 /16 |
+| pause-resumedba33a31 | paused1, then complete2 | 32natural /2 | 419 /16 |
+
+Each mode used the real Simulator91d5926 and actual wire5 learner. Separate
+fresh root commands `gfb-root-packed-parent-check.py` call the actual complete
+parent validator with a420s work bound, then assert run4/update4/proof2/numeric4,
+three generations, original storage/custody and unchanged run bytes. Both exit0:
+continuous87.381s and resumed87.661s. Source validation covers actual complete
+inventory/DB/Pack/Journal/candidate/Replay bytes and own-role correspondence.
+The independent continuous audit additionally observes both Source owners,
+SQLite/FD retirement and shared pool/control accounting0. Its initial temporary
+wrapper import/summary failures are preserved separately; they do not change the
+successful validation or replace the two fresh successful root commands.
+
+This accepts Python storage/runtime/resume scope:64natural games and4actual
+updates. It does not establish formal qualification, strength, full model/device
+learning-campaign coverage or independent-trajectory final-state determinism.
+The prior standalone matrix covers all3models×CPU/CUDA actor paths, and the
+affected numerical tests cover CPU/CUDA learning/parity. No formal campaign,
+HPO, final test or real-data Tree fit was run. Root receipts/configs/reviews/logs
+are retained in `runs/assessments/sqlite-group-pack-v1-20261111/python-source/`.
+
 ## Remaining verification
 
 - PASS scoped: standalone in-memory artifacts/RAM logging/joint admission,
   independent reviews, actual18game/inference saved-byte audits above.
-- NOT RUN: production Source/PPO update/pause-resume and native provider parity.
+- PASS scoped: production Python Source/PPO update/pause-resume below.
+- NOT RUN: native packed provider parity/ordinary PPO.
 - NOT RUN: pending final64/Dataset/Tree paths and affected actual CUDA checks.
 - NOT RUN: whole pytest/Ruff/mypy/Rust, current wheel/mandatory-only/old-data proofs.
 - NOT RUN: alternating same-HDD save/read and concurrent generation/learning

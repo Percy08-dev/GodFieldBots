@@ -292,7 +292,14 @@ async def _run_corrected(loaded: LoadedConfig, command: str,
     packed = None
     if isinstance(config, GroupPackExperimentConfig):
         from gf_training.group_pack_collection import GroupPackCollection
-        packed = GroupPackCollection(config.storage.settings(), run_id, deadline=work_deadline)
+        owned_directory = None
+        if collection is not None:
+            if _final_validation_context is not None or owned_ledger is None:
+                raise ContractError('packed final collection integration is not implemented')
+            online = _validate_online_collection(loaded, cast(CollectionPlan, collection), owned_ledger, preflight_deadline)
+            owned_directory = Path(config.storage.db_root) / online.state['run_id'] / 'collections' / collection.linkage['batch_id']
+        packed = GroupPackCollection(config.storage.settings(), run_id, deadline=work_deadline,
+                                     owned_directory=owned_directory)
 
     async def group_run(group: Any) -> GroupResult:
         nonlocal admission_closed
@@ -537,10 +544,15 @@ async def collect_ppo(loaded: LoadedConfig, plan: CollectionPlan,
             raise ContractError("empty frozen PPO collection schedule")
         # Keep the validated borrowed live context reachable until finalization.
         assert online is not None
-        directory, summary = cast(tuple[Path, Json], await _run_corrected(loaded, "collect", plan.bindings,
+        result = await _run_corrected(loaded, "collect", plan.bindings,
             tuple(plan.bindings), started=started, artifact_inputs=owner, runtime_evidence=evidence,
             resource_admission=max(admissions, key=lambda value: value["peak_cuda_bytes"]),
-            collection=plan, owned_ledger=ledger))
+            collection=plan, owned_ledger=ledger)
+        if type(result) is PackedRunResult:
+            from gf_training.collection import PackedFinalizedCollection
+            return PackedFinalizedCollection(result.directory, result.report, result.locator,
+                cast(str, result.envelope_sha256), result.storage_metrics)
+        directory, summary = cast(tuple[Path, Json], result)
         return FinalizedCollection(directory, summary)
     finally:
         owner.release()

@@ -333,10 +333,12 @@ def _read_structured_journal(path: Path, *, deadline: float = float("inf"),
     if artifacts is not None:
         from gf_common.candidate_columns import safe_basename
         from gf_training.group_pack_memory import MemoryArtifactSnapshot
-        if (_context is None or type(artifacts) is not MemoryArtifactSnapshot
+        from gf_training.group_pack_pool import OriginalArtifactReader
+        if (_context is None or type(artifacts) not in (MemoryArtifactSnapshot, OriginalArtifactReader)
                 or artifact_prefix is None or safe_basename(artifact_prefix) != path.parent.name
                 or records is not None):
             raise ContractError("logical journal requires an immutable original snapshot and exact episode prefix")
+        artifacts = cast(MemoryArtifactSnapshot | OriginalArtifactReader, artifacts)
         safe_basename(path.name)
         integer(max_jsonl_bytes, 1)
         integer(max_record_bytes, 1, max_jsonl_bytes)
@@ -346,13 +348,19 @@ def _read_structured_journal(path: Path, *, deadline: float = float("inf"),
         artifacts.admit_validation(32 * len(raw) + 65536)
         records = []
         import io
+
+        from gf_models.sharded_arrays import _pairs
         source_bytes = io.BytesIO(raw)
         while line := source_bytes.readline(max_record_bytes + 1):
             if time.monotonic() >= deadline:
                 raise TimeoutError("journal6 logical read deadline")
             if len(line) > max_record_bytes:
                 raise ContractError("journal6 JSONL record exceeds configured bound")
-            records.append(json.loads(line))
+            row = json.loads(line, object_pairs_hook=_pairs,
+                parse_constant=lambda _: (_ for _ in ()).throw(ContractError('nonfinite source JSON')))
+            if not isinstance(row, dict):
+                raise ContractError('original journal objects required')
+            records.append(row)
     elif artifact_prefix is not None:
         raise ContractError("logical prefix requires original artifacts")
     if records is None:
@@ -488,7 +496,7 @@ def _read_structured_journal(path: Path, *, deadline: float = float("inf"),
                 _, size = validate_descriptor_v2(column_descriptor, expected_file=name,
                     expected_frame_hash=frame.frame_hash, action_contract=action_contract,
                     purpose=purpose, synthetic_capacity=False, layout=_context.layout)
-                artifacts.admit_validation(32 * size + 4096 * column_descriptor["count"]
+                cast(Any, artifacts).admit_validation(32 * size + 4096 * column_descriptor["count"]
                     + 128 * column_descriptor["elements"] + 65536)
                 logical_name = cast(str, artifact_prefix) + "/" + name
                 payload = artifacts.read(logical_name)

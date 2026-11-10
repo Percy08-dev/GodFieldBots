@@ -8,9 +8,9 @@ import json
 import math
 from collections.abc import Iterator
 from contextlib import ExitStack, contextmanager
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from gf_common.card_instance import ActionConfigV3
 from gf_common.card_instance_rules import card_instance_rules
@@ -427,6 +427,7 @@ class _OnlineGameOwner:
     collection_controls: Any = None
     collection_generation: int | None = None
     formal_control: Any = None
+    packed_batch: Any = None
 
     def check(self, *, steps: int | None = None) -> None:
         child, ledger = self.process, self.ledger
@@ -471,7 +472,8 @@ def validate_owned_collection(plan: CollectionPlan, ledger: Any, *, max_owned_by
     expected_identity = wire_identity(model, InferenceBindingV2(**state['execution']['learner']['binding']),
         digest(asdict(actions)), state['resume_identity'], action_contract=actions.action_contract,
         purpose='qualified_game', synthetic_capacity=False,
-        cuda_visible_devices=state['execution']['learner']['cuda_visible_devices'], _actions=actions)
+        cuda_visible_devices=state['execution']['learner']['cuda_visible_devices'], _actions=actions,
+        storage_binding=state.get('storage_binding'))
     if (canonical(child.identity) != canonical(expected_identity) or canonical(asdict(child.model)) != canonical(asdict(model))
             or canonical(asdict(child.binding)) != canonical(state['execution']['learner']['binding'])
             or child.visibility != state['execution']['learner']['cuda_visible_devices']
@@ -553,6 +555,16 @@ class IssuedGameProjection:
         controls.finalize()
         if self.source.native_inputs is not None:
             self.source.native_inputs.prepare_commit()
+        if self.source.online.packed_batch is not None:
+            assert self.source.snapshot is not None
+            proof = self.source.proof
+            # Optimizer is complete: explicitly retire the bounded decoded input
+            # graph before original pool/FD/budget retirement.
+            self.source.records = None
+            self.source.snapshot.collection = replace(self.source.snapshot.collection, episodes=())
+            from gf_training.group_pack_game_source import PackedSourceOwner
+            cast(PackedSourceOwner, self.source.snapshot._owner).retire_decoded()
+            self.source.online.packed_batch.prepare(proof)
         # No remaining reportable per-batch I/O. Old run/registry snapshots are
         # legitimately replaced by the ensuing owned lineage commit.
         self.prepared = True
@@ -616,12 +628,15 @@ class _GameBatchSource:
     def correspondence(self) -> Json:
         from gf_training.lineage import generation_path
         generation = self.plan.linkage['collection_generation']
-        immutable = {str(path.relative_to(self.controls.root)): self.controls.files[path][1] for path in (
+        immutable = {str(path.relative_to(self.controls.root)): self.controls.verified_digest(path) for path in (
             generation_path(self.controls.root, generation), checkpoint_path(self.controls.root, generation) / 'inference.json')}
-        fingerprint = digest({'run_id': self.state['run_id'], 'config_sha256': self.state['config_sha256'],
+        content = {'run_id': self.state['run_id'], 'config_sha256': self.state['config_sha256'],
             'identity': self.state['identity'], 'execution': self.state['execution'], 'plan': self.plan.linkage, 'files': immutable,
-            'source_set_sha256': self.proof['source_set_sha256']})
-        expected = _source_correspondence(fingerprint, self.declaration, self.episode_digests, game=True)
+            'source_set_sha256': self.proof['source_set_sha256']}
+        if self.state['schema_version'] == 4:
+            content.update(recipe='card-instance-packed-source-controls-v1', storage=self.proof['storage'], custody=self.proof['custody'])
+        fingerprint = digest(content)
+        expected = _source_correspondence(fingerprint, self.declaration, self.episode_digests, game=True, storage_binding=self.state.get('storage_binding'))
         if self.native_inputs is not None and canonical(expected) != canonical(self.native_inputs.correspondence):
             raise ContractError('native correspondence differs from SAME Source control fingerprint')
         return expected
@@ -656,7 +671,8 @@ class _GameBatchSource:
         rollout = read_game_rollout(directory, expected_digest, self.model, actions=self.actions, rules=card_instance_rules(),
             declaration=self.declaration, expected_correspondence=self.correspondence(),
             max_owned_bytes=self.snapshot.max_owned_bytes, extra_owned_bytes=self.snapshot.resident_bytes + growth,
-            check=self.snapshot.check, reserve=lambda peak: snapshot.reserve(peak + growth))
+            check=self.snapshot.check, reserve=lambda peak: snapshot.reserve(peak + growth),
+            storage_binding=self.state.get('storage_binding'))
         files = {'rollout.json': expected_digest, **manifest['data']['files']}
         for name, expected in files.items():
             with self.controls.file(directory / name, expected):
@@ -682,7 +698,7 @@ class _GameBatchSource:
         self.controls.finalize()
         self.online.collection_controls.finalize()
         generation = self.plan.linkage['collection_generation']
-        expected = {'recipe': 'card-instance-source-update-v1', 'parent_run_id': self.state['run_id'],
+        expected = {'recipe': 'card-instance-packed-source-update-v1' if self.state['schema_version'] == 4 else 'card-instance-source-update-v1', 'parent_run_id': self.state['run_id'],
             'batch_id': self.plan.linkage['batch_id'], 'collection_generation': generation,
             'expected_optimizer_steps': self.state['optimizer_steps'], 'expected_policy_version': self.learner_label,
             'collection_manifest_sha256': self.proof['manifest_sha256'], 'numeric_manifest_sha256': files['rollout.json'],
@@ -700,6 +716,8 @@ def _open_batch(plan: CollectionPlan, state: Json, records: list[Json], controls
                 max_owned_bytes: int, deadline: float, extra_owned_bytes: int = 0) -> Iterator[_GameBatchSource]:
     with ExitStack() as scope:
         actions, model = _state(state, _game=True)
+        if state['schema_version'] == 4 and settings.backend != 'python':
+            raise ContractError('packed native Source is not implemented')
         generation = plan.linkage['collection_generation']
         expected, label, _ = recorded_plan(controls.root, state, records, generation, deadline)
         if canonical(plan.linkage) != canonical(expected.linkage):
@@ -731,8 +749,12 @@ def _open_batch(plan: CollectionPlan, state: Json, records: list[Json], controls
                 {key: previous[key] for key in SEMANTIC_KEYS_V3}, label, online, None, native_inputs=native_inputs)
             source.correspondence()
         else:
-            original = _SourceOwner(plan.output, settings, deadline, extra_owned_bytes=controls.retained + extra_owned_bytes,
-                                    max_owned_bytes=max_owned_bytes)
+            if state['schema_version'] == 4:
+                original = controls.packed_owner(plan.output, custody=online.packed_batch if online is not None else None)
+                original.charge(controls.retained + extra_owned_bytes)
+            else:
+                original = _SourceOwner(plan.output, settings, deadline, extra_owned_bytes=controls.retained + extra_owned_bytes,
+                                        max_owned_bytes=max_owned_bytes)
             collection = _inspect_component_collection(original, actions, 'train', _game=True)
             snapshot = _SourceSnapshot(collection, original, _owned_bytes((collection.episodes, collection._manifest, collection._proof, original.files, original.inventories)))
             _check_collection_parent(collection.manifest, state, plan)
@@ -742,6 +764,7 @@ def _open_batch(plan: CollectionPlan, state: Json, records: list[Json], controls
                 raise ContractError('all16 original neural learner seats required')
             source = _GameBatchSource(snapshot, controls, state, plan, model, actions,
                 {key: previous[key] for key in SEMANTIC_KEYS_V3}, label, online, tuple(row.records for row in selected))
+            del collection, selected
         try:
             yield source
             if source.issued is None or not source.issued.prepared:
@@ -760,6 +783,14 @@ def _open_batch(plan: CollectionPlan, state: Json, records: list[Json], controls
                     error.add_note('game Source final recheck: ' + str(cleanup_error))
             raise
         finally:
+            if state['schema_version'] == 4 and online is None:
+                # No historical decoded cohort remains resident after this scope.
+                assert source.snapshot is not None
+                original = source.snapshot._owner
+                source.records = None
+                source.snapshot = None
+                from gf_training.group_pack_game_source import PackedSourceOwner
+                cast(PackedSourceOwner, original).retire_decoded()
             if source.issued is not None:
                 source.issued.active = False
                 if online is not None:
@@ -774,12 +805,16 @@ def game_batch_source(plan: CollectionPlan, ledger: Any, *, max_owned_bytes: int
                       extra_owned_bytes: int = 0) -> Iterator[_GameBatchSource]:
     online = validate_owned_collection(plan, ledger, max_owned_bytes=max_owned_bytes, deadline=deadline)
     controls = _ChainScan(directory=online.ownership.directory, max_owned_bytes=max_owned_bytes, deadline=deadline)
-    state, records = _validate_component_chain(online.ownership.directory, require_complete=False,
-        require_retained=False, scan=controls, _game=True)
-    settings = preparation_config(state['effective_config']['preprocessing'])
-    with _open_batch(plan, state, records, controls, settings, online=online,
-        max_owned_bytes=max_owned_bytes, deadline=deadline, extra_owned_bytes=extra_owned_bytes) as source:
-        yield source
+    with controls:
+        controls.configure_packed(online.state)
+        if online.packed_batch is not None:
+            online.packed_batch.borrow(controls)
+        state, records = _validate_component_chain(online.ownership.directory, require_complete=False,
+            require_retained=False, scan=controls, _game=True)
+        settings = preparation_config(state['effective_config']['preprocessing'])
+        with _open_batch(plan, state, records, controls, settings, online=online,
+            max_owned_bytes=max_owned_bytes, deadline=deadline, extra_owned_bytes=extra_owned_bytes) as source:
+            yield source
 
 
 @contextmanager
@@ -836,12 +871,18 @@ def _open_game_parent_inputs(directory: Path, *, require_complete: bool = True, 
             for name, entry in original.files.items():
                 scan.charge(1024 + 4 * len(name))
                 path = original.root / name
-                snapshot = (tuple(entry['identity']), entry['sha256'])
-                if path in scan.files and scan.files[path] != snapshot:
-                    raise ContractError('original Source changed across parent/batch snapshots')
-                scan.files[path] = snapshot
+                if state['schema_version'] == 4:
+                    if path in scan.logical_files and scan.logical_files[path] != entry:
+                        raise ContractError('original logical Source changed across snapshots')
+                    scan.logical_files[path] = entry
+                else:
+                    snapshot = (tuple(entry['identity']), entry['sha256'])
+                    if path in scan.files and scan.files[path] != snapshot:
+                        raise ContractError('original Source changed across parent/batch snapshots')
+                    scan.files[path] = snapshot
             scan.charge(_owned_bytes(original.inventories) + 512 + 4 * len(str(original.root)))
-            source_inventories.append((original.root, tuple(original.inventories)))
+            if state['schema_version'] != 4:
+                source_inventories.append((original.root, tuple(original.inventories)))
     scan._game_source_inventories = source_inventories
     scan._game_source_settings = settings
     scan._game_source_extra_bytes = extra_owned_bytes
@@ -855,9 +896,13 @@ def _open_game_parent_inputs(directory: Path, *, require_complete: bool = True, 
 def validate_game_parent(directory: Path, *, require_complete: bool = True, max_owned_bytes: int,
                          deadline: float, extra_owned_bytes: int = 0, _scan: _ChainScan | None = None) -> tuple[Json, list[Json]]:
     """Existing one-shot validator; the private context also supports retained owners."""
-    with _open_game_parent_inputs(directory, require_complete=require_complete, max_owned_bytes=max_owned_bytes,
-            deadline=deadline, extra_owned_bytes=extra_owned_bytes, _scan=_scan) as (state, records, _inputs):
-        return state, records
+    scan = _scan or _ChainScan(directory=directory.resolve(), max_owned_bytes=max_owned_bytes - extra_owned_bytes, deadline=deadline)
+    with ExitStack() as scope:
+        if _scan is None:
+            scope.enter_context(scan)
+        with _open_game_parent_inputs(directory, require_complete=require_complete, max_owned_bytes=max_owned_bytes,
+                deadline=deadline, extra_owned_bytes=extra_owned_bytes, _scan=scan) as (state, records, _inputs):
+            return state, records
 
 
 def recheck_game_parent_snapshot(scan: Any) -> None:

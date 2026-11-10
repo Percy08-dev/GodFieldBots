@@ -788,8 +788,14 @@ passes both final reviews and123scoped/legacy checks. Standalone memory/RAM
 collection and explicit Config also pass both reviews,616affected/legacy checks
 and18real baseline/CPU-CUDA neural games with complete saved-byte audits. Actual
 D:9p uses the reviewed terminal-control readonly handoff while Source custody
-stays strict. Source/PPO/native/final64 integration remains in progress; this is
-not full-plan acceptance. The default directory storage,
+stays strict. Python original Source/shared-pool/proof2, run4/update4/wire5 and
+ordinary PPO now pass both final reviews,610affected checks with actual CUDA,
+50postreview file-cap/ownership checks and full static/kernel invariants. Actual
+continuous2 and pause1/resume2 MLP CPU-inference/CUDA-learner parents complete
+64natural games/4updates; both fresh original/lineage/numeric audits pass.
+The earlier update0 budget-failed parent remains immutable/ineligible. Native,
+final64/Dataset/Tree and whole-plan comparison remain pending; this is not full-
+plan acceptance or learning quality. The default directory storage,
 old Config identities and logical Collection5/Journal6/codec2 remain unchanged.
 The [design](design/sqlite-group-pack-v1.md) fixes the physical contract,
 seal/Writer retirement/publication ordering and managed memory-budget limits;

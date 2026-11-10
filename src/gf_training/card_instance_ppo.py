@@ -6,7 +6,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import asdict, replace
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from gf_common.card_instance import ActionConfigV3
 from gf_common.card_instance_rules import card_instance_rules
@@ -38,6 +38,18 @@ from gf_training.structured_lineage import (
 )
 
 
+def _validate_packed_config(config: Any, *, formal: bool = False) -> None:
+    if not hasattr(config, 'storage'):
+        return
+    from gf_models.structured_tree_config import ConfiguredTreeModelV3
+    if (type(config.actions) is not ActionConfigV3 or type(config.model) is not ConfiguredNeuralModelV3
+            or type(config.training) is not PPOTrainingConfig or config.run.split != 'train'
+            or formal or config.preprocessing.backend != 'python'
+            or config.preprocessing.reader != 'participant-structured-v2'
+            or type(config.opponent) is ConfiguredTreeModelV3):
+        raise ContractError('group Pack storage PPO requires ordinary corrected Python PPO')
+
+
 class _GameOperations:
     """One known composition; no configurable registry, callbacks or trainer loop."""
     actions_version = 3
@@ -56,13 +68,15 @@ class _GameOperations:
         self.projection: Any = None
         self.runtime: Any = None
         self.native: Any = None
+        self.finalized_collection: Any = None
 
     def __getattr__(self, name: str) -> Any:
-        if name in {'cap', 'read_control', 'saved_deadline', 'execution', 'decorate_identity'}:
+        if name in {'cap', 'saved_deadline', 'execution', 'decorate_identity'}:
             return getattr(structured_ppo, name)
         raise AttributeError(name)
 
     def validate_config(self, config: Any) -> ModelConfigV3:
+        _validate_packed_config(config, formal=self.formal is not None)
         if (type(config.actions) is not ActionConfigV3 or type(config.model) is not ConfiguredNeuralModelV3
                 or config.model.checkpoint is not None or type(config.training) is not PPOTrainingConfig
                 or isinstance(config.training, SequencePPOTrainingConfig) or config.run.split != 'train'
@@ -115,7 +129,63 @@ class _GameOperations:
         classification = input_binding_game_v3(config.actions.action_contract, card_instance_rules())
         if self.formal is not None:
             self.formal.initialize_state(state)
-        state['resume_identity'] = resume_identity(state['config_sha256'], state['identity'], state['execution'], classification)
+        if hasattr(config, 'storage'):
+            from gf_common.group_pack_game import storage_binding
+            state.update(schema_version=4, storage_binding=storage_binding())
+        state['resume_identity'] = resume_identity(state['config_sha256'], state['identity'], state['execution'], classification,
+            storage_binding=state.get('storage_binding'))
+
+    def external_roots(self, state: Json) -> tuple[Path, ...]:
+        if state['schema_version'] != 4:
+            return ()
+        root = Path(state['effective_config']['storage']['db_root'])
+        return (root / state['run_id'], root / 'catalog.sqlite3',
+            root / 'catalog.sqlite3-wal', root / 'catalog.sqlite3-shm', root / 'catalog.sqlite3-journal')
+
+    def accept_collection(self, collection: Any, config: Any) -> None:
+        from gf_training.collection import FinalizedCollection, PackedFinalizedCollection
+        expected = PackedFinalizedCollection if hasattr(config, 'storage') else FinalizedCollection
+        if type(collection) is not expected:
+            raise ContractError('callback requires its exact configured finalized collection variant')
+        if expected is PackedFinalizedCollection and (cast(PackedFinalizedCollection, collection).storage_metrics.get('publication_scope') != 'published'
+                or collection.report.get('healthy') is not True):
+            raise ContractError('healthy original packed publication required')
+        self.finalized_collection = collection
+
+    def read_control(self, path: Path, config: Any, *, deadline: float) -> Any:
+        if not hasattr(config, 'storage') or path.name != 'manifest.json':
+            return structured_ppo.read_control(path, config, deadline=deadline)
+        from gf_common.preprocessing import preparation_config
+        from gf_training.group_pack_game_source import PackedBatchCustody, PackedSourceOwner
+        online = self.online
+        if online is None:
+            raise ContractError('packed callback controls require SAME live parent')
+        online.check()
+        if online.packed_batch is None:
+            settings = preparation_config(online.state['effective_config']['preprocessing'])
+            expected = Path(config.storage.db_root) / online.state['run_id'] / 'collections' / path.parent.name
+            original = PackedSourceOwner(path.parent, settings, deadline,
+                storage_binding=online.state['storage_binding'], max_owned_bytes=structured_ppo.cap(config),
+                storage_limit=config.storage.budget_mib * 1024**2, expected_descriptor_root=expected)
+            online.packed_batch = PackedBatchCustody(original)
+        elif online.packed_batch.owner.root != path.parent:
+            raise ContractError('previous original packed batch has not retired')
+        original = online.packed_batch.owner
+        result = self.finalized_collection
+        if (result is None or result.directory.absolute() != original.root
+                or result.envelope_sha256 != original.locator.sha256
+                or result.locator.path != original.artifacts._originals.descriptor_file.path):
+            raise ContractError('callback locator/hash differs from actual original batch custody')
+        scan = _ChainScan(directory=online.ownership.directory, max_owned_bytes=structured_ppo.cap(config), deadline=deadline)
+        scan.configure_packed(online.state)
+        online.packed_batch.borrow(scan)
+        return scan.object(path), scan
+
+    def close_batch(self) -> None:
+        if self.online is not None and self.online.packed_batch is not None:
+            self.online.packed_batch.close()
+            self.online.packed_batch = None
+            self.finalized_collection = None
 
     def persist_control(self, path: Path, value: Json, config: Any, *, deadline: float, original: Any = None) -> None:
         if (self.formal is not None and path.name == 'run.json'
@@ -131,7 +201,8 @@ class _GameOperations:
         binding = InferenceBindingV2(**state['execution']['learner']['binding'])
         child = GameLearningProcess(directory, config.training.max_log_bytes, config.model.architecture(layout=LAYOUT), binding,
             digest(asdict(config.actions)), state['resume_identity'], actions=config.actions, ledger=ledger,
-            cuda_visible_devices=state['execution']['learner']['cuda_visible_devices'], cleanup_deadline=deadline)
+            cuda_visible_devices=state['execution']['learner']['cuda_visible_devices'], cleanup_deadline=deadline,
+            storage_binding=state.get('storage_binding'))
         self.online = _OnlineGameOwner(self.ownership, state, child, ledger)
         self.online.formal_control = self.formal
         child.online_owner = self.online
@@ -150,15 +221,16 @@ class _GameOperations:
 
     def binding(self, directory: Path, generation: int, config: Any, deadline: float) -> Any:
         scan = _ChainScan(directory=directory, max_owned_bytes=structured_ppo.cap(config), deadline=deadline)
-        state, records = _validate_component_chain(directory, require_complete=False, require_retained=False, scan=scan, _game=True)
-        registry = scan.object(directory / 'artifact-registry.json')
-        if registry['generations'][str(generation)]['status'] != 'retained':
-            raise ContractError('game policy cannot load a pruned generation')
-        inspect_retained_game_artifact_v3(checkpoint_path(directory, generation), expected_inference_digest=records[generation]['inference_sha256'],
-            actions=config.actions, rules=card_instance_rules(), scan=scan)
-        result = _binding(directory, state, records[generation], generation)
-        scan.finalize()
-        return result
+        with scan:
+            state, records = _validate_component_chain(directory, require_complete=False, require_retained=False, scan=scan, _game=True)
+            registry = scan.object(directory / 'artifact-registry.json')
+            if registry['generations'][str(generation)]['status'] != 'retained':
+                raise ContractError('game policy cannot load a pruned generation')
+            inspect_retained_game_artifact_v3(checkpoint_path(directory, generation), expected_inference_digest=records[generation]['inference_sha256'],
+                actions=config.actions, rules=card_instance_rules(), scan=scan)
+            result = _binding(directory, state, records[generation], generation)
+            scan.finalize()
+            return result
 
     @contextmanager
     def project(self, plan: Any, numeric: Path, config: Any, learner_label: str, generation: int, deadline: float,
@@ -179,16 +251,29 @@ class _GameOperations:
                     pass
             handle = source.issue(numeric, files)
             self.projection = handle
+            primary: BaseException | None = None
             try:
                 yield count, source.proof, files, handle
+            except BaseException as error:
+                primary = error
+                raise
             finally:
                 self.projection = None
+                try:
+                    self.close_batch()
+                except BaseException as cleanup:
+                    if primary is None:
+                        raise
+                    primary.__dict__['cleanup_owner'] = self.online.packed_batch if self.online is not None else self
+                    primary.add_note('packed batch cleanup: ' + str(cleanup))
 
     def update_record(self, update: Json, state: Json, numeric_files: Json) -> None:
         assert self.online is not None
         classification = input_binding_game_v3(self.online.process.actions.action_contract, card_instance_rules())
-        update.update(schema_version=3, model_id=state['model_id'], model_version='3', input_recipe=state['input_recipe'],
+        update.update(schema_version=4 if state['schema_version'] == 4 else 3, model_id=state['model_id'], model_version='3', input_recipe=state['input_recipe'],
             **classification, numeric_files=numeric_files)
+        if state['schema_version'] == 4:
+            update['storage_binding'] = state['storage_binding']
 
     def commit(self, directory: Path, state: Json, config: Any, *, generation: int, update: Json | None,
                controls: Json, acknowledgement: Json, deadline: float) -> Json:
@@ -208,8 +293,7 @@ class _GameOperations:
 
 async def train_card_instance_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 'fresh',
                                   pause_after_update: int | None = None) -> Json:
-    if hasattr(loaded.config, 'storage'):
-        raise ContractError('group Pack storage PPO awaits its accepted Source integration')
+    _validate_packed_config(loaded.config)
     operations = _GameOperations()
     operations.validate_config(loaded.config)
     from gf_training.ppo_run import _run_ppo

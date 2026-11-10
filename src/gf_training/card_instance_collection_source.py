@@ -115,6 +115,7 @@ def inspect_game_manifest(owner: _SourceOwner, manifest: Json, actions: ActionCo
     files = manifest.get('files')
     if type(files) is not list:
         raise ContractError('original complete inventory required')
+    from gf_training.group_pack_game_source import PackedSourceOwner
     expected_names = set()
     for entry in files:
         closed(entry, {'path', 'sha256', 'bytes'})
@@ -125,10 +126,20 @@ def inspect_game_manifest(owner: _SourceOwner, manifest: Json, actions: ActionCo
         if name in expected_names or name in ('manifest.json', 'report.json', control_name):
             raise ContractError('duplicate/foreign original inventory entry')
         expected_names.add(name)
-        # Opaque diagnostics are owned/hashes only; never become learner input.
-        owner.read(owner.root / path)
-        if owner.files[name]['sha256'] != checksum(entry['sha256']) or owner.files[name]['bytes'] != entry['bytes']:
-            raise ContractError('original collection inventory hash/size mismatch')
+        # Constructor validation has already verified every packed original
+        # byte/member. Opaque diagnostics need admitted evidence, not JSON decode.
+        if type(owner) is PackedSourceOwner:
+            owner.remember_inventory_entry(name, entry['bytes'], checksum(entry['sha256']))
+        else:
+            owner.read(owner.root / path)
+            if owner.files[name]['sha256'] != checksum(entry['sha256']) or owner.files[name]['bytes'] != entry['bytes']:
+                raise ContractError('original collection inventory hash/size mismatch')
+    if type(owner) is PackedSourceOwner:
+        if config.get('storage', {}).get('format') != 'sqlite-group-pack-v1':
+            raise ContractError('packed original requires explicit original storage Config')
+        owner.validate_index(manifest)
+    elif 'storage' in config:
+        raise ContractError('directory original cannot reinterpret packed Config')
     actual = owner.inventory('**/*')
     if set(actual) != expected_names | {control_name, 'report.json'}:
         raise ContractError('complete original collection inventory changed')

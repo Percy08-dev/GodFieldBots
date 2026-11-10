@@ -360,7 +360,7 @@ def _episode_correspondence_digest(record: EpisodeRecords) -> str:
         "end_kind": record.end_kind, "outcome": record.outcome, "reason": record.reason})
 
 
-def _source_correspondence(control_fingerprint: str, declaration: Json, episode_digests: tuple[str, ...], *, game: bool = False) -> Json:
+def _source_correspondence(control_fingerprint: str, declaration: Json, episode_digests: tuple[str, ...], *, game: bool = False, storage_binding: Json | None = None) -> Json:
     """Build a bounded ephemeral cohort binding from an ORIGINAL native owner.
 
     Callers must obtain the digests/fingerprint from their validated original
@@ -373,16 +373,27 @@ def _source_correspondence(control_fingerprint: str, declaration: Json, episode_
         raise ContractError('ordered original episode digest tuple required')
     for value in episode_digests:
         checksum(value)
-    content = {"recipe": "structured-source-cohort-correspondence-v2" if game else "structured-source-cohort-correspondence-v1", "control_fingerprint": control_fingerprint,
+    if storage_binding is not None:
+        from gf_common.group_pack_game import checked_storage_binding
+        checked_storage_binding(storage_binding)
+        if not game:
+            raise ContractError('packed correspondence requires corrected game context')
+    content = {"recipe": "card-instance-packed-source-correspondence-v1" if storage_binding is not None else "structured-source-cohort-correspondence-v2" if game else "structured-source-cohort-correspondence-v1", "control_fingerprint": control_fingerprint,
                "semantics_sha256": digest(declaration), "episode_count": len(episode_digests),
                "episode_digests": episode_digests}
     return {**content, "binding_sha256": digest(content)}
 
 
-def _check_source_correspondence(value: Json, declaration: Json, *, game: bool = False) -> tuple[str, ...]:
+def _check_source_correspondence(value: Json, declaration: Json, *, game: bool = False,
+                                 storage_binding: Json | None = None) -> tuple[str, ...]:
     from gf_models.structured_sealed import checksum
     closed(value, {'recipe', 'control_fingerprint', 'semantics_sha256', 'episode_count', 'episode_digests', 'binding_sha256'})
-    if value['recipe'] != ('structured-source-cohort-correspondence-v2' if game else 'structured-source-cohort-correspondence-v1') or value['semantics_sha256'] != digest(declaration):
+    if storage_binding is not None:
+        from gf_common.group_pack_game import checked_storage_binding
+        checked_storage_binding(storage_binding)
+        if not game:
+            raise ContractError('packed correspondence requires corrected game context')
+    if value['recipe'] != ('card-instance-packed-source-correspondence-v1' if storage_binding is not None else 'structured-source-cohort-correspondence-v2' if game else 'structured-source-cohort-correspondence-v1') or value['semantics_sha256'] != digest(declaration):
         raise ContractError('original Source correspondence semantic recipe mismatch')
     for key in ('control_fingerprint', 'semantics_sha256', 'binding_sha256'):
         checksum(value[key])
@@ -865,7 +876,7 @@ def _read_rollout(directory: Path, expected_digest: str, model: Any, *,
                   reserve: Callable[[int], None] = lambda _: None,
                   original_manifest: Json | None = None, snapshots: dict[str, tuple[int, ...]] | None = None,
                   encoded_scratch: int = 0, json_budget: int | None = None, historical: bool = False,
-                  _context: _RolloutContext | None = None) -> StructuredRollout:
+                  _context: _RolloutContext | None = None, storage_binding: Json | None = None) -> StructuredRollout:
     poll = check or (lambda: None)
     poll()
     limit = model.resources.max_owned_bytes if max_owned_bytes is None else min(max_owned_bytes, model.resources.max_owned_bytes)
@@ -896,7 +907,7 @@ def _read_rollout(directory: Path, expected_digest: str, model: Any, *,
     if expected_correspondence is not None:
         if expected_records is not None:
             raise ContractError('original record and digest correspondence modes are exclusive')
-        expected_digests = _check_source_correspondence(expected_correspondence, expected_semantics, game=_context is not None)
+        expected_digests = _check_source_correspondence(expected_correspondence, expected_semantics, game=_context is not None, storage_binding=storage_binding)
         if len(manifest['episodes']) != len(expected_digests):
             raise ContractError('numeric episode count differs from ORIGINAL Source digest order')
     if expected_records is not None and len(manifest['episodes']) != len(expected_records):
@@ -1076,14 +1087,15 @@ def game_rollout(records: tuple[EpisodeRecords, ...], model: ModelConfigV3, *, a
 def read_game_rollout(directory: Path, expected_digest: str, model: ModelConfigV3, *, actions: ActionConfigV3,
                       rules: CardInstanceRules, declaration: Json, expected_correspondence: Json,
                       max_owned_bytes: int | None = None, extra_owned_bytes: int = 0,
-                      check: Callable[[], None] | None = None, reserve: Callable[[int], None] = lambda _: None) -> StructuredRollout:
+                      check: Callable[[], None] | None = None, reserve: Callable[[int], None] = lambda _: None,
+                      storage_binding: Json | None = None) -> StructuredRollout:
     context = _RolloutContext(actions, rules)
     validate_config(model, layout=context.layout)
     closed(declaration, SEMANTIC_KEYS_V3)
     validate_recorded_semantics_v3(declaration, model, layout=context.layout,
         action_contract=actions.action_contract, rules=rules)
-    _check_source_correspondence(expected_correspondence, declaration, game=True)
+    _check_source_correspondence(expected_correspondence, declaration, game=True, storage_binding=storage_binding)
     return _read_rollout(directory, expected_digest, model, action_contract=actions.action_contract,
         purpose='qualified_game', synthetic_capacity=False, expected_semantics=declaration,
         expected_correspondence=expected_correspondence, max_owned_bytes=max_owned_bytes,
-        extra_owned_bytes=extra_owned_bytes, check=check, reserve=reserve, _context=context)
+        extra_owned_bytes=extra_owned_bytes, check=check, reserve=reserve, _context=context, storage_binding=storage_binding)

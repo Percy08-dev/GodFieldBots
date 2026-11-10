@@ -1,15 +1,17 @@
 # 0034: Explicit SQLite group Pack storage
 
-- Status: Accepted (foundation/runtime/Python Source designs; later gates pending)
+- Status: Accepted (all dependent designs; implementation milestones below)
 - Date: 2026-11-10
 - Decision owner: root
 - Review: bot_architecture_reviewer READY for foundation, 2026-11-10;
   namespace/loans, sealed publication ownership and persisted/IPC contracts resolved
-- Review: runtime and Python Source/lineage/PPO designs READY; native/formal/
-  final64/Dataset remain separately gated
+- Review: runtime/Python Source and separate native/formal/final64/Dataset
+  designs READY; each implementation still requires independent final reviews
 - Implementation: foundation and standalone memory/RAM runtime accepted after
   both final reviews,616affected/legacy checks and18real saved-byte-audited games;
-  Source/PPO/native/final64/Dataset consumers remain pending
+  Python Source/run4/update4/wire5 accepted after both reviews,610affected checks,
+  50postreview checks and64real natural games/4updates with fresh parent audits;
+  native/final64/Dataset/Tree implementation and full comparison remain pending
 
 ## Context
 
@@ -31,7 +33,8 @@ The [runtime design](../design/sqlite-group-pack-runtime.md) and
 memory/RAM output, composite publication, proof2/custody, run4/update4 and wire5.
 Their accepted Python scope preserves cross-open physical replacement detection
 and checks FD/pool retirement before generation publication. Native and final64
-outline sections require their own exact dependent-contract review before code.
+contracts have passed their separate design gates; their implementation and
+source-matched conformance/acceptance remain separate milestones.
 
 ## Alternatives
 
@@ -51,6 +54,14 @@ deletion occurs. Integration questions must pass their architecture gate before
 implementation; accepting the foundation does not accept incomplete full scope.
 
 ## Verification
+
+The packed Source's prepare boundary ends per-batch Source finalization, not
+the existing separate postcommit retention transaction. Retention owns a fresh
+parent/control scan before pruning and can fail the overall parent while
+retaining actual committed update history. Both reviewers agreed this is the
+design's allowed future-parent validation; it cannot reuse retired mutable
+controls or leave its new original owner unretired. Source callbacks/finally
+after preparation remain in-memory only.
 
 The design lists corruption/failure/ownership checks, complete runtime smoke
 coverage, old-data checks and same-HDD comparison requirements. Evidence and

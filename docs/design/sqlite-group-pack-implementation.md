@@ -42,30 +42,30 @@ loan interfaces. A `gf_training.group_pack_db` module owns exact SQL and
 seal/descriptor validation, reused by Writer and readonly Source. Private
 transport/resource helpers may live in their own focused storage modules.
 
-- [ ] Write and run failing byte-exact round-trip tests with all seven kinds,
+- [x] Write and run failing byte-exact round-trip tests with all seven kinds,
   zero-length and non-UTF8 member payloads, sorted names, arbitrary group sizes.
-- [ ] Implement the exact binary/index contract and one zstd3 frame; enforce
+- [x] Implement the exact binary/index contract and one zstd3 frame; enforce
   compressed/raw/index/count bounds before allocation where possible.
-- [ ] Add corruption/duplicate JSON keys/names, unsafe path/range/hash/trailing
+- [x] Add corruption/duplicate JSON keys/names, unsafe path/range/hash/trailing
   frame/oversized-expansion refusal tests and verify passes.
-- [ ] Write and run failing actual-child SQLite transaction tests, including
+- [x] Write and run failing actual-child SQLite transaction tests, including
   nullable game IDs, 2/6/other-sized groups, idempotent exact resend and conflicting
   group/episode/control resend with rollback of the entire group.
-- [ ] Implement Writer, bounded binary framing/deadlines and byte reservation.
+- [x] Implement Writer, bounded binary framing/deadlines and byte reservation.
   Capture child errors without logging original private payloads.
-- [ ] Test child kill/truncated IPC/open transaction rollback, capacity saturation,
+- [x] Test child kill/truncated IPC/open transaction rollback, capacity saturation,
   simulated disk-full/failed checkpoint, cancellation/timeout and confirmed reap.
-- [ ] Implement ordered sealing, DELETE-mode readonly namespace verification,
+- [x] Implement ordered sealing, DELETE-mode readonly namespace verification,
   fsync/no-overwrite external descriptor, short FULL catalog transactions and
   crash reconciliation from actual originals. Never repair/mutate a sealed DB.
-- [ ] Test seal/catalog/publication failure windows and bare-Pack/no-authority.
-- [ ] Implement directory and packed ArtifactSource with retained physical
+- [x] Test seal/catalog/publication failure windows and bare-Pack/no-authority.
+- [x] Implement directory and packed ArtifactSource with retained physical
   descriptor/DB/inventory identities, exact bytes and group reload/generation loans.
-- [ ] Test same-size mutation/replacement, symlink, changed descriptor, unexpected
+- [x] Test same-size mutation/replacement, symlink, changed descriptor, unexpected
   sidecars/namespace, live-loan close/eviction refusal, stale loan and reload.
-- [ ] Run `.venv/bin/python -m pytest -q tests/test_group_pack*.py`, scoped Ruff
+- [x] Run `.venv/bin/python -m pytest -q tests/test_group_pack*.py`, scoped Ruff
   and mypy, then report changed files, exact checks, limitations and design deltas.
-- [ ] Independent correctness and architecture conformance; resolve blockers,
+- [x] Independent correctness and architecture conformance; resolve blockers,
   root reruns affected verification and commits a coherent milestone.
 
 ### Task 2: Memory collection and explicit Config
@@ -94,9 +94,10 @@ remain limited to standalone smoke/collect/evaluate baseline/neural inference
 until the subsequent Source/native/final64/Dataset gates are implemented.
 
 - [x] Specify and review exact bounded in-memory artifact writer and RAM log seam.
-- [ ] Add failing compatibility/collection/failure tests, implement reviewed seam.
-- [ ] Test real baseline/evaluation and all incomplete/cancelled group evidence.
-- [ ] Independent task reviews, focused verification and local commit.
+- [x] Add failing compatibility/collection/failure tests, implement reviewed seam.
+- [x] Test real baseline/neural inference and controlled incomplete/cancelled group evidence.
+- [ ] Explicit live evaluate command remains in final all-path verification.
+- [x] Independent task reviews, focused verification and local commit.
 
 ### Task 3: Original-source and Python/Rust consumers
 
@@ -104,7 +105,7 @@ until the subsequent Source/native/final64/Dataset gates are implemented.
 Requires explicit stable logical proof, generation/resume variant, native byte
 provider and pending final64 interfaces; no inferred extraction adapter.
 
-- [ ] Review exact Python/SealedScan/lineage/native/final64/Dataset3 interface changes.
+- [x] Review exact Python/SealedScan/lineage/native/final64/Dataset4 interface changes.
 - [ ] Tests first; connect all original-source consumers and safe group retirement.
 - [ ] Verify artifact reconstruction and Python/Rust features/numerics parity.
 - [ ] Verify bounded PPO update/pause/resume/final64/Dataset/Tree conditions.
@@ -129,6 +130,10 @@ responsibility needs extraction (do not create empty layers). Existing
 `structured_rollout.py`; `gf_models/structured_sealed.py` only the generic
 physical verified_digest accessor/no training import;
 `gf_cli/card_instance.py`/`__init__.py` only ordinary packed PPO composition/guards.
+Approved narrow ownership additions: `structured_journal.py` exact concrete
+lower-layer verified-original reader adapter gate (no journal→high Source→journal
+cycle), and `gf_cli/config.py` ordinary Python PPO collect/standalone=False guard
+only. Actual parent/ledger/plan checks remain mandatory; all later guards stay.
 Tests `test_group_pack_game*.py` and directly affected original tests if needed.
 Root retains docs/dependencies/asset ownership. No native/Simulator edits.
 
@@ -139,25 +144,25 @@ wire5 paired recipes; explicit PackedFinalizedCollection including storage_metri
 external owned_bytes roots; checked precommit FD/pool retirement with frozen
 in-memory proof. Exact values/closed fields are in the accepted Source design.
 
-- [ ] Red→green stable proof2/custody across reopen; byte-identical replacement
+- [x] Red→green stable proof2/custody across reopen; byte-identical replacement
   across pause/reopen fails; bare Pack/descriptor/metadata cannot issue updates.
-- [ ] Full logical inventory/row checks, original-byte journal/candidate/replay
+- [x] Full logical inventory/row checks, original-byte journal/candidate/replay
   parsing, opaque diagnostics never enter inputs; old proof1/hash tests stay exact.
-- [ ] Shared one-group cache, stale/live borrow checks, requested-history group
+- [x] Shared one-group cache, stale/live borrow checks, requested-history group
   reload and actual graph/FD/budget retirement; no whole-parent raw residency.
-- [ ] New source/control callbacks share SAME actual owner through optimizer and
+- [x] New source/control callbacks share SAME actual owner through optimizer and
   checked prepare_commit; constructor/close/cancel failure tests preserve owners.
-- [ ] Tests for exact run4/update4/wire5, frozen resume identity and wrong/mixed
+- [x] Tests for exact run4/update4/wire5, frozen resume identity and wrong/mixed
   variants; numeric4 arrays/candidates/selected actions equal original references.
-- [ ] Preserve every base formal algorithm kernel AST (including training_groups,
+- [x] Preserve every base formal algorithm kernel AST (including training_groups,
   validation_groups, ppo.gae, normalize_advantages, ppo_math.losses, ppo_run._controls,
   structured_numeric.Learner.__init__/update). Storage must not change math,
   ordering, reward, optimization or existing saved numerical semantics.
-- [ ] Real external DB/WAL/descriptor/failed bytes count in the same parent disk
+- [x] Real external DB/WAL/descriptor/failed bytes count in the same parent disk
   cap before optimizer, after update/finalization and native scratch allowance.
-- [ ] Controlled ordinary PPO collect/update/pause/resume with actual numeric
+- [x] Controlled ordinary PPO collect/update/pause/resume with actual numeric
   wire5 and old unconfigured regressions. No formal parent/campaign/Tree gate.
-- [ ] Independent reviews and root bounded real smoke, scoped/static acceptance
+- [x] Independent reviews and root bounded real smoke, scoped/static acceptance
   and coherent commit before dependent native work.
 
 #### Task3B: Native original-byte provider

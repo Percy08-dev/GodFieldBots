@@ -96,6 +96,13 @@ class SealedScan:
         self.files: dict[Path, tuple[tuple[int, ...], str]] = {}
         self.inventories: dict[Path, tuple[str, ...]] = {}
 
+    def verified_digest(self, path: Path) -> str:
+        """Digest from an explicitly admitted physical original."""
+        self.check()
+        if path not in self.files:
+            raise ContractError('unregistered verified original digest')
+        return self.files[path][1]
+
     def check(self) -> None:
         if time.monotonic() >= self.deadline:
             raise TimeoutError('sealed inspection deadline')

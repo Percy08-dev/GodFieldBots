@@ -36,6 +36,13 @@ class FinalizedCollection:
 
 
 @dataclass(frozen=True)
+class PackedFinalizedCollection(FinalizedCollection):
+    locator: CollectionLocator
+    envelope_sha256: str
+    storage_metrics: Json
+
+
+@dataclass(frozen=True)
 class PackedRunResult:
     """Sealed runtime diagnostics, without Source or learning permission."""
 

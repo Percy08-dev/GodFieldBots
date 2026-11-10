@@ -1,10 +1,11 @@
 # Group Pack: original Source, lineage and native byte provider
 
 Date: 2026-11-10. Owner: root. Status: Python Source/lineage/PPO and Native3B
-designs accepted after independent architecture reviews;
+designs accepted after independent architecture reviews; Python Source/lineage/
+ordinary PPO implementation accepted within its bounded verification scope;
 formal/final64/Dataset design is separately accepted in
-[final sources](sqlite-group-pack-final-sources.md). Implementation and final
-conformance remain pending.
+[final sources](sqlite-group-pack-final-sources.md). Native/final integration
+implementation and final conformance remain pending.
 References: ADR0034, foundation/runtime designs, ADR0024 §§16–18.2.
 This design completes the intended consumer scope; no temporary extraction is
 used as original custody and no old identity is reinterpreted.
@@ -94,6 +95,41 @@ History/Dataset borrowing reloads only the requested group/episode, validates
 against the SAME retained original proof, and retires before another group.
 Whole-collection decoded PPO batches may retain their already bounded selected
 16-game inputs; do not accumulate every parent batch's decoded records.
+
+### Real-cohort admission closure (2026-11-11)
+
+An actual sixteen-game collection exposed duplicated conservative decode
+reservations: the manifest pass reread opaque members, the Source parsed journals
+before the logical reader parsed them again, and both the byte reader and parser
+reserved decoded graphs. The default2GiB budget remains unchanged. The bounded
+remedy is architecture READY; independent implementation reviews remain required.
+
+For initial packed inventory verification, compare every manifest name/length/SHA
+against the index produced by the constructor's COMPLETE original DB/Pack/member
+validation. Remember its exact logical identity with admitted evidence metadata.
+Preserve `max_source_file_mib` for EVERY declared inventory member, including
+opaque diagnostics; eliminating its read does not widen file-size admission.
+Do not trust fresh SQL metadata or an unvalidated external index. Preserve the
+complete-name closure, group/episode checks and final SAME-original DB hash/stat
+rechecks. This removes redundant opaque reads without weakening byte custody.
+
+For packed journals, the concrete logical reader performs the single parse and
+descriptor admission; Source applies `_game_header` to that validated header
+before projecting records. The single logical parse must preserve the outer
+parser's duplicate-key and nonfinite-number refusal. Directory preflight remains
+unchanged. The concrete
+`OriginalArtifactReader` uses a narrow raw-only read path: immutable returned
+bytes/aliases retain conservative raw-byte admission until explicit graph
+retirement or close, while `admit_validation` separately covers actual JSON/table
+graphs BEFORE allocation. Generic `owner.object()` still admits JSON decoding.
+Evidence metadata is charged once per remembered logical entry; separate live
+parses/copies must never be deduplicated merely because their filenames match.
+Keep the existing records-plus-artifacts refusal and exact concrete-reader gate.
+
+Verify the saved failed cohort structurally with allocation category totals,
+unchanged proof/numeric outputs and corruption/replacement refusals. This conveys
+no parent/update qualification and cannot rehabilitate the preserved failed run.
+Fresh actual PPO evidence is required in new run directories after both reviews.
 
 ## Parent control and generation compatibility
 
@@ -234,6 +270,17 @@ reopening closed originals; future parent validation/resume reopens and compares
 that persisted custody against actual originals. Keep long-lived parent locks
 through commit as today. This does not relax the no-reportable-I/O-after-commit
 rule or permit multiple updates from one issued projection.
+
+Phase clarification: existing `ops.retain` is a SEPARATE subsequent owned parent/
+pruning validation, after generation commit in both directory and packed runs.
+Its new scan must validate newly committed run/generation/registry controls before
+destructive pruning; retired mutable batch snapshots cannot authorize it. This
+is an allowed future-parent validation, not a prepared batch Source callback,
+finally guard or deferred close. It may fail the overall parent while preserving
+the true committed generation/update/optimizer history and ineligibility; never
+invent a rollback. It must retire its OWN scan/pool/FDs on every outcome. The
+prepared Source remains incapable of new original I/O. This distinction was
+confirmed by both reviewers after a targeted retention-reopen failure probe.
 
 ## Native provider (separate dependent increment)
 
@@ -425,11 +472,12 @@ keeps its manifest flock. DB/descriptor originals remain retained/rechecked
 alongside that lock. Lock order is unchanged: parent/Source roots in deterministic
 order, then catalog; provider callbacks never obtain those locks.
 
-Dataset3 retains the SAME complete three formal parents and three final64
-Sources. It accepts homogeneous explicit packed parents/validations or existing
-homogeneous directory sources; mixed physical storage modes reject in v1 rather
-than silently mixing proof recipes. Parent qualification, all-final64 source
-rules, split separation and prescribed labels/budgets remain unchanged. History
+Dataset3 remains the existing directory-original format. The separate Dataset4
+subtype in the accepted [final-sources design](sqlite-group-pack-final-sources.md)
+retains the SAME complete three packed formal parents and three packed final64
+Sources. Mixed physical storage modes reject in v1 rather than silently mixing
+proof recipes. Parent qualification, all-final64 source rules, split separation
+and prescribed labels/budgets remain unchanged. History
 borrows and native RAW receive only the requested original own episode under
 generation loans; source owners stay retained through fresh Tree fitting/final
 rechecks. Tree3 inference uses the same composite output publication and existing

@@ -27,16 +27,17 @@ class StructuredLearningProcess(LearningProcess):
     def __init__(self, directory: Path, max_log_bytes: int, model: Any, binding: InferenceBindingV2,
                  action_config_hash: str, resume_identity: str, *, action_contract: Any,
                  ledger: ReservationLedger, cuda_visible_devices: str | None, cleanup_deadline: float,
-                 _actions: ActionConfigV3 | None = None) -> None:
+                 _actions: ActionConfigV3 | None = None, storage_binding: Json | None = None) -> None:
         super().__init__(directory, max_log_bytes)
         self.actions = _actions
-        self.protocol = 3 if _actions is None else 4
+        self.storage_binding = storage_binding
+        self.protocol = 5 if storage_binding is not None else 3 if _actions is None else 4
         self._issued_handle: Any = None
         self.model, self.binding, self.action_contract = model, binding, action_contract
         self.visibility = child_cuda_visibility(binding.device, cuda_visible_devices)
         self.identity = wire_identity(model, binding, action_config_hash, resume_identity,
             action_contract=action_contract, purpose='component', synthetic_capacity=False,
-            cuda_visible_devices=self.visibility, _actions=self.actions)
+            cuda_visible_devices=self.visibility, _actions=self.actions, storage_binding=storage_binding)
         self.ledger, self.cleanup_deadline = ledger, cleanup_deadline
         self.resident_bytes = learner_process_bytes(model, binding, **({"layout": CORRECTED_CARD_INSTANCE_LAYOUT} if self.actions is not None else {}))
         self.lease: LearnerReservation | None = None
@@ -184,11 +185,11 @@ class StructuredLearningProcess(LearningProcess):
                     validate_projection,
                 )
                 expected = self._issued_handle.expectation
-                if canonical(request['projection']) != canonical(expected) or request['transaction_id'] != digest_projection(expected):
+                if canonical(request['projection']) != canonical(expected) or request['transaction_id'] != digest_projection(expected, storage_binding=self.storage_binding):
                     raise ContractError('wire4 request differs from live issued projection')
                 if self.steps is None:
                     raise ContractError('wire4 update before initialization')
-                validate_projection(expected, expected_steps=self.steps, policy=request['expected_policy_version'], batch_digest=request['batch_digest'])
+                validate_projection(expected, expected_steps=self.steps, policy=request['expected_policy_version'], batch_digest=request['batch_digest'], storage_binding=self.storage_binding)
             checksum(request['batch_digest'])
             if any(type(request[key]) is not str or not request[key] for key in ('batch', 'expected_policy_version')):
                 raise ContractError('wire3 batch path/policy required')
@@ -236,10 +237,11 @@ class StructuredLearningProcess(LearningProcess):
 class GameLearningProcess(StructuredLearningProcess):
     def __init__(self, directory: Path, max_log_bytes: int, model: Any, binding: InferenceBindingV2,
                  action_config_hash: str, resume_identity: str, *, actions: ActionConfigV3,
-                 ledger: ReservationLedger, cuda_visible_devices: str | None, cleanup_deadline: float) -> None:
+                 ledger: ReservationLedger, cuda_visible_devices: str | None, cleanup_deadline: float,
+                 storage_binding: Json | None = None) -> None:
         super().__init__(directory, max_log_bytes, model, binding, action_config_hash, resume_identity,
             action_contract=actions.action_contract, ledger=ledger, cuda_visible_devices=cuda_visible_devices,
-            cleanup_deadline=cleanup_deadline, _actions=actions)
+            cleanup_deadline=cleanup_deadline, _actions=actions, storage_binding=storage_binding)
         self.online_owner: Any = None
 
     async def update(self, projection: Any, output: Path, *, deadline: float) -> Json:  # type: ignore[override]
@@ -250,10 +252,10 @@ class GameLearningProcess(StructuredLearningProcess):
         projection.require(self)
         self._issued_handle = projection
         try:
-            reply = await self.request({'protocol_version': 4, 'command': 'update', 'identity': self.identity,
+            reply = await self.request({'protocol_version': self.protocol, 'command': 'update', 'identity': self.identity,
                 'batch': str(projection.numeric), 'batch_digest': projection.expectation['numeric_manifest_sha256'],
                 'expected_policy_version': projection.expectation['expected_policy_version'], 'output': str(output),
-                'transaction_id': digest_projection(projection.expectation), 'projection': projection.expectation}, deadline)
+                'transaction_id': digest_projection(projection.expectation, storage_binding=self.storage_binding), 'projection': projection.expectation}, deadline)
             projection.completed = True
             return reply
         finally:

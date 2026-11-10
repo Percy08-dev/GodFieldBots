@@ -191,3 +191,100 @@ Together with baseline6,18successful real games accept Task2 STANDALONE runtime
 scope. Both independent final reviews READY, root616/10SKIP/static evidence and
 receipts retained in runs/assessments/sqlite-group-pack-v1-20261111. No Source/
 PPO/native/final64/Dataset acceptance is implied; next Task3A remains required.
+
+Task2 milestone committed1831f6f. Fresh Task3A implementer is active with brief
+`/tmp/gfb-group-pack-task3a-brief.md`; report target
+`/tmp/gfb-group-pack-task3a-report.md`. Only one code writer. Scope Python Source,
+run4/update4/wire5/ordinary PPO/external disk budget; later guards remain.
+Approved minimal file ownership extends to structured_journal concrete lower
+verified-original adapter and config.py ordinary Python PPO guard; avoid a
+journal→high Source→journal cycle. Root owns docs/assets, does not edit those
+active implementation files. No push/publish or default switch.
+
+Comparison protocol independently reviewed by bot_advisor; root adopts two
+separate panels in sqlite-group-pack-comparison.md:6counterbalanced same-original
+full-pilot HDD archival/read pairs, then4matched-condition nonformal2update
+parents with independent bounded collector overlap. Do not call archival reference
+the production oldpublisher, pool unlike samples, assume coldhostcache, or infer
+strength/formal/default-switch authority. Numerical parity is its own gate.
+
+Task3A initial code frozen, report /tmp/gfb-group-pack-task3a-report.md and exact
+patch /tmp/gfb-group-pack-task3a-review.patch. Rootfresh affectedHOST with
+GF_RUN_CUDA=1 passes574checks223.56s (no CUDA skip in this selection), mypy170/
+RuffPASS. Independent correctness/conformance BLOCKED: expired workdeadline
+prevents cleanup; partialPackedSource construction loses actual originals;
+training importsCLI policy; ambient handled exception swallows scan-closeerror.
+Fix1 assigned to same implementer, snapshot /tmp/gfb-group-pack-task3a-before-fix1.
+Both reviewers agree separatepostcommit retention is allowed futureparent/pruning
+validation and may fail/invalidateparent preservingactualupdate2; actualprepared
+batch callbacks remain I/O-free. Source/ADR nowrecordthisphaseinterpretation.
+No actualSimulatorPPOorNative3Bcodeuntilfixreviews/runtimeacceptance.
+
+Task3A FIX1 both independent delta reviews READY; root fresh HOST affected suite
+with GF_RUN_CUDA=1 passes598checks in231.05s, Ruff/mypy170PASS. These establish
+component/fault/numerical coverage only. First actual packed Python PPO smoke
+(`python-mlp-cpu-continuous-2`, seed17, CPU inference/CUDA learner, max2updates,
+original7200/5400/7140/60budgets) FAILs before update0 with storage budget
+exhausted. Its first16game/8group collection is saved; parent remains failed,
+updates0/optimizer_steps0, immutable and ineligible. No limit increase, status
+repair, optimizer replay or dependent Native3B implementation is authorized by
+this result. Read-only saved-collection allocation diagnosis is in progress;
+Task3A acceptance/commit and later real PPO conditions remain pending.
+
+Source admission FIX2 direction architecture READY: reuse only the constructor's
+FULL validated member index for initial inventory hashes, one logical Journal
+parse with preserved strictJSON refusals, distinct retained raw-byte/decoded-graph
+admission and one evidence charge per entry. No cap increase or actual-copy
+deduplication by filename. Implementer active; saved-cohort diagnosis remains
+read-only and cannot change the failed parent's eligibility.
+
+Separate actual disposable direct-Writer D:probe FAILs the same controlled
+descriptor write-close ctime refresh at `_publish` terminal retirement; composite
+runtime remains accepted. Direct-public/non-retained-pending amendment is now
+architecture READY in the physical design: factor SAME exact lower terminal
+helper, joint RO allowance, strict DB/Source unchanged, no new DB control.
+Implementation follows the current Source wave; benchmark/full-plan gate remains
+open. Failed probe output is preserved, not silently retried as a paired trial.
+
+Task3A FIX2 structural saved-cohort probe PASS16games/32participant records/
+443decisions/566files, qualifiedFalse,49.30s; inspection admitted peak1,565,165,664B
+and terminal account0. Constructor's temporary whole-available reservation is
+reported separately, not as RSS. Root fresh HOST GF_RUN_CUDA=1 aggregate PASS610
+in238.81s; Ruff/mypy170/AST8PASS. Conformance READY. Correctness reproduces a new
+blocking file-cap regression: validated-index inventory admitted an opaque2MiB
+member despite frozen1MiB Source-file cap. Root ruling preserves that cap for ALL
+members before remembering evidence; minimal guard/regression fix pending the
+completed review. No actual new PPO acceptance/commit yet.
+
+PanelA draft harness review found omitted catalog bytes and absent per-report
+device/build identities. Root amended draft to per-trial catalogs and joint
+DB/catalog/sidecar sampling, exact host HDD/mount/runtime/source/harness identities,
+and explicit Writer-archival/format-specific-readback labels. Aggregate reducer
+and benchmark execution remain pending. Fresh read-only host identity confirms
+D:disk2/USB/ASMediaASM1153e/HDD/4,000,787,030,016B; no settings changed.
+
+Task3A file-cap correction both final reviews READY; root50affected cases PASS
+15.00s and fresh Ruff/mypy170/AST8PASS. Actual fresh continuous parent2579bc3a
+completes32natural games/2updates/419selected decisions/16optimizer steps in
+531.165s. Separate dba33a31 pauses after1update, then resumes in a NEW CLI process
+with identical Config/source and completes2updates/32natural/419decisions/16steps.
+Both fresh root complete-parent Source/lineage/numeric commands exit0,87.381s and
+87.661s, run bytes unchanged. Independent first-parent audit additionally records
+actual2Source owners/SQLite/FD closure and pool/control accounting0; its temporary
+wrapper import/summary errors are preserved, not labelled production failures.
+Root accepts Task3A Python scope (64real natural games/4updates), not learning
+quality, formal qualification or independent-trajectory final-state equality.
+The full actor model/device matrix remains Task2 evidence; current affected
+CPU/CUDA numerical parity plus the real MLP update/resume exercise the shared
+Python storage/Source path without inventing a new campaign.
+
+To preserve main's exact active-run source, direct-Writer work used a native
+managed worktree `/home/percy/.codex/worktrees/63cf/GodFieldBots`, HEAD1831f6f,
+with446hashed frozen-main src/test files copied before implementation. Only
+Writer/publication/newterminalhelper/newtest belong to that delta. Default sandbox
+write was readonly; authorized HOST copy/edits succeeded, no auto-review rejection.
+Baseline87PASS; both final reviews READY,163bounded tests and4actualD:/ext4
+public/nonretainedpending probes PASS. Parent used worktree source while -I child
+loaded byte-identical main worker/dependencies; main hashes stayed exact. Root
+integration/source-matched verification remains pending; no mixed-path wheel or
+production acceptance is inferred. No existing run/Simulator data was modified.

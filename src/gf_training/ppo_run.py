@@ -7,6 +7,7 @@ import importlib.util
 import json
 import os
 import resource
+import stat
 import subprocess
 import sys
 import time
@@ -127,15 +128,36 @@ def integration_identity(config: Any, deadline: float) -> Json:
     return result
 
 
-def owned_bytes(directory: Path, deadline: float = float("inf")) -> int:
+def owned_bytes(directory: Path, deadline: float = float("inf"), *,
+                external_roots: tuple[Path, ...] = ()) -> int:
     count = 0
-    for path in directory.rglob('*'):
+    seen: set[tuple[int, int]] = set()
+    pending = [directory, *external_roots]
+    while pending:
         if time.monotonic() >= deadline:
             raise TimeoutError('owned storage measurement deadline')
-        if path.is_symlink():
-            raise ContractError('symlink in owned PPO storage')
-        if path.is_file():
-            count += path.stat().st_size
+        path = pending.pop()
+        if not path.is_absolute():
+            path = path.absolute()
+        # Do not follow symlinks in external roots or their ancestry.
+        for ancestor in (path, *path.parents):
+            if ancestor.is_symlink():
+                raise ContractError('symlink in owned PPO storage')
+        try:
+            info = path.lstat()
+        except FileNotFoundError:
+            continue
+        key = (info.st_dev, info.st_ino)
+        if key in seen:
+            continue
+        seen.add(key)
+        if stat.S_ISDIR(info.st_mode):
+            with os.scandir(path) as entries:
+                pending.extend(Path(entry.path) for entry in entries)
+        elif stat.S_ISREG(info.st_mode):
+            count += info.st_size
+        else:
+            raise ContractError('nonregular owned PPO storage entry')
     return count
 
 
@@ -362,6 +384,11 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
             ops._implementation = 'native-structured-v2'
         else:
             ops = _structured_ops if _structured_ops is not None else structured_ppo
+    def measure_owned(deadline: float) -> int:
+        if game and state['schema_version'] == 4:
+            return owned_bytes(directory, deadline, external_roots=ops.external_roots(state))
+        return owned_bytes(directory, deadline)
+
     formal = ops.formal if game else None
     if formal is not None:
         formal.preflight(loaded)
@@ -492,7 +519,7 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
                     raise ContractError('wall clock rollback during PPO invocation')
             while True:
                 check_clock()
-                usage = owned_bytes(directory, execution)
+                usage = measure_owned(execution)
                 if formal is not None:
                     observed = time.monotonic()
                     if formal.observe_stop(state, operation_unix, invocation_started, observed, usage):
@@ -536,11 +563,15 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
                         collection = await collector(plan)
                     if collection.directory.resolve() != (directory / 'collections' / batch_id).resolve() or collection.report.get('comparison_valid') is not True:
                         raise ContractError('collection callback did not finalize requested original batch')
+                    if game:
+                        ops.accept_collection(collection, config)
                     check_clock()
                     from gf_common.schedule import serialize_schedule
                     collection_scan = None
                     if ops:
                         collection_manifest, collection_scan = ops.read_control(collection.directory / 'manifest.json', config, deadline=execution)
+                        if game:
+                            generation_scope.enter_context(collection_scan)
                     else:
                         collection_manifest = read_json(collection.directory / 'manifest.json')
                     expected_bindings = {key: asdict(value) for key, value in registry.items()}
@@ -555,14 +586,14 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
                         if ops:
                             assert collection_scan is not None
                             projection_options: dict[str, Any] = {
-                                'expected_manifest_sha256': collection_scan.files[collection.directory / 'manifest.json'][1],
+                                'expected_manifest_sha256': collection_scan.verified_digest(collection.directory / 'manifest.json'),
                                 'extra_owned_bytes': collection_scan.retained,
                             }
                             if type(ops) is structured_ppo._NativeComponentOps:
                                 # Actual remaining owned storage bounds the private
                                 # spool. The collection-admission reserve is separate.
                                 projection_options['scratch_allowance_bytes'] = max(
-                                    0, training.max_owned_bytes - owned_bytes(directory, execution))
+                                    0, training.max_owned_bytes - measure_owned(execution))
                             projected = (generation_scope if game else source_scope).enter_context(
                                 ops.project(plan, numeric, config, learner_label, generation, execution,
                                     **projection_options))
@@ -590,7 +621,7 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
                                 decision_count = len(decisions)
                                 del decisions
                         numeric_hash = sha256(numeric / 'rollout.json', execution)
-                        if owned_bytes(directory, execution) > training.max_owned_bytes or time.monotonic() >= execution:
+                        if measure_owned(execution) > training.max_owned_bytes or time.monotonic() >= execution:
                             raise RuntimeError('PPO collection/encoding exceeded execution/storage limits')
                         next_generation = generation + 1
                         await asyncio.sleep(0)  # Serve pending cancellation before optimizer side effects.
@@ -605,7 +636,7 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
                                                            'output': str(checkpoint_path(directory, next_generation)), 'action_hash': digest(asdict(config.actions))}, execution)
                         check_clock()
                         update_seconds = time.monotonic() - update_started
-                        if time.monotonic() >= execution or owned_bytes(directory, execution) > training.max_owned_bytes:
+                        if time.monotonic() >= execution or measure_owned(execution) > training.max_owned_bytes:
                             raise RuntimeError('PPO update/save execution/storage overrun')
                     if collection_scan is not None:
                         collection_scan.finalize()
@@ -637,7 +668,7 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
                         commit_generation(directory, state, generation=next_generation, update=update, controls=_controls(rng, pool, next_generation), deadline=execution)
                         retain(directory, next_generation, deadline=execution)
                 check_clock()
-                if time.monotonic() >= execution or owned_bytes(directory, execution) > training.max_owned_bytes:
+                if time.monotonic() >= execution or measure_owned(execution) > training.max_owned_bytes:
                     raise RuntimeError('PPO commit/retention execution/storage overrun')
                 state['last_unix'] = time.time()
                 if pause_after_update == next_generation:
@@ -651,6 +682,12 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
             except BaseException as failure:  # noqa: BLE001 - persist failure after owned cleanup
                 error = error or failure
                 state['cleanup_failure'] = str(failure)
+        if game:
+            try:
+                ops.close_batch()
+            except BaseException as cleanup_error:  # noqa: BLE001 -- persist cleanup failure before release.
+                error = error or cleanup_error
+                state['cleanup_failure'] = str(cleanup_error)
         if set(child.health) - {'exit_code', 'stderr_bytes'} or child.health.get('exit_code') != 0:
             error = error or RuntimeError('PPO learner cleanup health failed')
         if time.time() < operation_unix + (time.monotonic() - operation_started) - .1:
@@ -659,7 +696,7 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
         state['invocations'].append({'mode': mode, 'elapsed_seconds': time.monotonic() - invocation_started, 'child_health': child.health})
         state['elapsed_seconds'] = state['last_unix'] - state['created_unix']
         try:
-            storage_bytes = owned_bytes(directory, wall)
+            storage_bytes = measure_owned(wall)
         except TimeoutError as failure:
             storage_bytes = None
             error = error or failure
@@ -677,7 +714,7 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
                 ops.persist_control(directory / 'run.json', state, config, deadline=wall)
             else:
                 atomic_json(directory / 'run.json', state)
-            if time.monotonic() >= wall or owned_bytes(directory, wall) > training.max_owned_bytes:
+            if time.monotonic() >= wall or measure_owned(wall) > training.max_owned_bytes:
                 if formal is not None:
                     raise RuntimeError('formal post-persistence wall/storage overrun')
                 state.update(status='failed', failure='FinalPersistenceOverrun', quarantine=True)

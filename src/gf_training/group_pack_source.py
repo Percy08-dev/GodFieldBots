@@ -185,6 +185,7 @@ class PackedOriginals:
         without_descriptor: bool = False,
         database_original: OriginalFile | None = None,
         budget: StorageBudget | None = None,
+        source_base: int = SOURCE_BASE,
     ) -> None:
         self.deadline = deadline
         self._cleanup_children: list[Json] = []
@@ -208,7 +209,7 @@ class PackedOriginals:
                 self.namespace.add(predecessor.name)
         self.metadata_charge = 0
         self.budget = (ByteBudget(max_owned_bytes, base=SOURCE_BASE) if budget is None
-                       else BorrowedBudget(budget, base=SOURCE_BASE, limit=max_owned_bytes))
+                       else BorrowedBudget(budget, base=source_base, limit=max_owned_bytes))
         try:
             self.check_namespace()
             if not without_descriptor:
@@ -409,10 +410,16 @@ class GroupLoan:
 
 
 class PackedSource:
-    def __init__(self, path: Path, *, deadline: float, max_owned_bytes: int) -> None:
-        self._originals = PackedOriginals(path, deadline=deadline, max_owned_bytes=max_owned_bytes)
+    def __init__(self, path: Path, *, deadline: float, max_owned_bytes: int,
+                 pool: object = None) -> None:
+        from gf_training.group_pack_pool import PackedArtifactPool
+        if pool is not None and type(pool) is not PackedArtifactPool:
+            raise TypeError('concrete packed original pool required')
+        self._pool = pool
+        self._cleanup_children: list[Json] = []
+        self._originals: Json = None
         self._deadline = deadline
-        self._budget = self._originals.budget
+        self._budget: Json = None
         self._closed = False
         self._generation = 0
         self._group_id: str | None = None
@@ -420,25 +427,52 @@ class PackedSource:
         self._cache: dict[str, bytes] = {}
         self._cache_charge = 0
         self._detached_charge = 0
-        self._index = self._originals.validated["index"]
-        self._names = tuple(
-            sorted(
-                [m["name"] for m in self._index["members"]]
-                + [c["name"] for c in self._index["controls"]]
-            )
-        )
-        self._member_groups = {m["name"]: m["group_id"] for m in self._index["members"]}
-        self._groups = {g["group_id"]: g for g in self._index["groups"]}
-        self._controls = {c["name"]: c for c in self._index["controls"]}
+        self._index: Json = {}
+        self._names: tuple[str, ...] = ()
+        self._member_groups: dict[str, str] = {}
+        self._groups: Json = {}
+        self._controls: Json = {}
+        try:
+            if pool is not None:
+                # Register the cleanup owner BEFORE admitting actual Originals;
+                # index/registration allocations may fail before sources.append.
+                pool._cleanup_children.append(self)
+                pool.before_open()
+            self._originals = PackedOriginals(path, deadline=deadline, max_owned_bytes=max_owned_bytes,
+                budget=None if pool is None else pool.budget,
+                source_base=SOURCE_BASE if pool is None else 0)
+            # Own the actual Originals BEFORE any allocating index construction
+            # or pool registration. Every subsequent failure retires this SAME
+            # partial Source or leaves it attached to the initiating exception.
+            self._budget = self._originals.budget
+            self._index = self._originals.validated["index"]
+            self._names = tuple(sorted([m["name"] for m in self._index["members"]]
+                + [c["name"] for c in self._index["controls"]]))
+            self._member_groups = {m["name"]: m["group_id"] for m in self._index["members"]}
+            self._groups = {g["group_id"]: g for g in self._index["groups"]}
+            self._controls = {c["name"]: c for c in self._index["controls"]}
+            if pool is not None:
+                pool.register(self)
+        except BaseException as error:
+            retain_cleanup(self, error)
+            try:
+                self.close()
+            except BaseException as cleanup:  # noqa: BLE001 -- construction remains the initiating error.
+                retain_cleanup(self, cleanup)
+                error.__dict__['cleanup_owner'] = self
+                error.add_note('partial packed Source cleanup: ' + str(cleanup))
+            raise
 
     def _live(self) -> None:
         remaining(self._deadline)
         if self._closed:
             raise RuntimeError("artifact Source closed")
+        assert self._originals is not None and self._budget is not None
 
     @property
     def logical_index(self) -> Json:
         self.recheck()
+        assert self._originals is not None and self._budget is not None
         charge = self._originals.metadata_charge
         self._budget.acquire(charge, self._deadline)
         try:
@@ -459,6 +493,7 @@ class PackedSource:
 
     def inventory(self) -> tuple[Json, ...]:
         self.recheck()
+        assert self._originals is not None and self._budget is not None
         charge = self._originals.metadata_charge
         self._budget.acquire(charge, self._deadline)
         try:
@@ -487,15 +522,23 @@ class PackedSource:
 
     def evict_group(self) -> None:
         self._live()
+        self._retire_group()
+
+    def _retire_group(self) -> None:
+        """Cleanup-only group retirement; never opens or hashes an original."""
         if self._loans:
             raise RuntimeError("cannot evict a group with live loans")
         self._cache.clear()
         self._group_id = None
         self._generation += 1
-        self._budget.release(self._cache_charge)
+        if self._cache_charge:
+            assert self._budget is not None
+            self._budget.release(self._cache_charge)
         self._cache_charge = 0
 
     def _load(self, group_id: str) -> None:
+        if self._pool is not None:
+            self._pool.activate(self)
         self.recheck()
         if self._group_id == group_id:
             return
@@ -549,6 +592,8 @@ class PackedSource:
         self._budget.acquire(charge, self._deadline)
         try:
             if name in self._controls:
+                if self._pool is not None:
+                    self._pool.activate(self)
                 db = self._originals.db
                 assert db is not None
                 result = db.execute("SELECT data FROM controls WHERE name=?", (name,)).fetchone()[0]
@@ -568,12 +613,27 @@ class PackedSource:
         if self._loans:
             raise RuntimeError("cannot close a Source with live group loans")
         try:
-            self._originals.close()
+            self._retire_group()
+            close_resources(self, [self._originals])
+            if self._pool is not None and self in self._pool.sources:
+                self._pool.forget(self)
         except BaseException as exc:
             exc.__dict__["cleanup_owner"] = self
             raise
         self._cache.clear()
-        self._budget.release(self._budget.used)
+        if self._pool is not None:
+            self._index.clear()
+            self._groups.clear()
+            self._controls.clear()
+            self._member_groups.clear()
+            self._names = ()
+            if self._originals is not None:
+                self._originals.validated = None
+                self._originals.descriptor = None
+        if self._budget is not None:
+            self._budget.release(self._budget.used)
+        if self._pool is not None and self in self._pool._cleanup_children:
+            self._pool._cleanup_children.remove(self)
         self._closed = True
         self._generation += 1
 

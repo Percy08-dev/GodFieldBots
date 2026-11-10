@@ -17,7 +17,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from gf_common.action_contract import require_qualified_contract
 from gf_common.candidate_columns import validate_descriptor
@@ -284,6 +284,9 @@ class _SourceOwner:
             if list(_identity(path.lstat())) != entry['identity']:
                 raise ContractError('original source identity changed after hash sweep')
 
+    def close(self) -> None:
+        """Directory originals retain no open descriptors across reads."""
+
 
 def reject_engineering_source(manifest: Json) -> None:
     """Qualified paths inspect original Config first, never a claimed purpose."""
@@ -422,7 +425,9 @@ class _SourceSnapshot:
 
     @property
     def resident_bytes(self) -> int:
-        return self._retained_bytes + self._owner.extra_owned_bytes
+        from gf_training.group_pack_game_source import PackedSourceOwner
+        retained = self._retained_bytes + self._owner.extra_owned_bytes
+        return max(retained, cast(PackedSourceOwner, self._owner).pool.budget.used) if type(self._owner) is PackedSourceOwner else retained
 
     @property
     def max_owned_bytes(self) -> int:
@@ -433,12 +438,18 @@ class _SourceSnapshot:
         # Final rechecks need one bounded hash buffer and a bounded inventory
         # comparison in addition to retained Source and caller-owned results.
         scratch = 1024**2 + 1024 * len(self._owner.files)
-        if self.resident_bytes + self._external_bytes + scratch > self.max_owned_bytes:
+        from gf_training.group_pack_game_source import PackedSourceOwner
+        external = 0 if type(self._owner) is PackedSourceOwner else self._external_bytes
+        if self.resident_bytes + external + scratch > self.max_owned_bytes:
             raise ResourceLimit('joint Source/decode/publication reservation exceeded')
 
     def reserve(self, extra_owned_bytes: int) -> None:
         integer(extra_owned_bytes, 0)
+        from gf_training.group_pack_game_source import PackedSourceOwner
         previous = self._external_bytes
+        delta = max(0, extra_owned_bytes - previous)
+        if type(self._owner) is PackedSourceOwner:
+            self._owner.charge(delta)
         self._external_bytes = max(self._external_bytes, extra_owned_bytes)
         try:
             self.check()
@@ -491,6 +502,10 @@ def _component_source_snapshot(directory: Path, *, actions: ActionConfigV2, sett
 def _inspect_component_collection(owner: _SourceOwner, actions: Any,
                                   expected_split: str | None, *, _game: bool = False,
                                   _game_role: Any = None, _game_pending: Any = None) -> ComponentCollection:
+    from gf_training.group_pack_game_source import PackedSourceOwner
+    packed = type(owner) is PackedSourceOwner
+    if packed and not _game:
+        raise ContractError('packed original owner requires corrected game Source')
     settings, deadline = owner.settings, owner.deadline
     manifest_name = 'manifest.json'
     if _game_pending is not None:
@@ -564,39 +579,57 @@ def _inspect_component_collection(owner: _SourceOwner, actions: Any,
         closures = []
         for viewer in (1, 2):
             path = owner.root / name / f'player-{viewer}.jsonl'
-            raw = owner.read(path)
-            lines = raw.splitlines()
-            if any(len(line) > settings.max_record_mib * 1024**2 for line in lines):
-                raise ResourceLimit('original journal record bound exceeded before parse')
-            rows = [_json(line) for line in lines]
-            if any(not isinstance(row, dict) for row in rows):
-                raise ContractError('original journal objects required')
-            if not rows or rows[0].get('kind') != 'header':
-                raise ContractError('original journal header required')
-            if _game:
-                _game_header(rows[0], manifest, episode, spec, actions, viewer)
+            if packed:
+                # One logical parser owns all journal JSON/table graph admission.
+                # Validate its original header against this collection before
+                # projecting any participant records.
+                data = read_card_instance_journal(path, actions=actions, deadline=deadline,
+                    artifacts=cast(PackedSourceOwner, owner).reader, artifact_prefix=name,
+                    max_jsonl_bytes=settings.max_source_file_mib * 1024**2,
+                    max_record_bytes=settings.max_record_mib * 1024**2)
+                _game_header(data.header, manifest, episode, spec, actions, viewer)
             else:
-                _header_identity(rows[0], manifest, episode, spec, actions, viewer)
-            for row in rows:
-                if row.get('kind') == 'decision':
-                    descriptor = row.get('table', {})
-                    options: dict[str, Any] = {'expected_file': candidate_basename(viewer, row['decision']),
-                        'expected_frame_hash': row.get('frame', {}).get('frame_hash'), 'action_contract': actions.action_contract,
-                        'purpose': 'qualified_game' if _game else 'component', 'synthetic_capacity': False}
-                    if _game:
-                        _, size = validate_descriptor_v2(descriptor, layout=CORRECTED_CARD_INSTANCE_LAYOUT, **options)
-                    else:
-                        _, size = validate_descriptor(descriptor, **options)
-                    owner.charge(32 * size + 4096 * descriptor['count'] + 128 * descriptor['elements'] + 65536)
-            if _game:
-                data = read_card_instance_journal(path, actions=actions, records=rows, deadline=deadline,
-                    max_jsonl_bytes=settings.max_source_file_mib * 1024**2, max_record_bytes=settings.max_record_mib * 1024**2)
-            else:
-                data = read_structured_journal(path, records=rows, deadline=deadline,
-                    max_jsonl_bytes=settings.max_source_file_mib * 1024**2, max_record_bytes=settings.max_record_mib * 1024**2,
-                    action_contract=actions.action_contract, purpose='component', synthetic_capacity=False)
-            if data.logical_sidecars:
+                raw = owner.read(path)
+                lines = raw.splitlines()
+                if any(len(line) > settings.max_record_mib * 1024**2 for line in lines):
+                    raise ResourceLimit('original journal record bound exceeded before parse')
+                rows = [_json(line) for line in lines]
+                if any(not isinstance(row, dict) for row in rows):
+                    raise ContractError('original journal objects required')
+                if not rows or rows[0].get('kind') != 'header':
+                    raise ContractError('original journal header required')
+                if _game:
+                    _game_header(rows[0], manifest, episode, spec, actions, viewer)
+                else:
+                    _header_identity(rows[0], manifest, episode, spec, actions, viewer)
+                for row in rows:
+                    if row.get('kind') == 'decision':
+                        descriptor = row.get('table', {})
+                        options: dict[str, Any] = {'expected_file': candidate_basename(viewer, row['decision']),
+                            'expected_frame_hash': row.get('frame', {}).get('frame_hash'), 'action_contract': actions.action_contract,
+                            'purpose': 'qualified_game' if _game else 'component', 'synthetic_capacity': False}
+                        if _game:
+                            _, size = validate_descriptor_v2(descriptor, layout=CORRECTED_CARD_INSTANCE_LAYOUT, **options)
+                        else:
+                            _, size = validate_descriptor(descriptor, **options)
+                        owner.charge(32 * size + 4096 * descriptor['count'] + 128 * descriptor['elements'] + 65536)
+                if _game:
+                    data = read_card_instance_journal(path, actions=actions, records=rows, deadline=deadline,
+                        max_jsonl_bytes=settings.max_source_file_mib * 1024**2, max_record_bytes=settings.max_record_mib * 1024**2)
+                else:
+                    data = read_structured_journal(path, records=rows, deadline=deadline,
+                        max_jsonl_bytes=settings.max_source_file_mib * 1024**2, max_record_bytes=settings.max_record_mib * 1024**2,
+                        action_contract=actions.action_contract, purpose='component', synthetic_capacity=False)
+            if data.logical_sidecars and not packed:
                 raise ContractError("filesystem Source rejects logical candidate byte evidence")
+            if packed and data.sidecars:
+                raise ContractError('packed Source rejects physical candidate evidence')
+            for logical in data.logical_sidecars:
+                relative = logical.name
+                if relative in referenced:
+                    raise ContractError('candidate sidecar referenced more than once')
+                referenced.add(relative)
+                cast(PackedSourceOwner, owner).remember(owner.root / relative, cast(PackedSourceOwner, owner).member_identity(relative), logical.sha256)
             header = data.header
             if data.end['end_kind'] != episode['end_kind'] or data.end['outcome'] != episode.get('outcome') or data.end['simulator_abort_reason'] != episode.get('simulator_abort_reason'):
                 raise ContractError('original closure/result mismatch')
@@ -610,7 +643,7 @@ def _inspect_component_collection(owner: _SourceOwner, actions: Any,
                 owner.remember(target, tuple(item['identity']), item['sha256'])
             decisions = [data.decisions[index] for index in data.accepted]
             replay_path = owner.root / name / f'replay-player-{viewer}.json'
-            if replay_path.exists() or replay_path.is_symlink():
+            if (cast(PackedSourceOwner, owner).contains(replay_path) if packed else replay_path.exists() or replay_path.is_symlink()):
                 replay = owner.object(replay_path)
                 (game_reconcile if _game else reconcile_replay)(replay, viewer, [item.command['action'] for item in decisions], episode.get('outcome'))
                 closure = (game_closure if _game else replay_closure)(replay, header['game_id'], viewer)
@@ -647,6 +680,9 @@ def _inspect_component_collection(owner: _SourceOwner, actions: Any,
              'parent_qualification': 'not_performed', 'manifest_sha256': owner.files[manifest_name]['sha256'],
              'source_set_sha256': digest(owner.files), 'files': owner.files, 'games': len(specs),
              'accepted_decisions': accepted_count, 'closure_counts': closure_counts, 'missing_replays': missing_replays}
+    if packed:
+        from gf_common.group_pack_game import PROOF_KIND
+        proof.update(schema_version=2, kind=PROOF_KIND, storage=cast(PackedSourceOwner, owner).storage, custody=cast(PackedSourceOwner, owner).custody)
     return ComponentCollection(owner.root, tuple(outputs), canonical(manifest).encode(), canonical(proof).encode())
 
 

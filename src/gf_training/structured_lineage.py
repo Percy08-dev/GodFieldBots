@@ -12,7 +12,8 @@ import secrets
 import stat
 from dataclasses import asdict
 from pathlib import Path
-from typing import Any
+from types import TracebackType
+from typing import Any, Self, cast
 
 from gf_common.card_instance import action_config_v3
 from gf_common.card_instance_rules import card_instance_rules
@@ -76,12 +77,159 @@ class _ChainScan(SealedScan):
         self.root = directory
         self.artifact_snapshot: tuple[int, ...] | None = None
         self.artifact_count = 0
+        self.logical_files: dict[Path, Json] = {}
+        self._packed_owners: dict[Path, Any] = {}
+        self._packed_borrows: dict[Path, Any] = {}
+        self._packed_pool: Any = None
+        self._owns_packed_pool = True
+        self._pool_control_charge = 0
+        self._packed_state: Json | None = None
+        self._closed = False
+        self._cleanup_children: list[Any] = []
         self._game_source_inventories: list[Any] = []
         self._game_source_settings: Any = None
         self._game_source_extra_bytes = 0
         self._game_source_max_owned_bytes = max_owned_bytes
 
+    def admit_pool_controls(self) -> None:
+        if self._packed_pool is not None and self.retained > self._pool_control_charge:
+            amount = self.retained - self._pool_control_charge
+            self._packed_pool.budget.acquire(amount, self.deadline)
+            self._pool_control_charge += amount
+
+    def charge(self, size: int, *, temporary: bool = False) -> None:
+        super().charge(size, temporary=temporary)
+        if self._packed_pool is not None:
+            if temporary:
+                self._packed_pool.budget.acquire(size, self.deadline)
+                self._packed_pool.budget.release(size)
+            else:
+                self.admit_pool_controls()
+
+    def close_packed_originals(self, *, exclude: Path | None = None, recheck: bool = True) -> None:
+        failure: BaseException | None = None
+        for root, owner in tuple(self._packed_owners.items()):
+            if root == exclude or root in self._packed_borrows:
+                continue
+            if recheck:
+                try:
+                    owner.finalize()
+                except BaseException as error:  # noqa: BLE001 -- hashes do not gate terminal retirement.
+                    failure = failure or error
+            try:
+                owner.close()
+            except BaseException as cleanup:  # noqa: BLE001 -- attempt every independent original owner.
+                if failure is not None:
+                    failure.add_note('packed original cleanup: ' + str(cleanup))
+                failure = failure or cleanup
+                failure.__dict__['cleanup_owner'] = self
+            else:
+                del self._packed_owners[root]
+        if failure is not None:
+            raise failure
+
+    def configure_packed(self, state: Json) -> None:
+        from gf_common.group_pack_game import packed_state
+        if packed_state(state):
+            self._packed_state = state
+
+    def packed_owner(self, root: Path, *, custody: Any = None) -> Any:
+        from gf_training.group_pack_game_source import PackedSourceOwner
+        from gf_training.group_pack_pool import PackedArtifactPool
+        if self._packed_state is None:
+            raise ContractError('packed originals require checked run4 controls')
+        if custody is not None:
+            return custody.borrow(self)
+        if root not in self._packed_owners:
+            from gf_common.preprocessing import preparation_config
+            state = self._packed_state
+            storage = state['effective_config']['storage']
+            limit = min(self.limit, storage['budget_mib'] * 1024**2)
+            if self._packed_pool is None:
+                self._packed_pool = PackedArtifactPool(max_owned_bytes=limit, deadline=self.deadline)
+                self.admit_pool_controls()
+            expected = Path(storage['db_root']) / state['run_id'] / 'collections' / root.name
+            self._packed_owners[root] = PackedSourceOwner(root,
+                preparation_config(state['effective_config']['preprocessing']), self.deadline,
+                storage_binding=state['storage_binding'], max_owned_bytes=limit,
+                pool=self._packed_pool, expected_descriptor_root=expected)
+        return self._packed_owners[root]
+
+    def object(self, path: Path, expected: str | None = None) -> Json:
+        collection_root = self.root / 'collections'
+        if self._packed_state is not None and path.is_relative_to(collection_root):
+            relative = path.relative_to(collection_root)
+            if len(relative.parts) < 2:
+                raise ContractError('logical collection control path required')
+            owner = self.packed_owner(collection_root / relative.parts[0])
+            value = owner.object(path)
+            entry = owner.files[path.relative_to(owner.root).as_posix()]
+            if expected is not None and entry['sha256'] != checksum(expected):
+                raise ContractError('logical original digest mismatch')
+            self.logical_files[path] = entry
+            return value
+        return super().object(path, expected)
+
+    def verified_digest(self, path: Path) -> str:
+        if path in self.logical_files:
+            self.check()
+            return self.logical_files[path]['sha256']
+        return super().verified_digest(path)
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(self, error_type: type[BaseException] | None,
+                 error: BaseException | None, traceback: TracebackType | None) -> None:
+        # Only THIS context's body error can suppress a secondary close fault.
+        # Per-operation original rechecks already precede mutable publication.
+        self.close(recheck=False, error=error)
+
+    def close(self, *, recheck: bool = True, error: BaseException | None = None) -> None:
+        if self._closed:
+            return
+        from gf_training.group_pack_resources import close_resources, retain_cleanup
+        if error is not None and getattr(error, 'cleanup_owner', None) is not None:
+            retain_cleanup(self, error)
+        recheck_error: BaseException | None = None
+        if recheck:
+            try:
+                self.finalize()
+            except BaseException as caught:  # noqa: BLE001 -- preserve recheck while attempting all actual closes.
+                recheck_error = caught
+        cleanup_error: BaseException | None = None
+        borrowed = set(self._packed_borrows)
+        try:
+            close_resources(self, [owner for root, owner in self._packed_owners.items() if root not in borrowed])
+            # When a Source could not confirm close, retain its actual pool and
+            # account; do not reattempt the SAME failed resource in this sweep.
+            if self._packed_pool is not None and self._owns_packed_pool:
+                self._packed_pool.close()
+            if self._packed_pool is not None:
+                self._packed_pool.budget.release(self._pool_control_charge)
+                self._pool_control_charge = 0
+            for custody in tuple(self._packed_borrows.values()):
+                custody.release(self)
+            self._closed = True
+        except BaseException as caught:  # noqa: BLE001 -- retain concrete unconfirmed resources.
+            cleanup_error = caught
+        failure = recheck_error or cleanup_error
+        if failure is None:
+            return
+        if recheck_error is not None and cleanup_error is not None:
+            recheck_error.add_note('original scan cleanup: ' + str(cleanup_error))
+        if error is not None:
+            error.__dict__['cleanup_owner'] = self
+            error.add_note('original scan cleanup: ' + str(failure))
+            return
+        if cleanup_error is not None:
+            failure.__dict__['cleanup_owner'] = self
+        raise failure
+
+
     def finalize(self) -> None:
+        for owner in self._packed_owners.values():
+            owner.finalize()
         if self.artifact_snapshot is not None:
             _artifact_directories(self.root, self.artifact_count, self)
         super().finalize()
@@ -172,8 +320,14 @@ def _model(config: Json, recorded_signature: str | None = None, *, _game: bool =
     return model_config_v2(pure) if recorded_signature is None else recorded_model_config_v2(pure, recorded_signature)
 
 
-def resume_identity(config_sha256: str, identity: Json, execution: Json, classification: Json) -> str:
+def resume_identity(config_sha256: str, identity: Json, execution: Json, classification: Json,
+                    *, storage_binding: Json | None = None) -> str:
     checksum(config_sha256)
+    if storage_binding is not None:
+        from gf_common.group_pack_game import checked_storage_binding
+        return digest({'recipe': 'card-instance-packed-ppo-resume-identity-v1', 'config_sha256': config_sha256,
+            'identity': identity, 'execution': execution, 'input_binding': classification,
+            'storage_binding': checked_storage_binding(storage_binding)})
     return digest({'recipe': 'structured-ppo-resume-identity-v1', 'config_sha256': config_sha256,
                    'identity': identity, 'execution': execution, 'input_binding': classification})
 
@@ -181,17 +335,21 @@ def resume_identity(config_sha256: str, identity: Json, execution: Json, classif
 def _classification(record: Json, state: Json) -> None:
     if (record.get('model_id') != state['model_id'] or record.get('model_version') != state['model_version']
             or record.get('input_recipe') != state['input_recipe']
-            or any(canonical(record.get(key)) != canonical(state[key]) for key in (GAME_CLASSIFICATION if state['schema_version'] == 3 else CLASSIFICATION))):
+            or any(canonical(record.get(key)) != canonical(state[key]) for key in (GAME_CLASSIFICATION if state['schema_version'] in (3, 4) else CLASSIFICATION))):
         raise ContractError('component lineage model/input identity mismatch')
 
 
 def _state(state: Json, *, recorded_signature: str | None = None, _game: bool = False) -> tuple[Any, Any]:
     from gf_common.card_instance_formal import FORMAL_RUN_FIELDS, RUN_VARIANT, validate_formal_state
+    from gf_common.group_pack_game import packed_state
+    packed = _game and packed_state(state)
     formal = _game and state.get('run_variant') == RUN_VARIANT
-    closed(state, RUN_REQUIRED | (GAME_EXTRA if _game else set()) | (FORMAL_RUN_FIELDS if formal else set()), RUN_OPTIONAL)
+    if packed and formal:
+        raise ContractError('packed formal PPO awaits its later integration')
+    closed(state, RUN_REQUIRED | (GAME_EXTRA if _game else set()) | ({'storage_binding'} if packed else set()) | (FORMAL_RUN_FIELDS if formal else set()), RUN_OPTIONAL)
     if formal:
         validate_formal_state(state)
-    if (type(state['schema_version']) is not int or state['schema_version'] != (3 if _game else 2) or state['algorithm'] != 'ppo'
+    if (type(state['schema_version']) is not int or state['schema_version'] != (4 if packed else 3 if _game else 2) or state['algorithm'] != 'ppo'
             or state['status'] not in ('running', 'paused', 'complete') or state['model_version'] != ('3' if _game else '2')
             or state['input_recipe'] != (GAME_LAYOUT.input_recipe if _game else INPUT_RECIPE) or state['purpose'] != ('qualified_game' if _game else 'component') or state['synthetic_capacity'] is not False):
         raise ContractError('healthy component run2 required')
@@ -201,6 +359,15 @@ def _state(state: Json, *, recorded_signature: str | None = None, _game: bool = 
     config = state['effective_config']
     if not isinstance(config, dict) or digest(config) != state['config_sha256']:
         raise ContractError('component frozen Config hash mismatch')
+    if packed:
+        from gf_common.group_pack import MIB, StorageSettings
+        storage = closed(config['storage'], {'format', 'db_root', 'ram_root', 'budget_mib', 'queue_mib', 'max_pack_mib'})
+        if storage['format'] != 'sqlite-group-pack-v1' or not all(Path(storage[key]).is_absolute() for key in ('db_root', 'ram_root')):
+            raise ContractError('explicit absolute packed storage Config required')
+        StorageSettings(Path(storage['db_root']), Path(storage['ram_root']), storage['budget_mib'] * MIB,
+            storage['queue_mib'] * MIB, storage['max_pack_mib'] * MIB)
+        if config['preprocessing']['backend'] != 'python':
+            raise ContractError('packed native Source integration is not implemented')
     actions: Any = action_config_v3(config['actions']) if _game else action_config_v2(config['actions'])
     expected = input_binding_game_v3(actions.action_contract, card_instance_rules()) if _game else input_binding(actions.action_contract, 'component', False)
     if not isinstance(state['identity'], dict) or not state['identity']:
@@ -248,7 +415,7 @@ def _state(state: Json, *, recorded_signature: str | None = None, _game: bool = 
             raise ContractError('recorded execution/device/visibility mismatch')
     if canonical(execution['inference']['binding']) != canonical(config['model']['inference']):
         raise ContractError('recorded inference execution differs from frozen Config')
-    if state['resume_identity'] != resume_identity(state['config_sha256'], state['identity'], execution, expected):
+    if state['resume_identity'] != resume_identity(state['config_sha256'], state['identity'], execution, expected, storage_binding=state.get('storage_binding')):
         raise ContractError('domain-separated component resume identity mismatch')
     created, last, wall, admission, execute = [_number(state[key]) for key in ('created_unix', 'last_unix', 'wall_deadline_unix', 'admission_deadline_unix', 'execution_deadline_unix')]
     run = config['run']
@@ -324,19 +491,25 @@ def _relative(directory: Path, value: Any) -> Path:
 def _update(directory: Path, update: Json, state: Json, previous: Json, scan: SealedScan, model: Any,
             inference_declaration: Json, *, _game: bool = False) -> int:
     classification = GAME_CLASSIFICATION if _game else CLASSIFICATION
-    closed(update, UPDATE_FIELDS | (GAME_EXTRA if _game else set()))
+    packed = _game and state['schema_version'] == 4
+    closed(update, UPDATE_FIELDS | (GAME_EXTRA if _game else set()) | ({'storage_binding'} if packed else set()))
+    if packed and canonical(update['storage_binding']) != canonical(state['storage_binding']):
+        raise ContractError('packed update storage binding differs from run4')
     integer(update['generation'], 1, 1000)
     for key in ('parent_sha256', 'collection_manifest_sha256', 'numeric_sha256'):
         checksum(update[key])
     proof = update['source_proof']
     if not isinstance(proof, dict):
         raise ContractError('component Source proof object required')
+    if packed:
+        from gf_common.group_pack_game import checked_packed_proof
+        checked_packed_proof(proof)
     checksum(proof.get('manifest_sha256'))
     _filemap(update['numeric_files'], {'rollout.json'})
     if update['numeric_files']['rollout.json'] != update['numeric_sha256']:
         raise ContractError('numeric required manifest hash mismatch')
     _classification(update, state)
-    if (type(update['schema_version']) is not int or update['schema_version'] != (3 if _game else 2) or update['status'] != 'complete'
+    if (type(update['schema_version']) is not int or update['schema_version'] != (4 if packed else 3 if _game else 2) or update['status'] != 'complete'
             or update['run_id'] != state['run_id'] or update['generation'] != previous['generation'] + 1
             or update['parent_sha256'] != scan.files[generation_path(directory, previous['generation'])][1]
             or type(update['planned_games']) is not int or update['planned_games'] != 16 or update['actual_games'] != 16
@@ -349,6 +522,8 @@ def _update(directory: Path, update: Json, state: Json, previous: Json, scan: Se
         integer(role, 1, 2)
     collection = _relative(directory, update['collection'])
     manifest = scan.object(collection / 'manifest.json', update['collection_manifest_sha256'])
+    if packed:
+        cast(_ChainScan, scan).packed_owner(collection).require_custody(proof['custody'])
     if any(canonical(manifest.get(key)) != canonical(state[key]) for key in classification):
         raise ContractError('component collection classification mismatch')
     if (type(manifest.get('schema_version')) is not int or manifest['schema_version'] != (5 if _game else 4)
@@ -395,8 +570,8 @@ def _update(directory: Path, update: Json, state: Json, previous: Json, scan: Se
     if count != sum(len(episode['frames']) for episode in episodes) or update['accepted_decisions'] != count or type(update['accepted_decisions']) is not int:
         raise ContractError('learner-only numeric decision counter mismatch')
     proof = update['source_proof']
-    if (type(proof.get('schema_version')) is not int or proof['schema_version'] != 1
-            or proof.get('kind') != ('card-instance-original-source-proof' if _game else 'structured-component-source-proof') or proof.get('qualified') is not False
+    if (type(proof.get('schema_version')) is not int or proof['schema_version'] != (2 if packed else 1)
+            or proof.get('kind') != ('card-instance-packed-original-source-proof' if packed else 'card-instance-original-source-proof' if _game else 'structured-component-source-proof') or proof.get('qualified') is not False
             or proof.get('parent_qualification') != 'not_performed' or proof.get('games') != 16
             or proof.get('manifest_sha256') != update['collection_manifest_sha256']):
         raise ContractError('component Source proof scalar links mismatch')
@@ -424,6 +599,8 @@ def validate_component_chain(directory: Path, *, require_complete: bool = True, 
 
 def _validate_component_chain(directory: Path, *, require_complete: bool, require_retained: bool, scan: _ChainScan, _game: bool = False) -> tuple[Json, list[Json]]:
     state = scan.object(directory / 'run.json')
+    if _game:
+        scan.configure_packed(state)
     # Descriptor bootstrap is bound to the original protected generation0 and
     # its mandatory manifest map/hash before a missing event field is interpreted.
     bootstrap = closed(scan.object(generation_path(directory, 0)), GEN_FIELDS | (GAME_EXTRA if _game else set()))
@@ -601,54 +778,59 @@ def commit_component_generation(directory: Path, state: Json, *, generation: int
     integer(generation, 0, 1000)
     _controls(controls, generation)
     scan = _ChainScan(directory=directory, max_owned_bytes=max_owned_bytes, deadline=deadline)
-    _retained_values(scan, state, controls, update, artifact_files)
-    _filemap(artifact_files, {'inference.json', 'resume.json'})
-    path = checkpoint_path(directory, generation)
-    artifact = _inspect_pair(path, actions=actions, game=_game, expected_inference_digest=checksum(artifact_files.get('inference.json')),
-        scan=scan)
-    _retained_declaration(artifact, state, model)
-    if _game and 'run_variant' in state:
-        from gf_training.card_instance_formal import verify_actual_optimizer_metadata
-        verify_actual_optimizer_metadata(artifact.resume)
-    if (canonical(artifact.files) != canonical(artifact_files) or artifact.resume is None
-            or artifact.resume['resume_identity'] != state['resume_identity'] or artifact.resume['optimizer_steps'] != state['optimizer_steps']):
-        raise ContractError('component commit artifact/resume identity mismatch')
-    parent = state['generation_sha256']
-    if generation:
-        if generation != state['updates'] + 1 or update is None:
-            raise ContractError('component commit must append exactly one update')
-        previous = closed(scan.object(generation_path(directory, generation - 1), parent), GEN_FIELDS | (GAME_EXTRA if _game else set()))
-        _classification(previous, state)
-        durable = scan.object(directory / 'run.json')
-        from gf_common.card_instance_formal import FORMAL_RUN_FIELDS
-        stable_fields = (RUN_REQUIRED | (GAME_EXTRA if _game else set()) | (FORMAL_RUN_FIELDS if 'run_variant' in state else set())) - {'accepted_decisions', 'optimizer_steps', 'collection_seconds', 'update_seconds', 'last_unix', 'invocations', 'completed_updates'}
-        if any(canonical(durable.get(key)) != canonical(state[key]) for key in stable_fields):
-            raise ContractError('component commit differs from durable frozen parent')
-        amount = _update(directory, update, state, previous, scan, model, artifact.inference, _game=_game)
-        if state['accepted_decisions'] != previous['accepted_decisions'] + amount or state['optimizer_steps'] != previous['optimizer_steps'] + 4 * math.ceil(amount / 128):
-            raise ContractError('component commit counters mismatch')
-        registry = scan.object(directory / 'artifact-registry.json')
-    else:
-        if update is not None or parent is not None or state['updates'] != 0 or state['accepted_decisions'] != 0 or state['optimizer_steps'] != 0:
-            raise ContractError('component initial commit counters mismatch')
-        registry = {'schema_version': 3 if _game else 2, 'generations': {}}
-    scan.finalize()
-    if _precommit is not None:
-        _precommit.prepare_commit()
-    update_sha = _write(directory / 'updates' / f'{generation:06}.json', update, scan=scan, immutable=True) if update is not None else None
-    record = {'schema_version': 3 if _game else 2, 'run_id': state['run_id'], 'generation': generation, 'parent_sha256': parent,
-        **{key: state[key] for key in ('model_id', 'model_version', 'input_recipe', *(GAME_CLASSIFICATION if _game else CLASSIFICATION))},
-        'inference_sha256': artifact_files['inference.json'], 'resume_sha256': artifact_files['resume.json'],
-        'artifact_files': dict(artifact_files), 'accepted_decisions': state['accepted_decisions'], 'optimizer_steps': state['optimizer_steps'],
-        'update_sha256': update_sha, 'parent_controls': controls}
-    sha = _write(generation_path(directory, generation), record, scan=scan, immutable=True)
-    registry['generations'][str(generation)] = {'status': 'retained', 'inference_sha256': record['inference_sha256'],
-        'original_files': dict(artifact_files), 'deletion_intent': None, 'deletion_receipt': None}
-    _write(directory / 'artifact-registry.json', registry, scan=scan)
-    _write(directory / 'latest.json', {'generation': generation, 'sha256': sha}, scan=scan)
-    state.update(updates=generation, generation_sha256=sha)
-    _write(directory / 'run.json', state, scan=scan)
-    return record
+    with scan:
+        if _game:
+            scan.configure_packed(state)
+            if _precommit is not None and _precommit.source.online.packed_batch is not None:
+                _precommit.source.online.packed_batch.borrow(scan)
+        _retained_values(scan, state, controls, update, artifact_files)
+        _filemap(artifact_files, {'inference.json', 'resume.json'})
+        path = checkpoint_path(directory, generation)
+        artifact = _inspect_pair(path, actions=actions, game=_game, expected_inference_digest=checksum(artifact_files.get('inference.json')),
+            scan=scan)
+        _retained_declaration(artifact, state, model)
+        if _game and 'run_variant' in state:
+            from gf_training.card_instance_formal import verify_actual_optimizer_metadata
+            verify_actual_optimizer_metadata(artifact.resume)
+        if (canonical(artifact.files) != canonical(artifact_files) or artifact.resume is None
+                or artifact.resume['resume_identity'] != state['resume_identity'] or artifact.resume['optimizer_steps'] != state['optimizer_steps']):
+            raise ContractError('component commit artifact/resume identity mismatch')
+        parent = state['generation_sha256']
+        if generation:
+            if generation != state['updates'] + 1 or update is None:
+                raise ContractError('component commit must append exactly one update')
+            previous = closed(scan.object(generation_path(directory, generation - 1), parent), GEN_FIELDS | (GAME_EXTRA if _game else set()))
+            _classification(previous, state)
+            durable = scan.object(directory / 'run.json')
+            from gf_common.card_instance_formal import FORMAL_RUN_FIELDS
+            stable_fields = (RUN_REQUIRED | (GAME_EXTRA if _game else set()) | ({'storage_binding'} if state['schema_version'] == 4 else set()) | (FORMAL_RUN_FIELDS if 'run_variant' in state else set())) - {'accepted_decisions', 'optimizer_steps', 'collection_seconds', 'update_seconds', 'last_unix', 'invocations', 'completed_updates'}
+            if any(canonical(durable.get(key)) != canonical(state[key]) for key in stable_fields):
+                raise ContractError('component commit differs from durable frozen parent')
+            amount = _update(directory, update, state, previous, scan, model, artifact.inference, _game=_game)
+            if state['accepted_decisions'] != previous['accepted_decisions'] + amount or state['optimizer_steps'] != previous['optimizer_steps'] + 4 * math.ceil(amount / 128):
+                raise ContractError('component commit counters mismatch')
+            registry = scan.object(directory / 'artifact-registry.json')
+        else:
+            if update is not None or parent is not None or state['updates'] != 0 or state['accepted_decisions'] != 0 or state['optimizer_steps'] != 0:
+                raise ContractError('component initial commit counters mismatch')
+            registry = {'schema_version': 3 if _game else 2, 'generations': {}}
+        scan.finalize()
+        if _precommit is not None:
+            _precommit.prepare_commit()
+        update_sha = _write(directory / 'updates' / f'{generation:06}.json', update, scan=scan, immutable=True) if update is not None else None
+        record = {'schema_version': 3 if _game else 2, 'run_id': state['run_id'], 'generation': generation, 'parent_sha256': parent,
+            **{key: state[key] for key in ('model_id', 'model_version', 'input_recipe', *(GAME_CLASSIFICATION if _game else CLASSIFICATION))},
+            'inference_sha256': artifact_files['inference.json'], 'resume_sha256': artifact_files['resume.json'],
+            'artifact_files': dict(artifact_files), 'accepted_decisions': state['accepted_decisions'], 'optimizer_steps': state['optimizer_steps'],
+            'update_sha256': update_sha, 'parent_controls': controls}
+        sha = _write(generation_path(directory, generation), record, scan=scan, immutable=True)
+        registry['generations'][str(generation)] = {'status': 'retained', 'inference_sha256': record['inference_sha256'],
+            'original_files': dict(artifact_files), 'deletion_intent': None, 'deletion_receipt': None}
+        _write(directory / 'artifact-registry.json', registry, scan=scan)
+        _write(directory / 'latest.json', {'generation': generation, 'sha256': sha}, scan=scan)
+        state.update(updates=generation, generation_sha256=sha)
+        _write(directory / 'run.json', state, scan=scan)
+        return record
 
 
 def retain_component_generations(directory: Path, generation: int, *, max_owned_bytes: int, deadline: float, _game: bool = False) -> None:
@@ -658,20 +840,21 @@ def retain_component_generations(directory: Path, generation: int, *, max_owned_
     if predecessor <= 0 or predecessor % 10 == 0:
         return
     scan = _ChainScan(directory=directory, max_owned_bytes=max_owned_bytes, deadline=deadline)
-    state, records = _validate_component_chain(directory, require_complete=False, require_retained=False, scan=scan, _game=_game)
-    if state['updates'] != generation:
-        raise ContractError('retention requires the current committed generation')
-    registry = scan.object(directory / 'artifact-registry.json')
-    record = records[predecessor]
-    receipt = registry['generations'][str(predecessor)]
-    if receipt['status'] != 'retained':
-        raise ContractError('retention requires full original artifacts')
-    path = checkpoint_path(directory, predecessor)
-    actions = action_config_v3(state['effective_config']['actions']) if _game else action_config_v2(state['effective_config']['actions'])
-    _inspect_pair(path, expected_inference_digest=record['inference_sha256'], actions=actions, game=_game, scan=scan)
-    targets = {name: sha for name, sha in record['artifact_files'].items() if name != 'inference.json'}
-    scan.finalize()
-    _prune_staged(directory, path, registry, receipt, targets, record['inference_sha256'], scan)
+    with scan:
+        state, records = _validate_component_chain(directory, require_complete=False, require_retained=False, scan=scan, _game=_game)
+        if state['updates'] != generation:
+            raise ContractError('retention requires the current committed generation')
+        registry = scan.object(directory / 'artifact-registry.json')
+        record = records[predecessor]
+        receipt = registry['generations'][str(predecessor)]
+        if receipt['status'] != 'retained':
+            raise ContractError('retention requires full original artifacts')
+        path = checkpoint_path(directory, predecessor)
+        actions = action_config_v3(state['effective_config']['actions']) if _game else action_config_v2(state['effective_config']['actions'])
+        _inspect_pair(path, expected_inference_digest=record['inference_sha256'], actions=actions, game=_game, scan=scan)
+        targets = {name: sha for name, sha in record['artifact_files'].items() if name != 'inference.json'}
+        scan.finalize()
+        _prune_staged(directory, path, registry, receipt, targets, record['inference_sha256'], scan)
 
 
 def _directory_entry(parent_fd: int, name: str, held_fd: int) -> None:
@@ -877,8 +1060,9 @@ def validate_game_chain(directory: Path, *, require_complete: bool = True, requi
                         max_owned_bytes: int, deadline: float) -> tuple[Json, list[Json]]:
     directory = directory.resolve()
     scan = _ChainScan(directory=directory, max_owned_bytes=max_owned_bytes, deadline=deadline)
-    return _validate_component_chain(directory, require_complete=require_complete,
-        require_retained=require_retained, scan=scan, _game=True)
+    with scan:
+        return _validate_component_chain(directory, require_complete=require_complete,
+            require_retained=require_retained, scan=scan, _game=True)
 
 
 def commit_game_generation(directory: Path, state: Json, *, projection: Any = None, **options: Any) -> Json:
@@ -887,6 +1071,8 @@ def commit_game_generation(directory: Path, state: Json, *, projection: Any = No
         if type(projection) is not IssuedGameProjection or projection.source.state['run_id'] != state['run_id']:
             raise ContractError('game generation requires its live Source-issued update')
         projection.require(projection.process, after=True)
+        if state['schema_version'] == 4 and canonical(options['update']['source_proof']) != canonical(projection.source.proof):
+            raise ContractError('packed update proof differs from SAME issued Source')
     return commit_component_generation(directory, state, _game=True, _precommit=projection, **options)
 
 
