@@ -17,6 +17,13 @@ use std::{
     path::{Path, PathBuf},
     sync::Arc,
 };
+#[cfg(test)]
+thread_local! { static SOURCE_IO: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
+#[inline]
+fn source_io() {
+    #[cfg(test)]
+    SOURCE_IO.with(|count| count.set(count.get() + 1));
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Identity(u64, u64, u64, i64, i64, i64, i64);
@@ -79,9 +86,15 @@ pub struct Sources {
     pub control: Control,
     pub root: PathBuf,
     max_json: usize,
-    root_identity: Identity,
+    access: SourceAccess,
+    pub(crate) registry: Option<Arc<crate::logical_artifacts::Registry>>,
+    logical_files: BudgetVec<(PathBuf, Lease)>,
     files: BudgetVec<Evidence>,
     inventories: BudgetVec<Inventory>,
+}
+enum SourceAccess {
+    Physical(Identity),
+    Logical,
 }
 impl Sources {
     pub fn new(
@@ -103,7 +116,9 @@ impl Sources {
         let root_identity = Identity::of(&fs::symlink_metadata(&directory)?);
         Ok(Self {
             root: fs::canonicalize(directory)?,
-            root_identity,
+            access: SourceAccess::Physical(root_identity),
+            registry: None,
+            logical_files: BudgetVec::new(&budget),
             files: BudgetVec::new(&budget),
             inventories: BudgetVec::new(&budget),
             budget,
@@ -111,9 +126,140 @@ impl Sources {
             max_json,
         })
     }
+    pub(crate) fn from_registry(
+        directory: &Path,
+        budget: Arc<Budget>,
+        control: Control,
+        max_json: usize,
+        registry: Option<Arc<crate::logical_artifacts::Registry>>,
+    ) -> Result<Self> {
+        control.check()?;
+        if registry
+            .as_ref()
+            .is_some_and(|r| r.locate(directory).is_some())
+        {
+            let directory = std::path::absolute(directory)?;
+            let (_, _, prefix) = registry.as_ref().unwrap().locate(&directory).unwrap();
+            if !prefix.is_empty() {
+                crate::logical_artifacts::member_name(&prefix)?;
+            }
+            Ok(Self {
+                root: directory,
+                access: SourceAccess::Logical,
+                registry,
+                logical_files: BudgetVec::new(&budget),
+                files: BudgetVec::new(&budget),
+                inventories: BudgetVec::new(&budget),
+                budget,
+                control,
+                max_json,
+            })
+        } else {
+            let mut source = Self::new(directory, budget, control, max_json)?;
+            source.registry = registry;
+            Ok(source)
+        }
+    }
+    pub(crate) fn is_logical(&self, path: &Path) -> bool {
+        self.registry
+            .as_ref()
+            .is_some_and(|r| r.locate(path).is_some())
+    }
+    fn logical_file(&self, path: &Path) -> Result<Option<&Value>> {
+        self.control.check()?;
+        if !path.starts_with(&self.root) {
+            return Err(Error::contract("foreign original logical path"));
+        }
+        if let Some(registry) = &self.registry {
+            if let Some((_, source, name)) = registry.locate(path) {
+                return Ok(Some(registry.file(source, &name)?));
+            }
+        }
+        Ok(None)
+    }
+    fn remember_logical(&mut self, path: &Path) -> Result<()> {
+        if !self.logical_files.iter().any(|(p, _)| p == path) {
+            let lease = self.budget.reserve(1024 + 4 * path.as_os_str().len())?;
+            self.logical_files.push((path.into(), lease))?;
+        }
+        Ok(())
+    }
+    pub(crate) fn file_len(&self, path: &Path) -> Result<usize> {
+        if let Some(file) = self.logical_file(path)? {
+            return Ok(file.require("bytes")?.integer(0, usize::MAX as i128)? as usize);
+        }
+        let (_, identity) = self.open(path)?;
+        usize::try_from(identity.2).map_err(|_| Error::resource("original file length overflow"))
+    }
+    pub(crate) fn child_names(&self, path: &Path) -> Result<(Vec<(String, bool)>, Lease)> {
+        self.control.check()?;
+        let mut lease = self.budget.reserve(65536)?;
+        let mut children = std::collections::BTreeMap::new();
+        if let Some(registry) = &self.registry {
+            if let Some((_, source, prefix)) = registry.locate(path) {
+                for row in source.description.root.require("files")?.array()? {
+                    lease
+                        .resize(lease.bytes() + 2048 + 16 * row.require("name")?.string()?.len())?;
+                }
+                let prefix = if prefix.is_empty() {
+                    String::new()
+                } else {
+                    format!("{prefix}/")
+                };
+                for row in source.description.root.require("files")?.array()? {
+                    if let Some(relative) = row.require("name")?.string()?.strip_prefix(&prefix) {
+                        let (name, directory) = relative
+                            .split_once('/')
+                            .map_or((relative, false), |(name, _)| (name, true));
+                        if let Some(old) = children.insert(name.to_owned(), directory) {
+                            if old != directory {
+                                return Err(Error::contract(
+                                    "logical file/directory name collision",
+                                ));
+                            }
+                        }
+                    }
+                }
+                return Ok((children.into_iter().collect(), lease));
+            }
+        }
+        self.safe(&path.join("placeholder"))?;
+        for item in fs::read_dir(path)? {
+            let item = item?;
+            let kind = item.file_type()?;
+            if !kind.is_dir() && !kind.is_file() {
+                return Err(Error::contract("nonregular original child"));
+            }
+            lease.resize(lease.bytes() + 2048 + 16 * item.file_name().len())?;
+            children.insert(
+                item.file_name()
+                    .into_string()
+                    .map_err(|_| Error::contract("nonUTF8 original child"))?,
+                kind.is_dir(),
+            );
+        }
+        Ok((children.into_iter().collect(), lease))
+    }
+    pub(crate) fn packed_context(&self) -> Result<(&Value, &Value)> {
+        let (_, source, _) = self
+            .registry
+            .as_ref()
+            .and_then(|r| r.locate(&self.root))
+            .ok_or_else(|| Error::contract("packed original root required"))?;
+        Ok((
+            source.description.root.require("storage")?,
+            source.description.root.require("custody")?,
+        ))
+    }
     fn safe(&self, path: &Path) -> Result<()> {
         self.control.check()?;
-        if Identity::of(&fs::symlink_metadata(&self.root)?) != self.root_identity {
+        source_io();
+        let SourceAccess::Physical(root_identity) = &self.access else {
+            return Err(Error::contract(
+                "logical originals cannot be opened as physical files",
+            ));
+        };
+        if Identity::of(&fs::symlink_metadata(&self.root)?) != *root_identity {
             return Err(Error::contract(
                 "structured original root directory changed",
             ));
@@ -153,6 +299,7 @@ impl Sources {
     }
     fn current(&self, path: &Path, file: &File, original: &Identity) -> Result<()> {
         self.control.check()?;
+        source_io();
         let path_info = fs::symlink_metadata(path)?;
         if !path_info.is_file()
             || Identity::of(&file.metadata()?) != *original
@@ -184,6 +331,9 @@ impl Sources {
     /// Cached original byte bound for preallocation; never establishes new evidence.
     pub(crate) fn original_len(&self, path: &Path) -> Result<usize> {
         self.control.check()?;
+        if self.logical_files.iter().any(|(p, _)| p == path) {
+            return self.file_len(path);
+        }
         let file = self
             .files
             .iter()
@@ -193,6 +343,11 @@ impl Sources {
             .map_err(|_| Error::resource("original byte bound overflow"))
     }
     pub fn hash(&mut self, path: &Path) -> Result<String> {
+        if let Some(file) = self.logical_file(path)? {
+            let digest = file.require("sha256")?.string()?.to_owned();
+            self.remember_logical(path)?;
+            return Ok(digest);
+        }
         let (mut file, identity) = self.open(path)?;
         let _scratch = self.budget.reserve(32768)?;
         let mut hasher = Sha256::new();
@@ -211,6 +366,16 @@ impl Sources {
         Ok(digest)
     }
     pub fn bytes(&mut self, path: &Path, max_bytes: usize) -> Result<BudgetVec<u8>> {
+        if self.is_logical(path) {
+            let raw = self.registry.as_ref().unwrap().read(
+                path,
+                max_bytes.min(self.max_json),
+                &self.budget,
+                &self.control,
+            )?;
+            self.remember_logical(path)?;
+            return Ok(raw);
+        }
         let (mut file, identity) = self.open(path)?;
         let length =
             usize::try_from(identity.2).map_err(|_| Error::resource("input size overflow"))?;
@@ -247,6 +412,12 @@ impl Sources {
         Ok(bytes)
     }
     pub fn json(&mut self, path: &Path) -> Result<Document> {
+        if self.is_logical(path) {
+            let length = self.file_len(path)?;
+            let admission = json::admit(length, &self.budget)?;
+            let raw = self.bytes(path, self.max_json)?;
+            return crate::logical_artifacts::parse_admitted(&raw, &admission, &self.control);
+        }
         let (mut file, identity) = self.open(path)?;
         let length =
             usize::try_from(identity.2).map_err(|_| Error::resource("JSON size overflow"))?;
@@ -280,18 +451,24 @@ impl Sources {
         if bytes.len() != length {
             return Err(Error::contract("structured JSON size changed"));
         }
-        let document = json::parse_admitted(&bytes, &admission, &self.control)?;
+        let document = if self.registry.is_some() {
+            crate::logical_artifacts::parse_admitted(&bytes, &admission, &self.control)?
+        } else {
+            json::parse_admitted(&bytes, &admission, &self.control)?
+        };
         self.remember(path, identity, format!("{:x}", hasher.finalize()))?;
         Ok(document)
     }
+    pub(crate) fn parse_json(&self, bytes: &[u8]) -> Result<Document> {
+        if self.registry.is_some() {
+            crate::logical_artifacts::parse(bytes, &self.budget, &self.control)
+        } else {
+            json::parse(bytes, &self.budget, &self.control)
+        }
+    }
     pub fn checked_json(&mut self, path: &Path, expected: &Value) -> Result<Document> {
         let value = self.json(path)?;
-        let actual = &self
-            .files
-            .iter()
-            .find(|item| item.path == path)
-            .expect("remembered JSON")
-            .digest;
+        let actual = self.verified_sha(path)?;
         if actual != expected.string()? {
             return Err(Error::contract("structured metadata SHA256 mismatch"));
         }
@@ -371,6 +548,22 @@ impl Sources {
         Ok((names, Identity::of(&before), lease))
     }
     pub fn inventory(&mut self, path: &Path, names: Vec<String>, directories: bool) -> Result<()> {
+        if self.is_logical(path) {
+            let (actual, _admission) = self.child_names(path)?;
+            let expected = names
+                .iter()
+                .map(|n| (n.clone(), directories))
+                .collect::<std::collections::BTreeMap<_, _>>();
+            if expected.len() != names.len()
+                || actual
+                    .into_iter()
+                    .collect::<std::collections::BTreeMap<_, _>>()
+                    != expected
+            {
+                return Err(Error::contract("logical original inventory differs"));
+            }
+            return Ok(());
+        }
         let (names, identity, lease) = self.names(path, &names, directories)?;
         self.inventories.push(Inventory {
             path: path.into(),
@@ -387,8 +580,21 @@ impl Sources {
     /// content. Uses the same file/inventory evidence and final-sweep owner.
     pub(crate) fn owns_original(&self, path: &Path) -> bool {
         self.files.iter().any(|e| e.path == path)
+            || self.logical_files.iter().any(|(p, _)| p == path)
     }
     pub(crate) fn pin_tree(&mut self, path: &Path) -> Result<()> {
+        if self.is_logical(path) {
+            let (children, _admission) = self.child_names(path)?;
+            for (name, directory) in children {
+                let child = path.join(name);
+                if directory {
+                    self.pin_tree(&child)?;
+                } else {
+                    self.hash(&child)?;
+                }
+            }
+            return Ok(());
+        }
         self.safe(&path.join("placeholder"))?;
         let mut names = Vec::new();
         let mut lease = self.budget.reserve(1024)?;
@@ -497,6 +703,12 @@ impl Sources {
     }
     pub fn recheck(&self) -> Result<()> {
         self.control.check()?;
+        if let Some(registry) = &self.registry {
+            registry.recheck(&self.root, &self.control)?;
+        }
+        if matches!(self.access, SourceAccess::Logical) {
+            return Ok(());
+        }
         for item in self.files.iter() {
             let (mut file, identity) = self.open(&item.path)?;
             if identity != item.identity {
@@ -552,7 +764,15 @@ impl Sources {
     }
     fn current_directories(&self) -> Result<()> {
         self.control.check()?;
-        if Identity::of(&fs::symlink_metadata(&self.root)?) != self.root_identity {
+        source_io();
+        let SourceAccess::Physical(root_identity) = &self.access else {
+            return self
+                .registry
+                .as_ref()
+                .unwrap()
+                .recheck(&self.root, &self.control);
+        };
+        if Identity::of(&fs::symlink_metadata(&self.root)?) != *root_identity {
             return Err(Error::contract(
                 "structured original root directory changed",
             ));
@@ -745,6 +965,33 @@ impl Sources {
         pattern: SourcePattern,
         expected: Vec<String>,
     ) -> Result<()> {
+        if self.is_logical(&self.root) {
+            let mut actual = Vec::new();
+            let (children, _admission) = self.child_names(&self.root)?;
+            for (episode, directory) in children {
+                if directory {
+                    let (members, _member_admission) =
+                        self.child_names(&self.root.join(&episode))?;
+                    for (name, child_dir) in members {
+                        if pattern.matches(&name) {
+                            if child_dir {
+                                return Err(Error::contract(
+                                    "logical original member must be file",
+                                ));
+                            }
+                            actual.push(format!("{episode}/{name}"));
+                        }
+                    }
+                }
+            }
+            actual.sort();
+            let mut expected = expected;
+            expected.sort();
+            if actual != expected || expected.windows(2).any(|v| v[0] == v[1]) {
+                return Err(Error::contract("logical Source inventory differs"));
+            }
+            return Ok(());
+        }
         let (names, identity, lease) = self.source_names(pattern, &expected)?;
         self.inventories.push(Inventory {
             path: self.root.clone(),
@@ -759,8 +1006,40 @@ impl Sources {
     }
     pub(crate) fn proof_files(&self, root: &Path) -> Result<Document> {
         self.control.check()?;
-        let _copy = self.budget.reserve(65536 + self.files.len() * 4096)?;
+        let _copy = self.budget.reserve(
+            65536
+                + (self.files.len() + self.logical_files.len()) * 4096
+                + self
+                    .logical_files
+                    .iter()
+                    .map(|(p, _)| p.as_os_str().len() * 8)
+                    .sum::<usize>(),
+        )?;
         let mut values = json::object([]);
+        for (path, _) in self.logical_files.iter() {
+            let relative = path
+                .strip_prefix(root)
+                .map_err(|_| Error::contract("foreign logical proof root"))?
+                .to_str()
+                .ok_or_else(|| Error::contract("nonUTF8 logical proof name"))?;
+            let file = self
+                .logical_file(path)?
+                .ok_or_else(|| Error::contract("logical proof member missing"))?;
+            values.as_object_mut().unwrap().insert(
+                relative.into(),
+                json::object([
+                    (
+                        "sha256",
+                        json::copy(file.require("sha256")?, &self.control)?,
+                    ),
+                    ("bytes", json::copy(file.require("bytes")?, &self.control)?),
+                    (
+                        "identity",
+                        json::copy(file.require("identity")?, &self.control)?,
+                    ),
+                ]),
+            );
+        }
         for item in self.files.iter() {
             self.control.check()?;
             let relative = item
@@ -795,6 +1074,13 @@ impl Sources {
     }
     pub(crate) fn verified_sha(&self, path: &Path) -> Result<&str> {
         self.control.check()?;
+        if self.logical_files.iter().any(|(p, _)| p == path) {
+            return self
+                .logical_file(path)?
+                .unwrap()
+                .require("sha256")?
+                .string();
+        }
         self.files
             .iter()
             .find(|entry| entry.path == path)
@@ -809,6 +1095,13 @@ impl Sources {
             hasher.update(item.path.as_os_str().as_encoded_bytes());
             hasher.update([0]);
             hasher.update(item.digest.as_bytes());
+            hasher.update([0]);
+        }
+        for (path, _) in self.logical_files.iter() {
+            self.control.check()?;
+            hasher.update(path.as_os_str().as_encoded_bytes());
+            hasher.update([0]);
+            hasher.update(self.verified_sha(path)?.as_bytes());
             hasher.update([0]);
         }
         Ok(format!("{:x}", hasher.finalize()))
@@ -928,6 +1221,37 @@ pub(crate) struct CohortSession {
     recorded_episodes: Option<crate::json::Document>,
 }
 impl CohortSession {
+    pub(crate) fn open4(
+        plan: &[u8],
+        provider: Arc<dyn crate::logical_artifacts::LogicalArtifactProvider>,
+        budget: Arc<Budget>,
+        control: Control,
+        source_bytes: usize,
+        record_bytes: usize,
+        scratch_bytes: usize,
+        chunk_bytes: usize,
+    ) -> Result<Self> {
+        let mut inputs = crate::structured_source::OriginalInputs::open4(
+            plan,
+            provider,
+            budget,
+            control,
+            source_bytes,
+            record_bytes,
+            scratch_bytes,
+            chunk_bytes,
+        )?;
+        let controls = inputs.controls()?;
+        Ok(Self {
+            inputs,
+            controls,
+            phase: Phase::Scanned,
+            numeric_permit: None,
+            numeric: None,
+            expected_arrays: None,
+            recorded_episodes: None,
+        })
+    }
     pub(crate) fn is_closed(&self) -> bool {
         self.phase == Phase::Closed
     }
@@ -1772,8 +2096,18 @@ impl CohortSession {
         self.inputs.recheck()?;
         let numeric = self.numeric.as_ref().ok_or(Error::Closed)?;
         let receipt = json::object([
-            ("schema_version", json::integer(1)),
-            ("kind", json::text("card-instance-source-prepared")),
+            (
+                "schema_version",
+                json::integer(if self.inputs.format.packed() { 2 } else { 1 }),
+            ),
+            (
+                "kind",
+                json::text(if self.inputs.format.packed() {
+                    "card-instance-packed-source-prepared"
+                } else {
+                    "card-instance-source-prepared"
+                }),
+            ),
             ("summary_sha256", json::text(&self.controls.fingerprint)),
             (
                 "collection_manifest_sha256",
@@ -1832,8 +2166,18 @@ impl CohortSession {
         self.admitted_corrected_work()?;
         self.inputs.recheck()?;
         let receipt = json::object([
-            ("schema_version", json::integer(1)),
-            ("kind", json::text("card-instance-source-read-finalized")),
+            (
+                "schema_version",
+                json::integer(if self.inputs.format.packed() { 2 } else { 1 }),
+            ),
+            (
+                "kind",
+                json::text(if self.inputs.format.packed() {
+                    "card-instance-packed-source-read-finalized"
+                } else {
+                    "card-instance-source-read-finalized"
+                }),
+            ),
             ("summary_sha256", json::text(&self.controls.fingerprint)),
             ("qualified", Value::Bool(false)),
             ("parent_qualification", json::text("not_performed")),
@@ -1880,6 +2224,48 @@ impl CardInstanceNativeSession {
         scratch_bytes: usize,
         chunk_bytes: usize,
     ) -> Result<Self> {
+        Self::open_context(
+            plan,
+            None,
+            budget,
+            control,
+            source_bytes,
+            record_bytes,
+            scratch_bytes,
+            chunk_bytes,
+        )
+    }
+    pub(crate) fn open4(
+        plan: &[u8],
+        provider: Arc<dyn crate::logical_artifacts::LogicalArtifactProvider>,
+        budget: Arc<Budget>,
+        control: Control,
+        source_bytes: usize,
+        record_bytes: usize,
+        scratch_bytes: usize,
+        chunk_bytes: usize,
+    ) -> Result<Self> {
+        Self::open_context(
+            plan,
+            Some(provider),
+            budget,
+            control,
+            source_bytes,
+            record_bytes,
+            scratch_bytes,
+            chunk_bytes,
+        )
+    }
+    fn open_context(
+        plan: &[u8],
+        provider: Option<Arc<dyn crate::logical_artifacts::LogicalArtifactProvider>>,
+        budget: Arc<Budget>,
+        control: Control,
+        source_bytes: usize,
+        record_bytes: usize,
+        scratch_bytes: usize,
+        chunk_bytes: usize,
+    ) -> Result<Self> {
         if budget.limit() > 12usize * 1024 * 1024 * 1024
             || source_bytes == 0
             || source_bytes > 64 * 1024 * 1024
@@ -1898,15 +2284,28 @@ impl CardInstanceNativeSession {
             drop(core);
             Ok(())
         })?;
-        let core = CohortSession::open3(
-            plan,
-            budget.clone(),
-            control,
-            source_bytes,
-            record_bytes,
-            scratch_bytes,
-            chunk_bytes,
-        )?;
+        let core = if let Some(provider) = provider {
+            CohortSession::open4(
+                plan,
+                provider,
+                budget.clone(),
+                control,
+                source_bytes,
+                record_bytes,
+                scratch_bytes,
+                chunk_bytes,
+            )?
+        } else {
+            CohortSession::open3(
+                plan,
+                budget.clone(),
+                control,
+                source_bytes,
+                record_bytes,
+                scratch_bytes,
+                chunk_bytes,
+            )?
+        };
         Ok(Self {
             core: Some(core),
             retirement: Some(retirement),
@@ -2653,6 +3052,19 @@ mod card_instance_lifecycle_primitives {
         assert!(session.export_cohort().is_err());
         assert!(session.receipt.is_none());
         let _ = session.close();
+        drop(session);
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn cancelled_cleanup_closes_actual_native_core_without_any_original_source_io() {
+        let (root, mut session, budget, control) = setup();
+        SOURCE_IO.with(|count| count.set(0));
+        control.cancel();
+        assert!(matches!(session.close(), Err(Error::Cancelled)));
+        assert!(session.core.is_none());
+        assert_eq!(SOURCE_IO.with(|count| count.get()), 0);
+        session.close().unwrap();
+        assert_eq!(budget.used(), 0);
         drop(session);
         fs::remove_dir_all(root).unwrap();
     }

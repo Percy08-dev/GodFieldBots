@@ -110,6 +110,11 @@ pub(super) fn manifest(
             && receipts.len() == role.games() / 2,
         "complete eight swapped original pairs required",
     )?;
+    if s.is_logical(&s.root) {
+        let registry = s.registry.as_ref().ok_or(Error::Closed)?;
+        let (_, original, _) = registry.locate(&s.root).ok_or(Error::Closed)?;
+        packed_index(m, &original.description.root, b, c)?;
+    }
     for (group, receipt) in groups.iter().zip(receipts) {
         dto::runtime_receipt(receipt, b, c)?;
         require(
@@ -156,7 +161,7 @@ pub(super) fn manifest(
                 && expected_files.insert(name),
             "duplicate/foreign original inventory",
         )?;
-        let size = std::fs::symlink_metadata(&normalized)?.len();
+        let size = s.file_len(&normalized)? as u64;
         if size > limits.source_bytes as u64 {
             return Err(Error::resource("original collection file cap"));
         }
@@ -179,6 +184,177 @@ pub(super) fn manifest(
         actual == expected_files,
         "complete original Collection5 inventory differs",
     )
+}
+fn packed_index(m: &Value, description: &Value, b: &Arc<Budget>, c: &Control) -> Result<()> {
+    let index = description.require("index")?;
+    let groups = index.require("groups")?.array()?;
+    let episodes = index.require("episodes")?.array()?;
+    let schedule = m.require("schedule")?.array()?;
+    let originals = m.require("episodes")?.array()?;
+    require(
+        groups.len() == schedule.len() && episodes.len() == originals.len(),
+        "complete original packed group/episode row sets required",
+    )?;
+    // Metadata was already admitted, parsed and checked for sorted uniqueness.
+    // Semantic equality is canonical JSON equality, preserving bool/number/null.
+    for (spec, health) in schedule.iter().zip(m.require("groups")?.array()?) {
+        c.check()?;
+        let id = spec
+            .require("episodes")?
+            .array()?
+            .first()
+            .ok_or_else(|| Error::contract("empty original scheduled group"))?
+            .require("episode_id")?;
+        let group = groups
+            .iter()
+            .find(|g| g.get("group_id") == Some(id))
+            .ok_or_else(|| Error::contract("missing/foreign packed original group"))?;
+        require(
+            digest(group.require("record")?, b, c)? == digest(health, b, c)?,
+            "packed original group health differs",
+        )?;
+        for episode in spec.require("episodes")?.array()? {
+            let name = episode.require("episode_id")?;
+            let row = episodes
+                .iter()
+                .find(|e| e.get("episode_id") == Some(name))
+                .ok_or_else(|| Error::contract("missing/foreign packed original episode"))?;
+            let original = originals
+                .iter()
+                .find(|e| e.get("episode_id") == Some(name))
+                .ok_or_else(|| {
+                    Error::contract("packed original schedule/result episode differs")
+                })?;
+            require(
+                row.require("group_id")? == id
+                    && row.require("game_id")? == original.require("game_id")?,
+                "packed original episode group/game differs",
+            )?;
+            let record = json::object([
+                ("end_kind", json::copy(original.require("end_kind")?, c)?),
+                ("failure", json::copy(original.require("failure")?, c)?),
+            ]);
+            require(
+                digest(row.require("record")?, b, c)? == digest(&record, b, c)?,
+                "packed original episode outcome record differs",
+            )?;
+            let prefix = format!("{}/", name.string()?);
+            for member in description.require("files")?.array()? {
+                c.check()?;
+                if member.require("name")?.string()?.starts_with(&prefix) {
+                    require(
+                        member.require("identity")?.require("group_id")? == id,
+                        "packed original episode member belongs to different group",
+                    )?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod packed_index_tests {
+    use super::*;
+    fn fixture() -> (Value, Value) {
+        let health = json::object([
+            ("number", json::integer(1)),
+            ("flag", Value::Bool(true)),
+            ("missing", Value::Null),
+        ]);
+        let manifest = json::object([
+            (
+                "schedule",
+                json::array(["a", "b"].into_iter().map(|id| {
+                    json::object([(
+                        "episodes",
+                        json::array([json::object([("episode_id", json::text(id))])]),
+                    )])
+                })),
+            ),
+            ("groups", json::array([health.clone(), health.clone()])),
+            (
+                "episodes",
+                json::array(["a", "b"].into_iter().map(|id| {
+                    json::object([
+                        ("episode_id", json::text(id)),
+                        ("game_id", json::text(id)),
+                        ("end_kind", json::text("natural")),
+                        ("failure", Value::Null),
+                    ])
+                })),
+            ),
+        ]);
+        let description = json::object([
+            (
+                "index",
+                json::object([
+                    (
+                        "groups",
+                        json::array(["a", "b"].into_iter().map(|id| {
+                            json::object([("group_id", json::text(id)), ("record", health.clone())])
+                        })),
+                    ),
+                    (
+                        "episodes",
+                        json::array(["a", "b"].into_iter().map(|id| {
+                            json::object([
+                                ("episode_id", json::text(id)),
+                                ("group_id", json::text(id)),
+                                ("game_id", json::text(id)),
+                                (
+                                    "record",
+                                    json::object([
+                                        ("end_kind", json::text("natural")),
+                                        ("failure", Value::Null),
+                                    ]),
+                                ),
+                            ])
+                        })),
+                    ),
+                ]),
+            ),
+            (
+                "files",
+                json::array(["a", "b"].into_iter().map(|id| {
+                    json::object([
+                        ("name", json::text(&format!("{id}/player-1.jsonl"))),
+                        ("identity", json::object([("group_id", json::text(id))])),
+                    ])
+                })),
+            ),
+        ]);
+        (manifest, description)
+    }
+    #[test]
+    fn packed_index_semantics_reject_every_changed_original_record_and_mapping() {
+        let b = Budget::new(64 << 20);
+        let c = Control::new(crate::budget::monotonic() + 30.).unwrap();
+        let (manifest, original) = fixture();
+        packed_index(&manifest, &original, &b, &c).unwrap();
+        for case in 0..10 {
+            let mut value = original.clone();
+            match case {
+                0 => value["index"]["groups"][0]["record"]["number"] = Value::Bool(true),
+                1 => value["index"]["groups"][0]["record"]["number"] = json::float(1.0).unwrap(),
+                2 => value["index"]["groups"][0]["record"]["missing"] = json::integer(0),
+                3 => value["index"]["episodes"][0]["game_id"] = Value::Null,
+                4 => value["index"]["episodes"][0]["group_id"] = json::text("b"),
+                5 => value["index"]["episodes"][0]["record"]["end_kind"] = json::text("truncated"),
+                6 => value["index"]["episodes"][0]["record"]["failure"] = Value::Bool(false),
+                7 => {
+                    value["index"]["episodes"].as_array_mut().unwrap().pop();
+                }
+                8 => value["index"]["groups"][0]["group_id"] = json::text("foreign"),
+                _ => value["files"][0]["identity"]["group_id"] = json::text("b"),
+            }
+            assert!(
+                packed_index(&manifest, &value, &b, &c).is_err(),
+                "case{case}"
+            );
+        }
+        assert_eq!(b.used(), 0);
+    }
 }
 // Typed registry validation never selects a PPO learner.
 fn retained_registry(m: &Value, actions: &Value, b: &Arc<Budget>, c: &Control) -> Result<()> {

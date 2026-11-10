@@ -249,6 +249,37 @@ class NativeStructuredSource:
     def _before_session_construct(self) -> None:
         """Concrete corrected owner may pin its own binary before native allocation."""
 
+    def _construct_session(self, session_class: Any, plan: bytes, settings: bytes, cancel: Any) -> Any:
+        return session_class(plan, settings, self.deadline, cancel)
+
+    def _after_executor_retired(self) -> None:
+        """Concrete byte owners retire before the retained parent locks release."""
+
+    def _on_native_failure(self, error: BaseException) -> None:
+        """Packed owners fence cleanup; physical ownership preserves its behavior."""
+
+    def _make_executor(self, cancel: Any) -> Any:
+        from gf_training.native_execution import NativeExecution
+        return NativeExecution(cancel, thread_name_prefix='gf-structured-source')
+
+    def _native_call(self, function: Any, builder: Any = None, *, additional: int = 0,
+                     envelope: int = 0, retained: bool = True) -> Any:
+        arguments = (self._held(additional),) if builder is None else builder(self._held(additional))
+        return self._executor.call(function, *arguments)
+
+    def _construct_owned(self, session_class: Any, cancel: Any) -> None:
+        def arguments(held: int) -> tuple[bytes, bytes]:
+            return canonical(self.plan).encode(), canonical({'memory_bytes': self.budget, 'scratch_bytes': self.scratch_limit,
+                'max_source_file_bytes': self.settings.max_source_file_mib * 1024**2,
+                'max_record_bytes': self.settings.max_record_mib * 1024**2,
+                'chunk_target_bytes': min(self.settings.chunk_target_mib * 1024**2, 64 * 1024**2)}).encode()
+        def construct(plan: bytes, settings: bytes) -> None:
+            self._session = self._construct_session(session_class, plan, settings, cancel)
+        self._native_call(construct, arguments, retained=False)
+
+    def _control_summary(self) -> bytes:
+        return self._executor.call(self._session.control_summary)
+
     def _authorize_summary(self) -> tuple[Json, SealedScan, dict[int, Any]]:
         assert self.summary is not None
         return _authorize_controls(self.summary, self._session, max_owned_bytes=self.budget, deadline=self.deadline)
@@ -256,7 +287,6 @@ class NativeStructuredSource:
     def __enter__(self) -> Self:
         from gf_training.lineage import _OWNED_LOCKS, run_lock
         from gf_training.native_backend import binary_identity, load_native
-        from gf_training.native_execution import NativeExecution
         from gf_training.structured_rollout import _owned_bytes
         try:
             self._check()
@@ -274,26 +304,22 @@ class NativeStructuredSource:
                 directory = Path(entry['directory']).resolve()
                 if directory not in _OWNED_LOCKS:
                     self._locks.enter_context(run_lock(directory))
-            settings = canonical({'memory_bytes': self.budget, 'scratch_bytes': self.scratch_limit,
-                'max_source_file_bytes': self.settings.max_source_file_mib * 1024**2,
-                'max_record_bytes': self.settings.max_record_mib * 1024**2,
-                'chunk_target_bytes': min(self.settings.chunk_target_mib * 1024**2, 64 * 1024**2)}).encode()
-            encoded_plan = canonical(self.plan).encode()
             cancel = self.native.CancelHandle(self.deadline)
-            self._executor = NativeExecution(cancel, thread_name_prefix='gf-structured-source')
-            def construct() -> None:
-                self._session = session_class(encoded_plan, settings, self.deadline, cancel)
-            self._executor.call(construct)
-            encoded = self._executor.call(self._session.control_summary)
+            self._executor = self._make_executor(cancel)
+            self._construct_owned(session_class, cancel)
+            encoded = self._control_summary()
             self.summary = __import__('json').loads(encoded)
             self._auth, self.sealed, self.models = self._authorize_summary()
             if self.plan['mode'] == 'historical_parent':
                 self._check_historical()
                 self._correspondence_done = True
-            self._executor.call(self._session.authorize, canonical(self._auth).encode(), self._held())
+            from gf_common.artifacts import json_bound
+            self._native_call(self._session.authorize, lambda held: (canonical(self._auth).encode(), held),
+                envelope=8 * json_bound(self._auth) + 65536)
             self._check()
             return self
         except BaseException as error:
+            self._on_native_failure(error)
             try:
                 self.close()
             except BaseException as cleanup:  # noqa: BLE001 - initiating error wins owned cleanup
@@ -334,7 +360,7 @@ class NativeStructuredSource:
         self._check()
         if self.sealed is not None:
             self.sealed.finalize()
-        self._executor.call(self._session.recheck, self._held(additional))
+        self._native_call(self._session.recheck, additional=additional)
 
     def original_config_inputs(self, parent_index: int, additional: int = 0) -> list[Json]:
         """One bounded management query from this SAME retained original Run2."""
@@ -361,7 +387,7 @@ class NativeStructuredSource:
         if self.plan['mode'] != 'live_cohort' or not self._correspondence_done or self._begun:
             raise ContractError('actual live original correspondence must precede one update phase')
         self.recheck()  # Both ORIGINAL native and sealed owners, immediately before Adam.
-        self._executor.call(self._session.begin_update, self._held())
+        self._native_call(self._session.begin_update)
         self._begun = True
 
     def finalize(self) -> Json:
@@ -402,6 +428,15 @@ class NativeStructuredSource:
                 if not self._executor._closed or self._executor._active is not None:
                     vars(error)['_structured_source_cleanup_owner'] = self
                     raise error
+        try:
+            self._after_executor_retired()
+        except BaseException as cleanup:  # noqa: BLE001 -- original failure wins, actual owner/locks remain retained.
+            if error is None:
+                error = cleanup
+            else:
+                error.add_note('structured Source original-byte retirement: ' + str(cleanup))
+            vars(error)['_structured_source_cleanup_owner'] = self
+            raise error
         self._locks.close()
         self._closed = True
         if error is not None:
@@ -414,6 +449,9 @@ class NativeStructuredSource:
                 self.finalize()
             except BaseException as error:  # noqa: BLE001 - clean up before propagating final failure
                 failure = error
+        initiating = value if isinstance(value, BaseException) else failure
+        if initiating is not None:
+            self._on_native_failure(initiating)
         try:
             self.close()
         except BaseException as error:
@@ -474,7 +512,8 @@ class NativeStructuredSource:
         self._correspondence_done = True
         return count, proof, {'rollout.json': numeric_hash, **manifest['data']['files']}
 
-def _payload_views(payload: Any, *, game: bool = False, recorded: bool = False) -> tuple[Json, dict[str, Any]]:
+def _payload_views(payload: Any, *, game: bool = False, recorded: bool = False,
+                   packed: bool = False) -> tuple[Json, dict[str, Any]]:
     """Validate closed bank descriptors before creating any named NumPy view."""
     import json
     import math
@@ -491,6 +530,14 @@ def _payload_views(payload: Any, *, game: bool = False, recorded: bool = False) 
     if (recorded and not game or type(metadata['schema_version']) is not int
             or metadata['schema_version'] != (2 if game else 1) or metadata['kind'] != expected_kind):
         raise ContractError('unsupported structured cohort payload')
+    is_packed = metadata['source_proof'].get('kind') == 'card-instance-packed-original-source-proof'
+    if packed != is_packed or packed and not game:
+        raise ContractError('cohort payload packed Source context differs')
+    if packed:
+        from gf_common.group_pack_game import checked_packed_proof
+        checked_packed_proof(metadata['source_proof'])
+        if metadata['correspondence'].get('recipe') != 'card-instance-packed-source-correspondence-v1':
+            raise ContractError('packed cohort correspondence recipe differs')
     banks = {'uint8': payload[1], 'int64': payload[2], 'float32': payload[3]}
     for dtype, values in banks.items():
         for value in values:

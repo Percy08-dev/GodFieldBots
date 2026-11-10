@@ -165,10 +165,13 @@ def require_storage_command(config: ExperimentConfig, command: str, *, standalon
         return
     if command == 'train' or command == 'collect' and not standalone:
         if (type(config.actions) is not ActionConfigV3 or type(config.model) is not ConfiguredNeuralModelV3
-                or config.preprocessing.backend != 'python' or config.preprocessing.reader != 'participant-structured-v2'
+                or config.preprocessing.backend not in ('python', 'rust') or config.preprocessing.reader != 'participant-structured-v2'
                 or type(config.training) is not PPOTrainingConfig or config.run.split != 'train'
                 or type(config.opponent) is ConfiguredTreeModelV3):
-            raise ContractError('group Pack storage PPO requires ordinary corrected Python PPO')
+            raise ContractError('group Pack storage PPO requires ordinary corrected PPO')
+        if config.preprocessing.backend == 'rust':
+            from gf_training.native_backend import group_pack_reader_settings
+            group_pack_reader_settings(config.preprocessing)
         return
     if not standalone or command not in ("smoke", "collect", "evaluate"):
         raise ContractError("group Pack storage is not integrated for this command yet")

@@ -289,29 +289,40 @@ class _NativeFinalValidationInputs:
 
 def _authorize_game_controls(summary: Json, native: Any, actions: ActionConfigV3, *,
                              max_owned_bytes: int, deadline: float,
-                             extra_owned_bytes: int = 0) -> tuple[Json, SealedScan, dict[int, Any]]:
+                             extra_owned_bytes: int = 0, artifact_provider: Any = None) -> tuple[Json, SealedScan, dict[int, Any]]:
     binding = input_binding_game_v3(actions.action_contract, card_instance_rules())
+    packed = artifact_provider is not None
+    packed_fields = {'storage_binding', 'artifact_registry_sha256'} if packed else set()
     closed(summary, {'schema_version', 'kind', 'reader_contract', 'mode', 'parent', 'collections',
-        'authorization_max_bytes', 'qualified', 'parent_qualification'} | set(binding))
-    if (type(summary['schema_version']) is not int or summary['schema_version'] != 3
-            or summary['kind'] != 'card-instance-source-controls'
+        'authorization_max_bytes', 'qualified', 'parent_qualification'} | set(binding) | packed_fields)
+    if (type(summary['schema_version']) is not int or summary['schema_version'] != (4 if packed else 3)
+            or summary['kind'] != ('card-instance-packed-source-controls' if packed else 'card-instance-source-controls')
             or summary['reader_contract'] != 'participant-structured-v2'
             or summary['mode'] not in ('historical_parent', 'live_cohort')
             or summary['qualified'] is not False or summary['parent_qualification'] != 'not_performed'
             or any(canonical(summary[key]) != canonical(value) for key, value in binding.items())):
         raise ContractError('closed corrected native original controls3 required')
+    if packed:
+        from gf_common.group_pack_game import checked_storage_binding
+        checked_storage_binding(summary['storage_binding'])
+        if summary['artifact_registry_sha256'] != artifact_provider.registry_sha256:
+            raise ContractError('packed native summary registry differs from SAME provider')
     parent = summary['parent']
     closed(parent, {'schema_version', 'kind', 'validation_scope', 'npz_validated', 'journal6_validated',
         'qualified', 'parent_qualification', 'directory', 'state', 'clocks', 'model', 'execution',
         'semantics', 'actions_sha256', 'identity_sha256', 'generations', 'control_fingerprint',
-        'parent_index', 'run_sha256', 'run_limits', 'hardware'} | set(binding))
-    if (parent['schema_version'] != 3 or parent['kind'] != 'card-instance-parent-controls'
+        'parent_index', 'run_sha256', 'run_limits', 'hardware'} | set(binding) | ({'storage_binding'} if packed else set()))
+    if (parent['schema_version'] != (4 if packed else 3)
+            or parent['kind'] != ('card-instance-packed-parent-controls' if packed else 'card-instance-parent-controls')
             or parent['validation_scope'] != 'metadata-maps-filehashes-only'
             or any(parent[key] is not False for key in ('npz_validated', 'journal6_validated', 'qualified'))
             or parent['parent_qualification'] != 'not_performed' or parent['parent_index'] != 0
             or parent['actions_sha256'] != digest(asdict(actions))
             or any(canonical(parent[key]) != canonical(value) for key, value in binding.items())):
         raise ContractError('native parent3 context/scope differs')
+    if packed and (parent['storage_binding'] != summary['storage_binding']
+            or parent['state'].get('schema_version') != 4 or parent['state'].get('storage_binding') != summary['storage_binding']):
+        raise ContractError('packed native parent state/binding differs')
     remaining = max_owned_bytes - native.used_bytes() - extra_owned_bytes
     if remaining <= 0:
         raise ContractError('joint native/sealed ownership exhausted before game inspection')
@@ -331,6 +342,13 @@ def _authorize_game_controls(summary: Json, native: Any, actions: ActionConfigV3
     for index, collection in enumerate(summary['collections']):
         scan.check()
         closed(collection, COLLECTION_FIELDS)
+        if packed:
+            from gf_common.group_pack_game import checked_packed_proof
+            proof = checked_packed_proof(collection['source_proof'])
+            description = json.loads(artifact_provider.describe(collection['directory']))
+            if (proof['storage'] != description['storage'] or proof['custody'] != description['custody']
+                    or collection['correspondence']['recipe'] != 'card-instance-packed-source-correspondence-v1'):
+                raise ContractError('packed native collection differs from SAME originals')
         generation = integer(collection['generation'], 0, len(parent['generations']) - 1)
         if (collection['collection_index'] != index or collection['config_sha256'] != parent['state']['config_sha256']
                 or collection['schedule_sha256'] != schedules[0, generation]
@@ -352,15 +370,15 @@ def _authorize_game_controls(summary: Json, native: Any, actions: ActionConfigV3
             'correspondence_sha256': collection['correspondence']['binding_sha256'],
             'numeric_sha256': None if numeric is None else numeric['sha256']})
     scan.finalize()
-    return {'schema_version': 3, 'summary_sha256': digest(summary), 'parent': parents[0],
-            'collections': collections}, scan, models
+    return {'schema_version': 4 if packed else 3, 'summary_sha256': digest(summary), 'parent': parents[0],
+            'collections': collections, **({key: summary[key] for key in packed_fields})}, scan, models
 
 
 class _NativeGameInputs(NativeStructuredSource):
     """Concrete inputs representation only; SAME _GameBatchSource issues authority."""
     def __init__(self, plan: Json, settings: Any, *, actions: ActionConfigV3, max_owned_bytes: int,
                  deadline: float, extra_owned_bytes: int = 0, max_scratch_bytes: int | None = None,
-                 native: Any = None, collection_index: int = 0) -> None:
+                 native: Any = None, collection_index: int = 0, artifact_provider: Any = None, shared_controls: Any = None) -> None:
         self.actions = actions
         input_binding_game_v3(actions.action_contract, card_instance_rules())
         self.settings = preparation_config(asdict(settings))
@@ -368,6 +386,39 @@ class _NativeGameInputs(NativeStructuredSource):
             raise ContractError('explicit corrected native inputs required')
         self._initialize_owner(plan, max_owned_bytes=max_owned_bytes, deadline=deadline,
             extra_owned_bytes=extra_owned_bytes, max_scratch_bytes=max_scratch_bytes, native=native)
+        from gf_training.native_group_pack import OriginalArtifactProvider
+        self._artifact_provider = artifact_provider
+        self._shared_controls = shared_controls
+        self._last_held = 0
+        if artifact_provider is not None:
+            if (type(artifact_provider) is not OriginalArtifactProvider or plan.get('schema_version') != 4
+                    or plan.get('artifact_registry_sha256') != artifact_provider.registry_sha256):
+                raise ContractError('plan4 requires SAME concrete registered original provider')
+            from gf_common.group_pack_game import checked_storage_binding
+            checked_storage_binding(plan.get('storage_binding'))
+            if artifact_provider._empty_controls is not None and (
+                    shared_controls is not artifact_provider._empty_controls
+                    or plan.get('mode') != 'historical_parent' or plan.get('collections') != []
+                    or len(plan.get('parents', [])) != 1):
+                raise ContractError('empty provider requires SAME actual historical generation0 controls')
+            if shared_controls is not None:
+                from gf_training.structured_lineage import _ChainScan
+                if (type(shared_controls) is not _ChainScan or shared_controls._packed_pool is not artifact_provider.pool
+                        or shared_controls.root != Path(plan['parents'][0]['directory']).resolve()
+                        or shared_controls._pool_control_charge < shared_controls.retained
+                        or extra_owned_bytes < shared_controls.retained):
+                    raise ContractError('actual SAME pool-backed parent ControlScan required for credit')
+                self.extra -= shared_controls.retained
+            from gf_common.artifacts import json_bound
+            self.base += 8 * json_bound(plan) + 131072
+            self.extra += artifact_provider.external_bytes
+            self.budget = self.limit - self.extra - self.base
+            if self.budget <= 0:
+                raise ContractError('native original provider ownership exhausted before FFI')
+        elif plan.get('schema_version') == 4:
+            raise ContractError('plan4 requires explicit original byte provider')
+        elif shared_controls is not None:
+            raise ContractError('shared packed ControlScan requires an actual artifact provider')
         self._explicit_candidate = native is not None
         self._binary_scan: SealedScan | None = None
         self._binary_identity: bytes | None = None
@@ -395,6 +446,9 @@ class _NativeGameInputs(NativeStructuredSource):
         module = self.native if self._explicit_candidate else load_native()
         if not self._explicit_candidate:
             card_instance_reader_settings(self.settings, module)
+            if self._artifact_provider is not None:
+                from gf_training.native_backend import group_pack_reader_settings
+                group_pack_reader_settings(self.settings, module)
         current = binary_identity(module)
         evidence = SealedScan(max_owned_bytes=self.budget, deadline=self.deadline)
         binary_path = Path(current['extension_path'])
@@ -430,7 +484,103 @@ class _NativeGameInputs(NativeStructuredSource):
         assert self._binary_scan is not None
         self._binary_scan.finalize()
 
+    def _make_executor(self, cancel: Any) -> Any:
+        if self._artifact_provider is None:
+            return super()._make_executor(cancel)
+        from gf_training.native_group_pack import _PackedNativeExecution
+        executor = _PackedNativeExecution(cancel, self._artifact_provider)
+        self._executor = executor  # Adopt before the final prepaid N calculation.
+        growth = self._artifact_provider.pool.budget.used - self._artifact_provider.baseline_bytes
+        if growth < 0:
+            raise ContractError('constructor original account shrank without owned retirement')
+        self.extra += growth
+        self._artifact_provider.baseline_bytes += growth
+        self._artifact_provider.external_bytes += growth
+        self.budget = self.limit - self.extra - self.base
+        if self.budget <= 0:
+            raise ContractError('packed constructor account exhausted BEFORE encoding')
+        return executor
+
+    def _on_native_failure(self, error: BaseException) -> None:
+        if self._artifact_provider is not None:
+            self._artifact_provider._remember(error)
+            if self._executor is not None:
+                self._executor._remember(error)
+
+    def _check(self) -> None:
+        super()._check()
+        if getattr(self, '_artifact_provider', None) is not None:
+            self._artifact_provider._check()
+
+    def _native_call(self, function: Any, builder: Any = None, *, additional: int = 0,
+                     envelope: int = 0, retained: bool = True) -> Any:
+        if self._artifact_provider is None:
+            return super()._native_call(function, builder, additional=additional, envelope=envelope, retained=retained)
+        try:
+            self._executor.prepare()
+            dynamic = max(0, self._artifact_provider.pool.budget.used - self._artifact_provider.baseline_bytes)
+            held = dynamic + self._held(additional) + envelope
+            used = 0 if self._session is None else int(self._session.used_bytes()) - self._last_held
+            if used < 0 or used + held > self.budget:
+                raise ContractError('joint packed native ownership exhausted BEFORE argument construction')
+            arguments = (held,) if builder is None else builder(held)
+            result = self._executor.call(function, *arguments)
+            if retained:
+                self._last_held = held
+            return result
+        except BaseException as error:
+            self._executor._remember(error)
+            raise
+
+    def _control_summary(self) -> bytes:
+        if self._artifact_provider is None:
+            return super()._control_summary()
+        return self._native_call(self._session.control_summary)
+
+    def close(self) -> None:
+        if self._artifact_provider is None:
+            return super().close()
+        if self._closed:
+            return
+        primary: BaseException | None = None
+        if self._executor is not None:
+            try:
+                self._executor.close()
+            except BaseException as error:
+                primary = error
+                if not self._executor._closed:
+                    vars(error)['_structured_source_cleanup_owner'] = self
+                    raise
+            self._session_closed = self._executor._native_retired
+        try:
+            self._artifact_provider.close()
+        except BaseException as error:
+            vars(error)['_structured_source_cleanup_owner'] = self
+            if primary is not None:
+                primary.add_note('provider retirement: ' + str(error))
+                raise primary
+            raise
+        self._locks.close()
+        self._closed = True
+        if primary is not None:
+            raise primary
+
+    def _construct_session(self, session_class: Any, plan: bytes, settings: bytes, cancel: Any) -> Any:
+        if self._artifact_provider is None:
+            return super()._construct_session(session_class, plan, settings, cancel)
+        constructor = getattr(session_class, 'from_artifacts', None)
+        if not callable(constructor):
+            raise ContractError('native packed provider constructor unavailable; no fallback')
+        session = constructor(plan, self._artifact_provider, settings, self.deadline, cancel)
+        self._executor.bind_native(session)
+        return session
+
+    def _after_executor_retired(self) -> None:
+        if self._artifact_provider is not None:
+            self._artifact_provider.close()
+
     def recheck(self, additional: int = 0) -> None:
+        self._check()
         if self._binary_scan is not None:
             self._binary_scan.finalize()
         super().recheck(additional)
@@ -444,7 +594,7 @@ class _NativeGameInputs(NativeStructuredSource):
         getter = getattr(self._session, 'original_config_inputs', None)
         if not callable(getter):
             raise ContractError('native corrected source lacks original input-origin query')
-        raw = json.loads(self._executor.call(getter, parent_index, self._held(additional)))
+        raw = json.loads(self._native_call(getter, lambda held: (parent_index, held), additional=additional))
         closed(raw, {'schema_version', 'kind', 'summary_sha256', 'parent_index', 'run_sha256', 'config_inputs'})
         if (type(raw['schema_version']) is not int or raw['schema_version'] != 3
                 or raw['kind'] != 'card-instance-original-config-inputs'
@@ -459,7 +609,8 @@ class _NativeGameInputs(NativeStructuredSource):
     def cleanup_complete(self) -> bool:
         """Concrete cleanup confirmation, available even when failed/expired."""
         return (self._closed and (self._session is None or self._session_closed)
-            and (self._executor is None or (self._executor._closed and self._executor._active is None)))
+            and (self._executor is None or (self._executor._closed and self._executor._active is None))
+            and (self._artifact_provider is None or self._artifact_provider._closed))
 
     @property
     def joint_owned_bytes(self) -> int:
@@ -474,7 +625,7 @@ class _NativeGameInputs(NativeStructuredSource):
         if self._live_run_sha256 is not None and self.summary['parent']['run_sha256'] != self._live_run_sha256:
             raise ContractError('native live Source differs from SAME preflight parent state')
         return _authorize_game_controls(self.summary, self._session, self.actions,
-            max_owned_bytes=self.budget, deadline=self.deadline)
+            max_owned_bytes=self.budget, deadline=self.deadline, artifact_provider=self._artifact_provider)
 
     @property
     def collection(self) -> Json:
@@ -495,7 +646,13 @@ class _NativeGameInputs(NativeStructuredSource):
         return int(self.collection['learner_decisions'])
 
     def _held(self, additional: int = 0) -> int:
-        return super()._held(additional) + self._caller_growth
+        growth = self._caller_growth
+        if self._shared_controls is not None:
+            if (self._shared_controls._packed_pool is not self._artifact_provider.pool
+                    or self._shared_controls._pool_control_charge < self._shared_controls.retained):
+                raise ContractError('SAME ControlScan pool credit no longer covers retained controls')
+            growth = 0
+        return super()._held(additional) + growth
 
     def caller_growth(self, value: int) -> None:
         self._caller_growth = integer(value, 0)
@@ -513,8 +670,8 @@ class _NativeGameInputs(NativeStructuredSource):
         packet = None
         try:
             self.recheck()
-            packet = self._executor.call(self._session.export_recorded_episode_payload,
-                collection_index, episode_index, self._held())
+            packet = self._native_call(self._session.export_recorded_episode_payload,
+                lambda held: (collection_index, episode_index, held))
             bound = _NativeFinalValidationInputs._decode_bound(packet)
             budget_loan.admit_local(base_local + bound)
             def cheap() -> None:
@@ -549,7 +706,8 @@ class _NativeGameInputs(NativeStructuredSource):
         result = read_game_rollout(directory, expected_digest, self.models[0], actions=self.actions,
             rules=card_instance_rules(), declaration=collection['semantics'],
             expected_correspondence=collection['correspondence'], max_owned_bytes=self.budget,
-            extra_owned_bytes=self._session.used_bytes(), check=self._check, reserve=self._reserve_decode)
+            extra_owned_bytes=self._session.used_bytes(), check=self._check, reserve=self._reserve_decode,
+            storage_binding=self.plan.get('storage_binding'))
         if len(result) != collection['learner_decisions'] or result.policy_version != collection['learner_label']:
             raise ContractError('numeric4 differs from original game endpoints/policy')
         return result
@@ -591,7 +749,7 @@ class _NativeGameInputs(NativeStructuredSource):
                 raise ContractError('recorded comparison output must be outside every original')
             if directory.exists() or directory.is_symlink():
                 raise ContractError('recorded comparison requires a fresh assessment path')
-            payload = self._executor.call(self._session.export_recorded_cohort, index, self._held())
+            payload = self._native_call(self._session.export_recorded_cohort, lambda held: (index, held))
         else:
             assert self.summary is not None
             collection = self.summary['collections'][index]
@@ -603,8 +761,8 @@ class _NativeGameInputs(NativeStructuredSource):
                 raise ContractError('live numeric publication requires a fresh nonsymlink target')
             if self._published is not None:
                 raise ContractError('one native live numeric publication required')
-            payload = self._executor.call(self._session.export_cohort, self._held())
-        metadata, arrays = _payload_views(payload, game=True, recorded=recorded)
+            payload = self._native_call(self._session.export_cohort)
+        metadata, arrays = _payload_views(payload, game=True, recorded=recorded, packed=self._artifact_provider is not None)
         assert self.summary is not None
         collection = self.summary['collections'][index]
         if (metadata['collection_index'] != index
@@ -621,10 +779,11 @@ class _NativeGameInputs(NativeStructuredSource):
         digest_value = sha256(directory / 'rollout.json', self.deadline)
         files = {'rollout.json': digest_value, **manifest['data']['files']}
         del labels, arrays, metadata, payload
-        self._executor.call(self._session.retire_payload, self._held())
+        self._native_call(self._session.retire_payload)
         if not recorded:
-            self._executor.call(self._session.bind_numeric, canonical({'directory': str(directory.absolute()),
-                'manifest_sha256': digest_value, 'files': files}).encode(), self._held())
+            self._native_call(self._session.bind_numeric, lambda held: (canonical({'directory': str(directory.absolute()),
+                'manifest_sha256': digest_value, 'files': files}).encode(), held),
+                envelope=8 * __import__('gf_common.artifacts', fromlist=['json_bound']).json_bound(files) + 65536)
             self._published, self._numeric_files = manifest, files
             self._persistent_python = _owned_bytes((manifest, files))
         result = self._read_game(directory, digest_value, collection)
@@ -647,7 +806,14 @@ class _NativeGameInputs(NativeStructuredSource):
         if self.plan['mode'] != 'historical_parent' or not self._correspondence_done:
             raise ContractError('only fully checked historical input can finalize read-only')
         self.recheck()
-        result = json.loads(self._executor.call(self._session.finalize_read, self._held()))
+        result = json.loads(self._native_call(self._session.finalize_read))
+        closed(result, {'schema_version', 'kind', 'summary_sha256', 'qualified', 'parent_qualification'})
+        packed = self._artifact_provider is not None
+        if (type(result['schema_version']) is not int or result['schema_version'] != (2 if packed else 1)
+                or result['kind'] != ('card-instance-packed-source-read-finalized' if packed else 'card-instance-source-read-finalized')
+                or result['summary_sha256'] != digest(self.summary) or result['qualified'] is not False
+                or result['parent_qualification'] != 'not_performed'):
+            raise ContractError('native finalized receipt differs from SAME retained Source')
         if self.sealed is not None:
             self.sealed.finalize()
         if self._binary_scan is not None:
@@ -659,15 +825,16 @@ class _NativeGameInputs(NativeStructuredSource):
         if self.plan['mode'] != 'live_cohort' or not self._begun or self._numeric_files is None:
             raise ContractError('native preparation requires its completed live projection')
         self.recheck()
-        receipt = json.loads(self._executor.call(self._session.prepare_commit, self._held()))
+        receipt = json.loads(self._native_call(self._session.prepare_commit))
         closed(receipt, {'schema_version', 'kind', 'summary_sha256', 'collection_manifest_sha256',
             'source_correspondence', 'numeric_manifest_sha256', 'numeric_files_sha256', 'optimizer_steps'})
         assert self.summary is not None
         expected_steps = self.summary['parent']['state']['optimizer_steps'] + 4 * ((self.decision_count + 127) // 128)
-        if (receipt['schema_version'] != 1 or receipt['summary_sha256'] != digest(self.summary)
+        packed = self._artifact_provider is not None
+        if (receipt['schema_version'] != (2 if packed else 1) or receipt['summary_sha256'] != digest(self.summary)
                 or receipt['optimizer_steps'] != expected_steps
                 or receipt['collection_manifest_sha256'] != self.proof['manifest_sha256']
-                or receipt.get('kind') != 'card-instance-source-prepared'
+                or receipt.get('kind') != ('card-instance-packed-source-prepared' if packed else 'card-instance-source-prepared')
                 or receipt.get('numeric_manifest_sha256') != self._numeric_files['rollout.json']
                 or receipt.get('numeric_files_sha256') != digest(dict(sorted(self._numeric_files.items())))
                 or canonical(receipt.get('source_correspondence')) != canonical(self.correspondence)):
@@ -678,6 +845,8 @@ class _NativeGameInputs(NativeStructuredSource):
             self._binary_scan.finalize()
         self._session_closed = True
         self._executor.close()
+        if self._artifact_provider is not None:
+            self._artifact_provider.close()
         self._locks.close()
         self._prepared_receipt = receipt
         self._prepared = True
@@ -692,6 +861,8 @@ class _NativeGameInputs(NativeStructuredSource):
         if self.plan['mode'] == 'historical_parent':
             super().__exit__(kind, value, traceback)
             return
+        if isinstance(value, BaseException):
+            self._on_native_failure(value)
         try:
             self.close()
         except BaseException as cleanup:

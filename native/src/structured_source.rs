@@ -673,6 +673,7 @@ pub(crate) fn inspect_collection(
         None,
         SourceFormat::Engineering,
         CorrectedCollectionRole::PpoBatch16,
+        None,
     )
 }
 pub(crate) fn inspect_card_instance_collection(
@@ -693,6 +694,7 @@ pub(crate) fn inspect_card_instance_collection(
         None,
         SourceFormat::Corrected,
         CorrectedCollectionRole::PpoBatch16,
+        None,
     )
 }
 pub(crate) fn inspect_final64_collection(
@@ -713,6 +715,7 @@ pub(crate) fn inspect_final64_collection(
         None,
         SourceFormat::Corrected,
         CorrectedCollectionRole::Final64 { pending },
+        None,
     )
 }
 #[derive(Clone, Copy)]
@@ -740,6 +743,7 @@ pub(crate) fn inspect_tree_collection(
         Some((kind, window)),
         SourceFormat::Engineering,
         CorrectedCollectionRole::PpoBatch16,
+        None,
     )
 }
 fn inspect_collection_inner(
@@ -752,13 +756,15 @@ fn inspect_collection_inner(
     tree: Option<(TreeSourceKind, usize)>,
     format: SourceFormat,
     role: CorrectedCollectionRole,
+    registry: Option<Arc<crate::logical_artifacts::Registry>>,
 ) -> Result<CollectionScan> {
     control.check()?;
-    let mut sources = Sources::new(
+    let mut sources = Sources::from_registry(
         directory,
         budget.clone(),
         control.clone(),
         limits.source_bytes,
+        registry.clone(),
     )?;
     let root = sources.root.clone();
     let manifest = sources.json(&root.join(role.manifest()))?;
@@ -1076,13 +1082,13 @@ fn inspect_collection_inner(
     let mut all_columns = BTreeSet::new();
     let mut replays = BTreeSet::new();
     for name in &names {
-        for item in std::fs::read_dir(root.join(name))? {
+        let (children, _children_admission) = sources.child_names(&root.join(name))?;
+        for (file, directory) in children {
             control.check()?;
-            let item = item?;
-            let file = item.file_name();
-            let file = file
-                .to_str()
-                .ok_or_else(|| Error::contract("nonUTF8 Source child"))?;
+            let file = file.as_str();
+            if directory {
+                continue;
+            }
             if file.ends_with(".columns") {
                 _metadata.push(budget.reserve(1024 + 4 * (name.len() + file.len() + 1))?)?;
                 all_columns.insert(format!("{name}/{file}"));
@@ -1219,7 +1225,7 @@ fn inspect_collection_inner(
                 None
             };
             let input = if corrected {
-                Journal::original_corrected(
+                Journal::original_corrected_artifacts(
                     &dir,
                     &file,
                     budget.clone(),
@@ -1228,6 +1234,7 @@ fn inspect_collection_inner(
                     limits.record_bytes,
                     &declaration,
                     selected_stage,
+                    registry.clone(),
                 )?
             } else if let Some((_, window)) = tree {
                 if selected {
@@ -1508,6 +1515,19 @@ fn inspect_collection_inner(
         ("missing_replays", json::array(missing_replays)),
         ("files", json::copy(files, &control)?),
     ]);
+    if format.packed() {
+        let (storage, custody) = sources.packed_context()?;
+        proof["schema_version"] = json::integer(2);
+        proof["kind"] = json::text("card-instance-packed-original-source-proof");
+        proof
+            .as_object_mut()
+            .unwrap()
+            .insert("storage".into(), json::copy(storage, &control)?);
+        proof
+            .as_object_mut()
+            .unwrap()
+            .insert("custody".into(), json::copy(custody, &control)?);
+    }
     for key in if corrected {
         &[
             "action_contract",
@@ -1958,6 +1978,7 @@ impl OriginalInputs {
             scratch_bytes,
             chunk_bytes,
             SourceFormat::Engineering,
+            None,
         )
     }
     pub(crate) fn open3(
@@ -1978,6 +1999,79 @@ impl OriginalInputs {
             scratch_bytes,
             chunk_bytes,
             SourceFormat::Corrected,
+            None,
+        )
+    }
+    pub(crate) fn open4(
+        encoded: &[u8],
+        provider: Arc<dyn crate::logical_artifacts::LogicalArtifactProvider>,
+        budget: Arc<Budget>,
+        control: Control,
+        source_bytes: usize,
+        record_bytes: usize,
+        scratch_bytes: usize,
+        chunk_bytes: usize,
+    ) -> Result<Self> {
+        require(encoded.len() <= 65536, "plan4 bounded wire required")?;
+        let plan = crate::logical_artifacts::parse(encoded, &budget, &control)?;
+        let p = &plan.root;
+        p.require("schema_version")?.integer(4, 4)?;
+        let live = field(p, "mode")? == "live_cohort";
+        p.closed(
+            &[
+                "schema_version",
+                "mode",
+                "parents",
+                "collections",
+                "storage_binding",
+                "artifact_registry_sha256",
+            ],
+            if live {
+                &["cohort_collection_index"]
+            } else {
+                &[]
+            },
+        )?;
+        require(
+            p.require("storage_binding")? == &crate::logical_artifacts::binding(),
+            "plan4 exact storage binding required",
+        )?;
+        require(
+            p.require("parents")?.array()?.len() == 1,
+            "plan4 one original parent required",
+        )?;
+        let parent = Path::new(field(&p.require("parents")?.array()?[0], "directory")?);
+        let registry = crate::logical_artifacts::Registry::open(
+            provider,
+            crate::structured_controls::checksum(p.require("artifact_registry_sha256")?)?,
+            &budget,
+            &control,
+            source_bytes,
+        )?;
+        for root in registry.roots.keys() {
+            let batch = root
+                .strip_prefix(parent.join("collections"))
+                .map_err(|_| Error::contract("foreign original provider root"))?;
+            let name = batch
+                .to_str()
+                .ok_or_else(|| Error::contract("nonUTF8 registered original root"))?;
+            require(
+                name.len() == 12
+                    && name.starts_with("batch-")
+                    && name[6..].bytes().all(|c| c.is_ascii_digit()),
+                "registered original root must be prescribed parent batch",
+            )?;
+        }
+        Self::open_context(
+            encoded,
+            budget,
+            control,
+            source_bytes,
+            record_bytes,
+            scratch_bytes,
+            chunk_bytes,
+            SourceFormat::PackedCorrected,
+            Some(registry),
         )
     }
     fn open_context(
@@ -1989,6 +2083,7 @@ impl OriginalInputs {
         scratch_bytes: usize,
         chunk_bytes: usize,
         format: SourceFormat,
+        registry: Option<Arc<crate::logical_artifacts::Registry>>,
     ) -> Result<Self> {
         control.check()?;
         require(
@@ -2003,8 +2098,20 @@ impl OriginalInputs {
             "structured Source plan cannot be entirely empty",
         )?;
         p.require("schema_version")?.integer(
-            if format.corrected() { 3 } else { 2 },
-            if format.corrected() { 3 } else { 2 },
+            if format.packed() {
+                4
+            } else if format.corrected() {
+                3
+            } else {
+                2
+            },
+            if format.packed() {
+                4
+            } else if format.corrected() {
+                3
+            } else {
+                2
+            },
         )?;
         let live = match field(p, "mode")? {
             "live_cohort" => true,
@@ -2012,13 +2119,37 @@ impl OriginalInputs {
             _ => return Err(Error::contract("unknown structured source mode")),
         };
         p.closed(
-            &["schema_version", "mode", "parents", "collections"],
+            &if format.packed() {
+                vec![
+                    "schema_version",
+                    "mode",
+                    "parents",
+                    "collections",
+                    "storage_binding",
+                    "artifact_registry_sha256",
+                ]
+            } else {
+                vec!["schema_version", "mode", "parents", "collections"]
+            },
             if live {
                 &["cohort_collection_index"]
             } else {
                 &[]
             },
         )?;
+        if format.packed() {
+            require(
+                p.require("storage_binding")? == &crate::logical_artifacts::binding()
+                    && p.require("artifact_registry_sha256")?.string()?
+                        == registry
+                            .as_ref()
+                            .ok_or_else(|| Error::contract("plan4 requires original provider"))?
+                            .digest,
+                "plan4 original provider binding differs",
+            )?;
+        } else {
+            require(registry.is_none(), "old plan rejects original provider")?;
+        }
         if live {
             p.require("cohort_collection_index")?;
         }
@@ -2050,17 +2181,20 @@ impl OriginalInputs {
             control.check()?;
             value.closed(&["directory", "require_complete"], &[])?;
             validation::text_value(value.require("directory")?)?;
-            let mut sources = Sources::new(
+            let mut sources = Sources::from_registry(
                 Path::new(field(value, "directory")?),
                 budget.clone(),
                 control.clone(),
                 source_bytes,
+                registry.clone(),
             )?;
             require(
                 parent_paths.insert(sources.root.clone()),
                 "duplicate original parent directory",
             )?;
-            let summary = if format.corrected() {
+            let summary = if format.packed() {
+                crate::structured_controls::parent4(&mut sources)?
+            } else if format.corrected() {
                 crate::structured_controls::parent3(&mut sources)?
             } else {
                 crate::structured_controls::parent(&mut sources)?
@@ -2244,9 +2378,30 @@ impl OriginalInputs {
             None
         };
         let mut collections = BudgetVec::new(&budget);
+        if format.packed() {
+            require(
+                registry.as_ref().unwrap().roots.len() == requests.len()
+                    && requests
+                        .iter()
+                        .all(|(path, _)| registry.as_ref().unwrap().roots.contains_key(path)),
+                "registry must exactly match live and committed original roots",
+            )?;
+        }
         for (index, (directory, pi)) in requests.iter().enumerate() {
             control.check()?;
-            let mut peek = Sources::new(directory, budget.clone(), control.clone(), source_bytes)?;
+            if format.packed() {
+                require(
+                    registry.as_ref().unwrap().roots.contains_key(directory),
+                    "unregistered original collection root",
+                )?;
+            }
+            let mut peek = Sources::from_registry(
+                directory,
+                budget.clone(),
+                control.clone(),
+                source_bytes,
+                registry.clone(),
+            )?;
             let first = peek.json(&peek.root.join("manifest.json"))?;
             if first.root.get("schema_version").and_then(Value::as_i64)
                 == Some(if format.corrected() { 5 } else { 4 })
@@ -2265,7 +2420,27 @@ impl OriginalInputs {
                 ));
             }
             let parent = pi.map(|pi| (&*parents[pi].directory, &parents[pi].state.root));
-            let mut scan = if format.corrected() {
+            let mut scan = if format.packed() {
+                inspect_collection_inner(
+                    directory,
+                    parent,
+                    &CollectionLimits {
+                        source_bytes,
+                        record_bytes,
+                    },
+                    if selected == Some(index) {
+                        stage.as_mut()
+                    } else {
+                        None
+                    },
+                    budget.clone(),
+                    control.clone(),
+                    None,
+                    SourceFormat::PackedCorrected,
+                    CorrectedCollectionRole::PpoBatch16,
+                    registry.clone(),
+                )?
+            } else if format.corrected() {
                 inspect_card_instance_collection(
                     directory,
                     parent.ok_or_else(|| {
@@ -3088,39 +3263,52 @@ impl OriginalInputs {
                     ),
                 );
             }
-            let fingerprint = digest(
-                &json::object([
-                    (
-                        "run_id",
-                        json::copy(parent.state.root.require("run_id")?, c)?,
-                    ),
-                    (
-                        "config_sha256",
-                        json::copy(parent.state.root.require("config_sha256")?, c)?,
-                    ),
-                    (
-                        "identity",
-                        json::copy(parent.state.root.require("identity")?, c)?,
-                    ),
-                    (
-                        "execution",
-                        json::copy(parent.state.root.require("execution")?, c)?,
-                    ),
-                    ("plan", json::copy(link, c)?),
-                    ("files", immutable),
-                    (
-                        "source_set_sha256",
-                        json::copy(source.proof.root.require("source_set_sha256")?, c)?,
-                    ),
-                ]),
-                b,
-                c,
-            )?;
+            let mut fingerprint_value = json::object([
+                (
+                    "run_id",
+                    json::copy(parent.state.root.require("run_id")?, c)?,
+                ),
+                (
+                    "config_sha256",
+                    json::copy(parent.state.root.require("config_sha256")?, c)?,
+                ),
+                (
+                    "identity",
+                    json::copy(parent.state.root.require("identity")?, c)?,
+                ),
+                (
+                    "execution",
+                    json::copy(parent.state.root.require("execution")?, c)?,
+                ),
+                ("plan", json::copy(link, c)?),
+                ("files", immutable),
+                (
+                    "source_set_sha256",
+                    json::copy(source.proof.root.require("source_set_sha256")?, c)?,
+                ),
+            ]);
+            if self.format.packed() {
+                fingerprint_value.as_object_mut().unwrap().insert(
+                    "recipe".into(),
+                    json::text("card-instance-packed-source-controls-v1"),
+                );
+                for key in ["storage", "custody"] {
+                    fingerprint_value
+                        .as_object_mut()
+                        .unwrap()
+                        .insert(key.into(), json::copy(source.proof.root.require(key)?, c)?);
+                }
+            }
+            let fingerprint = digest(&fingerprint_value, b, c)?;
             let mut correspondence =
                 cohort_binding(&fingerprint, &declaration, &source.digests, b, c)?;
             correspondence.as_object_mut().unwrap().insert(
                 "recipe".into(),
-                json::text("structured-source-cohort-correspondence-v2"),
+                json::text(if self.format.packed() {
+                    "card-instance-packed-source-correspondence-v1"
+                } else {
+                    "structured-source-cohort-correspondence-v2"
+                }),
             );
             correspondence
                 .as_object_mut()
@@ -3232,6 +3420,15 @@ impl OriginalInputs {
             ("parent", parent_ack),
             ("collections", json::array(collection_ack)),
         ]);
+        if self.format.packed() {
+            authorization["schema_version"] = json::integer(4);
+            for key in ["storage_binding", "artifact_registry_sha256"] {
+                authorization
+                    .as_object_mut()
+                    .unwrap()
+                    .insert(key.into(), json::copy(self._plan.root.require(key)?, c)?);
+            }
+        }
         let auth_len = json::canonical(&authorization, b, c)?.len();
         let mut summary = json::object([
             ("schema_version", json::integer(3)),
@@ -3250,6 +3447,16 @@ impl OriginalInputs {
             ("qualified", Value::Bool(false)),
             ("parent_qualification", json::text("not_performed")),
         ]);
+        if self.format.packed() {
+            summary["schema_version"] = json::integer(4);
+            summary["kind"] = json::text("card-instance-packed-source-controls");
+            for key in ["storage_binding", "artifact_registry_sha256"] {
+                summary
+                    .as_object_mut()
+                    .unwrap()
+                    .insert(key.into(), json::copy(self._plan.root.require(key)?, c)?);
+            }
+        }
         for key in [
             "action_contract",
             "purpose",

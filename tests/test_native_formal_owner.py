@@ -111,7 +111,7 @@ def test_same_native_owner_is_retained_by_parent_context_until_scope_exit(tmp_pa
     from gf_common.domain import digest
     root=tmp_path/'unadmitted-traversal';root.mkdir()
     actions=ActionConfigV3(action_contract=corrected_card_instance_contract())
-    state={'identity':{'fixture':'NOT-runtime'},'effective_config':{'preprocessing':{
+    state={'schema_version':3,'identity':{'fixture':'NOT-runtime'},'effective_config':{'preprocessing':{
         **PreparationConfig().__dict__,'backend':'rust','reader':'participant-structured-v2'}},'seed':17}
     # This seam fixture bypasses all admission; it tests only object ownership.
     rng=__import__('numpy').random.Generator(__import__('numpy').random.PCG64(17))

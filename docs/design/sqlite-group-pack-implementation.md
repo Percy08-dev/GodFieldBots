@@ -96,7 +96,7 @@ until the subsequent Source/native/final64/Dataset gates are implemented.
 - [x] Specify and review exact bounded in-memory artifact writer and RAM log seam.
 - [x] Add failing compatibility/collection/failure tests, implement reviewed seam.
 - [x] Test real baseline/neural inference and controlled incomplete/cancelled group evidence.
-- [ ] Explicit live evaluate command remains in final all-path verification.
+- [x] Explicit live evaluate command and complete saved-byte audit pass6natural games.
 - [x] Independent task reviews, focused verification and local commit.
 
 ### Task 3: Original-source and Python/Rust consumers
@@ -180,14 +180,14 @@ New focused trait/bridge helper and affected tests permitted. No SQLite/zstd
 crate, new dependency, engine copy or formal/final64 implementation. Root handles
 capability activation and source-matched packaging after reviews.
 
-- [ ] Explicit plan4 registry/describe/OriginalByteLease bridge and generic Rust
+- [x] Explicit plan4 registry/describe/OriginalByteLease bridge and generic Rust
   provider, exact summary/auth/receipt contracts; keep plan3/old APIs unchanged.
-- [ ] All direct member/stat/inventory and original16/RAW/restage uses covered.
-- [ ] Same original bytes → exact candidate/selection/token/feature/numeric
+- [x] All direct member/stat/inventory and original16/RAW/restage uses covered.
+- [x] Same original bytes → exact candidate/selection/token/feature/numeric
   arrays; no Python fallback or authority from provider/DTO/marker.
-- [ ] Metadata/one-group/native copies jointly admitted; escaped bank/lease,
+- [x] Metadata/one-group/native copies jointly admitted; escaped bank/lease,
   mutation, callback failure, cancellation and terminal close tests.
-- [ ] Rust/scoped Python/static checks and private candidate parity; both reviews,
+- [x] Rust/scoped Python/static checks and private candidate parity; both reviews,
   then root source-matched capability/wheel acceptance and ordinary Rust PPO smoke.
 
 #### Task3C: Formal, final64, Dataset4 and Tree3 paths

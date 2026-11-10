@@ -181,12 +181,107 @@ DB control is introduced. Earlier failing/unsupported probe attempts remain
 diagnostic evidence. The benchmark publication gate is now open; timings below
 remain unmeasured until the planned comparison actually runs.
 
+## Native original-byte provider acceptance (2026-11-11)
+
+Generic Rust logical Sources consume exact Python-owned bytes through the SAME
+registry/provider/lease/pool; Rust gains no SQLite/zstd dependency. Explicit plan4,
+proof2/control4/receipt2 and RAW/Original16 contexts retain old plan3 meanings and
+all numerical formats. Creator-thread IO handoff, actual pool-close holds and
+pre-argument external accounting preserve originals through checked native join.
+Unicode16name/strict packed JSON validation and full SQL index/manifest relation
+checks pass their reviewed contracts. Both final independent reviews are READY.
+
+Reviews required fixes for fresh generation0 empty-registry ownership, no-effect
+partial executor cleanup, staged provider/query admissions and double-fault
+first-error owner propagation. Root fresh45focused HOST checks pass3.43s after
+the final minimal correction. Earlier143/3skips and112/1skip scoped batches are
+separate pre-correction evidence, not summed as disjoint final tests. Full
+mypy172/Ruff/8kernel AST checks pass. All3controlled model Sources match Python
+proof/correspondence, complete Numeric4 arrays and all16Original16 packets with
+actual final closure; CPU/CUDA component18checks pass. Fixtures remain unqualified.
+
+Root enables the reviewed capability only after both reviews and creates the
+source-matched release/MIMALLOC cp314-GIL wheel. Exact native53-file source recipe
+faff452b…f7115 is independently recomputed; wheel83f952b7…c6544 and ELF904038e1…3f3ff
+pass63release-candidate checks15.10s and installed identity checks. Build
+RUSTFLAGS are empty; explicit libpython flags apply only to Rust test binaries.
+Previous installed files/metadata and rollback package are preserved. Marker/
+package availability does not grant Source, formal or fit rights.
+
+Actual nonformal seed17/max2update parents retain all original budgets and2GiB
+storage. CPU-inference/CUDA-learner continuous0619c53e completes2updates/32natural/
+419selected/16optimizer steps in about1135s. CUDA-inference/CUDA-learner5dc00dce
+pauses1 then resumes2, also32natural/419selected/16steps. Fresh complete-parent
+native original/numeric/generation audits exit0 in176.95s and172.44s respectively,
+with unchanged run bytes. This accepts64natural games/4updates in Native storage/
+runtime/resume scope; no formal Source qualification or policy strength follows.
+Long revalidation time is retained/reported rather than hidden by weaker checks.
+
+## Identical-original HDD archival comparison (2026-11-11)
+
+All six predeclared AB/BA pairs complete,12PASS/exit0, on the verified D: USB
+HDD/9p mount. Each trial archives/restores the SAME32groups/192historical games,
+4492inventory members/273,062,500bytes plus4,212,418original control bytes.
+Inputs remain unchanged; these new diagnostic archives grant no Source rights.
+The eleven storage/reader modules used in the jobs retain their frozen hashes.
+
+| Median across6trials | Directory archival reference | Packed archival Writer |
+| --- | ---: | ---: |
+| Complete write/publication/retirement | 166.4435s | 19.8487s |
+| Open/read/verify/recheck/close | 171.5748s | 734.0756s |
+| Logical write throughput | 1.5887MiB/s | 13.3257MiB/s |
+| Logical read throughput | 1.5412MiB/s | 0.3602MiB/s |
+| Final apparent bytes including trial catalog | 277,274,918 | 23,646,793 |
+
+The directory writer is a documented exclusive-write/file-fsync/group-directory-
+sync archival reference, not a claim to reproduce the production collector.
+Packed trials use production encoding/Writer/sealing, preserving exact old
+controls; they do not invoke current collection preparation with a new metrics
+control. Readback integrity paths differ: directory rereads originals, while
+public packed loans repeatedly hash the physical DB/descriptor. No checks were
+disabled to improve timings. The current packed path trades faster/smaller
+archives for slower verified reading; the directory default stays unchanged.
+
+| Per-group descriptive p95 / p99,192observations | Directory | Packed |
+| --- | ---: | ---: |
+| Archive operation | 7.6716 /17.8417s | 0.5226 /1.2767s |
+| Readback operation | 3.3907 /3.9635s | 32.0066 /37.4495s |
+
+Packed trial medians: compression0.5029s, provisional submit/ACK total5.8645s,
+controls plus complete seal11.4932s, actual SQLite checkpoint3.6083s and
+DELETE transition0.1014s. These phases overlap/nest and must not be added again
+to total write time. Sampled DB/catalog/sidecar peak median49,383,496B; the
+append-only directory reference reaches277,274,918B at completion. RSS trial
+medians are111,298,560B directory and203,911,168B packed, under the allocator/
+shared-page scope below, not isolated live-memory overhead. Owned tmpfs is0 in
+this Writer-only panel. Queue occupancy is recorded; isolated queue wait is not.
+
+All raw pairs/group observations, type7 p95/p99/range summaries, queue/compression/
+submit/checkpoint/DELETE/combined-seal phases and sampled process/DB/WAL/SHM/
+journal/capacity data are retained in
+`runs/assessments/sqlite-group-pack-v1-20261111/physical-comparison/`.
+Each format has192group observations, providing weak support for tail inference.
+Windows/WSL caches are uncontrolled; completed-output first reads are not cold-
+device results. Apparent file sizes exclude filesystem metadata/cluster allocation.
+Sampled RSS includes shared pages and retained allocator arenas in the reused
+coordinator; it is not isolated per-format incremental/physical RAM cost. The
+managed2GiB peak includes a temporary whole-available validation reservation.
+
+Bounded single-job ext4 Native development builds/tests overlap part of these
+jobs; the exact first compile interval is unavailable and later intervals are
+recorded. Compiler processes are outside the benchmark's process RSS scope.
+No CPU isolation, causal per-trial contention attribution or default/strength
+conclusion is inferred. Independent arithmetic/scope audit PASS recomputes the
+raw pairs, bytes, medians/ranges/type7 tails and checks all11source hashes;
+its report is retained alongside the raw data. The actual
+concurrent collection/learning panel remains a separate required measurement.
+
 ## Remaining verification
 
 - PASS scoped: standalone in-memory artifacts/RAM logging/joint admission,
   independent reviews, actual18game/inference saved-byte audits above.
 - PASS scoped: production Python Source/PPO update/pause-resume below.
-- NOT RUN: native packed provider parity/ordinary PPO.
+- PASS scoped: native packed provider parity/ordinary PPO/resume above.
 - NOT RUN: pending final64/Dataset/Tree paths and affected actual CUDA checks.
 - NOT RUN: whole pytest/Ruff/mypy/Rust, current wheel/mandatory-only/old-data proofs.
 - NOT RUN: alternating same-HDD save/read and concurrent generation/learning

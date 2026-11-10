@@ -19,6 +19,22 @@ STRUCTURED_CONTRACT = 'participant-structured-v1;journal=5;rollout=3;generation=
 CARD_INSTANCE_CONTRACT = 'participant-structured-v2;journal6;rollout4;generation3;model3'
 CARD_INSTANCE_ORIGINAL_HISTORY = 'journal6;codec2;episode-dto1;recorded16'
 CARD_INSTANCE_TREE_RAW = 'journal6;lightgbm3;inference4;codec2'
+CARD_INSTANCE_GROUP_PACK = 'provider1;proof2;plan4'
+
+
+def group_pack_reader_settings(config: PreparationConfig, native: Any = None) -> Json:
+    """Require the separately accepted byte-provider ABI before packed native I/O."""
+    import unicodedata
+    if unicodedata.unidata_version != '16.0.0':
+        raise ContractError('packed native names require Unicode16.0.0')
+    module = native or load_native()
+    result = card_instance_reader_settings(config, module)
+    if dict(module.build_info()).get('card_instance_group_pack') != CARD_INSTANCE_GROUP_PACK:
+        raise ContractError('native group Pack capability unavailable; no fallback')
+    if (not callable(getattr(module.CardInstanceNativeSession, 'from_artifacts', None))
+            or not callable(getattr(getattr(module, 'StructuredJournalTokens', None), 'card_instance_artifacts', None))):
+        raise ContractError('native group Pack provider/RAW ABI incomplete; no fallback')
+    return result
 
 
 

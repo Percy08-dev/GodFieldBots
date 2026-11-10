@@ -556,14 +556,13 @@ class IssuedGameProjection:
         if self.source.native_inputs is not None:
             self.source.native_inputs.prepare_commit()
         if self.source.online.packed_batch is not None:
-            assert self.source.snapshot is not None
             proof = self.source.proof
             # Optimizer is complete: explicitly retire the bounded decoded input
             # graph before original pool/FD/budget retirement.
             self.source.records = None
-            self.source.snapshot.collection = replace(self.source.snapshot.collection, episodes=())
-            from gf_training.group_pack_game_source import PackedSourceOwner
-            cast(PackedSourceOwner, self.source.snapshot._owner).retire_decoded()
+            if self.source.snapshot is not None:
+                self.source.snapshot.collection = replace(self.source.snapshot.collection, episodes=())
+            self.source.online.packed_batch.owner.retire_decoded()
             self.source.online.packed_batch.prepare(proof)
         # No remaining reportable per-batch I/O. Old run/registry snapshots are
         # legitimately replaced by the ensuing owned lineage commit.
@@ -716,8 +715,6 @@ def _open_batch(plan: CollectionPlan, state: Json, records: list[Json], controls
                 max_owned_bytes: int, deadline: float, extra_owned_bytes: int = 0) -> Iterator[_GameBatchSource]:
     with ExitStack() as scope:
         actions, model = _state(state, _game=True)
-        if state['schema_version'] == 4 and settings.backend != 'python':
-            raise ContractError('packed native Source is not implemented')
         generation = plan.linkage['collection_generation']
         expected, label, _ = recorded_plan(controls.root, state, records, generation, deadline)
         if canonical(plan.linkage) != canonical(expected.linkage):
@@ -726,17 +723,38 @@ def _open_batch(plan: CollectionPlan, state: Json, records: list[Json], controls
         native_inputs = None
         if settings.backend == 'rust':
             from gf_training.native_card_instance import _NativeGameInputs
+            provider = None
+            if state['schema_version'] == 4:
+                from gf_training.native_backend import group_pack_reader_settings
+                from gf_training.native_group_pack import OriginalArtifactProvider
+                group_pack_reader_settings(settings)
+                # Register actual current custody first so historical owners join
+                # its SAME pool; no second original Source/pool is constructed.
+                if online is not None:
+                    controls.packed_owner(plan.output, custody=online.packed_batch)
+                for gi in range(state['updates']):
+                    controls.packed_owner(controls.root / 'collections' / f'batch-{gi:06}')
+                provider = scope.enter_context(OriginalArtifactProvider(tuple(controls._packed_owners.values())))
             mode = 'live_cohort' if online is not None else 'historical_parent'
             native_plan = {'schema_version': 3, 'mode': mode,
                 'parents': [{'directory': str(controls.root), 'require_complete': False}],
                 'collections': ([{'directory': str(plan.output), 'parent_index': 0}] if online is not None else [])}
             if online is not None:
                 native_plan['cohort_collection_index'] = 0
+            if provider is not None:
+                native_plan.update(schema_version=4, storage_binding=state['storage_binding'],
+                    artifact_registry_sha256=provider.registry_sha256)
             from gf_training.ppo_run import owned_bytes
-            remaining_storage = max(0, state['effective_config']['training']['max_owned_bytes'] - owned_bytes(controls.root, deadline))
+            external = ()
+            if provider is not None:
+                root = Path(state['effective_config']['storage']['db_root'])
+                external = (root / state['run_id'], *(root / name for name in ('catalog.sqlite3',
+                    'catalog.sqlite3-wal', 'catalog.sqlite3-shm', 'catalog.sqlite3-journal')))
+            remaining_storage = max(0, state['effective_config']['training']['max_owned_bytes']
+                - owned_bytes(controls.root, deadline, external_roots=external))
             native_inputs = scope.enter_context(_NativeGameInputs(native_plan, settings, actions=actions,
                 max_owned_bytes=max_owned_bytes, deadline=deadline, extra_owned_bytes=controls.retained + extra_owned_bytes,
-                max_scratch_bytes=remaining_storage))
+                max_scratch_bytes=remaining_storage, artifact_provider=provider, shared_controls=controls if provider is not None else None))
             assert native_inputs.summary is not None
             native_inputs.collection_index = next((index for index, row in enumerate(native_inputs.summary['collections'])
                 if row['generation'] == generation), -1)
@@ -783,7 +801,7 @@ def _open_batch(plan: CollectionPlan, state: Json, records: list[Json], controls
                     error.add_note('game Source final recheck: ' + str(cleanup_error))
             raise
         finally:
-            if state['schema_version'] == 4 and online is None:
+            if state['schema_version'] == 4 and online is None and source.snapshot is not None:
                 # No historical decoded cohort remains resident after this scope.
                 assert source.snapshot is not None
                 original = source.snapshot._owner
@@ -840,8 +858,30 @@ def _open_game_parent_inputs(directory: Path, *, require_complete: bool = True, 
         from gf_training.native_card_instance import _NativeGameInputs
         native_plan = {'schema_version': 3, 'mode': 'historical_parent',
             'parents': [{'directory': str(directory), 'require_complete': require_complete}], 'collections': []}
-        with _NativeGameInputs(native_plan, settings, actions=_state(state, _game=True)[0],
-                max_owned_bytes=max_owned_bytes, deadline=deadline, extra_owned_bytes=scan.retained + extra_owned_bytes) as inputs:
+        with ExitStack() as native_scope:
+            provider = None
+            if state['schema_version'] == 4:
+                from gf_training.native_backend import group_pack_reader_settings
+                from gf_training.native_group_pack import OriginalArtifactProvider
+                group_pack_reader_settings(settings)
+                for generation in range(state['updates']):
+                    scan.packed_owner(directory / 'collections' / f'batch-{generation:06}')
+                if state['updates'] == 0:
+                    if (scan._packed_state is not state or len(records) != 1
+                            or type(records[0].get('generation')) is not int or records[0]['generation'] != 0
+                            or records[0].get('update_sha256') is not None
+                            or scan._packed_owners or scan._packed_borrows):
+                        raise ContractError('actual uncommitted generation0 parent required before empty native allocation')
+                    provider = native_scope.enter_context(OriginalArtifactProvider((),
+                        pool=scan.ensure_packed_pool(), shared_controls=scan))
+                else:
+                    provider = native_scope.enter_context(OriginalArtifactProvider(tuple(scan._packed_owners.values())))
+                native_plan.update(schema_version=4, storage_binding=state['storage_binding'],
+                    artifact_registry_sha256=provider.registry_sha256)
+            inputs = native_scope.enter_context(_NativeGameInputs(native_plan, settings,
+                actions=_state(state, _game=True)[0], max_owned_bytes=max_owned_bytes, deadline=deadline,
+                extra_owned_bytes=scan.retained + extra_owned_bytes, artifact_provider=provider,
+                shared_controls=scan if provider is not None else None))
             assert inputs.summary is not None
             parent = inputs.summary['parent']
             if (parent['identity_sha256'] != digest(state['identity'])

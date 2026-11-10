@@ -86,3 +86,32 @@ Permitted conclusion: physical identical-data storage plus bounded operational/
 concurrency and parity evidence. Not policy strength, formal qualification,
 deterministic trajectories, final64 real success, cold-device/robust-tail claims,
 or authority to switch defaults. The existing directory default remains.
+
+## Panel B failure retirement (architecture READY)
+
+No new trial follows cancellation or a trial failure. Persist started/terminal
+records and the primary/secondary failures before propagation, retain actual
+exception/task/process/cleanup owners, and mark the remaining trials NOT RUN.
+Stop new spawn admission before attempting shutdown. Production cleanup remains
+the first owner; the harness must not retry ambiguous raw-FD numbers or fabricate
+healthy Source/parent retirement.
+
+Use an explicit failure-only process boundary: settle the actual sibling
+task and production cleanup first, then use retained actual Popen handles to
+stop/reap any still-owned children within a bounded cleanup reserve (TERM, wait,
+KILL, wait). PID/birth metadata is diagnostic, never authority for signalling an
+unrelated or reused PID. Do not proceed while an actual spawn remains in flight.
+All direct actor/learner/Simulator/Writer children must be confirmed stopped and
+reaped before the coordinator may exit. If that cannot be confirmed, keep actual
+owners/process alive and publish a cleanup-pending failure for external root
+disposition; do not drop owners by ordinary uncaught CLI exit.
+
+After children are confirmed retired and admissions are fenced, a failed process
+may exit while still retaining uncertain in-process FD/thread owners: process
+termination is the explicit final OS retirement boundary, never a successful
+Source close. Persist/sync this fallback and its limitations before exit; external
+supervision must confirm process termination. No healthy return, new trial,
+status repair, guessed outcome or reused serialized cleanup token is allowed.
+This handles a failed measurement process without inventing a general recovery
+framework. Acceptance needs inert cancellation/secondary-error/unreaped-child
+tests and an independent lifecycle review before real trials.

@@ -304,3 +304,200 @@ different code identities.
 Staging found one trailing blank line in the new helper (untracked files were
 outside the author's earlier diff-check). Root removed only that blank line;
 module AST is exact and fresh Ruff passes. No behavior/contract/test changed.
+
+Direct-Writer accepted milestone committed451fc23. Physical PanelA launched with
+the frozen full pilot, sixAB/BApairs, fresh D:root
+`gfb-hdd-archives-efc8ad8ebab84a7fb58f2d73a696e3ad`; report/log and harness are
+`/tmp/gfb-pack-benchmark-a*`. Eleven actually used storage files are separately
+hash-frozen in `/tmp/gfb-pack-benchmark-a-frozen-code.json`; first directory trial
+is in progress, no performance result claimed yet. Catalog/host/build/scope
+findings from draft review are addressed; aggregation still follows execution.
+
+Native3B implementer `/root/native_pack_implementation` starts from451fc23 with
+bounded brief `/tmp/gfb-group-pack-task3b-brief.md` and read-only IO map
+`/tmp/gfb-native-pack-io-map.md`. Ownership excludes the eleven benchmark files;
+heavy compile/tests are deferred while the physical comparison runs. Initial
+concrete provider tests report6RED→6PASS; no final review/native acceptance is
+inferred. Root owns docs and `/tmp` measurement harnesses; only this agent owns
+production implementation. Formal assets remain unadopted/untracked forTask3C.
+
+PanelA firstpair completes: directorywrite171.628s/read170.643s/final277,274,918B;
+packedwrite19.528s/read733.587s/final23,646,793Bincludingcatalog. These are ONEpair,
+notaggregates ordefaultadoption. Remainingpredeclaredpairscontinue. Whole-original
+rechecks in the current public read path are retained; no check is disabled to
+improve timing. Because the fullsixpairs can take1–2h, root permits explicitly
+logged bounded single-job Rustchecks/targetedtests onext4 (noD:/RAM/heavyGPU or
+fullPython/performance jobs); finalreportmustdisclose this development contention
+andcannotclaimCPUisolation. The11benchmarkcodefilesremainhash-frozen.
+
+Native3B implementationfound describe's missing group/episode-record metadata.
+Root's exact bounded describe.index amendment passes architectureREADY in
+`/tmp/gfb-native-index-amendment-review.md`; Rustkeepssemantic checks, full8MiB
+whole-describe/both-owneradmission applies, provider1/plan4stillunreleased.
+UnrelatedNativewiringcontinued; affectedindeximplementationnowmayproceed.
+
+PanelB draft independentlyBLOCKEDonfiveharnessissues (API,closed-envPIDcoverage,
+cancellation/cleanup,failureledger,peakownedHDDmeasurement). Dedicatedimplementer
+`/root/benchmark_harness_implementation` owns ONLY/tmp harness/inerttests, an
+explicitparallel exception with no repositoryproduction edits orrealtrials.
+Rootnativeagentissoleproductionwriter. ActualPanelBmustwaitforfullproduction
+freeze/independentre-review; nogamesortrainingwererunbythisdrafthelper.
+
+Native3B private debug ELF a652c93b…ce21a3d passes RAW/full-token/candidate/
+selection/feature and lease-fault checks. One authorized controlled MLP CPU
+wire5 update produced a paused, permanently unqualified ext4 fixture at
+`/tmp/gfb-native3b-source-mlp-20261110a/test_packed_source_proof_corre0/parent`.
+Proof2/summary4/parent4, all Numeric4 arrays and Original16 assertions passed,
+but final close FAILED SQLite thread affinity; this is not Native acceptance.
+No further fitting is needed. Installed ELF stays e9c7c08a…e3737c.
+
+Root escalated that concurrency decision to bot_advisor. Its returned ruling is
+recorded at `/tmp/gfb-sqlite-thread-advisor.md`. The first thread amendment was
+BLOCKED on creator-owned intercall failures and exact external-account/pre-argument
+admission. Root's N1/N2 closures now pass architecture READY at
+`/tmp/gfb-native-thread-amendment-rereview.md`: caller/worker creator lanes,
+cleanup-only callback fence plus Control cancellation, actual retirement before
+executor join, staged lease evidence, provider/executor lifetime binding and
+disjoint C0/B0/P0/W/N/H accounting. Ordinary plan4 parent/resume and native
+snapshot=None retirement branches remain part of this implementation fix.
+
+Logical-name parity also passes a separate design gate. A frozen Unicode16
+category-C table (736 ranges, root artifact SHA3bc5dc…632d9) closes Rust's
+char::is_control gap without changing valid Unicode names, old plan3 or adding
+a dependency. Both amendments may now be implemented; final independent reviews
+and preserved-fixture successful closure remain required. Core11 files stay frozen.
+
+PanelB first fix passes30 inert checks, but independent re-review reproduces two
+P1 exit-gate gaps: late constructor completion after a stale child snapshot and
+unregistered pending Tasks invisible to the gate. Original API/PID/ledger/disk
+findings close only at inert scope; cancellation/retirement remains BLOCKED.
+Bounded lifecycle fix2 is assigned to the same /tmp-only implementer. A repeated
+exit-gate failure after this second cycle requires advisor escalation. Actual
+PanelB and its performance conclusions remain NOT RUN.
+
+PanelB lifecycle fix2 passes both independent correctness/conformance reviews.
+Root independently reruns all34 inert tests and Ruff successfully; no real trial
+is implied. Actual loop-wide unknown Tasks and late constructor/capability census
+are now part of the exit gate. The regenerated supervisor receipt demonstrates
+one inert failed OS-boundary case only. Root accepts harness readiness, pending
+final production freeze/import admission and external supervision for actual B.
+Source freeze and measurement/overlap limitations remain explicit.
+
+Native thread fix now passes the preserved controlled MLP fixture end-to-end
+without fitting again: Python proof/correspondence, complete Numeric4 arrays,
+all16Original16 packets and checked final original/pool closure,12.59s at
+`/tmp/gfb-native3b-source-thread2.log`. The prior thread1 list/tuple assertion
+was a test-container mismatch, corrected by canonical JSON comparison; its log
+is retained. This is component evidence, not final Native acceptance. Unicode
+name-boundary tests pass; staged ownership/account/cancellation regressions and
+final candidate rebuild/reviews remain pending.
+
+An asynchronous inert readiness selection hung in the default sandbox with an
+idle worker/selector wait, then the identical HOST case passed0.24s. Both bounded
+logs and the interrupted selection are preserved. No production workaround or
+specific socket-syscall diagnosis is claimed. Subsequent owner checks use HOST
+and explicit bounds. Actual PanelA10/12trials have completed; the second-to-last
+packed read remained slower (766.84s), with full development/cache limitations
+to be reported after all pairs.
+
+PanelA complete:12/12PASS, all six counterbalanced pairs; independent arithmetic/
+scope audit PASS. Medians: directory write166.4435s/read171.5748s/277,274,918B;
+packed write19.8487s/read734.0756s/23,646,793B including catalog. Frozen11 hashes
+remain exact. Evidence is under physical-comparison/ in the assessment. Read-path
+amplification is code-derived, not an instrumented causal profile. Keep directory
+default and explicit contention/cache/RSS/archival-reference limitations.
+
+PanelB owned wait/RPC observations pass restricted re-review after one P2 fix:
+explicit own-operation errors remain primary even if recorder/control-flow or
+secondary recording fails. All48 inert methods pass independently; root reruns
+new14 metric methods/Ruff successfully. Accepted lifecycle AST remains exact.
+Latest harness SHA60a1793c…5e29. Root accepts measurement-harness readiness only;
+actual production import/PanelB remains NOT RUN until full NativeB/C freeze.
+
+Native3B production frozen20files at /tmp/gfb-native3b-production-freeze-final.json;
+separate correctness and conformance reviews active. Final private debug ELF
+SHAde78d958…c16e1 matches native source3ccdf9a8…ff458; marker/installed ELF remain
+unchanged. Root fresh HOST scoped143PASS/3explicit Source variant skips11.95s,
+Ruff/mypy172/AST8PASS. Author GRU/Transformer controlled CPU Sources additionally
+pass full proof/correspondence/Numeric4/Original16/final close without Simulator;
+root preserved MLP positive audit is running. Actual native PPO/release/activation
+and Task3C/full verification remain pending.
+
+Native3B initial independent reviews are BLOCKED on three concrete paths:
+F1 fresh native generation0 rejects empty original roots; F2/C1 partial stdlib
+executor initialization cannot retire its no-effect hold; F3/C2 metadata/query
+post-effect admissions can orphan SAME-pool reservations. Both reviewers reproduce
+resource/account defects against the EXACT original20-file freeze, using the
+reconstructed helper in /tmp/gfb-native3b-frozen-review-src. One author conditional
+was applied before STOP; it is disclosed/unaccepted and is not a refreeze.
+
+Generation-zero's explicit actual retained scan/SAME pool/control-charge/parent
+contract passes architecture READY (/tmp/gfb-native-gen0-provider-review.md).
+Root assigns one combined bounded REVIEW FIX1 for all three, with snapshot
+/tmp/gfb-native3b-before-review-fix1, no new fitting/activation. C1/C2 retain their
+already accepted ownership requirements; no schema fallback or fake Source.
+The author must freeze/hash the combined result before separate delta reviews.
+Root preserved-fixture positive passes12.75s and scoped143/3skips/static results
+remain pre-fix evidence, not acceptance of these uncovered startup/failure paths.
+
+Daemon recovery confirmed Native3B FIX2's20-file hashes and both final READY
+reviews before any repeated action. Root's45 focused HOST regressions pass3.43s;
+no second-cycle defect remains. Root enabled only build_info's reviewed
+card_instance_group_pack capability and built release/MIMALLOC with empty
+RUSTFLAGS from cached maturin1.15.0. Wheel83f952b7…c6544, ELF904038e1…3f3ff,
+sourcefaff452b…f7115. Independently recomputed exact53-file native source recipe;
+release candidate63checks PASS15.10s. Previous installed files/metadata are saved
+under /tmp/gfb-native3b-install-rollback; local installation identity matches the
+candidate. Actual native PPO/runtime acceptance is still pending, not inferred
+from capability activation. Main code is frozen while those runs execute.
+
+Fresh native CPU-inference/CUDA-learner continuous2 parent0619c53e is running at
+runs/ppo-comparison-v2/group-pack-smokes-20261111/native-mlp-cpu-continuous-2.
+Root rechecked Simulator91d5926 and binary76aff19c exactly; no Simulator changes.
+Explicit evaluate command additionally completes6natural games,1group,176files/
+14,774,746bytes with full saved-byte/index/report audit PASS. The first temporary
+post-evaluate audit passed a str instead of Path to CollectionLocator and refused
+before Source admission; the corrected audit exits0. Evaluation is baseline
+validation evidence, not strength/final-test/Source qualification.
+
+NativeB continuous parent0619c53e completes2updates/419decisions/16optimizer
+steps at about1135s; actual complete-parent/native original+numeric+generation
+read-only audit PASS176.95s, run bytes unchanged. Read diagnostics observed p9
+IO and worker transitions during its long run; no deadlock was established. A
+scheduled stack-only sys.remote_exec attempt was denied EPERM before execution;
+no debugger bypass/workaround or target-value inspection occurred. The temporary
+advisor investigation was stopped as soon as normal completion was observed.
+CUDA-inference parent5dc00dce pauses after1update and resumes with identical
+source/config; its completion/audit remain pending. Actual main code stays frozen.
+
+Root replans independent Task3C stage-only work in the existing managed worktree
+while NativeB supplemental runtime/audits finish. All NativeB implementation
+gates/release checks/continuous2 are complete; final integration/acceptance still
+waits the pending runtime evidence. Root snapshots715current src/native/test/doc/
+config files, configures /tmp/gfb-3c-env with staged-src-first .pth plus existing
+dependencies, and verifies Python -I also imports staged code. Baseline107PASS/
+34explicit optional skips1.46s. Main code/installed module are not changed by the
+stage. Agent /root/final_pack_implementation owns only isolated Task3C files;
+brief /tmp/gfb-group-pack-task3c-brief.md, map /tmp/gfb-final-pack-boundary-map.md.
+
+Final-original parent-lifetime closure passes architecture READY: final Source
+retires facade/slot/loans/graphs, actual parent retains original wrapper/provider/
+index/reservations through native join/hold release then terminal originals/
+accounts/locks. Healthy fitting retains Sources/parents; successful completion/
+publication requires checked retirement. This applies to public Dataset readers;
+no hold bypass or second parent/session. Root adds only stage native variant
+asset (exact27853b10...) and build.rs hash inclusion; same common/docs literal
+and old algorithm/budgets remain. Main root-owned formal assets remain unadopted
+until reviewed integration.
+
+NativeB CUDA-inference pause/resume parent5dc00dce completes2updates/32natural/
+419selected/16steps; final actual complete-parent/native original/numeric/lineage
+audit PASS172.44s with unchanged run bytes. CPU continuous audit PASS176.95s.
+Root verifies both real parents' full module-source identities still equal main
+before integration/commit. Root ACCEPTS Native3B implementation/runtime scope:
+64real natural games/4updates, separate actual CPU/CUDA actors and CUDA learner,
+ordinary fresh/paused paths, exact original/correspondence/numerics and checked
+retirement. No formal/strength/independent-trajectory determinism claim follows.
+Receipts/reviews/configs/phase logs are retained in native-source/ assessment.
+Final64/Dataset/Tree stage implementation, full current wheel/legacy/whole-suite
+checks and actual concurrent PanelB remain required for complete-plan acceptance.

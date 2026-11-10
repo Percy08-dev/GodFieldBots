@@ -258,6 +258,7 @@ class PackedSourceOwner(_SourceOwner):
     def close(self) -> None:
         if self._closed:
             return
+        self.pool.require_terminal_close()
         if self.artifacts is not None and self.artifacts._loans:
             raise RuntimeError('cannot close a Source with live group loans')
         close_resources(self, [self.artifacts, self.locator])
@@ -304,6 +305,7 @@ class PackedBatchCustody:
     def prepare(self, proof: Json) -> None:
         if self.retired:
             raise ContractError('packed custody cannot prepare twice')
+        self.owner.pool.require_terminal_close()
         self.owner.finalize()
         if canonical(proof['custody']) != canonical(self.owner.custody):
             raise ContractError('prepared proof differs from SAME original custody')
@@ -321,6 +323,7 @@ class PackedBatchCustody:
     def close(self) -> None:
         if self.retired:
             return
+        self.owner.pool.require_terminal_close()
         primary: BaseException | None = None
         try:
             self.owner.finalize()

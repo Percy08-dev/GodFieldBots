@@ -16,10 +16,14 @@ pub const INPUT: &str = "participant-structured-v1";
 pub(crate) enum SourceFormat {
     Engineering,
     Corrected,
+    PackedCorrected,
 }
 impl SourceFormat {
     pub(crate) fn corrected(self) -> bool {
-        self == Self::Corrected
+        self != Self::Engineering
+    }
+    pub(crate) fn packed(self) -> bool {
+        self == Self::PackedCorrected
     }
     fn class(self) -> &'static [&'static str] {
         if self.corrected() { GAME_CLASS } else { CLASS }
@@ -1443,7 +1447,9 @@ fn update_metadata(
             "synthetic_capacity",
             "numeric_files",
         ],
-        if format.corrected() {
+        if format.packed() {
+            &["rule_signature", "layout_signature", "storage_binding"]
+        } else if format.corrected() {
             &["rule_signature", "layout_signature"]
         } else {
             &[]
@@ -1452,10 +1458,29 @@ fn update_metadata(
     n(
         u,
         "schema_version",
-        if format.corrected() { 3 } else { 2 },
-        if format.corrected() { 3 } else { 2 },
+        if format.packed() {
+            4
+        } else if format.corrected() {
+            3
+        } else {
+            2
+        },
+        if format.packed() {
+            4
+        } else if format.corrected() {
+            3
+        } else {
+            2
+        },
     )?;
     is(u, "status", "complete")?;
+    if format.packed() {
+        eq(
+            u.require("storage_binding")?,
+            state.require("storage_binding")?,
+            "packed update storage binding differs",
+        )?;
+    }
     is(
         u,
         "model_version",
@@ -1663,11 +1688,18 @@ fn update_metadata(
         return Err(Error::contract("numeric learner-only count mismatch"));
     }
     let proof = u.require("source_proof")?;
-    n(proof, "schema_version", 1, 1)?;
+    n(
+        proof,
+        "schema_version",
+        if format.packed() { 2 } else { 1 },
+        if format.packed() { 2 } else { 1 },
+    )?;
     is(
         proof,
         "kind",
-        if format.corrected() {
+        if format.packed() {
+            "card-instance-packed-original-source-proof"
+        } else if format.corrected() {
             "card-instance-original-source-proof"
         } else {
             "structured-component-source-proof"
@@ -1725,6 +1757,9 @@ pub fn parent(s: &mut Sources) -> Result<Document> {
 pub(crate) fn parent3(s: &mut Sources) -> Result<Document> {
     parent_context(s, SourceFormat::Corrected)
 }
+pub(crate) fn parent4(s: &mut Sources) -> Result<Document> {
+    parent_context(s, SourceFormat::PackedCorrected)
+}
 fn parent_context(s: &mut Sources, format: SourceFormat) -> Result<Document> {
     let root = s.root.clone();
     let budget = s.budget.clone();
@@ -1742,6 +1777,11 @@ fn parent_context(s: &mut Sources, format: SourceFormat) -> Result<Document> {
             } else {
                 vec![]
             },
+            if format.packed() {
+                vec!["storage_binding"]
+            } else {
+                vec![]
+            },
             if formal {
                 self::formal::EXTRA.to_vec()
             } else {
@@ -1754,8 +1794,20 @@ fn parent_context(s: &mut Sources, format: SourceFormat) -> Result<Document> {
     n(
         r,
         "schema_version",
-        if format.corrected() { 3 } else { 2 },
-        if format.corrected() { 3 } else { 2 },
+        if format.packed() {
+            4
+        } else if format.corrected() {
+            3
+        } else {
+            2
+        },
+        if format.packed() {
+            4
+        } else if format.corrected() {
+            3
+        } else {
+            2
+        },
     )?;
     is(r, "algorithm", "ppo")?;
     is(
@@ -1793,6 +1845,22 @@ fn parent_context(s: &mut Sources, format: SourceFormat) -> Result<Document> {
         self::formal::validate(s, r)?;
     }
     let cfg = r.require("effective_config")?;
+    if format.packed() {
+        eq(
+            r.require("storage_binding")?,
+            &crate::logical_artifacts::binding(),
+            "packed run storage binding differs",
+        )?;
+        is(cfg.require("storage")?, "format", "sqlite-group-pack-v1")?;
+        if formal {
+            return Err(Error::contract("packed formal controls are a later gate"));
+        }
+    } else if cfg
+        .get("storage")
+        .is_some_and(|v| v.get("format").and_then(Value::as_str) == Some("sqlite-group-pack-v1"))
+    {
+        return Err(Error::contract("directory run rejects packed storage"));
+    }
     let action_contract = cfg.require("actions")?.require("action_contract")?;
     if format.corrected() {
         actions3(cfg.require("actions")?, &budget, &control)?;
@@ -1947,13 +2015,20 @@ fn parent_context(s: &mut Sources, format: SourceFormat) -> Result<Document> {
         cfg.require("model")?.require("inference")?,
         "frozen inference binding mismatch",
     )?;
-    let expected_resume = json::object([
+    let mut expected_resume = json::object([
         ("recipe", json::text("structured-ppo-resume-identity-v1")),
         ("config_sha256", r.require("config_sha256")?.clone()),
         ("identity", r.require("identity")?.clone()),
         ("execution", execution.clone()),
         ("input_binding", clone_fields(r, format.class(), &control)?),
     ]);
+    if format.packed() {
+        expected_resume["recipe"] = json::text("card-instance-packed-ppo-resume-identity-v1");
+        expected_resume.as_object_mut().unwrap().insert(
+            "storage_binding".into(),
+            json::copy(r.require("storage_binding")?, &control)?,
+        );
+    }
     if digest(&expected_resume, &budget, &control)? != checksum(r.require("resume_identity")?)? {
         return Err(Error::contract("domain-separated resume identity mismatch"));
     }
@@ -2287,6 +2362,16 @@ fn parent_context(s: &mut Sources, format: SourceFormat) -> Result<Document> {
         ],
         &control,
     )?;
+    if format.packed() {
+        state_summary
+            .as_object_mut()
+            .unwrap()
+            .insert("schema_version".into(), json::integer(4));
+        state_summary.as_object_mut().unwrap().insert(
+            "storage_binding".into(),
+            json::copy(r.require("storage_binding")?, &control)?,
+        );
+    }
     if formal {
         for key in self::formal::EXTRA {
             state_summary
@@ -2303,11 +2388,19 @@ fn parent_context(s: &mut Sources, format: SourceFormat) -> Result<Document> {
     let mut summary = json::object([
         (
             "schema_version",
-            json::integer(if format.corrected() { 3 } else { 2 }),
+            json::integer(if format.packed() {
+                4
+            } else if format.corrected() {
+                3
+            } else {
+                2
+            }),
         ),
         (
             "kind",
-            json::text(if format.corrected() {
+            json::text(if format.packed() {
+                "card-instance-packed-parent-controls"
+            } else if format.corrected() {
                 "card-instance-parent-controls"
             } else {
                 "structured-parent-controls"
@@ -2368,6 +2461,12 @@ fn parent_context(s: &mut Sources, format: SourceFormat) -> Result<Document> {
                 .unwrap()
                 .insert(key.into(), json::copy(r.require(key)?, &control)?);
         }
+    }
+    if format.packed() {
+        summary.as_object_mut().unwrap().insert(
+            "storage_binding".into(),
+            json::copy(r.require("storage_binding")?, &control)?,
+        );
     }
     let bytes = json::canonical(&summary, &budget, &control)?;
     json::parse(&bytes, &budget, &control)

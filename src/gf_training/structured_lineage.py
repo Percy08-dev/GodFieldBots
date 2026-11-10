@@ -83,6 +83,7 @@ class _ChainScan(SealedScan):
         self._packed_pool: Any = None
         self._owns_packed_pool = True
         self._pool_control_charge = 0
+        self._pool_control_uncertain = False
         self._packed_state: Json | None = None
         self._closed = False
         self._cleanup_children: list[Any] = []
@@ -94,8 +95,16 @@ class _ChainScan(SealedScan):
     def admit_pool_controls(self) -> None:
         if self._packed_pool is not None and self.retained > self._pool_control_charge:
             amount = self.retained - self._pool_control_charge
-            self._packed_pool.budget.acquire(amount, self.deadline)
-            self._pool_control_charge += amount
+            before = self._packed_pool.budget.used
+            try:
+                self._packed_pool.budget.acquire(amount, self.deadline)
+            finally:
+                if self._packed_pool.budget.used == before + amount:
+                    self._pool_control_charge += amount
+                elif self._packed_pool.budget.used != before:
+                    self._pool_control_uncertain = True
+            if self._pool_control_charge < self.retained:
+                raise ContractError('actual shared control admission unconfirmed')
 
     def charge(self, size: int, *, temporary: bool = False) -> None:
         super().charge(size, temporary=temporary)
@@ -133,9 +142,26 @@ class _ChainScan(SealedScan):
         if packed_state(state):
             self._packed_state = state
 
+    def ensure_packed_pool(self) -> Any:
+        from gf_training.group_pack_pool import PackedArtifactPool
+        if self._packed_state is None or self._closed:
+            raise ContractError('actual checked run4 scan required before pool allocation')
+        if self._packed_pool is None:
+            state = self._packed_state
+            limit = min(self.limit, state['effective_config']['storage']['budget_mib'] * 1024**2)
+            self._packed_pool = PackedArtifactPool.__new__(PackedArtifactPool)
+            try:
+                PackedArtifactPool.__init__(self._packed_pool, max_owned_bytes=limit, deadline=self.deadline)
+                self.admit_pool_controls()
+            except BaseException as error:
+                error.__dict__['cleanup_owner'] = self
+                raise
+        else:
+            self.admit_pool_controls()
+        return self._packed_pool
+
     def packed_owner(self, root: Path, *, custody: Any = None) -> Any:
         from gf_training.group_pack_game_source import PackedSourceOwner
-        from gf_training.group_pack_pool import PackedArtifactPool
         if self._packed_state is None:
             raise ContractError('packed originals require checked run4 controls')
         if custody is not None:
@@ -145,9 +171,7 @@ class _ChainScan(SealedScan):
             state = self._packed_state
             storage = state['effective_config']['storage']
             limit = min(self.limit, storage['budget_mib'] * 1024**2)
-            if self._packed_pool is None:
-                self._packed_pool = PackedArtifactPool(max_owned_bytes=limit, deadline=self.deadline)
-                self.admit_pool_controls()
+            self.ensure_packed_pool()
             expected = Path(storage['db_root']) / state['run_id'] / 'collections' / root.name
             self._packed_owners[root] = PackedSourceOwner(root,
                 preparation_config(state['effective_config']['preprocessing']), self.deadline,
@@ -188,6 +212,15 @@ class _ChainScan(SealedScan):
     def close(self, *, recheck: bool = True, error: BaseException | None = None) -> None:
         if self._closed:
             return
+        if self._packed_pool is not None:
+            try:
+                self._packed_pool.require_terminal_close()
+            except BaseException as cleanup:
+                if error is not None:
+                    error.__dict__['cleanup_owner'] = self
+                    error.add_note('original scan terminal close: ' + str(cleanup))
+                    return
+                raise
         from gf_training.group_pack_resources import close_resources, retain_cleanup
         if error is not None and getattr(error, 'cleanup_owner', None) is not None:
             retain_cleanup(self, error)
@@ -200,12 +233,16 @@ class _ChainScan(SealedScan):
         cleanup_error: BaseException | None = None
         borrowed = set(self._packed_borrows)
         try:
+            if self._packed_pool is not None:
+                self._packed_pool.require_terminal_close()
             close_resources(self, [owner for root, owner in self._packed_owners.items() if root not in borrowed])
             # When a Source could not confirm close, retain its actual pool and
             # account; do not reattempt the SAME failed resource in this sweep.
             if self._packed_pool is not None and self._owns_packed_pool:
                 self._packed_pool.close()
-            if self._packed_pool is not None:
+            if self._pool_control_uncertain:
+                raise ContractError('shared control admission remains uncertain')
+            if self._packed_pool is not None and self._pool_control_charge:
                 self._packed_pool.budget.release(self._pool_control_charge)
                 self._pool_control_charge = 0
             for custody in tuple(self._packed_borrows.values()):
@@ -366,8 +403,8 @@ def _state(state: Json, *, recorded_signature: str | None = None, _game: bool = 
             raise ContractError('explicit absolute packed storage Config required')
         StorageSettings(Path(storage['db_root']), Path(storage['ram_root']), storage['budget_mib'] * MIB,
             storage['queue_mib'] * MIB, storage['max_pack_mib'] * MIB)
-        if config['preprocessing']['backend'] != 'python':
-            raise ContractError('packed native Source integration is not implemented')
+        if config['preprocessing']['backend'] not in ('python', 'rust'):
+            raise ContractError('packed Source requires an explicit Python or native backend')
     actions: Any = action_config_v3(config['actions']) if _game else action_config_v2(config['actions'])
     expected = input_binding_game_v3(actions.action_contract, card_instance_rules()) if _game else input_binding(actions.action_contract, 'component', False)
     if not isinstance(state['identity'], dict) or not state['identity']:

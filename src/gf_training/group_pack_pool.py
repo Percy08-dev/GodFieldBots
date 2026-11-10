@@ -11,20 +11,94 @@ from gf_training.group_pack_resources import StorageBudget, close_resources, rem
 from gf_training.group_pack_source import PackedSource
 
 
+class PoolCloseHold:
+    """Actual terminal-close capability; its owning executor proves retirement."""
+    def __init__(self, pool: PackedArtifactPool, owner: object) -> None:
+        self.pool, self.owner = pool, owner
+        self.amount = 0
+        self._attempted = False
+        self._before = 0
+        self.retired = False
+
+    def retire(self, owner: object) -> None:
+        if owner is not self.owner:
+            raise RuntimeError('only the actual close-hold owner may retire it')
+        if self.retired:
+            return
+        if self.amount:
+            if self._attempted and self.pool.budget.used == self._before - self.amount:
+                self.amount = 0
+            else:
+                if self._attempted and self.pool.budget.used != self._before:
+                    raise RuntimeError('close-hold account retirement uncertain')
+                self._before, self._attempted = self.pool.budget.used, True
+                amount = self.amount
+                try:
+                    self.pool.budget.release(amount)
+                finally:
+                    if self.pool.budget.used == self._before - amount:
+                        self.amount = 0
+        try:
+            self.pool._close_holds.remove(self)
+        finally:
+            if self not in self.pool._close_holds:
+                self.retired = True
+
+
 class PackedArtifactPool:
     def __init__(self, *, max_owned_bytes: int, deadline: float,
                  storage_limit: int | None = None) -> None:
         self.deadline = deadline
-        # StorageSettings is only used to establish the SAME managed byte account;
-        # no directories, Writer or catalog are opened by this read-only pool.
-        settings = StorageSettings()
-        self.budget = StorageBudget(settings, deadline)
-        self.budget.limit = min(max_owned_bytes, storage_limit or max_owned_bytes)
-        self.budget.acquire(SOURCE_BASE, deadline)
         self.sources: list[PackedSource] = []
         self.active: PackedSource | None = None
         self.closed = False
         self._cleanup_children: list[Any] = []
+        self._close_holds: list[PoolCloseHold] = []
+        self._base_charge = 0
+        self._base_uncertain = False
+        self._base_release_attempted = False
+        self._base_before = 0
+        # The actual budget is reachable before its initializer/admission effects.
+        self.budget = StorageBudget.__new__(StorageBudget)
+        try:
+            StorageBudget.__init__(self.budget, StorageSettings(), deadline)
+            self.budget.limit = min(max_owned_bytes, storage_limit or max_owned_bytes)
+            before = self.budget.used
+            try:
+                self.budget.acquire(SOURCE_BASE, deadline)
+            finally:
+                if self.budget.used == before + SOURCE_BASE:
+                    self._base_charge = SOURCE_BASE
+                elif self.budget.used != before:
+                    self._base_uncertain = True
+        except BaseException as error:
+            error.__dict__['cleanup_owner'] = self
+            try:
+                self.close()
+            except BaseException as cleanup:  # noqa: BLE001 -- retain actual partial budget/pool and primary error.
+                error.add_note('original pool initialization cleanup: ' + str(cleanup))
+            raise
+
+    def hold_close(self, owner: object) -> PoolCloseHold:
+        self.check()
+        hold = PoolCloseHold(self, owner)
+        self._close_holds.append(hold)  # Reachable before admission can partially succeed.
+        before = self.budget.used
+        try:
+            self.budget.acquire(4096, self.deadline)
+        except BaseException as error:
+            if self.budget.used == before + 4096:
+                hold.amount = 4096
+            error.__dict__['cleanup_owner'] = owner
+            raise
+        hold.amount = 4096
+        return hold
+
+    def require_terminal_close(self) -> None:
+        if self._close_holds:
+            failure = RuntimeError('actual native executor close hold still owns originals/account')
+            failure.__dict__['cleanup_owner'] = self._close_holds[0].owner
+            raise failure
 
     def check(self) -> None:
         remaining(self.deadline)
@@ -91,11 +165,26 @@ class PackedArtifactPool:
     def close(self) -> None:
         if self.closed:
             return
+        self.require_terminal_close()
         # Each Source attempts its independently owned originals, even if a
         # different Source cannot retire. No work-deadline gate applies here.
         close_resources(self, list(self.sources))
         self.sources.clear()
-        self.budget.release(SOURCE_BASE)
+        if self._base_uncertain:
+            raise RuntimeError('original pool base admission remains uncertain')
+        if self._base_charge:
+            if self._base_release_attempted and self.budget.used == self._base_before - self._base_charge:
+                self._base_charge = 0
+            else:
+                if self._base_release_attempted and self.budget.used != self._base_before:
+                    raise RuntimeError('original pool base release remains uncertain')
+                amount = self._base_charge
+                self._base_before, self._base_release_attempted = self.budget.used, True
+                try:
+                    self.budget.release(amount)
+                finally:
+                    if self.budget.used == self._base_before - amount:
+                        self._base_charge = 0
         self.closed = True
 
 

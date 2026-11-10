@@ -11,7 +11,10 @@
   both final reviews,616affected/legacy checks and18real saved-byte-audited games;
   Python Source/run4/update4/wire5 accepted after both reviews,610affected checks,
   50postreview checks and64real natural games/4updates with fresh parent audits;
-  native/final64/Dataset/Tree implementation and full comparison remain pending
+  Native3B provider/plan4/Original16/RAW accepted after both final reviews,
+  source-matched release checks and64real natural games/4updates with actual
+  CPU/CUDA inference and resume/original audits; final64/Dataset/Tree and
+  concurrent-workload/full verification remain pending
 
 ## Context
 
@@ -52,6 +55,15 @@ impact, failure handling and revisit conditions are explicit in the design.
 Power loss may discard unsealed NORMAL transactions. No automatic migration or
 deletion occurs. Integration questions must pass their architecture gate before
 implementation; accepting the foundation does not accept incomplete full scope.
+
+The measured public-loan read path repeatedly hashes the complete immutable DB
+before returning cached members. On the identical192game archival workload,
+six-pair median verified reading is734.08s versus171.57s for the directory
+reference, while writing and final apparent size improve. This conservative
+integrity cost is retained in this implementation; default remains directory.
+Revisit with a separately reviewed amortized-integrity design if read-heavy
+Source/Dataset use becomes the bottleneck. Do not weaken checks or infer an
+instrumented causal cost from this code-derived explanation alone.
 
 ## Verification
 

@@ -2,9 +2,10 @@
 
 Date: 2026-11-10. Owner: root. Status: Python Source/lineage/PPO and Native3B
 designs accepted after independent architecture reviews; Python Source/lineage/
-ordinary PPO implementation accepted within its bounded verification scope;
+ordinary PPO and Native3B implementation accepted within their bounded
+verification scopes;
 formal/final64/Dataset design is separately accepted in
-[final sources](sqlite-group-pack-final-sources.md). Native/final integration
+[final sources](sqlite-group-pack-final-sources.md). Final integration
 implementation and final conformance remain pending.
 References: ADR0034, foundation/runtime designs, ADR0024 §§16–18.2.
 This design completes the intended consumer scope; no temporary extraction is
@@ -301,7 +302,7 @@ formal parent, update, final validation or fitting rights.
 
 Concrete callbacks (versioned adapter, fixed methods): `describe(root)->bytes`
 returns canonical UTF-8 closed `{format:'python-original-bytes-v1',root,storage,
-custody,files}` with proof2 storage/custody and name-sorted
+custody,files,index}` with proof2 storage/custody and name-sorted
 `{name,bytes,sha256,identity}` rows; `borrow(root,name)->OriginalByteLease` returns
 only that verified original member under a live generation-scoped loan;
 `recheck(root)->None` checks actual originals. Unknown root/name rejects.
@@ -377,6 +378,246 @@ locks. Fixed external-held allowance covers maximum one-group raw/codec/copy
 working storage and provider metadata, so callback allocation cannot borrow a
 second unaccounted full budget.
 
+### Native index-integrity amendment (architecture READY, 2026-11-11)
+
+Implementation found that the original closed describe shape exposed member
+group IDs but omitted the validated SQL group/episode records. That prevents
+Rust from checking the same full index/manifest correspondence as Python3A.
+The bounded amendment passes independent architecture review; dependent index
+implementation may proceed. Final correctness/conformance and capability
+activation remain pending.
+
+`index` has exactly `groups,episodes`. Groups are group_id-sorted closed
+`{group_id,record}` rows. Episodes are episode_id-sorted closed
+`{episode_id,group_id,game_id,record}` rows; physical null game_id stays null.
+All values come ONLY from the SAME constructor-validated original index, bound
+by the registry's DB/storage/custody. No fresh SQL or caller-trusted flags.
+
+Rust checks exact group/episode sets against the original complete manifest,
+canonical group record equality to the corresponding manifest health row,
+episode-to-schedule group mapping, game_id equality, and episode record equality
+to `{end_kind,failure}`. Existing member-to-schedule group checks remain. It
+still parses all manifest/journal/Replay semantics itself. Diagnostic RAW gains
+no Source rights. Python owns byte/index custody, not a duplicate semantic parser.
+
+The whole describe, including index records, retains the existing8MiB cap and
+pre-admission of actual retained/serialized/copied/parsed bytes in both owners.
+Source counts and duplicate/unknown rows refuse before semantic work. No new
+dependency, persisted schema, numerical input, policy feature or old plan3 ABI
+changes. Provider1/plan4 are not yet released; close this unreleased contract
+before capability activation. Tests must reject altered group/episode records,
+game IDs, mappings and row sets with exact fixture parity and cleanup intact.
+
+Alternative considered: Python transiently parses the original manifest and
+calls validate_index before native admission. It preserves the old callback
+shape but adds duplicate cross-language semantic ownership and managed-parse
+lifetime. Root prefers the explicit bounded metadata closure so Rust retains
+the agreed Source semantic responsibility; architecture review confirms this
+bounded closure with the existing whole-describe cap/admission requirements.
+
+### Native SQLite thread ownership amendment (architecture READY)
+
+The first private full-Source fixture matched proof/arrays/Original16 but failed
+final close: callbacks created SQLite on the FFI worker, then coordinator cleanup
+ran after that worker had joined. Earlier caller control reads can also leave a
+caller-owned connection. Root adopts the advisor's bounded per-operation handoff;
+The creator-state/accounting closures below pass independent architecture review;
+dependent retirement implementation may proceed. Final implementation reviews
+and preserved-fixture closure remain pending.
+
+A default protected executor factory in NativeStructuredSource preserves the
+physical path. The concrete packed owner selects a private packed executor
+adapter colocated with its provider; the generic executor imports no storage.
+Before each submission, the caller retires its own active cache/connection and
+admits current external growth. The worker executes the constructor/operation
+and retires its actual IO BEFORE publishing completion. No caller pool access
+overlaps that worker interval. Successful result/prepared authority requires
+confirmed retirement; cleanup failure poisons ordinary work permanently.
+
+Actual SQLite closure is attempted on its creating worker even when loan/cache
+retirement fails. Retain cache, generation, leases and charges; clear pool.active
+only after complete retirement, not merely a successful DB close. Standard-library
+connection close may be retried on that SAME actual object/worker for cleanup;
+retain it until success. Installed CPython3.14.10/SQLite3.54.1 same-thread double
+close was observed to remain closed. This permits no raw-FD retry or Source
+health recovery. No check_same_thread bypass, alternate connection or IO service.
+
+Cleanup-only scheduling on the SAME still-live worker bypasses work health/
+deadline gates, performs no new read/hash/open/admission and never reenters a
+native budget from a callback. Preserve first error and actual owners. One
+bounded attempt per explicit close invocation; unresolved state stays reachable
+for later disposition. Do not join/shutdown the executor until the actual native
+session, Future/callback, SQLite connection, provider cache and loans are retired.
+Only after checked join may coordinator release pool/original FDs/parent locks.
+
+OriginalByteLease needs staged retirement and an owner registered BEFORE borrow
+side effects. Mark context/budget attempts before invoking them; a second empty
+generator exit is never proof. Record success or direct supported evidence from
+the SAME actual loan/context/account under the exclusive interval; otherwise
+retain uncertainty without forcing loan counts or charges to zero. Every separate
+data/cache/budget/registry stage must remain owned until proven complete.
+
+Bind provider release to the actual executor lifetime. An outer provider context
+cannot free metadata or pool allowance when nested native close failed, even if
+byte leases are zero. Constructor failure before handoff retains caller cleanup;
+after binding, only confirmed executor retirement permits provider release.
+
+External accounting includes positive SAME-pool metadata/control growth beyond
+the prepaid baseline, after confirmed caller cache retirement. Decompose baseline,
+sealed/caller bytes and maximum one-group allowance without double counting.
+Admission must precede argument construction/FFI allocation, including constructor
+settings and summary calls, not only methods with explicit _held arguments.
+Callbacks remain inside the prepaid allowance. Ordinary resume/parent validation
+also derives plan4/provider from actual retained scans; native snapshot=None must
+not take Python-only decoded-graph retirement branches.
+
+Acceptance requires real alternating caller/worker SQLite thread checks, constructor/
+operation/expiry/sync-interrupt/async-cancel tests, close errors before and after
+actual SQLite close, uncertain lease/context/budget stages, outer-context cleanup
+refusal, sufficient/insufficient growth and successful final close on the preserved
+unqualified one-update fixture. Generic physical executor behavior and the frozen
+physical benchmark files remain unchanged. No new dependency, persisted format,
+policy input, numerical algorithm or capability activation is authorized here.
+
+#### Creator states and storage-free cleanup (N1 closure)
+
+| State | Actual IO owner | Permitted transition |
+| --- | --- | --- |
+| caller IO / later caller-retirement uncertainty | recorded creating caller thread | retire that actual cache/connection on caller; no ordinary worker submission until confirmed |
+| submitted/running Future | exclusive recorded FFI worker interval | caller cannot touch pool; worker retires its own IO before completion |
+| worker-retirement uncertainty after Future completion | same still-live worker | cleanup-only same-worker submission; caller never closes this connection |
+| idle, no IO | neither thread has a connection/cache/loan | normal caller preflight or cleanup, unless any prior failure made work sticky |
+| joined | confirmed native/session/IO/loan/Future retirement | caller may release provider metadata, pool/FDs and locks |
+
+Ownership records the creating thread BEFORE connection-capable work, including
+failure after binding. A failed caller handoff remains caller-cleanup-owned;
+executor binding does not transfer it. A worker cleanup lane may retire the native
+session while caller IO remains only if it is storage-free, and cannot then join/
+release the provider until caller retirement is confirmed. Unknown creator or
+partial ownership remains cleanup-only and reachable.
+
+Cleanup entry permanently fences ordinary provider callbacks (registry, describe,
+borrow, recheck) before invoking native close. It also cancels the independent
+native Control first: current OriginalInputs.recheck starts with Control.check,
+so close cannot hash physical parents before it reaches the provider. A callback
+attempt must refuse without IO, never return fabricated revalidation success.
+Existing native close retires its stage and records Closed even when returning
+that failed check; a later close on the SAME native object may confirm retirement
+while the original error remains primary. If that behavior cannot be established,
+retain session/executor rather than treating an error as closure. Normal healthy
+close keeps its existing final revalidation. Tests instrument ALL source read/
+hash/open paths, not only logical callbacks.
+
+#### Disjoint account and pre-argument builder (N2 closure)
+
+Let L be the configured joint native cap. After provider construction and confirmed
+caller cache/connection retirement, define these prepaid constants:
+
+| Term | Ownership represented exactly once |
+| --- | --- |
+| C0 | original caller extra plus preflight binary evidence, excluding only a proven SAME _ChainScan pool-backed credit |
+| B0 | existing native Python owner base/identity plus a prepaid constructor settings/plan encoding envelope |
+| P0 | cache-free SAME-pool used bytes, including original indexes, registry/describe and actual pool-backed control charges |
+| W | maximum one-group callback/cache working bytes plus maximum control-copy overlap and bounded callback/hash scratch |
+
+Compute N = L-C0-B0-P0-W before constructor encoding; nonpositive N refuses.
+Rust receives memory_bytes=N. Obtain actual compressed lengths for W through a
+bounded caller-thread metadata query on the SAME already validated original DB,
+checking exact group IDs and original rechecks before/after. Retire that query's
+temporary allowance and connection BEFORE measuring P0. W is
+max_groups(4*raw_bytes+2*compressed_bytes) + max_controls(2*bytes) + 1MiB.
+No raw payload query or second full budget is used. Constructor wire scratch
+is bounded allocation-free before encoding and added to B0, not silently
+deducted again as dynamic caller bytes.
+
+A private _NativeGameInputs shared_controls argument may reference only the
+actual _ChainScan for this parent and SAME provider pool. Before crediting, require
+pool-control charge to cover its current retained amount and that amount to be
+included in original caller extra. Credit exactly that actual retained amount
+once from C0; no arbitrary integer credit, filename deduplication or other credit
+is accepted. Other callers keep conservative extra ownership. Existing disjoint
+sealed/persistent/caller-growth accounting remains S(t); omit from S any exact
+shared-control ownership already represented by P(t).
+
+For each ordinary operation, retire caller IO first, then read cache-free P(t).
+Set D(t)=max(0,P(t)-P0), H(t)=D(t)+S(t)+K(t), where K is the precomputed argument
+encoding/copy envelope. Prepaid P0 and W never appear in H. Rust's current used
+account includes its previous caller lease h_prev; on a healthy idle session
+R(t)=used_bytes-h_prev. Require R(t)+H(t)<=N BEFORE building arguments. Track
+h_prev only from known-successful calls that set the explicit retained argument;
+after any failed/uncertain call, ordinary work is forbidden, so an unknown caller
+lease is never used for later admission. A non-growing call replaces its caller
+lease rather than charging prepaid or previous ownership twice.
+
+Use one concrete protected preflight/builder seam on NativeStructuredSource
+(physical default preserves behavior). Packed calls perform retirement, growth
+and remaining-account checks, then invoke the supplied bounded argument builder,
+then submit through the packed executor. No canonical(plan/auth/settings) or
+other affected argument encoding occurs ahead of that seam. Constructor uses the
+prepaid B0 envelope and N calculation before settings/plan encoding; control_summary
+must explicitly receive H(t), as do authorize/recheck/export/restage/prepare/
+finalize and other retained-argument calls. Scalar used_bytes is an idle-only
+accounting query outside callbacks. The executor factory/submit hook alone is
+not the admission seam. Tests use builder/encoding sentinels on constructor and
+summary, populated-cache baselines, smaller positive metadata growth, exact
+sufficient/insufficient caps and unchanged physical behavior.
+
+#### Terminal original-pool close hold (architecture READY)
+
+Outer _ChainScan/PackedBatchCustody exits can call PackedSourceOwner.close or
+PackedArtifactPool.close independently after a nested native cleanup error.
+Provider.close's executor guard alone does not protect those original FDs.
+Proposed enforcement adds one actual low-level pool-close hold, owned by the
+concrete packed executor before its first submission. Both owner.close and
+pool.close refuse BEFORE any original-FD/account release while a hold remains.
+_ChainScan.close also refuses before borrowed-custody detachment or refunding
+its _pool_control_charge; borrowed scans otherwise bypass both owner/pool close.
+Retain that actual scan/control ownership, rather than guessing its graph died
+or transferring a serialized reservation. The N2 pool-backed credit must remain
+represented until actual native retirement.
+Pool code imports no native provider/executor; the actual hold is a reachable
+capability with a retained cleanup owner, not a serialized flag or counter waiver.
+
+The packed adapter releases that SAME hold only after actual native/session/IO/
+loan/Future retirement and checked executor join. A partial constructor either
+has made no worker effects and retires its hold, or retains its actual cleanup
+owner and hold. Uncertain close/join or outer-context failure cannot release it.
+Worker IO retirement is not terminal pool close and remains available while the
+hold is active. Multiple shared-pool native owners each retain their actual hold;
+no wrapper decrements another owner's hold or forces a zero counter. Admission
+and release bookkeeping are included in the same pool's metadata account.
+
+This touches only the non-frozen group_pack_pool.py, group_pack_game_source.py
+and the assigned structured_lineage.py terminal guard, plus native adapters/tests.
+No physical PackedSource/core/benchmark-file
+change or third-party dependency is proposed. Tests must prove outer scan/custody
+and direct pool close cannot release FDs/charges with an active/uncertain executor,
+then confirm release after actual joined retirement, including partial binding,
+multiple owners and primary-error preservation.
+
+### Native logical-name parity amendment (architecture READY)
+
+Python3.14.10 safe_name rejects all Unicode general-category C code points;
+Rust char::is_control alone only covers control characters. Relative logical
+names must retain the SAME validity across readers, including opaque names.
+Do not narrow valid Unicode names to ASCII or add a dependency for this closure.
+
+The accepted native helper uses a frozen Unicode16.0.0 category-C range table,
+generated from the supported Python3.14 runtime, with version and exact bytes
+recorded in source/build identity. The736disjoint ranges require5888bytes of
+u32 endpoints, plus small static metadata. Decode UTF-8 strictly, retain existing
+traversal/NUL/backslash/name checks, and reject membership in any C range.
+The concrete Python adapter verifies the same UCD version before new packed
+allocation. New metadata fields or policy inputs are unnecessary; plan3 remains
+unchanged and the unreleased provider1 contract becomes exact before activation.
+
+Root's disposable data artifact is `/tmp/gfb-ucd16-category-c-ranges.json`.
+Acceptance requires exhaustive code-point/table agreement with Python and named
+Cc/Cf/Co/Cn/surrogate/valid-Unicode cases, including escaped JSON keys/names,
+without changing physical format/Config or accepting a permissive fallback.
+Future Unicode-version changes require a separate compatibility review rather
+than silently reinterpreting old name validity.
+
 Packed native control summaries use schema4 and kind
 `card-instance-packed-source-controls`, with exactly current corrected-summary
 keys plus `storage_binding,artifact_registry_sha256`; collection rows retain
@@ -442,6 +683,45 @@ provider/registered own episode, cannot imply Source rights. Native new capabili
 marker is `card_instance_group_pack='provider1;proof2;plan4'`; publish it only
 after both reviews, Python/native byte/feature/token/numeric parity and a
 source-matched build. The absence rejects packed native use before runtime I/O.
+
+### Generation-zero packed parent (architecture READY)
+
+Ordinary fresh PPO validates its run4 parent BEFORE the first collection exists.
+That historical-parent plan has a real generation0/control owner, zero committed
+collections and no original byte roots. Rejecting an empty provider prevents
+fresh native PPO from reaching collection, despite a valid parent.
+
+Permit a concrete empty registry over an explicitly supplied SAME PackedArtifactPool
+owned by the actual retained _ChainScan. Create/admit that pool and its control
+charges even when no PackedSourceOwner exists. OriginalArtifactProvider accepts
+zero owners only with that actual pool; it must not infer a pool, fabricate a
+Source owner, or accept an arbitrary root/descriptor flag. Zero-owner construction
+also requires the exact retained shared_controls _ChainScan: validate its actual
+pool identity, control-charge coverage and actual run4 parent binding BEFORE
+empty-provider/native allocation. At the concrete _open_game_parent_inputs
+factory, require the validated actual state/chain to have generation0 and no
+committed roots, and plan.parent to equal that scan.root. shared_controls=None
+cannot admit an empty provider. Preown the pool on this scan before shared
+control admission; partial initialization/admission failures retain the actual
+scan/pool owner and stage their reservations. This does not introduce a global
+pool registry or a serialized ownership assertion. Registry remains the
+exact closed format with roots=[], and its canonical digest binds plan4. Unknown
+describe/borrow/recheck roots always refuse; no episode/source authority appears.
+Metadata ownership, close holds, thread lanes and N1/N2 accounts remain actual;
+the no-group/no-control W case still includes its bounded scratch allowance.
+
+Rust derives expected roots from the SAME actual parent update chain: only a
+historical-parent mode with zero committed collections may match the empty
+registry. A live cohort requires its issued actual collection; any committed
+source requires its exact registered root. Existing run/identity/config/generation0
+checks remain mandatory. Do not fall back to plan3 for run4, waive a missing
+Source, retrofit old parents or return a successful Original16/export for no data.
+
+Tests must execute ordinary fresh validation-before-collection and later
+nonempty/paused-resume dispatch through the real scan/provider factory, with
+source-kind/authority/unknown-root refusals and balanced actual pool/control/
+hold/FD cleanup. Diagnostic fixtures remain unqualified. This closes an
+unreleased plan4 ordinary-path gap without a persisted-schema/old-plan3 change.
 
 ## final64 and Dataset/Tree (separate dependent increment)
 

@@ -793,8 +793,15 @@ ordinary PPO now pass both final reviews,610affected checks with actual CUDA,
 50postreview file-cap/ownership checks and full static/kernel invariants. Actual
 continuous2 and pause1/resume2 MLP CPU-inference/CUDA-learner parents complete
 64natural games/4updates; both fresh original/lineage/numeric audits pass.
-The earlier update0 budget-failed parent remains immutable/ineligible. Native,
-final64/Dataset/Tree and whole-plan comparison remain pending; this is not full-
+The earlier update0 budget-failed parent remains immutable/ineligible. Native3B
+logical provider/plan4/Original16/RAW also passes both final reviews after
+constructor/admission/gen0 fixes, all3model fixture parity and actual CPU/CUDA-
+inference continuous2/pause1-resume2 with CUDA learner (64natural/4updates).
+Both fresh original/numeric/lineage audits pass; source-matched release/MIMALLOC
+wheel904038e1 is installed with its rollback retained. Identical-byte HDD archival
+comparison completes six pairs and reports faster writes/smaller archives but
+slower verified reads; directory default stays. Final64/Dataset/Tree, actual
+concurrent learning comparison and whole-project acceptance remain pending; this is not full-
 plan acceptance or learning quality. The default directory storage,
 old Config identities and logical Collection5/Journal6/codec2 remain unchanged.
 The [design](design/sqlite-group-pack-v1.md) fixes the physical contract,

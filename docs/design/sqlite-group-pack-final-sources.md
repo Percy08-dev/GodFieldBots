@@ -117,6 +117,59 @@ pending/unpublished evidence, never recreates a lost live owner or publishes it.
 
 ## Native final64 and facts
 
+### Final-original parent lifetime closure (architecture READY)
+
+Native3B's actual pool-close hold remains unchanged. A final Source sharing that
+pool cannot terminal-close original wrappers before the parent executor joins;
+the parent already waits for the Source/slot to retire. Resolve this through
+explicit original ownership, never a hold bypass or permissive close flag.
+
+The SAME actual FormalGameParent preowns one concrete final-original slot before
+admission/open effects: actual PackedSourceOwner (including locator FD), final-only
+provider/index and their reservations. The Source borrows those originals; base
+training registry stays immutable. Source.close retires use, episode/packet/DTO
+graphs, native final slot and borrow/exclusion in the established order, but does
+not close parent-owned wrappers/pool/scan or refund their metadata/working delta.
+Source cleanup-complete describes its facade/slot/local use only and prevents
+further exports. This predicate is distinct from whole-parent physical cleanup.
+
+After Source/slot use retires, the parent closes its actual native session/worker
+with the creator-aware thread gates, confirms join and releases its SAME hold.
+Only then does it close its actual final provider/wrapper plus packed scan/pool/
+control charges, once per real owner. Keep the parent lock and all uncertain
+owners through these steps. Whole parent.cleanup_complete requires those new
+physical owners and accounts to retire too, not merely an empty Rust final slot.
+Partial final admission belongs to the parent from its first effects; no summary
+or serialized transfer marker reconstructs that ownership.
+
+Parent-held final metadata/index/provider/original charges remain counted after
+Source close and through native join. Preserve cumulative parent+final metadata
+and max(one-group need), retaining the admitted positive final working delta
+until parent terminal cleanup as the simple conservative v1 rule. Source-local
+graph/packet charges retire only with their actual loans/graphs. Do not double-
+charge shared metadata or refund it with the Source facade. Publication/facts
+reservations remain owned by their actual context/composite.
+
+The order stays Source/slot/actors → parent native join/hold release → parent
+originals/scan/pool/lock → whole-parent cleanup-complete → composite public facts/
+pointer commit. On failure, invalidate owned locator first and preserve actual
+owners/first error; no healthy publication, new session, manual hold reset or
+postcommit reopen. The composite keeps its independent publication capabilities.
+
+Apply the SAME rule to canonical PUBLIC final Sources and Dataset4 readers:
+each Source borrows originals preowned by its actual retained parent, Sources
+retire first, then all actual parents, then existing outer locator/root custody.
+Fitting itself uses the healthy retained Source/parent owners. Successful Dataset/
+fit completion and publication require complete checked retirement of every pair;
+one failed or partially retired pair cannot refund others' live ownership or
+grant new fit permission.
+
+Tests must prove Source use is retired while the actual parent hold/FDs/charges
+remain; then actual join → hold release → guarded originals/accounts/parent-lock
+retirement; pending and public/Dataset reader variants; partial construction,
+escaped loans, worker/join/original/lock failures and multiple pairs. Existing
+directory behavior, qualification, no-postcommit-IO and whole joint caps remain.
+
 Extend the SAME four-method native lifecycle with an explicit optional provider
 argument to inspect_final_validation; schema1/None preserves old behavior,
 schema2 requires the concrete final-only provider borrowed from the actual parent.
@@ -155,7 +208,98 @@ Native capability is `card_instance_packed_final_validation=
 unchanged. Activate only after both reviews/source-matched build and bounded
 component success/failure checks. No genuine formal-positive claim is inferred.
 
+### Concrete final-provider and pending-byte seams (architecture READY)
+
+The actual parent packed executor may attach exactly one concrete final-only
+OriginalArtifactProvider in addition to its immutable base provider. The parent
+preowns the final-original slot first. Attachment requires that exact parent/slot,
+SAME pool, idle Future/callback state and creator-aware IO retirement. It creates
+no second session, executor, pool or hold; the SAME executor's existing hold owns
+the interval. Require that idle/exclusive creator-retired state BEFORE final
+original/provider opening, shared-pool retirement/query and allocation effects,
+not only at the later attachment. The actual parent owns that admission interval
+and prevents overlapping FFI/pool use. No arbitrary provider list or serialized
+association is accepted.
+
+Every ordinary/cleanup callback fence, active/uncertain lease check, creator IO
+retirement and join gate includes BOTH attached providers. Native final-slot
+close retires use but keeps the final provider/metadata parent-owned and attached
+until actual parent executor retirement. Account cumulative retained metadata
+and only max(0,final working need-base prepaid working need) before final FFI,
+using the existing pre-argument admission seam. Keep that delta through parent
+terminal cleanup; callbacks never query native budget/session. Partial attach or
+slot construction retains actual owners, first error and charges.
+
+Physical PackedSource gains only a private constructor keyword
+_allow_pending:bool=False threaded to existing PackedOriginals.allow_pending.
+This is a byte/diagnostic seam, never Source eligibility. All public locator-open
+entrypoints retain their default pending refusal and do not forward a caller
+flag. The concrete pending PackedSourceOwner may enable the seam ONLY after
+validating the actual issued token against its SAME context/parent/publication,
+temporary locator, pending descriptor and held DB/seal. A bool, path, request
+manifest kind or DTO cannot pass those owner checks. Ordinary public Source
+construction and strict original custody remain unchanged. Tests separate low-
+level diagnostic bytes from rejected public/forged-pending Source access.
+
+### Pool-backed versus external caller growth (architecture READY)
+
+FormalGameParent._sync_native currently combines retained scan growth with
+external actor/Source growth into one caller_growth value. Packed shared-controls
+credit may exclude ONLY the proven SAME-pool scan component, never that external
+component. Split the private caller-growth interface into control_growth plus
+keyword external_growth=0; existing one-argument ordinary calls retain their
+meaning and old non-shared totals stay the sum. The actual parent passes
+scan.retained-native_scan_base and max(0,external-entry_extra) separately.
+
+When actual shared_controls cover the control scan under the existing identity/
+charge checks, H(t) excludes that control component already counted by P(t), but
+always includes the external component and the separately admitted positive
+final working delta. Without shared controls, include both components. Preserve
+pre-argument N2 admission and sticky shortage behavior; no arbitrary memory
+credit, higher cap, callback native-budget query or new serialized field.
+Tests cover independent scan/external growth, exact sufficient/insufficient
+joint caps, no double scan charge and no lost external charge across final use.
+
+### Numeric fit transport version closure (architecture READY)
+
+Packed Dataset4 uses request/completion/provenance schema5 only. Numerical
+structured-tree-fit-inputs and structured-tree-fit-result envelopes retain their
+EXACT existing game schema4/key sets and numerical contents. Input fields are
+schema_version,kind,action_config_hash,feature_signature,label_recipe,input_binding,
+row_counts,data,source_kind,source_origin. Result fields are schema_version,kind,
+request_sha256,input_files,metrics,inference_sha256,model_sha256,source_kind,
+source_origin. Their source_kind/source_origin values equal the checked packed
+Dataset4 context; storage_binding is NOT a numeric input/result field. Its full
+binding is carried by request5/provenance5 and the immutable request/inference
+hash relations. Inference remains schema4 with the already accepted closed packed
+source subtype below (including storage_binding and provenance5); its numerical
+parameter/feature/weight format is unchanged, not its old source-subtype key set.
+Inputs4 has no request_sha256: request5.input_files hashes the exact inputs4,
+avoiding a cycle. The worker first verifies immutable request5 against its
+supplied SHA, then validates inputs4 against that request and its input_files.
+Result4.request_sha256 binds the exact request5, and its inference hash binds
+the actual inference4 packed subtype. The actual verified Dataset4 context
+chooses the packed paired/provenance subtype. Keep separate
+paired-control versus numeric/inference schema selectors internally so changing
+the pair context cannot accidentally bump every envelope. Old contexts retain
+all existing version/key/domain checks and reject new source kinds by default.
+No new arbitrary version override, source flag or fit authority is introduced.
+
 ## Dataset4 and Tree3 consumers
+
+### Shared storage/custody value checker (architecture READY)
+
+Factor the existing proof2 storage/custody syntax checks into the pure common
+`checked_storage_custody(storage,custody)->tuple[Json,Json]` in group_pack_game.py.
+Return the same validated value objects without mutation or new authority.
+checked_packed_proof and Dataset4 closed row validation call that exact helper;
+proof-specific file/member/source-set checks stay in checked_packed_proof.
+Preserve all existing fields, allowed roles, ordering, stat6/SHA/fingerprint/type
+checks and old error/refusal semantics. Common depends only on pure common
+modules, with no I/O/training/model dependency. This introduces no new persisted
+format, clone/lifetime owner, qualification flag or permissive extension mapping.
+Tests compare valid/invalid storage and custody through proof2 and Dataset4 and
+retain proof/member cross-relations plus actual-owner eligibility separately.
 
 Use a new persisted Dataset4 subtype so no Dataset3 reader silently accepts
 changed source provenance. Numerical feature projection3, selected-label recipe,

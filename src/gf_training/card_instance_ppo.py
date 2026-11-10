@@ -44,10 +44,13 @@ def _validate_packed_config(config: Any, *, formal: bool = False) -> None:
     from gf_models.structured_tree_config import ConfiguredTreeModelV3
     if (type(config.actions) is not ActionConfigV3 or type(config.model) is not ConfiguredNeuralModelV3
             or type(config.training) is not PPOTrainingConfig or config.run.split != 'train'
-            or formal or config.preprocessing.backend != 'python'
+            or formal or config.preprocessing.backend not in ('python', 'rust')
             or config.preprocessing.reader != 'participant-structured-v2'
             or type(config.opponent) is ConfiguredTreeModelV3):
-        raise ContractError('group Pack storage PPO requires ordinary corrected Python PPO')
+        raise ContractError('group Pack storage PPO requires ordinary corrected PPO')
+    if config.preprocessing.backend == 'rust':
+        from gf_training.native_backend import group_pack_reader_settings
+        group_pack_reader_settings(config.preprocessing)
 
 
 class _GameOperations:

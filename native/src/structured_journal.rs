@@ -1500,6 +1500,33 @@ pub(crate) fn event_prefix_text(prefix: &[u8; 32]) -> String {
     hash_text(prefix)
 }
 impl Journal {
+    pub(crate) fn open_corrected_artifacts(
+        directory: &std::path::Path,
+        journal_file: &str,
+        budget: Arc<Budget>,
+        control: Control,
+        max_json: usize,
+        max_record: usize,
+        registry: Arc<crate::logical_artifacts::Registry>,
+    ) -> Result<Self> {
+        let mut sources = crate::structured_session::Sources::from_registry(
+            directory,
+            budget.clone(),
+            control.clone(),
+            max_json,
+            Some(registry),
+        )?;
+        let data = Self::parse_destination(
+            &mut sources,
+            journal_file,
+            budget,
+            control,
+            max_json,
+            max_record,
+            Destination::CorrectedDiagnostic,
+        )?;
+        Ok(Self { sources, data })
+    }
     pub(crate) fn open_corrected(
         directory: &std::path::Path,
         journal_file: &str,
@@ -1546,11 +1573,41 @@ impl Journal {
         declaration: &OriginalHeader<'_>,
         stage: Option<(&mut crate::structured_staging::Stage, usize)>,
     ) -> Result<Self> {
+        Self::original_corrected_artifacts(
+            directory,
+            journal_file,
+            budget,
+            control,
+            max_json,
+            max_record,
+            declaration,
+            stage,
+            None,
+        )
+    }
+    pub(crate) fn original_corrected_artifacts(
+        directory: &std::path::Path,
+        journal_file: &str,
+        budget: Arc<Budget>,
+        control: Control,
+        max_json: usize,
+        max_record: usize,
+        declaration: &OriginalHeader<'_>,
+        stage: Option<(&mut crate::structured_staging::Stage, usize)>,
+        registry: Option<Arc<crate::logical_artifacts::Registry>>,
+    ) -> Result<Self> {
         if !declaration.corrected || stage.is_some() && declaration.model.is_none() {
             return fail("corrected original entry requires its closed declaration");
         }
-        Self::open_destination(
+        let mut sources = crate::structured_session::Sources::from_registry(
             directory,
+            budget.clone(),
+            control.clone(),
+            max_json,
+            registry,
+        )?;
+        let data = Self::parse_destination(
+            &mut sources,
             journal_file,
             budget,
             control,
@@ -1561,7 +1618,8 @@ impl Journal {
                 stage,
                 tree_window: None,
             },
-        )
+        )?;
+        Ok(Self { sources, data })
     }
     pub(crate) fn original(
         directory: &std::path::Path,
@@ -1693,7 +1751,7 @@ impl Journal {
             if line.len() > max_record {
                 return fail("journal5 record byte cap exceeded");
             }
-            documents.push(json::parse(line, &budget, &control)?)?;
+            documents.push(sources.parse_json(line)?)?;
         }
         drop(bytes);
         if documents.is_empty() {

@@ -1,4 +1,6 @@
 use crate::json::ValueExt;
+/// Packed original-byte contract accepted after independent reviews.
+pub const CARD_INSTANCE_GROUP_PACK_CAPABILITY: &str = "provider1;proof2;plan4";
 pub mod budget;
 mod card_instance_fixture;
 pub mod control_memory;
@@ -9,6 +11,8 @@ pub mod feature;
 pub mod index;
 pub mod journal;
 pub mod json;
+mod logical_artifacts;
+mod logical_artifacts_bridge;
 mod numeric_io;
 pub mod parallel;
 pub mod pipeline;
@@ -209,6 +213,7 @@ impl Drop for StructuredParentControls {
 /// Diagnostic J5/raw-token owner. This deliberately does not activate reader2.
 #[pyclass]
 struct StructuredJournalTokens {
+    provider: Option<Arc<logical_artifacts_bridge::PythonArtifactProvider>>,
     core: Mutex<Option<structured_journal::Journal>>,
     retirement: Mutex<Option<retirement::Retirement<structured_journal::Journal>>>,
     budget: Arc<budget::Budget>,
@@ -294,6 +299,7 @@ impl StructuredJournalTokens {
             .map_err(python_error)?;
         let caller = budget.reserve(0).map_err(python_error)?;
         Ok(Self {
+            provider: None,
             core: Mutex::new(Some(core)),
             retirement: Mutex::new(Some(retirement)),
             budget,
@@ -305,6 +311,9 @@ impl StructuredJournalTokens {
         })
     }
     fn raw_phase(&self) -> error::Result<std::sync::MutexGuard<'_, JournalRawPhase>> {
+        if let Some(provider) = &self.provider {
+            provider.check_reentry()?;
+        }
         self.phase
             .lock()
             .map_err(|_| Error::contract("corrected RAW phase poisoned"))
@@ -477,6 +486,129 @@ impl StructuredJournalTokens {
 }
 #[pymethods]
 impl StructuredJournalTokens {
+    #[staticmethod]
+    #[pyo3(signature=(logical_root,episode_id,journal_file,provider,settings,deadline,cancel_handle=None))]
+    fn card_instance_artifacts(
+        py: Python<'_>,
+        logical_root: &str,
+        episode_id: &str,
+        journal_file: &str,
+        provider: Py<PyAny>,
+        settings: &[u8],
+        deadline: f64,
+        cancel_handle: Option<PyRef<'_, CancelHandle>>,
+    ) -> PyResult<Self> {
+        let provider = logical_artifacts_bridge::PythonArtifactProvider::new(provider);
+        (|| {
+            use logical_artifacts::LogicalArtifactProvider;
+            use sha2::Digest;
+            stack::ensure_minimum_stack().map_err(python_error)?;
+            if settings.len() > 65536
+                || logical_root.len() > 65536
+                || episode_id.len() > 4096
+                || !["player-1.jsonl", "player-2.jsonl"].contains(&journal_file)
+            {
+                return Err(python_error(Error::contract(
+                    "bounded registered own RAW episode required",
+                )));
+            }
+            logical_artifacts::member_name(episode_id).map_err(python_error)?;
+            if episode_id.contains('/') {
+                return Err(python_error(Error::contract(
+                    "own episode basename required",
+                )));
+            }
+            let control = match cancel_handle {
+                Some(c) => c.control.at_deadline(deadline),
+                None => Control::new(deadline),
+            }
+            .map_err(python_error)?;
+            let wire = StructuredSessionBridge::owned_wire(&Budget::new(1 << 20), settings)
+                .map_err(python_error)?;
+            let (core, retirement, budget) = py
+                .detach(|| {
+                    control.check()?;
+                    let initial = Budget::new(1 << 20);
+                    let settings = json::parse(&wire, &initial, &control)?;
+                    settings
+                        .root
+                        .closed(&["memory_bytes", "max_json_bytes", "max_record_bytes"], &[])?;
+                    let memory = settings
+                        .root
+                        .require("memory_bytes")?
+                        .integer(1, 12i128 << 30)? as usize;
+                    let max_json = settings
+                        .root
+                        .require("max_json_bytes")?
+                        .integer(1, 64i128 << 20)? as usize;
+                    let max_record = settings
+                        .root
+                        .require("max_record_bytes")?
+                        .integer(1, max_json as i128)?
+                        as usize;
+                    let budget = Budget::new(memory);
+                    let raw = provider.registry(&budget, &control)?;
+                    let digest = format!("{:x}", sha2::Sha256::digest(&*raw));
+                    let registry = logical_artifacts::Registry::open(
+                        provider.clone(),
+                        &digest,
+                        &budget,
+                        &control,
+                        max_json,
+                    )?;
+                    if !registry
+                        .roots
+                        .contains_key(std::path::Path::new(logical_root))
+                    {
+                        return Err(Error::contract(
+                            "RAW root absent from original provider registry",
+                        ));
+                    }
+                    let retirement =
+                        retirement::Retirement::start(&budget, retire_structured_journal)?;
+                    let directory = std::path::Path::new(logical_root).join(episode_id);
+                    let core = structured_journal::Journal::open_corrected_artifacts(
+                        &directory,
+                        journal_file,
+                        budget.clone(),
+                        control.clone(),
+                        max_json,
+                        max_record,
+                        registry,
+                    )?;
+                    let viewer = if journal_file == "player-1.jsonl" {
+                        1
+                    } else {
+                        2
+                    };
+                    if core
+                        .header_value()
+                        .require("viewer")?
+                        .integer(viewer, viewer)?
+                        != viewer
+                        || core.header_value().require("episode_id")?.string()? != episode_id
+                    {
+                        return Err(Error::contract("RAW registered own viewer differs"));
+                    }
+                    core.sources.recheck()?;
+                    Ok((core, retirement, budget))
+                })
+                .map_err(python_error)?;
+            let caller = budget.reserve(0).map_err(python_error)?;
+            Ok(Self {
+                provider: Some(provider.clone()),
+                core: Mutex::new(Some(core)),
+                retirement: Mutex::new(Some(retirement)),
+                budget,
+                control,
+                python: Mutex::new(control_memory::ControlMemory::default()),
+                caller: Mutex::new(caller),
+                corrected: true,
+                phase: Mutex::new(JournalRawPhase::Active),
+            })
+        })()
+        .map_err(|error| provider.retain_on_error(py, error))
+    }
     #[new]
     #[pyo3(signature=(directory,journal_file,settings,deadline,cancel_handle=None))]
     fn new(
@@ -592,14 +724,23 @@ impl StructuredJournalTokens {
         })
         .map_err(python_error)
     }
-    fn used_bytes(&self) -> usize {
-        self.budget.used()
+    fn used_bytes(&self) -> PyResult<usize> {
+        if let Some(provider) = &self.provider {
+            provider.check_reentry().map_err(python_error)?;
+        }
+        Ok(self.budget.used())
     }
-    fn peak_bytes(&self) -> usize {
-        self.budget.peak()
+    fn peak_bytes(&self) -> PyResult<usize> {
+        if let Some(provider) = &self.provider {
+            provider.check_reentry().map_err(python_error)?;
+        }
+        Ok(self.budget.peak())
     }
-    fn control_reserved_bytes(&self) -> usize {
-        self.python.lock().map(|c| c.reserved()).unwrap_or(0)
+    fn control_reserved_bytes(&self) -> PyResult<usize> {
+        if let Some(provider) = &self.provider {
+            provider.check_reentry().map_err(python_error)?;
+        }
+        Ok(self.python.lock().map(|c| c.reserved()).unwrap_or(0))
     }
     fn cancel_handle(&self) -> CancelHandle {
         CancelHandle {
@@ -834,6 +975,7 @@ impl StructuredBridgeCore {
 }
 /// Candidate structured Source/typed-bank path; markers remain disabled until acceptance.
 struct StructuredSessionBridge {
+    provider: Option<Arc<logical_artifacts_bridge::PythonArtifactProvider>>,
     core: Mutex<Option<StructuredBridgeCore>>,
     retirement: Mutex<Option<retirement::Retirement<structured_session::CohortSession>>>,
     budget: Arc<Budget>,
@@ -848,6 +990,12 @@ fn retire_structured_session(core: structured_session::CohortSession) -> error::
     Ok(())
 }
 impl StructuredSessionBridge {
+    fn callback_guard(&self) -> PyResult<()> {
+        self.provider
+            .as_ref()
+            .map_or(Ok(()), |p| p.check_reentry())
+            .map_err(python_error)
+    }
     fn release_final_consumer(&self, require_released: bool) -> error::Result<()> {
         let final_packet = {
             let core = self.core.lock().map_err(|_| Error::Closed)?;
@@ -898,6 +1046,17 @@ impl StructuredSessionBridge {
         deadline: f64,
         cancel_handle: Option<PyRef<'_, CancelHandle>>,
     ) -> PyResult<Self> {
+        Self::new_context(py, corrected, plan, settings, deadline, cancel_handle, None)
+    }
+    fn new_context(
+        py: Python<'_>,
+        corrected: bool,
+        plan: &[u8],
+        settings: &[u8],
+        deadline: f64,
+        cancel_handle: Option<PyRef<'_, CancelHandle>>,
+        provider: Option<Arc<logical_artifacts_bridge::PythonArtifactProvider>>,
+    ) -> PyResult<Self> {
         stack::ensure_minimum_stack().map_err(python_error)?;
         if settings.len() > 65536 || plan.len() > 65536 {
             return Err(python_error(Error::resource("structured request wire cap")));
@@ -928,7 +1087,18 @@ impl StructuredSessionBridge {
                 let budget = Budget::new(memory);
                 let (core, retirement) = if corrected {
                     (
-                        StructuredBridgeCore::Corrected(
+                        StructuredBridgeCore::Corrected(if let Some(provider) = &provider {
+                            structured_session::CardInstanceNativeSession::open4(
+                                plan,
+                                provider.clone(),
+                                budget.clone(),
+                                control.clone(),
+                                source,
+                                record,
+                                scratch,
+                                chunk,
+                            )?
+                        } else {
                             structured_session::CardInstanceNativeSession::open(
                                 plan,
                                 budget.clone(),
@@ -937,8 +1107,8 @@ impl StructuredSessionBridge {
                                 record,
                                 scratch,
                                 chunk,
-                            )?,
-                        ),
+                            )?
+                        }),
                         None,
                     )
                 } else {
@@ -960,6 +1130,7 @@ impl StructuredSessionBridge {
             .map_err(python_error)?;
         let caller = budget.reserve(0).map_err(python_error)?;
         Ok(Self {
+            provider,
             core: Mutex::new(Some(core)),
             retirement: Mutex::new(retirement),
             budget,
@@ -1415,24 +1586,24 @@ macro_rules! session_methods {
                 Ok(Self{bridge:StructuredSessionBridge::new(py,$corrected,plan,settings,deadline,cancel_handle)?})
             }
             #[pyo3(signature=(retained_python_bytes=0))]
-            fn control_summary<'py>(&self,py:Python<'py>,retained_python_bytes:usize)->PyResult<Bound<'py,PyBytes>>{self.bridge.control_summary(py,retained_python_bytes)}
+            fn control_summary<'py>(&self,py:Python<'py>,retained_python_bytes:usize)->PyResult<Bound<'py,PyBytes>>{self.bridge.callback_guard()?;self.bridge.control_summary(py,retained_python_bytes)}
             #[pyo3(signature=(parent_index,retained_python_bytes=0))]
-            fn original_config_inputs<'py>(&self,py:Python<'py>,parent_index:usize,retained_python_bytes:usize)->PyResult<Bound<'py,PyBytes>>{self.bridge.original_config_inputs(py,parent_index,retained_python_bytes)}
+            fn original_config_inputs<'py>(&self,py:Python<'py>,parent_index:usize,retained_python_bytes:usize)->PyResult<Bound<'py,PyBytes>>{self.bridge.callback_guard()?;self.bridge.original_config_inputs(py,parent_index,retained_python_bytes)}
             #[pyo3(signature=(encoded,retained_python_bytes=0))]
-            fn authorize(&self,py:Python<'_>,encoded:&[u8],retained_python_bytes:usize)->PyResult<()>{self.bridge.authorize(py,encoded,retained_python_bytes)}
+            fn authorize(&self,py:Python<'_>,encoded:&[u8],retained_python_bytes:usize)->PyResult<()>{self.bridge.callback_guard()?;self.bridge.authorize(py,encoded,retained_python_bytes)}
             #[pyo3(signature=(retained_python_bytes=0))]
-            fn export_cohort<'py>(&self,py:Python<'py>,retained_python_bytes:usize)->PyResult<(Py<PyBytes>,Py<PyTuple>,Py<PyTuple>,Py<PyTuple>)>{self.bridge.export_selected(py,retained_python_bytes,None)}
+            fn export_cohort<'py>(&self,py:Python<'py>,retained_python_bytes:usize)->PyResult<(Py<PyBytes>,Py<PyTuple>,Py<PyTuple>,Py<PyTuple>)>{self.bridge.callback_guard()?;self.bridge.export_selected(py,retained_python_bytes,None)}
             #[pyo3(signature=(retained_python_bytes=0))]
-            fn retire_payload(&self,py:Python<'_>,retained_python_bytes:usize)->PyResult<()>{self.bridge.retire_payload(py,retained_python_bytes)}
+            fn retire_payload(&self,py:Python<'_>,retained_python_bytes:usize)->PyResult<()>{self.bridge.callback_guard()?;self.bridge.retire_payload(py,retained_python_bytes)}
             #[pyo3(signature=(retained_python_bytes=0))]
-            fn begin_update(&self,py:Python<'_>,retained_python_bytes:usize)->PyResult<()>{self.bridge.begin_update(py,retained_python_bytes)}
+            fn begin_update(&self,py:Python<'_>,retained_python_bytes:usize)->PyResult<()>{self.bridge.callback_guard()?;self.bridge.begin_update(py,retained_python_bytes)}
             #[pyo3(signature=(retained_python_bytes=0))]
-            fn recheck(&self,py:Python<'_>,retained_python_bytes:usize)->PyResult<()>{self.bridge.recheck(py,retained_python_bytes)}
-            fn used_bytes(&self)->usize{self.bridge.used_bytes()}
-            fn peak_bytes(&self)->usize{self.bridge.peak_bytes()}
-            fn control_reserved_bytes(&self)->usize{self.bridge.control_reserved_bytes()}
+            fn recheck(&self,py:Python<'_>,retained_python_bytes:usize)->PyResult<()>{self.bridge.callback_guard()?;self.bridge.recheck(py,retained_python_bytes)}
+            fn used_bytes(&self)->PyResult<usize>{self.bridge.callback_guard()?;Ok(self.bridge.used_bytes())}
+            fn peak_bytes(&self)->PyResult<usize>{self.bridge.callback_guard()?;Ok(self.bridge.peak_bytes())}
+            fn control_reserved_bytes(&self)->PyResult<usize>{self.bridge.callback_guard()?;Ok(self.bridge.control_reserved_bytes())}
             fn cancel_handle(&self)->CancelHandle{self.bridge.cancel_handle()}
-            fn close(&self,py:Python<'_>)->PyResult<()>{self.bridge.close(py)}
+            fn close(&self,py:Python<'_>)->PyResult<()>{self.bridge.callback_guard()?;self.bridge.close(py)}
             $($extra)*
         }
     }
@@ -1448,6 +1619,30 @@ session_methods!(StructuredNativeSession, false, {
     }
 });
 session_methods!(CardInstanceNativeSession, true, {
+    #[staticmethod]
+    #[pyo3(signature=(plan,provider,settings,deadline,cancel_handle=None))]
+    fn from_artifacts(
+        py: Python<'_>,
+        plan: &[u8],
+        provider: Py<PyAny>,
+        settings: &[u8],
+        deadline: f64,
+        cancel_handle: Option<PyRef<'_, CancelHandle>>,
+    ) -> PyResult<Self> {
+        let provider = logical_artifacts_bridge::PythonArtifactProvider::new(provider);
+        StructuredSessionBridge::new_context(
+            py,
+            true,
+            plan,
+            settings,
+            deadline,
+            cancel_handle,
+            Some(provider.clone()),
+        )
+        .map(|bridge| Self { bridge })
+        .map_err(|error| provider.retain_on_error(py, error))
+    }
+
     #[pyo3(signature=(request,retained_python_bytes=0))]
     fn inspect_final_validation<'py>(
         &self,
@@ -1455,6 +1650,7 @@ session_methods!(CardInstanceNativeSession, true, {
         request: &[u8],
         retained_python_bytes: usize,
     ) -> PyResult<Bound<'py, PyBytes>> {
+        self.bridge.callback_guard()?;
         // Check pure mode/phase before any caller/wire allocation or poison.
         {
             let core = self
@@ -1509,6 +1705,7 @@ session_methods!(CardInstanceNativeSession, true, {
         episode_index: usize,
         retained_python_bytes: usize,
     ) -> PyResult<(Py<PyBytes>, Py<PyTuple>, Py<PyTuple>, Py<PyTuple>)> {
+        self.bridge.callback_guard()?;
         self.bridge
             .release_final_consumer(true)
             .map_err(python_error)?;
@@ -1566,6 +1763,7 @@ session_methods!(CardInstanceNativeSession, true, {
         py: Python<'_>,
         retained_python_bytes: usize,
     ) -> PyResult<()> {
+        self.bridge.callback_guard()?;
         self.bridge
             .release_final_consumer(false)
             .map_err(python_error)?;
@@ -1591,6 +1789,7 @@ session_methods!(CardInstanceNativeSession, true, {
         .map_err(python_error)
     }
     fn close_final_validation(&self, py: Python<'_>) -> PyResult<()> {
+        self.bridge.callback_guard()?;
         self.bridge
             .release_final_consumer(true)
             .map_err(python_error)?;
@@ -1612,6 +1811,7 @@ session_methods!(CardInstanceNativeSession, true, {
         episode_index: usize,
         retained_python_bytes: usize,
     ) -> PyResult<RawTokenPayload> {
+        self.bridge.callback_guard()?;
         self.bridge
             .release_final_consumer(true)
             .map_err(python_error)?;
@@ -1669,6 +1869,7 @@ session_methods!(CardInstanceNativeSession, true, {
         collection_index: usize,
         retained_python_bytes: usize,
     ) -> PyResult<(Py<PyBytes>, Py<PyTuple>, Py<PyTuple>, Py<PyTuple>)> {
+        self.bridge.callback_guard()?;
         self.bridge
             .export_selected(py, retained_python_bytes, Some(collection_index))
     }
@@ -1679,6 +1880,7 @@ session_methods!(CardInstanceNativeSession, true, {
         encoded: &[u8],
         retained_python_bytes: usize,
     ) -> PyResult<()> {
+        self.bridge.callback_guard()?;
         self.bridge.bind_numeric(py, encoded, retained_python_bytes)
     }
     #[pyo3(signature=(retained_python_bytes=0))]
@@ -1687,6 +1889,7 @@ session_methods!(CardInstanceNativeSession, true, {
         py: Python<'py>,
         retained_python_bytes: usize,
     ) -> PyResult<Bound<'py, PyBytes>> {
+        self.bridge.callback_guard()?;
         self.bridge
             .finish_corrected(py, retained_python_bytes, true)
     }
@@ -1696,6 +1899,7 @@ session_methods!(CardInstanceNativeSession, true, {
         py: Python<'py>,
         retained_python_bytes: usize,
     ) -> PyResult<Bound<'py, PyBytes>> {
+        self.bridge.callback_guard()?;
         self.bridge
             .finish_corrected(py, retained_python_bytes, false)
     }
@@ -3435,6 +3639,7 @@ fn build_info() -> Vec<(&'static str, &'static str)> {
             "ed0c61152b78fa984aad342be22c6b9d6ef49b12b8f0d1c0f0de89724468002f",
         ),
         ("card_instance_models", "mlp,gru,transformer"),
+        ("card_instance_group_pack", CARD_INSTANCE_GROUP_PACK_CAPABILITY),
         (
             "card_instance_formal_controls",
             "run3-formal-parent-v1;declaration1;stop1",
@@ -3684,6 +3889,7 @@ mod corrected_journal_owner_tests {
         )
         .unwrap();
         let value = StructuredJournalTokens {
+            provider: None,
             core: Mutex::new(Some(journal)),
             retirement: Mutex::new(Some(worker)),
             budget: budget.clone(),
