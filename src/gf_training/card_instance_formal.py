@@ -66,6 +66,8 @@ def verify_kernel_ast(recipe: Json) -> None:
 
 
 def formal_preflight(loaded: Any) -> Json:
+    if hasattr(loaded.config, 'storage'):
+        raise ContractError('group Pack storage formal execution awaits its accepted Source integration')
     if sys.version_info[:2] != (3, 14) or not sys._is_gil_enabled():
         raise ContractError('formal frozen AST/runtime requires Python3.14 with GIL enabled')
     recipe = load_recipe()

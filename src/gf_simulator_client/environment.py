@@ -123,6 +123,14 @@ def _save(path: Path, value: Any) -> None:
 
 
 class SimulatorEnvironment:
+    def _create_episode_directory(self, directory: Path) -> None:
+        directory.mkdir(parents=True, exist_ok=False)
+
+    def _save_artifact(self, path: Path, value: Any) -> None:
+        _save(path, value)
+
+    def _server_directory(self, group: EpisodeGroup) -> Path:
+        return self.settings.output_dir / f"server-{group.episodes[0].episode_id}"
     def __init__(self, settings: EnvironmentSettings, policy_factory: Callable[[str], Policy],
                  journal_factory: Callable[..., Journal]) -> None:
         if type(settings.actions) is ActionConfigV2:
@@ -208,7 +216,7 @@ class SimulatorEnvironment:
         started = time.monotonic()
         result = self._new_result(group, spec)
         directory = self.settings.output_dir / spec.episode_id
-        directory.mkdir(parents=True, exist_ok=False)
+        self._create_episode_directory(directory)
         journals: dict[int, Journal] = {}
         workers: dict[int, ParticipantWorker] = {}
         contexts: dict[int, Any] = {}
@@ -291,7 +299,7 @@ class SimulatorEnvironment:
             try:
                 if time.monotonic() >= min(self.settings.wall_deadline, self.settings.work_deadline):
                     raise TimeoutError("failure persistence deadline")
-                _save(directory / "failure.json", {"category": failure, "message": str(exc),
+                self._save_artifact(directory / "failure.json", {"category": failure, "message": str(exc),
                                                     "diagnostic": exc.body if isinstance(exc, ApiError) else None})
             except (OSError, TimeoutError) as save_error:
                 result.health["save_failure"] = str(save_error)
@@ -306,7 +314,7 @@ class SimulatorEnvironment:
             try:
                 if time.monotonic() >= min(self.settings.wall_deadline, self.settings.work_deadline):
                     raise TimeoutError("result persistence deadline")
-                _save(directory / "result.json", asdict(result))
+                self._save_artifact(directory / "result.json", asdict(result))
                 if time.monotonic() > min(self.settings.wall_deadline, self.settings.work_deadline):
                     result.health["budget_overrun"] = "result persistence exceeded wall deadline"
             except (OSError, TimeoutError) as exc:
@@ -351,7 +359,7 @@ class SimulatorEnvironment:
                             raise ContractError("replay game identity mismatch")
                         if time.monotonic() >= min(self.settings.replay_deadline, min(self.settings.wall_deadline, self.settings.work_deadline)):
                             raise TimeoutError("replay persistence deadline")
-                        _save(directory / f"replay-player-{viewer}.json", replay)
+                        self._save_artifact(directory / f"replay-player-{viewer}.json", replay)
                         self._reconcile_replay(replay, viewer, accepted[viewer], result.outcome)
                         closures.append(self._replay_closure(replay, game, viewer))
                     if closures[0] != closures[1]:
@@ -427,7 +435,7 @@ class SimulatorEnvironment:
             startup = None
             if self.settings.external_url is None:
                 server = self._new_server(self.settings.binary, self.settings.server_config, group.seed,
-                                       len(group.episodes), self.settings.output_dir / f"server-{group.episodes[0].episode_id}",
+                                       len(group.episodes), self._server_directory(group),
                                        self.settings.startup_seconds, self.settings.shutdown_seconds,
                                        cleanup_deadline=min(self.settings.wall_deadline, self.settings.work_deadline))
                 async with asyncio.timeout_at(self.settings.execution_deadline):

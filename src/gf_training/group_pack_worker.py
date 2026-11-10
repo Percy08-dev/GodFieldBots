@@ -36,6 +36,7 @@ COMMANDS = {
     "submit": {"group_id", "raw_bytes", "record", "episodes"},
     "control": {"name"},
     "seal": {"publication"},
+    "seal-metrics": {"publication"},
     "close": set(),
 }
 
@@ -147,14 +148,14 @@ def main() -> int:
                     payload = read_bytes(input_fd, payload_size, deadline)
                     store_control(db, request["name"], payload)
                     result = None
-                elif command == "seal":
+                elif command in ("seal", "seal-metrics"):
                     publication = request["publication"]
                     if publication not in ("published", "pending"):
                         raise ValueError("invalid publication")
                     original_seal = seal_transaction(
                         db, run_id, max_owned_bytes=settings.budget_bytes - WRITER_BASE
                     )
-                    finish_wal(db)
+                    checkpoint_metrics = finish_wal(db)
                     db.close()
                     db = None
                     database_original.check_identity()
@@ -187,6 +188,8 @@ def main() -> int:
                         settings, directory / DATABASE, run_id, "sealed", deadline, result
                     )
                     database_original.recheck()
+                    if command == "seal-metrics":
+                        result = {"descriptor": result, "checkpoint_metrics": checkpoint_metrics}
                     sealed = True
                 elif command == "close":
                     db.close()
@@ -196,7 +199,7 @@ def main() -> int:
                     raise ValueError("invalid Writer command")
             assert database_original is not None
             database_original.recheck()
-            if command in ("seal", "close"):
+            if command in ("seal", "seal-metrics", "close"):
                 database_original.close()
             if command in ("submit", "control"):
                 del payload
@@ -215,7 +218,7 @@ def main() -> int:
                 deadline,
             )
             request_id += 1
-            if command in ("seal", "close"):
+            if command in ("seal", "seal-metrics", "close"):
                 return 0
     except BaseException as exc:  # noqa: BLE001 -- child reports generic failure and exits
         cleanup_errors: list[str] = []

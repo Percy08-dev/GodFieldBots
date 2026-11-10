@@ -189,6 +189,8 @@ def _plan_original_contract(contract: _Final64OriginalContract, directory: Path,
 
 def require_actor_backend(loaded: Any) -> None:
     """No Rust64 activity before its separate reviewed retained-source adoption."""
+    if hasattr(loaded.config, 'storage'):
+        raise ContractError('group Pack storage final64 awaits its accepted Source integration')
     config = loaded.config
     if config.preprocessing.reader != 'participant-structured-v2':
         raise ContractError('explicit participant-structured-v2 final validation reader required')
@@ -201,6 +203,8 @@ def require_actor_backend(loaded: Any) -> None:
 
 
 def _caller_contract(loaded: Any) -> None:
+    if hasattr(loaded.config, 'storage'):
+        raise ContractError('group Pack storage final64 awaits its accepted Source integration')
     cfg = loaded.config
     if (type(cfg.actions) is not ActionConfigV3 or type(cfg.model) is not ConfiguredNeuralModelV3
             or not isinstance(cfg.training, PPOTrainingConfig) or cfg.model.checkpoint is not None

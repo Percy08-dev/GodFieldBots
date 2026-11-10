@@ -15,6 +15,9 @@ FORMAT = "sqlite-group-pack-v1"
 PACK_FORMAT = "group-pack-v1"
 MAGIC = b"GFBPACK1"
 MIB = 1024 * 1024
+WRITER_BASE = 128 * MIB
+SOURCE_BASE = 64 * MIB
+MIN_STORAGE_BYTES = WRITER_BASE + SOURCE_BASE + MIB
 MAX_INDEX = 8 * MIB
 MAX_ENTRIES = 100_000
 MAX_JSON = MIB
@@ -43,8 +46,12 @@ class StorageSettings:
         for value in (self.budget_bytes, self.queue_bytes, self.max_pack_bytes):
             if type(value) is not int or value <= 0:
                 raise ValueError("storage limits must be positive integers")
-        if self.budget_bytes <= 128 * MIB or self.queue_bytes > self.budget_bytes:
+        if self.budget_bytes < MIN_STORAGE_BYTES:
+            raise ValueError("storage budget requires at least 193 MiB for Writer/inspection/runtime")
+        if self.queue_bytes > self.budget_bytes:
             raise ValueError("impossible storage budget")
+        if self.max_pack_bytes > 256 * MIB:
+            raise ValueError("sqlite-group-pack-v1 supports at most 256 MiB per Pack")
         if not isinstance(self.db_root, Path) or not isinstance(self.ram_root, Path):
             raise TypeError("storage roots must be Paths")
 

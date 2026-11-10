@@ -1,0 +1,30 @@
+# Explicit storage opt-in; six baseline games per managed group.
+# This is a storage/runtime smoke, not a qualified learning Source.
+schema_version = 1
+kind = "experiment"
+
+[references]
+actions = "../actions/card-instance-v2-corrected.toml"
+model = "../models/heuristic.toml"
+opponent = "../models/random.toml"
+
+[run]
+name = "card-instance-group-pack-v1-baseline"
+output_dir = "../../runs/group-pack-v1"
+sampling_seeds = [17, 29, 43]
+
+[server]
+gameplay_api = "v2"
+simulator_revision = "91d5926a7572db327eaea3751e7c24f428120996"
+source_dir = "../../../GodFieldSimurator"
+binary = "../../../GodFieldSimurator/target/release/gf-test-server"
+config = "../test-server.toml"
+fixed_seed_experiment = true
+
+[storage]
+format = "sqlite-group-pack-v1"
+db_root = "/mnt/d/godfield"
+ram_root = "/dev/shm/godfieldbots"
+budget_mib = 2048
+queue_mib = 512
+max_pack_mib = 256

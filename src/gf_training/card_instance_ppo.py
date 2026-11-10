@@ -208,6 +208,8 @@ class _GameOperations:
 
 async def train_card_instance_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 'fresh',
                                   pause_after_update: int | None = None) -> Json:
+    if hasattr(loaded.config, 'storage'):
+        raise ContractError('group Pack storage PPO awaits its accepted Source integration')
     operations = _GameOperations()
     operations.validate_config(loaded.config)
     from gf_training.ppo_run import _run_ppo
@@ -218,6 +220,8 @@ async def train_card_instance_ppo(loaded: Any, collector: Any, directory: Path, 
 async def train_formal_card_instance_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 'fresh',
                                          pause_after_update: int | None = None) -> Json:
     """Explicit full-recipe entry, keeping completion revocable through lock exit."""
+    if hasattr(loaded.config, 'storage'):
+        raise ContractError('group Pack storage formal PPO awaits its accepted Source integration')
     from gf_training.card_instance_formal import FormalControl
     from gf_training.ppo_run import _run_ppo
     control = FormalControl(loaded)

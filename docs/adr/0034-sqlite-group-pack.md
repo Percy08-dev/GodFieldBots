@@ -7,8 +7,9 @@
   namespace/loans, sealed publication ownership and persisted/IPC contracts resolved
 - Review: runtime and Python Source/lineage/PPO designs READY; native/formal/
   final64/Dataset remain separately gated
-- Implementation: foundation accepted after both final reviews and123root checks;
-  production consumers not yet implemented
+- Implementation: foundation and standalone memory/RAM runtime accepted after
+  both final reviews,616affected/legacy checks and18real saved-byte-audited games;
+  Source/PPO/native/final64/Dataset consumers remain pending
 
 ## Context
 

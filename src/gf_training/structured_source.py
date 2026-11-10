@@ -595,6 +595,8 @@ def _inspect_component_collection(owner: _SourceOwner, actions: Any,
                 data = read_structured_journal(path, records=rows, deadline=deadline,
                     max_jsonl_bytes=settings.max_source_file_mib * 1024**2, max_record_bytes=settings.max_record_mib * 1024**2,
                     action_contract=actions.action_contract, purpose='component', synthetic_capacity=False)
+            if data.logical_sidecars:
+                raise ContractError("filesystem Source rejects logical candidate byte evidence")
             header = data.header
             if data.end['end_kind'] != episode['end_kind'] or data.end['outcome'] != episode.get('outcome') or data.end['simulator_abort_reason'] != episode.get('simulator_abort_reason'):
                 raise ContractError('original closure/result mismatch')

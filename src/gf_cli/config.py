@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import math
+import os
 import tomllib
 import uuid
 from dataclasses import asdict, dataclass, field
@@ -126,6 +127,49 @@ class ExperimentConfig:
 
 
 @dataclass(frozen=True)
+class GroupPackStorageConfig:
+    format: str = "sqlite-group-pack-v1"
+    db_root: str = "/mnt/d/godfield"
+    ram_root: str = "/dev/shm/godfieldbots"
+    budget_mib: int = 2048
+    queue_mib: int = 512
+    max_pack_mib: int = 256
+
+    def __post_init__(self) -> None:
+        if self.format != "sqlite-group-pack-v1":
+            raise ContractError("unsupported storage format")
+        for root in (self.db_root, self.ram_root):
+            if type(root) is not str or not root or not Path(root).is_absolute():
+                raise ContractError("storage roots must be absolute after origin resolution")
+        for size in (self.budget_mib, self.queue_mib, self.max_pack_mib):
+            integer(size, 1)
+        settings = self.settings()
+        if settings.max_pack_bytes > settings.budget_bytes - 128 * 1024**2:
+            raise ContractError("impossible storage Pack budget")
+
+    def settings(self) -> Any:
+        from gf_common.group_pack import MIB, StorageSettings
+        return StorageSettings(Path(self.db_root), Path(self.ram_root),
+            self.budget_mib * MIB, self.queue_mib * MIB, self.max_pack_mib * MIB)
+
+
+@dataclass(frozen=True)
+class GroupPackExperimentConfig(ExperimentConfig):
+    storage: GroupPackStorageConfig = field(default_factory=GroupPackStorageConfig)
+
+
+def require_storage_command(config: ExperimentConfig, command: str, *, standalone: bool = True) -> None:
+    if not isinstance(config, GroupPackExperimentConfig):
+        return
+    if command == "validate":
+        return
+    if not standalone or command not in ("smoke", "collect", "evaluate"):
+        raise ContractError("group Pack storage is not integrated for this command yet")
+    if any(type(model) is ConfiguredTreeModelV3 for model in (config.model, config.opponent)):
+        raise ContractError("group Pack storage Tree3 inference awaits Source integration")
+
+
+@dataclass(frozen=True)
 class LoadedConfig:
     config: ExperimentConfig
     effective: Json
@@ -223,14 +267,14 @@ def load_config(path: str | Path, overrides: Json | None = None) -> LoadedConfig
         stack.add(source)
         raw_bytes = source.read_bytes()
         data = tomllib.loads(raw_bytes.decode())
-        closed(data, {"schema_version", "kind"}, set(_TABLES) | {"references", "training"})
+        closed(data, {"schema_version", "kind"}, set(_TABLES) | {"references", "training", "storage"})
         if type(data["schema_version"]) is not int or data["schema_version"] != 1:
             raise ContractError("unsupported config schema_version")
         if data["kind"] not in ("experiment", "actions", "model", "training", "preprocessing") or expected_kind is not None and data["kind"] != expected_kind:
             raise ContractError("unsupported/mismatched preset kind")
         if data["kind"] == "preprocessing" and "preprocessing" not in data:
             raise ContractError("preprocessing preset requires its settings table")
-        allowed = set(_TABLES) if data["kind"] == "experiment" else {data["kind"]} | ({"training"} if data["kind"] == "model" else set())
+        allowed = set(_TABLES) | {"storage"} if data["kind"] == "experiment" else {data["kind"]} | ({"training"} if data["kind"] == "model" else set())
         if set(data) - allowed - {"schema_version", "kind", "references"}:
             raise ContractError("preset contains unrelated tables")
         refs = data.get("references", {})
@@ -238,6 +282,22 @@ def load_config(path: str | Path, overrides: Json | None = None) -> LoadedConfig
         if data["kind"] != "experiment" and refs:
             raise ContractError("only experiments may reference presets")
         merged: Json = {}
+        if "storage" in data:
+            storage = data["storage"]
+            closed(storage, set(), set(GroupPackStorageConfig.__dataclass_fields__))
+            storage = {**asdict(GroupPackStorageConfig()), **storage}
+            for key in ("db_root", "ram_root"):
+                if type(storage[key]) is not str or not storage[key]:
+                    raise ContractError("storage root requires a path string")
+                storage[key] = os.path.abspath(source.parent / storage[key])
+            for key in ("budget_mib", "queue_mib", "max_pack_mib"):
+                integer(storage[key], 1)
+            if storage["format"] != "sqlite-group-pack-v1":
+                raise ContractError("unsupported storage format")
+            settings = GroupPackStorageConfig(**storage).settings()
+            if settings.max_pack_bytes > settings.budget_bytes - 128 * 1024**2:
+                raise ContractError("impossible storage Pack budget")
+            merged["storage"] = storage
         for key in ("actions", "training", "model", "opponent", "preprocessing"):
             if key not in refs:
                 continue
@@ -275,6 +335,8 @@ def load_config(path: str | Path, overrides: Json | None = None) -> LoadedConfig
         if key in base[table] and base[table][key] is not None:
             base[table][key] = str((source.parent / base[table][key]).resolve())
     if overrides:
+        if "storage" in overrides:
+            raise ContractError("storage must be explicit in the input file; no CLI storage override")
         closed(overrides, set(), set(_TABLES))
         validation_context = _merge(data, {"actions": _merge(data.get("actions", {}), overrides.get("actions", {}))})
         for name, values in overrides.items():
@@ -463,5 +525,12 @@ def load_config(path: str | Path, overrides: Json | None = None) -> LoadedConfig
         defaults = asdict(cls())
         values = {k: tuple(v) if isinstance(defaults[k], tuple) else v for k, v in values.items()}
         converted[name] = cls(**values)
-    config = ExperimentConfig(**converted)
+    if "storage" in data:
+        if (not card_instance_actions or card_revision != CORRECTED_SIMULATOR_REVISION
+                or server["external_url"] is not None):
+            raise ContractError("storage requires corrected actions3 and a locally managed server")
+        config: ExperimentConfig = GroupPackExperimentConfig(**converted,
+            storage=GroupPackStorageConfig(**data["storage"]))
+    else:
+        config = ExperimentConfig(**converted)
     return LoadedConfig(config, clone(asdict(config)), digest(asdict(config)), tuple(inputs))

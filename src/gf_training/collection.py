@@ -1,9 +1,14 @@
 """Closed collection requests; training depends on this callable contract only."""
 from __future__ import annotations
 
+import re
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from gf_training.group_pack_source import CollectionLocator
 
 from gf_common.domain import EpisodeGroup, EpisodeSpec, Json, RuntimePolicyBinding, digest
 from gf_common.schedule import baseline_policy_labels
@@ -28,6 +33,36 @@ class CollectionPlan:
 class FinalizedCollection:
     directory: Path
     report: Json
+
+
+@dataclass(frozen=True)
+class PackedRunResult:
+    """Sealed runtime diagnostics, without Source or learning permission."""
+
+    directory: Path
+    report: Json
+    locator: CollectionLocator
+    envelope_sha256: str | None
+    storage_metrics: Json
+
+    def __post_init__(self) -> None:
+        from gf_common.group_pack import FORMAT
+        scope = self.storage_metrics.get("publication_scope")
+        if self.locator.kind != FORMAT or not self.locator.path.is_absolute():
+            raise ValueError("packed result requires its actual absolute physical locator")
+        if scope == "published":
+            if (self.report.get("healthy") is not True
+                    or self.locator.path.name != "collection.published.json"
+                    or type(self.envelope_sha256) is not str
+                    or re.fullmatch(r"[0-9a-f]{64}", self.envelope_sha256) is None):
+                raise ValueError("healthy packed result requires published locator and envelope hash")
+        elif scope == "diagnostic-pending":
+            if (self.report.get("healthy") is True or self.report.get("comparison_valid") is True
+                    or self.locator.path.name != "collection.pending.json"
+                    or self.envelope_sha256 is not None):
+                raise ValueError("diagnostic packed result requires unsuccessful pending-only evidence")
+        else:
+            raise ValueError("packed result requires explicit publication scope")
 
 
 def training_groups(seed: int, batch: int, learner: str, snapshots: tuple[str, ...], rng: object, *, actions_version: int = 1) -> tuple[EpisodeGroup, ...]:

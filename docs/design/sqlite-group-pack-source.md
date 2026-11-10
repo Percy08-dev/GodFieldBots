@@ -2,7 +2,9 @@
 
 Date: 2026-11-10. Owner: root. Status: Python Source/lineage/PPO and Native3B
 designs accepted after independent architecture reviews;
-formal/final64/Dataset gates pending.
+formal/final64/Dataset design is separately accepted in
+[final sources](sqlite-group-pack-final-sources.md). Implementation and final
+conformance remain pending.
 References: ADR0034, foundation/runtime designs, ADR0024 §§16–18.2.
 This design completes the intended consumer scope; no temporary extraction is
 used as original custody and no old identity is reinterpreted.
@@ -27,7 +29,8 @@ Source proof1 and its physical file identities remain exact for directory data.
 Proof2 also has `custody`, distinct from stable logical member identity. It is
 closed `{recipe:'packed-original-custody-v1',files,directories,fingerprint}`.
 Files are path-sorted `{role,path,sha256,identity}` for exact locator, descriptor
-and DB originals; roles are `locator`, `descriptor`, `database`, paths absolute,
+and DB originals plus the verified optional pending-descriptor predecessor;
+roles are `locator`, `descriptor`, `database`, `predecessor`, paths absolute,
 identity exactly `[dev,ino,mode,size,mtime_ns,ctime_ns]`. Directories are
 path-sorted `{path,device,inode}` for logical envelope and physical DB directory.
 Fingerprint hashes that object without `fingerprint`. Reopening compares saved
@@ -187,7 +190,8 @@ exact existing keys `recipe,control_fingerprint,semantics_sha256,episode_count,
 episode_digests,binding_sha256`; only recipe changes. Its binding digest excludes
 binding_sha256, as today. Projection has existing exact PROJECTION_KEYS, with
 new recipe as above. `PackedFinalizedCollection` fields are exactly inherited
-`directory,report` plus `locator:CollectionLocator,envelope_sha256:str`; return
+`directory,report` plus `locator:CollectionLocator,envelope_sha256:str,
+storage_metrics:Json`; return
 type/serialized flags do not mint Source authority.
 
 Use learner wire5 for packed Source updates. `GameLearningProcess` gains an

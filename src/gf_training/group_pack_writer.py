@@ -29,8 +29,10 @@ from gf_training.group_pack_db import (
 )
 from gf_training.group_pack_resources import (
     WRITER_BASE,
+    BorrowedBudget,
     ByteBudget,
     CleanupError,
+    StorageBudget,
     close_raw_descriptor,
     close_resources,
     receive_header,
@@ -39,38 +41,14 @@ from gf_training.group_pack_resources import (
     retain_cleanup,
     send_frame,
 )
+from gf_training.group_pack_resources import json_bound as _json_bound
 from gf_training.group_pack_source import CollectionLocator, OriginalFile, _stat_key, inspect_packed
-
-
-def _json_bound(value: Json, *, depth: int = 0) -> int:
-    """Allocation-free conservative encoded-size estimate for admission."""
-    if depth > 100:
-        raise ValueError("JSON nesting exceeds admission")
-    if value is None or type(value) is bool:
-        return 5
-    if type(value) is int:
-        return max(1, value.bit_length() + 2)
-    if type(value) is float:
-        if not math.isfinite(value):
-            raise ValueError("nonfinite JSON")
-        return 32
-    if isinstance(value, str):
-        return len(value) * 6 + 2
-    if isinstance(value, list):
-        return 2 + sum(_json_bound(v, depth=depth + 1) + 1 for v in value)
-    if isinstance(value, dict):
-        if any(not isinstance(k, str) for k in value):
-            raise ValueError("JSON object keys must be strings")
-        return 2 + sum(
-            _json_bound(k, depth=depth + 1) + _json_bound(v, depth=depth + 1) + 2
-            for k, v in value.items()
-        )
-    raise ValueError("invalid JSON value")
 
 
 class GroupPackWriter:
     def __init__(
-        self, directory: Path, run_id: str, *, settings: StorageSettings, deadline: float
+        self, directory: Path, run_id: str, *, settings: StorageSettings, deadline: float,
+        budget: StorageBudget | None = None,
     ) -> None:
         remaining(deadline)
         identity_text(run_id)
@@ -80,7 +58,9 @@ class GroupPackWriter:
         self.deadline = deadline
         self._lock = threading.Lock()
         self._cleanup_lock = threading.Lock()
-        self._budget = ByteBudget(settings.budget_bytes, base=WRITER_BASE)
+        self._joint_budget = budget
+        self._budget = (ByteBudget(settings.budget_bytes, base=WRITER_BASE) if budget is None
+                        else BorrowedBudget(budget, base=WRITER_BASE))
         self._queue = ByteBudget(settings.queue_bytes)
         self._request_id = 0
         self._pending = threading.Condition()
@@ -99,6 +79,9 @@ class GroupPackWriter:
         self._uncertain_releases: list[Json] = []
         self._cleanup_children: list[Json] = []
         self._database_original: OriginalFile | None = None
+        self._retain_pending = False
+        self._pending_owner: PendingDescriptorOwner | None = None
+        self.checkpoint_metrics: dict[str, float] | None = None
         try:
             self.directory.mkdir(parents=True, exist_ok=False)
             from gf_training.group_pack_source import _no_symlink_path
@@ -250,7 +233,7 @@ class GroupPackWriter:
                     raise RuntimeError("invalid Writer failure acknowledgement")
                 raise RuntimeError("Writer rejected storage operation")
             if response["error"] is not None or (
-                command != "seal" and response["result"] is not None
+                command not in ("seal", "seal-metrics") and response["result"] is not None
             ):
                 raise RuntimeError("invalid Writer response fields")
             if self._database_original is not None:
@@ -324,7 +307,7 @@ class GroupPackWriter:
         self._unlink_same(self._temporary)
         self._temporary = None
         close_raw_descriptor(self, "_publication_fd")
-        close_resources(self, [self._database_original])
+        close_resources(self, [self._database_original, self._pending_owner])
         require_certain_releases(self)
 
     def _fail(self, cause: BaseException) -> None:
@@ -418,6 +401,7 @@ class GroupPackWriter:
                 max_owned_bytes=self.settings.budget_bytes - self.owned_bytes,
                 allow_pending=True,
                 database_original=self._database_original,
+                budget=self._joint_budget,
             )
             if validated["descriptor"] != descriptor:
                 raise RuntimeError("published descriptor changed")
@@ -428,6 +412,13 @@ class GroupPackWriter:
             ) != data:
                 raise RuntimeError("published descriptor identity changed")
             self._database_original.recheck()
+            if self._retain_pending:
+                self._pending_owner = PendingDescriptorOwner(self.directory, target, identity,
+                    data, descriptor, self._publication_fd, self._database_original)
+                self._publication_fd = -1
+                self._database_original = None
+                self._published = None
+                return CollectionLocator(FORMAT, target)
             completion_stat = os.fstat(self._publication_fd)
             self._database_original.close()
             close_raw_descriptor(self, "_publication_fd")
@@ -452,8 +443,12 @@ class GroupPackWriter:
                 exc.add_note(f"descriptor cleanup remains owned ({type(cleanup).__name__})")
             raise
 
-    def seal(self, *, publication: str = "published") -> CollectionLocator:
+    def seal(self, *, publication: str = "published", retain_pending: bool = False,
+             collect_metrics: bool = False) -> CollectionLocator:
         descriptor_name(publication)
+        if retain_pending and publication != "pending":
+            raise ValueError("only pending descriptors may transfer their actual owner")
+        self._retain_pending = retain_pending
         with self._pending:
             if self._sealing or self._closing or self._stopped:
                 raise RuntimeError("Writer no longer admits sealing")
@@ -464,9 +459,22 @@ class GroupPackWriter:
             except BaseException as exc:
                 self._fail(exc)
                 raise
+
         with self._operation():
             try:
-                descriptor = validate_descriptor(self._rpc("seal", {"publication": publication}))
+                result = self._rpc("seal-metrics" if collect_metrics else "seal",
+                                   {"publication": publication})
+                if collect_metrics:
+                    if (not isinstance(result, dict) or set(result) != {"descriptor", "checkpoint_metrics"}
+                            or not isinstance(result["checkpoint_metrics"], dict)
+                            or set(result["checkpoint_metrics"]) != {"checkpoint_seconds", "delete_mode_seconds"}
+                            or any(type(value) not in (float, int) or not math.isfinite(value) or value < 0
+                                   for value in result["checkpoint_metrics"].values())):
+                        raise ValueError("invalid Writer checkpoint metrics")
+                    self.checkpoint_metrics = {key: float(value)
+                        for key, value in result["checkpoint_metrics"].items()}
+                    result = result["descriptor"]
+                descriptor = validate_descriptor(result)
                 assert self._database_original is not None
                 self._database_original.freeze()
                 self._retire()
@@ -490,7 +498,15 @@ class GroupPackWriter:
                 self._fail(exc)
                 raise
 
-    def close(self) -> None:
+    def take_pending_owner(self) -> PendingDescriptorOwner:
+        if not self._sealed or self._pending_owner is None:
+            raise RuntimeError("no retained pending descriptor owner")
+        result, self._pending_owner = self._pending_owner, None
+        return result
+
+    def close(self, *, _abort: bool = False) -> None:
+        if _abort:
+            self._stopped = True
         # Stop callers waiting on byte admission before waiting on the operation lock.
         with self._pending:
             self._closing = True
@@ -529,3 +545,38 @@ class GroupPackWriter:
         with self._pending:
             while self._pending_count:
                 self._pending.wait(remaining(self.deadline))
+
+
+class PendingDescriptorOwner:
+    """Actual seal-created inode and handles, transferable only from its Writer."""
+
+    def __init__(self, directory: Path, path: Path, identity: tuple[int, int], raw: bytes,
+                 descriptor: Json, fd: int, database: OriginalFile) -> None:
+        self.directory, self.path, self.identity = directory, path, identity
+        self.raw, self.descriptor, self.fd, self.database = raw, descriptor, fd, database
+        self.snapshot = os.fstat(fd)
+        self._uncertain_releases: list[Json] = []
+        self._cleanup_children: list[Json] = []
+
+    def recheck(self) -> None:
+        self.database.recheck()
+        if (_stat_key(self.path.lstat()) != _stat_key(self.snapshot)
+                or _stat_key(os.fstat(self.fd)) != _stat_key(self.snapshot)
+                or os.pread(self.fd, len(self.raw) + 1, 0) != self.raw):
+            raise ValueError("retained pending descriptor changed")
+
+    def close(self) -> None:
+        first: BaseException | None = None
+        try:
+            close_resources(self, [self.database])
+        except BaseException as error:  # noqa: BLE001 -- attempt the independent descriptor retirement too.
+            first = error
+        try:
+            close_raw_descriptor(self, "fd")
+            require_certain_releases(self)
+        except BaseException as error:  # noqa: BLE001 -- retain the initiating release failure and SAME owner.
+            retain_cleanup(self, error)
+            first = first or error
+        if first is not None:
+            retain_cleanup(self, first)
+            raise first

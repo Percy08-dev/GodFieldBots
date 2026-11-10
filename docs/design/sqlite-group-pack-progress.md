@@ -9,7 +9,7 @@ Source intent: owner plan supplied 2026-11-10. Baseline: 83aa67e7707b267217247af
   Writer retirement before owned descriptor publication, IPC/seal/catalog closure.
 - [x] Implement Pack, Writer/SQLite/catalog, sealing and ArtifactSource with tests.
 - [x] Independent correctness and architecture conformance of foundation.
-- [ ] Review and implement memory/RAM collection plus explicit Config.
+- [x] Review and implement memory/RAM collection plus explicit Config.
 - [ ] Review and implement all Python/Rust/PPO/resume/final64/Dataset/Tree readers.
 - [ ] Independent full integration reviews and resolved blocking findings.
 - [ ] Full checks, bounded runtime/CUDA/wheel/legacy verification.
@@ -96,4 +96,98 @@ Python Source/lineage/PPO design is READY after exact proof2 physical custody,
 shared pool/prepare_commit retirement, run4/update4/wire5 and external disk-cap
 accounting were specified. Native3B design is also READY after exact plan4,
 borrowed-byte provider, summary/authorization/receipt variants and unchanged
-numerical DTO choices were pinned. Formal/final64/Dataset outlines remain gated.
+numerical DTO choices were pinned. Formal/final64/Dataset final integration
+design also passes architecture after formal variant hashes/unchanged budgets,
+pending→public facts, native cumulative metadata/provider signature and exact
+Dataset4 fit/provenance records were pinned. Source3A optional predecessor custody
+delta is READY. Implementation/conformance and all dependent smokes remain open.
+
+Task2 starts from accepted foundation dc9440e with a fresh bot_implementer.
+Ownership is the Task2 plan list, plus minimal file-only logical-sidecar refusal
+in structured_source.py and StorageSettings256MiB physical-cap validation.
+Root owns docs/project-configuration assets; one code-writing agent is active.
+Pure packing helpers do not expand the SQLite v1 persisted bound. All old
+configuration/hash/default paths remain unchanged; larger physical bounds need
+their own version-pinned Source/descriptor/budget review.
+
+2026-11-11 Task2 frozen initial implementation: required368PASS, direct-entry
+guard192PASS (overlapping sets), scoped Ruff/mypy20PASS. Expanded default sandbox
+run380PASS/10SKIP/20setupERROR traced independently to inherited AF_UNIX socket
+EPERM; unchanged preloader same case passes host6.11s. Root exact expanded host
+rerun passes406/10SKIP in61.43s and fresh Ruff/mypy20. No infrastructure/timeout
+edits. Independent review still BLOCKED; passing tests did not cover the findings.
+
+Task2 fix1 design amendment READY: common sink/admission helper boundary,
+minimum193MiB(128+64+1) with actual viability test, bounded queued/deadline Future
+ownership, finite diagnostic graph retirement, held-original terminal identity
+and optional-predecessor sweep, PackedRunResult and optional seal-metrics IPC.
+Ordinary seal/report/tuple behavior and persisted formats remain unchanged.
+Fix wave covers correctness F1–F4 and conformance T1–T6 (9distinct issues), plus
+the exact accepted result/measurement contract. Before-fix snapshot is
+`/tmp/gfb-group-pack-task2-before-fix1/`; root does not edit implementer files.
+
+Task2 fix1 frozen: implementer365affected and61publication/retirement PASS
+(overlapping),19focused review cases. Root fresh expanded HOST command including
+all runtime/foundation/source/direct/formal guard regressions PASS596/10SKIP
+in65.73s; fresh Ruff and mypy23PASS. Delta correctness/conformance reviews remain
+pending; do not claim runtime acceptance from these test counts alone.
+
+Root verified actual Simulator binary/source preflight read-only:
+91d5926a7572db327eaea3751e7c24f428120996,
+binary76aff19c2f720a572bfe422d9b1e089a1467f253038cda66de3d8c35180d0f7d.
+Seven explicit opt-in live-smoke configs are prepared in
+`/tmp/gfb-group-pack-live-configs/` (baseline6,3models×CPU/CUDA2games each),
+all parsed with original7200/5400/7140/60defaults; NOT RUN until runtime reviews.
+Audit runner `/tmp/gfb-group-pack-live-smoke.py` will check actual sealed original
+bytes/report/index and capture final checkpoint metrics, without Source authority.
+
+Root materialized the reviewed formal storage-variant asset/package copy;
+canonical byte/hash/base/algorithm checks PASS (27853b10…). No code adopts it yet;
+keep those root-owned assets separate from Task2 implementation and future
+formal qualification/real training remains unrun.
+
+Task2 fix1 both independent delta reviews READY. First REAL6game baseline on
+actual D:/RAM reached composite publication but FAILed terminal stat comparison;
+run02d698f1-551d-47c7-85a2-6cf716600668 is preserved, locator quarantined and no
+healthy acceptance claimed. Log `/tmp/gfb-group-pack-live-baseline-six.log`.
+NNsmokes remain NOTRUN. Read-only verifier's minimal actual-Writer D:/ext4 probe
+isolated descriptor ctime-only changes at write-handle close on D:9p; all hashes
+and dev/ino/mode/size/mtime stayed exact, ext4 passed. Evidence
+`/tmp/gfb-pack-d-publication-investigation.md`.
+Root proposed bounded terminal-control-ro-handoff-v1 policy (runtime design):
+original inode+hash pinned through controlled close, then readonly capability
+and strict final fullstat/hash/namespace validation before commit. Source
+rechecks/custody remain strict6. Architecture handoff gate READY; bounded fix2
+assigned next. Preserve all late-replacement tests and require actual D:/ext4
+verification before the runtime milestone. Before-fix2 snapshot is
+`/tmp/gfb-group-pack-task2-before-fix2/`.
+
+Task2 fix2 both scoped reviews READY; root fresh HOST607PASS/10SKIP66.00s,
+Ruff/mypy23PASS. Actual D:/ext4 published/diagnostic4probes PASS, strict Source
+reopen and zero-budget cleanup PASS. No ordinary Source identity relaxation.
+Actual6game R2 cbb37f35-3daf-4f9a-bcad-57ddf689af53 physically publishes and
+ArtifactSource opens; DB integrityok and6natural outcomes. ROOTsaved-byte audit
+still FAILs logical inventory: only extra storage-metrics.json is not declared
+in manifest.files. Preserve this immutable population, do not claim acceptance
+or retrofit it. Proposed narrow fix freezes metric bytes/inventory row BEFORE
+manifest serialization, then stores EXACTfrozen bytes; no Source/auditor
+weakening. Architecture order/interface gate pending, code remains frozen.
+
+Metrics-inventory fix3 design and both delta reviews READY. Root fresh expanded
+HOST616PASS/10SKIP66.96s and Ruff/mypy23PASS. Actual new6game run
+9542c7a2-0283-441b-93b4-c7db8847bfb7 PASS:1group/6natural,176declared files,
+14,774,682original bytes, exact public Source.names/inventory/report/index audit.
+Actual checkpoint0.787115s, DELETE0.351610s, combined seal2.248325s. Metric
+peak_storage_bytes=2GiB is managed reservation peak, NOT RSS. Actual RAM peak
+3,310,004bytes. Receipt `/tmp/gfb-group-pack-live-baseline-six-r3.json`.
+Both earlier populations remain immutable/ineligible; no retrospective repair.
+Six neural CPU/CUDA×MLP/GRU/Transformer2game conditions now RUNNING sequentially,
+`/tmp/gfb-group-pack-live-neural-matrix.{json,log}`. Do not start dependent Source
+code or accept runtime milestone until final results are reconciled.
+
+Neural matrix COMPLETE: all6conditions PASS,12natural real games, each full
+saved-byte/index/report audit PASS; CPU/CUDA devices verified in receipts.
+Together with baseline6,18successful real games accept Task2 STANDALONE runtime
+scope. Both independent final reviews READY, root616/10SKIP/static evidence and
+receipts retained in runs/assessments/sqlite-group-pack-v1-20261111. No Source/
+PPO/native/final64/Dataset acceptance is implied; next Task3A remains required.

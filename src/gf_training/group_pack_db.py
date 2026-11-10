@@ -407,7 +407,8 @@ def validate_database(
     }
 
 
-def finish_wal(db: sqlite3.Connection) -> None:
+def finish_wal(db: sqlite3.Connection) -> dict[str, float]:
+    checkpoint_started = time.perf_counter()
     checkpoint = db.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
     if (
         checkpoint is None
@@ -416,8 +417,12 @@ def finish_wal(db: sqlite3.Connection) -> None:
         or checkpoint[1] != checkpoint[2]
     ):
         raise RuntimeError("WAL checkpoint incomplete")
+    checkpoint_seconds = time.perf_counter() - checkpoint_started
+    delete_started = time.perf_counter()
     if db.execute("PRAGMA journal_mode=DELETE").fetchone() != ("delete",):
         raise RuntimeError("DELETE journal transition failed")
+    return {"checkpoint_seconds": checkpoint_seconds,
+            "delete_mode_seconds": time.perf_counter() - delete_started}
 
 
 def fsync_directory(directory: Path) -> None:

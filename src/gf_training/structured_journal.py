@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, BinaryIO, cast
 
 from gf_common.action_contract import ActionContract
+from gf_common.artifacts import ArtifactReader
 from gf_common.diverse_actions import GENERATOR_V2, GeneratedCandidates, NumericCosts
 from gf_common.domain import (
     CATALOG_META,
@@ -160,8 +161,7 @@ class StructuredJournal(ParticipantJournal):
             raise ContractError("journal5 numeric cost binding mismatch")
         _host_timings(timings)
         index = self.count
-        publish = publish_candidates if self._context is None else self._context.publish_candidates
-        descriptor = publish(self.path.parent, frame, generated.table, index,
+        descriptor = self._publish_candidates(frame, generated.table, index,
                                         max_positions=self.caps["max_positions"], action_contract=self.action_contract,
                                         purpose=self.purpose, synthetic_capacity=False)
         # Sidecar is closed/verified/published BEFORE any referencing JSONL row.
@@ -183,11 +183,18 @@ class StructuredJournal(ParticipantJournal):
         self.last_storage_ms = (time.perf_counter() - started) * 1000
         return index
 
+    def _publish_candidates(self, frame: Any, table: Any, index: int, **kwargs: Any) -> Json:
+        publish = publish_candidates if self._context is None else self._context.publish_candidates
+        return publish(self.path.parent, frame, table, index, **kwargs)
+
+    def _final_exists(self) -> bool:
+        return self.final_path.exists() or self.final_path.is_symlink()
+
     def finish(self, end_kind: str, outcome: Any, final_observation: Json | None = None,
                simulator_abort_reason: str | None = None) -> None:
         if end_kind not in END_KINDS:
             raise ContractError("invalid journal5 end kind")
-        if self.final_path.exists() or self.final_path.is_symlink():
+        if self._final_exists():
             raise ContractError("journal5 refuses to overwrite existing final evidence")
         if simulator_abort_reason is not None and end_kind != projected_abort_kind(simulator_abort_reason):
             raise ContractError("simulator abort cause/projected kind mismatch")
@@ -212,32 +219,36 @@ class StructuredJournal(ParticipantJournal):
                         "terminal_reward": reward, "final_observation": final_observation,
                         "pending_decisions": sorted(self.pending), "simulator_abort_reason": simulator_abort_reason})
             self.output.flush()
-            os.fsync(self.output.fileno())
-            owned = os.fstat(self.output.fileno())
-            current = self.path.lstat()
-            if (not stat.S_ISREG(owned.st_mode) or (owned.st_dev, owned.st_ino) != self._owned_inode
-                    or not stat.S_ISREG(current.st_mode) or _identity(current) != _identity(owned)):
-                raise ContractError("journal5 pending path differs from owned file")
-            expected_hash = _bounded_hash(cast(BinaryIO, self.output.buffer), owned.st_size)
-            if _identity(os.fstat(self.output.fileno())) != _identity(owned):
-                raise ContractError("journal5 pending file changed during verification")
-            # Existing final objects remain evidence even if they appear during
-            # the end-row write. Keep the owned pending FD through publication.
-            os.link(self.path, self.final_path, follow_symlinks=False)
-            with _open_regular(self.final_path, owned.st_size) as published:
-                before = os.fstat(published.fileno())
-                if ((before.st_dev, before.st_ino) != self._owned_inode or before.st_mtime_ns != owned.st_mtime_ns
-                        or _bounded_hash(published, owned.st_size) != expected_hash):
-                    raise ContractError("journal5 published object/content differs from owned file")
-                after = os.fstat(published.fileno())
-                final, pending = self.final_path.lstat(), self.path.lstat()
-                if (_identity(after) != _identity(before) or not stat.S_ISREG(final.st_mode)
-                        or _identity(final) != _identity(before) or not stat.S_ISREG(pending.st_mode)
-                        or _identity(pending) != _identity(before)):
-                    raise ContractError("journal5 publication changed during verification")
-            self.path.unlink()
+            self._publish_final_output()
         finally:
             self.output.close()
+
+    def _publish_final_output(self) -> None:
+        # Shared closure validation/end-row writing above; physical custody below.
+        os.fsync(self.output.fileno())
+        owned = os.fstat(self.output.fileno())
+        current = self.path.lstat()
+        if (not stat.S_ISREG(owned.st_mode) or (owned.st_dev, owned.st_ino) != self._owned_inode
+                or not stat.S_ISREG(current.st_mode) or _identity(current) != _identity(owned)):
+            raise ContractError("journal5 pending path differs from owned file")
+        expected_hash = _bounded_hash(cast(BinaryIO, self.output.buffer), owned.st_size)
+        if _identity(os.fstat(self.output.fileno())) != _identity(owned):
+            raise ContractError("journal5 pending file changed during verification")
+        # Existing final objects remain evidence even if they appear during
+        # the end-row write. Keep the owned pending FD through publication.
+        os.link(self.path, self.final_path, follow_symlinks=False)
+        with _open_regular(self.final_path, owned.st_size) as published:
+            before = os.fstat(published.fileno())
+            if ((before.st_dev, before.st_ino) != self._owned_inode or before.st_mtime_ns != owned.st_mtime_ns
+                    or _bounded_hash(published, owned.st_size) != expected_hash):
+                raise ContractError("journal5 published object/content differs from owned file")
+            after = os.fstat(published.fileno())
+            final, pending = self.final_path.lstat(), self.path.lstat()
+            if (_identity(after) != _identity(before) or not stat.S_ISREG(final.st_mode)
+                    or _identity(final) != _identity(before) or not stat.S_ISREG(pending.st_mode)
+                    or _identity(pending) != _identity(before)):
+                raise ContractError("journal5 publication changed during verification")
+        self.path.unlink()
 
 
 @dataclass(frozen=True)
@@ -258,6 +269,20 @@ class StructuredJournalData:
     accepted: tuple[int, ...]
     end: Json
     sidecars: tuple[Json, ...]
+    logical_sidecars: tuple[LogicalSidecarEvidence, ...] = ()
+
+
+@dataclass(frozen=True)
+class LogicalSidecarEvidence:
+    name: str
+    sha256: str
+    bytes: int
+    frame_hash: str
+    table_hash: str
+    action_contract: Json
+    purpose: str
+    synthetic_capacity: bool
+    kind: str = "logical-candidate-bytes-v1"
 
 
 def _command(command: Json, frame: DecisionFrame, action: Json) -> None:
@@ -289,7 +314,9 @@ def read_structured_journal(path: Path, *, deadline: float = float("inf"),
 def _read_structured_journal(path: Path, *, deadline: float = float("inf"),
                             records: list[Json] | None = None, max_jsonl_bytes: int = 64 * 1024**2,
                             max_record_bytes: int = 8 * 1024**2, action_contract: Any,
-                            purpose: str, synthetic_capacity: bool, _context: Any = None) -> StructuredJournalData:
+                            purpose: str, synthetic_capacity: bool, _context: Any = None,
+                            artifacts: ArtifactReader | None = None,
+                            artifact_prefix: str | None = None) -> StructuredJournalData:
     """Return structural component records/evidence, NOT source eligibility.
 
     Whole-run, Replay, split and whole-PPO-parent qualification remain mandatory
@@ -302,6 +329,32 @@ def _read_structured_journal(path: Path, *, deadline: float = float("inf"),
     import json
 
     from gf_models.structured_runtime import WorkerCaps
+    logical_inventories: list[LogicalSidecarEvidence] = []
+    if artifacts is not None:
+        from gf_common.candidate_columns import safe_basename
+        from gf_training.group_pack_memory import MemoryArtifactSnapshot
+        if (_context is None or type(artifacts) is not MemoryArtifactSnapshot
+                or artifact_prefix is None or safe_basename(artifact_prefix) != path.parent.name
+                or records is not None):
+            raise ContractError("logical journal requires an immutable original snapshot and exact episode prefix")
+        safe_basename(path.name)
+        integer(max_jsonl_bytes, 1)
+        integer(max_record_bytes, 1, max_jsonl_bytes)
+        raw = artifacts.read(artifact_prefix + "/" + path.name)
+        if len(raw) > max_jsonl_bytes:
+            raise ContractError("journal6 logical bytes exceed bound")
+        artifacts.admit_validation(32 * len(raw) + 65536)
+        records = []
+        import io
+        source_bytes = io.BytesIO(raw)
+        while line := source_bytes.readline(max_record_bytes + 1):
+            if time.monotonic() >= deadline:
+                raise TimeoutError("journal6 logical read deadline")
+            if len(line) > max_record_bytes:
+                raise ContractError("journal6 JSONL record exceeds configured bound")
+            records.append(json.loads(line))
+    elif artifact_prefix is not None:
+        raise ContractError("logical prefix requires original artifacts")
     if records is None:
         integer(max_jsonl_bytes, 1)
         integer(max_record_bytes, 1, max_jsonl_bytes)
@@ -420,9 +473,33 @@ def _read_structured_journal(path: Path, *, deadline: float = float("inf"),
             frame.bank_view(bank.view())
             if frame.interval_start != (0 if last_frame is None else last_frame.boundary.end) or last_frame is not None and frame.revision <= last_frame.revision:
                 raise ContractError("journal5 frame interval/revision mismatch")
-            read = read_candidates if _context is None else _context.read_candidates
-            table = read(path.parent, row["table"], frame, index, max_positions=caps.max_positions, action_contract=action_contract,
-                                    purpose=purpose, synthetic_capacity=False)
+            if artifacts is None:
+                read = read_candidates if _context is None else _context.read_candidates
+                table = read(path.parent, row["table"], frame, index, max_positions=caps.max_positions, action_contract=action_contract,
+                                        purpose=purpose, synthetic_capacity=False)
+            else:
+                from gf_common.candidate_columns import (
+                    decode_candidate_columns_v2,
+                    validate_descriptor_v2,
+                )
+                from gf_training.candidate_storage import candidate_basename
+                name = candidate_basename(frame.actor, index)
+                column_descriptor = row["table"]
+                _, size = validate_descriptor_v2(column_descriptor, expected_file=name,
+                    expected_frame_hash=frame.frame_hash, action_contract=action_contract,
+                    purpose=purpose, synthetic_capacity=False, layout=_context.layout)
+                artifacts.admit_validation(32 * size + 4096 * column_descriptor["count"]
+                    + 128 * column_descriptor["elements"] + 65536)
+                logical_name = cast(str, artifact_prefix) + "/" + name
+                payload = artifacts.read(logical_name)
+                table = decode_candidate_columns_v2(payload, column_descriptor, expected_file=name,
+                    expected_frame_hash=frame.frame_hash, max_positions=caps.max_positions,
+                    action_contract=action_contract, purpose=purpose, synthetic_capacity=False,
+                    layout=_context.layout)
+                table.validate(frame)
+                logical_inventories.append(LogicalSidecarEvidence(logical_name,
+                    column_descriptor["sha256"], size, column_descriptor["frame_hash"], column_descriptor["table_hash"],
+                    asdict(table.action_contract), purpose, False))
             if _context is None:
                 report = parse_report(row["search_report"], action_contract=action_contract)
                 generated: Any = GeneratedCandidates(table, report)
@@ -442,9 +519,10 @@ def _read_structured_journal(path: Path, *, deadline: float = float("inf"),
             _host_timings(row["timings"])
             commands[index] = command
             decisions.append(StructuredDecision(frame, generated, selection, command, row["timings"]))
-            inventory = sidecar_inventory if _context is None else _context.sidecar_inventory
-            inventories.append(inventory(path.parent, row["table"], frame, index, max_positions=caps.max_positions, action_contract=action_contract,
-                                    purpose=purpose, synthetic_capacity=False))
+            if artifacts is None:
+                inventory = sidecar_inventory if _context is None else _context.sidecar_inventory
+                inventories.append(inventory(path.parent, row["table"], frame, index, max_positions=caps.max_positions, action_contract=action_contract,
+                                        purpose=purpose, synthetic_capacity=False))
             pending, last_frame, delta_pending = index, frame, False
         elif kind == "acknowledgement":
             closed(row, {"kind", "decision", "response"})
@@ -502,4 +580,4 @@ def _read_structured_journal(path: Path, *, deadline: float = float("inf"),
             raise ContractError("unknown journal5 record kind")
     if end is None:
         raise ContractError("journal5 final closure required")
-    return StructuredJournalData(header, tuple(records), bank.view(), tuple(decisions), tuple(accepted), end, tuple(inventories))
+    return StructuredJournalData(header, tuple(records), bank.view(), tuple(decisions), tuple(accepted), end, tuple(inventories), tuple(logical_inventories))

@@ -9,6 +9,11 @@ import time
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from gf_training.collection import PackedRunResult
+    from gf_training.group_pack_publication import GroupPackCollectionPublication
 
 from gf_common.card_instance import ActionConfigV3
 from gf_common.card_instance_rules import card_instance_rules, rule_signature
@@ -231,7 +236,9 @@ def _inode(value: os.stat_result) -> tuple[int, int]:
 class CollectionPublication:
     """One closed two-file commit with exact-inode recovery after close errors."""
 
-    def __init__(self, directory: Path, *, work_deadline: float, cleanup_deadline: float) -> None:
+    def __init__(self, directory: Path, *, work_deadline: float, cleanup_deadline: float,
+                 group_pack: GroupPackCollectionPublication | None = None) -> None:
+        self.group_pack = group_pack
         self.directory = directory
         self.work_deadline, self.cleanup_deadline = work_deadline, cleanup_deadline
         self.directory_identity: tuple[int, int] | None = None
@@ -323,6 +330,9 @@ class CollectionPublication:
         output.invalidated = True
 
     def revoke(self) -> None:
+        if self.group_pack is not None:
+            self.group_pack.revoke()
+            return
         errors: list[BaseException] = []
         # Failure for one record never prevents an independent attempt for the
         # other record, within the same original cleanup allowance.
@@ -360,10 +370,11 @@ class CollectionPublication:
                 unconfirmed.add_note(type(failure).__name__ + ": " + str(failure))
             raise unconfirmed
 
-    def _write(self, name: str, value: Json, *, _stage_manifest: bool = False) -> None:
+    def _write(self, name: str, value: Json, *, _stage_manifest: bool = False,
+               _raw: bytes | None = None) -> None:
         self._check()
         assert self.directory_fd is not None
-        raw = (canonical(value) + "\n").encode()
+        raw = (canonical(value) + "\n").encode() if _raw is None else _raw
         descriptor = os.open(
             name + ".tmp",
             os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
@@ -447,7 +458,20 @@ class CollectionPublication:
         os.fsync(self.directory_fd)
         self._check()  # final check while both original output descriptors are live.
 
-    def commit(self, report: Json, manifest: Json, *, retained_input_guard: Callable[[], None] | None = None) -> None:
+    def commit(self, report: Json, manifest: Json, *, retained_input_guard: Callable[[], None] | None = None) -> PackedRunResult | None:
+        if self.group_pack is not None:
+            from gf_training.group_pack_publication import GroupPackCollectionPublication
+            if type(self.group_pack) is not GroupPackCollectionPublication:
+                raise ContractError("packed publication requires its concrete owned composite")
+            if self.committed:
+                raise ContractError("collection publication owner already consumed")
+            try:
+                result = self.group_pack.commit(report, manifest, retained_input_guard=retained_input_guard)
+            except BaseException as error:
+                vars(error)["_card_instance_collection_cleanup_owner"] = self
+                raise
+            self.committed = True
+            return result
         if manifest.get('collection_role') == 'ppo-final-validation' or self._final_staged:
             raise ContractError('final validation requires its concrete retained publication owner')
         if self.committed or self.outputs or self._directory_handle is not None:
@@ -475,9 +499,12 @@ class CollectionPublication:
             raise
         # No fallible operation follows successful release.
         self.committed = True
+        return None
 
     @property
     def cleanup_complete(self) -> bool:
+        if self.group_pack is not None:
+            return self.group_pack.cleanup_complete
         released = all(handle.state == 'released' for handle in self._handles)
         return released and (self.committed or all(output.invalidated for output in self.outputs))
 

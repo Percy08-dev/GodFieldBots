@@ -36,7 +36,7 @@ from gf_evaluation.evaluation import report, schedule
 from gf_models.baselines import make_policy
 from gf_simulator_client.environment import EnvironmentSettings, SimulatorEnvironment
 from gf_simulator_client.process import server_effective
-from gf_training.collection import CollectionPlan, FinalizedCollection
+from gf_training.collection import CollectionPlan, FinalizedCollection, PackedRunResult
 from gf_training.journal import (
     FEATURE_VERSION,
     JOURNAL_SCHEMA,
@@ -220,8 +220,10 @@ async def _join_owned_groups(tasks: list[asyncio.Task[Any]], wall_deadline: floa
 
 
 async def run_experiment(loaded: LoadedConfig, command: str, *, collection: CollectionPlan | None = None,
-                         ledger: Any = None) -> tuple[Path, Json]:
+                         ledger: Any = None) -> tuple[Path, Json] | PackedRunResult:
     config = loaded.config
+    from gf_cli.config import require_storage_command
+    require_storage_command(config, command, standalone=collection is None and ledger is None)
     if (isinstance(config.actions, ActionConfigV3)
             and config.actions.action_contract == corrected_card_instance_contract()):
         if collection is not None or ledger is not None:
@@ -558,7 +560,10 @@ async def _run_experiment(loaded: LoadedConfig, command: str, *, collection: Col
 
 
 async def collect_ppo(loaded: LoadedConfig, plan: CollectionPlan) -> FinalizedCollection:
-    directory, summary = await run_experiment(loaded, "collect", collection=plan)
+    finalized = await run_experiment(loaded, "collect", collection=plan)
+    if isinstance(finalized, PackedRunResult):
+        raise ContractError("packed PPO result awaits Source integration")
+    directory, summary = finalized
     if summary.get("comparison_valid") is not True:
         raise RuntimeError("PPO batch collection did not complete naturally and healthily")
     return FinalizedCollection(directory, summary)
@@ -624,8 +629,10 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         if args.command in ("game-dataset", "fit-game-tree"):
-            from gf_cli.card_instance import build_game_dataset, fit_game_tree, inspect_game_dataset
             loaded = load_config(args.config)
+            from gf_cli.config import require_storage_command
+            require_storage_command(loaded.config, args.command)
+            from gf_cli.card_instance import build_game_dataset, fit_game_tree, inspect_game_dataset
             if args.command == "fit-game-tree":
                 result = asyncio.run(fit_game_tree(loaded, args.manifest, args.expected_digest,
                     args.output, args.seed, started=command_started))
@@ -676,6 +683,8 @@ def main(argv: list[str] | None = None) -> int:
         if args.command in ("train", "train-formal") and args.mode != "fresh" and args.run_dir is None:
             raise ValueError("resume is unsupported without --run-dir; no work performed")
         loaded = load_config(args.config, overrides)
+        from gf_cli.config import require_storage_command
+        require_storage_command(loaded.config, args.command)
         if args.command == "validate":
             server_effective(loaded.config.server.config, len(loaded.config.run.sampling_seeds) * loaded.config.run.pairs_per_seed * 2)
             print(canonical({"valid": True, "config_sha256": loaded.sha256, "effective_config": loaded.effective,
@@ -752,7 +761,13 @@ def main(argv: list[str] | None = None) -> int:
                 result = asyncio.run(train_experiments(loaded, mode=args.mode, code_provenance_provider=fit_identity))
             print(canonical(result))
             return 0
-        directory, summary = asyncio.run(run_experiment(loaded, args.command))
+        completed = asyncio.run(run_experiment(loaded, args.command))
+        if isinstance(completed, PackedRunResult):
+            print(canonical({"directory": str(completed.directory), "report": completed.report,
+                "locator": {"kind": completed.locator.kind, "path": str(completed.locator.path)},
+                "envelope_sha256": completed.envelope_sha256, "storage_metrics": completed.storage_metrics}))
+            return 0 if completed.report["comparison_valid"] else 1
+        directory, summary = completed
         print(canonical({"run_dir": str(directory), **{key: summary[key] for key in ("planned_games", "natural_denominator", "wins", "draws", "losses", "comparison_valid", "failures", "wall_seconds")}}))
         return 0 if summary["comparison_valid"] else 1
     except (OSError, ValueError, RuntimeError, ImportError, MemoryError) as exc:

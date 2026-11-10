@@ -8,10 +8,18 @@ import stat
 import time
 import uuid
 from dataclasses import asdict
+from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
-from gf_cli.config import CorrectedServerConfigV2, LoadedConfig, RunConfigV2
+from gf_cli.config import (
+    CorrectedServerConfigV2,
+    GroupPackExperimentConfig,
+    LoadedConfig,
+    RunConfigV2,
+    require_storage_command,
+)
+from gf_common.artifacts import ArtifactReader
 from gf_common.card_instance import ActionConfigV3, corrected_card_instance_contract
 from gf_common.card_instance_validation import reconcile_replay, replay_closure
 from gf_common.domain import (
@@ -40,7 +48,7 @@ from gf_training.card_instance_collection import (
     ppo_collection_metadata,
 )
 from gf_training.card_instance_journal import CardInstanceJournal, read_card_instance_journal
-from gf_training.collection import CollectionPlan, FinalizedCollection
+from gf_training.collection import CollectionPlan, FinalizedCollection, PackedRunResult
 
 if TYPE_CHECKING:
     from gf_training.card_instance_final_validation import GameFinalValidationPlan
@@ -105,7 +113,8 @@ def _validate_recorded_episodes(directory: Path, episodes: list[Any], actions: A
                                 run_id: str, deadline: float,
                                 expected: dict[str, tuple[EpisodeSpec, Json]],
                                 neural_metadata: dict[str, Json] | None = None,
-                                tree_metadata: dict[str, Json] | None = None) -> None:
+                                tree_metadata: dict[str, Json] | None = None,
+                                artifacts: ArtifactReader | None = None) -> None:
     import json
 
     for episode in episodes:
@@ -114,7 +123,8 @@ def _validate_recorded_episodes(directory: Path, episodes: list[Any], actions: A
         closures = []
         for viewer in (1, 2):
             folder = directory / episode.episode_id
-            journal = read_card_instance_journal(folder / f"player-{viewer}.jsonl", actions=actions, deadline=deadline)
+            journal = read_card_instance_journal(folder / f"player-{viewer}.jsonl", actions=actions, deadline=deadline,
+                **({} if artifacts is None else {"artifacts": artifacts, "artifact_prefix": episode.episode_id}))
             if (journal.header["run_id"] != run_id or journal.header["game_id"] != episode.game_id
                     or journal.header["episode_id"] != episode.episode_id or journal.header["viewer"] != viewer
                     or journal.header["policy"] != episode.policies[viewer - 1]
@@ -130,14 +140,26 @@ def _validate_recorded_episodes(directory: Path, episodes: list[Any], actions: A
                     and canonical(journal.header.get("tree")) != canonical(tree_metadata[journal.header["policy"]])):
                 raise ContractError("persisted Tree3 journal differs from its retained actual pair")
             accepted = [journal.decisions[index].command["action"] for index in journal.accepted]
-            value = json.loads((folder / f"replay-player-{viewer}.json").read_bytes())
+            replay_name = episode.episode_id + f"/replay-player-{viewer}.json"
+            if artifacts is not None:
+                from gf_training.group_pack_memory import MemoryArtifactSnapshot
+                if type(artifacts) is not MemoryArtifactSnapshot:
+                    raise ContractError("runtime replay validation requires immutable original snapshot")
+                raw = artifacts.read(replay_name)
+                if len(raw) > 64 * 1024**2:
+                    raise ContractError("runtime Replay original bytes exceed file bound")
+                artifacts.admit_validation(32 * len(raw) + 65536)
+            else:
+                raw = (folder / f"replay-player-{viewer}.json").read_bytes()
+            value = json.loads(raw)
             reconcile_replay(value, viewer, accepted, episode.outcome)
             closures.append(replay_closure(value, episode.game_id, viewer))
         if closures[0] != closures[1]:
             raise ContractError("persisted corrected participant Replay closures disagree")
 
 
-async def run_baseline(loaded: LoadedConfig, command: str) -> tuple[Path, Json]:
+async def run_baseline(loaded: LoadedConfig, command: str) -> tuple[Path, Json] | PackedRunResult:
+    require_storage_command(loaded.config, command)
     # Validate all unsupported combinations before filesystem/process ownership.
     if command not in ("smoke", "collect", "evaluate"):
         raise ContractError("corrected baseline integration supports smoke/collect/evaluate only")
@@ -145,7 +167,8 @@ async def run_baseline(loaded: LoadedConfig, command: str) -> tuple[Path, Json]:
     return await _run_corrected(loaded, command, bindings, labels)
 
 
-async def run_inference(loaded: LoadedConfig, command: str) -> tuple[Path, Json]:
+async def run_inference(loaded: LoadedConfig, command: str) -> tuple[Path, Json] | PackedRunResult:
+    require_storage_command(loaded.config, command)
     if command not in ("smoke", "collect", "evaluate"):
         raise ContractError("corrected neural inference supports smoke/collect/evaluate only")
     _require_actions(loaded)
@@ -220,9 +243,10 @@ async def _run_corrected(loaded: LoadedConfig, command: str,
                          resource_admission: Json | None = None,
                          collection: CollectionPlan | GameFinalValidationPlan | None = None,
                          owned_ledger: ReservationLedger | None = None,
-                         _final_validation_context: Any = None) -> tuple[Path, Any]:
+                         _final_validation_context: Any = None) -> tuple[Path, Any] | PackedRunResult:
     config = loaded.config
     assert isinstance(config.actions, ActionConfigV3)
+    require_storage_command(config, command, standalone=collection is None and owned_ledger is None)
     if config.server.external_url is not None or config.server.source_dir is None:
         raise ContractError("corrected baseline collection requires locally managed verified source/binary evidence")
     started = time.monotonic() if started is None else started
@@ -265,6 +289,10 @@ async def _run_corrected(loaded: LoadedConfig, command: str,
     tasks: list[asyncio.Task[GroupResult]] = []
     admission_closed = False
     diagnostics: Json = {}
+    packed = None
+    if isinstance(config, GroupPackExperimentConfig):
+        from gf_training.group_pack_collection import GroupPackCollection
+        packed = GroupPackCollection(config.storage.settings(), run_id, deadline=work_deadline)
 
     async def group_run(group: Any) -> GroupResult:
         nonlocal admission_closed
@@ -272,17 +300,54 @@ async def _run_corrected(loaded: LoadedConfig, command: str,
             if admission_closed:
                 return GroupResult([], {"failure": "admission_closed"})
             try:
-                return await environment.run_group(group)
+                if packed is None:
+                    return await environment.run_group(group)
+                from gf_training.group_pack_memory import MemoryCardInstanceJournal
+                memory_group = packed.new_group(group.episodes[0].episode_id)
+                task = asyncio.current_task()
+                assert task is not None
+                packed.track_group_task(task)
+                own_environment = CardInstanceSimulatorEnvironment(settings,
+                    partial(MemoryCardInstanceJournal, artifact_sink=memory_group.sink),
+                    ledger=ledger, runtime_evidence=evidence, artifact_sink=memory_group.sink,
+                    server_output_root=memory_group.server_root, **extra)
+                memory_group.runtime_owner = own_environment
+                result = await own_environment.run_group(group)
+                if not own_environment.storage_cleanup_complete(result):
+                    from gf_training.group_pack_resources import CleanupError
+                    raise CleanupError("Simulator/participant reap and drain are not confirmed", packed)
+                expected = {spec.episode_id: (spec, result.health.get("runtime_evidence", {}))
+                            for spec in group.episodes}
+                neural_metadata = ({label: artifact_inputs.journal_metadata(label)
+                    for label, binding in bindings.items()
+                    if binding.model_id in ("mlp", "gru", "transformer")}
+                    if artifact_inputs is not None else None)
+                def validate(snapshot: Any) -> None:
+                    healthy = [episode for episode in result.episodes
+                               if episode.end_kind == "natural" and episode.failure is None
+                               and episode.replay_reconciled and not any(episode.health.values())]
+                    _validate_recorded_episodes(directory, healthy, cast(ActionConfigV3, config.actions),
+                        run_id, work_deadline, expected, neural_metadata=neural_metadata,
+                        artifacts=snapshot)
+                await packed.archive(memory_group, group.episodes[0].episode_id, result,
+                                     validate=validate)
+                return result
             except BaseException:
                 admission_closed = True
                 raise
 
     try:
+        if packed is not None:
+            await packed.start()
         environment = CardInstanceSimulatorEnvironment(settings, CardInstanceJournal, ledger=ledger,
                                                       runtime_evidence=evidence, **extra)
         tasks = [asyncio.create_task(group_run(group)) for group in planned]
         groups = await asyncio.gather(*tasks)
         episodes = [episode for group in groups for episode in group.episodes]
+        if packed is not None:
+            from gf_training.group_pack_resources import json_bound
+            packed.reserve_metadata(32 * json_bound(loaded.effective) + 65536)
+            packed.freeze_storage_metrics()
         summary = report(episodes, planned, bootstrap_samples=config.evaluation.bootstrap_samples,
             bootstrap_seed=config.evaluation.bootstrap_seed, wall_seconds=time.monotonic() - started,
             groups_health=[group.health for group in groups], deadline=work_deadline)
@@ -310,13 +375,15 @@ async def _run_corrected(loaded: LoadedConfig, command: str,
                            if artifact_inputs is not None else None)
         tree_metadata = ({label: artifact_inputs.journal_metadata(label) for label, binding in bindings.items()
                           if binding.model_id == "lightgbm"} if artifact_inputs is not None else None)
-        _validate_recorded_episodes(directory, episodes, config.actions, run_id, work_deadline, expected,
-                                   neural_metadata=neural_metadata, tree_metadata=tree_metadata)
+        if packed is None:
+            _validate_recorded_episodes(directory, episodes, config.actions, run_id, work_deadline, expected,
+                                       neural_metadata=neural_metadata, tree_metadata=tree_metadata)
         from gf_models.card_instance_game_tree_runtime import RetainedGamePolicyArtifacts
         typed_inputs = artifact_inputs.finalize_inputs(deadline=work_deadline) if type(artifact_inputs) is RetainedGamePolicyArtifacts else None
         neural_inputs = (artifact_inputs.finalize(deadline=work_deadline)
             if artifact_inputs is not None and typed_inputs is None else None)
-        inventory = _inventory(directory, work_deadline)
+        inventory = (_inventory(directory, work_deadline) if packed is None
+                     else sorted(packed.inventory, key=lambda row: row["path"]))
         from gf_cli import _code_provenance
         producer = _code_provenance(work_deadline)
         receipts = [group.health["runtime_evidence"] for group in groups]
@@ -345,27 +412,59 @@ async def _run_corrected(loaded: LoadedConfig, command: str,
             summary["wall_seconds"] = time.monotonic() - started
         if not summary["healthy"]:
             # Diagnostic outputs have no healthy manifest/report completion names.
-            _write_diagnostic(directory, "incomplete.json", {"manifest": manifest, "report": summary})
+            if packed is None:
+                _write_diagnostic(directory, "incomplete.json", {"manifest": manifest, "report": summary})
+            else:
+                from gf_training.group_pack_publication import GroupPackCollectionPublication
+                return await GroupPackCollectionPublication(packed, directory).diagnostic(summary, manifest)
             return directory, summary
         manifest["report_sha256"] = hashlib.sha256((canonical(summary) + "\n").encode()).hexdigest()
-        publication = CollectionPublication(directory, work_deadline=work_deadline, cleanup_deadline=wall_deadline)
+        packed_publication = None
+        if packed is not None:
+            from gf_training.group_pack_publication import GroupPackCollectionPublication
+            packed_publication = GroupPackCollectionPublication(packed, directory)
+            await packed_publication.prepare(summary, manifest)
+        publication = CollectionPublication(directory, work_deadline=work_deadline,
+            cleanup_deadline=wall_deadline, group_pack=packed_publication)
         if _final_validation_context is not None:
             issued = _final_validation_context.begin_collection(publication, summary, manifest)
             return directory, issued  # Actual pending owner; canonical manifest remains absent.
-        if type(artifact_inputs) is RetainedGamePolicyArtifacts:
+        if type(artifact_inputs) is RetainedGamePolicyArtifacts or packed is not None and artifact_inputs is not None:
             # Bound integrity check over the admitted actual owner; the callable
             # conveys no Source, fit or paired-artifact authority of its own.
             def retained_input_guard() -> None:
-                artifact_inputs.guard(deadline=work_deadline)
-            publication.commit(summary, manifest, retained_input_guard=retained_input_guard)
+                if type(artifact_inputs) is RetainedGamePolicyArtifacts:
+                    artifact_inputs.guard(deadline=work_deadline)
+                else:
+                    cast(Any, artifact_inputs).finalize(deadline=work_deadline)
+            published_result = publication.commit(summary, manifest, retained_input_guard=retained_input_guard)
         else:
-            publication.commit(summary, manifest)
+            published_result = publication.commit(summary, manifest)
+        if packed is not None:
+            return cast(PackedRunResult, published_result)
         return directory, summary  # no reportable checks after publication owner releases.
     except BaseException as error:
         if _final_validation_context is not None:
             _final_validation_context._record_failure(error)  # Invalidate FIRST, before reap/diagnostics.
         from gf_cli import _join_owned_groups
         await _join_owned_groups(tasks, wall_deadline, diagnostics)
+        if packed is not None:
+            storage_cleanup: BaseException | None = None
+            try:
+                if not packed._closed and all(group.archived for group in packed._groups):
+                    pending = await packed.prepare_diagnostic("failure.json",
+                        {"error": type(error).__name__, "message": str(error), **diagnostics})
+                    pending.close()
+            except BaseException as cleanup:  # noqa: BLE001 -- preserve initiating error and concrete cleanup owner.
+                storage_cleanup = cleanup
+            try:
+                await packed.close()
+            except BaseException as cleanup:  # noqa: BLE001 -- independent Writer/thread retirement is mandatory.
+                storage_cleanup = storage_cleanup or cleanup
+            if storage_cleanup is not None:
+                vars(error)["cleanup_owner"] = packed
+                error.add_note("packed collection cleanup: " + str(storage_cleanup))
+            raise
         try:
             _write_diagnostic(directory, "failure.json", {"error": type(error).__name__, "message": str(error), **diagnostics})
         except OSError:
@@ -399,6 +498,7 @@ def _validate_online_collection(loaded: LoadedConfig, plan: CollectionPlan,
 async def collect_ppo(loaded: LoadedConfig, plan: CollectionPlan,
                       ledger: ReservationLedger) -> FinalizedCollection:
     """Same live parent's frozen plan; metadata cannot mint admission."""
+    require_storage_command(loaded.config, "collect", standalone=False)
     _require_actions(loaded)
     config = loaded.config
     assert type(config.actions) is ActionConfigV3 and isinstance(config.run, RunConfigV2)
@@ -437,10 +537,10 @@ async def collect_ppo(loaded: LoadedConfig, plan: CollectionPlan,
             raise ContractError("empty frozen PPO collection schedule")
         # Keep the validated borrowed live context reachable until finalization.
         assert online is not None
-        directory, summary = await _run_corrected(loaded, "collect", plan.bindings,
+        directory, summary = cast(tuple[Path, Json], await _run_corrected(loaded, "collect", plan.bindings,
             tuple(plan.bindings), started=started, artifact_inputs=owner, runtime_evidence=evidence,
             resource_admission=max(admissions, key=lambda value: value["peak_cuda_bytes"]),
-            collection=plan, owned_ledger=ledger)
+            collection=plan, owned_ledger=ledger))
         return FinalizedCollection(directory, summary)
     finally:
         owner.release()
@@ -467,6 +567,7 @@ async def collect_owned_final_validation(context: Any) -> Any:
     if type(context) is not GameFinalValidationContext:
         raise ContractError('concrete actor-only final validation context required')
     loaded, plan, ledger = context.projected, context.plan, context.ledger
+    require_storage_command(loaded.config, "validate-formal-policy", standalone=False)
     _validate_final_collection(loaded, plan, ledger, context, plan.execution_deadline)
     require_actor_backend(loaded)
     config = loaded.config
@@ -487,10 +588,10 @@ async def collect_owned_final_validation(context: Any) -> Any:
             game_concurrency=config.run.concurrency, global_cuda_bytes=config.run.global_cuda_budget_bytes,
             max_workers=config.run.max_participant_workers, learner_cuda_bytes=0)
             for group in plan.groups for spec in group.episodes]
-        directory, issued = await _run_corrected(loaded, 'collect', plan.bindings, tuple(plan.bindings),
+        directory, issued = cast(tuple[Path, Any], await _run_corrected(loaded, 'collect', plan.bindings, tuple(plan.bindings),
             started=plan.started_monotonic, artifact_inputs=owner, runtime_evidence=evidence,
             resource_admission=max(admissions, key=lambda value: value['peak_cuda_bytes']), collection=plan,
-            owned_ledger=ledger, _final_validation_context=context)
+            owned_ledger=ledger, _final_validation_context=context))
         from gf_training.card_instance_final_validation import _IssuedFinalValidationCollection
         if type(issued) is not _IssuedFinalValidationCollection or issued.directory != directory:
             raise ContractError('collector did not retain the actual pending publication')
@@ -502,6 +603,7 @@ async def collect_owned_final_validation(context: Any) -> Any:
 async def collect_formal_final_validation(loaded: LoadedConfig, parent: Path, output: Path,
                                           *, deadline: float | None = None) -> Json:
     """Explicit formal-only CLI/library composition; no legacy validation route."""
+    require_storage_command(loaded.config, "validate-formal-policy", standalone=False)
     from gf_training.card_instance_final_validation import GameFinalValidationContext, _loaded
     from gf_training.card_instance_formal import FormalGameParent
     _loaded(loaded)  # Includes early Rust64 refusal, before ownership/runtime/output/model.
@@ -576,6 +678,7 @@ async def collect_formal_final_validation(loaded: LoadedConfig, parent: Path, ou
 def _game_tree_data_config(loaded: LoadedConfig, started: float, *, fit: bool = False
                            ) -> tuple[ConfiguredTreeModelV3, TrainingConfig, float]:
     """Pure current Config admission; neither metadata nor flags qualify Source."""
+    require_storage_command(loaded.config, "game-dataset", standalone=False)
     from gf_common.card_instance_game_tree import MAX_OWNED_BYTES
     _require_actions(loaded)
     config = loaded.config

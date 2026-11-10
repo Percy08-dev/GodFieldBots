@@ -11,8 +11,8 @@ Design: [ADR0034](../adr/0034-sqlite-group-pack.md),
 
 Foundation implementation passes independent correctness/conformance after two
 bounded fix rounds; root accepts this isolated milestone.
-Runtime, Source/lineage/PPO, native, final64, Dataset/Tree and whole-plan comparison
-are not implemented/accepted at this point. This record distinguishes component
+Standalone runtime is accepted in the separate scope below. Source/lineage/PPO,
+native, final64, Dataset/Tree and whole-plan comparison remain pending. This record distinguishes component
 evidence from the complete owner's requested outcome.
 
 ## Foundation candidate evidence
@@ -70,9 +70,48 @@ unchanged DB hashes and no new sidecars. Probe-only files were removed; no
 existing data was modified. This establishes supported operations on the target
 filesystems, not a physical power-loss durability test.
 
+## Standalone runtime acceptance (2026-11-11)
+
+The explicit Config, memory Journal6/codec2/Replay/results, RAM Simulator logs,
+SAME budget, actual queued/submitted work custody, composite publication and
+typed final checkpoint diagnostics pass both independent reviews after bounded
+fixes. Old directory Config/hash/default paths remain unchanged. Packed
+Source/PPO/native/final64/Dataset/Tree entry points remain explicitly guarded.
+
+Root's fixed-revision expanded HOST check passes **616checks/10explicit skips**
+in66.96s, plus fresh full changed-file Ruff/mypy23. The initial sandbox's20CPU
+preload setup errors were traced to AF_UNIX EPERM; identical unchanged fixtures
+pass HOST. No timeout/skip or infrastructure change was used to hide a failure.
+
+Actual D:9p exposed a write-close ctime refresh for owned descriptors. The scoped
+`terminal-control-ro-handoff-v1` policy fixes original inode/hash across that
+controlled transition, then requires strict full-stat/hash readonly validation
+and retirement. DB and all ordinary Source custody stay strict. D:/ext4 public/
+diagnostic probes pass all4cases with zero reservations. The first failed run
+02d698f1 retains6natural results and an intact DB, but its locator is quarantined.
+The second cbb37f35 physically published but failed full inventory audit because
+the metrics control was undeclared. Both populations remain immutable/ineligible.
+Metrics bytes now freeze into inventory before manifest/report; no Source
+exception or old-run repair is used.
+
+Final actual six-game run9542c7a2 passes1Pack/6natural games,176declared files and
+14,774,682restored bytes with every hash/length/report/index check. Six actual
+MLP/GRU/Transformer×CPU/CUDA inference conditions each pass2natural games and the
+same saved-byte audit (**18successful real games total**, not learning quality).
+Final metrics expose actual child checkpoint/DELETE and combined seal times;
+managed reservation peaks are not RSS. Detailed receipts/configs are retained at
+`runs/assessments/sqlite-group-pack-v1-20261111/`.
+
+Explicit example: [baseline storage preset](../../configs/experiments/card-instance-group-pack-baseline.toml).
+Only this new table opts in; the default is unchanged. Supported persisted v1
+max Pack is256MiB; positive smaller limits remain configurable. Minimum193MiB
+is fixed Writer128+inspection64+minimal control slack1, not a promise any game
+fits the minimum. Larger bounds need a reviewed format/Source/budget extension.
+
 ## Remaining verification
 
-- NOT RUN: runtime in-memory artifacts/RAM logging and joint monitor/admission.
+- PASS scoped: standalone in-memory artifacts/RAM logging/joint admission,
+  independent reviews, actual18game/inference saved-byte audits above.
 - NOT RUN: production Source/PPO update/pause-resume and native provider parity.
 - NOT RUN: pending final64/Dataset/Tree paths and affected actual CUDA checks.
 - NOT RUN: whole pytest/Ruff/mypy/Rust, current wheel/mandatory-only/old-data proofs.

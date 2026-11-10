@@ -81,6 +81,10 @@ owner and checked optional predecessor), `src/gf_training/card_instance_journal.
 `src/gf_cli/config.py`, `card_instance.py`, `__init__.py`, plus directly affected
 existing tests if justified. Runtime design is accepted; implement only after
 foundation independent reviews/acceptance. Root owns docs/project dependency files.
+Approved narrow additions: `structured_source.py` only rejects logical_sidecars
+in its existing file-only reader; `gf_common/group_pack.py` StorageSettings only
+rejects max_pack_bytes above physical v1's256MiB ceiling, with tests. No packed
+learner Source/proof/lineage implementation enters Task2.
 
 **Interfaces:** exact config/types, byte-journal seam, memory sink/snapshot,
 joint StorageBudget, composite CollectionPublication and command/model guard
@@ -105,6 +109,108 @@ provider and pending final64 interfaces; no inferred extraction adapter.
 - [ ] Verify artifact reconstruction and Python/Rust features/numerics parity.
 - [ ] Verify bounded PPO update/pause/resume/final64/Dataset/Tree conditions.
 - [ ] Independent correctness/conformance, resolved blockers and local commit.
+
+#### Task3A: Python original Source, lineage and ordinary PPO
+
+Requires Task2 acceptance. Design: Python sections and closure of
+`sqlite-group-pack-source.md`; optional predecessor delta and PackedRunResult
+amendment are accepted. Native/formal/final64/Dataset production entry guards
+stay in force until their implementations.
+
+**Assigned files:** new focused common `group_pack_game.py` contract helpers;
+new focused training `group_pack_pool.py`, `group_pack_game_source.py`,
+`group_pack_controls.py` and/or `group_pack_lineage.py` only where actual
+responsibility needs extraction (do not create empty layers). Existing
+`gf_training/group_pack_source.py`, `group_pack_resources.py`,
+`group_pack_collection.py`, `group_pack_publication.py`, `structured_source.py`,
+`card_instance_collection_source.py`, `card_instance_source.py`,
+`structured_lineage.py`, `collection.py`, `card_instance_ppo.py`, `ppo_run.py`,
+`structured_learning_process.py`, `structured_numeric_worker.py`,
+`structured_rollout.py`; `gf_models/structured_sealed.py` only the generic
+physical verified_digest accessor/no training import;
+`gf_cli/card_instance.py`/`__init__.py` only ordinary packed PPO composition/guards.
+Tests `test_group_pack_game*.py` and directly affected original tests if needed.
+Root retains docs/dependencies/asset ownership. No native/Simulator edits.
+
+**Deliverable interfaces:** checked storage_binding; PackedSourceOwner/one-group
+shared pool and PackedBatchCustody; tagged proof2 with persistent physical custody;
+separate logical_files and verified_digest; run4/update4/resume/fingerprint and
+wire5 paired recipes; explicit PackedFinalizedCollection including storage_metrics;
+external owned_bytes roots; checked precommit FD/pool retirement with frozen
+in-memory proof. Exact values/closed fields are in the accepted Source design.
+
+- [ ] Red→green stable proof2/custody across reopen; byte-identical replacement
+  across pause/reopen fails; bare Pack/descriptor/metadata cannot issue updates.
+- [ ] Full logical inventory/row checks, original-byte journal/candidate/replay
+  parsing, opaque diagnostics never enter inputs; old proof1/hash tests stay exact.
+- [ ] Shared one-group cache, stale/live borrow checks, requested-history group
+  reload and actual graph/FD/budget retirement; no whole-parent raw residency.
+- [ ] New source/control callbacks share SAME actual owner through optimizer and
+  checked prepare_commit; constructor/close/cancel failure tests preserve owners.
+- [ ] Tests for exact run4/update4/wire5, frozen resume identity and wrong/mixed
+  variants; numeric4 arrays/candidates/selected actions equal original references.
+- [ ] Preserve every base formal algorithm kernel AST (including training_groups,
+  validation_groups, ppo.gae, normalize_advantages, ppo_math.losses, ppo_run._controls,
+  structured_numeric.Learner.__init__/update). Storage must not change math,
+  ordering, reward, optimization or existing saved numerical semantics.
+- [ ] Real external DB/WAL/descriptor/failed bytes count in the same parent disk
+  cap before optimizer, after update/finalization and native scratch allowance.
+- [ ] Controlled ordinary PPO collect/update/pause/resume with actual numeric
+  wire5 and old unconfigured regressions. No formal parent/campaign/Tree gate.
+- [ ] Independent reviews and root bounded real smoke, scoped/static acceptance
+  and coherent commit before dependent native work.
+
+#### Task3B: Native original-byte provider
+
+Requires Task3A acceptance. Design: Native3B section/closure in Source design,
+already architecture READY. One writer/implementer at a time.
+
+**Assigned files:** training native provider adapter, `native_card_instance.py`,
+`native_structured_session.py`, `native_backend.py`, relevant original-source
+composition, and minimal RAW consumers; Rust `structured_session.rs`,
+`structured_source.rs`, `structured_journal.rs`, `card_instance_source.rs`,
+`card_instance_original_episode.rs`, `structured_controls.rs` and necessary
+control helpers, `lib.rs`, `gf_native.pyi`/build_info capability declaration.
+New focused trait/bridge helper and affected tests permitted. No SQLite/zstd
+crate, new dependency, engine copy or formal/final64 implementation. Root handles
+capability activation and source-matched packaging after reviews.
+
+- [ ] Explicit plan4 registry/describe/OriginalByteLease bridge and generic Rust
+  provider, exact summary/auth/receipt contracts; keep plan3/old APIs unchanged.
+- [ ] All direct member/stat/inventory and original16/RAW/restage uses covered.
+- [ ] Same original bytes → exact candidate/selection/token/feature/numeric
+  arrays; no Python fallback or authority from provider/DTO/marker.
+- [ ] Metadata/one-group/native copies jointly admitted; escaped bank/lease,
+  mutation, callback failure, cancellation and terminal close tests.
+- [ ] Rust/scoped Python/static checks and private candidate parity; both reviews,
+  then root source-matched capability/wheel acceptance and ordinary Rust PPO smoke.
+
+#### Task3C: Formal, final64, Dataset4 and Tree3 paths
+
+Requires Task3A/3B acceptance. Design:
+`sqlite-group-pack-final-sources.md` (architecture READY). Root materializes the
+exact reviewed variant JSON/package copy and hash; no frozen base/kernel change.
+
+**Assigned files:** common formal/collection/game-tree contracts; training
+formal/final-validation/custody/game-tree-data, native final-validation adapter,
+structured tree fitting; model tree pairing/artifact/runtime/worker provenance
+dispatch; CLI corresponding guards/composition; Rust formal/final-slot/control
+provider dispatch and package stub/capability declarations; focused tests. No
+new runtime dependency/Simulator edits. Root owns docs/assets/capability activation.
+
+- [ ] Explicit storage-only formal variant and exact unchanged budgets/algorithm;
+  old declarations/stop/parents remain exact and cannot be retrofitted.
+- [ ] SAME pending owner/private reader → Source/actor close → actual parent close
+  → public facts/pointer commit; every failure/cancellation/late-swap boundary.
+- [ ] Exact native request2/summary2/final-slot provider metadata and four-method
+  lifecycle/escaped packet retirement; no flag/FD grants Python Source authority.
+- [ ] Dataset4 full three-parent/three-public-final64 qualification/homogeneity,
+  labels/splits/correspondence/provenance, explicit paired fit5 context and Tree3
+  inference4 subtype; reject mixed storage and short/fixture promotion.
+- [ ] Original input/feature/label/score equality, controlled fixtures and fresh
+  fitting without claiming real Source qualification; no prohibited campaign.
+- [ ] Independent reviews, relevant checks and root records genuine formal-
+  positive/real-source fit NOT RUN if no already eligible parent exists.
 
 ### Task 4: Whole verification and comparison
 

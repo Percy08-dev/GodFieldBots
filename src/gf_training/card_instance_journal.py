@@ -10,6 +10,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
+from gf_common.artifacts import ArtifactReader
 from gf_common.card_instance import (
     CATALOG_META,
     GENERATOR_VERSION,
@@ -284,11 +285,7 @@ class CardInstanceJournal(StructuredJournal):
             directory / f"player-{viewer}.jsonl",
             directory / f"player-{viewer}.partial.jsonl",
         )
-        if self.final_path.exists() or self.final_path.is_symlink():
-            raise ContractError("journal6 final evidence already exists")
-        self.output = self.path.open("x+", encoding="utf-8")
-        info = os.fstat(self.output.fileno())
-        self._owned_inode = info.st_dev, info.st_ino
+        self._allocate_output()
         self.viewer, self.count, self.use_action_options = viewer, 0, True
         self.pending = set()
         self.commands = {}
@@ -305,6 +302,13 @@ class CardInstanceJournal(StructuredJournal):
         ).getstate()
         self.write(header)
 
+    def _allocate_output(self) -> None:
+        if self._final_exists():
+            raise ContractError("journal6 final evidence already exists")
+        self.output = self.path.open("x+", encoding="utf-8")
+        info = os.fstat(self.output.fileno())
+        self._owned_inode = info.st_dev, info.st_ino
+
 
 def read_card_instance_journal(
     path: Path,
@@ -315,6 +319,8 @@ def read_card_instance_journal(
     records: list[Json] | None = None,
     max_jsonl_bytes: int = 64 * 1024**2,
     max_record_bytes: int = 8 * 1024**2,
+    artifacts: ArtifactReader | None = None,
+    artifact_prefix: str | None = None,
 ) -> StructuredJournalData:
     context = _Context(actions, card_instance_rules() if rules is None else rules)
     return _read_structured_journal(
@@ -327,4 +333,6 @@ def read_card_instance_journal(
         purpose="qualified_game",
         synthetic_capacity=False,
         _context=context,
+        artifacts=artifacts,
+        artifact_prefix=artifact_prefix,
     )

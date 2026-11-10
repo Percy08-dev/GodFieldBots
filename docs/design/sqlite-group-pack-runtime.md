@@ -20,6 +20,13 @@ nonpositive/impossible budgets reject before filesystem or process allocation.
 Explicit relative configured paths resolve at their originating file as existing
 config paths do. No CLI override/default silently selects this storage.
 
+The current physical v1 Source has a256MiB uncompressed ceiling. Runtime and
+StorageSettings reject max_pack above that ceiling before allocation; positive
+smaller bounds remain configurable. Standalone pure Pack helpers may accept an
+explicit diagnostic bound, but that does not enlarge the SQLite v1 reader
+contract. Revisit a larger persisted bound only with version-pinned descriptor/
+Source and joint-budget review; do not collect an unreadable declared format.
+
 `run.output_dir` retains its existing meaning for parent checkpoints and the
 logical collection envelope. Database directories are independently allocated
 at `storage.db_root/<run_id>/` with one `collection.sqlite3` and descriptor;
@@ -251,7 +258,132 @@ revocation clarification requires. Temporary run directories have exclusive
 cooperative ownership; no hard security sandbox against same-user filesystem
 mutation is claimed.
 
+## Review-fix contract closure (2026-11-11)
+
+The client imports only common artifact/admission contracts and a pure common
+`json_bound` estimator. Extend `gf_common.artifacts` with `ArtifactReservation`
+(close and context-manager methods), `ArtifactAdmission.reserve(size,
+wait=False)->ArtifactReservation`, and ArtifactSink's readonly `budget` property
+plus `hold_graph(key:str,size:int)->None`. The concrete threaded StorageBudget
+and MemoryGroupArtifacts remain in training; neither environment type hints nor
+runtime imports depend on them. Keep training's old helper import as a pure
+re-export if existing callers need it; introduce no client→training edge.
+
+Known simultaneous fixed bases are common pure constants128MiB Writer and64MiB
+Source inspection. The minimum accepted persisted/runtime budget is their sum
+plus1MiB minimal control/descriptor/runtime slack (**193MiB**). Reject a smaller
+StorageSettings/Config before directories/processes; payload/index/graph/copy
+costs still need ordinary admission. Verify an actual tiny diagnostic seal at
+the minimum rather than claiming every group fits it. Defaults remain2048MiB.
+
+Queued archival has an actual owned/shielded operation before waiting for the
+serialization lock, not only after executor submission. Cancellation preserves
+the first cancellation and best-effort archives obtained, cleanup-confirmed
+groups within remaining finalization allowance. Deadline/failure gates and
+actual prior-Future state are checked before every submit, including after lock
+acquisition. Latch timeout/failure and close ordinary admission; no new normal
+operations or extra queued Futures run after expiry. Bounded retirement joins
+actual prior work instead of queuing arbitrary cleanup behind an unconfirmed
+operation. Preserve actual owners if finalization is unavailable.
+
+Raw member/Pack/index aliases and parsed graphs remain charged through actual
+use, exception and worker retirement. Discard owned aliases/loop temporaries
+before releasing their reservations, or transfer that charge to the actual
+Future/error owner until it finishes. After diagnostic archive and confirmed
+physical/worker cleanup, finite retirement clears completed INTERNAL traceback
+frames and owned graph references while preserving the initiating exception,
+its stack/diagnostic facts and unsuccessful validation. Do not clear active or
+user-body frames. Only genuinely unconfirmed resources retain cleanup ownership;
+do not permanently pin all parsed data merely because validation failed.
+
+New `PackedRunResult(directory,report,locator,envelope_sha256,storage_metrics)`
+is a frozen concrete result contract in training (no common→training import).
+Old unconfigured APIs still return their exact two-tuples. Packed APIs/CLI
+explicitly handle this result; do not mutate the original sealed report to add
+post-checkpoint fields. Build descriptor/locator hashes and the final result/
+metrics under actual publication ownership, expose only after checked commit,
+and perform no reopen/parse/reportable I/O afterward. A healthy result requires
+the actual published locator, nonnull envelope SHA and metrics publication_scope
+published. A successfully sealed unsuccessful diagnostic result carries its
+ACTUAL pending locator, envelope_sha256=None and scope diagnostic-pending;
+public pending-reader refusal remains unchanged. Failed sealing/unconfirmed
+cleanup still raises with the actual owner. Future
+PackedFinalizedCollection adds the same storage_metrics field to its already
+specified original-result fields. The result conveys no Source permission.
+
+For an actual separately accessible checkpoint measurement, add OPTIONAL IPC
+command `seal-metrics` with existing common request keys plus `publication` and
+no payload. Version1 ordinary seal/result behavior stays exact. seal-metrics
+response result is exactly `{descriptor,checkpoint_metrics}`; descriptor is the
+unchanged physical descriptor, checkpoint_metrics exactly nonnegative finite
+`checkpoint_seconds,delete_mode_seconds`. Measure actual checked WAL checkpoint
+and DELETE transition independently in the child, without changing transaction,
+schema, durability or seal ordering. `finish_wal` may return those two durations;
+old callers may ignore them. The runtime's owned-pending seal requests metrics;
+ordinary Writer.seal gains optional collect_metrics=False, preserving existing
+return/default behavior. Client validates/retains metrics before retirement;
+PackedRunResult storage_metrics exposes them plus existing combined seal/wait/
+encode/write/RAM/managed peaks and explicit scope. No metrics go into sealed DB
+after sealing, new sidecars, policy inputs or learning authority.
+
+Composite expected terminal identities come from held original owners, never
+fresh pathname admission after inspection. Recheck DB and predecessor content/
+paths after inspection, then compare their captured immutable originals and both
+output identities through terminal retirement. Every physical Source original,
+including optional predecessor, participates in the final post-sweep identity
+check. A late replacement fails locator-first invalidation and preserves foreign
+bytes; it cannot become the new baseline.
+
 ## Verification
+
+### Closed diagnostic inventory ordering (2026-11-11; design accepted)
+
+`GroupPackCollection.freeze_storage_metrics()->inventory row` admits/freezes exact
+pre-checkpoint metric bytes and appends their unique storage-metrics.json row
+BEFORE the CLI constructs complete inventory, manifest and report. Report
+artifact_bytes includes that declared row. The freeze is idempotent only for
+the SAME frozen bytes; reject a name collision/duplicate. `prepare` stores those
+EXACT bytes and validates a healthy manifest's metrics row hash/length, never
+regenerates or silently rewrites supplied controls. Diagnostic-only preparation
+may freeze it without a healthy manifest. Final child checkpoint/result metrics
+stay separate; original Collection5 and full logical inventory checks remain
+unchanged. Preserve prior immutable runs whose audit failed; do not retrofit them.
+
+### Terminal control-file handoff amendment (2026-11-11; design accepted)
+
+The actual D:9p target advances descriptor ctime at final write-handle close,
+while device/inode/mode/size/mtime and SHA256 stay unchanged; the equivalent
+ext4 probe does not. The real six-game run therefore correctly returned failure
+under the stricter pre-close tuple rule and remains preserved/ineligible.
+Do not remove late replacement/content checks or silently accept a fresh inode.
+
+Versioned policy `terminal-control-ro-handoff-v1` applies ONLY to controls staged
+by this actual composite publication owner at their terminal handoff. Record the
+policy in final/persisted diagnostic metrics; descriptor/DB schema stays unchanged.
+Capture expected device/inode/mode/size/mtime and exact bytes/SHA from held
+original owners before retiring write handles, never from newly admitted paths.
+After all controlled writes/syncs/links finish and those write handles retire,
+open fresh readonly nofollow capabilities and REQUIRE those same original
+device/inode/mode/size/mtime values and original content hashes. A ctime change
+across this single write-close handoff is permitted only with those guarantees.
+This does not permit arbitrary metadata changes or a different same-byte inode.
+The sealed DB itself is not a staged control and keeps its strict full six-field
+original snapshot through this handoff; its ctime is not exempted.
+
+During readonly verification, capture full six-field identity; hash from the SAME
+opened inode and require full FD/path identities unchanged before/after the hash.
+Close readonly handles once, then run final full path/namespace comparisons
+against that verified readonly snapshot before committed=True. Failure/uncertain
+close still invalidates locator first and retains actual owner; hash buffers/FDs
+are admitted to the SAME account. Preserve every substitution/mutation regression
+and add close-window ctime-only/content/inode variants plus actual D: probe.
+
+All ordinary ArtifactSource admission/recheck and persisted proof2 custody keep
+strict complete six-field identity and full original hashes. No Dataset/Source
+authority or postcommit I/O is added. Final/public facts are prepared from the
+verified readonly snapshot while that capability is still owned; terminal RO
+retirement and final checks precede exposure. If readonly close also changes
+ctime or full metadata will not stabilize, fail rather than retry/relax again.
 
 - Exact old Config/effective hashes and physical journal/codec publication tests.
 - New derived Config defaults, path origins, unsupported/invalid early rejection.

@@ -784,8 +784,11 @@ Interrupted runs get no guessed final observation, return or bootstrap.
 `sqlite-group-pack-v1` storage foundation: one immutable database per collection,
 one zstd3 Pack per managed Simulator group, a Python-only Writer and catalog,
 and retained descriptor/DB ArtifactSource custody. The foundation implementation
-passes both final reviews and123scoped/legacy checks. Runtime/Source/native/
-final64 integration remains in progress under separate review gates; this is
+passes both final reviews and123scoped/legacy checks. Standalone memory/RAM
+collection and explicit Config also pass both reviews,616affected/legacy checks
+and18real baseline/CPU-CUDA neural games with complete saved-byte audits. Actual
+D:9p uses the reviewed terminal-control readonly handoff while Source custody
+stays strict. Source/PPO/native/final64 integration remains in progress; this is
 not full-plan acceptance. The default directory storage,
 old Config identities and logical Collection5/Journal6/codec2 remain unchanged.
 The [design](design/sqlite-group-pack-v1.md) fixes the physical contract,

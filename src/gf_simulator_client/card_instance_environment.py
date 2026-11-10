@@ -5,10 +5,12 @@ from __future__ import annotations
 import time
 import uuid
 from collections.abc import Callable
+from contextlib import nullcontext
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Protocol, cast
 
+from gf_common.artifacts import ArtifactSink, json_bound
 from gf_common.card_instance import ActionConfigV3, CardInstanceContract
 from gf_common.card_instance_rules import card_instance_rules
 from gf_common.card_instance_runtime import require_corrected_contract
@@ -23,6 +25,7 @@ from gf_common.domain import (
     GroupResult,
     Json,
     RuntimePolicyBinding,
+    canonical,
     integer,
 )
 from gf_common.structured import DecisionFrame, EventBank, EventDelta, Selection, event_delta
@@ -77,6 +80,8 @@ class CardInstanceSimulatorEnvironment(SimulatorEnvironment):
         ledger: ReservationLedger,
         runtime_evidence: CardInstanceRuntimeEvidence,
         artifact_inputs: RetainedGameArtifacts | RetainedGamePolicyArtifacts | None = None,
+        artifact_sink: ArtifactSink | None = None,
+        server_output_root: Path | None = None,
     ) -> None:
         if type(settings.actions) is not ActionConfigV3:
             raise ContractError("corrected environment requires exact actions3")
@@ -106,7 +111,9 @@ class CardInstanceSimulatorEnvironment(SimulatorEnvironment):
         self._include_input_time = True
         self.ledger, self.runtime_evidence = ledger, runtime_evidence
         self.artifact_inputs = artifact_inputs
+        self.artifact_sink, self.server_output_root = artifact_sink, server_output_root
         self._managed_server: ManagedServer | None = None
+        self._storage_group_owner: CardInstanceSimulatorEnvironment | None = None
 
     async def run_group(self, group: EpisodeGroup) -> GroupResult:
         # Each group owns its evidence context. Concurrent groups never overwrite
@@ -131,8 +138,52 @@ class CardInstanceSimulatorEnvironment(SimulatorEnvironment):
                 deadline=min(self.settings.wall_deadline, self.settings.work_deadline),
             ),
             artifact_inputs=self.artifact_inputs,
+            artifact_sink=self.artifact_sink,
+            server_output_root=self.server_output_root,
         )
+        if self.artifact_sink is not None:
+            self._storage_group_owner = own
         return await own._run_group_body(group)
+
+    def _new_server(self, *args: Any, **kwargs: Any) -> ManagedServer:
+        server = super()._new_server(*args, **kwargs)
+        self._managed_server = server
+        return server
+
+    def storage_cleanup_complete(self, result: GroupResult) -> bool:
+        owner = self._storage_group_owner
+        if owner is None:
+            return False
+        server = owner._managed_server
+        if server is not None:
+            if any(not task.done() for task in server.drainers):
+                return False
+            if server.process is None:
+                if not server.stopped:
+                    return False
+            elif server.process.returncode is None:
+                return False
+        process = result.health.get("process", {})
+        return (not process.get("reap_failure")
+            and not result.health.get("cleanup_failure")
+            and not any(episode.health.get("worker_cleanup_failure") for episode in result.episodes))
+
+    def _create_episode_directory(self, directory: Path) -> None:
+        if self.artifact_sink is None:
+            super()._create_episode_directory(directory)
+
+    def _save_artifact(self, path: Path, value: Any) -> None:
+        if self.artifact_sink is None:
+            super()._save_artifact(path, value)
+        else:
+            with self.artifact_sink.budget.reserve(8 * json_bound(value) + 65536):
+                self.artifact_sink.write(path.parent.name + "/" + path.name,
+                    (canonical(value) + "\n").encode())
+
+    def _server_directory(self, group: EpisodeGroup) -> Path:
+        if self.server_output_root is None:
+            return super()._server_directory(group)
+        return self.server_output_root / f"server-{group.episodes[0].episode_id}"
 
     async def _episode(
         self, client: AttestedClient, definitions: Json, group: EpisodeGroup, spec: EpisodeSpec
@@ -167,6 +218,9 @@ class CardInstanceSimulatorEnvironment(SimulatorEnvironment):
         definitions: Json,
         options: Json | None,
     ) -> DecisionInput:
+        if self.artifact_sink is not None:
+            self.artifact_sink.hold_graph(f"participant-{obs['viewer_player_id']}",
+                32 * (json_bound(obs) + json_bound(events) + json_bound(options)) + 65536)
         return decision_input(obs, events, cursor, definitions, options)
 
     def _reconcile_replay(
@@ -287,27 +341,31 @@ class CardInstanceSimulatorEnvironment(SimulatorEnvironment):
             value, context, before.end, layout=CORRECTED_CARD_INSTANCE_LAYOUT
         )
         ready = time.monotonic()
-        generated, selected = await worker.select_frame(frame, delta)
-        command = {
-            "command_id": str(uuid.uuid4()),
-            "expected_revision": frame.revision,
-            "action": selected.validate(generated.table, frame),
-        }
-        timings = {
-            **worker.last_timings,
-            "input_frame_host_ms": (ready - selection_started) * 1000,
-            "parent_decision_host_ms": (time.monotonic() - selection_started) * 1000,
-        }
-        sink = cast(CardInstanceJournalSink, journal)
-        index = sink.begin_frame(frame, delta, generated, selected, command, timings)
-        result.decision_timings.append(
-            {"actor": frame.actor, **timings, "storage_host_ms": sink.last_storage_ms}
-        )
-        return _DecisionReceipt(
-            command,
-            index,
-            len(generated.table.kinds),
-            timings["generation_ms"],
-            generated.report.attempts,
-            worker.inference_elapsed_ms,
-        )
+        admission = (nullcontext() if self.artifact_sink is None else
+            self.artifact_sink.budget.reserve(4096 * worker.caps.max_candidates
+                + 128 * worker.caps.max_candidates * worker.caps.max_positions + 65536))
+        with admission:
+            generated, selected = await worker.select_frame(frame, delta)
+            command = {
+                "command_id": str(uuid.uuid4()),
+                "expected_revision": frame.revision,
+                "action": selected.validate(generated.table, frame),
+            }
+            timings = {
+                **worker.last_timings,
+                "input_frame_host_ms": (ready - selection_started) * 1000,
+                "parent_decision_host_ms": (time.monotonic() - selection_started) * 1000,
+            }
+            sink = cast(CardInstanceJournalSink, journal)
+            index = sink.begin_frame(frame, delta, generated, selected, command, timings)
+            result.decision_timings.append(
+                {"actor": frame.actor, **timings, "storage_host_ms": sink.last_storage_ms}
+            )
+            return _DecisionReceipt(
+                command,
+                index,
+                len(generated.table.kinds),
+                timings["generation_ms"],
+                generated.report.attempts,
+                worker.inference_elapsed_ms,
+            )

@@ -9,11 +9,12 @@ import threading
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
+from typing import Self
 
-from gf_common.group_pack import MAX_JSON, Json, canonical_json, parse_json
-
-WRITER_BASE = 128 * 1024 * 1024
-SOURCE_BASE = 64 * 1024 * 1024
+from gf_common.artifacts import json_bound as json_bound  # noqa: PLC0414 -- compatibility pure re-export.
+from gf_common.group_pack import MAX_JSON, Json, StorageSettings, canonical_json, parse_json
+from gf_common.group_pack import SOURCE_BASE as SOURCE_BASE  # noqa: PLC0414 -- compatibility pure re-export.
+from gf_common.group_pack import WRITER_BASE as WRITER_BASE  # noqa: PLC0414 -- compatibility pure re-export.
 
 
 class CleanupError(RuntimeError):
@@ -42,7 +43,7 @@ class ByteBudget:
         self._stopped = False
 
     def acquire(self, size: int, deadline: float, *, wait: bool = False) -> None:
-        if size < 0 or size > self.limit:
+        if type(size) is not int or size < 0 or size > self.limit:
             raise ValueError("reservation exceeds capacity")
         with self._condition:
             while True:
@@ -67,6 +68,102 @@ class ByteBudget:
     def stop(self) -> None:
         with self._condition:
             self._stopped = True
+            self._condition.notify_all()
+
+
+class StorageBudget(ByteBudget):
+    """One thread-safe account for live Python, Writer and measured RAM bytes."""
+
+    def __init__(self, settings: StorageSettings, deadline: float) -> None:
+        super().__init__(settings.budget_bytes)
+        self.settings, self.deadline = settings, deadline
+        self.ram_bytes = 0
+
+    @property
+    def peak_bytes(self) -> int:
+        with self._condition:
+            return self.peak
+
+    def reserve(self, size: int, *, wait: bool = False) -> StorageReservation:
+        self.acquire(size, self.deadline, wait=wait)
+        return StorageReservation(self, size)
+
+    def measure_ram(self, size: int) -> None:
+        if type(size) is not int or size < 0:
+            raise ValueError("invalid RAM measurement")
+        with self._condition:
+            self.used += size - self.ram_bytes
+            self.ram_bytes = size
+            self.peak = max(self.peak, self.used)
+            self._condition.notify_all()
+            if self.used > self.limit:
+                self._stopped = True
+                raise ValueError("storage budget exceeded by RAM files")
+
+
+class StorageReservation:
+    def __init__(self, budget: StorageBudget, size: int) -> None:
+        self.budget, self.size = budget, size
+        self.closed = False
+
+    def resize(self, size: int) -> None:
+        with self.budget._condition:
+            if self.closed or type(size) is not int or size < 0:
+                raise ValueError("invalid storage reservation resize")
+            delta = size - self.size
+            if delta > 0:
+                self.budget.acquire(delta, self.budget.deadline)
+            elif delta < 0:
+                self.budget.release(-delta)
+            self.size = size
+
+    def close(self) -> None:
+        with self.budget._condition:
+            if not self.closed:
+                self.budget.release(self.size)
+                self.size, self.closed = 0, True
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        self.close()
+
+
+class BorrowedBudget(ByteBudget):
+    """Local bookkeeping backed by the SAME account; stop never stops its lender."""
+
+    def __init__(self, parent: StorageBudget, *, base: int = 0, limit: int | None = None) -> None:
+        super().__init__(parent.limit if limit is None else min(limit, parent.limit))
+        self.parent = parent
+        # The shared condition releases the SAME lock while waiting. A local
+        # lock held across parent admission would prevent another borrower
+        # operation from releasing bytes and deadlock a saturated queue.
+        self._condition = parent._condition
+        self.acquire(base, parent.deadline)
+
+    def acquire(self, size: int, deadline: float, *, wait: bool = False) -> None:
+        with self._condition:
+            if type(size) is not int or size < 0 or size > self.limit:
+                raise ValueError("reservation exceeds borrowed capacity")
+            while self.used + size > self.limit:
+                if self._stopped:
+                    raise RuntimeError("storage admission stopped")
+                if not wait:
+                    raise ValueError("borrowed storage budget exhausted")
+                self._condition.wait(remaining(deadline))
+            if self._stopped:
+                raise RuntimeError("storage admission stopped")
+            self.parent.acquire(size, deadline, wait=wait)
+            self.used += size
+            self.peak = max(self.used, self.peak)
+
+    def release(self, size: int) -> None:
+        with self._condition:
+            if size < 0 or size > self.used:
+                raise RuntimeError("invalid borrowed reservation release")
+            self.parent.release(size)
+            self.used -= size
             self._condition.notify_all()
 
 

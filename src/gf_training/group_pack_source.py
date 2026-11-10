@@ -30,8 +30,10 @@ from gf_training.group_pack_db import (
 )
 from gf_training.group_pack_resources import (
     SOURCE_BASE,
+    BorrowedBudget,
     ByteBudget,
     OwnedDescriptor,
+    StorageBudget,
     close_resources,
     remaining,
     reserve,
@@ -182,20 +184,31 @@ class PackedOriginals:
         allow_pending: bool = False,
         without_descriptor: bool = False,
         database_original: OriginalFile | None = None,
+        budget: StorageBudget | None = None,
     ) -> None:
         self.deadline = deadline
         self._cleanup_children: list[Json] = []
         self._owns_database = database_original is None
-        self.budget = ByteBudget(max_owned_bytes, base=SOURCE_BASE)
         self.directory = _no_symlink_path(path.parent)
         self.directory_identity = self.directory.stat()
         self.descriptor_file: OriginalFile | None = None
+        self.predecessor_file: OriginalFile | None = None
         self.database_file: OriginalFile | None = None
         self.db: sqlite3.Connection | None = None
         self.descriptor: Json = None
         self.validated: Json = None
         self.namespace = {DATABASE} if without_descriptor else {DATABASE, path.name}
+        predecessor = self.directory / descriptor_name("pending")
+        if not without_descriptor and path.name == descriptor_name("published"):
+            try:
+                predecessor.lstat()
+            except FileNotFoundError:
+                pass
+            else:
+                self.namespace.add(predecessor.name)
         self.metadata_charge = 0
+        self.budget = (ByteBudget(max_owned_bytes, base=SOURCE_BASE) if budget is None
+                       else BorrowedBudget(budget, base=SOURCE_BASE, limit=max_owned_bytes))
         try:
             self.check_namespace()
             if not without_descriptor:
@@ -210,6 +223,15 @@ class PackedOriginals:
                     raise ValueError("descriptor filename mismatch")
                 if self.descriptor["publication"] == "pending" and not allow_pending:
                     raise ValueError("pending physical descriptor has no public Source authority")
+                if predecessor.name in self.namespace and predecessor != path:
+                    self.predecessor_file = OriginalFile(predecessor, deadline)
+                    charge = 32 * self.predecessor_file.identity.st_size + 65536
+                    self.budget.acquire(charge, deadline)
+                    self.metadata_charge += charge
+                    if self.predecessor_file.read(MAX_JSON) != canonical_json(
+                        {**self.descriptor, "publication": "pending"}, limit=MAX_JSON
+                    ):
+                        raise ValueError("pending predecessor differs from SAME public seal")
             if database_original is None:
                 self.database_file = OriginalFile(self.directory / DATABASE, deadline)
             else:
@@ -234,14 +256,17 @@ class PackedOriginals:
             self.db = sqlite3.connect(uri, uri=True, timeout=min(5.0, remaining(deadline)))
             self.db.execute("PRAGMA query_only=ON")
             self.db.execute("PRAGMA cache_size=-32768")
-            self.validated = validate_database(
-                self.db,
-                deadline=deadline,
-                max_pack_bytes=256 * MIB,
-                max_owned_bytes=self.budget.limit - self.budget.used,
-            )
-            extra_charge = self.validated["metadata_charge"]
-            self.budget.acquire(extra_charge, deadline)
+            available = (self.budget.limit - self.budget.used if budget is None
+                         else min(self.budget.limit - self.budget.used, budget.limit - budget.used))
+            # Validation's internal bounded graph must exclude every other live user.
+            self.budget.acquire(available, deadline)
+            extra_charge = 0
+            try:
+                self.validated = validate_database(self.db, deadline=deadline,
+                    max_pack_bytes=256 * MIB, max_owned_bytes=available)
+                extra_charge = self.validated["metadata_charge"]
+            finally:
+                self.budget.release(available - extra_charge)
             self.metadata_charge += extra_charge
             if self.descriptor is not None:
                 seal = self.validated["seal"]
@@ -288,16 +313,21 @@ class PackedOriginals:
             self.database_file.recheck()
         if self.descriptor_file is not None:
             self.descriptor_file.recheck()
+        if self.predecessor_file is not None:
+            self.predecessor_file.recheck()
         self.check_namespace()
         if self.database_file is not None:
             self.database_file.check_identity()
         if self.descriptor_file is not None:
             self.descriptor_file.check_identity()
+        if self.predecessor_file is not None:
+            self.predecessor_file.check_identity()
 
     def close(self) -> None:
         close_resources(
             self,
-            [self.db, self.database_file if self._owns_database else None, self.descriptor_file],
+            [self.db, self.database_file if self._owns_database else None, self.descriptor_file,
+             self.predecessor_file],
         )
         self.db = None
         self.budget.release(self.budget.used)
@@ -311,6 +341,7 @@ def inspect_packed(
     allow_pending: bool = False,
     without_descriptor: bool = False,
     database_original: OriginalFile | None = None,
+    budget: StorageBudget | None = None,
 ) -> Json:
     originals = PackedOriginals(
         path,
@@ -319,6 +350,7 @@ def inspect_packed(
         allow_pending=allow_pending,
         without_descriptor=without_descriptor,
         database_original=database_original,
+        budget=budget,
     )
     try:
         result = {
