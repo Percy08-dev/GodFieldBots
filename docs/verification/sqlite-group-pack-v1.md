@@ -284,10 +284,51 @@ concurrent collection/learning panel remains a separate required measurement.
 - PASS scoped: native packed provider parity/ordinary PPO/resume above.
 - NOT RUN: pending final64/Dataset/Tree paths and affected actual CUDA checks.
 - NOT RUN: whole pytest/Ruff/mypy/Rust, current wheel/mandatory-only/old-data proofs.
-- NOT RUN: alternating same-HDD save/read and concurrent generation/learning
-  comparison with throughput, generation/wait/p95/p99/checkpoint/RAM/DB/WAL metrics.
+- PASS scoped: alternating same-HDD archival save/read comparison above.
+- FAIL first concurrent generation/learning block: first directory startup lacks
+  parent/artifact-registry.json before any update; remaining3trials NOT RUN.
+  Original failed block63f2b9bef0f34cfe97e5ea599ea9245e and retirement ledger are
+  retained. Main d3e15f9 runtime sources stay frozen during diagnosis; a new
+  operational comparison and generation/wait/p95/p99/RAM/DB/WAL report remain due.
 
 The existing ledger identifies no complete genuine formal parent/final64 Source;
 short two-update acceptance parents are permanently nonformal and cannot be
 retrofitted. The plan forbids a formal campaign/HPO/final test. Future component
 final64 tests must remain distinguished from any unrun genuine formal handoff.
+
+## Lineage control publication on D: (2026-11-11)
+
+The first concurrent block fails before collection at initial registry publication.
+A control-only reproduction fails6/6on D: and passes6/6on /tmp. A separate12case
+actualHOST probe isolates open-FD rename visibility: writable/readonly FDs held
+across replace hide the destination6/6; both close-before variants succeed6/6.
+These are diagnostic controls, not games or qualified Sources.
+
+The owned lineage writer now confirms writer close before its single mutable
+replace or immutable exclusive link/unlink. It binds final readonly verification
+to the SAME controlled inode/mode/length/mtime/hash, permits ctime handoff only
+for its controlled close/namespace effects, then requires strict six-field checks
+through actual readonly close. Scan snapshots retain their existing five fields
+and advance only after every check/retirement. Actual uncertain descriptor stages
+and the first error remain owned; no polling/rename retry/Source relaxation.
+
+Both independent reviews READY. Author's372disjoint checks pass (56publication,
+85historical lineage/resume,212Source/formal plus19affected HOST CPU rechecks),
+Ruff/fullmypy172 and8frozen algorithm AST checks pass. Reviewer independently
+runs56publication/40compatibility checks and bounded cancellation/replacement/
+budget/deadline probes. Root then runs12actualHOST cases across D:/tmp,
+ExperimentConfig/GroupPackExperimentConfig and3repetitions: two mutable writes,
+one immutable publication and one refused immutable overwrite per case. AllPASS;
+canonical hashes/scanner5tuple remain exact, source60674ee5/tests4931bdbf frozen.
+No game/learner/qualified-source experiment runs in these probes.
+
+The sandbox Source fixture fails its inherited Unix socket with EPERM before
+numeric launch; exact HOST selectors pass19cases with10existing CUDA skips and
+14deselected. No production timeout/skip change. The initial60s historical-test
+log was overwritten by the85PASS rerun; the report records its timeout. The first
+sandbox template directory was unavailable when root copied receipts; its batch
+log and the separate sandbox recheck's stderr/lifecycle remain preserved.
+Artifacts/reviews/raw probes/patch/log inventory are retained under
+`runs/assessments/sqlite-group-pack-v1-20261111/lineage-publication/`.
+This accepts the scoped control fix; final64/Dataset/Tree, whole verification and
+a new actual concurrent comparison remain pending.

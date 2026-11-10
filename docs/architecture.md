@@ -800,9 +800,15 @@ inference continuous2/pause1-resume2 with CUDA learner (64natural/4updates).
 Both fresh original/numeric/lineage audits pass; source-matched release/MIMALLOC
 wheel904038e1 is installed with its rollback retained. Identical-byte HDD archival
 comparison completes six pairs and reports faster writes/smaller archives but
-slower verified reads; directory default stays. Final64/Dataset/Tree, actual
-concurrent learning comparison and whole-project acceptance remain pending; this is not full-
-plan acceptance or learning quality. The default directory storage,
+slower verified reads; directory default stays.
+An actual D: startup failure also exposed lineage control rename visibility while
+an original FD stays open. The reviewed owned writer-close/namespace/readonly
+handoff now passes both reviews,372scoped regressions and12actual D:/ext4 control
+probes for old/new Configs and both publication modes. It preserves canonical
+bytes, scanner tuple shapes and ordinary Source identity checks.
+Final64/Dataset/Tree, actual concurrent learning comparison and whole-project
+acceptance remain pending; this is not full-plan acceptance or learning quality.
+The default directory storage,
 old Config identities and logical Collection5/Journal6/codec2 remain unchanged.
 The [design](design/sqlite-group-pack-v1.md) fixes the physical contract,
 seal/Writer retirement/publication ordering and managed memory-budget limits;

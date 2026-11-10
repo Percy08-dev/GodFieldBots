@@ -782,3 +782,69 @@ paired-model source custody. No real-data training gate is widened by storage.
 4. Separate correctness and architecture conformance for each stable increment,
    root exact-command acceptance and local commits. Whole project/CUDA/wheel/
    legacy proofs and same-HDD/concurrent-workload comparison remain required.
+
+## Controlled lineage publication on DrvFS (architecture READY)
+
+The first actual concurrent block fails before collection: _write keeps its
+writable temporary FD open through os.replace and immediate path verification.
+A persistence-only reproduction fails6/6on D: and passes6/6on /tmp. An independent
+12case namespace probe on the actual HOST D:9p/DrvFS mount shows ENOENT for all
+six renames with either a writable or readonly FD held; both close-before-rename
+variants succeed6/6. Held descriptors remain valid, and closing them makes the
+renamed name visible. This is not an eligibility/schema/config/monitor failure.
+Raw evidence: /tmp/gfb-rename-visibility-diagnostic-v2.json and preserved first
+block63f2b9bef0f34cfe97e5ea599ea9245e. No outcomes/updates are inferred or repaired.
+
+Revise only owned _write control publication, preserving its signature, canonical
+bytes, old Config/hash/format domains and immutable-versus-mutable semantics.
+It is a controlled write-close/namespace/readonly handoff, not a Source-admission
+relaxation or a retry for arbitrary missing files. Use the same contract on both
+filesystems/formats; do not infer a filesystem type or add a configuration switch.
+
+Before namespace publication, the actual owner exclusively creates its nonsymlink
+sibling temporary, writes/flushes/fsyncs it, verifies held object versus temporary
+path and exact bytes under the existing scan/deadline/budget, and captures device,
+inode, regular mode, length, mtime and SHA256. Actual writer close must be confirmed
+once BEFORE rename/link. An uncertain close retains its actual owner/capability
+and first error, prevents publication and is never retried by raw FD number.
+
+Then perform the existing single mutable replace, or immutable exclusive link and
+owned temporary unlink, with no live FD to this original across these namespace
+operations. All parent directories stay owned nonsymlink paths. Do not poll for
+visibility, retry rename/link, overwrite an immutable target, reopen another
+inode as a replacement, or treat eventual file appearance as successful cleanup.
+Namespace/close/inspection failure leaves the write failed and its actual owners
+reachable; no scan snapshot is advanced and no healthy caller result follows.
+
+Open the final original readonly with O_NOFOLLOW|O_NONBLOCK. Bind it to that
+ALREADY controlled original through exact device/inode/mode/length/mtime and full
+SHA256. ctime may change ONLY across this owner's confirmed writer-close and
+own rename/link/unlink operations, matching the accepted terminal-control
+handoff. Capture the new ctime only after those operations, then require strict
+six-field held/path identity and exact bytes throughout readonly verification,
+checked close and final path verification. A same-size mutation, path/symlink or
+inode replacement, final read/close failure or later ctime drift fails. Preserve
+retained readonly owner/uncertainty on failure; do not reconstruct authority from
+an arbitrary pathname or weaken ordinary SealedScan/Pack/DB Source checks.
+
+Advance scan.files[path] to the verified post-readonly-close snapshot and same
+canonical hash ONLY after every actual close and check succeeds. Handoff checks
+include mode in their six-field identity; scan.files retains the EXISTING
+_stat_identity five-field projection (device,inode,size,mtime,ctime), consumed
+unchanged by SealedScan and _ChainScan.finalize. Do not widen those tuple formats
+or relax their checks. Existing
+charges and deadlines still apply before effects; new private owner bookkeeping
+must also fit them. Keep original first errors and uncertain capabilities attached
+to actual exceptions/owners. No new persisted format, dependency, public authority,
+policy visibility, simulator change or learning condition is introduced.
+
+Required verification: reproduce original open-FD rename failure without games;
+old/new control bytes and _write signatures unchanged; actual close occurs before
+both mutable replace and immutable link/unlink; mutation/replacement/symlink at
+each handoff rejected; wrong inode/mode/length/mtime/hash and post-handoff ctime
+change rejected; failed write/close/rename/link/unlink/read/readonly-close retains
+actual owners and never advances snapshot; no raw close/rename retry; historical
+lineage/Source/resume regressions, formal frozen algorithm ASTs and static checks.
+After both reviews, run bounded persistence-only checks on ext4 and actual D:
+for both publication modes, then a NEW matched four-trial concurrent block.
+The original failed block stays failed and immutable.

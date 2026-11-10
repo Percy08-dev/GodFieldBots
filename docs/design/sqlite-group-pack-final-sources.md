@@ -241,6 +241,59 @@ manifest kind or DTO cannot pass those owner checks. Ordinary public Source
 construction and strict original custody remain unchanged. Tests separate low-
 level diagnostic bytes from rejected public/forged-pending Source access.
 
+### Failed final-slot cleanup lane (architecture READY)
+
+The packed executor permanently refuses normal calls after its first FFI/provider
+failure. The final Source must nevertheless retire its native slot before the
+parent joins that executor. Reusing normal call() for close_final_validation
+creates a cycle: the refusal prevents slot retirement, which prevents whole
+parent close. Whole-parent close must not be moved ahead of Source retirement.
+
+Add one private fixed-operation cleanup lane on the SAME packed executor for
+the SAME bound native session's close_final_validation only. It accepts no
+caller-selected callback, registry, new source, payload or budget. Healthy final
+closure first uses the ordinary checked call. The cleanup lane is available
+after sticky failure/expiry or failure of that close, on the original caller
+thread, with no concurrent normal submission. Any already-active Future is
+cancelled/joined through existing ownership before this lane proceeds; uncertain
+active work retains the owner and blocks the lane.
+
+Before its native call, permanently fence BOTH actual providers and cancel the
+existing Control. Native close must encounter that cancellation before any
+original-byte callback or filesystem recheck. The fixed close may retire the
+final slot and return its first guard error; a second SAME-session call may
+confirm the already-retired slot, matching the existing bounded two-attempt
+slot protocol. Escaped packet views or uncertain native retirement remain
+failures; an empty Python collection is not retirement evidence. No arbitrary
+method retry or raw-FD-number retry is introduced.
+
+Use the actual creator worker for native cleanup and any worker-created SQLite
+connection/loan retirement. Caller-created IO retires on the caller. A failed
+caller close must retain its actual creator/owner and cannot transfer that IO to
+the worker. Track/join the actual cleanup Future using the existing executor;
+its completion includes checked IO retirement for both providers. No second
+executor/session, join/hold release, parent-original refund, registry mutation,
+new reads or re-admission occurs here. Whole-parent close still owns terminal
+executor join, hold release and original/account retirement in the existing order.
+
+Keep error identity and terminal progress distinct: actual successful native
+close plus checked IO retirement can confirm the Source's slot/local cleanup
+even while the original operation remains failed. The facade records that
+concrete cleanup before propagating its first error; the executor/parent retain
+the same sticky failure and actual owners. No successful final facts, fitting,
+publication or resumed work follows this cleanup-only lane. Secondary native,
+creator-IO, Future or cancellation errors attach to that first failure and keep
+uncertain owners reachable. A cleanup return cannot mark the whole parent healthy.
+
+Verification: reproduce FFI/callback failure followed by final Source close;
+confirm fixed native close runs on the SAME worker, callbacks stay fenced and
+Control is cancelled before recheck, both providers' actual loans/IO retire, and
+Source slot retirement precedes parent join/hold/FD/account retirement. Cover
+first close guard error then actual terminal confirmation, escaped packet,
+caller-versus-worker close failures, cancelled/failed Future, pre-existing active
+work refusal/join, retained first error, and public/pending publication refusal.
+Existing directory final lifecycle and healthy packed closure remain unchanged.
+
 ### Pool-backed versus external caller growth (architecture READY)
 
 FormalGameParent._sync_native currently combines retained scan growth with

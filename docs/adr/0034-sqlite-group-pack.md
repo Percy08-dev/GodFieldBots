@@ -82,6 +82,18 @@ Both reviews and fresh source-matched249checks/fourD:/ext4 probes pass. It
 retains SAME-account/FD custody and strict DB/Source identity; no new DB control
 or original bytes are introduced. External diagnostics record the policy.
 
+The first concurrent runtime block fails before collection because DrvFS hides
+a renamed control while any FD to that original remains open. A12case actualHOST
+probe isolates that behavior. Owned lineage controls now use a confirmed writer
+close before their single replace or exclusive link/unlink, then bind readonly
+verification to the controlled inode/mode/length/mtime/full hash. Only owned
+write-close/namespace operations permit ctime handoff; subsequent checks stay
+strict through actual readonly close. Separate actual descriptor stages retain
+uncertainty without raw-number retry. Both reviews,372scoped checks and12fresh
+actualD:/ext4 old/new-Config mutable/immutable probes pass. Scanner5tuple,
+canonical bytes, existing Source custody and persisted versions remain unchanged.
+The original failed comparison stays failed; new operational evidence is pending.
+
 The design lists corruption/failure/ownership checks, complete runtime smoke
 coverage, old-data checks and same-HDD comparison requirements. Evidence and
 review dispositions will be recorded in a separate verification ledger.

@@ -61,6 +61,7 @@ from gf_models.structured_sealed import (
     inspect_retained_game_artifact_v3,
     pruning_basename,
 )
+from gf_training.group_pack_resources import OwnedDescriptor, close_resources, retain_cleanup
 from gf_training.lineage import _OWNED_LOCKS, checkpoint_path, generation_path
 
 RUN_REQUIRED = {'schema_version', 'algorithm', 'run_id', 'status', 'config_sha256', 'effective_config', 'config_inputs', 'identity', 'seed', 'device', 'created_unix', 'last_unix', 'wall_deadline_unix', 'admission_deadline_unix', 'execution_deadline_unix', 'updates', 'accepted_decisions', 'optimizer_steps', 'generation_sha256', 'collection_seconds', 'update_seconds', 'invocations', 'completed_updates', 'model_id', 'model_version', 'input_recipe', 'action_contract', 'purpose', 'synthetic_capacity', 'resume_identity', 'execution'}
@@ -738,70 +739,136 @@ def _validate_component_chain(directory: Path, *, require_complete: bool, requir
     return state, records
 
 
+class _LineagePublication:
+    """Retain separate actual capabilities through a controlled namespace handoff."""
+
+    def __init__(self, path: Path, scan: SealedScan,
+                 parents: list[tuple[Path, tuple[int, int, int]]]) -> None:
+        self.path, self.scan, self.parents = path, scan, parents
+        self.temporary = path.with_name(path.name + '.tmp')
+        self.writer = OwnedDescriptor(-1)
+        self.reader = OwnedDescriptor(-1)
+        self._cleanup_children: list[Any] = []
+        self.original: os.stat_result | None = None
+        self.readonly: os.stat_result | None = None
+        self.sha256 = ''
+
+    @staticmethod
+    def identity(info: os.stat_result) -> tuple[int, ...]:
+        return (info.st_dev, info.st_ino, info.st_mode, info.st_size,
+                info.st_mtime_ns, info.st_ctime_ns)
+
+    def check_parents(self) -> None:
+        self.scan.check()
+        for directory, expected in self.parents:
+            current = directory.lstat()
+            if (current.st_dev, current.st_ino, current.st_mode) != expected:
+                raise ContractError('published lineage parent changed from owned directory')
+
+    def verify(self, descriptor: OwnedDescriptor, path: Path, expected: os.stat_result) -> None:
+        self.check_parents()
+        key = self.identity(expected)
+        if (self.identity(os.fstat(descriptor.fd)) != key
+                or self.identity(path.lstat()) != key):
+            raise ContractError('published lineage path/object differs from controlled original')
+        value, offset = hashlib.sha256(), 0
+        while offset < expected.st_size:
+            self.scan.check()
+            block = os.pread(descriptor.fd, min(65536, expected.st_size - offset), offset)
+            if not block:
+                raise ContractError('published lineage original shortened')
+            value.update(block)
+            offset += len(block)
+        if os.pread(descriptor.fd, 1, offset) or value.hexdigest() != self.sha256:
+            raise ContractError('published lineage content differs from owned bytes')
+        self.check_parents()
+        if (self.identity(os.fstat(descriptor.fd)) != key
+                or self.identity(path.lstat()) != key):
+            raise ContractError('published lineage identity changed during verification')
+
+    def close(self) -> None:
+        close_resources(self, [self.writer, self.reader])
+
+
 def _write(path: Path, value: Json, *, scan: SealedScan, immutable: bool = False) -> str:
     if not isinstance(scan, _ChainScan):
         raise ContractError('owned lineage writer requires chain snapshots')
     if not path.is_relative_to(scan.root):
         raise ContractError('foreign lineage publication path')
+    parents = []
     for directory in (path.parent, *path.parent.parents):
-        if not stat.S_ISDIR(directory.lstat().st_mode):
+        info = directory.lstat()
+        if not stat.S_ISDIR(info.st_mode):
             raise ContractError('lineage publication parent must be owned nonsymlink directory')
+        parents.append((directory, (info.st_dev, info.st_ino, info.st_mode)))
         if directory == scan.root:
             break
     scan.charge(32 * json_bytes(value) + 65536)
+    scan.charge(4096 + sum(512 + len(str(directory).encode()) for directory, _ in parents))
     raw = (canonical(value) + '\n').encode()
     scan.check()
-    temporary = path.with_name(path.name + '.tmp')
     if path.is_symlink():
         raise ContractError('refusing mutable lineage symlink')
-    fd = os.open(temporary, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
-    with os.fdopen(fd, 'w+b') as target:
-        target.write(raw)
-        target.flush()
-        os.fsync(target.fileno())
+    owner = _LineagePublication(path, scan, parents)
+    owner.sha256 = hashlib.sha256(raw).hexdigest()
+    try:
+        owner.check_parents()
+        owner.writer.fd = os.open(owner.temporary, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        offset = 0
+        while offset < len(raw):
+            scan.check()
+            amount = os.write(owner.writer.fd, memoryview(raw)[offset:])
+            if amount <= 0:
+                raise ContractError('published lineage write made no progress')
+            offset += amount
         scan.check()
-        before = os.fstat(target.fileno())
+        os.fsync(owner.writer.fd)
+        scan.check()
+        owner.original = os.fstat(owner.writer.fd)
+        if not stat.S_ISREG(owner.original.st_mode) or owner.original.st_size != len(raw):
+            raise ContractError('published lineage temporary must be the complete regular original')
+        owner.verify(owner.writer, owner.temporary, owner.original)
+        owner.writer.close()
+        owner.check_parents()
+        expected = owner.identity(owner.original)[:5]
+        if owner.identity(owner.temporary.lstat())[:5] != expected:
+            raise ContractError('published lineage temporary changed after writer close')
+        scan.check()
         if immutable:
-            os.link(temporary, path, follow_symlinks=False)
+            os.link(owner.temporary, path, follow_symlinks=False)
+            owner.check_parents()
+            if owner.identity(owner.temporary.lstat())[:5] != expected:
+                raise ContractError('published lineage temporary changed before owned unlink')
+            scan.check()
+            owner.temporary.unlink()
         else:
-            os.replace(temporary, path)
-        actual = path.lstat()
-        if (actual.st_dev, actual.st_ino, actual.st_size, actual.st_mtime_ns) != (before.st_dev, before.st_ino, len(raw), before.st_mtime_ns):
+            os.replace(owner.temporary, path)
+        owner.check_parents()
+        # Only the confirmed writer retirement and this owner's namespace effects
+        # may change ctime. All subsequent checks include this captured ctime.
+        owner.readonly = path.lstat()
+        if owner.identity(owner.readonly)[:5] != expected:
             raise ContractError('published lineage object differs from owned temporary')
-        target.seek(0)
-        if target.read(len(raw) + 1) != raw:
-            raise ContractError('published lineage content differs from owned bytes')
-        after = os.fstat(target.fileno())
-        current = path.lstat()
-        if ((after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns)
-                != (actual.st_dev, actual.st_ino, actual.st_size, actual.st_mtime_ns, actual.st_ctime_ns)
-                or (current.st_dev, current.st_ino, current.st_size, current.st_mtime_ns, current.st_ctime_ns)
-                != (actual.st_dev, actual.st_ino, actual.st_size, actual.st_mtime_ns, actual.st_ctime_ns)):
-            raise ContractError('published lineage identity changed during verification')
-        if immutable:
-            temporary.unlink()
         scan.check()
-        post_unlink = os.fstat(target.fileno())
-        if ((post_unlink.st_dev, post_unlink.st_ino, post_unlink.st_size, post_unlink.st_mtime_ns)
-                != (before.st_dev, before.st_ino, len(raw), before.st_mtime_ns)):
-            raise ContractError('owned lineage object changed after temporary unlink')
-        # Unlink legitimately changes ctime/nlink. Capture that SAME held object,
-        # then verify the final path and bytes against this post-unlink baseline.
-        published_fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
-        with os.fdopen(published_fd, 'rb') as published:
-            if _stat_identity(os.fstat(published.fileno())) != _stat_identity(post_unlink):
-                raise ContractError('published lineage path replaced after temporary unlink')
-            if published.read(len(raw) + 1) != raw:
-                raise ContractError('published lineage bytes changed after temporary unlink')
-            if (_stat_identity(os.fstat(published.fileno())) != _stat_identity(post_unlink)
-                    or _stat_identity(os.fstat(target.fileno())) != _stat_identity(post_unlink)
-                    or _stat_identity(path.lstat()) != _stat_identity(post_unlink)):
-                raise ContractError('published lineage path/object changed after verification')
+        owner.reader.fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
+        owner.verify(owner.reader, path, owner.readonly)
+        owner.reader.close()
+        owner.check_parents()
+        final = path.lstat()
+        if owner.identity(final) != owner.identity(owner.readonly):
+            raise ContractError('published lineage path changed after readonly close')
         scan.check()
-        # A verified write by this owner advances, rather than discards, its
-        # existing snapshot. Other parent records remain bound to their reads.
-        scan.files[path] = (_stat_identity(post_unlink), hashlib.sha256(raw).hexdigest())
-    return hashlib.sha256(raw).hexdigest()
+        scan.files[path] = (_stat_identity(final), owner.sha256)
+        return owner.sha256
+    except BaseException as error:
+        error.__dict__['_lineage_publication_owner'] = owner
+        retain_cleanup(owner, error)
+        try:
+            owner.close()
+        except BaseException as cleanup:  # noqa: BLE001 -- first failure and actual capabilities survive.
+            retain_cleanup(owner, cleanup)
+            error.add_note('published lineage cleanup failure: ' + type(cleanup).__name__)
+        raise
 
 
 def commit_component_generation(directory: Path, state: Json, *, generation: int, update: Json | None, controls: Json,

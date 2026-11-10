@@ -501,3 +501,73 @@ retirement. No formal/strength/independent-trajectory determinism claim follows.
 Receipts/reviews/configs/phase logs are retained in native-source/ assessment.
 Final64/Dataset/Tree stage implementation, full current wheel/legacy/whole-suite
 checks and actual concurrent PanelB remain required for complete-plan acceptance.
+
+Root starts PanelB against accepted main d3e15f9, with main runtime sources and
+installed NativeB frozen; isolated Task3C work does not enter this measurement.
+The first directory trial fails at startup (0.538s), before any collection/update
+request, with missing parent/artifact-registry.json. Failed block
+63f2b9bef0f34cfe97e5ea599ea9245e is retained; remaining three trials are NOT RUN.
+The failure ledger confirms permanent admission fence, settled creations, all six
+actual Popen capabilities retired, transports retired and no unknown tasks. The
+supervised coordinator exits86 through the reviewed failure-only OS boundary;
+this is not a healthy Source close or comparison acceptance. Root assigns a
+bounded read-only startup diagnosis before any retry; no failed parent is reused.
+
+The persistence-only diagnosis reproduces the missing path at _write's immediate
+post-os.replace Path.lstat in6/6fresh D: parents; the renamed registry is visible
+after each error. The identical helper/config/payload on /tmp passes6/6initial
+registry+run writes. No game, learner or subprocess was started. This establishes
+the actual failure boundary independently of observer scans or old-format schema;
+it does not justify retrying/weakening original validation. Root retains the
+failed block and evaluates a bounded filesystem/publication response before any
+new operational block.
+
+Stage3C identifies a second lifetime cycle after an FFI/provider failure: normal
+packed executor.call refuses, preventing final-slot retirement that must precede
+parent executor join. The fixed SAME-session final-close-only cleanup lane passes
+architecture READY (/tmp/gfb-final-failed-slot-cleanup-review.md). Both providers
+are fenced and Control cancelled before any native original recheck; actual
+creator IO/Futures and sticky first error remain owned. Source-slot completion
+does not release parent holds/originals/accounts or grant healthy publication.
+
+The12case actualHOST9p namespace probe confirms both writable and readonly held
+FDs hide the renamed destination6/6; closing before rename makes it visible6/6.
+No polling/retry or Source relaxation is accepted. Root's controlled lineage
+publication design is architecture READY after clarifying local strict6 checks
+versus the unchanged scanner5tuple projection. A separate Main implementer owns
+only _write/private capability helper/test, explicitly isolated from Stage3C.
+Production60674ee5/tests4931bdbf are frozen; architecture conformance READY with
+independent56PASS0.45s. Author's85historical lineage checks pass82.26s, fullmypy172
+and scopedRuff pass. Source/formal sandbox setup hits the previously identified
+AF_UNIX EPERM before numeric launches; exact bounded HOST checks are authorized,
+with failed logs preserved. Correctness review, actualD probes and new operational
+block are still pending; no failed measurement is retroactively repaired.
+
+Temporary error_record diagnostics add only bounded actual traceback metadata,
+no locals/source/filesystem reads; all other source/lifecycle/measurement byte
+and AST checks are identical. Author and independent reviewer pass54inertmethods;
+harness620ed176 is READY. Original failed block retains its old60a1793harness.
+Root also prepares the final optional-free environment (8mandatory distributions,
+no app installed yet) and a package inventory auditor. Reference-package positive
+and deliberately changed Python/Rust source negative controls pass. These are
+preparation only, not current application/native package/startup acceptance.
+
+Task3C scope clarification: native/src/card_instance_tree_raw.rs owns the actual
+Tree RAW provenance parser, so its exact packed subtype/storage_binding and
+provenance5 dispatch is assigned. Python's actual assigned runtime is
+card_instance_game_tree_runtime.py; no nonexistent structured_tree_runtime.py or
+new replacement layer is created. Numeric/inference4/weights and old fieldsets
+remain governed by the accepted design.
+
+Root ACCEPTS controlled lineage publication60674ee5/tests4931bdbf after BOTH
+READY reviews and12fresh HOST cases across D:/tmp and old/new Configs, each
+covering mutable write/update, immutable publication/refused overwrite with
+unchanged snapshots. Canonical bytes/scanner5tuple and strict Source custody
+remain unchanged. Source/formal HOST19PASS resolves sandbox AF_UNIX setup errors;
+full172mypy/Ruff/8kernel AST checks pass. Author372disjoint checks pass. Raw
+reviews/patch/logs/probes copied to lineage-publication assessment. The original
+60s timeout log was overwritten; the initial sandbox template directory already
+rotated away before root copy, so root records those evidence limits explicitly.
+Batch failure log and isolated sandbox stderr/lifecycle plus HOST receipt survive.
+The accepted Main patch will be applied by the Stage3C owner; no root edit of its
+owned stage file. Actual comparison waits the generation-observer/reducer reviews.
