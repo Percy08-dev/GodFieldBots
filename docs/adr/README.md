@@ -72,6 +72,10 @@ native Sourceの構造化収集テストへTorch先読みを拡張。設計・�
 
 ## 記録テンプレート
 
+追加: [0034](0034-sqlite-group-pack.md) — Accepted (保存基盤の設計):
+明示選択のグループPack＋SQLite、Python Writer、sealと原本所有権。
+実装とruntime／Source／native／final64接続のレビューは進行中。既定形式は維持。
+
 追加: [0023](0023-structured-encoders-and-diverse-search.md) — Accepted (独立実装可能部分):
 構造化入力・設定可能E2E encoderと予算付き多様候補探索の共同導入。
 core・確認済み候補の設計レビューはREADY。公開utility行動契約の不足はissue0005、全体受入は未完了。

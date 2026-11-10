@@ -780,6 +780,17 @@ Interrupted runs get no guessed final observation, return or bootstrap.
 
 ## Persistence and evaluation
 
+[ADR0034](adr/0034-sqlite-group-pack.md) accepts the design of an explicit
+`sqlite-group-pack-v1` storage foundation: one immutable database per collection,
+one zstd3 Pack per managed Simulator group, a Python-only Writer and catalog,
+and retained descriptor/DB ArtifactSource custody. The foundation implementation
+and runtime/Source/native/final64 integration are in progress under separate
+review gates; this is not full-plan acceptance. The default directory storage,
+old Config identities and logical Collection5/Journal6/codec2 remain unchanged.
+The [design](design/sqlite-group-pack-v1.md) fixes the physical contract,
+seal/Writer retirement/publication ordering and managed memory-budget limits;
+the [ledger](design/sqlite-group-pack-progress.md) records current scope.
+
 Versioned participant JSONL journals retain exact input/history boundary,
 ordered CandidateSet, selection, policy version/logprob/value, command identity,
 acknowledgement and timing. Commit acceptance only on positive response or verified
