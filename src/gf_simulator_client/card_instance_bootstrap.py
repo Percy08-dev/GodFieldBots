@@ -46,7 +46,11 @@ from gf_common.structured import EventBank
 from gf_common.structured_layout import CORRECTED_CARD_INSTANCE_LAYOUT
 from gf_common.structured_wire import game_generated_dict_v3, parse_delta, parse_frame
 from gf_models.card_instance_baselines import CardInstanceBaseline
-from gf_models.structured_binding import child_cuda_visibility, safe_options_game_v3
+from gf_models.structured_binding import (
+    child_cuda_visibility,
+    safe_options_game_v3,
+    safe_options_game_v4,
+)
 from gf_models.structured_runtime import own_game_worker_settings_v3
 from gf_simulator_client.framing import (
     frame_decode_bytes,
@@ -106,7 +110,9 @@ def main() -> None:
         integer(initial["sampling_seed"])
         sampling_seed = initial["sampling_seed"]
         from gf_models.card_instance_game_tree_runtime import safe_tree_options_game_v3
-        parser = safe_tree_options_game_v3 if tree else safe_options_game_v3
+        raw_options = initial.get("policy_options")
+        v4 = type(raw_options) is dict and raw_options.get("version") == "4"
+        parser = safe_tree_options_game_v3 if tree else safe_options_game_v4 if v4 else safe_options_game_v3
         options = parser(initial["policy_options"], actions=actions, rules=rules) if neural or tree else None
         if tree and options is not None and options["resources"]["max_owned_bytes"] != _MANAGED:
             raise ContractError("Tree3 argv/decoded resources must match before model allocation")
@@ -133,13 +139,21 @@ def main() -> None:
             else:
                 os.environ["CUDA_VISIBLE_DEVICES"] = visibility
             from gf_common.structured_layout import layout_for_contract
+            from gf_models.hpo_config import model_config_v4
             from gf_models.structured_config import InferenceBindingV2, model_config_v3
-            from gf_models.structured_policy import GameStructuredPolicyV3
-            policy = GameStructuredPolicyV3.from_artifact(
-                Path(options["checkpoint"]), options["expected_manifest_digest"],
-                model_config_v3(options["model"], layout=layout_for_contract(actions.action_contract)),
-                InferenceBindingV2(**options["inference"]), options["action_config_hash"],
-                action_contract=actions.action_contract, rules=rules)
+            from gf_models.structured_policy import GameStructuredPolicyV3, GameStructuredPolicyV4
+            if v4:
+                policy = GameStructuredPolicyV4.from_artifact(
+                    Path(options["checkpoint"]), options["expected_manifest_digest"],
+                    model_config_v4(options["model"], layout=layout_for_contract(actions.action_contract)),
+                    InferenceBindingV2(**options["inference"]), options["action_config_hash"],
+                    action_contract=actions.action_contract, rules=rules)
+            else:
+                policy = GameStructuredPolicyV3.from_artifact(
+                    Path(options["checkpoint"]), options["expected_manifest_digest"],
+                    model_config_v3(options["model"], layout=layout_for_contract(actions.action_contract)),
+                    InferenceBindingV2(**options["inference"]), options["action_config_hash"],
+                    action_contract=actions.action_contract, rules=rules)
         model_load_ms = (time.perf_counter() - load_started) * 1000 if neural or tree else 0.0
         policy.reset(sampling_seed)
         del initial, options

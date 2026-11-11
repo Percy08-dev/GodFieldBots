@@ -109,9 +109,12 @@ class Learner:
     def parity(self, rollout: StructuredRollout) -> Json:
         # Component2 preserves its original stream behavior. Game parity is read-only.
         devices = list(range(self.torch.cuda.device_count())) if self.binding.device != "cpu" else []
-        scope = self.torch.random.fork_rng(devices=devices) if self._context.schema == 4 else nullcontext()
+        scope = self.torch.random.fork_rng(devices=devices) if self._context.schema >= 4 else nullcontext()
         with scope:
             return self._parity(rollout)
+
+    def _suffix_length(self, decisions: int) -> int:
+        return min(decisions, self.model.temporal.sequence_length)
 
     def _parity(self, rollout: StructuredRollout) -> Json:
         self.admit(rollout)
@@ -133,7 +136,7 @@ class Learner:
                 # This actual learner-device suffix graph stays differentiable;
                 # no persisted or previous-update latent is used as a shortcut.
                 split_logs, split_value, _ = self.network(frames, candidates,
-                    suffix_length=min(len(frames), self.model.temporal.sequence_length))
+                    suffix_length=self._suffix_length(len(frames)))
                 if not split_logs.requires_grad or not split_value.requires_grad:
                     raise ContractError("learner split lost suffix gradients")
                 self.synchronize()
@@ -147,7 +150,8 @@ class Learner:
                         raise ContractError("whole-batch frozen saved/cache/full/device/split parity failed before update")
                     maximum = max(maximum, float((actual - expected).abs().max()))
                 del split_logs, split_value, checks
-        return {"atol": 1e-5, "rtol": 1e-5, "max_abs_error": maximum, "decisions": len(rollout),
+        return {"atol": 1e-5, "rtol": 1e-5, "max_abs_error": maximum,
+                "decisions": sum(len(episode.frames) for episode in rollout.episodes),
                 "checks": ["saved", "cpu-cache", "cpu-full", "learner-full", "learner-split"]}
 
     def update(self, rollout: StructuredRollout) -> Json:

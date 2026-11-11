@@ -298,6 +298,17 @@ def static_semantics_v3(model: Any, *, layout: StructuredLayout, action_contract
         "spec_inventory_sha256": action_contract.spec_inventory_sha256}
 
 
+def static_semantics_v4(model: Any, *, layout: StructuredLayout, action_contract: CardInstanceContract,
+                        rules: CardInstanceRules) -> Json:
+    """Only inference semantics; reward and optimizer are resume5 training fields."""
+    from gf_models.hpo_config import _legacy_validation_proxy, validate_model_v4
+    validate_model_v4(model, layout=layout)
+    result = static_semantics_v3(_legacy_validation_proxy(model), layout=layout,
+        action_contract=action_contract, rules=rules)
+    result.pop("reward_policy_version")
+    return result
+
+
 @dataclass(frozen=True)
 class _SealedContextV3:
     layout: StructuredLayout
@@ -307,6 +318,26 @@ class _SealedContextV3:
     synthetic_capacity: bool
     action_config_hash: str
     game: bool = False
+
+    @property
+    def schema(self) -> int:
+        return 4
+
+    @property
+    def semantic_keys(self) -> set[str]:
+        return SEMANTIC_KEYS_V3
+
+    def model(self, raw: Json) -> Any:
+        return model_config_v3(raw, layout=self.layout)
+
+    def semantics(self, model: Any) -> Json:
+        return static_semantics_v3(model, layout=self.layout, action_contract=self.action_contract, rules=self.rules)
+
+    def resume_metadata(self) -> Json:
+        return {}
+
+    def optimizer(self, model: Any) -> Json:
+        return ADAM
 
     @property
     def class_keys(self) -> set[str]:
@@ -319,6 +350,38 @@ class _SealedContextV3:
         else:
             check_input_binding_v3(raw, action_contract=self.action_contract, rules=self.rules,
                 purpose=self.purpose, synthetic_capacity=self.synthetic_capacity)
+
+
+@dataclass(frozen=True)
+class _SealedContextV4(_SealedContextV3):
+    training_recipe: Json | None = None
+    optimizer_recipe: Json | None = None
+
+    @property
+    def schema(self) -> int:
+        return 5
+
+    @property
+    def semantic_keys(self) -> set[str]:
+        return SEMANTIC_KEYS_V3 - {"reward_policy_version"}
+
+    def model(self, raw: Json) -> Any:
+        from gf_models.structured_binding import recorded_inference_model_v4
+        return recorded_inference_model_v4(raw, layout=self.layout)
+
+    def semantics(self, model: Any) -> Json:
+        return static_semantics_v4(model, layout=self.layout, action_contract=self.action_contract, rules=self.rules)
+
+    def resume_metadata(self) -> Json:
+        if type(self.training_recipe) is not dict:
+            raise ContractError("sealed resume5 requires an expected closed training recipe")
+        return {"training_recipe": self.training_recipe}
+
+    def optimizer(self, model: Any) -> Json:
+        from gf_models.structured_artifacts import _optimizer_descriptor
+        if self.optimizer_recipe is None:
+            raise ContractError("sealed resume5 requires the expected optimizer recipe")
+        return _optimizer_descriptor(model, self.optimizer_recipe)
 
 
 def validate_recorded_semantics_v3(value: Json, model: Any, *, layout: StructuredLayout,
@@ -337,7 +400,12 @@ def _semantics(value: Json, model: Any, context: _SealedContextV3 | None = None)
     if context is None:
         validate_recorded_semantics(value, model)
     else:
-        validate_recorded_semantics_v3(value, model, layout=context.layout, action_contract=context.action_contract, rules=context.rules)
+        if not context.semantic_keys <= value.keys() or any(canonical(value[key]) != canonical(item)
+                for key, item in context.semantics(model).items()):
+            raise ContractError("unsupported recorded structured semantics")
+        runtime = closed(value["runtime"], {"torch", "numpy", "python", "gil_enabled"})
+        if any(type(runtime[key]) is not str or not runtime[key] for key in ("torch", "numpy", "python")) or type(runtime["gil_enabled"]) is not bool:
+            raise ContractError("invalid recorded runtime shape")
     producer = closed(value['producer'], {'code_revision', 'source_digest'})
     checksum(producer['source_digest'])
     if producer['code_revision'] is not None and (type(producer['code_revision']) is not str or re.fullmatch(r'[0-9a-f]{40}', producer['code_revision']) is None):
@@ -367,8 +435,8 @@ def _inference_metadata(directory: Path, expected_inference_digest: str, action_
 
 def _inference_document(inference: Json, action_contract: Any, purpose: str, synthetic_capacity: bool,
                         context: _SealedContextV3 | None = None) -> tuple[Json, Any, Json]:
-    semantic_keys, class_keys = (SEMANTIC_KEYS, CLASSIFICATION) if context is None else (SEMANTIC_KEYS_V3, context.class_keys)
-    schema = 3 if context is None else 4
+    semantic_keys, class_keys = (SEMANTIC_KEYS, CLASSIFICATION) if context is None else (context.semantic_keys, context.class_keys)
+    schema = 3 if context is None else context.schema
     closed(inference, {'schema_version', 'kind', 'model', 'architecture_identity', 'action_config_hash', 'producer', 'weights'} | semantic_keys | class_keys)
     if context is None:
         check_input_binding({key: inference[key] for key in class_keys}, action_contract=action_contract, purpose=purpose, synthetic_capacity=synthetic_capacity)
@@ -379,7 +447,7 @@ def _inference_document(inference: Json, action_contract: Any, purpose: str, syn
     if type(inference['schema_version']) is not int or inference['schema_version'] != schema or inference['kind'] != 'structured-inference':
         raise ContractError('sealed inference3 required')
     model = (recorded_model_config_v2(inference['model'], inference['token_signature']) if context is None else
-             model_config_v3(inference['model'], layout=context.layout))
+             context.model(inference['model']))
     if context is not None and context.game and model.max_positions > 18:
         raise ContractError("game sealed model capacity exceeds real18")
     options: dict[str, Any] = {} if context is None else {"layout": context.layout}
@@ -398,13 +466,15 @@ def _inference_document(inference: Json, action_contract: Any, purpose: str, syn
 
 def _inspect_retained_artifact(directory: Path, *, expected_inference_digest: str, action_contract: Any,
                               purpose: str, synthetic_capacity: bool, scan: SealedScan, context: _SealedContextV3 | None = None) -> SealedArtifact:
-    semantic_keys, class_keys = (SEMANTIC_KEYS, CLASSIFICATION) if context is None else (SEMANTIC_KEYS_V3, context.class_keys)
-    schema = 3 if context is None else 4
+    semantic_keys, class_keys = (SEMANTIC_KEYS, CLASSIFICATION) if context is None else (context.semantic_keys, context.class_keys)
+    schema = 3 if context is None else context.schema
     inference, model, expected_weights = _inference_metadata(directory, expected_inference_digest, action_contract,
                                                             purpose, synthetic_capacity, scan, context)
     resume = scan.object(directory / 'resume.json')
+    metadata = {} if context is None else context.resume_metadata()
+    optimizer_recipe = ADAM if context is None else context.optimizer(model)
     closed(resume, {'schema_version', 'kind', 'inference_digest', 'model', 'binding', 'resume_identity', 'producer',
-        'optimizer_steps', 'optimizer_recipe', 'parameter_states', 'cuda_rng_count', 'shuffle_rng', 'state'} | ({'action_config_hash'} if context is not None else set()) | semantic_keys | class_keys)
+        'optimizer_steps', 'optimizer_recipe', 'parameter_states', 'cuda_rng_count', 'shuffle_rng', 'state'} | ({'action_config_hash'} if context is not None else set()) | semantic_keys | class_keys | set(metadata))
     if context is None:
         check_input_binding({key: resume[key] for key in class_keys}, action_contract=action_contract, purpose=purpose, synthetic_capacity=synthetic_capacity)
     else:
@@ -412,10 +482,18 @@ def _inspect_retained_artifact(directory: Path, *, expected_inference_digest: st
         if resume["action_config_hash"] != context.action_config_hash:
             raise ContractError("recorded resume4 action Config mismatch")
     checksum(resume['inference_digest'])
+    paired_model = resume["model"]
+    if schema == 5:
+        from gf_models.hpo_config import model_config_v4
+        from gf_models.structured_binding import inference_model
+        assert context is not None
+        full_model = model_config_v4(paired_model, layout=context.layout)
+        paired_model = inference_model(full_model)
     if (type(resume['schema_version']) is not int or resume['schema_version'] != schema or resume['kind'] != 'structured-resume'
-            or resume['inference_digest'] != expected_inference_digest or canonical(resume['model']) != canonical(inference['model'])
+            or resume['inference_digest'] != expected_inference_digest or canonical(paired_model) != canonical(inference['model'])
             or any(canonical(resume[key]) != canonical(inference[key]) for key in semantic_keys)
-            or canonical(resume['optimizer_recipe']) != canonical(ADAM)):
+            or canonical(resume['optimizer_recipe']) != canonical(optimizer_recipe)
+            or any(canonical(resume[key]) != canonical(value) for key, value in metadata.items())):
         raise ContractError('sealed paired resume/inference declarations mismatch')
     _semantics(resume, model, context)
     if (resume['producer']['source_digest'] != inference['producer']['source_digest']
@@ -581,3 +659,57 @@ def inspect_pruned_game_inference_v3(directory: Path, *, expected_inference_dige
         expected_resume_digest=expected_resume_digest, original_files=original_files,
         deletion_receipt=deletion_receipt, action_contract=actions.action_contract,
         purpose='qualified_game', synthetic_capacity=False, scan=scan, _context=context)
+
+
+def _game_sealed_context_v4(actions: ActionConfigV3, rules: CardInstanceRules, *,
+                             training_recipe: Json | None = None,
+                             optimizer_recipe: Json | None = None) -> _SealedContextV4:
+    from dataclasses import asdict
+
+    from gf_common.domain import digest
+    input_binding_game_v3(actions.action_contract, rules)
+    if type(actions) is not ActionConfigV3 or actions.max_sequence_length > 18:
+        raise ContractError("sealed model4 requires exact real18 actions")
+    return _SealedContextV4(layout_for_contract(actions.action_contract), actions.action_contract, rules,
+        "qualified_game", False, digest(asdict(actions)), True, training_recipe, optimizer_recipe)
+
+
+def validate_game_inference_metadata_v4(inference: Json, *, actions: ActionConfigV3,
+                                        rules: CardInstanceRules) -> Any:
+    """Pure recorded format5 validation; no training imports or runtime query."""
+    context = _game_sealed_context_v4(actions, rules)
+    _, model, _ = _inference_document(inference, actions.action_contract, "qualified_game", False, context)
+    return model
+
+
+def inspect_retained_game_inference_v4(directory: Path, *, expected_inference_digest: str,
+                                        actions: ActionConfigV3, rules: CardInstanceRules,
+                                        scan: SealedScan) -> SealedArtifact:
+    inference = scan.object(directory / "inference.json", checksum(expected_inference_digest))
+    validate_game_inference_metadata_v4(inference, actions=actions, rules=rules)
+    scan.bundle(directory, inference["weights"])
+    scan.finalize()
+    return SealedArtifact(inference, None,
+        {"inference.json": expected_inference_digest, **inference["weights"]["files"]}, True)
+
+
+def inspect_retained_game_artifact_v4(directory: Path, *, expected_inference_digest: str,
+                                      actions: ActionConfigV3, rules: CardInstanceRules,
+                                      training_recipe: Json, optimizer_recipe: Json,
+                                      scan: SealedScan) -> SealedArtifact:
+    context = _game_sealed_context_v4(actions, rules, training_recipe=training_recipe,
+        optimizer_recipe=optimizer_recipe)
+    return _inspect_retained_artifact(directory, expected_inference_digest=expected_inference_digest,
+        action_contract=actions.action_contract, purpose="qualified_game", synthetic_capacity=False,
+        scan=scan, context=context)
+
+
+def inspect_pruned_game_inference_v4(directory: Path, *, expected_inference_digest: str,
+                                    expected_resume_digest: str, original_files: Json, deletion_receipt: Json,
+                                    actions: ActionConfigV3, rules: CardInstanceRules,
+                                    scan: SealedScan) -> SealedArtifact:
+    return inspect_pruned_inference(directory, expected_inference_digest=expected_inference_digest,
+        expected_resume_digest=expected_resume_digest, original_files=original_files,
+        deletion_receipt=deletion_receipt, action_contract=actions.action_contract,
+        purpose="qualified_game", synthetic_capacity=False, scan=scan,
+        _context=_game_sealed_context_v4(actions, rules))

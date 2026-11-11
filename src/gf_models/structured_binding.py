@@ -19,6 +19,7 @@ from gf_models.structured_config import (
     InferenceBindingV2,
     ModelConfigV2,
     ModelConfigV3,
+    ModelConfigV4,
     RecordedModelConfigV2,
     TemporalConfigV2,
     model_config_v2,
@@ -53,6 +54,41 @@ class ConfiguredNeuralModelV3(ModelConfigV3):
         for key in ("checkpoint", "inference", "cuda_visible_devices"):
             del fields[key]
         return model_config_v3(fields, layout=layout)
+
+
+@dataclass(frozen=True)
+class ConfiguredNeuralModelV4(ModelConfigV4):
+    checkpoint: str | None = None
+    inference: InferenceBindingV2 = field(default_factory=lambda: InferenceBindingV2(device="cuda:0"))
+    cuda_visible_devices: str | None = None
+
+    def architecture(self, *, layout: StructuredLayout) -> ModelConfigV4:
+        from gf_models.hpo_config import model_config_v4
+        fields = asdict(self)
+        for key in ("checkpoint", "inference", "cuda_visible_devices"):
+            del fields[key]
+        return model_config_v4(fields, layout=layout)
+
+
+def model_defaults_v4(model_id: str = "mlp") -> ConfiguredNeuralModelV4:
+    from gf_models.hpo_config import model_defaults_v4 as architecture_defaults
+    model = architecture_defaults(model_id)
+    return ConfiguredNeuralModelV4(**{name: getattr(model, name) for name in model.__dataclass_fields__})
+
+
+def configured_model_v4(value: Json, *, layout: StructuredLayout) -> ConfiguredNeuralModelV4:
+    from gf_models.hpo_config import model_config_v4
+    closed(value, set(asdict(ConfiguredNeuralModelV4())))
+    pure = model_config_v4({key: item for key, item in value.items()
+        if key not in ("checkpoint", "inference", "cuda_visible_devices")}, layout=layout)
+    inference = InferenceBindingV2(**closed(value["inference"], set(asdict(InferenceBindingV2()))))
+    checkpoint = value["checkpoint"]
+    if checkpoint is not None and (type(checkpoint) is not str or not checkpoint):
+        raise ContractError("invalid model4 checkpoint path")
+    validate_cuda_visibility(value["cuda_visible_devices"])
+    resource_estimate(pure, inference, layout=layout)
+    return ConfiguredNeuralModelV4(**{name: getattr(pure, name) for name in pure.__dataclass_fields__},
+        checkpoint=checkpoint, inference=inference, cuda_visible_devices=value["cuda_visible_devices"])
 
 
 def model_defaults_v3(model_id: str = "mlp") -> ConfiguredNeuralModelV3:
@@ -356,3 +392,91 @@ def safe_options_game_v3(value: Any, *, actions: ActionConfigV3, rules: CardInst
         raise ContractError("game options require exact real18 actions3")
     return _safe_options_v3(value, action_contract=actions.action_contract, rules=rules,
         purpose="qualified_game", synthetic_capacity=False, action_config_hash=digest(asdict(actions)), _game=True)
+
+
+def inference_model(model: ModelConfigV2 | ModelConfigV3 | ModelConfigV4) -> Json:
+    """Persist model4 architecture without caller-owned resource management."""
+    raw = asdict(model)
+    if type(model) is ModelConfigV4:
+        raw.pop("resources")
+    return raw
+
+
+def recorded_inference_model_v4(value: Json, *, layout: StructuredLayout) -> ModelConfigV4:
+    """Parse resource-free architecture under technical bounds, never admission.
+
+    The returned resource ceiling is solely a bounded shape-validation aid.
+    An active loader/worker must supply and admit its own resource policy.
+    """
+    from dataclasses import replace
+
+    from gf_models.hpo_config import model_config_v4, model_defaults_v4
+    defaults = model_defaults_v4()
+    closed(value, set(inference_model(defaults)))
+    technical = replace(defaults.resources, max_parameters=100000000)
+    return model_config_v4({**value, "resources": asdict(technical)}, layout=layout)
+
+
+def _bind_network_input_v4(network: Any, *, action_contract: CardInstanceContract,
+                            rules: CardInstanceRules, purpose: str, synthetic_capacity: bool,
+                            action_config_hash: str, fresh: bool = False, _game: bool = False) -> None:
+    context = (input_binding_game_v3(action_contract, rules) if _game else
+        input_binding_v3(action_contract, rules, purpose, synthetic_capacity))
+    if (_game and (purpose != "qualified_game" or synthetic_capacity is not False)
+            or type(network.config) is not ModelConfigV4 or network.config.max_positions > 18
+            or network.layout is not layout_for_contract(action_contract)
+            or hasattr(network, "_structured_input_binding") or hasattr(network, "_structured_input_binding_v3")):
+        raise ContractError("network4 requires its exact own-view model/layout")
+    from gf_models.hpo_config import validate_model_v4
+    validate_model_v4(network.config, layout=network.layout)
+    expected = _NetworkInputBindingV3(action_contract, context["rule_signature"], purpose,
+        synthetic_capacity, _action_hash(action_config_hash))
+    if hasattr(network, "_structured_input_binding_v4"):
+        if type(network._structured_input_binding_v4) is not _NetworkInputBindingV3 or network._structured_input_binding_v4 != expected:
+            raise ContractError("immutable network4 input/action binding mismatch")
+    elif fresh:
+        network._structured_input_binding_v4 = expected
+    else:
+        raise ContractError("fresh network4 binding required")
+
+
+def execution_binding_v4(model: ModelConfigV4, inference: InferenceBindingV2, *, layout: StructuredLayout,
+                          cuda_visible_devices: str | None = None) -> Json:
+    from gf_models.hpo_config import validate_model_v4
+    validate_model_v4(model, layout=layout)
+    if type(inference) is not InferenceBindingV2:
+        raise ContractError("closed model4 inference binding required")
+    return {"inference": asdict(inference), "resources": asdict(model.resources),
+        "cuda_visible_devices": validate_cuda_visibility(cuda_visible_devices)}
+
+
+def policy_label_game_v4(model: ModelConfigV4, inference: InferenceBindingV2, manifest_digest: str, *,
+                         action_contract: CardInstanceContract, rules: CardInstanceRules,
+                         action_config_hash: str, cuda_visible_devices: str | None = None) -> str:
+    context = input_binding_game_v3(action_contract, rules)
+    if model.max_positions > 18:
+        raise ContractError("game model4 capacity exceeds real18")
+    identity = {"execution": execution_binding_v4(model, inference, layout=layout_for_contract(action_contract),
+        cuda_visible_devices=cuda_visible_devices), **context,
+        "action_config_hash": _action_hash(action_config_hash)}
+    return f"{model.model_id}-ppo-v4-{_action_hash(manifest_digest)}-{digest(identity)}"
+
+
+def safe_options_game_v4(value: Any, *, actions: ActionConfigV3, rules: CardInstanceRules) -> Json:
+    if type(actions) is not ActionConfigV3 or actions.max_sequence_length > 18:
+        raise ContractError("game model4 requires exact real18 actions3")
+    context = input_binding_game_v3(actions.action_contract, rules)
+    raw = closed(value, {"version", "checkpoint", "expected_manifest_digest", "model", "inference",
+        "cuda_visible_devices", "action_config_hash"} | set(context))
+    if (type(raw["version"]) is not str or raw["version"] != "4"
+            or type(raw["checkpoint"]) is not str or not raw["checkpoint"]
+            or canonical({key: raw[key] for key in context}) != canonical(context)
+            or raw["action_config_hash"] != digest(asdict(actions))):
+        raise ContractError("invalid safe model4 input/action binding")
+    from gf_models.hpo_config import model_config_v4
+    model = model_config_v4(raw["model"], layout=layout_for_contract(actions.action_contract))
+    inference = InferenceBindingV2(**closed(raw["inference"], set(asdict(InferenceBindingV2()))))
+    policy_label_game_v4(model, inference, raw["expected_manifest_digest"],
+        action_contract=actions.action_contract, rules=rules, action_config_hash=raw["action_config_hash"],
+        cuda_visible_devices=raw["cuda_visible_devices"])
+    return clone(raw)

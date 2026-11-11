@@ -18,6 +18,7 @@ lightgbm = ["lightgbm>=4.6,<5"]
 torch = ["torch==2.14.1", "torchvision==0.29.1"]
 torch-cuda = ["torch==2.14.1", "torchvision==0.29.1"]
 native = ["godfieldbots-native==0.1.0"]
+hpo = ["optuna==5.0.0"]
 
 [dependency-groups]
 dev = ["pytest>=8.4,<10", "ruff>=0.14,<1", "mypy>=1.18,<2"]

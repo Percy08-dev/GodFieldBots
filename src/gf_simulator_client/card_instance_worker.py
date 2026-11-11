@@ -32,8 +32,18 @@ from gf_models.card_instance_game_tree_runtime import (
     policy_label_tree_game_v3,
     safe_tree_options_game_v3,
 )
-from gf_models.structured_binding import policy_label_game_v3, safe_options_game_v3
-from gf_models.structured_config import InferenceBindingV2, model_config_v3
+from gf_models.structured_binding import (
+    policy_label_game_v3,
+    policy_label_game_v4,
+    safe_options_game_v3,
+    safe_options_game_v4,
+)
+from gf_models.structured_config import (
+    InferenceBindingV2,
+    ModelConfigV3,
+    ModelConfigV4,
+    model_config_v3,
+)
 from gf_models.structured_runtime import own_game_worker_settings_v3
 from gf_simulator_client.structured_resources import ReservationLedger
 from gf_simulator_client.structured_worker import (
@@ -63,7 +73,8 @@ class CardInstanceParticipantWorker(StructuredParticipantWorker):
             actions.action_contract, rule_signature(actions.action_contract, self.rules)
         )
         self._tree = model_id == "lightgbm"
-        parser = safe_tree_options_game_v3 if self._tree else safe_options_game_v3
+        v4 = type(policy_options) is dict and policy_options.get("version") == "4"
+        parser = safe_tree_options_game_v3 if self._tree else safe_options_game_v4 if v4 else safe_options_game_v3
         options = parser(policy_options, actions=actions, rules=self.rules) if policy_options is not None else None
         if self._tree and (deadline is None or type(deadline) not in (int, float) or not math.isfinite(deadline) or deadline <= time.monotonic()):
             raise ContractError("Tree3 worker requires the original finite live session deadline")
@@ -98,10 +109,18 @@ class CardInstanceParticipantWorker(StructuredParticipantWorker):
                 raise ContractError("neural worker requires its retained original artifact owner")
             assert artifact_inputs is not None
             artifact_inputs.require_options(model_id, options)
-            self.expected_policy = policy_label_game_v3(model_config_v3(options["model"], layout=CORRECTED_CARD_INSTANCE_LAYOUT),
-                InferenceBindingV2(**options["inference"]), options["expected_manifest_digest"],
-                action_contract=actions.action_contract, rules=self.rules, action_config_hash=digest(asdict(actions)),
-                cuda_visible_devices=options["cuda_visible_devices"])
+            from gf_models.hpo_config import model_config_v4
+            model_parser = model_config_v4 if v4 else model_config_v3
+            model = model_parser(options["model"], layout=CORRECTED_CARD_INSTANCE_LAYOUT)
+            label_options = {"action_contract": actions.action_contract, "rules": self.rules,
+                "action_config_hash": digest(asdict(actions)), "cuda_visible_devices": options["cuda_visible_devices"]}
+            if type(model) is ModelConfigV4:
+                self.expected_policy = policy_label_game_v4(model, InferenceBindingV2(**options["inference"]),
+                    options["expected_manifest_digest"], **label_options)
+            else:
+                assert type(model) is ModelConfigV3
+                self.expected_policy = policy_label_game_v3(model, InferenceBindingV2(**options["inference"]),
+                    options["expected_manifest_digest"], **label_options)
             self.neural_metadata = artifact_inputs.journal_metadata(self.expected_policy)
         integer(sampling_seed)
         if type(timeout) not in (int, float) or not math.isfinite(timeout) or timeout <= 0:

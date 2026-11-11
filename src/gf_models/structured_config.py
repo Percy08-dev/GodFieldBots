@@ -15,6 +15,7 @@ from gf_common.domain import ContractError, Json, closed, digest, integer
 from gf_common.structured_history import ACTIVE_AGGREGATE, HISTORICAL_AGGREGATE, history_width
 from gf_common.structured_layout import (
     CARD_INSTANCE_AGGREGATE,
+    CORRECTED_CARD_INSTANCE_LAYOUT,
     LEGACY_LAYOUT,
     StructuredLayout,
     is_card_instance_layout,
@@ -132,6 +133,36 @@ class ModelConfigV3(ModelConfigV2):
 
 
 @dataclass(frozen=True)
+class TemporalConfigV4:
+    """Inference context only; backward extent belongs to the HPO recipe."""
+    kind: str = "mlp"
+    hidden_size: int = 128
+    num_layers: int = 1
+    num_heads: int = 4
+    feedforward_size: int = 256
+    max_decisions: int = 1024
+    activation: str = "relu"
+
+
+@dataclass(frozen=True)
+class ModelConfigV4:
+    model_id: str = "mlp"
+    version: str = "4"
+    input_recipe: str = "participant-structured-v2"
+    max_positions: int = 18
+    state: StateConfigV2 = field(default_factory=StateConfigV2)
+    card: CardConfigV2 = field(default_factory=CardConfigV2)
+    hand: HandConfigV2 = field(default_factory=HandConfigV2)
+    event: EventConfigV3 = field(default_factory=EventConfigV3)
+    temporal: TemporalConfigV4 = field(default_factory=TemporalConfigV4)
+    heads: HeadConfigV2 = field(default_factory=HeadConfigV2)
+    resources: ResourceConfigV2 = field(default_factory=ResourceConfigV2)
+    initialization: str = "orthogonal-activation-aware-v1"
+    dropout: int = 0
+    precision: str = "ieee-fp32"
+
+
+@dataclass(frozen=True)
 class HistoricalEventConfigV2:
     """Exact original serialization; never an accepted active configuration."""
     hidden_size: int = 32
@@ -160,13 +191,13 @@ class HistoricalModelConfigV2:
 
 
 type RecordedModelConfigV2 = ModelConfigV2 | HistoricalModelConfigV2
-type StructuredModel = RecordedModelConfigV2 | ModelConfigV3
+type StructuredModel = RecordedModelConfigV2 | ModelConfigV3 | ModelConfigV4
 
 
 def aggregate_recipe(model: StructuredModel) -> str:
     if type(model) is HistoricalModelConfigV2:
         return HISTORICAL_AGGREGATE
-    if type(model.event) is not (EventConfigV3 if type(model) is ModelConfigV3 else EventConfigV2):
+    if type(model.event) is not (EventConfigV3 if type(model) in (ModelConfigV3, ModelConfigV4) else EventConfigV2):
         raise ContractError('closed active event descriptor required')
     return model.event.aggregate_recipe
 
@@ -203,7 +234,8 @@ def _check_model_layout(model: StructuredModel, layout: StructuredLayout) -> Non
     if layout is LEGACY_LAYOUT:
         valid = type(model) in (ModelConfigV2, HistoricalModelConfigV2)
     else:
-        valid = type(model) is ModelConfigV3 and is_card_instance_layout(layout)
+        valid = (type(model) is ModelConfigV3 and is_card_instance_layout(layout)
+                 or type(model) is ModelConfigV4 and layout is CORRECTED_CARD_INSTANCE_LAYOUT)
     if not valid or model.input_recipe != layout.input_recipe:
         raise ContractError("closed structured model/exact layout mismatch")
 
@@ -213,6 +245,10 @@ def validate_config(model: StructuredModel, *, layout: StructuredLayout = LEGACY
 
 
 def _validate_descriptor(model: StructuredModel, *, historical: bool, layout: StructuredLayout = LEGACY_LAYOUT) -> None:
+    if type(model) is ModelConfigV4:
+        from gf_models.hpo_config import validate_model_v4
+        validate_model_v4(model, layout=layout)
+        return
     _check_model_layout(model, layout)
     modern = layout is not LEGACY_LAYOUT
     if (type(model) is not (ModelConfigV3 if modern else HistoricalModelConfigV2 if historical else ModelConfigV2) or model.version != ("3" if modern else "2")
@@ -328,7 +364,7 @@ def recorded_model_config_v2(value: Json, recorded_signature: str) -> RecordedMo
     model = _construct_descriptor(value, historical=historical)
     if recorded_signature != recorded_token_signature(model):
         raise ContractError('recorded closed model/signature descriptor mismatch')
-    assert type(model) in (ModelConfigV2, HistoricalModelConfigV2)
+    assert isinstance(model, (ModelConfigV2, HistoricalModelConfigV2))
     return model
 
 
@@ -399,6 +435,9 @@ def parameter_shapes(model: StructuredModel, *, layout: StructuredLayout = LEGAC
             attention(f"hand_attention.{index}", model.card.output_size, model.hand.attention_feedforward)
     gru("event_encoder", layout.event_width, model.event.hidden_size, model.event.num_layers)
     linear("frame_projection", d["frame"], model.temporal.hidden_size)
+    if type(model) is ModelConfigV4 and model.model_id == "mlp":
+        for index in range(model.temporal.num_layers - 1):
+            linear(f"temporal_dense.{index * 2}", model.temporal.hidden_size, model.temporal.hidden_size)
     if model.model_id == "gru":
         gru("temporal", model.temporal.hidden_size, model.temporal.hidden_size, model.temporal.num_layers)
     elif model.model_id == "transformer":
@@ -427,7 +466,8 @@ def resource_estimate(model: StructuredModel, binding: InferenceBindingV2, *,
     integer(decisions, 1, model.temporal.max_decisions)
     integer(interval_events, 0, model.event.max_interval)
     integer(candidates, 1, binding.max_candidates)
-    suffix_decisions = (min(decisions, model.temporal.sequence_length) if suffix_decisions is None else suffix_decisions)
+    suffix_decisions = ((1 if isinstance(model.temporal, TemporalConfigV4) else min(decisions, model.temporal.sequence_length))
+                        if suffix_decisions is None else suffix_decisions)
     integer(suffix_decisions, 1, decisions)
     d = dimensions(model, layout=layout)
     parameter_count = sum(prod(shape) for shape in parameter_shapes(model, layout=layout).values())

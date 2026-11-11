@@ -20,11 +20,16 @@ from gf_common.domain import (
 from gf_common.structured_layout import layout_for_contract
 from gf_models.structured_binding import (
     ConfiguredNeuralModelV3,
+    ConfiguredNeuralModelV4,
     child_cuda_visibility,
     configured_model_v3,
+    configured_model_v4,
+    inference_model,
     input_binding_game_v3,
     policy_label_game_v3,
+    policy_label_game_v4,
     safe_options_game_v3,
+    safe_options_game_v4,
 )
 from gf_models.structured_config import InferenceBindingV2
 from gf_models.structured_runtime import own_game_worker_settings_v3
@@ -33,7 +38,9 @@ from gf_models.structured_sealed import (
     basename,
     checksum,
     inspect_retained_game_inference_v3,
+    inspect_retained_game_inference_v4,
     validate_game_inference_metadata,
+    validate_game_inference_metadata_v4,
 )
 
 EXTERNAL_INPUT_CONTRACT = "retained-external-inference-v1"
@@ -44,10 +51,14 @@ def validate_neural_metadata(raw: Json, *, actions: ActionConfigV3, rules: CardI
     closed(raw, {"input_contract", "policy_options", "inference_manifest", "files"})
     if raw["input_contract"] != EXTERNAL_INPUT_CONTRACT:
         raise ContractError("retained external inference contract required")
-    safe = safe_options_game_v3(raw["policy_options"], actions=actions, rules=rules)
+    v4 = type(raw["policy_options"]) is dict and raw["policy_options"].get("version") == "4"
+    safe_parser = safe_options_game_v4 if v4 else safe_options_game_v3
+    safe = safe_parser(raw["policy_options"], actions=actions, rules=rules)
     manifest = raw["inference_manifest"]
-    model = validate_game_inference_metadata(manifest, actions=actions, rules=rules)
-    if canonical(manifest["model"]) != canonical(safe["model"]):
+    metadata_parser = validate_game_inference_metadata_v4 if v4 else validate_game_inference_metadata
+    model = metadata_parser(manifest, actions=actions, rules=rules)
+    expected_model = {key: value for key, value in safe["model"].items() if key != "resources"} if v4 else safe["model"]
+    if canonical(manifest["model"]) != canonical(expected_model):
         raise ContractError("sealed model differs from own execution model")
     expected = {"inference.json": safe["expected_manifest_digest"], **manifest["weights"]["files"]}
     files = raw["files"]
@@ -68,19 +79,23 @@ def validate_neural_metadata(raw: Json, *, actions: ActionConfigV3, rules: CardI
     if safe["cuda_visible_devices"] != child_cuda_visibility(binding.device, safe["cuda_visible_devices"]):
         raise ContractError("own inference CUDA visibility differs from child execution")
     own_game_worker_settings_v3(model.model_id, actions, safe, rules=rules)
-    label = policy_label_game_v3(model, binding, safe["expected_manifest_digest"],
+    if v4:
+        from gf_models.hpo_config import model_config_v4
+        model = model_config_v4(safe["model"], layout=layout_for_contract(actions.action_contract))
+    labeler = policy_label_game_v4 if v4 else policy_label_game_v3
+    label = labeler(model, binding, safe["expected_manifest_digest"],
         action_contract=actions.action_contract, rules=rules, action_config_hash=digest(asdict(actions)),
         cuda_visible_devices=safe["cuda_visible_devices"])
     return safe, label
 
 
 class RetainedGameArtifacts:
-    def __init__(self, models: tuple[ConfiguredNeuralModelV3, ...], actions: ActionConfigV3, *,
+    def __init__(self, models: tuple[ConfiguredNeuralModelV3 | ConfiguredNeuralModelV4, ...], actions: ActionConfigV3, *,
                  rules: CardInstanceRules, max_owned_bytes: int, preflight_deadline: float,
                  finalization_deadline: float) -> None:
         input_binding_game_v3(actions.action_contract, rules)
         if (type(models) is not tuple or not 1 <= len(models) <= 2
-                or any(type(model) is not ConfiguredNeuralModelV3 for model in models)
+                or any(type(model) not in (ConfiguredNeuralModelV3, ConfiguredNeuralModelV4) for model in models)
                 or actions.max_sequence_length > 18):
             raise ContractError("one or two explicit real18 neural roles required")
         self._initialize(models, actions, rules=rules, max_owned_bytes=max_owned_bytes,
@@ -107,13 +122,22 @@ class RetainedGameArtifacts:
                 if value.model_id not in ('random', 'heuristic') or label != value.model_id + '-card-instance-v2':
                     raise ContractError('noncanonical registry baseline binding')
                 continue
-            safe = safe_options_game_v3(value.policy_options, actions=actions, rules=rules)
-            configured = configured_model_v3({**safe['model'], 'checkpoint': safe['checkpoint'],
+            v4 = type(value.policy_options) is dict and value.policy_options.get("version") == "4"
+            safe_parser = safe_options_game_v4 if v4 else safe_options_game_v3
+            configure = configured_model_v4 if v4 else configured_model_v3
+            safe = safe_parser(value.policy_options, actions=actions, rules=rules)
+            configured = configure({**safe['model'], 'checkpoint': safe['checkpoint'],
                 'inference': safe['inference'], 'cuda_visible_devices': safe['cuda_visible_devices']}, layout=layout)
             model = configured.architecture(layout=layout)
-            actual_label = policy_label_game_v3(model, configured.inference, safe['expected_manifest_digest'],
-                action_contract=actions.action_contract, rules=rules, action_config_hash=digest(asdict(actions)),
-                cuda_visible_devices=safe['cuda_visible_devices'])
+            label_options = {"action_contract": actions.action_contract, "rules": rules,
+                "action_config_hash": digest(asdict(actions)), "cuda_visible_devices": safe["cuda_visible_devices"]}
+            if type(configured) is ConfiguredNeuralModelV4:
+                actual_label = policy_label_game_v4(configured.architecture(layout=layout), configured.inference,
+                    safe["expected_manifest_digest"], **label_options)
+            else:
+                assert type(configured) is ConfiguredNeuralModelV3
+                actual_label = policy_label_game_v3(configured.architecture(layout=layout), configured.inference,
+                    safe["expected_manifest_digest"], **label_options)
             if label != actual_label or value.model_id != model.model_id:
                 raise ContractError('frozen registry label/model differs from exact game options')
             key = digest(asdict(configured))
@@ -132,7 +156,7 @@ class RetainedGameArtifacts:
                 owner.release()  # In-memory retirement only; preserve the initiating failure.
             raise
 
-    def _initialize(self, models: tuple[ConfiguredNeuralModelV3, ...], actions: ActionConfigV3, *,
+    def _initialize(self, models: tuple[ConfiguredNeuralModelV3 | ConfiguredNeuralModelV4, ...], actions: ActionConfigV3, *,
                     rules: CardInstanceRules, max_owned_bytes: int, preflight_deadline: float,
                     finalization_deadline: float, expected: dict[str, tuple[str, Json]] | None = None) -> None:
         for deadline in (preflight_deadline, finalization_deadline):
@@ -158,11 +182,13 @@ class RetainedGameArtifacts:
             manifest = self._scan.object(directory / "inference.json",
                 None if frozen is None else frozen[1]['expected_manifest_digest'])
             manifest_digest = self._scan.files[directory / "inference.json"][1]
-            artifact = inspect_retained_game_inference_v3(directory, expected_inference_digest=manifest_digest,
+            v4 = type(configured) is ConfiguredNeuralModelV4
+            inspect = inspect_retained_game_inference_v4 if v4 else inspect_retained_game_inference_v3
+            artifact = inspect(directory, expected_inference_digest=manifest_digest,
                 actions=actions, rules=rules, scan=self._scan)
-            if canonical(manifest["model"]) != canonical(asdict(model)):
+            if canonical(manifest["model"]) != canonical(inference_model(model)):
                 raise ContractError("external artifact differs from configured Model3")
-            options = {"version": "3", "checkpoint": str(directory), "expected_manifest_digest": manifest_digest,
+            options = {"version": "4" if v4 else "3", "checkpoint": str(directory), "expected_manifest_digest": manifest_digest,
                 "model": asdict(model), "inference": asdict(configured.inference),
                 "cuda_visible_devices": child_cuda_visibility(configured.inference.device, configured.cuda_visible_devices),
                 **input_binding_game_v3(actions.action_contract, rules), "action_config_hash": digest(asdict(actions))}
@@ -190,7 +216,7 @@ class RetainedGameArtifacts:
         self._live()
         return self._scan.retained
 
-    def binding(self, model: ConfiguredNeuralModelV3) -> tuple[str, RuntimePolicyBinding]:
+    def binding(self, model: ConfiguredNeuralModelV3 | ConfiguredNeuralModelV4) -> tuple[str, RuntimePolicyBinding]:
         self._live()
         label = self._models.get(digest(asdict(model)))
         if label is None:

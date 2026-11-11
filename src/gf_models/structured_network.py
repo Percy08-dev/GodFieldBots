@@ -27,6 +27,7 @@ from gf_models.structured_config import (
     InferenceBindingV2,
     ModelConfigV2,
     ModelConfigV3,
+    ModelConfigV4,
     dimensions,
     parameter_shapes,
     recorded_token_signature,
@@ -63,7 +64,7 @@ class TemporalCache:
         self.position, self.owner, self.revision, self.event_end = 0, None, -1, 0
 
 
-def make_network(model: ModelConfigV2 | ModelConfigV3, seed: int,
+def make_network(model: ModelConfigV2 | ModelConfigV3 | ModelConfigV4, seed: int,
                  binding: InferenceBindingV2 | None = None, *, layout: StructuredLayout = LEGACY_LAYOUT) -> Any:
     layout_options: dict[str, Any] = {} if layout is LEGACY_LAYOUT else {"layout": layout}
     validate_config(model, layout=layout)
@@ -76,12 +77,15 @@ def make_network(model: ModelConfigV2 | ModelConfigV3, seed: int,
     base: Any = nn.Module
     d = dimensions(model, layout=layout)
 
-    def mlp(widths: tuple[int, ...], final_relu: bool = False) -> Any:
+    def activate(value: Any, activation: str) -> Any:
+        return value.tanh() if activation == "tanh" else value.relu()
+
+    def mlp(widths: tuple[int, ...], final_relu: bool = False, activation: str = "relu") -> Any:
         layers = []
         for index, (source, target) in enumerate(pairwise(widths)):
             layers.append(nn.Linear(source, target))
             if index < len(widths) - 2 or final_relu:
-                layers.append(nn.ReLU())
+                layers.append(nn.Tanh() if activation == "tanh" else nn.ReLU())
         return nn.Sequential(*layers)
 
     @contextmanager
@@ -96,9 +100,10 @@ def make_network(model: ModelConfigV2 | ModelConfigV3, seed: int,
             torch.backends.cudnn.enabled = enabled
 
     class AttentionLayer(base):
-        def __init__(self, width: int, heads: int, feedforward: int) -> None:
+        def __init__(self, width: int, heads: int, feedforward: int, activation: str = "relu") -> None:
             super().__init__()
             self.width, self.heads = width, heads
+            self.activation = activation
             self.query, self.key, self.value, self.output = (nn.Linear(width, width) for _ in range(4))
             self.norm1, self.norm2 = nn.LayerNorm(width), nn.LayerNorm(width)
             self.feedforward1, self.feedforward2 = nn.Linear(width, feedforward), nn.Linear(feedforward, width)
@@ -118,7 +123,7 @@ def make_network(model: ModelConfigV2 | ModelConfigV3, seed: int,
 
         def finish(self, x: Any, attended: Any) -> Any:
             x = x + self.output(attended)
-            return x + self.feedforward2(self.feedforward1(self.norm2(x)).relu())
+            return x + self.feedforward2(activate(self.feedforward1(self.norm2(x)), self.activation))
 
         def forward(self, x: Any, valid: Any, past: Any = None,
                     offset: int = 0, causal: bool = False) -> tuple[Any, Any]:
@@ -149,28 +154,31 @@ def make_network(model: ModelConfigV2 | ModelConfigV3, seed: int,
             self._measure_input_packing = False
             self._input_packing_seconds = 0.
             self.state_encoder = (mlp((layout.state_width,
-                                       *model.state.hidden_sizes, model.state.output_size), True)
+                                       *model.state.hidden_sizes, model.state.output_size), True, model.state.activation)
                                   if model.state.kind == "mlp" else nn.Identity())
             self.definition_embedding = nn.Embedding(len(layout.card_categories[0]) + 2, model.card.definition_embedding, padding_idx=0)
             self.ability_embedding = nn.Embedding(len(layout.card_categories[1]) + 2, model.card.ability_embedding, padding_idx=0)
             self.card_encoder = nn.Linear(d["card_input"], model.card.output_size)
             if model.hand.kind != "direct":
-                self.hand_encoder = mlp((model.card.output_size, *model.hand.hidden_sizes, model.hand.latent_size), True)
+                self.hand_encoder = mlp((model.card.output_size, *model.hand.hidden_sizes, model.hand.latent_size), True, model.hand.activation)
             if model.hand.kind == "attention":
                 self.hand_attention = nn.ModuleList([AttentionLayer(model.card.output_size, model.hand.attention_heads,
-                                                                    model.hand.attention_feedforward)
+                                                                    model.hand.attention_feedforward, model.hand.activation)
                                                     for _ in range(model.hand.attention_layers)])
             self.event_encoder = nn.GRU(layout.event_width, model.event.hidden_size, model.event.num_layers, batch_first=True)
             self.frame_projection = nn.Linear(d["frame"], model.temporal.hidden_size)
+            if model.model_id == "mlp" and model.temporal.num_layers > 1:
+                self.temporal_dense = mlp((model.temporal.hidden_size,) * model.temporal.num_layers,
+                                          True, model.temporal.activation)
             if model.model_id == "gru":
                 self.temporal = nn.GRU(model.temporal.hidden_size, model.temporal.hidden_size,
                                        model.temporal.num_layers, batch_first=True)
             elif model.model_id == "transformer":
                 self.temporal = nn.ModuleList([AttentionLayer(model.temporal.hidden_size, model.temporal.num_heads,
-                                                             model.temporal.feedforward_size)
+                                                             model.temporal.feedforward_size, model.temporal.activation)
                                               for _ in range(model.temporal.num_layers)])
-            self.actor = mlp((d["actor"], *model.heads.actor_hidden_sizes, 1))
-            self.critic = mlp((model.temporal.hidden_size, *model.heads.critic_hidden_sizes, 1))
+            self.actor = mlp((d["actor"], *model.heads.actor_hidden_sizes, 1), activation=model.heads.activation)
+            self.critic = mlp((model.temporal.hidden_size, *model.heads.critic_hidden_sizes, 1), activation=model.heads.activation)
             positions = torch.arange(model.temporal.max_decisions, dtype=torch.float32)[:, None]
             frequencies = torch.exp(torch.arange(0, model.temporal.hidden_size, 2, dtype=torch.float32)
                                     * (-math.log(10000.) / model.temporal.hidden_size))
@@ -243,7 +251,7 @@ def make_network(model: ModelConfigV2 | ModelConfigV3, seed: int,
             card_input = torch.cat((self.definition_embedding(cats[:, 0]), self.ability_embedding(cats[:, 1]),
                                     self._onehot(tuple(row[2:] for row in tokens.card_categories), layout.card_categories[2:]), numbers), -1)
             mask = self._tensor(tokens.card_mask, dtype=torch.bool, device=self.device)
-            cards = self.card_encoder(card_input).relu().masked_fill(~mask[:, None], 0)
+            cards = activate(self.card_encoder(card_input), model.card.activation).masked_fill(~mask[:, None], 0)
             source = functional.one_hot(cats[:, layout.membership_index], len(layout.card_categories[layout.membership_index]) + 2).float().masked_fill(~mask[:, None], 0)
             order = self._float(tuple(row[layout.card_numeric_fields.index(layout.order_field)] for row in tokens.card_numerics))[:, None]
             actor_cards = torch.cat((cards, source, mask.float()[:, None], order), -1)
@@ -273,7 +281,10 @@ def make_network(model: ModelConfigV2 | ModelConfigV3, seed: int,
             else:
                 event = torch.zeros(model.event.hidden_size, device=self.device)
             frame = torch.cat((state, hand, event, self._float(tokens.history)))
-            return self.frame_projection(frame).relu(), actor_cards
+            projected = activate(self.frame_projection(frame), model.temporal.activation)
+            if model.model_id == "mlp" and model.temporal.num_layers > 1:
+                projected = self.temporal_dense(projected)
+            return projected, actor_cards
 
         def encode_temporal(self, frames: Any, past: Any = None, offset: int = 0) -> tuple[Any, Any]:
             length = frames.shape[0]
@@ -508,7 +519,11 @@ def make_network(model: ModelConfigV2 | ModelConfigV3, seed: int,
                         "query", "key", "value", "output", "feedforward2"):
                     gain = 1.
                 else:
-                    gain = math.sqrt(2)
+                    component = (model.state if name.startswith("state_encoder") else
+                                 model.card if name == "card_encoder" else
+                                 model.hand if name.startswith("hand_") else
+                                 model.heads if name.startswith(("actor", "critic")) else model.temporal)
+                    gain = 5 / 3 if component.activation == "tanh" else math.sqrt(2)
                 nn.init.orthogonal_(module.weight, gain)
                 nn.init.zeros_(module.bias)
         actual_shapes = {name: tuple(parameter.shape) for name, parameter in network.named_parameters()}

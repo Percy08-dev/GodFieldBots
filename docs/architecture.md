@@ -2,6 +2,18 @@
 
 ## Status and scope
 
+[ADR0037](adr/0037-ppo-hpo-foundation.md) accepts the explicit configurable PPO
+and outer HPO campaign design. Implementation is in progress under
+[the supplied plan](design/ppo-hpo.md); current-context independent architecture
+mapping is READY. Model4 and HPO-only inference/resume5, run5/generation4/update5/
+registry4, collection6/proof3/numeric5/wire6 preserve old meanings and the eight
+fixed kernel ASTs. TBPTT belongs to training/resume rather than inference identity.
+The common coordinator/network and complete-original Source owners are reused;
+Optuna5.0.0 is a lazy `hpo` extra. HPO evaluation/completion authority is separate
+from formal/final64/Dataset qualification. Functional acceptance and limitations
+will be recorded in [the verification record](verification/ppo-hpo.md).
+No formal HPO, experiment sizing or strength evidence is claimed here.
+
 [ADR0024](adr/0024-card-instance-simulator-v2.md) begins a separately identified
 card-instance Simulator v2 migration. Contract/wire/Config/direct HTTP and pure
 opaque-reference frames/layouts/tokens pass both independent reviews and scoped
@@ -561,7 +573,7 @@ needs that transport or the facade gains management/game responsibilities; do no
 duplicate its process/reap protocol inside training.
 Runtime is CPython 3.14, GIL enabled, uv; baseline dependencies httpx/NumPy.
 Extras are `data` (PyArrow), `lightgbm`, mutually exclusive `torch` (CPU) and
-`torch-cuda` (cu132); dev is pytest/ruff/mypy. NumPy is pinned to 2.5.4, Torch to
+`torch-cuda` (cu132), and `hpo` (Optuna5.0.0); dev is pytest/ruff/mypy. NumPy is pinned to 2.5.4, Torch to
 2.14.1 and torchvision to 0.29.1. PyTorch indexes are explicit; baseline
 dependencies continue to resolve from PyPI.
 Optional libraries must not load for baseline or CLI help.

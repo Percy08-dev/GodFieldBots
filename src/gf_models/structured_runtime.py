@@ -13,6 +13,7 @@ from gf_common.structured_layout import LEGACY_LAYOUT, StructuredLayout, layout_
 from gf_models.structured_binding import (
     input_binding_game_v3,
     safe_options_game_v3,
+    safe_options_game_v4,
     safe_options_v2,
     safe_options_v3,
 )
@@ -20,6 +21,7 @@ from gf_models.structured_config import (
     InferenceBindingV2,
     ModelConfigV2,
     ModelConfigV3,
+    ModelConfigV4,
     dimensions,
     model_config_v2,
     model_config_v3,
@@ -94,7 +96,7 @@ def own_worker_settings_v3(model_id: str, actions: ActionConfigV3, options: Json
     return _neural_settings(model, binding, actions, layout=layout)
 
 
-def _neural_settings(model: ModelConfigV2 | ModelConfigV3, binding: InferenceBindingV2,
+def _neural_settings(model: ModelConfigV2 | ModelConfigV3 | ModelConfigV4, binding: InferenceBindingV2,
                      actions: ActionConfigV2 | ActionConfigV3, *, layout: StructuredLayout = LEGACY_LAYOUT) -> tuple[WorkerCaps, NumericCosts, int, int]:
     caps = WorkerCaps(model.event.max_interval, model.event.max_episode, model.temporal.max_decisions,
                       actions.max_sequence_length, actions.max_candidates)
@@ -135,9 +137,13 @@ def own_game_worker_settings_v3(model_id: str, actions: ActionConfigV3, options:
         return game_tree_settings(options, actions=actions, rules=rules)
     if model_id not in ("mlp", "gru", "transformer") or options is None:
         raise ContractError("neural game worker requires explicit safe options")
-    safe = safe_options_game_v3(options, actions=actions, rules=rules)
+    v4 = type(options) is dict and options.get("version") == "4"
+    safe_parser = safe_options_game_v4 if v4 else safe_options_game_v3
+    safe = safe_parser(options, actions=actions, rules=rules)
     layout = layout_for_contract(actions.action_contract)
-    model, binding = model_config_v3(safe["model"], layout=layout), InferenceBindingV2(**safe["inference"])
+    from gf_models.hpo_config import model_config_v4
+    parser = model_config_v4 if v4 else model_config_v3
+    model, binding = parser(safe["model"], layout=layout), InferenceBindingV2(**safe["inference"])
     if model.model_id != model_id or actions.max_sequence_length > model.max_positions or actions.max_candidates > binding.max_candidates:
         raise ContractError("game model/actions capacity mismatch")
     return _neural_settings(model, binding, actions, layout=layout)

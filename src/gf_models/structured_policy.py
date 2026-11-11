@@ -15,10 +15,16 @@ from gf_common.domain import ContractError, canonical, integer
 from gf_common.structured import CandidateTable, DecisionFrame, EventBankView, Selection
 from gf_common.structured_layout import LEGACY_LAYOUT, StructuredLayout, layout_for_contract
 from gf_common.structured_tokens import tokenize_frame, tokenize_table, validate_candidate_tokens
-from gf_models.structured_artifacts import load_game_inference_v3, load_inference, load_inference_v3
+from gf_models.structured_artifacts import (
+    load_game_inference_v3,
+    load_game_inference_v4,
+    load_inference,
+    load_inference_v3,
+)
 from gf_models.structured_binding import (
     _bind_network_input,
     _bind_network_input_v3,
+    _bind_network_input_v4,
     _policy_label_v3,
     check_input_binding,
     check_input_binding_game_v3,
@@ -28,12 +34,14 @@ from gf_models.structured_binding import (
     input_binding_game_v3,
     input_binding_v3,
     policy_label,
+    policy_label_game_v4,
     validate_cuda_visibility,
 )
 from gf_models.structured_config import (
     InferenceBindingV2,
     ModelConfigV2,
     ModelConfigV3,
+    ModelConfigV4,
     architecture_identity,
     resource_estimate,
 )
@@ -180,9 +188,10 @@ class StructuredPolicyV3:
         return _select_generated_v3(self, frame, bank_view, generated)
 
 
-def _initialize_policy_v3(self: Any, network: Any, model: ModelConfigV3, binding: InferenceBindingV2, manifest_digest: str, *,
+def _initialize_policy_v3(self: Any, network: Any, model: ModelConfigV3 | ModelConfigV4, binding: InferenceBindingV2, manifest_digest: str, *,
                           layout: StructuredLayout, action_contract: CardInstanceContract, rules: CardInstanceRules,
-                          purpose: str, synthetic_capacity: bool, action_config_hash: str, game: bool = False) -> None:
+                          purpose: str, synthetic_capacity: bool, action_config_hash: str, game: bool = False,
+                          _model4: bool = False) -> None:
     self.input_binding = (input_binding_game_v3(action_contract, rules) if game else
         input_binding_v3(action_contract, rules, purpose, synthetic_capacity))
     if layout is not layout_for_contract(action_contract) or network.layout is not layout:
@@ -193,7 +202,8 @@ def _initialize_policy_v3(self: Any, network: Any, model: ModelConfigV3, binding
             or architecture_identity(network.config, layout=layout) != architecture_identity(model, layout=layout)
             or str(network.device) != binding.device):
         raise ContractError("policy3 network/model/execution mismatch")
-    _bind_network_input_v3(network, action_contract=action_contract, rules=rules, purpose=purpose,
+    binder = _bind_network_input_v4 if _model4 else _bind_network_input_v3
+    binder(network, action_contract=action_contract, rules=rules, purpose=purpose,
         synthetic_capacity=synthetic_capacity, action_config_hash=action_config_hash, fresh=True, _game=game)
     import torch
     self.torch, self.network, self.model, self.binding = torch, network, model, binding
@@ -202,9 +212,16 @@ def _initialize_policy_v3(self: Any, network: Any, model: ModelConfigV3, binding
     self.reserved_bytes = resource_estimate(model, binding, layout=layout)["total_bytes"]
     visibility = validate_cuda_visibility(os.environ.get("CUDA_VISIBLE_DEVICES"))
     self.cuda_visible_devices = child_cuda_visibility(binding.device, visibility) if game else visibility
-    self.version = _policy_label_v3(model, binding, manifest_digest, layout=layout, action_contract=action_contract,
-        rules=rules, purpose=purpose, synthetic_capacity=synthetic_capacity, action_config_hash=action_config_hash,
-        cuda_visible_devices=self.cuda_visible_devices, _game=game)
+    if _model4:
+        if not game or type(model) is not ModelConfigV4:
+            raise ContractError("model4 policy requires explicit game inference")
+        self.version = policy_label_game_v4(model, binding, manifest_digest, action_contract=action_contract,
+            rules=rules, action_config_hash=action_config_hash, cuda_visible_devices=self.cuda_visible_devices)
+    else:
+        assert type(model) is ModelConfigV3
+        self.version = _policy_label_v3(model, binding, manifest_digest, layout=layout, action_contract=action_contract,
+            rules=rules, purpose=purpose, synthetic_capacity=synthetic_capacity, action_config_hash=action_config_hash,
+            cuda_visible_devices=self.cuda_visible_devices, _game=game)
     self.cache = network.new_cache()
     self.last_timing = {}
     self.rng = torch.Generator(device="cpu")
@@ -222,7 +239,8 @@ def _select_generated_v3(self: Any, frame: DecisionFrame, bank_view: EventBankVi
     else:
         check_input_binding_v3(self.input_binding, action_contract=self.action_contract, rules=self.rules,
             purpose=self.purpose, synthetic_capacity=self.synthetic_capacity)
-    _bind_network_input_v3(self.network, action_contract=self.action_contract, rules=self.rules, purpose=self.purpose,
+    binder = _bind_network_input_v4 if type(self.model) is ModelConfigV4 else _bind_network_input_v3
+    binder(self.network, action_contract=self.action_contract, rules=self.rules, purpose=self.purpose,
         synthetic_capacity=self.synthetic_capacity, action_config_hash=self.action_config_hash, _game=game)
     table, report = generated.table, generated.report
     if (self.synthetic_capacity or table.synthetic_capacity or table.purpose != ("qualified_game" if game else "component")
@@ -253,6 +271,34 @@ class GameStructuredPolicyV3:
                       action_contract: CardInstanceContract, rules: CardInstanceRules) -> GameStructuredPolicyV3:
         network, _ = load_game_inference_v3(directory, expected_digest=expected_digest, model=model, binding=binding,
             action_config_hash=action_config_hash, action_contract=action_contract, rules=rules)
+        return cls(network, model, binding, expected_digest, action_contract=action_contract,
+            rules=rules, action_config_hash=action_config_hash)
+
+    def select_frame(self, frame: DecisionFrame, bank_view: EventBankView,
+                     generated: GameGeneratedCandidatesV3) -> Selection:
+        return _select_generated_v3(self, frame, bank_view, generated, game=True)
+
+
+class GameStructuredPolicyV4:
+    """Explicit Model4 inference5; shared participant token/scoring/cache path."""
+    def __init__(self, network: Any, model: ModelConfigV4, binding: InferenceBindingV2,
+                 manifest_digest: str, *, action_contract: CardInstanceContract,
+                 rules: CardInstanceRules, action_config_hash: str) -> None:
+        _initialize_policy_v3(self, network, model, binding, manifest_digest,
+            layout=layout_for_contract(action_contract), action_contract=action_contract, rules=rules,
+            purpose="qualified_game", synthetic_capacity=False, action_config_hash=action_config_hash,
+            game=True, _model4=True)
+
+    def reset(self, sampling_seed: int) -> None:
+        _reset_policy(self, sampling_seed)
+
+    @classmethod
+    def from_artifact(cls, directory: Path, expected_digest: str, model: ModelConfigV4,
+                      binding: InferenceBindingV2, action_config_hash: str, *,
+                      action_contract: CardInstanceContract, rules: CardInstanceRules) -> GameStructuredPolicyV4:
+        network, _ = load_game_inference_v4(directory, expected_digest=expected_digest,
+            model=model, binding=binding, action_config_hash=action_config_hash,
+            action_contract=action_contract, rules=rules)
         return cls(network, model, binding, expected_digest, action_contract=action_contract,
             rules=rules, action_config_hash=action_config_hash)
 
