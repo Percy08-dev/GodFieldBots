@@ -16,7 +16,8 @@
   CPU/CUDA inference and resume/original audits; formal/final64/Dataset4/Tree
   engineering scope accepted after both candidate2 re-reviews,1469affected HOST
   checks and157Rust checks. Genuine formal/qualified fit remains NOT RUN;
-  concurrent-workload/final whole verification remain pending
+  revised concurrent-workload four-trial comparison and final whole verification
+  accepted with documented filesystem/measurement limits
 
 ## Context
 

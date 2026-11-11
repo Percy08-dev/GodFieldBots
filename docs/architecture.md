@@ -798,7 +798,8 @@ logical provider/plan4/Original16/RAW also passes both final reviews after
 constructor/admission/gen0 fixes, all3model fixture parity and actual CPU/CUDA-
 inference continuous2/pause1-resume2 with CUDA learner (64natural/4updates).
 Both fresh original/numeric/lineage audits pass; source-matched release/MIMALLOC
-wheel904038e1 is installed with its rollback retained. Identical-byte HDD archival
+wheel904038e1 passed that milestone; final integrated releaseELFda042804 is now
+installed with both earlier binaries/metadata retained. Identical-byte HDD archival
 comparison completes six pairs and reports faster writes/smaller archives but
 slower verified reads; directory default stays.
 An actual D: startup failure also exposed lineage control rename visibility while
@@ -816,8 +817,12 @@ constructed on the current9p mount and remain explicitly unexercised with
 uncertain cleanup retained. Parent/control/pruning workflows on that mount are
 not claimed supported; normal packed DB placement on D: uses ext4 parent data.
 Genuine formal/final64/qualified Dataset4 fitting remains NOT RUN.
-Actual revised concurrent comparison and final whole-project acceptance remain
-pending; this is not training-quality acceptance.
+The revised ext4PPO+HDDcollector four-trial comparison also completes, with
+two updates/pause-resume and actual collector overlap in every trial. All four
+ordinary complete-parent original/numeric/retention audits preserve byte/stat
+identity; independent arithmetic/condition audits pass. Final whole-project
+acceptance records the remaining verification scopes in the ledger; this is not
+training-quality acceptance.
 The default directory storage,
 old Config identities and logical Collection5/Journal6/codec2 remain unchanged.
 The [design](design/sqlite-group-pack-v1.md) fixes the physical contract,

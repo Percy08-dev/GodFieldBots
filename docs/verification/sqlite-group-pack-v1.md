@@ -1,7 +1,7 @@
 # SQLite group Pack verification
 
-Date: 2026-11-10. Scope: implementation in progress on
-`feat/sqlite-group-pack-v1`; default directory format retained.
+Date:2026-11-11. Scope: explicit opt-in implementation and engineering acceptance
+on `feat/sqlite-group-pack-v1`; default directory format retained.
 Design: [ADR0034](../adr/0034-sqlite-group-pack.md),
 [foundation](../design/sqlite-group-pack-v1.md),
 [runtime](../design/sqlite-group-pack-runtime.md),
@@ -9,12 +9,24 @@ Design: [ADR0034](../adr/0034-sqlite-group-pack.md),
 
 ## Acceptance status
 
-Foundation implementation passes independent correctness/conformance after two
-bounded fix rounds; root accepts this isolated milestone.
-Standalone runtime and Python original Source/ordinary PPO are accepted in the
-separate scopes below. Native, final64, Dataset/Tree and whole-plan comparison
-remain pending. This record distinguishes component
-evidence from the complete owner's requested outcome.
+Foundation, standalone collect/evaluate, Python/Rust original Sources, ordinary
+PPO/resume, formal/final64 interfaces and Dataset4/Tree implementation pass their
+independent reviews. Final code0178199 passes whole-branch correctness and
+architecture conformance. Source-matched packages, mandatory-only startup,
+Rust157/4ignored, CUDA58, CPUpreload safety199 and exact current-inventory old-data
+five-job/audit proofs pass. Corrected whole HOST pytest passes4756checks with
+331explicit skips and4NumPydeprecation warnings in1019.74s; the initial two
+stale-test failures and passing reviewed fixes remain separately preserved.
+
+Both comparison panels complete: same-real-byte HDD archival six pairs and the
+four-trial ext4PPO+HDDcollector combined workload. Four complete-parent original/
+numeric/retention immutability audits and independent raw/derived arithmetic
+audits pass. See [the comparison report](sqlite-group-pack-comparison.md).
+Current9p full-parent/pruning and six compound recovery fault constructions are
+unsupported/unexercised as detailed below. Intermediate per-category B peaks,
+optimizer intervals and pure SQL/admission timings are unmeasured. Genuine
+formal/final64/qualified fitting, HPO and final-test evaluation remain NOT RUN;
+component results do not establish learning quality.
 
 ## Foundation candidate evidence
 
@@ -396,7 +408,7 @@ and qualified Dataset4 fitting remain NOT RUN. The actual unqualified fixture
 96train/192validation/500round fit and all own-bank directory/packed Rust64
 comparisons remain component evidence only.
 
-## Final integrated build and checks (in progress)
+## Final integrated build and checks
 
 Root integrates the exact reviewed delta, preserving accepted lineage writer
 ASTs, then activates the two specified packed capability declarations. Final
@@ -441,3 +453,57 @@ pass standard mountinfo escape decoding with exact D: or D:\ root identity,
 raw token retained, all filesystem/device/root/physical-HDD checks preserved.
 Independent review and actual admission on the current mount precede execution.
 No block is extended or silently repaired.
+
+## Revised B terminal acceptance
+
+Revised block5670221899a348be94452c8f6613b2b7 completes all4trials PASS/exit0 at
+source0178199 with harness6d2f6aa6, preserving all source hashes. Times are
+582.067/271.209/270.270/578.332s in D/P/P/D order. Every parent completes2updates,
+pause1/resume2,32natural PPO games/419accepted decisions/16optimizer steps; each
+independent collector completes6natural games with one actual Source-window/
+collector-action overlap. Four complete-parent original/control/numeric/retention
+reader audits and byte/stat inventories pass. The independent raw/derived and
+producer-metric/final-file-size audits also pass. Detailed scope/tables/limits
+are in [the comparison report](sqlite-group-pack-comparison.md).
+
+The production-returned collection timers remain valid though the optional
+archive metric observer is empty. Explicit supplement uses those returned facts,
+not invented observer events. Final packed PPO DBs total4,841,472B/2files per
+trial and catalog12,288B; HDD collector DB1,437,696/1,433,600B and catalog12,288B.
+Final WAL/SHM/journal absent; intermediate category peaks remain unmeasured. Source
+request/ACK intervals do not establish kernel-level optimizer/I/O simultaneity.
+Whole-branch correctness and conformance both READY for0178199; documentation
+current-status refresh is the only optional feedback, being incorporated here.
+
+All5old-data jobs/audits were then freshly repeated with the final test-file
+inventory in final-legacy-current-tests and PASS. This supersedes the prior
+pre-test-only-fix inventory for current proof while preserving both. No original
+dataset/checkpoint/test input changed. The corrected fullHOSTpytest is a separate
+fresh run; its terminal result follows below rather than rewriting the earlier
+2failure run.
+
+## Root final acceptance — 2026-11-11
+
+The corrected final whole HOST run exits0:4756PASS/331explicit skips/
+4existingNumPydeprecation warnings in1019.74s. No application/native source
+changes after0178199 are needed. Source-matched package proof, actual installed
+identity, separate distribution metadata, mandatory-only baseline, all final
+static/Rust/CUDA/CPUpreload checks, current-inventory five-job old-data proofs,
+all4successful parent Source/immutability audits and independent comparison
+arithmetic/producer/final-size audits pass. Whole-branch correctness and
+architecture conformance are READY. Root accepts the requested opt-in
+implementation and bounded engineering/comparison scope; directory stays default.
+
+Retained exclusions are explicit: genuine complete formal/final64/public
+Dataset4 positive qualification or real-source fit, HPO and final-test evaluation
+were not executed. Failed full-parent-on-D attempts remain failed/ineligible;
+private0700pruning and six compound recovery fault constructions are unsupported
+or unexercised on the present9p mount. Intermediate per-category B sidecar peaks,
+optimizer intervals, pure SQL/admission timing and comparable logical MiB/s in
+that combined operational block remain unmeasured; physical PanelA provides its
+separate complete HDD storage figures. No defaults, learning budgets, rewards,
+failed outcomes, filesystem privileges or old dataset semantics were rewritten.
+
+All source/worktree/evidence artifacts and original user-untracked files remain
+preserved. Local commits only; no push or publication. This engineering acceptance
+does not establish policy strength, formal source eligibility or training quality.

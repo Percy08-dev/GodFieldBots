@@ -101,15 +101,15 @@ until the subsequent Source/native/final64/Dataset gates are implemented.
 
 ### Task 3: Original-source and Python/Rust consumers
 
-**Files:** root will append exact ownership after Source/native design review.
-Requires explicit stable logical proof, generation/resume variant, native byte
-provider and pending final64 interfaces; no inferred extraction adapter.
+**Files:** exact ownership and reviewed interfaces are recorded in Tasks3A/3B/3C
+below. Logical proof, generation/resume, native byte provider and pending final64
+remain separate checked contracts; no extraction adapter is Source authority.
 
 - [x] Review exact Python/SealedScan/lineage/native/final64/Dataset4 interface changes.
-- [ ] Tests first; connect all original-source consumers and safe group retirement.
-- [ ] Verify artifact reconstruction and Python/Rust features/numerics parity.
-- [ ] Verify bounded PPO update/pause/resume/final64/Dataset/Tree conditions.
-- [ ] Independent correctness/conformance, resolved blockers and local commit.
+- [x] Tests first; connect all original-source consumers and safe group retirement.
+- [x] Verify artifact reconstruction and Python/Rust features/numerics parity.
+- [x] Verify bounded PPO update/pause/resume/final64/Dataset/Tree conditions.
+- [x] Independent correctness/conformance, resolved blockers and local commit.
 
 #### Task3A: Python original Source, lineage and ordinary PPO
 
@@ -219,10 +219,10 @@ new runtime dependency/Simulator edits. Root owns docs/assets/capability activat
 
 ### Task 4: Whole verification and comparison
 
-- [ ] Whole pytest, Ruff, mypy, Rust and affected actual CUDA checks.
-- [ ] Source-matched wheel and mandatory-only startup, original Config/data proofs.
-- [ ] Alternating same-real-data/same-HDD old/new read/write comparison and
+- [x] Whole pytest, Ruff, mypy, Rust and affected actual CUDA checks.
+- [x] Source-matched wheel and mandatory-only startup, original Config/data proofs.
+- [x] Alternating same-real-data/same-HDD old/new read/write comparison and
   concurrent generation/learning measurements, with p95/p99 and resource metrics.
-- [ ] Record exact evidence/NOT RUN conditions in `docs/verification/`.
-- [ ] Whole-branch correctness/conformance review; root final acceptance only
+- [x] Record exact evidence/NOT RUN conditions in `docs/verification/`.
+- [x] Whole-branch correctness/conformance review; root final acceptance only
   when the complete owner scope passes, with directory default unchanged.
