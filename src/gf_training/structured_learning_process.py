@@ -27,19 +27,31 @@ class StructuredLearningProcess(LearningProcess):
     def __init__(self, directory: Path, max_log_bytes: int, model: Any, binding: InferenceBindingV2,
                  action_config_hash: str, resume_identity: str, *, action_contract: Any,
                  ledger: ReservationLedger, cuda_visible_devices: str | None, cleanup_deadline: float,
-                 _actions: ActionConfigV3 | None = None, storage_binding: Json | None = None) -> None:
+                 _actions: ActionConfigV3 | None = None, storage_binding: Json | None = None,
+                 _hpo_training: Any = None) -> None:
         super().__init__(directory, max_log_bytes)
         self.actions = _actions
         self.storage_binding = storage_binding
-        self.protocol = 5 if storage_binding is not None else 3 if _actions is None else 4
+        self.hpo_training = _hpo_training
+        self.protocol = 6 if _hpo_training is not None else 5 if storage_binding is not None else 3 if _actions is None else 4
         self._issued_handle: Any = None
         self.model, self.binding, self.action_contract = model, binding, action_contract
         self.visibility = child_cuda_visibility(binding.device, cuda_visible_devices)
-        self.identity = wire_identity(model, binding, action_config_hash, resume_identity,
-            action_contract=action_contract, purpose='component', synthetic_capacity=False,
-            cuda_visible_devices=self.visibility, _actions=self.actions, storage_binding=storage_binding)
+        if _hpo_training is not None:
+            from gf_training.hpo_numeric_worker import wire_identity as hpo_identity
+            self.identity = hpo_identity(model, _hpo_training, binding, action_config_hash, resume_identity,
+                actions=self.actions, cuda_visible_devices=self.visibility, storage_binding=storage_binding)
+        else:
+            self.identity = wire_identity(model, binding, action_config_hash, resume_identity,
+                action_contract=action_contract, purpose='component', synthetic_capacity=False,
+                cuda_visible_devices=self.visibility, _actions=self.actions, storage_binding=storage_binding)
         self.ledger, self.cleanup_deadline = ledger, cleanup_deadline
-        self.resident_bytes = learner_process_bytes(model, binding, **({"layout": CORRECTED_CARD_INSTANCE_LAYOUT} if self.actions is not None else {}))
+        if _hpo_training is not None:
+            from gf_models.structured_config import resource_estimate
+            self.resident_bytes = (resource_estimate(model, binding, layout=CORRECTED_CARD_INSTANCE_LAYOUT,
+                suffix_decisions=_hpo_training.tbptt_length)['total_bytes'] if binding.device != 'cpu' else 0)
+        else:
+            self.resident_bytes = learner_process_bytes(model, binding, **({"layout": CORRECTED_CARD_INSTANCE_LAYOUT} if self.actions is not None else {}))
         self.lease: LearnerReservation | None = None
         self.hardware: Json | None = None
         self.steps: int | None = None
@@ -184,12 +196,20 @@ class StructuredLearningProcess(LearningProcess):
                     digest_projection,
                     validate_projection,
                 )
+                projection_hash: Any = digest_projection
+                projection_validator: Any = validate_projection
+                validation_options = {}
+                if self.hpo_training is not None:
+                    from gf_training.hpo_numeric_worker import digest_projection as hpo_digest
+                    from gf_training.hpo_numeric_worker import validate_projection as hpo_projection
+                    projection_hash, projection_validator = hpo_digest, hpo_projection
+                    validation_options = {'training': self.hpo_training}
                 expected = self._issued_handle.expectation
-                if canonical(request['projection']) != canonical(expected) or request['transaction_id'] != digest_projection(expected, storage_binding=self.storage_binding):
+                if canonical(request['projection']) != canonical(expected) or request['transaction_id'] != projection_hash(expected, storage_binding=self.storage_binding):
                     raise ContractError('wire4 request differs from live issued projection')
                 if self.steps is None:
                     raise ContractError('wire4 update before initialization')
-                validate_projection(expected, expected_steps=self.steps, policy=request['expected_policy_version'], batch_digest=request['batch_digest'], storage_binding=self.storage_binding)
+                projection_validator(expected, expected_steps=self.steps, policy=request['expected_policy_version'], batch_digest=request['batch_digest'], storage_binding=self.storage_binding, **validation_options)
             checksum(request['batch_digest'])
             if any(type(request[key]) is not str or not request[key] for key in ('batch', 'expected_policy_version')):
                 raise ContractError('wire3 batch path/policy required')
@@ -200,31 +220,53 @@ class StructuredLearningProcess(LearningProcess):
         validate_reply(reply, command, self.identity)
         if command == 'close':
             return reply
-        if command == 'update' and reply['metrics']['sequence_length'] != self.model.temporal.sequence_length:
+        if command == 'update' and (reply['metrics']['tbptt_length'] != self.hpo_training.tbptt_length if self.hpo_training is not None else reply['metrics']['sequence_length'] != self.model.temporal.sequence_length):
             raise ContractError('wire3 configured W mismatch')
         if self.hardware is not None and canonical(reply['hardware']) != canonical(self.hardware):
             raise ContractError('wire3 numerical hardware changed')
         output = Path(request['restore'] or request['output']) if command == 'initialize' else Path(request['output'])
         scan = SealedScan(max_owned_bytes=self.model.resources.max_owned_bytes, deadline=deadline)
-        artifact = (inspect_retained_game_artifact_v3(output, expected_inference_digest=reply['artifact']['inference_digest'], actions=self.actions, rules=card_instance_rules(), scan=scan) if self.actions is not None else
-            inspect_retained_artifact(output, expected_inference_digest=reply['artifact']['inference_digest'],
-            action_contract=self.action_contract, purpose='component', synthetic_capacity=False, scan=scan))
+        if self.hpo_training is not None:
+            from gf_models.structured_artifacts import adam_recipe
+            from gf_models.structured_sealed import inspect_retained_game_artifact_v4
+            recipe = self.hpo_training
+            assert self.actions is not None
+            artifact = inspect_retained_game_artifact_v4(output, expected_inference_digest=reply['artifact']['inference_digest'],
+                actions=self.actions, rules=card_instance_rules(), scan=scan, training_recipe=asdict(recipe),
+                optimizer_recipe=adam_recipe(recipe.adam_learning_rate, recipe.adam_beta1, recipe.adam_beta2, recipe.adam_epsilon))
+        else:
+            artifact = (inspect_retained_game_artifact_v3(output, expected_inference_digest=reply['artifact']['inference_digest'], actions=self.actions, rules=card_instance_rules(), scan=scan) if self.actions is not None else
+                inspect_retained_artifact(output, expected_inference_digest=reply['artifact']['inference_digest'],
+                action_contract=self.action_contract, purpose='component', synthetic_capacity=False, scan=scan))
         if artifact.resume is None:
             raise ContractError('wire3 requires retained resume metadata')
+        from gf_models.structured_binding import inference_model
         if (canonical(artifact.files) != canonical(reply['artifact']['files'])
-                or canonical(artifact.inference['model']) != canonical(asdict(self.model))
+                or canonical(artifact.inference['model']) != canonical(inference_model(self.model))
                 or canonical(artifact.resume['binding']) != canonical(asdict(self.binding))
                 or artifact.inference['action_config_hash'] != self.identity['action_config_hash']
                 or artifact.resume['resume_identity'] != self.identity['resume_identity']
                 or artifact.resume['optimizer_steps'] != reply['artifact']['optimizer_steps']
                 or artifact.resume['cuda_rng_count'] != reply['hardware']['device_count']):
             raise ContractError('wire3 artifact acknowledgement differs from verified files/binding')
+        if self.hpo_training is not None and canonical(artifact.resume['model']) != canonical(asdict(self.model)):
+            raise ContractError('wire6 resume full model/resources differ from reserved model')
         scan.finalize()
         steps = reply['artifact']['optimizer_steps']
         if command == 'update':
             if self.actions is not None and (reply['transaction_id'] != request['transaction_id'] or reply['collection_generation'] != request['projection']['collection_generation'] or reply['expected_optimizer_steps'] != self.steps):
                 raise ContractError('wire4 reply transaction/generation mismatch')
             expected = self.steps + 4 * ((reply['metrics']['parity']['decisions'] + 127) // 128)
+            if self.hpo_training is not None:
+                metrics, projection = reply['metrics'], request['projection']
+                from gf_training.hpo_source import learner_context_costs
+                prefix_costs = learner_context_costs(projection['selection'], self.hpo_training)
+                if (metrics['optimizer_step_delta'] != projection['expected_optimizer_step_delta']
+                        or metrics['collected_decisions'] != self._issued_handle._verified_collected
+                        or metrics['used_decisions'] != self._issued_handle._verified_decisions
+                        or any(metrics[key] != value for key, value in prefix_costs.items())):
+                    raise ContractError('wire6 acknowledgement differs from frozen issued Source counts/delta')
+                expected = self.steps + self._issued_handle._verified_delta
             if steps != expected:
                 raise ContractError('wire3 optimizer advancement mismatch')
             self.ledger.finish_update()
@@ -247,6 +289,10 @@ class GameLearningProcess(StructuredLearningProcess):
     async def update(self, projection: Any, output: Path, *, deadline: float) -> Json:  # type: ignore[override]
         from gf_training.card_instance_source import IssuedGameProjection
         from gf_training.structured_numeric_worker import digest_projection
+        projection_hash: Any = digest_projection
+        if self.hpo_training is not None:
+            from gf_training.hpo_numeric_worker import digest_projection as hpo_digest
+            projection_hash = hpo_digest
         if type(projection) is not IssuedGameProjection:
             raise ContractError('wire4 requires a live Source-issued projection')
         projection.require(self)
@@ -255,7 +301,7 @@ class GameLearningProcess(StructuredLearningProcess):
             reply = await self.request({'protocol_version': self.protocol, 'command': 'update', 'identity': self.identity,
                 'batch': str(projection.numeric), 'batch_digest': projection.expectation['numeric_manifest_sha256'],
                 'expected_policy_version': projection.expectation['expected_policy_version'], 'output': str(output),
-                'transaction_id': digest_projection(projection.expectation, storage_binding=self.storage_binding), 'projection': projection.expectation}, deadline)
+                'transaction_id': projection_hash(projection.expectation, storage_binding=self.storage_binding), 'projection': projection.expectation}, deadline)
             projection.completed = True
             return reply
         finally:

@@ -46,7 +46,7 @@ def checksum(value: Any) -> str:
 def wire_identity(model: Any, binding: InferenceBindingV2, action_hash: str, resume_identity: str,
                   *, action_contract: Any, purpose: str, synthetic_capacity: bool,
                   cuda_visible_devices: str | None, _actions: ActionConfigV3 | None = None,
-                  storage_binding: Json | None = None) -> Json:
+                  storage_binding: Json | None = None, _hpo: bool = False) -> Json:
     visibility = child_cuda_visibility(binding.device, cuda_visible_devices)
     storage = {}
     if storage_binding is not None:
@@ -58,12 +58,14 @@ def wire_identity(model: Any, binding: InferenceBindingV2, action_hash: str, res
         from gf_common.domain import digest
         if action_hash != digest(asdict(_actions)):
             raise ContractError("wire4 action Config hash mismatch")
-        return {"model_id": model.model_id, "model_version": "3",
+        if _hpo:
+            from gf_models.structured_binding import execution_binding_v4
+        return {"model_id": model.model_id, "model_version": "4" if _hpo else "3",
             "architecture_identity": architecture_identity(model, layout=GAME_LAYOUT), **storage,
             "action_config_hash": checksum(action_hash), "resume_identity": checksum(resume_identity),
             "actions": asdict(_actions), **input_binding_game_v3(_actions.action_contract, card_instance_rules()),
             "execution": {"binding": asdict(binding), "cuda_visible_devices": visibility},
-            "execution_digest": execution_binding_v3(model, binding, layout=GAME_LAYOUT, cuda_visible_devices=visibility)}
+            "execution_digest": (execution_binding_v4 if _hpo else execution_binding_v3)(model, binding, layout=GAME_LAYOUT, cuda_visible_devices=visibility)}
     return {'model_id': model.model_id, 'model_version': model.version,
             'architecture_identity': architecture_identity(model), 'action_config_hash': checksum(action_hash),
             'resume_identity': checksum(resume_identity),
@@ -84,16 +86,17 @@ def _number(value: Any) -> None:
 
 
 def validate_reply(reply: Json, command: str, identity: Json) -> None:
-    game = identity.get('model_version') == '3'
+    hpo = identity.get('model_version') == '4'
+    game = identity.get('model_version') in ('3', '4')
     fields = {'protocol_version', 'command', 'identity'}
     if game and command == 'update':
         fields |= {'transaction_id', 'collection_generation', 'expected_optimizer_steps'}
         checksum(reply.get('transaction_id'))
-        integer(reply.get('collection_generation'), 0, 999)
+        integer(reply.get('collection_generation'), 0, 2**63 - 1 if hpo else 999)
         integer(reply.get('expected_optimizer_steps'), 0)
     closed(reply, fields | ({'closed'} if command == 'close' else {'artifact', 'hardware', 'timings'}
                            | ({'metrics'} if command == 'update' else set())))
-    if (type(reply['protocol_version']) is not int or reply['protocol_version'] != (5 if 'storage_binding' in identity else 4 if game else 3)
+    if (type(reply['protocol_version']) is not int or reply['protocol_version'] != (6 if hpo else 5 if 'storage_binding' in identity else 4 if game else 3)
             or reply['command'] != command or canonical(reply['identity']) != canonical(identity)):
         raise ContractError('wire3 acknowledgement identity/command mismatch')
     if command == 'close':
@@ -142,12 +145,28 @@ def validate_reply(reply: Json, command: str, identity: Json) -> None:
         if value < 0:
             raise ContractError('wire3 negative timing')
     if command == 'update':
+        hpo_fields = {'optimizer_step_delta', 'collected_decisions', 'used_decisions', 'tbptt_length',
+            'epochs', 'endpoint_evaluations', 'context_decisions', 'suffix_decisions', 'update_seconds'}
         metrics = closed(reply['metrics'], {'policy_loss', 'value_mse', 'entropy', 'approx_kl', 'total_loss',
-                                           'optimizer_steps', 'sequence_length', 'parity'})
+                                           'optimizer_steps', 'parity'} | (hpo_fields if hpo else {'sequence_length'}))
         for name in ('policy_loss', 'value_mse', 'entropy', 'approx_kl', 'total_loss'):
             _number(metrics[name])
         integer(metrics['optimizer_steps'], 1)
-        integer(metrics['sequence_length'], 1, 1024)
+        integer(metrics['tbptt_length'] if hpo else metrics['sequence_length'], 1, 1024)
+        if hpo:
+            from gf_common.hpo import optimizer_delta
+            from gf_training.hpo_config import hpo_training_config
+            recipe = hpo_training_config(identity['training_recipe'])
+            for name in hpo_fields - {'update_seconds'}:
+                integer(metrics[name], 1)
+            _number(metrics['update_seconds'])
+            if (metrics['epochs'] != recipe.epochs or metrics['tbptt_length'] != recipe.tbptt_length
+                    or metrics['collected_decisions'] < metrics['used_decisions']
+                    or metrics['endpoint_evaluations'] != recipe.epochs * metrics['used_decisions']
+                    or metrics['optimizer_step_delta'] != optimizer_delta(metrics['used_decisions'],
+                        epochs=recipe.epochs, minibatch_size=recipe.minibatch_size)
+                    or metrics['update_seconds'] < 0):
+                raise ContractError('wire6 configured counts/steps mismatch')
         if metrics['optimizer_steps'] != artifact['optimizer_steps']:
             raise ContractError('wire3 optimizer counter mismatch')
         parity = closed(metrics['parity'], {'atol', 'rtol', 'max_abs_error', 'decisions', 'checks'})
@@ -157,6 +176,8 @@ def validate_reply(reply: Json, command: str, identity: Json) -> None:
         if (parity['atol'] != 1e-5 or parity['rtol'] != 1e-5 or parity['max_abs_error'] < 0
                 or parity['checks'] != ['saved', 'cpu-cache', 'cpu-full', 'learner-full', 'learner-split']):
             raise ContractError('wire3 parity recipe mismatch')
+        if hpo and parity['decisions'] != metrics['collected_decisions']:
+            raise ContractError('wire6 parity must cover all complete originals')
 
 
 def _select_visibility(initial: Json, binding: InferenceBindingV2, visibility: str | None) -> None:
@@ -172,14 +193,22 @@ def _select_visibility(initial: Json, binding: InferenceBindingV2, visibility: s
 
 def serve(initial: Json, lines: Iterable[str]) -> None:
     closed(initial, {'protocol_version', 'command', 'identity', 'model', 'seed', 'output', 'restore'})
-    packed = initial.get('protocol_version') == 5
-    game = initial.get('protocol_version') in (4, 5)
-    protocol = 5 if packed else 4 if game else 3
+    hpo = initial.get('protocol_version') == 6
+    packed = initial.get('protocol_version') == 5 or hpo and 'storage_binding' in initial.get('identity', {})
+    game = initial.get('protocol_version') in (4, 5, 6)
+    protocol = 6 if hpo else 5 if packed else 4 if game else 3
     if type(initial['protocol_version']) is not int or initial['protocol_version'] != protocol or initial['command'] != 'initialize':
         raise ContractError('wire3 initialize required')
     identity = closed(initial['identity'], {'model_id', 'model_version', 'architecture_identity', 'action_config_hash',
-        'resume_identity', 'action_contract', 'purpose', 'synthetic_capacity', 'execution', 'execution_digest'} | ({'actions', 'rule_signature', 'layout_signature'} if game else set()) | ({'storage_binding'} if packed else set()))
-    model: Any = model_config_v3(initial['model'], layout=GAME_LAYOUT) if game else model_config_v2(initial['model'])
+        'resume_identity', 'action_contract', 'purpose', 'synthetic_capacity', 'execution', 'execution_digest'} | ({'actions', 'rule_signature', 'layout_signature'} if game else set()) | ({'storage_binding'} if packed else set()) | ({'training_recipe'} if hpo else set()))
+    training: Any = None
+    if hpo:
+        from gf_models.hpo_config import model_config_v4
+        from gf_training.hpo_config import hpo_training_config
+        model: Any = model_config_v4(initial['model'], layout=GAME_LAYOUT)
+        training = hpo_training_config(identity['training_recipe'])
+    else:
+        model = model_config_v3(initial['model'], layout=GAME_LAYOUT) if game else model_config_v2(initial['model'])
     execution = closed(identity['execution'], {'binding', 'cuda_visible_devices'})
     binding = InferenceBindingV2(**closed(execution['binding'], set(asdict(InferenceBindingV2()))))
     actions = action_config_v3(identity['actions']) if game else None
@@ -187,9 +216,14 @@ def serve(initial: Json, lines: Iterable[str]) -> None:
     if not game:
         check_input_binding({key: identity[key] for key in ('action_contract', 'purpose', 'synthetic_capacity')},
         action_contract=contract, purpose='component', synthetic_capacity=False)
-    expected = wire_identity(model, binding, identity['action_config_hash'], identity['resume_identity'],
-        action_contract=contract, purpose='component', synthetic_capacity=False,
-        cuda_visible_devices=execution['cuda_visible_devices'], _actions=actions, storage_binding=identity.get('storage_binding'))
+    if hpo:
+        from gf_training.hpo_numeric_worker import wire_identity as hpo_identity
+        expected = hpo_identity(model, training, binding, identity['action_config_hash'], identity['resume_identity'],
+            actions=actions, cuda_visible_devices=execution['cuda_visible_devices'], storage_binding=identity.get('storage_binding'))
+    else:
+        expected = wire_identity(model, binding, identity['action_config_hash'], identity['resume_identity'],
+            action_contract=contract, purpose='component', synthetic_capacity=False,
+            cuda_visible_devices=execution['cuda_visible_devices'], _actions=actions, storage_binding=identity.get('storage_binding'))
     if canonical(identity) != canonical(expected):
         raise ContractError('wire3 initialize binding mismatch')
     _select_visibility(initial, binding, execution['cuda_visible_devices'])
@@ -204,9 +238,14 @@ def serve(initial: Json, lines: Iterable[str]) -> None:
     from gf_models.torch_runtime import hardware
     from gf_training.structured_numeric import GameLearner, Learner
     from gf_training.structured_rollout import read_game_rollout, read_rollout
-    learner = (GameLearner(model, initial['seed'], binding, identity['resume_identity'], actions=actions, rules=card_instance_rules()) if actions is not None else
-        Learner(model, initial['seed'], binding, identity['action_config_hash'], identity['resume_identity'],
-        action_contract=contract, purpose='component', synthetic_capacity=False))
+    if hpo:
+        from gf_training.hpo_numeric import HpoLearner
+        assert actions is not None
+        learner: Any = HpoLearner(model, training, initial['seed'], binding, identity['resume_identity'], actions=actions, rules=card_instance_rules())
+    else:
+        learner = (GameLearner(model, initial['seed'], binding, identity['resume_identity'], actions=actions, rules=card_instance_rules()) if actions is not None else
+            Learner(model, initial['seed'], binding, identity['action_config_hash'], identity['resume_identity'],
+            action_contract=contract, purpose='component', synthetic_capacity=False))
     if initial['restore'] is not None:
         directory = Path(initial['restore'])
         learner.restore(directory)
@@ -252,13 +291,22 @@ def serve(initial: Json, lines: Iterable[str]) -> None:
         if any(type(request[key]) is not str or not request[key] for key in ('batch', 'output', 'expected_policy_version')):
             raise ContractError('wire3 update path/policy required')
         started = time.monotonic()
+        rollout: Any
         if game:
             assert actions is not None
-            projection = validate_projection(request['projection'], expected_steps=learner.steps, policy=request['expected_policy_version'], batch_digest=request['batch_digest'], storage_binding=identity.get('storage_binding'))
-            if request['transaction_id'] != digest_projection(projection, storage_binding=identity.get('storage_binding')):
+            validator: Any = validate_projection
+            transaction: Any = digest_projection
+            arguments = {}
+            if hpo:
+                from gf_training.hpo_numeric_worker import digest_projection as hpo_transaction
+                from gf_training.hpo_numeric_worker import validate_projection as hpo_projection
+                validator, transaction = hpo_projection, hpo_transaction
+                arguments = {'training': training}
+            projection = validator(request['projection'], expected_steps=learner.steps, policy=request['expected_policy_version'], batch_digest=request['batch_digest'], storage_binding=identity.get('storage_binding'), **arguments)
+            if request['transaction_id'] != transaction(projection, storage_binding=identity.get('storage_binding')):
                 raise ContractError('wire4 transaction mismatch')
             from gf_models.structured_artifacts import semantics_v3
-            declaration = semantics_v3(model, layout=GAME_LAYOUT, action_contract=contract, rules=card_instance_rules())
+            declaration = (learner._context.semantics(model) if hpo else semantics_v3(model, layout=GAME_LAYOUT, action_contract=contract, rules=card_instance_rules()))
             from gf_models.arrays import sha256
             manifest = read_json(Path(request['batch']) / 'rollout.json', expected_digest=request['batch_digest'], max_owned_bytes=model.resources.max_owned_bytes)
             from gf_models.sharded_arrays import validate_bundle_metadata
@@ -269,7 +317,13 @@ def serve(initial: Json, lines: Iterable[str]) -> None:
             for name, expected_hash in files.items():
                 if sha256(Path(request['batch']) / name) != expected_hash:
                     raise ContractError('wire4 numeric original file hash mismatch')
-            rollout = read_game_rollout(Path(request['batch']), request['batch_digest'], model, actions=actions, rules=card_instance_rules(), declaration=declaration, expected_correspondence=projection['source_correspondence'], storage_binding=identity.get('storage_binding'))
+            if hpo:
+                from gf_training.hpo_rollout import read_hpo_rollout
+                rollout = read_hpo_rollout(Path(request['batch']), request['batch_digest'], model, training,
+                    actions=actions, rules=card_instance_rules(), expected_selection=projection['selection'],
+                    expected_correspondence=projection['source_correspondence'], storage_binding=identity.get('storage_binding'))
+            else:
+                rollout = read_game_rollout(Path(request['batch']), request['batch_digest'], model, actions=actions, rules=card_instance_rules(), declaration=declaration, expected_correspondence=projection['source_correspondence'], storage_binding=identity.get('storage_binding'))
         else:
             rollout = read_rollout(Path(request['batch']), request['batch_digest'], model,
                 action_contract=contract, purpose='component', synthetic_capacity=False)
@@ -277,6 +331,11 @@ def serve(initial: Json, lines: Iterable[str]) -> None:
             if rollout.policy_version != request['expected_policy_version']:
                 raise ContractError('wire3 frozen behavior policy mismatch')
             metrics = learner.update(rollout)
+            if hpo and (metrics['optimizer_step_delta'] != projection['expected_optimizer_step_delta']
+                    or learner.steps != projection['expected_optimizer_steps'] + projection['expected_optimizer_step_delta']
+                    or metrics['collected_decisions'] != projection['collected_decisions']
+                    or metrics['used_decisions'] != projection['used_decisions']):
+                raise ContractError('wire6 optimizer acknowledgement differs from frozen Source expectations')
         finally:
             del rollout
         learner.synchronize()

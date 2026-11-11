@@ -413,9 +413,10 @@ class GroupPackCollectionPublication:
         if (self.committed or self.pending is None or self._controls is None
                 or self._physical is not None or self._pointer is not None or self._terminal_originals):
             raise ContractError("packed publication requires its actual prepared pending owner")
+        from gf_training.card_instance_collection import _publication_schema
         if (self._controls != {"report.json": (canonical(report) + "\n").encode(),
                 "manifest.json": (canonical(manifest) + "\n").encode()}
-                or report.get("healthy") is not True or manifest.get("schema_version") != 5
+                or report.get("healthy") is not True or not _publication_schema(manifest)
                 or (manifest.get("collection_role") == "ppo-final-validation") != (final_context is not None)):
             raise ContractError("packed controls changed or are not ordinary healthy collection5")
         pending = self.pending

@@ -121,6 +121,16 @@ persist intent, then use existing owned verify/stage/unlink. Never convert
 uncertain or foreign-file deletion into success. Native Registry4 interpretation
 checks each individual file; old artifact_status semantics remain exact.
 
+Historical complete-original audits may need an inference manifest legitimately
+deleted under these receipts. Only for a historical generation with SAME-chain
+validated `deleted` status and successful receipt, use the immutable Generation4
+original inference SHA, protectedG0 for unchanged architecture/public semantics,
+and actual original Journal6 neural metadata checked against that exact model,
+generation, label and original manifest identity. Do not claim a fresh physical
+read of a deleted file or rewrite the old proof/correspondence. Missing retained,
+deleting or failed files never receive this fallback. Current/new-collection and
+pool policies still require actual retained inference and weight dependencies.
+
 ## Source, selection and numerical boundaries
 
 Collection6 linkage freezes closed precollection selection context:

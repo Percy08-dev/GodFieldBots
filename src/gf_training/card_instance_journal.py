@@ -110,7 +110,7 @@ class _Context:
 
     def validate_header(self, header: Json) -> tuple[WorkerCaps, EventBank]:
         tree = header.get("model_id") == "lightgbm" and header.get("model_version") == "3"
-        neural = header.get("model_version") == "3" and not tree
+        neural = header.get("model_version") in ("3", "4") and not tree
         learned = neural or tree
         closed(
             header,
@@ -186,7 +186,8 @@ class _Context:
             safe, label = validator(header[key], actions=self.actions, rules=self.rules)
             expected_caps, expected_costs, _, _ = own_game_worker_settings_v3(
                 header["model_id"], self.actions, safe, rules=self.rules)
-            if (header["policy"] != label or header["caps"] != asdict(expected_caps)
+            if (neural and header['model_version'] != safe['version']
+                    or header["policy"] != label or header["caps"] != asdict(expected_caps)
                     or header["numeric_costs"] != asdict(expected_costs)
                     or header["aggregate_window"] != safe["model"]["encoder" if tree else "event"]["aggregate_window"]):
                 raise ContractError("journal6 neural execution/label/capacity mismatch")
@@ -264,7 +265,7 @@ class CardInstanceJournal(StructuredJournal):
             "caps": caps,
             "numeric_costs": numeric_costs,
             "model_id": model_id,
-            "model_version": "3" if neural is not None or tree is not None else "1",
+            "model_version": neural['policy_options']['version'] if neural is not None else "3" if tree is not None else "1",
             "generation_schema": None,
             "aggregate_window": aggregate_window,
             "token_signature": signature(aggregate_window, layout=context.layout),

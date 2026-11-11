@@ -13,6 +13,13 @@ Optuna5.0.0 is a lazy `hpo` extra. HPO evaluation/completion authority is separa
 from formal/final64/Dataset qualification. Functional acceptance and limitations
 will be recorded in [the verification record](verification/ppo-hpo.md).
 No formal HPO, experiment sizing or strength evidence is claimed here.
+Scoped implementation now accepts configurable model/numeric/artifact components,
+structural lineage readers, and the Python complete-original Source/selection/
+Wire6 path after independent reviews and root verification. Native HPO support,
+the common coordinator/retention producer and campaign/CLI integration remain
+implementation work. Native dispatch stays strictly refused until actual support
+is accepted. Concrete [record ownership](design/ppo-hpo-records.md) and the
+[two-stage native authorization](design/ppo-hpo-native-handshake.md) are reviewed.
 
 [ADR0024](adr/0024-card-instance-simulator-v2.md) begins a separately identified
 card-instance Simulator v2 migration. Contract/wire/Config/direct HTTP and pure

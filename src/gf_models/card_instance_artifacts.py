@@ -105,14 +105,24 @@ class RetainedGameArtifacts:
     def for_registry(cls, frozenbindings: dict[str, RuntimePolicyBinding], actions: ActionConfigV3, *,
                      rules: CardInstanceRules, max_owned_bytes: int, preflight_deadline: float,
                      finalization_deadline: float) -> RetainedGameArtifacts:
+        return cls._for_registry(frozenbindings, actions, rules=rules, max_owned_bytes=max_owned_bytes,
+            preflight_deadline=preflight_deadline, finalization_deadline=finalization_deadline)
+
+    @classmethod
+    def _for_registry(cls, frozenbindings: dict[str, RuntimePolicyBinding], actions: ActionConfigV3, *,
+                     rules: CardInstanceRules, max_owned_bytes: int, preflight_deadline: float,
+                     finalization_deadline: float, _hpo_pool_size: int | None = None) -> RetainedGameArtifacts:
         """Own the exact current/pool registry; grants no live run or Source authority."""
         input_binding_game_v3(actions.action_contract, rules)
-        if type(frozenbindings) is not dict or not frozenbindings or len(frozenbindings) > 8:
+        if _hpo_pool_size is not None:
+            integer(_hpo_pool_size, 1, 2**31 - 1)
+        limit = 6 if _hpo_pool_size is None else _hpo_pool_size + 1
+        if type(frozenbindings) is not dict or not frozenbindings or len(frozenbindings) > limit + 2:
             raise ContractError('closed frozen game policy registry required')
         if any(type(value) is not RuntimePolicyBinding for value in frozenbindings.values()):
             raise ContractError('closed frozen runtime policy bindings required')
         neural = [value for value in frozenbindings.values() if value.policy_options is not None]
-        if not 1 <= len(neural) <= 6 or len(frozenbindings) > len(neural) + 2:
+        if not 1 <= len(neural) <= limit or len(frozenbindings) > len(neural) + 2:
             raise ContractError('registry requires one to six exact neural identities and canonical baselines')
         models = []
         expected: dict[str, tuple[str, Json]] = {}
@@ -123,6 +133,8 @@ class RetainedGameArtifacts:
                     raise ContractError('noncanonical registry baseline binding')
                 continue
             v4 = type(value.policy_options) is dict and value.policy_options.get("version") == "4"
+            if _hpo_pool_size is not None and not v4:
+                raise ContractError('HPO registry requires explicit model4 policies')
             safe_parser = safe_options_game_v4 if v4 else safe_options_game_v3
             configure = configured_model_v4 if v4 else configured_model_v3
             safe = safe_parser(value.policy_options, actions=actions, rules=rules)
@@ -155,6 +167,14 @@ class RetainedGameArtifacts:
             if hasattr(owner, '_scan'):
                 owner.release()  # In-memory retirement only; preserve the initiating failure.
             raise
+
+    @classmethod
+    def for_hpo_registry(cls, frozenbindings: dict[str, RuntimePolicyBinding], actions: ActionConfigV3, *,
+                         pool_size: int, rules: CardInstanceRules, max_owned_bytes: int,
+                         preflight_deadline: float, finalization_deadline: float) -> RetainedGameArtifacts:
+        return cls._for_registry(frozenbindings, actions, rules=rules, max_owned_bytes=max_owned_bytes,
+            preflight_deadline=preflight_deadline, finalization_deadline=finalization_deadline,
+            _hpo_pool_size=pool_size)
 
     def _initialize(self, models: tuple[ConfiguredNeuralModelV3 | ConfiguredNeuralModelV4, ...], actions: ActionConfigV3, *,
                     rules: CardInstanceRules, max_owned_bytes: int, preflight_deadline: float,

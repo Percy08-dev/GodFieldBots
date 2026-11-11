@@ -6,12 +6,15 @@ reconstructs these from complete originals; this class does not authorize them.
 from __future__ import annotations
 
 from dataclasses import asdict
+from pathlib import Path
+from typing import Any
 
 import numpy as np
 
 from gf_common.card_instance import ActionConfigV3
 from gf_common.card_instance_rules import CardInstanceRules
-from gf_common.domain import ContractError, canonical, digest, integer
+from gf_common.domain import ContractError, Json, canonical, digest, integer
+from gf_common.hpo import optimizer_delta
 from gf_common.structured_layout import CORRECTED_CARD_INSTANCE_LAYOUT
 from gf_common.structured_tokens import tokenize_frame, tokenize_table
 from gf_models.hpo_config import validate_model_v4
@@ -26,6 +29,7 @@ from gf_training.structured_rollout import (
     _owned_bytes,
     _predicted_token_bytes,
     _record_binding,
+    _RolloutContext,
 )
 
 
@@ -34,6 +38,7 @@ class HpoRollout(StructuredRollout):
                  training: HPOTrainingConfig, *, actions: ActionConfigV3, rules: CardInstanceRules,
                  selected_locations: tuple[tuple[int, int], ...], _reserved_bytes: int = 0) -> None:
         self.layout = CORRECTED_CARD_INSTANCE_LAYOUT
+        self._context = _RolloutContext(actions, rules)
         validate_model_v4(model, layout=self.layout)
         if type(training) is not HPOTrainingConfig:
             raise ContractError("closed HPO training recipe required")
@@ -126,3 +131,42 @@ class HpoRollout(StructuredRollout):
                 or any(episode.records.end_kind != "natural" for episode in self.episodes)
                 or canonical(asdict(self.training)) != canonical(asdict(hpo_training_config(asdict(self.training))))):
             raise ContractError("invalid complete HPO numeric component")
+
+
+def _numeric_context(rollout: HpoRollout, selection: Json) -> Json:
+    from gf_training.hpo_collection import replay_selection
+    locations = replay_selection(selection, tuple(len(episode.records.frames) for episode in rollout.episodes))
+    if locations != rollout.selected_locations:
+        raise ContractError('numeric5 selection differs from complete rollout endpoints')
+    return {'training_recipe': asdict(rollout.training), 'selection': selection,
+        'expected_optimizer_step_delta': optimizer_delta(rollout.used_decisions,
+            epochs=rollout.training.epochs, minibatch_size=rollout.training.minibatch_size)}
+
+
+def write_hpo_rollout(directory: Path, rollout: HpoRollout, *, selection: Json, **options: Any) -> Json:
+    from gf_training.structured_rollout import _write_rollout
+    if type(rollout) is not HpoRollout:
+        raise ContractError('exact HPO numeric component required')
+    rollout.require_learning()
+    return _write_rollout(directory, rollout, _hpo=_numeric_context(rollout, selection), **options)
+
+
+def read_hpo_rollout(directory: Path, expected_digest: str, model: ModelConfigV4,
+                     training: HPOTrainingConfig, *, actions: ActionConfigV3, rules: CardInstanceRules,
+                     expected_selection: Json, expected_records: tuple[EpisodeRecords, ...] | None = None,
+                     expected_correspondence: Json | None = None, **options: Any) -> HpoRollout:
+    from gf_common.hpo import checked_selection
+    from gf_training.structured_rollout import _hpo_semantics, _read_rollout
+    validate_model_v4(model, layout=CORRECTED_CARD_INSTANCE_LAYOUT)
+    training = hpo_training_config(asdict(training))
+    selection = checked_selection(expected_selection)
+    context = _RolloutContext(actions, rules)
+    hpo = {'training_recipe': asdict(training), 'selection': selection,
+        'expected_optimizer_step_delta': optimizer_delta(selection['used_decisions'],
+            epochs=training.epochs, minibatch_size=training.minibatch_size)}
+    output = _read_rollout(directory, expected_digest, model, action_contract=actions.action_contract,
+        purpose='qualified_game', synthetic_capacity=False, expected_semantics=_hpo_semantics(model, context),
+        expected_records=expected_records, expected_correspondence=expected_correspondence,
+        _context=context, _hpo=hpo, **options)
+    assert type(output) is HpoRollout
+    return output

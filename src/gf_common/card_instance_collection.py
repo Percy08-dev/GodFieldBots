@@ -24,6 +24,19 @@ PPO_BATCH = GameCollectionRole('ppo-batch', 'train', 16, frozenset({
 FINAL_VALIDATION = GameCollectionRole('ppo-final-validation', 'validation', 64, frozenset({
     'parent_run_id', 'parent_run_path', 'batch_id', 'final_generation', 'final_inference_sha256',
     'policy_label', 'learner_seats', 'schedule_digest', 'policy_registry_digest'}))
+
+
+@dataclass(frozen=True)
+class HpoCollectionRole(GameCollectionRole):
+    """Explicit variable-size exploratory role; no formal/final authority."""
+
+
+def hpo_batch_role(games: int) -> HpoCollectionRole:
+    integer(games, 8, 65536)
+    if games % 8:
+        raise ContractError('HPO collection games must preserve four opponent pairs')
+    return HpoCollectionRole('hpo-ppo-batch', 'train', games,
+        PPO_BATCH.linkage_keys | {'selection_context'})
 PROJECTION_KEYS = {'recipe', 'parent_config_sha256', 'parent_config_inputs_sha256', 'projected_config_sha256'}
 INVOCATION_KEYS = {'started_unix', 'started_monotonic', 'caller_deadline_monotonic',
     'admission_deadline_monotonic', 'execution_deadline_monotonic', 'wall_deadline_monotonic'}
@@ -56,6 +69,10 @@ def packed_final_facts(value: Json, *, storage: Json, custody: Json, source_set_
 
 
 def checked_role(role: GameCollectionRole) -> GameCollectionRole:
+    if type(role) is HpoCollectionRole:
+        if role != hpo_batch_role(role.games):
+            raise ContractError('closed HPO collection role required')
+        return role
     if role is not PPO_BATCH and role is not FINAL_VALIDATION:
         raise ContractError('one explicit closed corrected collection role required')
     return role
@@ -75,10 +92,14 @@ def checked_linkage(value: Any, *, role: GameCollectionRole, schedule: list[Json
             raise ContractError('original collection requires explicit parent/batch linkage')
     if not Path(raw['parent_run_path']).is_absolute():
         raise ContractError('original collection parent path must be absolute')
-    if role is PPO_BATCH:
-        generation = integer(raw['collection_generation'], 0, 999)
+    if role is PPO_BATCH or type(role) is HpoCollectionRole:
+        generation = integer(raw['collection_generation'], 0, 2**63 - 1 if type(role) is HpoCollectionRole else 999)
         if raw['batch_id'] != f'batch-{generation:06}':
             raise ContractError('original PPO batch generation mismatch')
+        if type(role) is HpoCollectionRole:
+            from gf_common.hpo import checked_context
+            if checked_context(raw['selection_context'])['batch'] != generation:
+                raise ContractError('HPO selection batch differs from original linkage')
     else:
         integer(raw['final_generation'], 0, 1000)
         _sha(raw['final_inference_sha256'])

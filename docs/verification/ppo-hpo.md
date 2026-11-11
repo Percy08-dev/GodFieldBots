@@ -135,3 +135,48 @@ metadata is explicitly unqualified for production HPO. Actual original Collectio
 resolution/replay, selection RNG/GAE reconstruction and exact prefix costs remain
 unit3's work. No original Source, GPU campaign, coordinator, deletion producer or
 Optuna evaluation authority is granted by these reader tests.
+
+## Python Source3a and Wire6
+
+Source3a is the Python scheduling/selection/complete-original Source/Numeric5/
+Wire6 milestone. Actual native support remains Source3b; current installed
+native HPO dispatch is strictly refused, with no fallback or advertised marker.
+The same Source, custody, scan, numerical loop and process owners are reused.
+Journal6 now explicitly binds own neural model4 metadata; Collection6 publication
+checks its closed HPO role/context. Old versions retain their exact meanings.
+
+Proof3 preserves both-view accepted-original counts; learner collected/used counts
+are separate. Original-backed selection replay rejects even a rehashed alternative
+valid subset. Complete episodes supply targets/context, selected rows supply loss/
+normalization. Wire6 validates actual saved state/counters/costs and retirement
+freezes236collected/1used/delta3 in the controlled case while retaining originals.
+Historical inference deletion is accepted only with SAME-chain successful receipts,
+immutable generation hashes and actual journal-carried inference5 metadata. The
+original proof/correspondence remains identical; active policies require weights.
+
+Independent correctness initially found two P2 blockers: legacy999cap on HPO
+generation linkage and missing seed-derived G0 opponent RNG validation. Both were
+reproduced and fixed. HPO supports its technical domain/canonical minimum-width
+names including1000/1,000,000; old PPO keeps999. Full parent/live planning now
+checks exact `PCG64(learning_seed)` initial controls before original/native or
+production work. Independent scoped re-review passes5cases and static checks;
+architecture rechecks the cap fix and is READY for the Python milestone.
+
+Root fresh host command (local preload sockets require host access):
+`.venv/bin/python -m pytest tests/test_hpo_selection.py tests/test_hpo_source.py
+tests/test_hpo_wire.py tests/test_hpo_native.py tests/test_card_instance_source.py
+tests/test_structured_numeric_worker.py tests/test_group_pack_decoded_retirement.py
+tests/test_card_instance_learning.py tests/test_card_instance_collection_publication.py
+tests/test_card_instance_registry_artifacts.py tests/test_hpo_lineage.py
+-q --disable-warnings --maxfail=1 --tb=short` —268PASS/25unchanged CUDA SKIP
+in110.56s. Root full project Ruff passes; mypy passes185source files.
+Earlier implementer affected322PASS, host254PASS/25SKIP and post-registry14PASS
+are overlapping scoped evidence. Independent initial review ran26new cases.
+
+Controlled cases include24-game schedule order past pair10, same learner/snapshot
+label with explicit own viewer, GAE/token/scalar/normalization tampering, historical
+fully pruned controls, pool>5 through SAME custody, and actual CPU Wire6 update/
+restore/bad-ack reap. No actual game, production CUDA Source/coordinator, native
+positive dispatch, deletion producer, Optuna objective or strength claim follows.
+The [native authorization design](../design/ppo-hpo-native-handshake.md) is
+architecture READY; its implementation/positive candidate checks remain pending.

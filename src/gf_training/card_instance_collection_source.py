@@ -11,6 +11,7 @@ from gf_common.card_instance_collection import (
     PROJECTION_KEYS,
     PROJECTION_RECIPE,
     GameCollectionRole,
+    HpoCollectionRole,
     checked_invocation,
     checked_linkage,
     checked_role,
@@ -32,6 +33,7 @@ def inspect_game_manifest(owner: _SourceOwner, manifest: Json, actions: ActionCo
                    expected_split: str | None, *, role: GameCollectionRole = PPO_BATCH,
                    _pending: object = None) -> tuple[Json, list[tuple[Json, Json]]]:
     role = checked_role(role)
+    hpo = type(role) is HpoCollectionRole
     control_name = 'manifest.json'
     if _pending is not None:
         from gf_common.card_instance_collection import FINAL_VALIDATION
@@ -40,9 +42,9 @@ def inspect_game_manifest(owner: _SourceOwner, manifest: Json, actions: ActionCo
             raise ContractError('actual final-only pending collection owner required')
         control_name = _pending.manifest_name()
     expected = input_binding_game_v3(actions.action_contract, card_instance_rules())
-    if (manifest.get('schema_version') != 5 or type(manifest['schema_version']) is not int
+    if (manifest.get('schema_version') != (6 if hpo else 5) or type(manifest['schema_version']) is not int
             or manifest.get('status') != 'complete' or manifest.get('collection_role') != role.role
-            or manifest.get('model_version') != '3' or manifest.get('journal_schema_version') != 6
+            or manifest.get('model_version') != ('4' if hpo else '3') or manifest.get('journal_schema_version') != 6
             or manifest.get('derived_schema_version') != 6 or manifest.get('participant_protocol_version') != 3
             or manifest.get('candidate_codec') != 'candidate-columns-v2'
             or manifest.get('input_recipe') != LAYOUT.input_recipe
@@ -55,7 +57,10 @@ def inspect_game_manifest(owner: _SourceOwner, manifest: Json, actions: ActionCo
             or canonical(config.get('actions')) != canonical(asdict(actions))
             or config.get('run', {}).get('split') != expected_split):
         raise ContractError('original collection5 frozen Config/split mismatch')
-    if role is PPO_BATCH:
+    if hpo:
+        link = checked_linkage(manifest.get('linkage'), role=role,
+            schedule=manifest.get('schedule', []), registry=manifest.get('policy_bindings'))
+    elif role is PPO_BATCH:
         link = closed(manifest.get('linkage'), LINKAGE_KEYS)
         integer(link['collection_generation'], 0, 999)
         if link['batch_id'] != f"batch-{link['collection_generation']:06}" or not Path(link['parent_run_path']).is_absolute():

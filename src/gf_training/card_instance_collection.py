@@ -34,6 +34,18 @@ from gf_models.card_instance_artifacts import EXTERNAL_INPUT_CONTRACT, validate_
 from gf_models.card_instance_game_tree_runtime import TREE_INPUT_CONTRACT, validate_tree_metadata
 
 
+def _publication_schema(manifest: Json) -> bool:
+    if type(manifest.get('schema_version')) is not int:
+        return False
+    if manifest['schema_version'] == 5:
+        return True
+    if manifest['schema_version'] != 6:
+        return False
+    from gf_training.hpo_collection import check_hpo_collection
+    check_hpo_collection(manifest)
+    return True
+
+
 def collection_metadata(
     *,
     actions: ActionConfigV3,
@@ -46,6 +58,7 @@ def collection_metadata(
     policy_bindings: dict[str, RuntimePolicyBinding] | None = None,
     neural_inputs: Json | None = None,
     tree_inputs: Json | None = None,
+    _hpo: bool = False,
 ) -> Json:
     binding = game_binding(
         actions.action_contract, rule_signature(actions.action_contract, card_instance_rules())
@@ -86,6 +99,8 @@ def collection_metadata(
                 raise ContractError("missing retained own-policy metadata")
             validator = validate_tree_metadata if tree else validate_neural_metadata
             safe, expected = validator(raw, actions=actions, rules=card_instance_rules())
+            if _hpo and (tree or safe['version'] != '4'):
+                raise ContractError('Collection6 requires explicit neural4 registry')
             if expected != label or canonical(safe) != canonical(execution.policy_options) or safe["model"]["model_id"] != execution.model_id:
                 raise ContractError("collection retained policy binding mismatch")
         for key, labels in expected_by_type.items():
@@ -98,7 +113,7 @@ def collection_metadata(
     ):
         raise ContractError("collection5 supports corrected baselines only")
     return {
-        "schema_version": 5,
+        "schema_version": 6 if _hpo else 5,
         **binding,
         "config": config,
         "config_hash": digest(config),
@@ -113,7 +128,7 @@ def collection_metadata(
         "derived_schema_version": 6,
         "participant_protocol_version": 3,
         "candidate_codec": "candidate-columns-v2",
-        "model_version": "3" if neural_fields else "1",
+        "model_version": "4" if _hpo else "3" if neural_fields else "1",
         "input_recipe": CORRECTED_CARD_INSTANCE_LAYOUT.input_recipe,
         "token_signature": signature(128, layout=CORRECTED_CARD_INSTANCE_LAYOUT),
         "source_eligibility": "not-authorized-by-collection-metadata",
@@ -434,7 +449,7 @@ class CollectionPublication:
     def _publish(self, report: Json, manifest: Json, *, final: bool) -> None:
         if self.committed or self.outputs or self._directory_handle is not None:
             raise ContractError("collection publication owner already consumed")
-        if report.get("healthy") is not True or manifest.get("schema_version") != 5:
+        if report.get("healthy") is not True or not _publication_schema(manifest):
             raise ContractError("collection healthy report and manifest5 required")
         descriptor = os.open(self.directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
         self._directory_handle = self._own_handle(descriptor)
@@ -477,7 +492,7 @@ class CollectionPublication:
             raise ContractError('final validation requires its concrete retained publication owner')
         if self.committed or self.outputs or self._directory_handle is not None:
             raise ContractError('collection publication owner already consumed')
-        if report.get('healthy') is not True or manifest.get('schema_version') != 5:
+        if report.get('healthy') is not True or not _publication_schema(manifest):
             raise ContractError('collection healthy report and manifest5 required')
         try:
             if retained_input_guard is not None:

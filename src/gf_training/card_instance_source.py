@@ -4,6 +4,7 @@ Serialized evidence never substitutes for the same live lock/process/lease owner
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 from collections.abc import Iterator
@@ -55,6 +56,15 @@ from gf_training.structured_source import (
 
 LINKAGE_KEYS = {'parent_run_id', 'parent_run_path', 'batch_id', 'collection_generation',
                 'learner_seats', 'schedule_digest', 'policy_registry_digest'}
+
+
+def _hpo(state: Json) -> bool:
+    from gf_training.hpo_source import is_hpo
+    return is_hpo(state)
+
+
+def _packed(state: Json) -> bool:
+    return state.get('schema_version') == 4 or _hpo(state) and 'storage_binding' in state
 
 
 @dataclass(frozen=True)
@@ -382,7 +392,14 @@ def _game_header(header: Json, manifest: Json, episode: Json, spec: Json,
     else:
         raw = manifest['neural_inputs']['policies'][header['policy']]
         safe, label = validate_neural_metadata(raw, actions=actions, rules=card_instance_rules())
-        if header['model_version'] != '3' or label != header['policy'] or canonical(safe) != canonical(binding['policy_options']) or canonical(header.get('neural')) != canonical(raw):
+        if manifest['schema_version'] == 6:
+            # Inference5 is written by atomic_json's canonical UTF-8+newline
+            # codec. Retained Journal6 metadata keeps that complete document
+            # even after Registry4 deliberately deletes the physical manifest.
+            encoded = (canonical(raw['inference_manifest']) + '\n').encode()
+            if hashlib.sha256(encoded).hexdigest() != safe['expected_manifest_digest']:
+                raise ContractError('HPO original neural manifest bytes/hash differ from generation identity')
+        if header['model_version'] != ('4' if manifest['schema_version'] == 6 else '3') or label != header['policy'] or canonical(safe) != canonical(binding['policy_options']) or canonical(header.get('neural')) != canonical(raw):
             raise ContractError('original neural metadata differs from frozen registry')
 
 
@@ -449,11 +466,12 @@ class _OnlineGameOwner:
 def validate_owned_collection(plan: CollectionPlan, ledger: Any, *, max_owned_bytes: int,
                               deadline: float) -> _OnlineGameOwner:
     from gf_simulator_client.structured_resources import ReservationLedger
+    from gf_training.hpo_learning_process import HpoLearningProcess
     from gf_training.structured_learning_process import GameLearningProcess
     if type(ledger) is not ReservationLedger or ledger.learner is None or ledger.workers or ledger.updating:
         raise ContractError('online collection requires idle SAME learner ledger')
     child = ledger.learner._cleanup_owner
-    if type(child) is not GameLearningProcess or type(getattr(child, 'online_owner', None)) is not _OnlineGameOwner:
+    if type(child) not in (GameLearningProcess, HpoLearningProcess) or type(getattr(child, 'online_owner', None)) is not _OnlineGameOwner:
         raise ContractError('online collection requires concrete wire4 live owner')
     owner = child.online_owner
     owner.check()
@@ -467,21 +485,40 @@ def validate_owned_collection(plan: CollectionPlan, ledger: Any, *, max_owned_by
     elif owner.collection_generation != generation:
         raise ContractError('previous original collection controls have not retired')
     owner.collection_controls.finalize()
-    state, records = validate_game_parent(owner.ownership.directory, require_complete=False,
+    validator = validate_game_parent
+    if _hpo(owner.state):
+        from gf_training.hpo_source import validate_hpo_parent
+        validator = validate_hpo_parent
+    state, records = validator(owner.ownership.directory, require_complete=False,
         max_owned_bytes=max_owned_bytes, deadline=deadline)
-    actions, model = _state(state, _game=True)
+    if _hpo(state):
+        from gf_training.hpo_lineage import hpo_spec, hpo_state
+        actions, model, _ = hpo_state(state)
+    else:
+        actions, model = _state(state, _game=True)
     from gf_training.structured_numeric_worker import wire_identity
     expected_identity = wire_identity(model, InferenceBindingV2(**state['execution']['learner']['binding']),
         digest(asdict(actions)), state['resume_identity'], action_contract=actions.action_contract,
         purpose='qualified_game', synthetic_capacity=False,
         cuda_visible_devices=state['execution']['learner']['cuda_visible_devices'], _actions=actions,
-        storage_binding=state.get('storage_binding'))
+        storage_binding=state.get('storage_binding'), **({'_hpo': True} if _hpo(state) else {}))
+    if _hpo(state):
+        from gf_training.hpo_config import hpo_training_config
+        from gf_training.hpo_numeric_worker import wire_identity as hpo_identity
+        expected_identity = hpo_identity(model, hpo_training_config(hpo_spec(state)['training_recipe']),
+            InferenceBindingV2(**state['execution']['learner']['binding']), digest(asdict(actions)),
+            state['resume_identity'], actions=actions, cuda_visible_devices=state['execution']['learner']['cuda_visible_devices'],
+            storage_binding=state.get('storage_binding'))
     if (canonical(child.identity) != canonical(expected_identity) or canonical(asdict(child.model)) != canonical(asdict(model))
             or canonical(asdict(child.binding)) != canonical(state['execution']['learner']['binding'])
             or child.visibility != state['execution']['learner']['cuda_visible_devices']
             or ledger.learner_bytes != 0 or ledger.learner.resident_bytes != child.resident_bytes):
         raise ContractError('online learner wire/model/execution/reservation differs from original parent')
-    expected, _, _ = recorded_plan(owner.ownership.directory, state, records, state['updates'], deadline)
+    planner = recorded_plan
+    if _hpo(state):
+        from gf_training.hpo_source import recorded_hpo_plan
+        planner = recorded_hpo_plan
+    expected, _, _ = planner(owner.ownership.directory, state, records, state['updates'], deadline)
     if (state['status'] != 'running' or set(state) != set(owner.state)
             or any(canonical(value) != canonical(owner.state.get(key)) for key, value in state.items() if key != 'last_unix')
             or type(owner.state.get('last_unix')) not in (int, float) or not math.isfinite(owner.state['last_unix'])
@@ -521,14 +558,20 @@ class IssuedGameProjection:
     completed: bool = False
     prepared: bool = False
     _verified_decisions: int = field(init=False, repr=False)
+    _verified_collected: int = field(init=False, repr=False)
+    _verified_delta: int = field(init=False, repr=False)
     _decoded_retired: bool = field(default=False, init=False, repr=False)
     _decoded_retirement_error: BaseException | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
-        self._verified_decisions = integer(self.source.decision_count, 1)
+        hpo = _hpo(self.source.state)
+        self._verified_decisions = integer(self.source.selection['used_decisions'] if hpo else self.source.decision_count, 1)
+        self._verified_collected = integer(self.source.decision_count, self._verified_decisions)
+        self._verified_delta = integer(self.expectation['expected_optimizer_step_delta'] if hpo else
+            4 * ((self._verified_decisions + 127) // 128), 1)
 
     def __setattr__(self, name: str, value: Any) -> None:
-        if name == '_verified_decisions' and name in vars(self):
+        if name in ('_verified_decisions', '_verified_collected', '_verified_delta') and name in vars(self):
             raise AttributeError('verified issued decision count is immutable')
         object.__setattr__(self, name, value)
 
@@ -546,9 +589,10 @@ class IssuedGameProjection:
                 or self.source.online.state['updates'] != self.expectation['collection_generation']):
             raise ContractError('update requires the SAME active Source-issued projection')
         before = self.expectation['expected_optimizer_steps']
-        if not self._decoded_retired and self.source.decision_count != self._verified_decisions:
+        if not self._decoded_retired and (self.source.decision_count != self._verified_collected
+                or _hpo(self.source.state) and self.source.selection['used_decisions'] != self._verified_decisions):
             raise ContractError('issued decision count differs from actual decoded Source')
-        expected_after = before + 4 * ((self._verified_decisions + 127) // 128)
+        expected_after = before + self._verified_delta
         self.source.online.check(steps=expected_after if after else before)
         if not after and (self.completed or process.steps != before):
             raise ContractError('replayed/stale Source update transaction')
@@ -563,7 +607,7 @@ class IssuedGameProjection:
         source = self.source
         if type(source) is not _GameBatchSource:
             raise ContractError('SAME issued game Source required for decoded retirement')
-        if source.state['schema_version'] != 4 or source.native_inputs is not None:
+        if not _packed(source.state) or source.native_inputs is not None:
             return
         if self._decoded_retirement_error is not None:
             raise self._decoded_retirement_error
@@ -594,7 +638,7 @@ class IssuedGameProjection:
             # These serialized values can still be decoded by later reportable
             # guards. Preserve their existing conservative JSON allowances too.
             parsing = 32*(len(source.snapshot.collection._manifest)+len(source.snapshot.collection._proof))+131072
-            remaining = source.snapshot._retained_bytes + parsing + _owned_bytes((self._expectation, self.files, numeric_metadata))
+            remaining = source.snapshot._retained_bytes + parsing + _owned_bytes((self._expectation, self.files, numeric_metadata, source._hpo_selection))
             owner.retire_decoded(retained_bytes=remaining)
         except BaseException as error:
             self._decoded_retirement_error = error
@@ -651,6 +695,7 @@ class _GameBatchSource:
     issued: IssuedGameProjection | None = None
     _control_base: int = field(init=False)
     _numeric: tuple[Path, str, bytes] | None = None
+    _hpo_selection: bytes | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
         from gf_training.native_card_instance import _NativeGameInputs
@@ -660,6 +705,27 @@ class _GameBatchSource:
         elif (type(self.native_inputs) is not _NativeGameInputs or self.snapshot is not None or self.records is not None):
             raise ContractError('native game inputs are a mutually exclusive concrete representation')
         self._control_base = self.controls.retained
+        if _hpo(self.state):
+            from gf_training.hpo_collection import selection_for_counts
+            counts = (tuple(self.native_inputs.collection['selection']['episode_counts']) if self.native_inputs is not None
+                else tuple(len(record.frames) for record in cast(tuple[Any, ...], self.records)))
+            context = self.plan.linkage['selection_context']
+            if self.snapshot is not None:
+                # Worst-case list/set/JSON/RNG scratch is admitted before sampling.
+                self.snapshot.reserve(self.snapshot._external_bytes + 256 * sum(counts) + 65536)
+            selection = selection_for_counts(counts, **{key: context[key]
+                for key in ('learning_seed', 'batch', 'decision_budget', 'used_before')})
+            self._hpo_selection = canonical(selection).encode()
+
+    @property
+    def selection(self) -> Json:
+        if self._hpo_selection is None:
+            raise ContractError('only explicit HPO Source has selected endpoint facts')
+        return json.loads(self._hpo_selection)
+
+    @property
+    def _selection_owned(self) -> int:
+        return 0 if self._hpo_selection is None else 32 * len(self._hpo_selection) + 65536
 
     @property
     def decision_count(self) -> int:
@@ -688,21 +754,40 @@ class _GameBatchSource:
         if self.native_inputs is not None:
             return self.native_inputs.proof
         assert self.snapshot is not None
-        return self.snapshot.collection.proof
+        proof = self.snapshot.collection.proof
+        if _hpo(self.state):
+            from gf_common.hpo import PROOF_KINDS, optimizer_delta
+            from gf_training.hpo_lineage import hpo_spec
+            recipe = hpo_spec(self.state)['training_recipe']
+            proof.update(schema_version=3, kind=PROOF_KINDS[int(_packed(self.state))], selection=self.selection,
+                expected_optimizer_step_delta=optimizer_delta(self.selection['used_decisions'],
+                    epochs=recipe['epochs'], minibatch_size=recipe['minibatch_size']))
+        return proof
 
     def correspondence(self) -> Json:
         from gf_training.lineage import generation_path
         generation = self.plan.linkage['collection_generation']
         immutable = {str(path.relative_to(self.controls.root)): self.controls.verified_digest(path) for path in (
-            generation_path(self.controls.root, generation), checkpoint_path(self.controls.root, generation) / 'inference.json')}
+            generation_path(self.controls.root, generation),)}
+        inference_path = checkpoint_path(self.controls.root, generation) / 'inference.json'
+        if _hpo(self.state):
+            from gf_training.hpo_source import original_inference
+            record = self.controls.object(generation_path(self.controls.root, generation))
+            _, inference_sha = original_inference(self.controls, self.state, record, generation, live=self.online is not None)
+        else:
+            inference_sha = self.controls.verified_digest(inference_path)
+        immutable[str(inference_path.relative_to(self.controls.root))] = inference_sha
         content = {'run_id': self.state['run_id'], 'config_sha256': self.state['config_sha256'],
             'identity': self.state['identity'], 'execution': self.state['execution'], 'plan': self.plan.linkage, 'files': immutable,
             'source_set_sha256': self.proof['source_set_sha256']}
-        if self.state['schema_version'] == 4:
+        if _packed(self.state):
             evidence = getattr(self, '_historical_proof', self.proof)
             content.update(recipe='card-instance-packed-source-controls-v1', storage=evidence['storage'], custody=evidence['custody'])
+        if _hpo(self.state):
+            content.update(recipe='card-instance-hpo-source-controls-v1', selection=self.selection,
+                hpo_spec_sha256=self.state['hpo_spec_sha256'])
         fingerprint = digest(content)
-        expected = _source_correspondence(fingerprint, self.declaration, self.episode_digests, game=True, storage_binding=self.state.get('storage_binding'))
+        expected = _source_correspondence(fingerprint, self.declaration, self.episode_digests, game=True, storage_binding=self.state.get('storage_binding'), hpo=_hpo(self.state))
         if self.native_inputs is not None and canonical(expected) != canonical(self.native_inputs.correspondence):
             raise ContractError('native correspondence differs from SAME Source control fingerprint')
         return expected
@@ -712,12 +797,27 @@ class _GameBatchSource:
             self.native_inputs.caller_growth(self.controls.retained - self._control_base)
             return self.native_inputs.publish_numeric(directory)
         assert self.snapshot is not None and self.records is not None
-        extra = self.snapshot.extra_bytes_for(self.records)
-        self.snapshot.reserve(self.snapshot.additional_bytes((self.records, self.model)) + _predicted_token_bytes(self.records))
-        rollout = game_rollout(self.records, self.model, actions=self.actions, rules=card_instance_rules(), reserved_bytes=extra)
-        return _write_rollout(directory, rollout, max_owned_bytes=self.snapshot.max_owned_bytes,
+        extra = self.snapshot.extra_bytes_for(self.records) + self._selection_owned
+        self.snapshot.reserve(self.snapshot.additional_bytes((self.records, self.model))
+            + _predicted_token_bytes(self.records) + self._selection_owned)
+        rollout: Any
+        extra_context: Json
+        if _hpo(self.state):
+            from gf_training.hpo_collection import replay_selection
+            from gf_training.hpo_config import hpo_training_config
+            from gf_training.hpo_lineage import hpo_spec
+            from gf_training.hpo_rollout import HpoRollout
+            recipe = hpo_training_config(hpo_spec(self.state)['training_recipe'])
+            rollout = HpoRollout(self.records, self.model, recipe, actions=self.actions, rules=card_instance_rules(),
+                selected_locations=replay_selection(self.selection, tuple(len(record.frames) for record in self.records)), _reserved_bytes=extra)
+            from gf_training.hpo_rollout import _numeric_context
+            extra_context = {'_hpo': _numeric_context(rollout, self.selection)}
+        else:
+            rollout = game_rollout(self.records, self.model, actions=self.actions, rules=card_instance_rules(), reserved_bytes=extra)
+            extra_context = {}
+        return _write_rollout(directory, rollout, **extra_context, max_owned_bytes=self.snapshot.max_owned_bytes,
             extra_owned_bytes=self.snapshot.extra_bytes_for((rollout.model, rollout.episodes, rollout.locations,
-                rollout.action_config_hash, rollout.policy_version, rollout.input_binding)),
+                rollout.action_config_hash, rollout.policy_version, rollout.input_binding)) + self._selection_owned,
             check=self.snapshot.check, reserve=self.snapshot.reserve)
 
     def read_numeric(self, directory: Path, expected_digest: str) -> Any:
@@ -734,10 +834,18 @@ class _GameBatchSource:
         manifest = self.controls.object(directory / 'rollout.json', expected_digest)
         growth = self.controls.retained - self._control_base
         self.snapshot.reserve(prior + growth)
-        rollout = read_game_rollout(directory, expected_digest, self.model, actions=self.actions, rules=card_instance_rules(),
-            declaration=self.declaration, expected_correspondence=self.correspondence(),
-            max_owned_bytes=self.snapshot.max_owned_bytes, extra_owned_bytes=self.snapshot.resident_bytes + growth,
-            check=self.snapshot.check, reserve=lambda peak: snapshot.reserve(peak + growth),
+        reader: Any = read_game_rollout
+        parameters: Json = {'declaration': self.declaration}
+        if _hpo(self.state):
+            from gf_training.hpo_config import hpo_training_config
+            from gf_training.hpo_lineage import hpo_spec
+            from gf_training.hpo_rollout import read_hpo_rollout
+            reader = read_hpo_rollout
+            parameters = {'training': hpo_training_config(hpo_spec(self.state)['training_recipe']), 'expected_selection': self.selection}
+        rollout = reader(directory, expected_digest, self.model, actions=self.actions, rules=card_instance_rules(),
+            **parameters, expected_correspondence=self.correspondence(),
+            max_owned_bytes=self.snapshot.max_owned_bytes, extra_owned_bytes=self.snapshot.resident_bytes + growth + self._selection_owned,
+            check=self.snapshot.check, reserve=lambda peak: snapshot.reserve(peak + growth + self._selection_owned),
             storage_binding=self.state.get('storage_binding'))
         files = {'rollout.json': expected_digest, **manifest['data']['files']}
         for name, expected in files.items():
@@ -750,6 +858,9 @@ class _GameBatchSource:
     def issue(self, numeric: Path, files: Json) -> IssuedGameProjection:
         if self.online is None or self.issued is not None or self.online.issued is not None:
             raise ContractError('only one live online Source may issue an update')
+        if _hpo(self.state):
+            from gf_training.hpo_source import require_hpo_production
+            require_hpo_production(self.state)
         self.online.check()
         expected_numeric = self.online.ownership.directory / 'numeric' / self.plan.linkage['batch_id']
         if numeric.absolute() != expected_numeric:
@@ -769,6 +880,10 @@ class _GameBatchSource:
             'expected_optimizer_steps': self.state['optimizer_steps'], 'expected_policy_version': self.learner_label,
             'collection_manifest_sha256': self.proof['manifest_sha256'], 'numeric_manifest_sha256': files['rollout.json'],
             'numeric_files_sha256': digest(dict(sorted(files.items()))), 'source_correspondence': self.correspondence()}
+        if _hpo(self.state):
+            expected.update(recipe='card-instance-hpo-source-update-v1', training_recipe=self.state['effective_config']['hpo_spec']['training_recipe'],
+                selection=self.selection, collected_decisions=self.decision_count, used_decisions=self.selection['used_decisions'],
+                expected_optimizer_step_delta=self.proof['expected_optimizer_step_delta'])
         self.issued = IssuedGameProjection(self, self.online.process, canonical(expected).encode(), numeric, files)
         self.online.issued = self.issued
         if self.native_inputs is not None:
@@ -781,17 +896,34 @@ def _open_batch(plan: CollectionPlan, state: Json, records: list[Json], controls
                 settings: PreparationConfig, *, online: _OnlineGameOwner | None,
                 max_owned_bytes: int, deadline: float, extra_owned_bytes: int = 0) -> Iterator[_GameBatchSource]:
     with ExitStack() as scope:
-        actions, model = _state(state, _game=True)
+        hpo = _hpo(state)
+        if hpo:
+            from gf_training.hpo_lineage import hpo_spec, hpo_state
+            from gf_training.hpo_source import recorded_hpo_plan
+            actions, model, _ = hpo_state(state)
+            planner = recorded_hpo_plan
+            semantic_keys = SEMANTIC_KEYS_V3 - {'reward_policy_version'}
+        else:
+            actions, model = _state(state, _game=True)
+            planner = recorded_plan
+            semantic_keys = SEMANTIC_KEYS_V3
         generation = plan.linkage['collection_generation']
-        expected, label, _ = recorded_plan(controls.root, state, records, generation, deadline)
+        expected, label, _ = planner(controls.root, state, records, generation, deadline)
         if canonical(plan.linkage) != canonical(expected.linkage):
             raise ContractError('original batch plan differs from committed generation')
-        previous = controls.object(checkpoint_path(controls.root, generation) / 'inference.json', records[generation]['inference_sha256'])
+        if hpo:
+            from gf_training.hpo_source import original_inference
+            previous, _ = original_inference(controls, state, records[generation], generation, live=online is not None)
+        else:
+            previous = controls.object(checkpoint_path(controls.root, generation) / 'inference.json', records[generation]['inference_sha256'])
         native_inputs = None
         if settings.backend == 'rust':
+            if hpo:
+                from gf_training.native_backend import hpo_reader_settings
+                hpo_reader_settings(settings, packed=_packed(state))
             from gf_training.native_card_instance import _NativeGameInputs
             provider = None
-            if state['schema_version'] == 4:
+            if _packed(state):
                 from gf_training.native_backend import group_pack_reader_settings
                 from gf_training.native_group_pack import OriginalArtifactProvider
                 group_pack_reader_settings(settings)
@@ -811,6 +943,8 @@ def _open_batch(plan: CollectionPlan, state: Json, records: list[Json], controls
             if provider is not None:
                 native_plan.update(schema_version=4, storage_binding=state['storage_binding'],
                     artifact_registry_sha256=provider.registry_sha256)
+            if hpo:
+                native_plan['schema_version'] = 5
             from gf_training.ppo_run import owned_bytes
             external = ()
             if provider is not None:
@@ -828,27 +962,31 @@ def _open_batch(plan: CollectionPlan, state: Json, records: list[Json], controls
             if (canonical(native_inputs.collection['linkage']) != canonical(plan.linkage)
                     or native_inputs.collection['learner_label'] != label
                     or canonical(asdict(native_inputs.models[0])) != canonical(asdict(model))
-                    or canonical(native_inputs.collection['semantics']) != canonical({key: previous[key] for key in SEMANTIC_KEYS_V3})):
+                    or canonical(native_inputs.collection['semantics']) != canonical({key: previous[key] for key in semantic_keys})):
                 raise ContractError('native originals differ from SAME recorded Source plan/model/declaration')
             source = _GameBatchSource(None, controls, state, plan, model, actions,
-                {key: previous[key] for key in SEMANTIC_KEYS_V3}, label, online, None, native_inputs=native_inputs)
+                {key: previous[key] for key in semantic_keys}, label, online, None, native_inputs=native_inputs)
             source.correspondence()
         else:
-            if state['schema_version'] == 4:
+            if _packed(state):
                 original = controls.packed_owner(plan.output, custody=online.packed_batch if online is not None else None)
                 original.charge(controls.retained + extra_owned_bytes)
             else:
                 original = _SourceOwner(plan.output, settings, deadline, extra_owned_bytes=controls.retained + extra_owned_bytes,
                                         max_owned_bytes=max_owned_bytes)
-            collection = _inspect_component_collection(original, actions, 'train', _game=True)
+            role_options = {}
+            if hpo:
+                from gf_common.card_instance_collection import hpo_batch_role
+                role_options['_game_role'] = hpo_batch_role(hpo_spec(state)['training_recipe']['collection_games'])
+            collection = _inspect_component_collection(original, actions, 'train', _game=True, **role_options)
             snapshot = _SourceSnapshot(collection, original, _owned_bytes((collection.episodes, collection._manifest, collection._proof, original.files, original.inventories)))
             _check_collection_parent(collection.manifest, state, plan)
             seats = plan.linkage['learner_seats']
             selected = tuple(row for row in collection.episodes if seats[row.episode_id] == row.viewer)
-            if len(selected) != 16 or any(row.model_id != model.model_id or row.model_version != '3' for row in selected):
+            if len(selected) != (hpo_spec(state)['training_recipe']['collection_games'] if hpo else 16) or any(row.model_id != model.model_id or row.model_version != ('4' if hpo else '3') for row in selected):
                 raise ContractError('all16 original neural learner seats required')
             source = _GameBatchSource(snapshot, controls, state, plan, model, actions,
-                {key: previous[key] for key in SEMANTIC_KEYS_V3}, label, online, tuple(row.records for row in selected))
+                {key: previous[key] for key in semantic_keys}, label, online, tuple(row.records for row in selected))
             del collection, selected
         try:
             yield source
@@ -868,7 +1006,7 @@ def _open_batch(plan: CollectionPlan, state: Json, records: list[Json], controls
                     error.add_note('game Source final recheck: ' + str(cleanup_error))
             raise
         finally:
-            if state['schema_version'] == 4 and online is None and source.snapshot is not None:
+            if _packed(state) and online is None and source.snapshot is not None:
                 # No historical decoded cohort remains resident after this scope.
                 assert source.snapshot is not None
                 original = source.snapshot._owner
@@ -894,8 +1032,13 @@ def game_batch_source(plan: CollectionPlan, ledger: Any, *, max_owned_bytes: int
         controls.configure_packed(online.state)
         if online.packed_batch is not None:
             online.packed_batch.borrow(controls)
-        state, records = _validate_component_chain(online.ownership.directory, require_complete=False,
-            require_retained=False, scan=controls, _game=True)
+        if _hpo(online.state):
+            from gf_training.hpo_lineage import validate_hpo_chain
+            state, records = validate_hpo_chain(online.ownership.directory, require_complete=False,
+                max_owned_bytes=max_owned_bytes, deadline=deadline, scan=controls)
+        else:
+            state, records = _validate_component_chain(online.ownership.directory, require_complete=False,
+                require_retained=False, scan=controls, _game=True)
         settings = preparation_config(state['effective_config']['preprocessing'])
         with _open_batch(plan, state, records, controls, settings, online=online,
             max_owned_bytes=max_owned_bytes, deadline=deadline, extra_owned_bytes=extra_owned_bytes) as source:

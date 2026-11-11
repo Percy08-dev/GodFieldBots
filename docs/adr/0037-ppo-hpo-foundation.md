@@ -70,3 +70,7 @@ Scoped units1/2 pass independent correctness; unit2 also passes independent
 implementation conformance. Root's affected576CPU checks, project Ruff and
 mypy179 pass; actual CUDA component evidence and remaining acceptance scopes are
 recorded in the verification document. Later units remain implementation work.
+The structural reader prerequisite4a and Python Source3a now also pass both
+reviews after generation-cap/G0-RNG fixes, with root341 and268affected checks
+respectively. Native Source3b, runtime producer and outer campaign acceptance
+remain pending; no full-foundation completion is implied.

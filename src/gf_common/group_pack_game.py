@@ -26,7 +26,9 @@ def checked_storage_binding(value: object) -> Json:
 
 def packed_state(state: Json) -> bool:
     """Select an explicit variant, never interpreting a high version as corrected."""
-    if state.get('schema_version') == 4 and type(state.get('schema_version')) is int:
+    hpo = (type(state.get('schema_version')) is int and state['schema_version'] == 5
+        and state.get('run_variant') == 'hpo-ppo-v1' and state.get('model_version') == '4')
+    if (state.get('schema_version') == 4 and type(state.get('schema_version')) is int) or hpo and 'storage_binding' in state:
         checked_storage_binding(state.get('storage_binding'))
         return True
     if 'storage_binding' in state or 'storage' in state.get('effective_config', {}):

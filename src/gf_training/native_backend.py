@@ -22,6 +22,24 @@ CARD_INSTANCE_TREE_RAW = 'journal6;lightgbm3;inference4;codec2'
 CARD_INSTANCE_GROUP_PACK = 'provider1;proof2;plan4'
 CARD_INSTANCE_PACK_CHECKSUM = 'pack-checksum-v1;custody2'
 
+
+def hpo_reader_settings(config: PreparationConfig, native: Any = None, *, packed: bool = False) -> Json:
+    """Additive HPO preflight before Source, arrays, collection or process work."""
+    from gf_common.hpo import NATIVE_CAPABILITY
+    module = load_native() if native is None else native
+    if dict(module.build_info()).get('card_instance_hpo') != NATIVE_CAPABILITY:
+        raise ContractError('native HPO original/model4/selection support unavailable; no fallback')
+    result = card_instance_reader_settings(config, module)
+    if packed:
+        group_pack_reader_settings(config, module)
+        require_pack_checksum(module)
+    cls = getattr(module, 'CardInstanceNativeSession', None)
+    methods = ('control_summary', 'authorize', 'export_cohort', 'export_recorded_cohort',
+        'bind_numeric', 'retire_payload', 'begin_update', 'prepare_commit', 'finalize_read', 'recheck', 'close')
+    if any(not callable(getattr(cls, name, None)) for name in methods):
+        raise ContractError('native HPO shared session ABI incomplete; no fallback')
+    return result
+
 def require_pack_checksum(native: Any) -> None:
     if dict(native.build_info()).get('card_instance_pack_checksum') != CARD_INSTANCE_PACK_CHECKSUM:
         raise ContractError('native Pack checksum policy/custody2 capability unavailable; no fallback')

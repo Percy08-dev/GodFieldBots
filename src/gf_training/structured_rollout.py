@@ -360,7 +360,7 @@ def _episode_correspondence_digest(record: EpisodeRecords) -> str:
         "end_kind": record.end_kind, "outcome": record.outcome, "reason": record.reason})
 
 
-def _source_correspondence(control_fingerprint: str, declaration: Json, episode_digests: tuple[str, ...], *, game: bool = False, storage_binding: Json | None = None) -> Json:
+def _source_correspondence(control_fingerprint: str, declaration: Json, episode_digests: tuple[str, ...], *, game: bool = False, storage_binding: Json | None = None, hpo: bool = False) -> Json:
     """Build a bounded ephemeral cohort binding from an ORIGINAL native owner.
 
     Callers must obtain the digests/fingerprint from their validated original
@@ -368,7 +368,7 @@ def _source_correspondence(control_fingerprint: str, declaration: Json, episode_
     """
     from gf_models.structured_sealed import checksum
     checksum(control_fingerprint)
-    closed(declaration, SEMANTIC_KEYS_V3 if game else SEMANTIC_KEYS)
+    closed(declaration, SEMANTIC_KEYS_V3 - {'reward_policy_version'} if hpo else SEMANTIC_KEYS_V3 if game else SEMANTIC_KEYS)
     if type(episode_digests) is not tuple:
         raise ContractError('ordered original episode digest tuple required')
     for value in episode_digests:
@@ -378,14 +378,14 @@ def _source_correspondence(control_fingerprint: str, declaration: Json, episode_
         checked_storage_binding(storage_binding)
         if not game:
             raise ContractError('packed correspondence requires corrected game context')
-    content = {"recipe": "card-instance-packed-source-correspondence-v1" if storage_binding is not None else "structured-source-cohort-correspondence-v2" if game else "structured-source-cohort-correspondence-v1", "control_fingerprint": control_fingerprint,
+    content = {"recipe": ('card-instance-hpo-packed-source-correspondence-v1' if storage_binding is not None else 'card-instance-hpo-source-correspondence-v1') if hpo else "card-instance-packed-source-correspondence-v1" if storage_binding is not None else "structured-source-cohort-correspondence-v2" if game else "structured-source-cohort-correspondence-v1", "control_fingerprint": control_fingerprint,
                "semantics_sha256": digest(declaration), "episode_count": len(episode_digests),
                "episode_digests": episode_digests}
     return {**content, "binding_sha256": digest(content)}
 
 
 def _check_source_correspondence(value: Json, declaration: Json, *, game: bool = False,
-                                 storage_binding: Json | None = None) -> tuple[str, ...]:
+                                 storage_binding: Json | None = None, hpo: bool = False) -> tuple[str, ...]:
     from gf_models.structured_sealed import checksum
     closed(value, {'recipe', 'control_fingerprint', 'semantics_sha256', 'episode_count', 'episode_digests', 'binding_sha256'})
     if storage_binding is not None:
@@ -393,7 +393,8 @@ def _check_source_correspondence(value: Json, declaration: Json, *, game: bool =
         checked_storage_binding(storage_binding)
         if not game:
             raise ContractError('packed correspondence requires corrected game context')
-    if value['recipe'] != ('card-instance-packed-source-correspondence-v1' if storage_binding is not None else 'structured-source-cohort-correspondence-v2' if game else 'structured-source-cohort-correspondence-v1') or value['semantics_sha256'] != digest(declaration):
+    expected_recipe = ('card-instance-hpo-packed-source-correspondence-v1' if storage_binding is not None else 'card-instance-hpo-source-correspondence-v1') if hpo else ('card-instance-packed-source-correspondence-v1' if storage_binding is not None else 'structured-source-cohort-correspondence-v2' if game else 'structured-source-cohort-correspondence-v1')
+    if value['recipe'] != expected_recipe or value['semantics_sha256'] != digest(declaration):
         raise ContractError('original Source correspondence semantic recipe mismatch')
     for key in ('control_fingerprint', 'semantics_sha256', 'binding_sha256'):
         checksum(value[key])
@@ -424,9 +425,11 @@ def _legacy_table_contract(table: CandidateTable) -> ActionContract:
 def _write_rollout(directory: Path, rollout: StructuredRollout, *, shard_bytes: int = MAX_ARRAY_BYTES,
                    extra_owned_bytes: int = 0, max_owned_bytes: int | None = None,
                    check: Callable[[], None] | None = None,
-                   reserve: Callable[[int], None] = lambda _: None) -> Json:
+                   reserve: Callable[[int], None] = lambda _: None, _hpo: Json | None = None) -> Json:
     poll = check or (lambda: None)
     context = rollout._context
+    if (rollout.model.version == '4') != (_hpo is not None):
+        raise ContractError('numeric5 requires its explicit complete selection context')
     validate_config(rollout.model, layout=rollout.layout)
     for episode in rollout.episodes:
         for table in episode.records.tables:
@@ -501,7 +504,8 @@ def _write_rollout(directory: Path, rollout: StructuredRollout, *, shard_bytes: 
                              ("old_logprob", tuple(selection.logprob for selection in record.selections)),
                              ("old_value", tuple(selection.value for selection in record.selections))):
             plan(prefix + "." + name, values, np.int64 if name == "selected" else np.float32)
-        if episode.advantage is not None:
+        has_targets = episode.advantage is not None and (_hpo is None or bool(episode.frames))
+        if has_targets:
             plan(prefix + ".advantage", episode.advantage, np.float32)
             plan(prefix + ".target", episode.target, np.float32)
         episodes.append({**_record_binding(record.action_contract, record.purpose, record.synthetic_capacity),
@@ -510,16 +514,16 @@ def _write_rollout(directory: Path, rollout: StructuredRollout, *, shard_bytes: 
                          "frames": frame_records, "end_kind": record.end_kind,
                          "outcome": record.outcome, "reason": record.reason,
                          "selections": [asdict(selection) for selection in record.selections],
-                         "has_targets": episode.advantage is not None})
+                         "has_targets": has_targets})
     if not planned:
         # Zero-decision episode closure is preserved without synthetic transition.
         plan("empty", (), np.uint8)
     return _publish_payload(directory, model=rollout.model, classification=rollout.input_binding,
-        declaration=(semantics(rollout.model) if context is None else semantics_v3(rollout.model, layout=context.layout, action_contract=context.actions.action_contract, rules=context.rules)), action_config_hash=rollout.action_config_hash,
+        declaration=(_hpo_semantics(rollout.model, context) if _hpo is not None else semantics(rollout.model) if context is None else semantics_v3(rollout.model, layout=context.layout, action_contract=context.actions.action_contract, rules=context.rules)), action_config_hash=rollout.action_config_hash,
         policy_version=rollout.policy_version, decision_count=len(rollout), episodes=episodes,
         planned=planned, resident_bytes=rollout.resident_bytes, planning_bytes=planning_bytes,
         planned_bytes=planned_bytes, shard_bytes=shard_bytes, admit=admit, poll=poll, check=check,
-        _context=context)
+        _context=context, _hpo=_hpo)
 
 
 def _publish_payload(directory: Path, *, model: Any, classification: Json, declaration: Json,
@@ -527,7 +531,8 @@ def _publish_payload(directory: Path, *, model: Any, classification: Json, decla
                      episodes: list[Json], planned: dict[str, tuple[Any, Any, bool]],
                      resident_bytes: int, planning_bytes: int, planned_bytes: int, shard_bytes: int,
                      admit: Callable[[int], None], poll: Callable[[], None],
-                     check: Callable[[], None] | None, _context: _RolloutContext | None = None) -> Json:
+                     check: Callable[[], None] | None, _context: _RolloutContext | None = None,
+                     _hpo: Json | None = None) -> Json:
     """Publish one admitted raw payload; callers own validation and input leases.
 
     This private seam neither authorizes Source nor constructs/retokenizes it.
@@ -537,10 +542,12 @@ def _publish_payload(directory: Path, *, model: Any, classification: Json, decla
                          "bytes": len(value) if blob else _scalar_count(value) * np.dtype(dtype).itemsize}
                    for key, (value, dtype, blob) in planned.items()}
     bundle_plan = plan_bundle("rollout", descriptors, shard_bytes=shard_bytes)
-    manifest = {"schema_version": 3 if _context is None else 4, "kind": "structured-rollout", **classification, **declaration,
+    manifest = {"schema_version": 5 if _hpo is not None else 3 if _context is None else 4, "kind": "structured-rollout", **classification, **declaration,
                 "architecture_identity": recorded_architecture_identity(model, layout=LEGACY_LAYOUT if _context is None else _context.layout),
                 "action_config_hash": action_config_hash, "policy_version": policy_version,
                 "decision_count": decision_count, "episodes": episodes, "data": bundle_plan}
+    if _hpo is not None:
+        manifest.update(_hpo)
     metadata_bytes = json_bytes(manifest, limit=MAX_MANIFEST_BYTES)
     admit(resident_bytes + planning_bytes + 2 * planned_bytes + 32 * metadata_bytes + 65536)
     arrays = {}
@@ -876,7 +883,8 @@ def _read_rollout(directory: Path, expected_digest: str, model: Any, *,
                   reserve: Callable[[int], None] = lambda _: None,
                   original_manifest: Json | None = None, snapshots: dict[str, tuple[int, ...]] | None = None,
                   encoded_scratch: int = 0, json_budget: int | None = None, historical: bool = False,
-                  _context: _RolloutContext | None = None, storage_binding: Json | None = None) -> StructuredRollout:
+                  _context: _RolloutContext | None = None, storage_binding: Json | None = None,
+                  _hpo: Json | None = None) -> StructuredRollout:
     poll = check or (lambda: None)
     poll()
     limit = model.resources.max_owned_bytes if max_owned_bytes is None else min(max_owned_bytes, model.resources.max_owned_bytes)
@@ -892,22 +900,26 @@ def _read_rollout(directory: Path, expected_digest: str, model: Any, *,
         expected_digest=expected_digest, max_owned_bytes=limit - extra_owned_bytes)
     poll()
     closed(manifest, {"schema_version", "kind", "architecture_identity", "action_config_hash", "policy_version",
-                      "decision_count", "episodes", "data"} | set(classification) | set(expected_semantics))
+                      "decision_count", "episodes", "data"} | set(classification) | set(expected_semantics) | (set(_hpo) if _hpo is not None else set()))
     binding_check({key: manifest[key] for key in classification}, action_contract=action_contract,
                         purpose=purpose, synthetic_capacity=synthetic_capacity)
-    if (type(manifest["schema_version"]) is not int or manifest["schema_version"] != (3 if _context is None else 4)
+    if (type(manifest["schema_version"]) is not int or manifest["schema_version"] != (5 if _hpo is not None else 3 if _context is None else 4)
             or manifest["kind"] != "structured-rollout"
             or manifest["architecture_identity"] != recorded_architecture_identity(model, layout=layout)
             or any(canonical(manifest[key]) != canonical(value) for key, value in expected_semantics.items())):
         raise ContractError("rollout recipe/architecture/runtime mismatch")
     integer(manifest["decision_count"], 0, 2**31 - 1)
+    if _hpo is not None:
+        assert _context is not None
+        if manifest['action_config_hash'] != digest(asdict(_context.actions)):
+            raise ContractError('numeric5 action configuration mismatch')
     if not isinstance(manifest["episodes"], list):
         raise ContractError("episode records required")
     expected_digests = None
     if expected_correspondence is not None:
         if expected_records is not None:
             raise ContractError('original record and digest correspondence modes are exclusive')
-        expected_digests = _check_source_correspondence(expected_correspondence, expected_semantics, game=_context is not None, storage_binding=storage_binding)
+        expected_digests = _check_source_correspondence(expected_correspondence, expected_semantics, game=_context is not None, storage_binding=storage_binding, hpo=_hpo is not None)
         if len(manifest['episodes']) != len(expected_digests):
             raise ContractError('numeric episode count differs from ORIGINAL Source digest order')
     if expected_records is not None and len(manifest['episodes']) != len(expected_records):
@@ -1031,9 +1043,23 @@ def _read_rollout(directory: Path, expected_digest: str, model: Any, *,
             if scalar[name].shape != (count,):
                 raise ContractError("rollout target shape mismatch")
         train_vectors.append(scalar)
-    rollout = StructuredRollout(tuple(records), model, manifest["action_config_hash"],
-                                _reserved_bytes=manifest["data"]["decoded_bytes"] + extra_owned_bytes, action_contract=action_contract,
-                                purpose=purpose, synthetic_capacity=synthetic_capacity, _historical=historical, _context=_context)
+    rollout: StructuredRollout
+    if _hpo is not None:
+        from gf_training.hpo_collection import replay_selection
+        from gf_training.hpo_config import hpo_training_config
+        from gf_training.hpo_rollout import HpoRollout
+        assert _context is not None
+        for key, value in _hpo.items():
+            if canonical(manifest[key]) != canonical(value):
+                raise ContractError('numeric5 training/selection/step correspondence mismatch')
+        locations = replay_selection(_hpo['selection'], tuple(len(record.frames) for record in records))
+        rollout = HpoRollout(tuple(records), model, hpo_training_config(_hpo['training_recipe']),
+            actions=_context.actions, rules=_context.rules, selected_locations=locations,
+            _reserved_bytes=manifest['data']['decoded_bytes'] + extra_owned_bytes)
+    else:
+        rollout = StructuredRollout(tuple(records), model, manifest["action_config_hash"],
+                                    _reserved_bytes=manifest["data"]["decoded_bytes"] + extra_owned_bytes, action_contract=action_contract,
+                                    purpose=purpose, synthetic_capacity=synthetic_capacity, _historical=historical, _context=_context)
     if manifest["decision_count"] != len(rollout) or manifest["policy_version"] != rollout.policy_version:
         raise ContractError("rollout endpoint/policy identity mismatch")
     for episode, scalars in zip(rollout.episodes, train_vectors, strict=True):
@@ -1043,9 +1069,10 @@ def _read_rollout(directory: Path, expected_digest: str, model: Any, *,
                              ("old_value", [s.value for s in episode.records.selections])):
             if not np.array_equal(scalars[name], np.asarray(source, dtype=scalars[name].dtype)):
                 raise ContractError("selection/scalar binding mismatch")
-        if (episode.advantage is not None) != ("advantage" in scalars):
+        has_targets = episode.advantage is not None and (_hpo is None or bool(episode.frames))
+        if has_targets != ("advantage" in scalars):
             raise ContractError("natural/interrupted target presence mismatch")
-        if episode.advantage is not None and (not np.array_equal(scalars["advantage"], episode.advantage)
+        if has_targets and (not np.array_equal(scalars["advantage"], episode.advantage)
                                                or not np.array_equal(scalars["target"], episode.target)):
             raise ContractError("GAE/normalized target mismatch")
     expected_tokens = [(frame, table) for episode in rollout.episodes for frame, table in zip(episode.frames, episode.tables, strict=True)]
@@ -1065,6 +1092,14 @@ def _read_rollout(directory: Path, expected_digest: str, model: Any, *,
         raise ContractError("unowned/unknown rollout tensor")
     poll()
     return rollout
+
+
+def _hpo_semantics(model: Any, context: _RolloutContext | None) -> Json:
+    from gf_models.structured_artifacts import _game_context_v4
+    if context is None:
+        raise ContractError('numeric5 requires corrected participant context')
+    return _game_context_v4(context.actions.action_contract, context.rules,
+        digest(asdict(context.actions))).semantics(model)
 
 
 def game_episode_records(bank: EventBankView, frames: tuple[DecisionFrame, ...], tables: tuple[CandidateTable, ...],
