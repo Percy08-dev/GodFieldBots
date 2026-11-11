@@ -41,6 +41,10 @@ def _publication_schema(manifest: Json) -> bool:
         return True
     if manifest['schema_version'] != 6:
         return False
+    if manifest.get('collection_role') == 'hpo-evaluation':
+        from gf_common.card_instance_collection import checked_hpo_evaluation_manifest
+        checked_hpo_evaluation_manifest(manifest)
+        return True
     from gf_training.hpo_collection import check_hpo_collection
     check_hpo_collection(manifest)
     return True
@@ -134,6 +138,20 @@ def collection_metadata(
         "source_eligibility": "not-authorized-by-collection-metadata",
         **neural_fields,
     }
+
+
+def hpo_evaluation_collection_metadata(*, actions: ActionConfigV3, config: Json,
+                            runtime_evidence: list[Json], schedule: list[Json],
+                            inventory: list[Json], policies: list[str], bots_revision: str,
+                            policy_bindings: dict[str, RuntimePolicyBinding],
+                            neural_inputs: Json, linkage: Json) -> Json:
+    """Closed Eval6 metadata; neither final64 nor a training Source capability."""
+    from gf_common.card_instance_collection import checked_hpo_evaluation_metadata
+    value = collection_metadata(actions=actions, config=config, runtime_evidence=runtime_evidence,
+        schedule=schedule, inventory=inventory, policies=policies, bots_revision=bots_revision,
+        policy_bindings=policy_bindings, neural_inputs=neural_inputs, _hpo=True)
+    value.update(collection_role='hpo-evaluation', linkage=clone(linkage))
+    return checked_hpo_evaluation_metadata(value)
 
 
 def ppo_collection_metadata(*, actions: ActionConfigV3, config: Json,

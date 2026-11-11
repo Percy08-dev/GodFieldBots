@@ -1,7 +1,9 @@
 """Shared closed-role Collection5 original validator; structural evidence only."""
 from __future__ import annotations
 
+import hashlib
 import math
+from collections.abc import Iterator
 from dataclasses import asdict
 from pathlib import Path
 
@@ -12,28 +14,138 @@ from gf_common.card_instance_collection import (
     PROJECTION_RECIPE,
     GameCollectionRole,
     HpoCollectionRole,
+    HpoEvaluationRole,
+    checked_hpo_evaluation_manifest,
     checked_invocation,
     checked_linkage,
     checked_role,
 )
 from gf_common.card_instance_rules import card_instance_rules
 from gf_common.card_instance_runtime import validate_runtime_receipt
-from gf_common.domain import ContractError, Json, canonical, closed, digest, integer
+from gf_common.domain import (
+    ContractError,
+    Json,
+    canonical,
+    closed,
+    digest,
+    group_health_failures,
+    integer,
+)
 from gf_common.structured_layout import CORRECTED_CARD_INSTANCE_LAYOUT as LAYOUT
 from gf_common.structured_tokens import signature
 from gf_models.card_instance_artifacts import EXTERNAL_INPUT_CONTRACT, validate_neural_metadata
 from gf_models.structured_binding import input_binding_game_v3
 from gf_models.structured_sealed import checksum
-from gf_training.structured_source import _name, _SourceOwner
+from gf_training.structured_source import _json, _name, _SourceOwner
 
 LINKAGE_KEYS = set(PPO_BATCH.linkage_keys)
+
+_GROUP_ERRORS = {'failure', 'client_close_failure', 'finalization_cancelled', 'cleanup_failure',
+    'runtime_evidence_failure', 'storage_validation_failure'}
+_EPISODE_ERRORS = {'save_failure', 'finalization_deadline', 'budget_overrun', 'replay_or_finalization_failure',
+    'journal_close_failure', 'worker_cleanup_failure', 'delete_failure', 'process_failure',
+    'runtime_evidence_failure', 'finalization_cancelled', 'cleanup_failure'}
+
+
+def _evaluation_raw_health(manifest: Json) -> None:
+    """Read actual saved evidence; a success summary cannot override it."""
+    groups, receipts = manifest.get('groups'), manifest.get('runtime_evidence')
+    if (type(groups) is not list or type(receipts) is not list
+            or len(groups) != len(manifest['schedule']) or len(receipts) != len(groups)):
+        raise ContractError('complete evaluation group/runtime health correspondence required')
+    seen_receipts = set()
+    for group, receipt in zip(groups, receipts, strict=True):
+        group = closed(group, {'runtime_evidence', 'process'}, _GROUP_ERRORS | {'startup', 'expected_effective',
+            'message', 'budget_overrun_seconds'})
+        original = validate_runtime_receipt(receipt, require_executed=True)
+        validated = validate_runtime_receipt(group['runtime_evidence'], require_executed=True)
+        identity = canonical(validated)
+        if identity != canonical(original) or identity in seen_receipts:
+            raise ContractError('evaluation group differs from its distinct original runtime receipt')
+        seen_receipts.add(identity)
+        process = closed(group['process'], {'exit_code', 'shutdown', 'log_error'},
+            {'reap_failure', 'budget_overrun_seconds'})
+        if type(process['exit_code']) is not int or type(process['shutdown']) is not str:
+            raise ContractError('actual closed managed process health required')
+        for key in ('log_error', 'reap_failure'):
+            if process.get(key) is not None:
+                raise ContractError('evaluation managed process has log/reap failure evidence')
+        for health in (process, group):
+            if 'budget_overrun_seconds' in health:
+                value = health['budget_overrun_seconds']
+                if type(value) not in (int, float) or not math.isfinite(value) or value < 0:
+                    raise ContractError('finite actual cleanup budget observation required')
+        if group_health_failures(group) or any(group.get(key) is not None for key in _GROUP_ERRORS):
+            raise ContractError('evaluation has actual group/process failure evidence')
+        for key in ('startup', 'expected_effective'):
+            if key in group and type(group[key]) is not dict:
+                raise ContractError('closed original managed group metadata required')
+        if 'message' in group and type(group['message']) is not str:
+            raise ContractError('original group diagnostic must be text')
+    for episode in manifest['episodes']:
+        health = closed(episode.get('health'), set(), _EPISODE_ERRORS)
+        if episode.get('failure') is not None or any(value is not None for value in health.values()):
+            raise ContractError('natural evaluation episode retains actual failure evidence')
+
+
+def _evaluation_report_health(manifest: Json, report: Json, games: int) -> None:
+    """Cross-check the report ledger against the already checked raw facts."""
+    # JSON parse_constant rejects NaN/Infinity tokens, but ordinary exponent
+    # parsing can still produce +/-inf. Check every parsed diagnostic value too.
+    pending: list[Iterator[object]] = [iter((report,))]
+    while pending:
+        try:
+            value = next(pending[-1])
+        except StopIteration:
+            pending.pop()
+            continue
+        if type(value) is float and not math.isfinite(value):
+            raise ContractError('nonfinite parsed HPO evaluation report value')
+        if isinstance(value, dict):
+            pending.append(iter(value.values()))
+        elif isinstance(value, list):
+            pending.append(iter(value))
+    if (type(report) is not dict or type(report.get('schema_version')) is not int or report['schema_version'] != 1
+            or report.get('healthy') is not True or report.get('comparison_valid') is not True
+            or report.get('report_status') == 'minimal'):
+        raise ContractError('complete original evaluation report health ledger required')
+    counts = {'planned_games': games, 'recorded_games': len(manifest['episodes']), 'missing_games': 0,
+        'natural_denominator': games, 'planned_pairs': len(manifest['schedule']), 'complete_pairs': len(manifest['schedule'])}
+    wins = draws = losses = 0
+    seats = manifest['linkage']['learner_seats']
+    for row in manifest['episodes']:
+        if row['outcome'] == 'draw':
+            draws += 1
+        elif row['outcome']['win']['winner'] == seats[row['episode_id']]:
+            wins += 1
+        else:
+            losses += 1
+    counts.update(wins=wins, draws=draws, losses=losses)
+    for key, expected in counts.items():
+        if integer(report.get(key), 0) != expected:
+            raise ContractError('original evaluation report count differs from actual complete panel')
+    if (canonical(report.get('end_counts')) != canonical({'natural': games})
+            or canonical(report.get('episodes')) != canonical(manifest['episodes'])):
+        raise ContractError('original evaluation report episode/outcome ledger differs')
+    for key in ('failures', 'health_failures', 'group_health_failures'):
+        if type(report.get(key)) is not dict or report[key]:
+            raise ContractError('original evaluation report health summary differs from actual healthy evidence')
+    score = report.get('paired_score')
+    if not isinstance(score, (int, float)) or isinstance(score, bool):
+        raise ContractError('finite original evaluation score required')
+    if not math.isfinite(score) or score != (wins + .5 * draws) / games:
+        raise ContractError('original evaluation score differs from actual learner-seat terminal outcomes')
 
 
 def inspect_game_manifest(owner: _SourceOwner, manifest: Json, actions: ActionConfigV3,
                    expected_split: str | None, *, role: GameCollectionRole = PPO_BATCH,
                    _pending: object = None) -> tuple[Json, list[tuple[Json, Json]]]:
     role = checked_role(role)
-    hpo = type(role) is HpoCollectionRole
+    evaluation = type(role) is HpoEvaluationRole
+    hpo = type(role) in (HpoCollectionRole, HpoEvaluationRole)
+    if evaluation:
+        checked_hpo_evaluation_manifest(manifest)
+        _evaluation_raw_health(manifest)
     control_name = 'manifest.json'
     if _pending is not None:
         from gf_common.card_instance_collection import FINAL_VALIDATION
@@ -148,5 +260,11 @@ def inspect_game_manifest(owner: _SourceOwner, manifest: Json, actions: ActionCo
     actual = owner.inventory('**/*')
     if set(actual) != expected_names | {control_name, 'report.json'}:
         raise ContractError('complete original collection inventory changed')
+    if evaluation:
+        raw_report = owner.read(owner.root / 'report.json')
+        if hashlib.sha256(raw_report).hexdigest() != checksum(manifest['report_sha256']):
+            raise ContractError('original HPO evaluation report hash differs')
+        report = _json(raw_report)
+        _evaluation_report_health(manifest, report, role.games)
     return {row['episode_id']: row for row in episodes}, specs
 
