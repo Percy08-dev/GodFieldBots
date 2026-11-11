@@ -18,15 +18,16 @@ from gf_common.group_pack import (
     MIB,
     Json,
     canonical_json,
-    decode_pack,
     parse_json,
     safe_name,
 )
 from gf_training.group_pack_db import (
     DATABASE,
+    admit_database,
     descriptor_name,
-    validate_database,
+    is_digest,
     validate_descriptor,
+    verified_pack,
 )
 from gf_training.group_pack_resources import (
     SOURCE_BASE,
@@ -83,12 +84,20 @@ def _no_symlink_path(path: Path) -> Path:
 
 class OriginalFile(OwnedDescriptor):
     def __init__(
-        self, path: Path, deadline: float, *, mutable: bool = False, create: bool = False
+        self, path: Path, deadline: float, *, mutable: bool = False, create: bool = False,
+        database_expected_sha256: str | None = None, _database_index_only: bool = False
     ) -> None:
         super().__init__(-1)
         self.deadline = deadline
         self.mutable = mutable
         self.sha256 = ""
+        if _database_index_only and (mutable or create or path.name != DATABASE or database_expected_sha256 is not None):
+            raise ValueError("unbound database is diagnostic-only")
+        self._database_expected = database_expected_sha256 is not None or _database_index_only
+        if database_expected_sha256 is not None:
+            if mutable or create or not is_digest(database_expected_sha256):
+                raise ValueError("invalid expected database checksum mode")
+            self.sha256 = database_expected_sha256
         try:
             self.path = _no_symlink_path(path.parent) / path.name
             flags = os.O_NOFOLLOW | os.O_NONBLOCK | (os.O_RDWR if create else os.O_RDONLY)
@@ -98,7 +107,7 @@ class OriginalFile(OwnedDescriptor):
             self.identity = os.fstat(self.fd)
             if not stat.S_ISREG(self.identity.st_mode):
                 raise ValueError("original source is not a regular file")
-            if not mutable:
+            if not mutable and not self._database_expected:
                 self.sha256 = self.hash()
             self.recheck()
         except BaseException as error:
@@ -115,6 +124,17 @@ class OriginalFile(OwnedDescriptor):
         self.identity = os.fstat(self.fd)
         self.mutable = False
         self.sha256 = self.hash()
+        self.check_identity()
+
+    def freeze_database(self, expected_sha256: str | None = None) -> None:
+        """Seal-time generation or explicit SAME-DB expected-checksum handoff."""
+        self.check_identity()
+        if expected_sha256 is not None and not is_digest(expected_sha256):
+            raise ValueError("invalid expected database checksum")
+        self.identity = os.fstat(self.fd)
+        self.sha256 = self.hash() if expected_sha256 is None else expected_sha256
+        self.mutable = False
+        self._database_expected = True
         self.check_identity()
 
     def hash(self) -> str:
@@ -152,7 +172,7 @@ class OriginalFile(OwnedDescriptor):
 
     def recheck(self) -> None:
         self.check_identity()
-        if not self.mutable and self.hash() != self.sha256:
+        if not self.mutable and not self._database_expected and self.hash() != self.sha256:
             raise ValueError("original file content changed")
         self.check_identity()
 
@@ -188,6 +208,7 @@ class PackedOriginals:
         source_base: int = SOURCE_BASE,
     ) -> None:
         self.deadline = deadline
+        self._closed = False
         self._cleanup_children: list[Json] = []
         self._owns_database = database_original is None
         self.directory = _no_symlink_path(path.parent)
@@ -234,7 +255,9 @@ class PackedOriginals:
                     ):
                         raise ValueError("pending predecessor differs from SAME public seal")
             if database_original is None:
-                self.database_file = OriginalFile(self.directory / DATABASE, deadline)
+                self.database_file = OriginalFile(self.directory / DATABASE, deadline,
+                    database_expected_sha256=None if self.descriptor is None else self.descriptor['database_sha256'],
+                    _database_index_only=without_descriptor)
             else:
                 self.database_file = database_original
                 if database_original.mutable:
@@ -263,7 +286,7 @@ class PackedOriginals:
             self.budget.acquire(available, deadline)
             extra_charge = 0
             try:
-                self.validated = validate_database(self.db, deadline=deadline,
+                self.validated = admit_database(self.db, deadline=deadline,
                     max_pack_bytes=256 * MIB, max_owned_bytes=available)
                 extra_charge = self.validated["metadata_charge"]
             finally:
@@ -325,6 +348,8 @@ class PackedOriginals:
             self.predecessor_file.check_identity()
 
     def close(self) -> None:
+        if self._closed:
+            return
         close_resources(
             self,
             [self.db, self.database_file if self._owns_database else None, self.descriptor_file,
@@ -332,6 +357,7 @@ class PackedOriginals:
         )
         self.db = None
         self.budget.release(self.budget.used)
+        self._closed = True
 
 
 def inspect_packed(
@@ -357,7 +383,7 @@ def inspect_packed(
         result = {
             "descriptor": originals.descriptor,
             "validated": originals.validated,
-            "database_sha256": originals.database_file.sha256 if originals.database_file else None,
+            "database_sha256": (originals.database_file.sha256 or None) if originals.database_file else None,
             "database_bytes": originals.database_file.identity.st_size
             if originals.database_file
             else None,
@@ -396,7 +422,7 @@ class GroupLoan:
             or self._source._group_id != self._group_id
         ):
             raise RuntimeError("stale or retired group loan")
-        self._source.recheck()
+        self._source._loan_check()
 
     def names(self) -> tuple[str, ...]:
         self._check()
@@ -536,7 +562,13 @@ class PackedSource:
             self._budget.release(self._cache_charge)
         self._cache_charge = 0
 
+    def _loan_check(self) -> None:
+        self._live()
+
     def _load(self, group_id: str) -> None:
+        self._live()
+        if self._group_id == group_id:
+            return
         if self._pool is not None:
             self._pool.activate(self)
         self.recheck()
@@ -548,14 +580,17 @@ class PackedSource:
         db = self._originals.db
         assert db is not None
         group = self._groups[group_id]
-        size = db.execute(
-            "SELECT length(pack) FROM groups WHERE group_id=?", (group_id,)
-        ).fetchone()[0]
+        row = db.execute("SELECT length(pack) FROM groups WHERE run_id=? AND group_id=?",
+                         (self._index['run_id'], group_id)).fetchone()
+        expected_size = self._originals.validated['compressed_sizes'][group_id]
+        if row is None or row[0] != expected_size:
+            raise ValueError("compressed group size changed")
+        size = row[0]
         charge = 4 * group["raw_bytes"] + 2 * size
         self._budget.acquire(charge, self._deadline)
         try:
-            pack = db.execute("SELECT pack FROM groups WHERE group_id=?", (group_id,)).fetchone()[0]
-            self._cache = {m.name: m.data for m in decode_pack(pack, group["raw_bytes"])}
+            members = verified_pack(db, self._index['run_id'], group, self._index, size)
+            self._cache = {m.name: m.data for m in members}
             self.recheck()
         except BaseException:
             self._cache.clear()
@@ -580,7 +615,7 @@ class PackedSource:
         return self._cache[name]
 
     def read(self, name: str) -> bytes:
-        self.recheck()
+        self._live()
         if name in self._controls:
             size = self._controls[name]["bytes"]
         elif name in self._member_groups:
@@ -592,15 +627,18 @@ class PackedSource:
         self._budget.acquire(charge, self._deadline)
         try:
             if name in self._controls:
+                self.recheck()
                 if self._pool is not None:
                     self._pool.activate(self)
                 db = self._originals.db
                 assert db is not None
                 result = db.execute("SELECT data FROM controls WHERE name=?", (name,)).fetchone()[0]
+                if hashlib.sha256(result).hexdigest() != self._controls[name]['sha256']:
+                    raise ValueError("control BLOB mismatch")
+                self.recheck()
             else:
                 with self.borrow_group(self._member_groups[name]) as loan:
                     result = loan.read(name)
-            self.recheck()
         except BaseException:
             self._budget.release(charge)
             raise
@@ -692,6 +730,9 @@ class DirectorySource:
         remaining(self._deadline)
         if self._closed:
             raise RuntimeError("artifact Source closed")
+
+    def _loan_check(self) -> None:
+        self.recheck()
 
     def _check_namespace(self) -> None:
         workspace = 65536 + 128 * (len(self._files) + len(self._directories))

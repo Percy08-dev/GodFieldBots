@@ -31,17 +31,23 @@ This is one coupled interface change implemented by one writer after design revi
 
 **Interfaces:** Existing ArtifactSource/PackedOriginals/GroupLoan ownership is preserved. Factor index admission from `validate_database`; full validation is explicit. Add a bounded readonly verifier callable by CLI; use closed pure custody check/comparison helpers shared by Python/Rust consumers. No new learning eligibility API.
 
-- [ ] Write/run focused red tests asserting zero ordinary full DB hashes/integrity/eager Pack reads, verified acquire/reacquire, no cached-member I/O, corruption/oversize/missing-index rejection and unchanged close ownership.
-- [ ] Implement metadata admission, explicit DB expected-hash custody and lazy complete Pack verification; update Writer/publication/terminal paths to avoid duplicate whole verification while preserving seal-time SHA generation.
-- [ ] Write/run red historical-v1/v2 strict-evidence/correspondence, old Dataset4, native early-refusal and candidate/feature/numeric parity tests; implement shared checkers and all Python/Rust integrations with unchanged schemas/old-parent resume rejection.
-- [ ] Write/run red CLI/audit tests for locator/descriptor/pending/Dataset4, actual full corruption/missing/extra detection, same-inode aliases/conflicting expectations, bounded admission, timeout/cancel and close uncertainty. Implement serial full audit and JSON/nonzero semantics.
-- [ ] Verify changed paths with `.venv/bin/python -m pytest -q` selected affected modules, `.venv/bin/ruff check src tests`, `.venv/bin/mypy src`, and `cargo test --manifest-path native/Cargo.toml --locked` using the existing bounded test policy. Report pre-existing unrelated findings separately; build isolated source-matched native before FFI checks. No formal experiments.
-- [ ] Self-review against spec. Write full report with changed files, red/green commands/results, exact native build/FFI identity, known limitations and proposed doc corrections. Do not stage/commit.
+- [x] Write/run focused red tests asserting zero ordinary full DB hashes/integrity/eager Pack reads, verified acquire/reacquire, no cached-member I/O, corruption/oversize/missing-index rejection and unchanged close ownership.
+- [x] Implement metadata admission, explicit DB expected-hash custody and lazy complete Pack verification; update Writer/publication/terminal paths to avoid duplicate whole verification while preserving seal-time SHA generation.
+- [x] Write/run red historical-v1/v2 strict-evidence/correspondence, old Dataset4, native early-refusal and candidate/feature/numeric parity tests; implement shared checkers and all Python/Rust integrations with unchanged schemas/old-parent resume rejection.
+- [x] Write/run red CLI/audit tests for locator/descriptor/pending/Dataset4, actual full corruption/missing/extra detection, same-inode aliases/conflicting expectations, bounded admission, timeout/cancel and close uncertainty. Implement serial full audit and JSON/nonzero semantics.
+- [x] Verify changed paths with `.venv/bin/python -m pytest -q` selected affected modules, `.venv/bin/ruff check src tests`, `.venv/bin/mypy src`, and `cargo test --manifest-path native/Cargo.toml --locked` using the existing bounded test policy. Report pre-existing unrelated findings separately; build isolated source-matched native before FFI checks. No formal experiments.
+- [x] Self-review against spec. Write full report with changed files, red/green commands/results, exact native build/FFI identity, known limitations and proposed doc corrections. Do not stage/commit.
 
 ### Root acceptance and evidence
 
-- [ ] Resolve architecture review before dispatch; record review and ADR0034 supersession.
-- [ ] Preserve baseline Reader revision `f59a2ab` for identical-original/HDD comparison. Instrument bounded readonly before/after phases and verify originals unchanged.
-- [ ] Run existing limited real two-update pause/resume and controlled Dataset/Tree checks where available, never shorten/qualify formal parents. Record missing real qualified inputs as NOT RUN.
-- [ ] Independent correctness/spec-quality and architecture-conformance reviews; resolve concrete blockers and recheck changed areas.
-- [ ] Fresh applicable verification, evidence/current architecture updates and coherent local commit. No push/publish.
+- [x] Resolve architecture review before dispatch; record review and ADR0034 supersession.
+- [x] Preserve baseline Reader revision `f59a2ab` for identical-original/HDD comparison. Instrument bounded readonly before/after phases and verify originals unchanged.
+- [x] Run existing limited real two-update pause/resume and controlled Dataset/Tree checks where available, never shorten/qualify formal parents. Record missing real qualified inputs as NOT RUN.
+- [x] Independent correctness/spec-quality and architecture-conformance reviews; resolve concrete blockers and recheck changed areas.
+- [x] Fresh applicable verification, evidence/current architecture updates and coherent local commit. No push/publish.
+
+Runtime acceptance additionally required the independently reviewed ADR0036
+consumed-graph retirement and effect-aware owned-pool closure. The first failed
+parent and all failed/inconclusive verification attempts remain recorded. Exact
+final results, scope limitations and unchanged default are in the verification
+record; no formal experiment or qualification is implied.

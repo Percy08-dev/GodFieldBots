@@ -19,10 +19,11 @@ class _TerminalOriginal(OwnedDescriptor):
     """
 
     def __init__(self, path: Path, expected: os.stat_result, sha256: str,
-                 deadline: float, *, write_handoff: bool) -> None:
+                 deadline: float, *, write_handoff: bool, database_expected: bool = False) -> None:
         super().__init__(-1)
         self.path, self.expected, self.sha256 = path, expected, sha256
         self.deadline, self.write_handoff = deadline, write_handoff
+        self.database_expected = database_expected
         self.identity: os.stat_result | None = None
 
     def open_verified(self) -> None:
@@ -49,6 +50,9 @@ class _TerminalOriginal(OwnedDescriptor):
         self.check_path_identity()
         if _stat_key(os.fstat(self.fd)) != _stat_key(self.identity):
             raise ContractError("terminal readonly handle identity changed")
+        if self.database_expected:
+            self.check_path_identity()
+            return
         value = hashlib.sha256()
         offset = 0
         while offset < self.identity.st_size:

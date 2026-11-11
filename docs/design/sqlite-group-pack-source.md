@@ -1,5 +1,11 @@
 # Group Pack: original Source, lineage and native byte provider
 
+Read-policy amendment: [ADR0035](../adr/0035-pack-checksum-read-policy.md) and
+[the accepted Pack checksum design](pack-checksum-read-policy.md) supersede
+eager/repeated whole-DB read verification and custody-v1-only production.
+New evidence uses custody2; historical bytes/evidence stay unchanged. All other
+information, Source authority, ownership and format contracts remain applicable.
+
 Date: 2026-11-10. Owner: root. Status: Python Source/lineage/PPO and Native3B
 designs accepted after independent architecture reviews; Python Source/lineage/
 ordinary PPO and Native3B implementation accepted within their bounded

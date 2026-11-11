@@ -7,7 +7,7 @@ from typing import Any
 
 from gf_common.domain import ContractError, Json, canonical, closed, digest, integer
 from gf_common.group_pack import MAX_JSON, parse_json, safe_name
-from gf_common.group_pack_game import checked_storage_binding
+from gf_common.group_pack_game import checked_storage_binding, same_storage_custody
 from gf_training.group_pack_pool import OriginalArtifactReader, PackedArtifactPool
 from gf_training.group_pack_resources import close_resources, retain_cleanup
 from gf_training.group_pack_source import OriginalFile, PackedSource, _no_symlink_path, _stat_key
@@ -64,6 +64,8 @@ class PackedSourceOwner(_SourceOwner):
         self.locator: OriginalFile | None = None
         self.artifacts: PackedSource | None = None
         self._charge_bytes = 0
+        self._control_object_charge = 0
+        self._retained_metadata_bytes = 0
         self._charge_uncertain = False
         self._acquisition_state = 'unattempted'
         self._release_state = 'unattempted'
@@ -195,6 +197,16 @@ class PackedSourceOwner(_SourceOwner):
         """Journal/column bytes only; their parser admits its own live graphs."""
         return self._read_original(path, decode=False)
 
+    def object(self, path: Path) -> Json:
+        value = super().object(path)
+        assert self.artifacts is not None
+        name = path.relative_to(self.root).as_posix()
+        if name in self.artifacts._controls:
+            # The caller may retain every successful exported parsed graph.
+            # Preserve its already acquired decode charge, including repeats.
+            self._control_object_charge += 32*self._entries[name]['bytes']+65536
+        return value
+
     def _read_original(self, path: Path, *, decode: bool) -> bytes:
         self.check()
         self._safe(path)
@@ -284,11 +296,22 @@ class PackedSourceOwner(_SourceOwner):
             if prefix in episode_groups and row['group_id'] != episode_groups[prefix]:
                 raise ContractError('packed own episode member belongs to a different group')
 
-    def retire_decoded(self) -> None:
-        """Drop per-batch decode allowances after its graph has explicitly retired."""
-        retained = 65536 + 1024 * len(self.files) + sum(len(str(k)) * 32 for k in self.files)
-        release = max(0, self._charge_bytes - retained)
-        self._release_charge(release)
+    def retire_decoded(self, *, retained_bytes: int = 0) -> None:
+        """Refund retired graphs only, preserving all exported control metadata."""
+        if self._failure is not None:
+            raise self._failure
+        integer(retained_bytes, 0)
+        integer(self._control_object_charge, 0)
+        integer(self._retained_metadata_bytes, 0)
+        pinned = max(self._retained_metadata_bytes, retained_bytes)
+        retained = max(65536 + 1024 * len(self.files) + sum(len(str(k)) * 32 for k in self.files),
+            pinned+self._control_object_charge)
+        if retained > self._charge_bytes:
+            raise ContractError('remaining packed metadata exceeds SAME held graph charge')
+        # A later borrower cannot retire metadata exported by an earlier Source.
+        # Validate first; retain this floor even if the ensuing refund is uncertain.
+        self._retained_metadata_bytes = pinned
+        self._release_charge(self._charge_bytes-retained)
 
     def borrow_group(self, group_id: str) -> Any:
         assert self.artifacts is not None
@@ -317,13 +340,13 @@ class PackedSourceOwner(_SourceOwner):
                 ('database', originals.database_file), ('predecessor', originals.predecessor_file)) if file is not None]
         directories: list[Json] = [{'path': str(path), 'device': value.st_dev, 'inode': value.st_ino}
             for path, value in ((self.root, self.directory_identity), (originals.directory, originals.directory_identity))]
-        content = {'recipe': 'packed-original-custody-v1', 'files': sorted(files, key=lambda row: row['path']),
+        content = {'recipe': 'packed-original-custody-v2', 'files': sorted(files, key=lambda row: row['path']),
             'directories': sorted(directories, key=lambda row: row['path'])}
         return {**content, 'fingerprint': digest(content)}
 
     def require_custody(self, custody: Json) -> None:
         self.finalize()
-        if canonical(custody) != canonical(self.custody):
+        if not same_storage_custody(self.storage, custody, self.storage, self.custody):
             raise ContractError('persisted packed original custody changed')
 
     def finalize(self) -> None:
@@ -357,12 +380,26 @@ class PackedSourceOwner(_SourceOwner):
         if self.artifacts is not None and self.artifacts._loans:
             raise RuntimeError('cannot close a Source with live group loans')
         close_resources(self, [self.artifacts, self.locator])
+        if self._charge_uncertain:
+            # Validate existing uncertainty before retiring the independent pool
+            # base. The zero amount cannot refund any wrapper reservation.
+            self._release_charge(0)
+        if self._owns_pool:
+            try:
+                self.pool.close()
+            except BaseException as error:
+                # This enclosing owner still funds the wrapper metadata. Its
+                # SAME pool retains every nested cleanup capability and base
+                # refund effect receipt, including a release-before-error.
+                self._failure = self._failure or error
+                vars(error)['cleanup_owner'] = self
+                raise
         getattr(self, '_entries', {}).clear()
         self.files.clear()
         self.inventories.clear()
         self._release_charge(self._charge_bytes)
-        if self._owns_pool:
-            self.pool.close()
+        self._control_object_charge = 0
+        self._retained_metadata_bytes = 0
         self._closed = True
 
 
@@ -401,7 +438,7 @@ class PackedBatchCustody:
             raise ContractError('packed custody cannot prepare twice')
         self.owner.pool.require_terminal_close()
         self.owner.finalize()
-        if canonical(proof['custody']) != canonical(self.owner.custody):
+        if not same_storage_custody(proof['storage'], proof['custody'], self.owner.storage, self.owner.custody):
             raise ContractError('prepared proof differs from SAME original custody')
         frozen = canonical(proof).encode()
         # Close every historical original admitted by these SAME scans before

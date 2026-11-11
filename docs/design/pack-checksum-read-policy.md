@@ -2,6 +2,8 @@
 
 Date: 2026-11-11. Owner: root. Status: architecture READY before implementation.
 Independent `bot_architecture_reviewer` found no blocking design findings.
+Final implementation correctness/conformance are READY; root accepts the scoped
+implementation and verification in [the evidence record](../verification/pack-checksum-read-policy.md).
 This document implements the owner's Group Pack＋SQLite revision. It supersedes
 the ordinary whole-database rehash and eager Pack-verification requirements in
 ADR0034 and its dependent designs; their other contracts remain applicable.
@@ -53,6 +55,18 @@ real close, actual creator-thread ownership and uncertain cleanup reservations.
 Session/finalize/group transitions retain lightweight FD and namespace checks.
 Source semantic verification may naturally consume every required episode; it
 must not start an additional whole-dataset audit.
+
+Existing explicit `reconcile_collection` diagnostic recovery may inspect a bare
+sealed DB after descriptor/catalog publication failure. Its narrowly selected
+descriptor-free metadata mode retains strict SAME-FD/stat6/namespace/header/
+schema/seal/index/control admission without Pack reads or a DB hash. Expected
+SHA remains `None`/unbound. `sealed-without-descriptor` means observed seal and
+metadata only: no full-audit assertion, custody2, proof, publication or Source
+permission. Normal Source still requires a descriptor-bound expected hash;
+Writer's supplied SAME frozen original remains bound to its generated hash.
+Deadline, close and uncertain cleanup errors propagate, including when their
+exception type otherwise matches diagnostic `failed/unsealed` handling. This
+amendment is independently architecture READY on2026-11-11.
 
 `group_pack_worker` keeps checkpoint, DELETE transition, close, sync and one
 whole-DB SHA generation for sealed descriptors. Its already-validated submission
@@ -126,6 +140,14 @@ parent/control/pruning stay on ext4. No new formal learning/HPO/final test/quali
 fit, data deletion or migration is authorized by this work.
 
 ## Verification and acceptance
+
+[ADR0036](../adr/0036-packed-decoded-source-retirement.md) records the independently
+reviewed runtime memory-lifetime amendment discovered by the actual smoke. It
+retires only consumed packed Python decoded graphs before temporary artifact
+inspection, with Source-frozen count and completed SAME-update guards. Actual
+live metadata, physical custody and all original prepublication checks survive;
+budgets, mathematics and persisted schemas stay unchanged. This is a required
+runtime acceptance fix, not permission to resume the failed parent.
 
 Use failing behavioral tests before implementation, including call counts for
 zero ordinary DB hashes/integrity scans/eager decode, one decode per acquired

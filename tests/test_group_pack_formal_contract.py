@@ -160,7 +160,7 @@ def test_native_packed_formal_requires_both_exact_markers():
     with pytest.raises(ContractError):
         require_native_formal_controls(SimpleNamespace(build_info=lambda: info), packed=True)
     info.update(card_instance_packed_formal_controls='run4-formal-packed-parent-v1;declaration2;stop2',
-        card_instance_group_pack='provider1;proof2;plan4')
+        card_instance_group_pack='provider1;proof2;plan4', card_instance_pack_checksum='pack-checksum-v1;custody2')
     require_native_formal_controls(SimpleNamespace(build_info=lambda: info), packed=True)
     del info['card_instance_group_pack']
     with pytest.raises(ContractError):

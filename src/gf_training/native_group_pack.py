@@ -379,7 +379,7 @@ class OriginalArtifactProvider:
                 lease._data = raw
                 entry = owner._entries[name]
                 if (type(raw) is not bytes or len(raw) != entry.get('length', entry.get('bytes'))
-                        or hashlib.sha256(raw).hexdigest() != entry['sha256']):
+                        or name not in source._member_groups and hashlib.sha256(raw).hexdigest() != entry['sha256']):
                     raise ContractError('original provider member content/type changed')
                 return lease
             except BaseException as error:

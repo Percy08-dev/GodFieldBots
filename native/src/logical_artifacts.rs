@@ -387,9 +387,15 @@ impl Registry {
     }
 }
 
-fn validate_custody(value: &Value, budget: &Arc<Budget>, control: &Control) -> Result<()> {
+pub(crate) fn validate_custody(
+    value: &Value,
+    budget: &Arc<Budget>,
+    control: &Control,
+) -> Result<()> {
     value.closed(&["recipe", "files", "directories", "fingerprint"], &[])?;
-    if value.require("recipe")?.string()? != "packed-original-custody-v1" {
+    if !["packed-original-custody-v1", "packed-original-custody-v2"]
+        .contains(&value.require("recipe")?.string()?)
+    {
         return Err(Error::contract("original custody recipe differs"));
     }
     let mut unsigned = json::copy(value, control)?;
@@ -646,6 +652,35 @@ mod tests {
         })
     }
     #[test]
+    fn historical_custody_requires_its_own_fingerprint_and_exact_stable_evidence() {
+        let b = Budget::new(64 << 20);
+        let c = Control::new(crate::budget::monotonic() + 30.).unwrap();
+        let memory = fixture(&b, &c);
+        let description = parse(&memory.description, &b, &c).unwrap();
+        let old = description.root.require("custody").unwrap();
+        let mut current = json::copy(old, &c).unwrap();
+        current["recipe"] = json::text("packed-original-custody-v2");
+        current.as_object_mut().unwrap().remove("fingerprint");
+        let fingerprint = crate::structured_controls::digest(&current, &b, &c).unwrap();
+        current
+            .as_object_mut()
+            .unwrap()
+            .insert("fingerprint".into(), json::text(&fingerprint));
+        assert!(same_custody(old, &current, &b, &c).unwrap());
+        current["fingerprint"] = json::text(&"0".repeat(64));
+        assert!(same_custody(old, &current, &b, &c).is_err());
+        current.as_object_mut().unwrap().remove("fingerprint");
+        current["files"].as_array_mut().unwrap()[0]["identity"]
+            .as_array_mut()
+            .unwrap()[3] = json::integer(99);
+        let fingerprint = crate::structured_controls::digest(&current, &b, &c).unwrap();
+        current
+            .as_object_mut()
+            .unwrap()
+            .insert("fingerprint".into(), json::text(&fingerprint));
+        assert!(!same_custody(old, &current, &b, &c).unwrap());
+    }
+    #[test]
     fn virtual_sources_use_original_member_identity_and_budgeted_bytes() {
         let b = Budget::new(64 << 20);
         let c = Control::new(crate::budget::monotonic() + 30.).unwrap();
@@ -781,4 +816,45 @@ mod tests {
             assert_eq!(budget.used(), 0);
         }
     }
+}
+
+pub(crate) fn same_custody(
+    left: &Value,
+    right: &Value,
+    budget: &Arc<Budget>,
+    control: &Control,
+) -> Result<bool> {
+    validate_custody(left, budget, control)?;
+    validate_custody(right, budget, control)?;
+    if left.require("recipe")? == right.require("recipe")? {
+        return Ok(left == right);
+    }
+    let mut a = json::copy(left, control)?;
+    let mut b = json::copy(right, control)?;
+    for value in [&mut a, &mut b] {
+        value.as_object_mut().unwrap().remove("recipe");
+        value.as_object_mut().unwrap().remove("fingerprint");
+    }
+    Ok(a == b)
+}
+
+pub(crate) fn same_proof(
+    left: &Value,
+    right: &Value,
+    budget: &Arc<Budget>,
+    control: &Control,
+) -> Result<bool> {
+    if !same_custody(
+        left.require("custody")?,
+        right.require("custody")?,
+        budget,
+        control,
+    )? {
+        return Ok(false);
+    }
+    let mut a = json::copy(left, control)?;
+    let mut b = json::copy(right, control)?;
+    a.as_object_mut().unwrap().remove("custody");
+    b.as_object_mut().unwrap().remove("custody");
+    Ok(a == b)
 }

@@ -58,7 +58,7 @@ class GroupPackCollectionPublication:
         self._handoff_reservation = self.collection.budget.reserve(65536 + 4096 * len(expected))
         for path, identity, sha256, write_handoff in expected:
             original = _TerminalOriginal(path, identity, sha256, self.collection.deadline,
-                                         write_handoff=write_handoff)
+                                         write_handoff=write_handoff, database_expected=path.name == 'collection.sqlite3')
             self._terminal_originals.append(original)  # Own FD before open/hash can fail.
             original.open_verified()
         for original in self._terminal_originals:
@@ -396,7 +396,7 @@ class GroupPackCollectionPublication:
                 'identity': list(_stat_key(original.identity))})
         directories: list[Json] = [{'path': str(owner.directory), 'device': owner.directory_identity[0], 'inode': owner.directory_identity[1]}
             for owner in (self._physical, self._pointer)]
-        custody = {'recipe': 'packed-original-custody-v1', 'files': sorted(files, key=lambda row: row['path']),
+        custody = {'recipe': 'packed-original-custody-v2', 'files': sorted(files, key=lambda row: row['path']),
             'directories': sorted(directories, key=lambda row: row['path'])}
         custody['fingerprint'] = object_digest(custody)
         self._public_facts = packed_final_facts({key: pending_facts[key] for key in FINAL_FACTS_FIELDS},

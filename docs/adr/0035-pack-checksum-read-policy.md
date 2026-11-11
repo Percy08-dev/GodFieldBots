@@ -1,9 +1,12 @@
 # 0035: Demand-verified Packs and explicit full storage audit
 
-- Status: Accepted design; implementation and final acceptance pending
+- Status: Accepted design and scoped implementation,2026-11-11
 - Date: 2026-11-11
 - Decision owner: root
 - Review: `bot_architecture_reviewer` READY, 2026-11-11; no blocking findings
+- Acceptance: both final independent reviews READY; final686affected checks,
+  two real pause/resume parents and original/numeric audits PASS. Exact scope
+  and pre-amendment whole-suite evidence are in the verification record.
 - Supersedes: ADR0034's eager full read verification and repeated whole-DB rehash
   guarantee only; all other storage, learning and publication contracts remain.
 
@@ -40,6 +43,15 @@ new receipts never claim a historical v1 check was performed. Native support
 requires the additive `card_instance_pack_checksum='pack-checksum-v1;custody2'`.
 All persisted format/schema versions and existing capability values stay exact.
 Different-code paused parents remain nonresumable. Directory remains default.
+
+The independently reviewed descriptor-free recovery amendment preserves explicit
+`reconcile_collection` diagnostics after failed descriptor/catalog publication.
+Bare-DB metadata admission is unbound (`SHA=None`) and reports only observed seal
+and metadata. It never reads Packs, hashes a full DB, emits custody/proof or grants
+Source/publication permission. Normal descriptor-bound readers and SAME sealed
+Writer originals remain strict. Deadline, close and uncertain cleanup errors
+propagate rather than being converted into a diagnostic state. Amendment review
+is architecture READY on2026-11-11.
 
 ## Alternatives and consequences
 

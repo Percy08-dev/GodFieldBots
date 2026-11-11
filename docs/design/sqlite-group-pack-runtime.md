@@ -1,5 +1,10 @@
 # Group Pack: memory collection and explicit configuration
 
+Read-policy amendment: [ADR0035](../adr/0035-pack-checksum-read-policy.md) and
+[the accepted Pack checksum design](pack-checksum-read-policy.md) supersede
+duplicate whole-DB verification in Reader/publication/terminal handoffs. Writer
+seal-time checksum generation, memory/queue budgets and actual retirement stay.
+
 Date: 2026-11-10. Owner: root. Status: runtime design accepted after independent
 architecture review, including the FD-invalidation/optional-predecessor delta.
 Builds on ADR0034 and [foundation](sqlite-group-pack-v1.md). Logical output

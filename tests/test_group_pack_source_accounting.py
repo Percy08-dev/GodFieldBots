@@ -82,7 +82,9 @@ def test_actual_wrapper_refund_failure_never_refunds_live_base_twice(tmp_path, m
     if context != 'ordinary-own':
         base_root, _ = packed(tmp_path/'base')
         base = owner(base_root)
-    baseline = base.pool.budget.used if base is not None else SOURCE_BASE
+    # An owned pool confirms base cleanup before the wrapper refund. A shared
+    # pool belongs to its external owner and keeps that owner's full baseline.
+    baseline = base.pool.budget.used if base is not None else 0
     actual = owner(final_root, base.pool if base is not None else None)
     if context == 'final-slot':
         parent = FormalGameParent(tmp_path, max_owned_bytes=512*1024**2, deadline=actual.deadline)
@@ -92,15 +94,30 @@ def test_actual_wrapper_refund_failure_never_refunds_live_base_twice(tmp_path, m
     close = slot.close if slot is not None else actual.close
     amount = actual._charge_bytes
     release = actual.pool.budget.release
+    base_amount = actual.pool._base_charge
     first = OSError('wrapper refund fault')
     attempted = []
+    effects = {'base': 0, 'wrapper': 0}
+    def observed_release(size):
+        release(size)
+        if size == base_amount:
+            effects['base'] += 1
+        if size == amount:
+            effects['wrapper'] += 1
     def fault(size):
         if size == amount and not attempted:
+            if base is None:
+                assert actual.pool.closed and actual.pool._base_charge == 0
+                assert actual.pool._base_release_attempted
+            else:
+                assert not actual.pool.closed and actual.pool._base_charge == base_amount
+                assert base.locator.fd >= 0
+            assert actual.pool.budget.used == baseline + amount
             attempted.append(size)
             if after:
-                release(size)
+                observed_release(size)
             raise first
-        return release(size)
+        return observed_release(size)
     monkeypatch.setattr(actual.pool.budget, 'release', fault)
     try:
         with pytest.raises(OSError) as caught:
@@ -109,12 +126,16 @@ def test_actual_wrapper_refund_failure_never_refunds_live_base_twice(tmp_path, m
         assert actual._charge_bytes == (0 if after else amount)
         assert actual.pool.budget.used == baseline + (0 if after else amount)
         assert actual._failure is first
-        monkeypatch.setattr(actual.pool.budget, 'release', release)
+        assert first.cleanup_owner is actual and attempted == [amount]
+        assert effects == {'base': 1 if base is None else 0, 'wrapper': 1 if after else 0}
+        monkeypatch.setattr(actual.pool.budget, 'release', observed_release)
         close()
         close()
         assert actual._closed and actual._charge_bytes == 0
+        assert effects == {'base': 1 if base is None else 0, 'wrapper': 1}
         if base is not None:
             assert base.locator.fd >= 0 and actual.pool.budget.used == baseline
+            assert not actual.pool.closed and actual.pool._base_charge == base_amount
         else:
             assert actual.pool.closed and actual.pool.budget.used == 0
     finally:

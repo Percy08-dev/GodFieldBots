@@ -791,7 +791,21 @@ its PASS grants no Source authority or later-read trust. New custody2 records a
 stored expected DB hash under `pack-checksum-v1`, with strict historical custody1
 compatibility and an additive native capability. Persisted schemas, original
 bytes, learning math and directory default remain unchanged. This supersedes
-ADR0034's eager/full-rehash read guarantee; implementation acceptance is pending.
+ADR0034's eager/full-rehash read guarantee. Both final reviews and scoped
+acceptance pass:686affected tests, two real pause/resume parents and complete
+original/numeric audits. Full evidence and remaining scopes are recorded in
+[the policy verification](verification/pack-checksum-read-policy.md).
+
+[ADR0036](adr/0036-packed-decoded-source-retirement.md) adds the independently
+reviewed packed Python lifetime split required by actual runtime evidence:
+retire consumed decoded records after verified optimizer completion and before
+artifact-inspection reservations, using the Source-frozen decision count.
+Retain live metadata and physical original custody through the existing complete
+prepublication checks/close boundary. Budgets, native/directory behavior and
+learning mathematics remain unchanged. Both final reviews and unchanged-budget
+fresh-parent acceptance pass. The earlier failed parent is preserved/ineligible;
+full-suite evidence before this amendment is explicitly distinguished from the
+final affected checks. No qualification or storage-default change is implied.
 
 [ADR0034](adr/0034-sqlite-group-pack.md) accepts the design of an explicit
 `sqlite-group-pack-v1` storage foundation: one immutable database per collection,

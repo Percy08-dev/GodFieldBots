@@ -495,7 +495,7 @@ class GroupPackWriter:
                     result = result["descriptor"]
                 descriptor = validate_descriptor(result)
                 assert self._database_original is not None
-                self._database_original.freeze()
+                self._database_original.freeze_database(descriptor['database_sha256'])
                 self._retire()
                 self._database_original.recheck()
                 if self.returncode != 0:

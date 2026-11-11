@@ -52,8 +52,10 @@ def checked_storage_custody(storage: Json, custody: Json) -> tuple[Json, Json]:
     for key in ('locator_sha256', 'descriptor_sha256', 'database_sha256', 'logical_sha256'):
         checksum(storage[key])
     custody = closed(custody, {'recipe', 'files', 'directories', 'fingerprint'})
-    if custody['recipe'] != 'packed-original-custody-v1':
+    if custody['recipe'] not in ('packed-original-custody-v1', 'packed-original-custody-v2'):
         raise ContractError('packed original custody recipe required')
+    if type(custody['files']) is not list or type(custody['directories']) is not list:
+        raise ContractError('packed custody arrays required')
     roles = set()
     previous = ''
     for entry in custody['files']:
@@ -82,6 +84,10 @@ def checked_storage_custody(storage: Json, custody: Json) -> tuple[Json, Json]:
         integer(row['inode'], 0)
     if len(custody['directories']) != 2 or checksum(custody['fingerprint']) != digest({key: item for key, item in custody.items() if key != 'fingerprint'}):
         raise ContractError('packed custody directory/fingerprint mismatch')
+    for role, key in (('locator', 'locator_sha256'), ('descriptor', 'descriptor_sha256'),
+                      ('database', 'database_sha256')):
+        if next(row['sha256'] for row in custody['files'] if row['role'] == role) != storage[key]:
+            raise ContractError('packed custody/storage checksum differs')
     return storage, custody
 
 
@@ -126,3 +132,68 @@ def checked_packed_proof(value: Json) -> Json:
     if checksum(value['source_set_sha256']) != digest(value['files']):
         raise ContractError('packed logical source set hash mismatch')
     return value
+
+
+def same_storage_custody(left_storage: Json, left: Json, right_storage: Json, right: Json) -> bool:
+    """Validate both closed receipts, then compare only the approved recipe change."""
+    checked_storage_custody(left_storage, left)
+    checked_storage_custody(right_storage, right)
+    if canonical(left_storage) != canonical(right_storage):
+        return False
+    if left['recipe'] == right['recipe']:
+        return canonical(left) == canonical(right)
+    return canonical({k: v for k, v in left.items() if k not in ('recipe', 'fingerprint')}) == canonical(
+        {k: v for k, v in right.items() if k not in ('recipe', 'fingerprint')})
+
+
+def same_packed_proof(left: Json, right: Json) -> bool:
+    """Proof2 stays exact except validated historical/current custody recipes."""
+    checked_packed_proof(left)
+    checked_packed_proof(right)
+    return (same_storage_custody(left['storage'], left['custody'], right['storage'], right['custody'])
+        and canonical({k: v for k, v in left.items() if k != 'custody'}) == canonical(
+            {k: v for k, v in right.items() if k != 'custody'}))
+
+
+def same_packed_dataset(left: Json, right: Json, *, historical_correspondences: tuple[Json, ...] | None = None) -> bool:
+    """Bind each saved aggregate before checking every actual row and correspondence."""
+    from gf_common.card_instance_game_tree import packed_manifest
+    from gf_common.domain import clone, digest
+
+    packed_manifest(left)
+    packed_manifest(right)
+    if len(left['collections']) != len(right['collections']):
+        return False
+    if historical_correspondences is not None and len(historical_correspondences) != len(left['collections']):
+        return False
+    compared = clone(right)
+    for index, (saved, actual) in enumerate(zip(left['collections'], compared['collections'], strict=True)):
+        if not same_storage_custody(saved['storage'], saved['custody'], actual['storage'], actual['custody']):
+            return False
+        # Only the independently checked custody evidence can differ. Historical
+        # correspondence is compared exactly; episode/role/numeric facts are never omitted.
+        if historical_correspondences is not None:
+            expected = historical_correspondences[index]
+            from gf_common.card_instance_game_tree import (
+                checked_final_correspondence,
+                checked_training_correspondence,
+            )
+            if saved['split'] == 'train':
+                checked_training_correspondence(expected, packed=True)
+            else:
+                checked_final_correspondence(expected, manifest_sha256=saved['manifest_sha256'], packed=True)
+            if saved['custody']['recipe'] == actual['custody']['recipe'] and canonical(
+                    saved['original_correspondence']) != canonical(actual['original_correspondence']):
+                return False
+            if canonical(saved['original_correspondence']) != canonical(expected):
+                return False
+            ignored = ('control_fingerprint', 'binding_sha256') if saved['split'] == 'train' else ()
+            if canonical({k: v for k, v in actual['original_correspondence'].items() if k not in ignored}) != canonical(
+                    {k: v for k, v in expected.items() if k not in ignored}):
+                return False
+            actual['original_correspondence'] = expected
+        actual['custody'] = saved['custody']
+    compared['source_set_sha256'] = digest({'recipe': 'card-instance-game-dataset-originals-v1',
+        'parents': compared['parents'], 'collections': compared['collections']})
+    compared['content_sha256'] = digest({k: v for k, v in compared.items() if k != 'content_sha256'})
+    return canonical(left) == canonical(compared)

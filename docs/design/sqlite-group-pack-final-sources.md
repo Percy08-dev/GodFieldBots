@@ -1,5 +1,11 @@
 # Group Pack: formal controls, final64 and Dataset/Tree
 
+Read-policy amendment: [ADR0035](../adr/0035-pack-checksum-read-policy.md) and
+[the accepted Pack checksum design](pack-checksum-read-policy.md) supersede
+eager/full-rehash reads and custody-v1-only comparisons. New custody2 and strict
+historical correspondence compatibility preserve original Dataset4 bytes,
+learning eligibility, ownership and all persisted format versions.
+
 Date: 2026-11-10. Owner: root. Status: final integration design accepted after
 independent architecture review; implementation/conformance remain pending.
 Depends on the reviewed foundation/runtime/Python Source/Native3B designs in

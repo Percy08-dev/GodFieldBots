@@ -42,6 +42,9 @@ def _require_final_validation_native(settings: Any, native: Any = None, *, packe
     module = load_native() if native is None else native
     if settings.backend != 'rust' or settings.reader != 'participant-structured-v2':
         raise ContractError('explicit corrected native final64 reader required')
+    if packed:
+        from gf_training.native_backend import require_pack_checksum
+        require_pack_checksum(module)
     card_instance_reader_settings(settings, module)
     info = dict(module.build_info())
     if (info.get('card_instance_final_validation') != NATIVE_FINAL_VALIDATION_MARKER
@@ -480,6 +483,9 @@ class _NativeGameInputs(NativeStructuredSource):
         if mode == 'live_cohort' and self._explicit_candidate:
             raise ContractError('explicit native candidate is historical diagnostic only')
         module = self.native if self._explicit_candidate else load_native()
+        if self._artifact_provider is not None:
+            from gf_training.native_backend import require_pack_checksum
+            require_pack_checksum(module)
         if not self._explicit_candidate:
             card_instance_reader_settings(self.settings, module)
             if self._artifact_provider is not None:

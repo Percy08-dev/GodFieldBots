@@ -21,6 +21,7 @@ from gf_common.domain import (
     canonical,
     closed,
     digest,
+    integer,
 )
 from gf_common.preprocessing import PreparationConfig, preparation_config
 from gf_common.schedule import serialize_schedule
@@ -519,18 +520,35 @@ class IssuedGameProjection:
     active: bool = True
     completed: bool = False
     prepared: bool = False
+    _verified_decisions: int = field(init=False, repr=False)
+    _decoded_retired: bool = field(default=False, init=False, repr=False)
+    _decoded_retirement_error: BaseException | None = field(default=None, init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        self._verified_decisions = integer(self.source.decision_count, 1)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        if name == '_verified_decisions' and name in vars(self):
+            raise AttributeError('verified issued decision count is immutable')
+        object.__setattr__(self, name, value)
 
     @property
     def expectation(self) -> Json:
         return json.loads(self._expectation)
 
     def require(self, process: Any, *, after: bool = False) -> None:
+        if self._decoded_retirement_error is not None:
+            raise self._decoded_retirement_error
+        if self._decoded_retired and not after:
+            raise ContractError('retired decoded projection cannot replay numerical use')
         if (type(self.source) is not _GameBatchSource or type(self.source.online) is not _OnlineGameOwner
                 or not self.active or self.source.issued is not self or self.process is not process or self.source.online.issued is not self
                 or self.source.online.state['updates'] != self.expectation['collection_generation']):
             raise ContractError('update requires the SAME active Source-issued projection')
         before = self.expectation['expected_optimizer_steps']
-        expected_after = before + 4 * ((self.source.decision_count + 127) // 128)
+        if not self._decoded_retired and self.source.decision_count != self._verified_decisions:
+            raise ContractError('issued decision count differs from actual decoded Source')
+        expected_after = before + 4 * ((self._verified_decisions + 127) // 128)
         self.source.online.check(steps=expected_after if after else before)
         if not after and (self.completed or process.steps != before):
             raise ContractError('replayed/stale Source update transaction')
@@ -538,6 +556,51 @@ class IssuedGameProjection:
             self.source.recheck_originals()
             self.source.controls.finalize()
             self.source.online.collection_controls.finalize()
+
+    def retire_packed_decoded(self) -> None:
+        """One guarded consumed-graph boundary; physical originals remain live."""
+        from gf_training.group_pack_game_source import PackedBatchCustody, PackedSourceOwner
+        source = self.source
+        if type(source) is not _GameBatchSource:
+            raise ContractError('SAME issued game Source required for decoded retirement')
+        if source.state['schema_version'] != 4 or source.native_inputs is not None:
+            return
+        if self._decoded_retirement_error is not None:
+            raise self._decoded_retirement_error
+        if not self.completed or self.prepared or self._decoded_retired:
+            raise ContractError('decoded retirement requires one completed unprepared update')
+        if (type(source.online) is not _OnlineGameOwner or self.process is not source.online.process
+                or type(source.snapshot) is not _SourceSnapshot):
+            raise ContractError('SAME actual packed Python Source/process required')
+        custody = source.online.packed_batch
+        if (type(custody) is not PackedBatchCustody or custody.retired
+                or type(custody.owner) is not PackedSourceOwner
+                or source.snapshot._owner is not custody.owner):
+            raise ContractError('SAME retained packed original owner required')
+        owner = custody.owner
+        self.require(self.process, after=True)
+        if (self.process._issued_handle is not None or source.online.ledger.updating
+                or source.online.ledger.workers or any(s._loans for s in owner.pool.sources)):
+            raise ContractError('learner request, numeric update or group borrow remains active')
+        source.recheck_originals()
+        try:
+            # Do not retain a local alias of either consumed graph across refund.
+            source.records = None
+            source.snapshot.collection = replace(source.snapshot.collection, episodes=())
+            source.snapshot._retained_bytes = _owned_bytes((source.snapshot.collection._manifest,
+                source.snapshot.collection._proof, owner.files, owner.inventories))
+            source.snapshot._external_bytes = 0
+            numeric_metadata = None if source._numeric is None else (str(source._numeric[0]), *source._numeric[1:])
+            # These serialized values can still be decoded by later reportable
+            # guards. Preserve their existing conservative JSON allowances too.
+            parsing = 32*(len(source.snapshot.collection._manifest)+len(source.snapshot.collection._proof))+131072
+            remaining = source.snapshot._retained_bytes + parsing + _owned_bytes((self._expectation, self.files, numeric_metadata))
+            owner.retire_decoded(retained_bytes=remaining)
+        except BaseException as error:
+            self._decoded_retirement_error = error
+            vars(error)['_source_projection_cleanup_owner'] = self
+            raise
+        self._decoded_retired = True
 
     def prepare_commit(self) -> None:
         self.require(self.process, after=True)
@@ -560,10 +623,12 @@ class IssuedGameProjection:
             proof = self.source.proof
             # Optimizer is complete: explicitly retire the bounded decoded input
             # graph before original pool/FD/budget retirement.
-            self.source.records = None
-            if self.source.snapshot is not None:
-                self.source.snapshot.collection = replace(self.source.snapshot.collection, episodes=())
-            self.source.online.packed_batch.owner.retire_decoded()
+            if self.source.native_inputs is None:
+                if not self._decoded_retired:
+                    self.retire_packed_decoded()
+            else:
+                # Native owns its separate existing payload-retirement boundary.
+                self.source.online.packed_batch.owner.retire_decoded()
             self.source.online.packed_batch.prepare(proof)
         # No remaining reportable per-batch I/O. Old run/registry snapshots are
         # legitimately replaced by the ensuing owned lineage commit.
@@ -634,7 +699,8 @@ class _GameBatchSource:
             'identity': self.state['identity'], 'execution': self.state['execution'], 'plan': self.plan.linkage, 'files': immutable,
             'source_set_sha256': self.proof['source_set_sha256']}
         if self.state['schema_version'] == 4:
-            content.update(recipe='card-instance-packed-source-controls-v1', storage=self.proof['storage'], custody=self.proof['custody'])
+            evidence = getattr(self, '_historical_proof', self.proof)
+            content.update(recipe='card-instance-packed-source-controls-v1', storage=evidence['storage'], custody=evidence['custody'])
         fingerprint = digest(content)
         expected = _source_correspondence(fingerprint, self.declaration, self.episode_digests, game=True, storage_binding=self.state.get('storage_binding'))
         if self.native_inputs is not None and canonical(expected) != canonical(self.native_inputs.correspondence):
@@ -900,8 +966,12 @@ def _open_game_parent_inputs(directory: Path, *, require_complete: bool = True, 
         update = scan.object(directory / 'updates' / f'{number:06}.json', records[number]['update_sha256'])
         with _open_batch(plan, state, records, scan, settings, online=None, max_owned_bytes=max_owned_bytes,
                          deadline=deadline, extra_owned_bytes=extra_owned_bytes) as source:
-            if canonical(source.proof) != canonical(update['source_proof']):
+            from gf_common.group_pack_game import same_packed_proof
+            if not (same_packed_proof(source.proof, update['source_proof']) if state['schema_version'] == 4
+                    else canonical(source.proof) == canonical(update['source_proof'])):
                 raise ContractError('original Source proof differs from committed generation')
+            if state['schema_version'] == 4:
+                vars(source)['_historical_proof'] = update['source_proof']
             rollout = source.read_numeric(directory / update['numeric'], update['numeric_sha256'])
             rollout.require_learning()
             if len(rollout) != update['accepted_decisions']:

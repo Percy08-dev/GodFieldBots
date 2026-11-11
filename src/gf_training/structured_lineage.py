@@ -171,6 +171,10 @@ class _ChainScan(SealedScan):
             from gf_common.preprocessing import preparation_config
             state = self._packed_state
             storage = state['effective_config']['storage']
+            settings = preparation_config(state['effective_config']['preprocessing'])
+            if settings.backend == 'rust':
+                from gf_training.native_backend import group_pack_reader_settings
+                group_pack_reader_settings(settings)
             limit = min(self.limit, storage['budget_mib'] * 1024**2)
             self.ensure_packed_pool()
             expected = Path(storage['db_root']) / state['run_id'] / 'collections' / root.name
@@ -891,6 +895,8 @@ def commit_component_generation(directory: Path, state: Json, *, generation: int
             if _precommit is not None and _precommit.source.online.packed_batch is not None:
                 _precommit.source.online.packed_batch.borrow(scan)
         _retained_values(scan, state, controls, update, artifact_files)
+        if _game and _precommit is not None:
+            _precommit.retire_packed_decoded()
         _filemap(artifact_files, {'inference.json', 'resume.json'})
         path = checkpoint_path(directory, generation)
         artifact = _inspect_pair(path, actions=actions, game=_game, expected_inference_digest=checksum(artifact_files.get('inference.json')),

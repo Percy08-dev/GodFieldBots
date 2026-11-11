@@ -3685,7 +3685,11 @@ fn build_info() -> Vec<(&'static str, &'static str)> {
             "ed0c61152b78fa984aad342be22c6b9d6ef49b12b8f0d1c0f0de89724468002f",
         ),
         ("card_instance_models", "mlp,gru,transformer"),
-        ("card_instance_group_pack", CARD_INSTANCE_GROUP_PACK_CAPABILITY),
+        (
+            "card_instance_group_pack",
+            CARD_INSTANCE_GROUP_PACK_CAPABILITY,
+        ),
+        ("card_instance_pack_checksum", "pack-checksum-v1;custody2"),
         (
             "card_instance_packed_formal_controls",
             CARD_INSTANCE_PACKED_FORMAL_CAPABILITY,

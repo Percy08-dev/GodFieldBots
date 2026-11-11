@@ -716,8 +716,7 @@ def test_shared_readonly_validation_rejects_internal_corruption(
     tmp_path: Path, corruption: str
 ) -> None:
     from gf_common.group_pack import digest
-    from gf_training.group_pack_db import logical_index
-    from gf_training.group_pack_source import inspect_packed
+    from gf_training.group_pack_db import logical_index, validate_database
 
     locator = sealed(tmp_path)
     locator.path.unlink()
@@ -742,10 +741,10 @@ def test_shared_readonly_validation_rejects_internal_corruption(
             )
             seal["logical_sha256"] = digest(canonical_json(logical_index(db, "run-1")))
             db.execute("update metadata set value=? where key='seal'", (canonical_json(seal),))
-    with pytest.raises(ValueError):
-        inspect_packed(
-            path, deadline=time.monotonic() + 10, max_owned_bytes=512 * MIB, without_descriptor=True
-        )
+    from contextlib import closing
+    with closing(sqlite3.connect(f"file:{path}?mode=ro", uri=True)) as db, pytest.raises(ValueError):
+        validate_database(db, deadline=time.monotonic()+10, max_pack_bytes=256*MIB,
+                          max_owned_bytes=512*MIB)
 
 
 def test_terminal_original_close_never_retries_recycled_number(
@@ -1275,7 +1274,7 @@ def test_parent_publication_uses_remaining_joint_writer_allowance(
     pack = encode_pack([PackMember("diagnostic", "x", b"x" * (16 * MIB - headroom))])
     w.submit("g", pack, raw_bytes=len(unpack_raw(pack)), record={}, episodes=[])
     actual_inspect = writer_module.inspect_packed
-    actual_validate = source_module.validate_database
+    actual_validate = source_module.admit_database
     allowances: list[tuple[int, int]] = []
     requested: list[int] = []
     accepted: list[int] = []
@@ -1298,7 +1297,7 @@ def test_parent_publication_uses_remaining_joint_writer_allowance(
         return result
 
     monkeypatch.setattr(writer_module, "inspect_packed", inspect)
-    monkeypatch.setattr(source_module, "validate_database", validate)
+    monkeypatch.setattr(source_module, "admit_database", validate)
     try:
         if refuse:
             with pytest.raises(ValueError, match="group exceeds admission"):

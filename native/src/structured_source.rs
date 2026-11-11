@@ -2527,7 +2527,16 @@ impl OriginalInputs {
                     "committed original source generation differs",
                 )?;
                 require(
-                    scan.proof.root == *entry.update.root.require("source_proof")?,
+                    if format.packed() {
+                        crate::logical_artifacts::same_proof(
+                            &scan.proof.root,
+                            entry.update.root.require("source_proof")?,
+                            &budget,
+                            &control,
+                        )?
+                    } else {
+                        scan.proof.root == *entry.update.root.require("source_proof")?
+                    },
                     "original Source proof differs from immutable committed evidence",
                 )?;
             }
@@ -3314,10 +3323,19 @@ impl OriginalInputs {
                     json::text("card-instance-packed-source-controls-v1"),
                 );
                 for key in ["storage", "custody"] {
-                    fingerprint_value
-                        .as_object_mut()
-                        .unwrap()
-                        .insert(key.into(), json::copy(source.proof.root.require(key)?, c)?);
+                    fingerprint_value.as_object_mut().unwrap().insert(
+                        key.into(),
+                        json::copy(
+                            self.committed
+                                .iter()
+                                .find(|entry| entry.collection_index == index)
+                                .map(|entry| entry.update.root.require("source_proof"))
+                                .transpose()?
+                                .unwrap_or(&source.proof.root)
+                                .require(key)?,
+                            c,
+                        )?,
+                    );
                 }
             }
             let fingerprint = digest(&fingerprint_value, b, c)?;

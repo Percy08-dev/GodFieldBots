@@ -579,7 +579,8 @@ class _GameTreeOriginals:
                         or facts.get('kind') != 'card-instance-packed-final-validation-facts'
                         or self._sources[index]._pending is not None):
                     raise ContractError('Dataset4 requires SAME PUBLIC packed final64 Source')
-                manifest = self._logical_object(slot.owner, directory/'manifest.json', facts['manifest_sha256'])
+                packed_owner = slot.owner
+                manifest = self._logical_object(packed_owner, directory/'manifest.json', facts['manifest_sha256'])
                 source_set = facts['source_set_sha256']
             else:
                 manifest = self._object(directory/'manifest.json', facts['manifest_sha256'])
@@ -590,7 +591,9 @@ class _GameTreeOriginals:
             record = self._records[index][generation+1]
             update = self._object(directory/'updates'/f'{generation+1:06}.json', record['update_sha256'])
             collection_directory = _relative(directory, update['collection'])
-            manifest = (self._logical_object(self._parents[index].scan.packed_owner(collection_directory),
+            if self._packed:
+                packed_owner = self._parents[index].scan.packed_owner(collection_directory)
+            manifest = (self._logical_object(packed_owner,
                 collection_directory/'manifest.json', update['collection_manifest_sha256']) if self._packed else
                 self._object(collection_directory/'manifest.json', update['collection_manifest_sha256']))
             numeric_directory = _relative(directory, update['numeric'])
@@ -620,12 +623,14 @@ class _GameTreeOriginals:
             else:
                 assert update is not None
                 proof = update['source_proof']
-            row.update(storage=proof['storage'], custody=proof['custody'])
+            from gf_common.group_pack_game import same_storage_custody
+            if not same_storage_custody(proof['storage'], proof['custody'], packed_owner.storage, packed_owner.custody):
+                raise ContractError('Dataset4 immutable storage evidence differs from actual owner')
+            row.update(storage=packed_owner.storage, custody=packed_owner.custody)
         return row, manifest, update
 
     def selected_inputs(self) -> Iterator[tuple[str, GameSelectedInput]]:
         from gf_training.journal import _reward
-        from gf_training.lineage import checkpoint_path, generation_path
         from gf_training.structured_rollout import (
             _episode_correspondence_digest,
             _owned_bytes,
@@ -708,23 +713,9 @@ class _GameTreeOriginals:
                         row['original_correspondence'] = game.final_correspondence(row['manifest_sha256'],digests,packed=self._packed)
                     else:
                         assert update is not None
-                        from gf_training.card_instance_source import recorded_plan
                         # Exact existing original Source control recipe. The
                         # result remains a correspondence FACT, no authority.
-                        plan,_,_ = recorded_plan(self._custody.parents[parent_index],self._states[parent_index],
-                            self._records[parent_index],generation,self.deadline)
-                        root = self._custody.parents[parent_index]
-                        fingerprint_fields = {'run_id':self._states[parent_index]['run_id'],
-                            'config_sha256':self._states[parent_index]['config_sha256'],
-                            'identity':self._states[parent_index]['identity'],'execution':self._states[parent_index]['execution'],
-                            'plan':plan.linkage,'files':{str(generation_path(root,generation).relative_to(root)):
-                                self._parent_rows[parent_index]['generations'][generation]['generation_sha256'],
-                                str((checkpoint_path(root,generation)/'inference.json').relative_to(root)):
-                                self._records[parent_index][generation]['inference_sha256']},
-                            'source_set_sha256':row['source_set_sha256']}
-                        if self._packed:
-                            fingerprint_fields.update(recipe='card-instance-packed-source-controls-v1',
-                                storage=row['storage'], custody=row['custody'])
+                        fingerprint_fields = self._training_fingerprint_fields(parent_index, generation, row)
                         fingerprint = digest(fingerprint_fields)
                         row['original_correspondence'] = _source_correspondence(fingerprint,self._neural['semantics'],tuple(digests),game=True,storage_binding=self._states[parent_index].get('storage_binding'))
                     roles = row['selected_roles']
@@ -741,6 +732,46 @@ class _GameTreeOriginals:
         except BaseException as error:
             self._failure = error
             raise
+
+    def _training_fingerprint_fields(self, index: int, generation: int, row: Json) -> Json:
+        from gf_training.card_instance_source import recorded_plan
+        from gf_training.lineage import checkpoint_path, generation_path
+        plan, _, _ = recorded_plan(self._custody.parents[index], self._states[index],
+            self._records[index], generation, self.deadline)
+        root, state = self._custody.parents[index], self._states[index]
+        fields = {'run_id': state['run_id'], 'config_sha256': state['config_sha256'],
+            'identity': state['identity'], 'execution': state['execution'], 'plan': plan.linkage,
+            'files': {str(generation_path(root, generation).relative_to(root)):
+                self._parent_rows[index]['generations'][generation]['generation_sha256'],
+                str((checkpoint_path(root, generation)/'inference.json').relative_to(root)):
+                self._records[index][generation]['inference_sha256']},
+            'source_set_sha256': row['source_set_sha256']}
+        if self._packed:
+            fields.update(recipe='card-instance-packed-source-controls-v1', storage=row['storage'], custody=row['custody'])
+        return fields
+
+    def historical_correspondences(self, saved: Json) -> tuple[Json, ...]:
+        """Comparison facts only, recomputed from original controls and actual episodes."""
+        from gf_common.group_pack_game import same_storage_custody
+        from gf_training.structured_rollout import _source_correspondence
+        values = []
+        if len(saved['collections']) != len(self._collections):
+            raise ContractError('saved Dataset4 complete membership differs')
+        for expected, actual in zip(saved['collections'], self._collections, strict=True):
+            if not same_storage_custody(expected['storage'], expected['custody'], actual['storage'], actual['custody']):
+                raise ContractError('saved Dataset4 original custody differs')
+            if actual['split'] == 'validation':
+                values.append(actual['original_correspondence'])
+            else:
+                index, generation = actual['parent_index'], actual['generation']
+                # The saved fingerprint binds its own validated custody recipe.
+                # No historical receipt is emitted; fresh rows always retain custody2.
+                fields = self._training_fingerprint_fields(index, generation, actual)
+                fields.update(storage=expected['storage'], custody=expected['custody'])
+                values.append(_source_correspondence(digest(fields), self._neural['semantics'],
+                    tuple(actual['original_correspondence']['episode_digests']), game=True,
+                    storage_binding=self._states[index]['storage_binding']))
+        return tuple(values)
 
     def _content(self) -> Json:
         totals = {split:{key:sum(row['counts'][key] for row in self._collections if row['split']==split)
@@ -981,7 +1012,11 @@ class VerifiedGameTreeDataset3:
 
     def verify_complete(self) -> None:
         source = self._live()
-        if not self._complete or canonical(source.verify_complete())!=canonical(self._metadata):
+        from gf_common.group_pack_game import same_packed_dataset
+        actual = source.verify_complete()
+        if not self._complete or not (same_packed_dataset(self._metadata, actual,
+                historical_correspondences=source.historical_correspondences(self._metadata)) if self._packed
+                else canonical(actual) == canonical(self._metadata)):
             raise ContractError('actual original game Dataset membership/roles/labels/costs differ from index')
         self._index.finalize(); _check_output_ancestors(self._ancestors)
 

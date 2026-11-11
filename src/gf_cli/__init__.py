@@ -590,6 +590,12 @@ def main(argv: list[str] | None = None) -> int:
             child.add_argument("--parent-run", required=True, type=Path)
             child.add_argument("--output", required=True, type=Path)
         child.add_argument("--set", action="append", default=[], metavar="TABLE.FIELD=TOML_VALUE")
+    audit = subcommands.add_parser("verify-storage")
+    targets = audit.add_mutually_exclusive_group(required=True)
+    targets.add_argument("--locator", type=Path)
+    targets.add_argument("--dataset", type=Path)
+    audit.add_argument("--memory-budget-mib", type=float, default=2048)
+    audit.add_argument("--wall-seconds", type=float, default=7200)
     export = subcommands.add_parser("export")
     export.add_argument("journals", nargs="+", type=Path)
     export.add_argument("--output", required=True, type=Path)
@@ -628,6 +634,16 @@ def main(argv: list[str] | None = None) -> int:
     game_fit.add_argument("--seed", required=True, type=int)
     args = parser.parse_args(argv)
     try:
+        if args.command == "verify-storage":
+            from gf_training.group_pack_verify import StorageAuditError, verify_storage
+            try:
+                result = verify_storage(locator=args.locator, dataset=args.dataset,
+                    memory_budget_mib=args.memory_budget_mib, wall_seconds=args.wall_seconds)
+            except StorageAuditError as error:
+                print(canonical(error.result))
+                return 130 if isinstance(error.error, KeyboardInterrupt) else 2
+            print(canonical(result))
+            return 0
         if args.command in ("game-dataset", "fit-game-tree"):
             loaded = load_config(args.config)
             from gf_cli.config import require_storage_command

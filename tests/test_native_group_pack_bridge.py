@@ -222,7 +222,8 @@ def test_group_pack_marker_is_separate_from_existing_native_capability(monkeypat
         StructuredJournalTokens=SimpleNamespace(card_instance_artifacts=lambda: None))
     with pytest.raises(ContractError, match='capability'):
         native_backend.group_pack_reader_settings(settings, module)
-    module.build_info = lambda: [('card_instance_group_pack', native_backend.CARD_INSTANCE_GROUP_PACK)]
+    module.build_info = lambda: [('card_instance_group_pack', native_backend.CARD_INSTANCE_GROUP_PACK),
+        ('card_instance_pack_checksum', native_backend.CARD_INSTANCE_PACK_CHECKSUM)]
     assert native_backend.group_pack_reader_settings(settings, module) == {'checked': True}
     module.CardInstanceNativeSession.from_artifacts = None
     with pytest.raises(ContractError, match='ABI'):

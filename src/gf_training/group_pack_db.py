@@ -324,87 +324,119 @@ def is_digest(value: Json) -> bool:
     )
 
 
-def validate_database(
+def admit_database(
     db: sqlite3.Connection, *, deadline: float, max_pack_bytes: int, max_owned_bytes: int
 ) -> dict[str, Json]:
-    """Full readonly verification, streaming one BLOB at a time after size admission."""
+    """Bounded metadata admission: never fetch a Pack or run whole-DB pragmas."""
+    from gf_common.group_pack import KINDS
+
     configure(db, deadline)
     check_schema(db)
     if db.execute("PRAGMA journal_mode").fetchone() != ("delete",):
         raise ValueError("sealed database must use DELETE journal mode")
-    if db.execute("PRAGMA integrity_check").fetchall() != [("ok",)]:
-        raise ValueError("database integrity failure")
-    if db.execute("PRAGMA foreign_key_check").fetchall():
-        raise ValueError("database foreign key failure")
     meta = metadata(db, sealed=True)
     run_id, seal = meta["run_id"], meta["seal"]
     validate_seal_object(seal, run_id)
     lengths, metadata_charge = index_admission(db, max_owned_bytes)
+    checks = {
+        "groups": "typeof(run_id)!='text' OR typeof(group_id)!='text' OR typeof(pack)!='blob' OR typeof(sha256)!='text' OR typeof(raw_bytes)!='integer' OR typeof(metadata)!='blob'",
+        "episodes": "typeof(run_id)!='text' OR typeof(episode_id)!='text' OR typeof(group_id)!='text' OR (game_id IS NOT NULL AND typeof(game_id)!='text') OR typeof(metadata)!='blob'",
+        "members": "typeof(name)!='text' OR typeof(run_id)!='text' OR typeof(group_id)!='text' OR typeof(kind)!='text' OR typeof(offset)!='integer' OR typeof(length)!='integer' OR typeof(sha256)!='text'",
+        "controls": "typeof(name)!='text' OR typeof(data)!='blob' OR typeof(sha256)!='text' OR typeof(bytes)!='integer'",
+    }
+    for table, condition in checks.items():
+        if db.execute(f"SELECT 1 FROM {table} WHERE {condition} LIMIT 1").fetchone():
+            raise ValueError("database row type mismatch")
     index = logical_index(db, run_id)
-    if digest(canonical_json(index, limit=metadata_charge)) != seal["logical_sha256"]:
-        raise ValueError("logical seal digest mismatch")
     for table in ("groups", "episodes", "members"):
         if db.execute(f"SELECT 1 FROM {table} WHERE run_id != ? LIMIT 1", (run_id,)).fetchone():
             raise ValueError("database contains another run")
-    seen: set[str] = set()
-    for group_id, packed_size, raw_size, expected_hash in db.execute(
-        "SELECT group_id,length(pack),raw_bytes,sha256 FROM groups ORDER BY group_id"
-    ):
+    groups = {g['group_id']: g for g in index['groups']}
+    compressed = dict(db.execute("SELECT group_id,length(pack) FROM groups"))
+    for group_id, group in groups.items():
         remaining(deadline)
         identity_text(group_id)
-        if (
-            type(raw_size) is not int
-            or raw_size < 16
-            or raw_size > max_pack_bytes
-            or packed_size > max_pack_bytes + 1024 * 1024
-            or 4 * raw_size + 2 * packed_size + metadata_charge > max_owned_bytes
-        ):
+        raw_size, size = group['raw_bytes'], compressed[group_id]
+        if (not is_digest(group['sha256']) or raw_size < 16 or raw_size > max_pack_bytes
+                or size < 1 or size > max_pack_bytes + 1024 * 1024
+                or 4 * raw_size + 2 * size + metadata_charge > max_owned_bytes):
             raise ValueError("group exceeds admission")
-        pack = db.execute(
-            "SELECT pack FROM groups WHERE group_id=? AND run_id=?", (group_id, run_id)
-        ).fetchone()[0]
-        if type(pack) is not bytes or digest(pack) != expected_hash:
-            raise ValueError("group BLOB mismatch")
-        if len(unpack_raw(pack, raw_size)) != raw_size:
-            raise ValueError("group uncompressed size mismatch")
-        expected_members = member_index(decode_pack(pack, raw_size))
-        actual_members = db.execute(
-            "SELECT name,kind,offset,length,sha256 FROM members "
-            "WHERE run_id=? AND group_id=? ORDER BY name",
-            (run_id, group_id),
-        ).fetchall()
-        if actual_members != [
-            (m["name"], m["kind"], m["offset"], m["length"], m["sha256"]) for m in expected_members
-        ]:
-            raise ValueError("member lookup mismatch")
-        seen.update(m["name"] for m in expected_members)
+    cursors = dict.fromkeys(groups, 0)
+    seen: set[str] = set()
+    for member in index['members']:
+        remaining(deadline)
+        name, group_id = safe_name(member['name']), member['group_id']
+        if (name in seen or group_id not in groups or member['kind'] not in KINDS
+                or not is_digest(member['sha256']) or member['offset'] != cursors.get(group_id)
+                or member['length'] < 0
+                or member['offset'] + member['length'] > groups[group_id]['raw_bytes'] - 16):
+            raise ValueError("member lookup range/reference mismatch")
+        cursors[group_id] += member['length']
+        seen.add(name)
+    for episode in index['episodes']:
+        identity_text(episode['episode_id'])
+        if episode['group_id'] not in groups:
+            raise ValueError("episode group reference mismatch")
+        if episode['game_id'] is not None:
+            identity_text(episode['game_id'])
     for name, size, packed_size, expected_hash in db.execute(
         "SELECT name,bytes,length(data),sha256 FROM controls ORDER BY name"
     ):
         remaining(deadline)
         safe_name(name)
-        if (
-            name in seen
-            or type(size) is not int
-            or size != packed_size
-            or size < 0
-            or size > min(max_pack_bytes, 64 * 1024 * 1024)
-            or metadata_charge + size * 2 > max_owned_bytes
-        ):
+        if (name in seen or size != packed_size or size < 0
+                or not is_digest(expected_hash)
+                or size > min(max_pack_bytes, 64 * 1024 * 1024)
+                or metadata_charge + size * 2 > max_owned_bytes):
             raise ValueError("control exceeds admission or duplicates name")
         data = db.execute("SELECT data FROM controls WHERE name=?", (name,)).fetchone()[0]
-        if type(data) is not bytes or digest(data) != expected_hash:
+        if digest(data) != expected_hash:
             raise ValueError("control BLOB mismatch")
-    for episode in index["episodes"]:
-        identity_text(episode["episode_id"])
-        if episode["game_id"] is not None:
-            identity_text(episode["game_id"])
-    return {
-        "seal": seal,
-        "index": index,
-        "metadata_bytes": lengths,
-        "metadata_charge": metadata_charge,
-    }
+    if digest(canonical_json(index, limit=metadata_charge)) != seal["logical_sha256"]:
+        raise ValueError("logical seal digest mismatch")
+    return {"seal": seal, "index": index, "metadata_bytes": lengths,
+            "metadata_charge": metadata_charge, "compressed_sizes": compressed}
+
+
+def verified_pack(db: sqlite3.Connection, run_id: str, group: Json, index: Json,
+                  compressed_size: int) -> tuple:
+    """Fetch a single admitted Pack and decode it once, checking the complete index."""
+    from gf_common.group_pack import PACK_FORMAT
+
+    row = db.execute("SELECT pack FROM groups WHERE run_id=? AND group_id=?",
+                     (run_id, group['group_id'])).fetchone()
+    if (row is None or type(row[0]) is not bytes or len(row[0]) != compressed_size
+            or digest(row[0]) != group['sha256']):
+        raise ValueError("group BLOB mismatch")
+    members = decode_pack(row[0], group['raw_bytes'])
+    actual = member_index(members)
+    expected = [{k: m[k] for k in ('name', 'kind', 'offset', 'length', 'sha256')}
+                for m in index['members'] if m['group_id'] == group['group_id']]
+    if actual != expected:
+        raise ValueError("member lookup mismatch")
+    raw_size = 16 + len(canonical_json({'format': PACK_FORMAT, 'files': actual})) + sum(len(m.data) for m in members)
+    if raw_size != group['raw_bytes']:
+        raise ValueError("group uncompressed size mismatch")
+    return members
+
+
+def validate_database(
+    db: sqlite3.Connection, *, deadline: float, max_pack_bytes: int, max_owned_bytes: int
+) -> dict[str, Json]:
+    """Explicit full readonly audit, streaming one complete Pack at a time."""
+    admitted = admit_database(db, deadline=deadline, max_pack_bytes=max_pack_bytes,
+                              max_owned_bytes=max_owned_bytes)
+    if db.execute("PRAGMA integrity_check").fetchall() != [("ok",)]:
+        raise ValueError("database integrity failure")
+    if db.execute("PRAGMA foreign_key_check").fetchall():
+        raise ValueError("database foreign key failure")
+    for group in admitted['index']['groups']:
+        remaining(deadline)
+        members = verified_pack(db, admitted['seal']['run_id'], group, admitted['index'],
+                                admitted['compressed_sizes'][group['group_id']])
+        del members
+    remaining(deadline)
+    return admitted
 
 
 def finish_wal(db: sqlite3.Connection) -> dict[str, float]:
@@ -562,7 +594,7 @@ def reconcile_collection(
     path = directory / DATABASE
     if not path.exists():
         return {"state": "failed/unsealed"}
-    # The same verification machinery admits a physically sealed, unpublished DB.
+    # Diagnostic seal/index/control observation only: no Pack/full audit or Source authority.
     try:
         value = inspect_packed(
             path,
@@ -571,6 +603,11 @@ def reconcile_collection(
             allow_pending=True,
             without_descriptor=True,
         )
-    except ValueError, sqlite3.DatabaseError:
+    except (ValueError, sqlite3.DatabaseError) as error:
+        remaining(deadline)
+        owner = error.__dict__.get('cleanup_owner')
+        if owner is not None and not getattr(owner, '_closed', False):
+            raise
         return {"state": "failed/unsealed"}
+    remaining(deadline)
     return {"state": "sealed-without-descriptor", "seal": value["validated"]["seal"]}

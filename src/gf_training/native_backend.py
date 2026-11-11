@@ -20,6 +20,12 @@ CARD_INSTANCE_CONTRACT = 'participant-structured-v2;journal6;rollout4;generation
 CARD_INSTANCE_ORIGINAL_HISTORY = 'journal6;codec2;episode-dto1;recorded16'
 CARD_INSTANCE_TREE_RAW = 'journal6;lightgbm3;inference4;codec2'
 CARD_INSTANCE_GROUP_PACK = 'provider1;proof2;plan4'
+CARD_INSTANCE_PACK_CHECKSUM = 'pack-checksum-v1;custody2'
+
+def require_pack_checksum(native: Any) -> None:
+    if dict(native.build_info()).get('card_instance_pack_checksum') != CARD_INSTANCE_PACK_CHECKSUM:
+        raise ContractError('native Pack checksum policy/custody2 capability unavailable; no fallback')
+
 
 
 def group_pack_reader_settings(config: PreparationConfig, native: Any = None) -> Json:
@@ -28,6 +34,7 @@ def group_pack_reader_settings(config: PreparationConfig, native: Any = None) ->
     if unicodedata.unidata_version != '16.0.0':
         raise ContractError('packed native names require Unicode16.0.0')
     module = native or load_native()
+    require_pack_checksum(module)
     result = card_instance_reader_settings(config, module)
     if dict(module.build_info()).get('card_instance_group_pack') != CARD_INSTANCE_GROUP_PACK:
         raise ContractError('native group Pack capability unavailable; no fallback')

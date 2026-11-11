@@ -161,7 +161,7 @@ def main() -> int:
                     database_original.check_identity()
                     os.fsync(database_original.fd)
                     fsync_directory(directory)
-                    database_original.freeze()
+                    database_original.freeze_database()
                     validated = inspect_packed(
                         directory / DATABASE,
                         deadline=deadline,

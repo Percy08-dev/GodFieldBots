@@ -1,5 +1,10 @@
 # SQLite group Pack v1
 
+Read-policy amendment: [ADR0035](../adr/0035-pack-checksum-read-policy.md) and
+[the accepted Pack checksum design](pack-checksum-read-policy.md) supersede this
+document's eager Pack verification and repeated whole-DB read hashes. Remaining
+physical/writer/resource/ownership contracts stay; historical evidence stays.
+
 Date: 2026-11-10. Owner: root. Status: foundation design accepted after independent
 architecture review; runtime/Source/native/final64 gates pending.
 

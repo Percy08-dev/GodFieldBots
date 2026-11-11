@@ -116,6 +116,9 @@ def verify_actual_optimizer_metadata(resume: Json) -> None:
 
 
 def require_native_formal_controls(native: Any, *, packed: bool = False) -> None:
+    if packed:
+        from gf_training.native_backend import require_pack_checksum
+        require_pack_checksum(native)
     info = dict(native.build_info())
     if packed and (info.get('card_instance_packed_formal_controls') != NATIVE_PACKED_FORMAL_MARKER
             or info.get('card_instance_group_pack') != 'provider1;proof2;plan4'):
