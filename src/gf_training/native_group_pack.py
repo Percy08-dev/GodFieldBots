@@ -481,6 +481,8 @@ class _PackedNativeExecution(NativeExecution):
         if not callable(getattr(cancel_handle, 'cancel', None)) or provider._executor_owner is not None:
             raise ContractError('independent cancel handle and unbound actual provider required')
         self.provider = provider
+        self._providers = [provider]
+        self._final_provider: OriginalArtifactProvider | None = None
         self._closed = False
         self._active: Any = None
         self._cancel_handle = cancel_handle
@@ -512,6 +514,36 @@ class _PackedNativeExecution(NativeExecution):
                 error.add_note('packed executor constructor cleanup: ' + str(cleanup))
             raise
 
+    def attach_final_provider(self, provider: OriginalArtifactProvider) -> None:
+        """Attach the parent's concrete final registry to this SAME executor."""
+        self.prepare()
+        if (type(provider) is not OriginalArtifactProvider or provider.pool is not self.provider.pool
+                or provider._executor_owner is not None or self._final_provider is not None
+                or len(provider._owners) != 1 or set(provider._owners) & set(self.provider._owners)):
+            raise ContractError('one distinct final provider on SAME actual executor/pool required')
+        provider._check()
+        self._final_provider = provider
+        self._providers.append(provider)
+        provider._executor_owner = self
+
+    def _retire_io(self) -> None:
+        first: BaseException | None = None
+        # Retire the actual active source's byte loan before another provider
+        # can evict that SAME pool cache/connection.
+        active = self.provider.pool.active
+        ordered = sorted(self._providers,
+            key=lambda provider: not any(owner.artifacts is active for owner in provider._owners.values()))
+        for provider in ordered:
+            try:
+                provider._retire_io()
+            except BaseException as error:  # noqa: BLE001 - retain every actual provider/loan/creator owner.
+                if first is None:
+                    first = error
+                elif first is not error:
+                    first.add_note('final provider IO retirement: ' + str(error))
+        if first is not None:
+            raise first
+
     def bind_native(self, native: Any) -> None:
         if self._native is not None:
             raise ContractError('actual native session already bound')
@@ -533,7 +565,8 @@ class _PackedNativeExecution(NativeExecution):
 
     def _remember(self, error: BaseException) -> None:
         self._failure = self._failure or error
-        self.provider._remember(error)
+        for provider in self._providers:
+            provider._remember(error)
         vars(self._failure)['_structured_source_executor_cleanup_owner'] = self
 
     def prepare(self) -> None:
@@ -549,9 +582,10 @@ class _PackedNativeExecution(NativeExecution):
                 raise ContractError('another actual pool executor owns active or uncertain IO')
         self._creator = 'caller'
         try:
-            self.provider._retire_io()
+            self._retire_io()
             self._creator = None
-            self.provider._check()
+            for provider in self._providers:
+                provider._check()
         except BaseException as error:
             self._remember(error)
             raise
@@ -571,7 +605,7 @@ class _PackedNativeExecution(NativeExecution):
             except BaseException as error:  # noqa: BLE001 -- IO retirement precedes every Future completion.
                 primary = error
             try:
-                self.provider._retire_io()
+                self._retire_io()
                 self._creator = None
             except BaseException as cleanup:  # noqa: BLE001 -- SAME creating worker remains reachable.
                 if primary is not None:
@@ -587,6 +621,71 @@ class _PackedNativeExecution(NativeExecution):
             return super()._submit(run)
         except BaseException as error:
             self._running = False
+            self._remember(error)
+            raise
+
+    def close_final_validation(self) -> None:
+        """Fixed cleanup-only slot operation, retaining this executor and hold."""
+        if threading.get_ident() != self._caller or self._closed or self._native is None:
+            raise ContractError('SAME live native parent executor/caller required for final cleanup')
+        if self._failure is None and self._active is None:
+            self.call(self._native.close_final_validation)
+            return
+        if self._active is not None:
+            first = self._failure or ContractError('final cleanup joined an active admitted operation')
+            self._remember(first)
+            self._cancel_for(first)
+            self._join_sync(self._active, first)
+            if not self._active.done():
+                raise first
+            self._active = None
+        for provider in self._providers:
+            provider._fenced = True
+        # Slot.recheck starts with Control.check, before ANY original IO.
+        self.cancel()
+        if self._creator != 'worker':
+            self._creator = 'caller'
+            try:
+                self._retire_io()
+            except BaseException as error:
+                self._remember(error)
+                raise
+            self._creator = None
+        def close_slot() -> None:
+            current = threading.get_ident()
+            if self._creator == 'worker' and self._worker != current:
+                raise ContractError('actual final-slot creator worker unavailable')
+            self._worker = current
+            self._creator = 'worker'
+            primary: BaseException | None = None
+            try:
+                self._native.close_final_validation()
+            except BaseException as error:  # noqa: BLE001 - IO retirement remains independently reportable.
+                primary = error
+            try:
+                self._retire_io()
+                self._creator = None
+            except BaseException as error:  # noqa: BLE001 - retain SAME creator/loan/connection on failure.
+                if primary is not None and primary is not error:
+                    self._note(primary, 'final-slot creator IO cleanup', error)
+                primary = primary or error
+            self._running = False
+            if primary is not None:
+                raise primary
+        self._running = True
+        try:
+            # Bypass normal admission ONLY for this fixed storage-free operation.
+            future = NativeExecution._submit(self, close_slot)
+            try:
+                future.result()
+            except KeyboardInterrupt as cancellation:
+                self._cancel_for(cancellation)
+                self._join_sync(future, cancellation)
+                raise
+            finally:
+                if future.done():
+                    self._active = None
+        except BaseException as error:
             self._remember(error)
             raise
 
@@ -615,12 +714,13 @@ class _PackedNativeExecution(NativeExecution):
                 self._remember(error)
                 raise
         else:
-            self.provider._fenced = True
+            for provider in self._providers:
+                provider._fenced = True
             self.cancel()
             if self._creator != 'worker':
                 self._creator = 'caller'
                 try:
-                    self.provider._retire_io()
+                    self._retire_io()
                     self._creator = None
                 except BaseException as cleanup:  # noqa: BLE001 -- do not transfer caller-owned uncertainty.
                     self._failure.add_note('caller cleanup: ' + str(cleanup))
@@ -639,7 +739,7 @@ class _PackedNativeExecution(NativeExecution):
                 try:
                     if self._creator != 'caller':
                         self._creator = 'worker'
-                        self.provider._retire_io()
+                        self._retire_io()
                         self._creator = None
                 except BaseException as error:  # noqa: BLE001 -- preserve native failure and actual IO owner.
                     primary = primary or error
@@ -655,12 +755,12 @@ class _PackedNativeExecution(NativeExecution):
                 self._failure.add_note('worker cleanup: ' + str(cleanup))
             finally:
                 self._active = None
-            if not self._native_retired or self._creator is not None or self.provider._leases or self.provider.pool.active is not None:
+            if not self._native_retired or self._creator is not None or any(provider._leases for provider in self._providers) or self.provider.pool.active is not None:
                 raise self._failure
         no_effect_initialization = (not self._executor_initialized and not self._submission_attempted
             and self._worker is None and self._active is None and self._native is None
             and self._native_retired and self._creator is None and not self._running
-            and not self.provider._leases and self.provider.pool.active is None)
+            and not any(provider._leases for provider in self._providers) and self.provider.pool.active is None)
         if self._executor is None or no_effect_initialization:
             if self._executor is not None:
                 fields = vars(self._executor)

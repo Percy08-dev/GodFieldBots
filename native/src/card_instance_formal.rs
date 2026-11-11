@@ -10,6 +10,10 @@ use crate::{
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
 pub(crate) const VARIANT: &str = "formal-parent-v1";
+pub(crate) const PACKED_VARIANT: &str = "formal-packed-parent-v1";
+const PACKED_RECIPE_SHA: &str = "27853b108089667e3e5f3e8f9d54c202b2f76583334f40954f1a1ab2a6844a47";
+const PACKED_RECIPE_ID: &str = "card-instance-formal-ppo-group-pack-v1";
+const PACKED_ASSET: &[u8] = include_bytes!("../assets/card-instance-formal-ppo-group-pack-v1.json");
 pub(crate) const EXTRA: &[&str] = &["run_variant", "formal_declaration", "formal_stop"];
 pub(crate) const RECIPE_SHA: &str =
     "871fc8d4591e62d302bb2f79d98d474da15cbdb19c86506e5a70557f4ecd67b2";
@@ -29,12 +33,89 @@ fn exact(a: &Value, b: &Value, budget: &Arc<Budget>, control: &Control) -> Resul
 pub(crate) fn discriminator(state: &Value) -> Result<bool> {
     match state.get("run_variant") {
         Some(value) => {
-            require(value.string()? == VARIANT, "unknown formal Run3 variant")?;
+            require(
+                [VARIANT, PACKED_VARIANT].contains(&value.string()?),
+                "unknown formal variant",
+            )?;
             Ok(true)
         }
         None => Ok(false),
     }
 }
+fn packed_formal(state: &Value) -> Result<bool> {
+    let packed = state.require("run_variant")?.string()? == PACKED_VARIANT;
+    state
+        .require("schema_version")?
+        .integer(if packed { 4 } else { 3 }, if packed { 4 } else { 3 })?;
+    if packed {
+        require(
+            state.require("storage_binding")? == &crate::logical_artifacts::binding(),
+            "formal packed binding differs",
+        )?;
+    } else {
+        require(
+            state.get("storage_binding").is_none()
+                && state.require("effective_config")?.get("storage").is_none(),
+            "formal storage requires explicit packed variant",
+        )?;
+    }
+    Ok(packed)
+}
+fn packed_recipe(b: &Arc<Budget>, c: &Control) -> Result<Document> {
+    require(
+        format!("{:x}", Sha256::digest(PACKED_ASSET)) == PACKED_RECIPE_SHA,
+        "formal storage variant bytes differ",
+    )?;
+    let doc = json::parse(PACKED_ASSET, b, c)?;
+    require(
+        doc.root.require("base_recipe_id")?.string()? == RECIPE_ID
+            && doc.root.require("base_recipe_sha256")?.string()? == RECIPE_SHA
+            && doc.root.require("algorithm_recipe_sha256")?.string()? == ALGORITHM_SHA,
+        "formal storage variant base/algorithm differs",
+    )?;
+    Ok(doc)
+}
+fn checked_packed_config(
+    config: &Value,
+    recipe: &Value,
+    b: &Arc<Budget>,
+    c: &Control,
+) -> Result<Value> {
+    let storage = config.require("storage")?;
+    storage.closed(
+        &[
+            "format",
+            "db_root",
+            "ram_root",
+            "budget_mib",
+            "queue_mib",
+            "max_pack_mib",
+        ],
+        &[],
+    )?;
+    require(
+        storage.require("format")?.string()? == "sqlite-group-pack-v1",
+        "formal packed storage format differs",
+    )?;
+    for (key, size) in [
+        ("budget_mib", 2048),
+        ("queue_mib", 512),
+        ("max_pack_mib", 256),
+    ] {
+        storage.require(key)?.integer(size, size)?;
+    }
+    for key in ["db_root", "ram_root"] {
+        require(
+            std::path::Path::new(storage.require(key)?.string()?).is_absolute(),
+            "formal absolute storage root required",
+        )?;
+    }
+    let _copy = b.reserve(65536)?;
+    let mut logical = json::copy(config, c)?;
+    logical.as_object_mut().unwrap().remove("storage");
+    checked_config(&logical, recipe, b, c)
+}
+
 fn recipe(b: &Arc<Budget>, c: &Control) -> Result<Document> {
     require(
         format!("{:x}", Sha256::digest(ASSET)) == RECIPE_SHA,
@@ -129,7 +210,7 @@ fn execution(config: &Value, c: &Control) -> Result<Value> {
     }
     Ok(result)
 }
-pub(crate) fn reference(v: &Value) -> Result<()> {
+pub(crate) fn reference(v: &Value, packed: bool) -> Result<()> {
     v.closed(
         &[
             "relative_path",
@@ -144,8 +225,14 @@ pub(crate) fn reference(v: &Value) -> Result<()> {
     checksum(v.require("sha256")?)?;
     require(
         v.require("relative_path")?.string()? == "formal-declaration.json"
-            && v.require("recipe_id")?.string()? == RECIPE_ID
-            && checksum(v.require("recipe_sha256")?)? == RECIPE_SHA
+            && v.require("recipe_id")?.string()?
+                == if packed { PACKED_RECIPE_ID } else { RECIPE_ID }
+            && checksum(v.require("recipe_sha256")?)?
+                == if packed {
+                    PACKED_RECIPE_SHA
+                } else {
+                    RECIPE_SHA
+                }
             && checksum(v.require("algorithm_recipe_sha256")?)? == ALGORITHM_SHA
             && [17, 29, 43].contains(&v.require("seed_slot")?.integer(0, i64::MAX as i128)?),
         "formal declaration reference differs",
@@ -158,6 +245,7 @@ fn declaration(
     b: &Arc<Budget>,
     c: &Control,
 ) -> Result<()> {
+    let packed = packed_formal(state)?;
     v.closed(
         &[
             "schema_version",
@@ -171,10 +259,23 @@ fn declaration(
             "input_binding",
             "execution_identity_sha256",
             "identity_sha256",
-        ],
+        ]
+        .into_iter()
+        .chain(if packed {
+            vec!["storage_binding", "logical_config_sha256"]
+        } else {
+            vec![]
+        })
+        .collect::<Vec<_>>()
+        .as_slice(),
         &[],
     )?;
-    let cfg = checked_config(state.require("effective_config")?, recipe, b, c)?;
+    let full_cfg = state.require("effective_config")?;
+    let cfg = if packed {
+        checked_packed_config(full_cfg, recipe, b, c)?
+    } else {
+        checked_config(full_cfg, recipe, b, c)?
+    };
     let reference = state.require("formal_declaration")?;
     let identity = state.require("identity")?;
     require(
@@ -184,16 +285,30 @@ fn declaration(
     let mut base = json::copy(identity, c)?;
     base.as_object_mut().unwrap().remove("formal_parent");
     let exec = execution(&cfg, c)?;
-    let config_sha = digest(&cfg, b, c)?;
+    let config_sha = digest(if packed { full_cfg } else { &cfg }, b, c)?;
     let inputs_sha = digest(state.require("config_inputs")?, b, c)?;
-    let wanted = json::object([
-        ("schema_version", json::integer(1)),
+    let mut wanted = json::object([
+        ("schema_version", json::integer(if packed { 2 } else { 1 })),
         (
             "kind",
-            json::text("card-instance-formal-parent-declaration"),
+            json::text(if packed {
+                "card-instance-formal-packed-parent-declaration"
+            } else {
+                "card-instance-formal-parent-declaration"
+            }),
         ),
-        ("recipe_id", json::text(RECIPE_ID)),
-        ("recipe_sha256", json::text(RECIPE_SHA)),
+        (
+            "recipe_id",
+            json::text(if packed { PACKED_RECIPE_ID } else { RECIPE_ID }),
+        ),
+        (
+            "recipe_sha256",
+            json::text(if packed {
+                PACKED_RECIPE_SHA
+            } else {
+                RECIPE_SHA
+            }),
+        ),
         ("algorithm_recipe_sha256", json::text(ALGORITHM_SHA)),
         ("seed_slot", json::copy(&cfg["training"]["seeds"][0], c)?),
         ("config_sha256", json::text(&config_sha)),
@@ -208,6 +323,16 @@ fn declaration(
         ),
         ("identity_sha256", json::text(&digest(&base, b, c)?)),
     ]);
+    if packed {
+        wanted.as_object_mut().unwrap().insert(
+            "storage_binding".into(),
+            crate::logical_artifacts::binding(),
+        );
+        wanted.as_object_mut().unwrap().insert(
+            "logical_config_sha256".into(),
+            json::text(&digest(&cfg, b, c)?),
+        );
+    }
     require(
         exact(v, &wanted, b, c)?
             && exact(
@@ -336,11 +461,29 @@ fn stop_expected(state: &Value, raw: &Value, b: &Arc<Budget>, c: &Control) -> Re
         "formal positive committed prefix/original elapsed differs",
     )?;
     let _copy = b.reserve(65536)?;
+    let packed = packed_formal(state)?;
     Ok(json::object([
-        ("schema_version", json::integer(1)),
-        ("kind", json::text("card-instance-formal-stop")),
-        ("recipe_id", json::text(RECIPE_ID)),
-        ("recipe_sha256", json::text(RECIPE_SHA)),
+        ("schema_version", json::integer(if packed { 2 } else { 1 })),
+        (
+            "kind",
+            json::text(if packed {
+                "card-instance-formal-packed-stop"
+            } else {
+                "card-instance-formal-stop"
+            }),
+        ),
+        (
+            "recipe_id",
+            json::text(if packed { PACKED_RECIPE_ID } else { RECIPE_ID }),
+        ),
+        (
+            "recipe_sha256",
+            json::text(if packed {
+                PACKED_RECIPE_SHA
+            } else {
+                RECIPE_SHA
+            }),
+        ),
         (
             "declaration_sha256",
             json::copy(state.require("formal_declaration")?.require("sha256")?, c)?,
@@ -362,7 +505,13 @@ pub(crate) fn validate_values(
     c: &Control,
 ) -> Result<()> {
     require(discriminator(state)?, "explicit formal variant required")?;
-    reference(state.require("formal_declaration")?)?;
+    let packed = packed_formal(state)?;
+    reference(state.require("formal_declaration")?, packed)?;
+    let _variant = if packed {
+        Some(packed_recipe(b, c)?)
+    } else {
+        None
+    };
     let recipe = recipe(b, c)?;
     declaration(declared, state, &recipe.root, b, c)?;
     match state.require("status")?.string()? {
@@ -400,7 +549,7 @@ pub(crate) fn validate_values(
 }
 pub(crate) fn validate(s: &mut Sources, state: &Value) -> Result<()> {
     let reference = state.require("formal_declaration")?;
-    self::reference(reference)?;
+    self::reference(reference, packed_formal(state)?)?;
     let sidecar = s.checked_json(
         &s.root.join("formal-declaration.json"),
         reference.require("sha256")?,
@@ -430,6 +579,79 @@ mod tests {
         for case in doc.root["cases"].array().unwrap() {
             validate_values(&case["state"], &case["declaration"], &b, &c)
                 .unwrap_or_else(|error| panic!("{}: {error:?}", case["label"]));
+        }
+    }
+    // Closed value tests only. This fixture conveys no executed-parent authority.
+    #[test]
+    fn packed_formal_storage_only_values_keep_old_algorithms_and_closed_schemas() {
+        let (b, c, doc) = fixtures();
+        for case in doc.root["cases"].array().unwrap() {
+            let mut state = case["state"].clone();
+            let mut declared = case["declaration"].clone();
+            let logical_sha = state["config_sha256"].clone();
+            state["schema_version"] = json::integer(4);
+            state["run_variant"] = json::text("formal-packed-parent-v1");
+            state.as_object_mut().unwrap().insert(
+                "storage_binding".into(),
+                crate::logical_artifacts::binding(),
+            );
+            state["effective_config"].as_object_mut().unwrap().insert(
+                "storage".into(),
+                json::object([
+                    ("format", json::text("sqlite-group-pack-v1")),
+                    ("db_root", json::text("/unused/db")),
+                    ("ram_root", json::text("/unused/ram")),
+                    ("budget_mib", json::integer(2048)),
+                    ("queue_mib", json::integer(512)),
+                    ("max_pack_mib", json::integer(256)),
+                ]),
+            );
+            state["config_sha256"] =
+                json::text(&digest(&state["effective_config"], &b, &c).unwrap());
+            state["formal_declaration"]["recipe_id"] =
+                json::text("card-instance-formal-ppo-group-pack-v1");
+            state["formal_declaration"]["recipe_sha256"] =
+                json::text("27853b108089667e3e5f3e8f9d54c202b2f76583334f40954f1a1ab2a6844a47");
+            state["identity"]["formal_parent"] = state["formal_declaration"].clone();
+            declared["schema_version"] = json::integer(2);
+            declared["kind"] = json::text("card-instance-formal-packed-parent-declaration");
+            declared["config_sha256"] = state["config_sha256"].clone();
+            declared["recipe_id"] = state["formal_declaration"]["recipe_id"].clone();
+            declared["recipe_sha256"] = state["formal_declaration"]["recipe_sha256"].clone();
+            declared
+                .as_object_mut()
+                .unwrap()
+                .insert("logical_config_sha256".into(), logical_sha);
+            declared.as_object_mut().unwrap().insert(
+                "storage_binding".into(),
+                crate::logical_artifacts::binding(),
+            );
+            if !state["formal_stop"].is_null() {
+                state["formal_stop"]["schema_version"] = json::integer(2);
+                state["formal_stop"]["kind"] = json::text("card-instance-formal-packed-stop");
+                state["formal_stop"]["recipe_id"] =
+                    state["formal_declaration"]["recipe_id"].clone();
+                state["formal_stop"]["recipe_sha256"] =
+                    state["formal_declaration"]["recipe_sha256"].clone();
+            }
+            validate_values(&state, &declared, &b, &c)
+                .unwrap_or_else(|error| panic!("{}: {error:?}", case["label"]));
+            for mutation in 0..7 {
+                let mut bad = state.clone();
+                match mutation {
+                    0 => bad["schema_version"] = json::integer(3),
+                    1 => bad["run_variant"] = json::text("formal-parent-v1"),
+                    2 => bad["effective_config"]["storage"]["queue_mib"] = Value::Bool(true),
+                    3 => bad["effective_config"]["storage"]["max_pack_mib"] = json::integer(255),
+                    4 => bad["effective_config"]["storage"]["db_root"] = json::text("relative"),
+                    5 => bad["effective_config"]["training"]["max_updates"] = json::integer(2),
+                    _ => bad["effective_config"]["run"]["wall_seconds"] = json::integer(7199),
+                }
+                assert!(
+                    validate_values(&bad, &declared, &b, &c).is_err(),
+                    "mutation {mutation}"
+                );
+            }
         }
     }
     #[test]

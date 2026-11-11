@@ -571,3 +571,125 @@ rotated away before root copy, so root records those evidence limits explicitly.
 Batch failure log and isolated sandbox stderr/lifecycle plus HOST receipt survive.
 The accepted Main patch will be applied by the Stage3C owner; no root edit of its
 owned stage file. Actual comparison waits the generation-observer/reducer reviews.
+
+FormalCompletion's retained writable temporary has the same DrvFS rename issue.
+The separate namespace-handoff design is architecture READY after resolving a
+blocking recovery-route ambiguity: while the original directory FD is active,
+recover only fixed canonical/temp candidates through that held directory, preserve
+expected original identity independently and never invalidate a foreign opened
+candidate. Distinct writer/retained/recovery stages precede effects. Outer-lock,
+known-inode revocation, strict post-close guard and old formats remain. Six raw
+HOST D:/tmp syscall checks confirm a newly opened, non-writing retained O_RDWR
+FD closes without strict identity drift; this is feasibility only. Actual
+FormalCompletion component conformance/runtime still pending, no genuine parent.
+
+The first TMP generation-observer/reducer review blocks realB with4reproduced
+findings despite74inert tests: wrong private class name (also wrong in root brief),
+invented identity fields in return-report fixtures, missing generation/update-file
+hash linkage, and initial unregistered samples erasing later category peaks.
+Root accepts all findings and assigns one bounded API-grounded fix cycle. No
+trial starts. Lifecycle/ownership code and Main675ff8c remain unchanged.
+
+The package-auditor independent negative exposes ignored duplicate symlink tar
+members. Root reproduces RED, rejects unsupported member types/duplicates across
+all entries/noncanonical paths/mixed roots, and passes reference plus9archive
+negatives; independent recheck confirms prior malicious copy now refuses. The
+scope is explicitly source/contract-asset correspondence, not distribution
+metadata/runtime/learning. Actual wheel/source/startup proof still NOTRUN; final
+mandatory-only installation will separately check core metadata and startup.
+
+Tree terminal closure is architecture READY after explicitly fixing actual
+Source/Dataset release BEFORE healthy exposure, same fit-owned one-use direct/
+implicit-context-exit routes, and strict6 path/namespace verification AFTER
+terminal close BEFORE committed. Legacy __exit__ uses that same actual stage
+without a new Dataset API. Stage component checks cover actual unqualified
+fixture500rounds and release faults before/after effects; full conformance remains.
+
+The preliminary Dataset3/4 selector correction crosses a new settings-argument
+seam, so root pauses adoption and applies a narrow gate to the isolated code.
+Architecture READY resolves two additional constraints: route ONLY integer schema,
+leaving full clone/validation to the concrete reader's existing reserved pass;
+one absolute preprocessing deadline from original caller entry is shared by
+selection and reader construction, with no wall-budget restart. No Main adoption
+or genuine source/fit used the earlier experimental correction.
+
+TMP observer/reducer fix1 now passes independent READY80methods, actual production
+hook integration, exact6key return shape, generation/update-file hash linkage and
+mixed category-coverage probes. Root separately imports the actual production
+runtime and confirms hook installation/restoration without a trial. Hardware
+preflight confirms same D:disk2 USBHDD4,000,787,030,016B and HOST RTX5070Ti/610.88;
+sandbox NVML refusal does not imply HOST GPU failure. Fresh blockcd82db731f234913
+acbeb2f7aae8ad38 starts on Main675ff8c with harnessc84f9d08, fixed four-trial order,
+CUBLAS_WORKSPACE_CONFIG=:4096:8 and original nonformal budgets. Tool session23095
+supervises it without an unconditional kill timeout. Main source/installed904038e1
+remain frozen; isolated Stage3C work records substantial check/build intervals.
+No operational result is claimed while the block is STARTED.
+
+Bcd82 terminatesFAILafter2188.729s: DIRECTORYparentpause1/resume2 receives2ACKs,
+32recordedgames/419accepted decisions andone6gamecollectorHTTPoverlap, thensafe
+pruning rejectsD9pprivate0700(actual0777). All193Popen+19async capabilities,
+creations/transportsretire; supervisorconfirms86. Remaining3NOTRUN. No failed
+parent repair, newoutcome, skippedprune orpermissionrelaxation. Raw/derivedFAIL
+andfrozeninputs/terminalmodeevidence retained. The laterheld-pruningFDrename
+issue is code-inferredrisk only, not observedsecondfailure.
+
+Advisor Root ACCEPTS option2: onefreshRevisedB4trial samealloriginalbudgets,
+PPOALLdata/storageext4bothformats, independentcollectoronSAMEHDDbothformats;
+separateDB/catalog/RAMroots, nohostmount/ACL/externalLegacySourceinterface.
+PhysicalPanelA +explicitcombinedworkloadRevisedB addressdifferentquestions;
+originalfullParentHDD remainsFAIL/notcompleted. NewTMPdesign passesarchitecture
+READY, preservingcurrent-trialscope/globalinodecensus/actualConfig+mount/dev
+assertions/primaryerror/failureownership. Newharness/reducervariantonly; oldc84/41
+immutable, actualrunwaitsbothimplementationreviewsandext4private-stageprobe.
+
+Stage finalwideHOST initiallystalls because -E -S bypasseddependency.pth and
+Torchwasabsentfromprivatepurelib. Trackedpytest+learnerretired; runexit-2/logs
+preserved, no source workaround. Root links101EXISTINGdependency entries only,
+physicallycopiesnative/appmetadata(avoidfutureprivateinstalluninstallingMain),
+keepsstage-source-first.pth. -E -S Torch2.14.1+cu132import and-Istagedsource/native
+separationPASS; MainELF904038e1unchanged. Genuine toy4nullsource compatibility
+regression fixedthroughvalidatedclosedfields, 28PASS2.33s.
+
+Stage PRODUCTIONFREEZE: report67ac0167, delta9ba19cd0(manifestb76e1415),
+35modified17added/zero missing from715baseline, acceptedWriterASTexception.
+FinalaffectedHOST1419PASS/116SKIP/4NumPywarnings269.26s; Rust157PASS/4ignored,
+fullmypy172/scopedRuff/whitespace/privateABI-refusal/source54recipechecksPASS.
+PrivateELF6e6e94cc/sourceaf7488e9releaseMIMALLOCemptyflags, markersDECLonly.
+Root archivescandidate1includingall52deltafiles andELF. Independentcorrectness
+andarchitectureconformancereviews nowruninparallel, noStageedits. ActualFormal/
+TreeHOSTcompletionprobesawaitBOTHreviews; genuineformal/F64/qualifiedfitNOTRUN.
+
+After session restart, /tmp environments/helpers were absent. All54candidate2
+Stagefiles still matched durable manifestbb9b072f/contentd162a07d. Root restored
+privateenvironment/manifests/reviewedbenchmarktemplatesfrom retained receipts;
+noSourcechanges. Old completion-probe failure (19cases, ineffective latefault)
+was not retained outside/tmp; its cause remains unknown. Reconstructed raw3D
+utimecases andoneactualDFormalRun3latefault pass withvisiblemutation+revocation.
+
+Recoveredsourcebound36schedule2890c4e0 reaches20PASS(18ext4+2DFormalRun3) then
+oneDcompoundfaultNOT_EXERCISED: aftermovingoriginalwithrevokerheld, evenfstat of
+thatactualFD returnsENOENTbeforeforeigncreation/intendederror. Implementation
+retainsactualrevoker/firsterror/uncertainDIRrelease andnevermarksrevoked/committed.
+Read-onlyarchitecturedispositionREADYwithlimits: thisconservativefailurematches
+contract; currentmountcompoundrecoveryisnotverified. ProbeFDinventorydropsfstat
+errors, so its emptylistcannotproveapplicationretirement; actualownerstage is
+preserved and OSexit isseparate. Rootwillattemptremaining15unique casesonce,
+eachsupervisedprocess(retainuncertainowneruntilOSexit), stopunexpectedfailure/
+sourceDrift, reportPARTIALifplatformcasescannotbeexercised. NoSourceguardrelaxation.
+
+FinalMainintegration174app/88native/7asset wheel/sdist correspondence and separate
+core/extras/entrypoint/Python/version metadata PASS; releaseMIMALLOCemptyflags
+sourcef8dd9fa7/installedELFda042804, old9040backupretained. WholeRust157/4ignored,
+CUDA58, fullmypy172/RuffPASS; mandatoryonlyinstalledbaselinePASS. WholeHOSTpytest
+4754PASS331SKIP2failedstaletestassumptions4warnings1027s; reviewedtest-onlyfix
+pinsimmutableD093andoptionalprovideroldcallbinding, whole2files137PASS64skip,
+bothoriginalfails2PASS. Fulloldhistory/observation/Parquet/PPO1/PPO4checks/audits
+ALLPASS; their inventorypredatesonlythose2Python test edits, explicit. CPUpreload
+safetyopt-in199PASS107s. Noapp/nativecode changedforcompatfixes.
+
+ReviewedRevisedBattempt35a8a62aFAILBEFOREworkload0.118s becausecurrentkernel's
+Ddrive mount-source token is escapedD:\134, whiletemporaryharness expectedliteralD:.
+All2diagnosticPopenretired/fenced/86, noModel/Sim/collector work. Preservethatraw
+failure independently; normalizeONLYstandardmountinfoescapes/exactdriveROOT,
+retainrawtoken/actualHDD+fs+deviceasserts, reviewbeforefreshRootexecution. No
+productionorfilesystem/securitychange needed; no automatictrialextension.

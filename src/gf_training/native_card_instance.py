@@ -30,7 +30,7 @@ COLLECTION_FIELDS = {'collection_index', 'directory', 'generation', 'manifest_sh
     'learner_decisions', 'correspondence', 'numeric'}
 
 
-def _require_final_validation_native(settings: Any, native: Any = None) -> Any:
+def _require_final_validation_native(settings: Any, native: Any = None, *, packed: bool = False) -> Any:
     """Full closed capability/API/binary preflight; no parent or Source allocation."""
     from gf_common.card_instance_collection import NATIVE_FINAL_VALIDATION_MARKER
     from gf_common.card_instance_formal import NATIVE_FORMAL_MARKER
@@ -47,6 +47,12 @@ def _require_final_validation_native(settings: Any, native: Any = None) -> Any:
     if (info.get('card_instance_final_validation') != NATIVE_FINAL_VALIDATION_MARKER
             or info.get('card_instance_formal_controls') != NATIVE_FORMAL_MARKER):
         raise ContractError('Rust final64 capability unavailable; formal-control marker is insufficient; no fallback')
+    if packed:
+        from gf_common.card_instance_collection import NATIVE_PACKED_FINAL_VALIDATION_MARKER
+        from gf_training.card_instance_formal import require_native_formal_controls
+        require_native_formal_controls(module, packed=True)
+        if info.get('card_instance_packed_final_validation') != NATIVE_PACKED_FINAL_VALIDATION_MARKER:
+            raise ContractError('Rust packed final64 capability unavailable; no fallback')
     cls = getattr(module, 'CardInstanceNativeSession', None)
     if any(not callable(getattr(cls, name, None)) for name in ('inspect_final_validation',
             'export_final_validation', 'recheck_final_validation', 'close_final_validation')):
@@ -73,6 +79,10 @@ class _NativeFinalValidationInputs:
         if type(owner) is not _NativeGameInputs:
             raise ContractError('SAME concrete retained corrected native inputs required')
         self._owner, self._parent, self._token = owner, parent, token
+        slot = getattr(parent, '_packed_final_originals', None)
+        self._provider = None if slot is None else slot.provider
+        if getattr(owner, '_artifact_provider', None) is not None and self._provider is None:
+            raise ContractError('packed final native loan requires SAME parent-preowned final provider')
         self.deadline = min(deadline, parent.deadline, owner.deadline)
         self._source: Any = None
         self._summary: Json | None = None
@@ -133,16 +143,29 @@ class _NativeFinalValidationInputs:
         try:
             self._owner.recheck()
             self._started = True  # Reachable through SAME parent/Source before I/O.
-            raw = self._owner._executor.call(self._owner._session.inspect_final_validation, encoded, self._owner._held())
+            raw = (self._owner._native_call(self._owner._session.inspect_final_validation,
+                lambda held: (encoded, held, self._provider), envelope=8*len(encoded)+65536)
+                if self._provider is not None else self._owner._executor.call(
+                    self._owner._session.inspect_final_validation, encoded, self._owner._held()))
             # Native retains its concrete summary/control reservation before this
             # JSON decode; no second per-parent allowance is constructed.
-            summary = closed(json.loads(raw), FINAL_SUMMARY_FIELDS)
-            if (type(summary['schema_version']) is not int or summary['schema_version'] != 1
-                    or summary['kind'] != 'card-instance-final-validation-summary'
+            packed = self._provider is not None
+            summary = closed(json.loads(raw), FINAL_SUMMARY_FIELDS | ({'storage_binding', 'source_proof'} if packed else set()))
+            if (type(summary['schema_version']) is not int or summary['schema_version'] != (2 if packed else 1)
+                    or summary['kind'] != ('card-instance-packed-final-validation-summary' if packed else 'card-instance-final-validation-summary')
                     or summary['games'] != 64 or summary['qualified'] is not False
                     or summary['parent_qualification'] != 'not_performed'
                     or type(summary['episodes']) is not list or len(summary['episodes']) != 64):
                 raise ContractError('native final64 closed structural summary differs')
+            if packed:
+                assert self._provider is not None
+                from gf_common.group_pack_game import checked_packed_proof, checked_storage_binding
+                checked_storage_binding(summary['storage_binding'])
+                proof = checked_packed_proof(summary['source_proof'])
+                description = json.loads(self._provider.describe(summary['directory']))
+                if (proof['storage'] != description['storage'] or proof['custody'] != description['custody']
+                        or proof['source_set_sha256'] != summary['source_set_sha256']):
+                    raise ContractError('packed final summary differs from SAME final originals')
             for i, row in enumerate(summary['episodes']):
                 closed(row, {'episode_index', 'episode_id', 'game_id', 'viewer', 'decisions', 'end_kind', 'outcome', 'episode_digest'})
                 if type(row['episode_index']) is not int or row['episode_index'] != i or row['end_kind'] != 'natural':
@@ -160,7 +183,10 @@ class _NativeFinalValidationInputs:
         self._cheap()
         try:
             self._parent.recheck()
-            self._owner._executor.call(self._owner._session.recheck_final_validation, self._owner._held())
+            if self._provider is None:
+                self._owner._executor.call(self._owner._session.recheck_final_validation, self._owner._held())
+            else:
+                self._owner._native_call(self._owner._session.recheck_final_validation)
         except BaseException as error:
             self._remember(error)
             raise
@@ -191,7 +217,9 @@ class _NativeFinalValidationInputs:
         assert self._summary is not None
         try:
             self.recheck()
-            self._packet = self._owner._executor.call(self._owner._session.export_final_validation, index, self._owner._held())
+            self._packet = (self._owner._executor.call(self._owner._session.export_final_validation, index, self._owner._held())
+                if self._provider is None else self._owner._native_call(self._owner._session.export_final_validation,
+                    lambda held: (index, held)))
             bound = self._decode_bound(self._packet)
             self._admit_local(base_external + bound)
             if self._parent.resident_bytes + self._other_base() + base_external + bound > max_owned_bytes:
@@ -204,7 +232,7 @@ class _NativeFinalValidationInputs:
                 actions=self._owner.actions, rules=card_instance_rules(), aggregate_window=aggregate_window,
                 max_owned_bytes=max_owned_bytes, retained_owned_bytes=self._parent.resident_bytes + self._other_base() + base_external,
                 max_record_bytes=min(64*1024**2, self._owner.settings.max_record_mib*1024**2),
-                reserve=reserve, check=self._cheap)
+                reserve=reserve, check=self._cheap, _packed_owner=self if self._provider is not None else None)
         except BaseException as error:
             self._remember(error)
             # Retire completed decoder frames' NumPy views before native close;
@@ -264,7 +292,10 @@ class _NativeFinalValidationInputs:
         if self._started:
             for _ in range(2):
                 try:
-                    self._owner._executor.call(self._owner._session.close_final_validation)
+                    if self._provider is None:
+                        self._owner._executor.call(self._owner._session.close_final_validation)
+                    else:
+                        self._owner._executor.close_final_validation()
                     self._closed = True
                     break
                 except BaseException as error:  # noqa: BLE001 - SAME reachable owner confirms cleanup vs error
@@ -376,6 +407,8 @@ def _authorize_game_controls(summary: Json, native: Any, actions: ActionConfigV3
 
 class _NativeGameInputs(NativeStructuredSource):
     """Concrete inputs representation only; SAME _GameBatchSource issues authority."""
+    _explicit_candidate: bool
+
     def __init__(self, plan: Json, settings: Any, *, actions: ActionConfigV3, max_owned_bytes: int,
                  deadline: float, extra_owned_bytes: int = 0, max_scratch_bytes: int | None = None,
                  native: Any = None, collection_index: int = 0, artifact_provider: Any = None, shared_controls: Any = None) -> None:
@@ -426,6 +459,9 @@ class _NativeGameInputs(NativeStructuredSource):
         self.collection_index = collection_index
         self._prepared = False
         self._caller_growth = 0
+        self._external_growth = 0
+        self._final_working_delta = 0
+        self._final_artifact_provider: Any = None
         self._numeric_files: Json | None = None
         self._prepared_receipt: Json | None = None
 
@@ -531,6 +567,19 @@ class _NativeGameInputs(NativeStructuredSource):
         except BaseException as error:
             self._executor._remember(error)
             raise
+
+    def _attach_final_artifacts(self, provider: Any) -> None:
+        from gf_training.native_group_pack import OriginalArtifactProvider
+        if (type(provider) is not OriginalArtifactProvider or self._artifact_provider is None
+                or provider.pool is not self._artifact_provider.pool or self._final_artifact_provider is not None):
+            raise ContractError('one final provider on SAME packed actual parent required')
+        self._executor.prepare()
+        self._final_artifact_provider = provider
+        self._final_working_delta = max(0, provider.working_bytes-self._artifact_provider.working_bytes)
+        self._executor.attach_final_provider(provider)
+        # Cumulative metadata plus only the positive max-one-group difference
+        # is checked through the SAME native caller lease before any final FFI.
+        self._native_call(self._session.recheck)
 
     def _control_summary(self) -> bytes:
         if self._artifact_provider is None:
@@ -652,10 +701,11 @@ class _NativeGameInputs(NativeStructuredSource):
                     or self._shared_controls._pool_control_charge < self._shared_controls.retained):
                 raise ContractError('SAME ControlScan pool credit no longer covers retained controls')
             growth = 0
-        return super()._held(additional) + growth
+        return (super()._held(additional) + growth + self._external_growth + self._final_working_delta)
 
-    def caller_growth(self, value: int) -> None:
+    def caller_growth(self, value: int, *, external_growth: int = 0) -> None:
         self._caller_growth = integer(value, 0)
+        self._external_growth = integer(external_growth, 0)
         self._check()
 
     def _original_episode(self, collection_index: int, episode_index: int, *, parent: Any,

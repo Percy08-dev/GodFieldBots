@@ -718,6 +718,27 @@ pub(crate) fn inspect_final64_collection(
         None,
     )
 }
+pub(crate) fn inspect_final64_artifacts(
+    directory: &Path,
+    parent: (&Path, &Value),
+    limits: &CollectionLimits,
+    budget: Arc<Budget>,
+    control: Control,
+    registry: Arc<crate::logical_artifacts::Registry>,
+) -> Result<CollectionScan> {
+    inspect_collection_inner(
+        directory,
+        Some(parent),
+        limits,
+        None,
+        budget,
+        control,
+        None,
+        SourceFormat::PackedCorrected,
+        CorrectedCollectionRole::Final64 { pending: false },
+        Some(registry),
+    )
+}
 #[derive(Clone, Copy)]
 pub(crate) enum TreeSourceKind {
     Train,

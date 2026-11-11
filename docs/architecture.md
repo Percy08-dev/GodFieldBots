@@ -806,8 +806,18 @@ an original FD stays open. The reviewed owned writer-close/namespace/readonly
 handoff now passes both reviews,372scoped regressions and12actual D:/ext4 control
 probes for old/new Configs and both publication modes. It preserves canonical
 bytes, scanner tuple shapes and ordinary Source identity checks.
-Final64/Dataset/Tree, actual concurrent learning comparison and whole-project
-acceptance remain pending; this is not full-plan acceptance or learning quality.
+The formal storage-only variant, final64 same-parent/provider lifetime,
+Dataset4 and packed Tree provenance/transport now pass independent correctness
+and conformance re-reviews. Candidate2's1469affected HOST checks and157Rust
+checks pass; the unadmitted64episode directory/packed comparison preserves all
+own DTO/token/numeric banks. Controlled fixture fitting remains unqualified.
+Formal/Tree terminal probes pass30cases;6compound D:namespace faults cannot be
+constructed on the current9p mount and remain explicitly unexercised with
+uncertain cleanup retained. Parent/control/pruning workflows on that mount are
+not claimed supported; normal packed DB placement on D: uses ext4 parent data.
+Genuine formal/final64/qualified Dataset4 fitting remains NOT RUN.
+Actual revised concurrent comparison and final whole-project acceptance remain
+pending; this is not training-quality acceptance.
 The default directory storage,
 old Config identities and logical Collection5/Journal6/codec2 remain unchanged.
 The [design](design/sqlite-group-pack-v1.md) fixes the physical contract,

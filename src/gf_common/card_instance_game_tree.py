@@ -12,6 +12,7 @@ from gf_common.card_instance_runtime import game_binding
 from gf_common.domain import ContractError, Json, canonical, clone, closed, digest, integer
 
 SOURCE_KIND = 'card-instance-formal-ppo-originals'
+PACKED_SOURCE_KIND = 'card-instance-formal-ppo-packed-originals'
 KIND = 'card-instance-game-fixed-sources'
 SELECTION = 'all-explicit-learner-accepted-natural-return-v3'
 LABEL = 'behavior-selected-natural-return-gamma1-v1'
@@ -32,6 +33,10 @@ COLLECTION_FIELDS = {'parent_index', 'directory', 'collection_role', 'split', 'g
 COUNT_FIELDS = {'games', 'participants', 'selected_decisions', 'zero_endpoint_games'}
 MEMORY_FIELDS = {'recipe', 'total_bytes', 'controller_reserved_bytes', 'child_limit_bytes', 'reserved_peak_bytes'}
 
+PACKED_FIELDS = FIELDS | {'storage_binding'}
+PACKED_PARENT_FIELDS = PARENT_FIELDS | {'storage_binding'}
+PACKED_COLLECTION_FIELDS = COLLECTION_FIELDS | {'storage', 'custody'}
+
 
 def sha256(value: Any) -> str:
     if type(value) is not str or re.fullmatch('[0-9a-f]{64}', value) is None:
@@ -45,14 +50,22 @@ def origin() -> Json:
         'qualification_recipe': 'three-formal-parents-final64-v1'}
 
 
+def packed_origin() -> Json:
+    return {**origin(), 'qualification_recipe': 'three-formal-packed-parents-final64-v1'}
+
+
 def input_binding() -> Json:
     contract = corrected_card_instance_contract()
     return game_binding(contract, rule_signature(contract, card_instance_rules()))
 
 
-def checked_source(raw: Json) -> None:
-    if raw.get('source_kind') != SOURCE_KIND or canonical(raw.get('source_origin')) != canonical(origin()):
+def checked_source(raw: Json, *, packed: bool = False) -> None:
+    if (raw.get('source_kind') != (PACKED_SOURCE_KIND if packed else SOURCE_KIND)
+            or canonical(raw.get('source_origin')) != canonical(packed_origin() if packed else origin())):
         raise ContractError('exact observed formal game Tree source origin required')
+    if packed:
+        from gf_common.group_pack_game import checked_storage_binding
+        checked_storage_binding(raw.get('storage_binding'))
 
 
 def seconds(value: Any) -> float:
@@ -71,22 +84,23 @@ def counts(value: Any, *, games: int | None = None) -> Json:
     return raw
 
 
-def final_correspondence(manifest_sha256: str, episode_digests: tuple[str, ...] | list[str]) -> Json:
+def final_correspondence(manifest_sha256: str, episode_digests: tuple[str, ...] | list[str], *, packed: bool = False) -> Json:
     sha256(manifest_sha256)
     if len(episode_digests) != 64:
         raise ContractError('final game Tree correspondence requires64 selected episodes')
     for episode_digest in episode_digests:
         sha256(episode_digest)
-    value = {'recipe': 'card-instance-final-validation-correspondence-v1', 'input_binding': input_binding(),
+    value = {'recipe': ('card-instance-packed-final-validation-correspondence-v1' if packed
+        else 'card-instance-final-validation-correspondence-v1'), 'input_binding': input_binding(),
         'manifest_sha256': manifest_sha256, 'episode_count': 64, 'episode_digests': list(episode_digests)}
     return {**value, 'binding_sha256': digest(value)}
 
 
-def checked_final_correspondence(value: Any, *, manifest_sha256: str) -> Json:
+def checked_final_correspondence(value: Any, *, manifest_sha256: str, packed: bool = False) -> Json:
     raw = closed(value, {'recipe', 'input_binding', 'manifest_sha256', 'episode_count', 'episode_digests', 'binding_sha256'})
     if type(raw['episode_count']) is not int or raw['episode_count'] != 64 or type(raw['episode_digests']) is not list:
         raise ContractError('closed final64 original correspondence required')
-    expected = final_correspondence(manifest_sha256, raw['episode_digests'])
+    expected = final_correspondence(manifest_sha256, raw['episode_digests'], packed=packed)
     if canonical(raw) != canonical(expected):
         raise ContractError('final64 original correspondence binding differs')
     return raw
@@ -141,10 +155,10 @@ def normalized_formal_config(value: Json) -> Json:
     return result
 
 
-def checked_training_correspondence(value: Any) -> Json:
+def checked_training_correspondence(value: Any, *, packed: bool = False) -> Json:
     raw = closed(value, {'recipe', 'control_fingerprint', 'semantics_sha256', 'episode_count',
         'episode_digests', 'binding_sha256'})
-    if (raw['recipe'] != 'structured-source-cohort-correspondence-v2'
+    if (raw['recipe'] != ('card-instance-packed-source-correspondence-v1' if packed else 'structured-source-cohort-correspondence-v2')
             or type(raw['episode_count']) is not int or raw['episode_count'] != 16
             or type(raw['episode_digests']) not in (list, tuple) or len(raw['episode_digests']) != 16):
         raise ContractError('complete16 original training correspondence required')
@@ -167,10 +181,19 @@ def source_identity(parents: list[Json], collections: list[Json]) -> str:
 
 
 def manifest(value: Any) -> Json:
-    """Validate recipe/index structure only; this cannot qualify any originals."""
-    raw = closed(value, FIELDS)
-    checked_source(raw)
-    if (type(raw['schema_version']) is not int or raw['schema_version'] != 3 or raw['kind'] != KIND
+    """Validate Dataset3 structure only; this cannot qualify any originals."""
+    return _manifest(value, packed=False)
+
+
+def packed_manifest(value: Any) -> Json:
+    """Validate explicit Dataset4 values without granting Source authority."""
+    return _manifest(value, packed=True)
+
+
+def _manifest(value: Any, *, packed: bool) -> Json:
+    raw = closed(value, PACKED_FIELDS if packed else FIELDS)
+    checked_source(raw, packed=packed)
+    if (type(raw['schema_version']) is not int or raw['schema_version'] != (4 if packed else 3) or raw['kind'] != KIND
             or raw['selection'] != SELECTION or raw['label_recipe'] != LABEL
             or canonical(raw['input_binding']) != canonical(input_binding())
             or raw['input_recipe'] != corrected_card_instance_contract().input_recipe):
@@ -187,7 +210,11 @@ def manifest(value: Any) -> Json:
         raise ContractError('all three ordered formal parent originals required')
     identities = set()
     for index, (parent, seed) in enumerate(zip(parents, SEEDS, strict=True)):
-        closed(parent, PARENT_FIELDS)
+        closed(parent, PACKED_PARENT_FIELDS if packed else PARENT_FIELDS)
+        if packed:
+            from gf_common.group_pack_game import checked_storage_binding
+            if checked_storage_binding(parent['storage_binding']) != raw['storage_binding']:
+                raise ContractError('Dataset4 parent storage binding differs')
         _directory(parent['directory'])
         if type(parent['parent_index']) is not int or parent['parent_index'] != index or parent['seed'] != seed:
             raise ContractError('game Dataset3 exact ordered17/29/43 slots required')
@@ -222,7 +249,10 @@ def manifest(value: Any) -> Json:
         raise ContractError('all committed training and three final64 memberships required')
     totals = {split: {name: 0 for name in COUNT_FIELDS} for split in ('train', 'validation')}
     for row, (index, split, generation) in zip(collections, expected, strict=True):
-        closed(row, COLLECTION_FIELDS)
+        closed(row, PACKED_COLLECTION_FIELDS if packed else COLLECTION_FIELDS)
+        if packed:
+            from gf_common.group_pack_game import checked_storage_custody
+            checked_storage_custody(row['storage'], row['custody'])
         _directory(row['directory'])
         integer(row['parent_index'],0,2); integer(row['generation'],0,1000)
         if (row['parent_index'] != index or row['split'] != split or row['generation'] != generation
@@ -251,9 +281,9 @@ def manifest(value: Any) -> Json:
         if split == 'validation':
             if row['numeric'] is not None:
                 raise ContractError('final64 cannot fabricate a numeric update')
-            checked_final_correspondence(row['original_correspondence'], manifest_sha256=row['manifest_sha256'])
+            checked_final_correspondence(row['original_correspondence'], manifest_sha256=row['manifest_sha256'], packed=packed)
         else:
-            checked_training_correspondence(row['original_correspondence'])
+            checked_training_correspondence(row['original_correspondence'], packed=packed)
             closed(row['numeric'], {'directory', 'sha256', 'files'}); sha256(row['numeric']['sha256'])
             _directory(row['numeric']['directory'])
         seconds(row['elapsed_seconds'])

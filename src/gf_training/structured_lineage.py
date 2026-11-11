@@ -378,12 +378,15 @@ def _classification(record: Json, state: Json) -> None:
 
 
 def _state(state: Json, *, recorded_signature: str | None = None, _game: bool = False) -> tuple[Any, Any]:
-    from gf_common.card_instance_formal import FORMAL_RUN_FIELDS, RUN_VARIANT, validate_formal_state
+    from gf_common.card_instance_formal import (
+        FORMAL_RUN_FIELDS,
+        PACKED_RUN_VARIANT,
+        RUN_VARIANT,
+        validate_formal_state,
+    )
     from gf_common.group_pack_game import packed_state
     packed = _game and packed_state(state)
-    formal = _game and state.get('run_variant') == RUN_VARIANT
-    if packed and formal:
-        raise ContractError('packed formal PPO awaits its later integration')
+    formal = _game and state.get('run_variant') in (RUN_VARIANT, PACKED_RUN_VARIANT)
     closed(state, RUN_REQUIRED | (GAME_EXTRA if _game else set()) | ({'storage_binding'} if packed else set()) | (FORMAL_RUN_FIELDS if formal else set()), RUN_OPTIONAL)
     if formal:
         validate_formal_state(state)

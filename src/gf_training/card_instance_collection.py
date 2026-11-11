@@ -331,6 +331,7 @@ class CollectionPublication:
 
     def revoke(self) -> None:
         if self.group_pack is not None:
+            self.committed = False
             self.group_pack.revoke()
             return
         errors: list[BaseException] = []
@@ -510,11 +511,15 @@ class CollectionPublication:
 
     @property
     def final_pending(self) -> bool:
+        if self.group_pack is not None:
+            return self.group_pack.final_pending
         return self._final_staged and not self.committed and not self.quarantined and not any(
             output.invalidated for output in self.outputs)
 
     @property
     def resident_bytes(self) -> int:
+        if self.group_pack is not None:
+            return self.group_pack.resident_bytes
         return sum(32 * len(output.raw) + 65536 for output in self.outputs) + 65536
 
     def fail_final_validation(self, initiating: BaseException) -> None:
@@ -537,12 +542,17 @@ class CollectionPublication:
             raise ContractError('collection publication owner already consumed')
         self._final_staged = True
         try:
-            self._publish(report, manifest, final=True)
+            if self.group_pack is not None:
+                self.group_pack.begin_final_validation(report, manifest)
+            else:
+                self._publish(report, manifest, final=True)
         except BaseException as error:
             self.fail_final_validation(error)
             raise
 
     def pending_manifest(self) -> str:
+        if self.group_pack is not None:
+            return self.group_pack.pending_manifest()
         if not self.final_pending:
             raise ContractError('SAME pending final validation publication required')
         self._check()
@@ -558,7 +568,11 @@ class CollectionPublication:
             self._verify(output.recorded_name, output.handle.descriptor, output.raw)
         return 'manifest.json.tmp'
 
-    def finish_final_validation(self) -> None:
+    def finish_final_validation(self, *, context: object = None) -> Json | None:
+        if self.group_pack is not None:
+            result = self.group_pack.finish_final_validation(self, context)
+            self.committed = True
+            return result
         if not self.final_pending:
             raise ContractError('one active pending final publication required for finish')
         try:
@@ -581,6 +595,7 @@ class CollectionPublication:
             self.fail_final_validation(error)
             raise
         self.committed = True  # All reportable terminal work has finished.
+        return None
 
     def retire_final_memory(self) -> None:
         if not self.cleanup_complete:

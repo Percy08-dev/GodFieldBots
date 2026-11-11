@@ -66,9 +66,8 @@ def test_current_v1_pack_bound_rejects_config_and_direct_settings_above256(tmp_p
 
 
 @pytest.mark.parametrize("entry", ["train", "train-formal", "formal-preflight", "final-caller", "final-backend"])
-def test_direct_learning_entries_reject_storage_before_allocation(tmp_path, monkeypatch, entry):
+def test_invalid_formal_source_commands_refuse_before_runtime_or_source_work(tmp_path, monkeypatch, entry):
     import asyncio
-    from dataclasses import replace
     from types import SimpleNamespace
 
     from gf_training import card_instance_final_validation as final
@@ -76,20 +75,11 @@ def test_direct_learning_entries_reject_storage_before_allocation(tmp_path, monk
     from gf_training import card_instance_ppo as ppo
 
     loaded = load_config(packed_config(tmp_path))
-    # A poisonous preprocessing object proves final backend code never reads
-    # reader/backend, performs a Source borrow or reaches native loading.
-    class Poison:
-        def __getattr__(self, name):
-            pytest.fail("later final backend/config work reached: " + name)
-    loaded = replace(loaded, config=replace(loaded.config, preprocessing=Poison()))
     def later(*args, **kwargs):
-        pytest.fail("later allocation, recipe, model or native work reached")
-    monkeypatch.setattr(ppo, "_GameOperations", later)
-    monkeypatch.setattr(formal, "FormalControl", later)
-    monkeypatch.setattr(formal, "load_recipe", later)
+        pytest.fail("invalid full formal Config reached Source or collection work")
     monkeypatch.setattr(final, "_admit_source", later)
     output = tmp_path / "never-created"
-    with pytest.raises(ContractError, match="storage"):
+    with pytest.raises(ContractError):
         if entry == "train":
             asyncio.run(ppo.train_card_instance_ppo(loaded, later, output))
         elif entry == "train-formal":
@@ -99,5 +89,7 @@ def test_direct_learning_entries_reject_storage_before_allocation(tmp_path, monk
         elif entry == "final-caller":
             final._caller_contract(SimpleNamespace(config=loaded.config))
         else:
+            # This fixture retains its old scalar reader. Final64 requires the
+            # explicit participant reader even after storage support is added.
             final.require_actor_backend(loaded)
     assert not output.exists()

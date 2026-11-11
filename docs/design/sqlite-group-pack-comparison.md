@@ -115,3 +115,46 @@ status repair, guessed outcome or reused serialized cleanup token is allowed.
 This handles a failed measurement process without inventing a general recovery
 framework. Acceptance needs inert cancellation/secondary-error/unreaped-child
 tests and an independent lifecycle review before real trials.
+
+## Revised B: ext4 PPO concurrent with the same-HDD collector
+
+Root accepts bot_advisor's bounded amendment after full-parent-on-D blockcd82
+fails at private0700 pruning. Both updates and one real collector overlap occur,
+but the whole parent remains failed/ineligible and the remaining3trials NOT RUN.
+The current D:9p mount reports0777 for the newly requested0700 staging directory.
+Later held-original pruning rename is an additional code-derived risk, not an
+observed second failure. Do not relax permissions, skip pruning, repair/resume
+that parent, add a legacy external locator or change privileged host mounts/ACLs.
+
+Run ONE new independently labelled D/P/P/D block under unchanged seed17,
+CPUactors/CUDAlearner, two updates, pause1/resume2, six-game sibling and all
+original wall/admission/execution/finalization/resource caps. All PPO parent,
+checkpoint/numeric/control and original collection storage is on the SAME ext4
+filesystem in both formats (Directory collections or packed DBs). The independent
+six-game collector alone writes to the SAME D:HDD as PanelA: directory originals
+or packed DBs. Give PPO and sibling distinct configured DB/catalog/RAM roots.
+Do not accidentally leave the PPO packed DB on D while directory PPO data is
+ext4. Each block/trial has fresh exclusive owned paths; no automatic extra block
+or trial extension follows failure/non-overlap.
+
+Record both owned filesystem roots and actual mount/device identities before
+admission. Accounting/monitoring includes ext4 plus D plus owned RAM and every
+actual process; deduplicate overlapping roots/inodes, report per-filesystem and
+combined apparent bytes, category/sidecar scopes, coverage/gaps and scan overhead.
+Commit observer uses the actual explicit parent path rather than inferring it
+from a collector root. Keep failure-retirement/creation fencing, actual Source
+issuance and primary-error behavior unchanged. Before execution independently
+review path-split effective-config assertions and focused inert failure tests;
+exercise private0700 staging and held-original rename in disposable ext4 files.
+
+PanelA remains the identical-data alternating HDD archival comparison. RevisedB
+measures actual ext4 PPO generation/resume/learning concurrent with actual HDD
+collection, a combined configured workload whose two components both change
+format. It cannot isolate per-component format causes, exact optimizer-kernel/
+HDD-I/O simultaneity, solo slowdown, cold-cache behavior or reliable population
+tails. Do not pool original failed-HDD and revised conditions or call the latter
+successful full-parent HDD support. Original all-parent-on-D remains FAIL on the
+current mount; its remaining trials stay NOT RUN. This amendment plus PanelA
+addresses physical storage and operational concurrency separately, with those
+limits explicit. Default remains directory; formal/qualified/final-test gates
+are independent and unchanged.

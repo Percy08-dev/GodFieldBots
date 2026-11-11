@@ -28,6 +28,8 @@ def _root(path: Path) -> Path:
 
 class ValidationManifestOwnership:
     """One actual readonly canonical-manifest flock; never a copied token value."""
+    _control_name = 'manifest.json'
+
     def __init__(self, directory: Path, *, deadline: float) -> None:
         self.directory = _root(directory)
         self.deadline = deadline
@@ -49,7 +51,7 @@ class ValidationManifestOwnership:
             self._directory_fd = os.open(self.directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
             info = os.fstat(self._directory_fd)
             self._root_identity = info.st_dev, info.st_ino
-            self._fd = os.open('manifest.json', os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=self._directory_fd)
+            self._fd = os.open(self._control_name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=self._directory_fd)
             before = os.fstat(self._fd)
             if not stat.S_ISREG(before.st_mode):
                 raise ContractError('canonical validation manifest must be regular')
@@ -79,7 +81,7 @@ class ValidationManifestOwnership:
             if (not stat.S_ISDIR(root.st_mode) or (root.st_dev, root.st_ino) != self._root_identity
                     or (held_root.st_dev, held_root.st_ino) != self._root_identity):
                 raise ContractError('manifest custody root replaced')
-            path = os.stat('manifest.json', dir_fd=self._directory_fd, follow_symlinks=False)
+            path = os.stat(self._control_name, dir_fd=self._directory_fd, follow_symlinks=False)
             held = os.fstat(self._fd)
             if (not stat.S_ISREG(path.st_mode) or _identity(path) != self._snapshot
                     or _identity(held) != self._snapshot):
@@ -143,10 +145,18 @@ class ValidationManifestOwnership:
                     pass
 
 
+class ValidationLocatorOwnership(ValidationManifestOwnership):
+    """Actual immutable public packed locator flock, without Source authority."""
+    _control_name = 'collection.locator.json'
+
+
 class GameSourceCustody:
     """Complete six-logical-root ordered custody, optionally borrowed as a whole."""
     def __init__(self, parents: tuple[Path, ...], validations: tuple[Path, ...], *, deadline: float,
-                 ownership: GameSourceCustody | None = None) -> None:
+                 ownership: GameSourceCustody | None = None, packed: bool = False) -> None:
+        if type(packed) is not bool:
+            raise ContractError('explicit storage custody variant required')
+        self._packed = packed
         if len(parents) != 3 or len(validations) != 3:
             raise ContractError('three parent and three validation memberships required')
         self.parents = tuple(_root(path) for path in parents)
@@ -177,7 +187,7 @@ class GameSourceCustody:
                 raise ContractError('complete game custody has one lifetime')
             self._entered = True
             if self._borrowed is not None:
-                if type(self._borrowed) is not GameSourceCustody or self._borrowed._ordered != self._ordered:
+                if type(self._borrowed) is not GameSourceCustody or self._borrowed._ordered != self._ordered or self._borrowed._packed != self._packed:
                     raise ContractError('only SAME complete ordered custody set can be borrowed')
                 self._borrowed.require()
                 self._active = True
@@ -186,7 +196,8 @@ class GameSourceCustody:
                 for path, role in self._ordered:
                     if time.monotonic() >= self.deadline:
                         raise TimeoutError('complete game custody deadline')
-                    owner = run_lock(path) if role == 'parent' else ValidationManifestOwnership(path, deadline=self.deadline)
+                    owner = (run_lock(path) if role == 'parent' else
+                        (ValidationLocatorOwnership if self._packed else ValidationManifestOwnership)(path, deadline=self.deadline))
                     token = owner.__enter__()
                     self._entries[path] = owner, token
                     info = path.lstat()
@@ -217,7 +228,7 @@ class GameSourceCustody:
             elif _OWNED_LOCKS.get(path) != token.token:
                 raise ContractError('actual original parent lock no longer held')
 
-    def ownership_for(self, path: Path) -> RunOwnership | ValidationManifestOwnership:
+    def ownership_for(self, path: Path) -> RunOwnership | ValidationManifestOwnership | ValidationLocatorOwnership:
         self.require()
         if self._borrowed is not None:
             return self._borrowed.ownership_for(path)

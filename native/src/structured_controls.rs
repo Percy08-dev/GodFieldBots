@@ -1852,9 +1852,6 @@ fn parent_context(s: &mut Sources, format: SourceFormat) -> Result<Document> {
             "packed run storage binding differs",
         )?;
         is(cfg.require("storage")?, "format", "sqlite-group-pack-v1")?;
-        if formal {
-            return Err(Error::contract("packed formal controls are a later gate"));
-        }
     } else if cfg
         .get("storage")
         .is_some_and(|v| v.get("format").and_then(Value::as_str) == Some("sqlite-group-pack-v1"))

@@ -44,13 +44,16 @@ from gf_models.structured_tree_config import (
 from gf_models.structured_tree_pairing import (
     TREE2_RECORDS,
     TREE3_GAME_RECORDS,
+    TREE3_PACKED_GAME_RECORDS,
     TREE3_RECORDS,
     GameTrainedProvenanceV4,
+    PackedGameTrainedProvenanceV5,
     TrainedProvenance,
     TrainedProvenanceV4,
     TrainingBinding,
     _records,
     _TreeRecords,
+    game_records,
     provenance_for_request,
     validate_request,
 )
@@ -297,7 +300,7 @@ class TreeOriginV3:
 
     def __post_init__(self) -> None:
         checksum(self.action_config_hash)
-        context = TREE3_GAME_RECORDS if type(self) is GameTreeOriginV3 else TREE3_RECORDS
+        context = _origin_records(self)
         classification = _classification(self.action_contract, self.purpose, self.synthetic_capacity, context)
         fields = self.fields()
         context.source(fields, toy=self.fit_origin == 'toy')
@@ -305,7 +308,7 @@ class TreeOriginV3:
             if self.provenance is not None:
                 raise ContractError('Tree3 toy requires null source/provenance')
         elif self.fit_origin == 'trained':
-            if type(self.provenance) is not (GameTrainedProvenanceV4 if context.game else TrainedProvenanceV4):
+            if type(self.provenance) is not (PackedGameTrainedProvenanceV5 if context.packed else GameTrainedProvenanceV4 if context.game else TrainedProvenanceV4):
                 raise ContractError('immutable actual trained Tree3 provenance4 required')
             raw = self.provenance.to_dict()
             if (canonical(raw['input_binding']) != canonical(classification)
@@ -320,11 +323,22 @@ class TreeOriginV3:
         source = None if self.source_origin is None else json.loads(self.source_origin)
         if self.source_origin is not None and canonical(source).encode() != self.source_origin:
             raise ContractError('canonical Tree3 source origin required')
-        context = TREE3_GAME_RECORDS if type(self) is GameTreeOriginV3 else TREE3_RECORDS
-        return {'action_config_hash': self.action_config_hash,
+        context = _origin_records(self)
+        result = {'action_config_hash': self.action_config_hash,
             **_classification(self.action_contract, self.purpose, self.synthetic_capacity, context),
             'fit_origin': self.fit_origin, 'provenance': None if self.provenance is None else self.provenance.to_dict(),
             'source_kind': self.source_kind, 'source_origin': source}
+
+        if context.packed:
+            assert type(self) is PackedGameTreeOriginV3
+            encoded = self.storage_binding
+            if type(encoded) is not bytes:
+                raise ContractError('canonical immutable packed Tree storage bytes required')
+            binding = json.loads(encoded)
+            if canonical(binding).encode() != encoded:
+                raise ContractError('canonical packed Tree storage binding required')
+            result['storage_binding'] = binding
+        return result
 
 
 @dataclass(frozen=True)
@@ -333,13 +347,41 @@ class GameTreeOriginV3(TreeOriginV3):
 
 
 
+@dataclass(frozen=True)
+class PackedGameTreeOriginV3(GameTreeOriginV3):
+    storage_binding: bytes | None = None
+
+
+def _origin_records(origin: Any) -> _TreeRecords:
+    if type(origin) is PackedGameTreeOriginV3:
+        return TREE3_PACKED_GAME_RECORDS
+    if type(origin) is GameTreeOriginV3:
+        return TREE3_GAME_RECORDS
+    if type(origin) is TreeOriginV3:
+        return TREE3_RECORDS
+    if type(origin) is TreeOrigin:
+        return TREE2_RECORDS
+    raise ContractError('exact immutable Tree origin subtype required')
+
+
+def _origin_type(context: _TreeRecords) -> Any:
+    return (PackedGameTreeOriginV3 if context.packed else GameTreeOriginV3 if context.game
+        else TreeOriginV3 if context.modern else TreeOrigin)
+
+
+def _loaded_type(context: _TreeRecords) -> Any:
+    return (LoadedPackedGameTreeV3 if context.packed else LoadedGameTreeV3 if context.game
+        else LoadedTreeV3 if context.modern else LoadedTree)
+
+
 def _origin_from_fields(raw: Json, contract: Any, context: _TreeRecords) -> Any:
     if context.modern:
-        origin_type = GameTreeOriginV3 if context.game else TreeOriginV3
-        provenance_type = GameTrainedProvenanceV4 if context.game else TrainedProvenanceV4
+        origin_type = _origin_type(context)
+        provenance_type = PackedGameTrainedProvenanceV5 if context.packed else GameTrainedProvenanceV4 if context.game else TrainedProvenanceV4
         return origin_type(raw['action_config_hash'], contract, raw['purpose'], raw['synthetic_capacity'], raw['fit_origin'],
             None if raw['provenance'] is None else provenance_type.parse(raw['provenance']), raw['source_kind'],
-            None if raw['source_origin'] is None else canonical(raw['source_origin']).encode())
+            None if raw['source_origin'] is None else canonical(raw['source_origin']).encode(),
+            **({'storage_binding': canonical(raw['storage_binding']).encode()} if context.packed else {}))
     return TreeOrigin(raw['action_config_hash'], contract, raw['purpose'], raw['synthetic_capacity'], raw['fit_origin'],
                       None if raw['provenance'] is None else TrainedProvenance.parse(raw['provenance']))
 
@@ -367,7 +409,8 @@ class LoadedTreeV3:
     creation_execution: bytes | None = None
 
     def __post_init__(self) -> None:
-        if type(self.model) is not ConfiguredTreeModelV3 or type(self.origin) is not (GameTreeOriginV3 if type(self) is LoadedGameTreeV3 else TreeOriginV3):
+        context = _origin_records(self.origin)
+        if type(self.model) is not ConfiguredTreeModelV3 or type(self) is not _loaded_type(context) or not context.modern:
             raise ContractError('closed loaded Tree3 model/origin required')
         _bind_origin(self.booster, self.origin)
         _bind_model_v3(self.booster, self.model, self.origin)
@@ -380,6 +423,11 @@ class LoadedGameTreeV3(LoadedTreeV3):
 
 
 @dataclass(frozen=True)
+class LoadedPackedGameTreeV3(LoadedGameTreeV3):
+    """Exact packed trained provenance subtype over unchanged Tree3 numerics."""
+
+
+@dataclass(frozen=True)
 class _BoosterBindingV3:
     signature: str
 
@@ -387,7 +435,7 @@ class _BoosterBindingV3:
 def _bind_model_v3(booster:Any,model:ConfiguredTreeModelV3,origin:TreeOriginV3,*,fresh:bool=False)->None:
     """Bind every architecture/feature/input field; execution overrides stay separate."""
     TREE3_RECORDS.require_model(model)
-    if type(origin) not in (TreeOriginV3, GameTreeOriginV3):
+    if type(origin) not in (TreeOriginV3, GameTreeOriginV3, PackedGameTreeOriginV3):
         raise ContractError('closed Tree3 actual model origin required')
     expected=_BoosterBindingV3(digest({'model':asdict(model.architecture()),
         'feature_layout':TREE3_RECORDS.layout(model.encoder),'input_origin':origin.fields()}))
@@ -402,7 +450,7 @@ def _bind_model_v3(booster:Any,model:ConfiguredTreeModelV3,origin:TreeOriginV3,*
 
 
 def _bind_origin(booster: Any, origin: TreeOrigin | TreeOriginV3, *, fresh: bool = False) -> None:
-    if type(origin) not in (TreeOrigin, TreeOriginV3, GameTreeOriginV3):
+    if type(origin) not in (TreeOrigin, TreeOriginV3, GameTreeOriginV3, PackedGameTreeOriginV3):
         raise ContractError('immutable Tree2 origin required')
     previous = getattr(booster, '_structured_tree_origin', None)
     if previous is not None:
@@ -417,19 +465,19 @@ def _bind_origin(booster: Any, origin: TreeOrigin | TreeOriginV3, *, fresh: bool
 def _inspect_document(manifest: Json, *, model: Any, action_config_hash: str, action_contract: Any,
                       purpose: str, synthetic_capacity: bool, deadline: float,
                       expected_tree_descriptor: TreeDescriptor | None, expected_feature_signature: str | None,
-                      context: _TreeRecords, expected_source: tuple[Any, Any] | None,
+                      context: _TreeRecords, expected_source: tuple[Any, ...] | None,
                       retained_bytes: int) -> tuple[Json, TreeDescriptor]:
     classification = _classification(action_contract, purpose, synthetic_capacity, context)
     _expected_source = expected_source
     closed(manifest, FIELDS | (context.extra_fields | {'rule_signature', 'layout_signature', 'feature_layout'} if context.modern else set()))
-    if type(manifest['schema_version']) is not int or manifest['schema_version'] != context.schema or manifest['kind'] != 'structured-tree-inference':
+    if type(manifest['schema_version']) is not int or manifest['schema_version'] != context.inference_schema or manifest['kind'] != 'structured-tree-inference':
         raise ContractError('unsupported Tree2 artifact schema/kind')
     if canonical({key: manifest[key] for key in classification}) != canonical(classification):
         raise ContractError('Tree artifact classification differs from explicit component binding')
     _origin_from_fields(manifest, action_contract, context)
     if context.modern:
         assert _expected_source is not None
-        actual_source=(manifest['source_kind'],manifest['source_origin'])
+        actual_source=tuple(manifest[key] for key in context.source_fields)
         if canonical(actual_source)!=canonical(_expected_source):
             raise ContractError('Tree3 artifact differs from explicitly expected component source origin')
     layout = _model_records(model).layout(model.encoder)
@@ -467,25 +515,29 @@ def _inspect_document(manifest: Json, *, model: Any, action_config_hash: str, ac
     return file, descriptor
 
 
+def _check_expected_binding(descriptor: TreeDescriptor | None, feature_signature: str | None) -> None:
+    if descriptor is not None and type(descriptor) is not TreeDescriptor:
+        raise ContractError('closed expected Tree2 descriptor required')
+    if feature_signature is not None:
+        checksum(feature_signature)
+
+
 def inspect_artifact(directory: Path, *, expected_digest: str, model: Any,
                      action_config_hash: str, action_contract: Any,
                      purpose: str, synthetic_capacity: bool, deadline: float = float('inf'),
                      expected_tree_descriptor: TreeDescriptor | None = None,
                      expected_feature_signature: str | None = None,
                      _scan: SealedScan | None = None, _context: _TreeRecords = TREE2_RECORDS,
-                     _expected_source: tuple[Any, Any] | None = None) -> tuple[Json, str]:
+                     _expected_source: tuple[Any, ...] | None = None) -> tuple[Json, str]:
     context = _records(_context); context.require_model(model)
     _classification(action_contract, purpose, synthetic_capacity, context)
     if context.modern:
         if _expected_source is None:
             raise ContractError('Tree3 loader requires explicit expected component source origin')
-        context.source(dict(zip(('source_kind', 'source_origin'), _expected_source, strict=True)), toy=_expected_source == (None, None))
+        context.source(dict(zip(context.source_fields, _expected_source, strict=True)), toy=_expected_source == (None, None))
     checksum(expected_digest)
     checksum(action_config_hash)
-    if expected_tree_descriptor is not None and type(expected_tree_descriptor) is not TreeDescriptor:
-        raise ContractError('closed expected Tree2 descriptor required')
-    if expected_feature_signature is not None:
-        checksum(expected_feature_signature)
+    _check_expected_binding(expected_tree_descriptor, expected_feature_signature)
     scan = _scan if _scan is not None else SealedScan(max_owned_bytes=model.resources.max_owned_bytes, deadline=deadline)
     scan.check()
     scan.inventory(directory, {'inference.json', 'model.txt'})
@@ -578,7 +630,7 @@ def load_artifact(directory: Path, **options: Any) -> Any:
     if context.modern:_bind_model_v3(booster,model,cast(TreeOriginV3,origin),fresh=True)
     _check(deadline)
     if pair is not None:pair.finalize()
-    return (LoadedGameTreeV3 if context.game else LoadedTreeV3 if context.modern else LoadedTree)(booster, model, origin, actual,None if pair is None else pair.binding,
+    return _loaded_type(context)(booster, model, origin, actual,None if pair is None else pair.binding,
         None if pair is None else canonical(manifest['creation_execution']).encode())
 
 
@@ -640,8 +692,8 @@ def save_artifact(directory: Path, tree: LoadedTree, *, deadline: float = float(
 
 
 def _save_inference(directory: Path, tree: Any, *, deadline: float = float('inf')) -> Json:
-    context=TREE3_GAME_RECORDS if type(tree) is LoadedGameTreeV3 else _model_records(tree.model)
-    if type(tree) is not (LoadedGameTreeV3 if context.game else LoadedTreeV3 if context.modern else LoadedTree) or type(tree.origin) is not (GameTreeOriginV3 if context.game else TreeOriginV3 if context.modern else TreeOrigin):
+    context=_origin_records(tree.origin)
+    if type(tree) is not _loaded_type(context) or type(tree.origin) is not _origin_type(context):
         raise ContractError('immutable actual loaded Tree wrapper/context required')
     _bind_origin(tree.booster, tree.origin)
     if context.modern:_bind_model_v3(tree.booster,cast(ConfiguredTreeModelV3,tree.model),cast(TreeOriginV3,tree.origin))
@@ -653,7 +705,7 @@ def _save_inference(directory: Path, tree: Any, *, deadline: float = float('inf'
     if time.monotonic() >= deadline:
         raise TimeoutError('Tree2 save deadline')
     layout = context.layout(tree.model.encoder)
-    manifest = {'schema_version': context.schema, 'kind': 'structured-tree-inference', 'model': asdict(tree.model.architecture()),
+    manifest = {'schema_version': context.inference_schema, 'kind': 'structured-tree-inference', 'model': asdict(tree.model.architecture()),
         'architecture_identity': context.identity(tree.model.architecture()), 'input_recipe': context.features.layout.input_recipe,
         'token_signature': signature(tree.model.encoder.aggregate_window, layout=context.features.layout), 'feature_recipe': context.features.recipe,
         'feature_signature': layout['feature_signature'], 'feature_names': layout['feature_names'],
@@ -810,7 +862,7 @@ def save_provisional_trained(directory:Path,booster:Any,model:Any,request:Json,r
     if descriptor.model_bytes>request['model_envelope']['text_bytes']:raise ContractError('actual native Tree2 exceeds pre-admitted model envelope')
     _bind_origin(booster,origin,fresh=True)
     if context.modern:_bind_model_v3(booster,model,cast(TreeOriginV3,origin),fresh=True)
-    tree=(LoadedGameTreeV3 if context.game else LoadedTreeV3 if context.modern else LoadedTree)(booster,model,origin,descriptor,creation_execution=canonical({**request['execution'],'tree_descriptor':asdict(descriptor)}).encode())
+    tree=_loaded_type(context)(booster,model,origin,descriptor,creation_execution=canonical({**request['execution'],'tree_descriptor':asdict(descriptor)}).encode())
     return _save_inference(directory,tree,deadline=deadline)
 
 
@@ -877,7 +929,7 @@ def _utf8_size(value: str | bytes) -> int:
 def _load_owned_model_v3(metadata: str | bytes, text: str | bytes, *, expected_digest: str,
                           model: ConfiguredTreeModelV3, action_config_hash: str,
                           retained_bytes: int, deadline: float, context: _TreeRecords,
-                          expected_source: tuple[str, Json], own_pair_reference: Json | None) -> Any:
+                          expected_source: tuple[Any, ...], own_pair_reference: Json | None) -> Any:
     """One scoring/game own-artifact kernel, with no completion or Source access."""
     context = _records(context)
     context.require_model(model)
@@ -899,6 +951,12 @@ def _load_owned_model_v3(metadata: str | bytes, text: str | bytes, *, expected_d
         parse_constant=lambda _: (_ for _ in ()).throw(ContractError('nonfinite own inference JSON')))
     if type(manifest) is not dict:
         raise ContractError('own inference object required')
+    if context.game:
+        selected = game_records(manifest)
+        if context.packed and selected is not context:
+            raise ContractError('packed own model cannot reinterpret another source subtype')
+        context = selected
+        expected_source = context.source_identity(manifest)
     contract = context.features.layout.action_contract
     file, descriptor = _inspect_document(manifest, model=model, action_config_hash=action_config_hash,
         action_contract=contract, purpose='qualified_game' if context.game else 'component',
@@ -937,10 +995,10 @@ def validate_game_inference_metadata_v3(manifest: Json, *, model: ConfiguredTree
         action_config_hash: str, expected_tree_descriptor: TreeDescriptor | None = None,
         expected_feature_signature: str | None = None) -> Json:
     """Pure structural own-inference4 declaration; NO Booster/Pair/Source authority."""
-    from gf_common.card_instance_game_tree import SOURCE_KIND, origin
     from gf_common.domain import clone
     from gf_models.structured_tree_encoder import _owned
-    TREE3_GAME_RECORDS.require_model(model)
+    context = game_records(manifest)
+    context.require_model(model)
     checksum(action_config_hash)
     if expected_tree_descriptor is not None and type(expected_tree_descriptor) is not TreeDescriptor:
         raise ContractError('closed expected game Tree descriptor required')
@@ -949,11 +1007,11 @@ def validate_game_inference_metadata_v3(manifest: Json, *, model: ConfiguredTree
     # Own typed-control envelope before canonical comparisons/result cloning.
     resource_estimate(model, extra_bytes=32*_owned(manifest)+65536)
     _inspect_document(manifest, model=model, action_config_hash=action_config_hash,
-        action_contract=TREE3_GAME_RECORDS.features.layout.action_contract,
+        action_contract=context.features.layout.action_contract,
         purpose='qualified_game', synthetic_capacity=False, deadline=float('inf'),
         expected_tree_descriptor=expected_tree_descriptor,
-        expected_feature_signature=expected_feature_signature, context=TREE3_GAME_RECORDS,
-        expected_source=(SOURCE_KIND, origin()), retained_bytes=0)
+        expected_feature_signature=expected_feature_signature, context=context,
+        expected_source=context.source_identity(manifest), retained_bytes=0)
     if manifest['fit_origin'] != 'trained':
         raise ContractError('own game Tree must have observed trained origin')
     return clone(manifest)
@@ -973,13 +1031,27 @@ def _load_game_own_model_v3(metadata: str | bytes, text: str | bytes, *, expecte
 
 
 
+def _game_artifact_context(directory: Path, options: Json) -> tuple[_TreeRecords, SealedScan, Json]:
+    model = options['model']
+    TREE3_GAME_RECORDS.require_model(model)
+    _classification(options['action_contract'],options['purpose'],options['synthetic_capacity'],TREE3_GAME_RECORDS)
+    checksum(options['expected_digest']); checksum(options['action_config_hash'])
+    _check_expected_binding(options.get('expected_tree_descriptor'), options.get('expected_feature_signature'))
+    scan = options.get('_scan') or SealedScan(max_owned_bytes=model.resources.max_owned_bytes,
+        deadline=options.get('deadline', float('inf')))
+    raw = scan.object(directory/'inference.json', options['expected_digest'])
+    return game_records(raw), scan, raw
+
+
 def inspect_game_artifact_v3(directory: Path, **options: Any) -> tuple[Json, str]:
-    from gf_common.card_instance_game_tree import SOURCE_KIND, origin
-    return inspect_artifact(directory, _context=TREE3_GAME_RECORDS,
-        _expected_source=(SOURCE_KIND, origin()), **options)
+    context, scan, raw = _game_artifact_context(directory, options)
+    options['_scan'] = scan
+    return inspect_artifact(directory, _context=context,
+        _expected_source=context.source_identity(raw), **options)
 
 
 def load_game_artifact_v3(directory: Path, **options: Any) -> LoadedGameTreeV3:
-    from gf_common.card_instance_game_tree import SOURCE_KIND, origin
-    return load_artifact(directory, _context=TREE3_GAME_RECORDS,
-        _expected_source=(SOURCE_KIND, origin()), **options)
+    context, scan, raw = _game_artifact_context(directory, options)
+    options['_scan'] = scan
+    return load_artifact(directory, _context=context,
+        _expected_source=context.source_identity(raw), **options)

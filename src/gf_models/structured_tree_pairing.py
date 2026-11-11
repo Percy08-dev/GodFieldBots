@@ -29,10 +29,37 @@ from gf_models.structured_tree_config import (
 class _TreeRecords:
     modern: bool
     game: bool = False
+    packed: bool = False
 
     @property
     def schema(self) -> int:
+        return 5 if self.packed else 4 if self.modern else 3
+
+    @property
+    def numeric_schema(self) -> int:
         return 4 if self.modern else 3
+
+    @property
+    def inference_schema(self) -> int:
+        return self.numeric_schema
+
+    @property
+    def numeric_extra_fields(self) -> set[str]:
+        return {'source_kind', 'source_origin'} if self.modern else set()
+
+    @property
+    def source_fields(self) -> tuple[str, ...]:
+        return ('source_kind', 'source_origin', 'storage_binding') if self.packed else ('source_kind', 'source_origin')
+
+    def source_identity(self, raw: Json) -> tuple[Any, ...]:
+        self.source(raw)
+        return tuple(raw[key] for key in self.source_fields)
+
+    def numeric_source(self, raw: Json, request: Json) -> None:
+        self.source(request)
+        for key in self.numeric_extra_fields:
+            if canonical(raw[key]) != canonical(request[key]):
+                raise ContractError('numeric Tree source differs from SAME immutable request')
 
     @property
     def features(self) -> Any:
@@ -40,7 +67,8 @@ class _TreeRecords:
 
     @property
     def extra_fields(self) -> set[str]:
-        return {'source_kind', 'source_origin'} if self.modern else set()
+        return ({'source_kind', 'source_origin', 'storage_binding'} if self.packed
+            else {'source_kind', 'source_origin'} if self.modern else set())
 
     @property
     def label(self) -> str:
@@ -94,7 +122,7 @@ class _TreeRecords:
             from gf_common.card_instance_game_tree import checked_source
             if toy:
                 raise ContractError('qualified game Tree cannot be toy/component origin')
-            checked_source(raw)
+            checked_source(raw, packed=self.packed)
             return
         if toy:
             if raw['source_kind'] is not None or raw['source_origin'] is not None:
@@ -115,12 +143,27 @@ class _TreeRecords:
 TREE2_RECORDS = _TreeRecords(False)
 TREE3_RECORDS = _TreeRecords(True)
 TREE3_GAME_RECORDS = _TreeRecords(True, True)
+TREE3_PACKED_GAME_RECORDS = _TreeRecords(True, True, True)
 
 
 def _records(value: _TreeRecords) -> _TreeRecords:
-    if value is not TREE2_RECORDS and value is not TREE3_RECORDS and value is not TREE3_GAME_RECORDS:
+    if value is not TREE2_RECORDS and value is not TREE3_RECORDS and value is not TREE3_GAME_RECORDS and value is not TREE3_PACKED_GAME_RECORDS:
         raise ContractError('explicit closed Tree record context required')
     return value
+
+def game_records(raw: Json) -> _TreeRecords:
+    """Closed source-value dispatch only. It grants no Source or fit authority."""
+    from gf_common.card_instance_game_tree import PACKED_SOURCE_KIND, SOURCE_KIND
+    kind = raw.get('source_kind')
+    if kind == PACKED_SOURCE_KIND:
+        context = TREE3_PACKED_GAME_RECORDS
+    elif kind == SOURCE_KIND:
+        context = TREE3_GAME_RECORDS
+    else:
+        raise ContractError('exact known game Tree source subtype required')
+    context.source(raw)
+    return context
+
 
 ENVELOPE_RECIPE='tree-fit-model-envelope-v1'
 
@@ -254,7 +297,8 @@ class TrainedProvenanceV4(TrainedProvenance):
 def _parse_provenance(cls:Any,value:Any,context:_TreeRecords)->Any:
     import re
     raw=closed(value,PROVENANCE_FIELDS|context.extra_fields)
-    expected_kind='structured-fixed-dataset3-fit' if context.modern else 'structured-fixed-dataset2-fit'
+    expected_kind=('structured-fixed-dataset4-fit' if context.packed else
+        'structured-fixed-dataset3-fit' if context.modern else 'structured-fixed-dataset2-fit')
     if type(raw['schema_version']) is not int or raw['schema_version']!=context.schema or raw['kind']!=expected_kind:
         raise ContractError('closed trained provenance/context mismatch')
     if type(raw['training_run_id']) is not str or re.fullmatch('[0-9a-f]{32}',raw['training_run_id']) is None:
@@ -270,13 +314,20 @@ class GameTrainedProvenanceV4(TrainedProvenanceV4):
         return _parse_provenance(cls, value, TREE3_GAME_RECORDS)
 
 
+class PackedGameTrainedProvenanceV5(TrainedProvenanceV4):
+    @classmethod
+    def parse(cls, value: Any) -> PackedGameTrainedProvenanceV5:
+        return _parse_provenance(cls, value, TREE3_PACKED_GAME_RECORDS)
+
+
 def _provenance(value:Any,context:_TreeRecords)->TrainedProvenance:
-    return (GameTrainedProvenanceV4 if context.game else TrainedProvenanceV4 if context.modern else TrainedProvenance).parse(value)
+    return (PackedGameTrainedProvenanceV5 if context.packed else GameTrainedProvenanceV4 if context.game else TrainedProvenanceV4 if context.modern else TrainedProvenance).parse(value)
 
 
 def provenance_for_request(request:Json,request_sha:str,*,_context:_TreeRecords=TREE2_RECORDS)->TrainedProvenance:
     context=_records(_context);validate_request(request,_context=context);_sha(request_sha)
-    value={'schema_version':context.schema,'kind':'structured-fixed-dataset3-fit' if context.modern else 'structured-fixed-dataset2-fit',
+    value={'schema_version':context.schema,'kind':('structured-fixed-dataset4-fit' if context.packed else
+        'structured-fixed-dataset3-fit' if context.modern else 'structured-fixed-dataset2-fit'),
         'training_run_id':request['run_id'],'request_sha256':request_sha,'dataset_manifest_sha256':request['dataset_manifest_sha256'],
         'input_binding':request['input_binding'],**{key:request[key] for key in context.extra_fields}}
     return _provenance(value,context)
@@ -391,12 +442,12 @@ def validate_input_envelope(value:Any,request:Json,*,_context:_TreeRecords=TREE2
     """Pure envelope/typed-descriptor link, before allocating native inputs."""
     from gf_models.sharded_arrays import validate_bundle_metadata
     context=_records(_context)
-    raw=closed(value,{'schema_version','kind','action_config_hash','feature_signature','label_recipe','input_binding','row_counts','data'}|context.extra_fields)
-    context.source(raw)
-    if type(raw['schema_version']) is not int or raw['schema_version']!=context.schema or raw['kind']!='structured-tree-fit-inputs':
+    raw=closed(value,{'schema_version','kind','action_config_hash','feature_signature','label_recipe','input_binding','row_counts','data'}|context.numeric_extra_fields)
+    context.numeric_source(raw, request)
+    if type(raw['schema_version']) is not int or raw['schema_version']!=context.numeric_schema or raw['kind']!='structured-tree-fit-inputs':
         raise ContractError('Tree2 closed numeric input envelope3 required')
     _sha(raw['action_config_hash'])
-    for key in ('feature_signature','label_recipe','input_binding','row_counts',*context.extra_fields):
+    for key in ('feature_signature','label_recipe','input_binding','row_counts',*context.numeric_extra_fields):
         if canonical(raw[key])!=canonical(request[key]):raise ContractError('Tree2 input/request common fields differ: '+key)
     model=context.configured({**request['model'],'checkpoint':None,**request['execution']})
     if context.layout(model.encoder)['feature_signature']!=raw['feature_signature']:
@@ -551,7 +602,7 @@ def inspect_training(directory:Any,*,expected_binding:TrainingBinding|None=None,
     inference,text=inspect_artifact(directory/'artifact',expected_digest=inference_sha,model=model,
         action_config_hash=inference['action_config_hash'],action_contract=(parse_card_instance_contract if context.modern else parse_action_contract)(classification['action_contract']),
         purpose=classification['purpose'],synthetic_capacity=classification['synthetic_capacity'],deadline=deadline,_scan=scan,_context=context,
-        _expected_source=None if not context.modern else (request['source_kind'],request['source_origin']))
+        _expected_source=None if not context.modern else context.source_identity(request))
     validate_fitted_parameters(text,request,model)
     validate_pair_records(request,completion,inference,request_sha256=request_sha,inference_sha256=inference_sha,model_sha256=model_sha,_context=context)
     envelope,_,_=inspect_fit_inputs(directory,request,scan,_context=context)
@@ -562,9 +613,9 @@ def inspect_training(directory:Any,*,expected_binding:TrainingBinding|None=None,
     for name,sha in completion['outputs']['files'].items():
         with scan.file(directory/name,sha):pass
     receipt=scan.object(directory/'child-result.json',completion['outputs']['files']['child-result.json'])
-    closed(receipt,{'schema_version','kind','request_sha256','input_files','metrics','inference_sha256','model_sha256'}|context.extra_fields)
-    context.source(receipt)
-    if (type(receipt['schema_version']) is not int or receipt['schema_version']!=context.schema or receipt['kind']!='structured-tree-fit-result'
+    closed(receipt,{'schema_version','kind','request_sha256','input_files','metrics','inference_sha256','model_sha256'}|context.numeric_extra_fields)
+    context.numeric_source(receipt, request)
+    if (type(receipt['schema_version']) is not int or receipt['schema_version']!=context.numeric_schema or receipt['kind']!='structured-tree-fit-result'
             or receipt['request_sha256']!=request_sha or receipt['input_files']!=request['input_files']
             or canonical(receipt['metrics'])!=canonical(completion['metrics'])
             or receipt['inference_sha256']!=inference_sha or receipt['model_sha256']!=model_sha):
@@ -612,7 +663,7 @@ def resolve_checkpoint(directory:Any,*,max_owned_bytes:int=2*1024**3,deadline:fl
     scan=SealedScan(max_owned_bytes=max_owned_bytes,deadline=deadline)
     _container(scan,directory,{'inference.json':'file','model.txt':'file'})
     manifest=scan.object(directory/'inference.json')
-    if (type(manifest.get('schema_version')) is not int or manifest['schema_version']!=context.schema
+    if (type(manifest.get('schema_version')) is not int or manifest['schema_version']!=context.inference_schema
             or manifest.get('kind')!='structured-tree-inference' or manifest.get('fit_origin')!='toy' or manifest.get('provenance') is not None):
         raise ContractError('bare trained/unknown Tree2 artifact cannot bind without explicit paired Training3 root')
     context.source(manifest,toy=True)
@@ -879,17 +930,32 @@ def game_fit_admission(model: ConfiguredTreeModelV3, fit: Json, rows: Json, *,
 
 
 def validate_game_request(value: Any) -> Json:
-    return validate_request(value, _context=TREE3_GAME_RECORDS)
+    return validate_request(value, _context=game_records(value))
 
+
+
+def _game_pair_context(directory: Any, options: Json) -> _TreeRecords:
+    from pathlib import Path
+
+    from gf_models.structured_sealed import SealedScan
+    path = Path(directory)/'request.json'
+    if not path.exists():
+        return TREE3_GAME_RECORDS  # Existing absent/bare-root refusal remains in the actual reader.
+    scan = SealedScan(max_owned_bytes=options.get('max_owned_bytes', 2*1024**3), deadline=options.get('deadline', float('inf')))
+    raw = scan.object(path)
+    context = game_records(raw)
+    validate_request(raw, _context=context)
+    scan.finalize()
+    return context
 
 
 def inspect_training_game_v3(directory: Any, **options: Any) -> PairedTraining:
     """Retain ACTUAL healthy real pair custody; serialized binding is not its owner."""
-    return inspect_training(directory, _context=TREE3_GAME_RECORDS, **options)
+    return inspect_training(directory, _context=_game_pair_context(directory,options), **options)
 
 
 def resolve_checkpoint_game_v3(directory: Any, **options: Any) -> tuple[Any, str, TrainingBinding]:
-    artifact, inference_sha256, binding = resolve_checkpoint(directory, _context=TREE3_GAME_RECORDS, **options)
+    artifact, inference_sha256, binding = resolve_checkpoint(directory, _context=_game_pair_context(directory,options), **options)
     if type(binding) is not TrainingBinding:
         raise ContractError('real game Tree requires a trained complete pair')
     return artifact, inference_sha256, binding

@@ -294,10 +294,13 @@ async def _run_corrected(loaded: LoadedConfig, command: str,
         from gf_training.group_pack_collection import GroupPackCollection
         owned_directory = None
         if collection is not None:
-            if _final_validation_context is not None or owned_ledger is None:
-                raise ContractError('packed final collection integration is not implemented')
-            online = _validate_online_collection(loaded, cast(CollectionPlan, collection), owned_ledger, preflight_deadline)
-            owned_directory = Path(config.storage.db_root) / online.state['run_id'] / 'collections' / collection.linkage['batch_id']
+            if owned_ledger is None:
+                raise ContractError('packed owned collection requires its SAME actual ledger')
+            if _final_validation_context is None:
+                online = _validate_online_collection(loaded, cast(CollectionPlan, collection), owned_ledger, preflight_deadline)
+                owned_directory = Path(config.storage.db_root) / online.state['run_id'] / 'collections' / collection.linkage['batch_id']
+            else:
+                _validate_final_collection(loaded, collection, owned_ledger, _final_validation_context, preflight_deadline)
         packed = GroupPackCollection(config.storage.settings(), run_id, deadline=work_deadline,
                                      owned_directory=owned_directory)
 
@@ -683,7 +686,9 @@ async def collect_formal_final_validation(loaded: LoadedConfig, parent: Path, ou
                 vars(error)['_game_final_validation_cleanup_owner'] = context
                 vars(error)['_game_final_validation_parent_owner'] = original
             raise
-        context._finish_after_owned_parent(original)
+        public_facts = context._finish_after_owned_parent(original)
+        if public_facts is not None:
+            facts = public_facts
     return facts
 
 

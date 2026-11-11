@@ -203,18 +203,18 @@ dispatch; CLI corresponding guards/composition; Rust formal/final-slot/control
 provider dispatch and package stub/capability declarations; focused tests. No
 new runtime dependency/Simulator edits. Root owns docs/assets/capability activation.
 
-- [ ] Explicit storage-only formal variant and exact unchanged budgets/algorithm;
+- [x] Explicit storage-only formal variant and exact unchanged budgets/algorithm;
   old declarations/stop/parents remain exact and cannot be retrofitted.
-- [ ] SAME pending owner/private reader → Source/actor close → actual parent close
+- [x] SAME pending owner/private reader → Source/actor close → actual parent close
   → public facts/pointer commit; every failure/cancellation/late-swap boundary.
-- [ ] Exact native request2/summary2/final-slot provider metadata and four-method
+- [x] Exact native request2/summary2/final-slot provider metadata and four-method
   lifecycle/escaped packet retirement; no flag/FD grants Python Source authority.
-- [ ] Dataset4 full three-parent/three-public-final64 qualification/homogeneity,
+- [x] Dataset4 full three-parent/three-public-final64 qualification/homogeneity,
   labels/splits/correspondence/provenance, explicit paired fit5 context and Tree3
   inference4 subtype; reject mixed storage and short/fixture promotion.
-- [ ] Original input/feature/label/score equality, controlled fixtures and fresh
+- [x] Original input/feature/label/score equality, controlled fixtures and fresh
   fitting without claiming real Source qualification; no prohibited campaign.
-- [ ] Independent reviews, relevant checks and root records genuine formal-
+- [x] Independent reviews, relevant checks and root records genuine formal-
   positive/real-source fit NOT RUN if no already eligible parent exists.
 
 ### Task 4: Whole verification and comparison

@@ -271,6 +271,8 @@ class GameSelectedInput:
 
 class _GameTreeOriginals:
     """One concrete three-parent/raw-source lifetime, never constructed from arrays."""
+    _packed = False
+
     def __setattr__(self, name: str, value: Any) -> None:
         if not name.startswith('_') and getattr(self,'_entered',False):
             raise AttributeError('original game Source configuration is immutable after entry')
@@ -279,17 +281,19 @@ class _GameTreeOriginals:
     def __init__(self, parents: tuple[Path, ...], validations: tuple[Path, ...], settings: PreparationConfig, *,
                  encoder: TreeEncoderConfigV3, max_owned_bytes: int, deadline: float,
                  extra_owned_bytes: int = 0, child_limit_bytes: int = 0,
-                 ownership: GameSourceCustody | None = None) -> None:
+                 ownership: GameSourceCustody | None = None, packed: bool = False) -> None:
+        self._packed = packed
         self.settings = _settings(settings, max_owned_bytes, deadline)
         _reader_preflight(self.settings)
         self.encoder = _encoder(encoder)
         self.limit, self.deadline = max_owned_bytes, deadline
-        self._custody = GameSourceCustody(parents, validations, deadline=deadline, ownership=ownership)
+        self._custody = GameSourceCustody(parents, validations, deadline=deadline, ownership=ownership, packed=packed)
         self.original_roots = (*self._custody.parents, *self._custody.validations)
         self._budget = GameTreeBudget(max_owned_bytes, dataset_bytes=extra_owned_bytes+131072,
             child_limit_bytes=child_limit_bytes)
         self._extra = extra_owned_bytes
         self._scan = SealedScan(max_owned_bytes=max_owned_bytes, deadline=deadline)
+        self._logical_controls: dict[Path, str] = {}
         self._parents: list[FormalGameParent] = []
         self._sources: list[GameFinalValidationSource] = []
         self._source_scopes: list[Any] = []
@@ -350,6 +354,28 @@ class _GameTreeOriginals:
         reader.finalize()
         return value
 
+    def _logical_object(self, owner: Any, path: Path, expected: str | None = None) -> Json:
+        from gf_training.group_pack_game_source import PackedSourceOwner
+        if not self._packed or type(owner) is not PackedSourceOwner:
+            raise ContractError('exact retained Dataset4 original wrapper required')
+        name = path.relative_to(owner.root).as_posix()
+        size = owner._entries[name].get('length', owner._entries[name].get('bytes'))
+        self._read_peak = max(self._read_peak, 32*size+65536)
+        self._reserve_controls(self._persistent+self._read_peak+self._scan.retained+4096+4*len(str(path)))
+        value = owner.object(path)
+        sha = owner.files[name]['sha256']
+        if expected is not None and sha != game.sha256(expected):
+            raise ContractError('packed original Dataset control hash differs')
+        previous = self._logical_controls.get(path)
+        if previous is not None and previous != sha:
+            raise ContractError('packed Dataset original control changed')
+        self._logical_controls[path] = sha
+        owner.finalize()
+        return value
+
+    def _control_digest(self, path: Path) -> str:
+        return self._logical_controls[path] if path in self._logical_controls else self._scan.files[path][1]
+
     def __enter__(self) -> Self:
         if self._entered or self._closed:
             raise ContractError('game original custody has exactly one lifetime')
@@ -378,6 +404,10 @@ class _GameTreeOriginals:
                 state, records = parent.state, parent.records
                 if state is None or records is None:
                     raise ContractError('SAME admitted parent must retain complete original state/generations')
+                from gf_common.card_instance_formal import PACKED_RUN_VARIANT, RUN_VARIANT
+                if (type(state.get('schema_version')) is not int or state['schema_version'] != (4 if self._packed else 3)
+                        or state.get('run_variant') != (PACKED_RUN_VARIANT if self._packed else RUN_VARIANT)):
+                    raise ContractError('Dataset requires three homogeneous explicit formal storage variants')
                 if state['seed'] != game.SEEDS[index]:
                     raise ContractError('actual original formal parents must be ordered17/29/43')
                 if state['effective_config']['preprocessing']['backend'] != self.settings.backend:
@@ -385,7 +415,8 @@ class _GameTreeOriginals:
                 self._states.append(state); self._records.append(records)
                 self._parent_rows.append(self._parent_row(index))
                 token = self._custody.ownership_for(self._custody.validations[index])
-                if type(token) is not ValidationManifestOwnership:
+                from gf_training.card_instance_source_locks import ValidationLocatorOwnership
+                if type(token) is not (ValidationLocatorOwnership if self._packed else ValidationManifestOwnership):
                     raise ContractError('SAME canonical-manifest custody token required')
                 scope = open_parent_game_final_validation(parent, self._custody.validations[index],
                     manifest_ownership=token, budget_loan=loan, max_owned_bytes=self.limit, deadline=self.deadline)
@@ -436,7 +467,8 @@ class _GameTreeOriginals:
             'registry_sha256': self._scan.files[directory/'artifact-registry.json'][1],
             'final_generation': state['updates'], 'final_generation_sha256': state['generation_sha256'],
             'final_inference_sha256': records[-1]['inference_sha256'], 'generations': generations,
-            'elapsed_seconds': state['elapsed_seconds']}
+            'elapsed_seconds': state['elapsed_seconds'],
+            **({'storage_binding': state['storage_binding']} if self._packed else {})}
 
     def recheck(self) -> None:
         self._live()
@@ -507,6 +539,8 @@ class _GameTreeOriginals:
         # for309-digit finite integral clocks. No observed-run maxima or raw
         # episode/NN buffers are used to admit this management-only clone.
         encoded = state_bytes+6*len(str(self._custody.validations[index]).encode())+16384
+        if self._packed:
+            encoded += len(self._sources[index]._facts)
         self._reserve_controls(self._persistent+self._read_peak+self._scan.retained+32*encoded+65536)
         return self._sources[index].facts
 
@@ -538,15 +572,27 @@ class _GameTreeOriginals:
         update: Json | None = None
         if validation:
             directory = self._custody.validations[index]
-            manifest = self._object(directory/'manifest.json', self._facts(index)['manifest_sha256'])
-            source_set = self._final_source_set(index, directory, manifest)
+            facts = self._facts(index)
+            if self._packed:
+                slot = self._parents[index]._packed_final_originals
+                if (slot is None or slot.owner is None or facts.get('schema_version') != 2
+                        or facts.get('kind') != 'card-instance-packed-final-validation-facts'
+                        or self._sources[index]._pending is not None):
+                    raise ContractError('Dataset4 requires SAME PUBLIC packed final64 Source')
+                manifest = self._logical_object(slot.owner, directory/'manifest.json', facts['manifest_sha256'])
+                source_set = facts['source_set_sha256']
+            else:
+                manifest = self._object(directory/'manifest.json', facts['manifest_sha256'])
+                source_set = self._final_source_set(index, directory, manifest)
             numeric = None
             elapsed = manifest['elapsed_seconds']
         else:
             record = self._records[index][generation+1]
             update = self._object(directory/'updates'/f'{generation+1:06}.json', record['update_sha256'])
             collection_directory = _relative(directory, update['collection'])
-            manifest = self._object(collection_directory/'manifest.json', update['collection_manifest_sha256'])
+            manifest = (self._logical_object(self._parents[index].scan.packed_owner(collection_directory),
+                collection_directory/'manifest.json', update['collection_manifest_sha256']) if self._packed else
+                self._object(collection_directory/'manifest.json', update['collection_manifest_sha256']))
             numeric_directory = _relative(directory, update['numeric'])
             numeric_metadata = self._object(numeric_directory/'rollout.json', update['numeric_sha256'])
             if (numeric_metadata['schema_version'] != 4 or numeric_metadata['kind'] != 'structured-rollout'
@@ -564,10 +610,17 @@ class _GameTreeOriginals:
             raise ContractError('original C5 must belong to SAME actual parent/generation/role')
         row = {'parent_index': index, 'directory': str(directory), 'collection_role': manifest['collection_role'],
             'split': 'validation' if validation else 'train', 'generation': generation,
-            'manifest_sha256': self._scan.files[directory/'manifest.json'][1], 'source_set_sha256': source_set,
+            'manifest_sha256': self._control_digest(directory/'manifest.json'), 'source_set_sha256': source_set,
             'schedule_sha256': digest(manifest['schedule']), 'bindings_sha256': digest(manifest['policy_bindings']),
             'original_correspondence': None, 'numeric': numeric, 'selected_roles': [], 'counts': {},
             'elapsed_seconds': elapsed}
+        if self._packed:
+            if validation:
+                proof = facts
+            else:
+                assert update is not None
+                proof = update['source_proof']
+            row.update(storage=proof['storage'], custody=proof['custody'])
         return row, manifest, update
 
     def selected_inputs(self) -> Iterator[tuple[str, GameSelectedInput]]:
@@ -652,7 +705,7 @@ class _GameTreeOriginals:
                             del borrow
                         self._sync(retired=True)
                     if validation:
-                        row['original_correspondence'] = game.final_correspondence(row['manifest_sha256'],digests)
+                        row['original_correspondence'] = game.final_correspondence(row['manifest_sha256'],digests,packed=self._packed)
                     else:
                         assert update is not None
                         from gf_training.card_instance_source import recorded_plan
@@ -661,15 +714,19 @@ class _GameTreeOriginals:
                         plan,_,_ = recorded_plan(self._custody.parents[parent_index],self._states[parent_index],
                             self._records[parent_index],generation,self.deadline)
                         root = self._custody.parents[parent_index]
-                        fingerprint = digest({'run_id':self._states[parent_index]['run_id'],
+                        fingerprint_fields = {'run_id':self._states[parent_index]['run_id'],
                             'config_sha256':self._states[parent_index]['config_sha256'],
                             'identity':self._states[parent_index]['identity'],'execution':self._states[parent_index]['execution'],
                             'plan':plan.linkage,'files':{str(generation_path(root,generation).relative_to(root)):
                                 self._parent_rows[parent_index]['generations'][generation]['generation_sha256'],
                                 str((checkpoint_path(root,generation)/'inference.json').relative_to(root)):
                                 self._records[parent_index][generation]['inference_sha256']},
-                            'source_set_sha256':row['source_set_sha256']})
-                        row['original_correspondence'] = _source_correspondence(fingerprint,self._neural['semantics'],tuple(digests),game=True)
+                            'source_set_sha256':row['source_set_sha256']}
+                        if self._packed:
+                            fingerprint_fields.update(recipe='card-instance-packed-source-controls-v1',
+                                storage=row['storage'], custody=row['custody'])
+                        fingerprint = digest(fingerprint_fields)
+                        row['original_correspondence'] = _source_correspondence(fingerprint,self._neural['semantics'],tuple(digests),game=True,storage_binding=self._states[parent_index].get('storage_binding'))
                     roles = row['selected_roles']
                     row['counts'] = {'games':expected_games,'participants':2*expected_games,
                         'selected_decisions':sum(role['accepted_count'] for role in roles),
@@ -689,14 +746,17 @@ class _GameTreeOriginals:
         totals = {split:{key:sum(row['counts'][key] for row in self._collections if row['split']==split)
             for key in game.COUNT_FIELDS} for split in ('train','validation')}
         layout = feature_layout_v3(self.encoder)
-        value = {'schema_version':3,'kind':game.KIND,'selection':game.SELECTION,'label_recipe':game.LABEL,
-            'source_kind':game.SOURCE_KIND,'source_origin':game.origin(),'input_binding':game.input_binding(),
+        value = {'schema_version':4 if self._packed else 3,'kind':game.KIND,'selection':game.SELECTION,'label_recipe':game.LABEL,
+            'source_kind':game.PACKED_SOURCE_KIND if self._packed else game.SOURCE_KIND,
+            'source_origin':game.packed_origin() if self._packed else game.origin(),'input_binding':game.input_binding(),
             'input_recipe':LAYOUT.input_recipe,'tree_projection':{'encoder':asdict(self.encoder),'feature_layout':layout,
                 'feature_signature':layout['feature_signature'],'token_signature':signature(self.encoder.aggregate_window,layout=LAYOUT)},
             'neural_cohort':self._neural,'parents':self._parent_rows,'collections':self._collections,'counts':totals,
             'source_set_sha256':game.source_identity(self._parent_rows,self._collections),
             'shared_generation':game.shared_generation(self._parent_rows,self._collections)}
-        return game.manifest({**value,'content_sha256':digest(value)})
+        if self._packed:
+            value['storage_binding'] = self._states[0]['storage_binding']
+        return (game.packed_manifest if self._packed else game.manifest)({**value,'content_sha256':digest(value)})
 
     def verify_complete(self) -> Json:
         self.recheck()
@@ -791,6 +851,8 @@ class _GameTreeOriginals:
 
 class VerifiedGameTreeDataset3:
     """Concrete real Dataset3/index plus SAME three formal and final Source owners."""
+    _packed = False
+
     def __setattr__(self, name: str, value: Any) -> None:
         if not name.startswith('_') and getattr(self,'_entered',False):
             raise AttributeError('verified game Dataset configuration is immutable after entry')
@@ -799,6 +861,7 @@ class VerifiedGameTreeDataset3:
     def __init__(self, path: Path, expected_digest: str, settings: PreparationConfig, *,
                  max_owned_bytes: int = MAX_OWNED_BYTES, deadline: float,
                  child_limit_bytes: int = 0, ownership: GameSourceCustody | None = None) -> None:
+        self._packed = type(self) is VerifiedGameTreeDataset4
         self.path = Path(path).absolute(); self.expected_digest = game.sha256(expected_digest)
         self.settings = _settings(settings,max_owned_bytes,deadline)
         _reader_preflight(self.settings)
@@ -847,7 +910,7 @@ class VerifiedGameTreeDataset3:
                 self._index.charge(32*info.st_size+65536)
                 value = self._index.object(path,expected)
                 if path == self.path:
-                    self._metadata = game.manifest(value)
+                    self._metadata = (game.packed_manifest if self._packed else game.manifest)(value)
                 else:
                     closed(value,{'schema_version','kind','dataset_content_sha256','seconds','scope'})
                     if (type(value['schema_version']) is not int or value['schema_version']!=1
@@ -867,7 +930,7 @@ class VerifiedGameTreeDataset3:
             validations = tuple(Path(row['directory']) for row in self._metadata['collections'] if row['split']=='validation')
             self._source = _GameTreeOriginals(parents,validations,self.settings,encoder=encoder,
                 max_owned_bytes=self.limit,deadline=self.deadline,extra_owned_bytes=self._index.retained,
-                child_limit_bytes=self._child,ownership=self._ownership)
+                child_limit_bytes=self._child,ownership=self._ownership,packed=self._packed)
             self._source.__enter__()
             self._active = True
             if canonical(self._source._parent_rows)!=canonical(self._metadata['parents']):
@@ -898,10 +961,10 @@ class VerifiedGameTreeDataset3:
         self._live().reserve_sink(amount)
 
     def _retire_fit_sink(self, prepared: Any) -> None:
-        from gf_models.structured_tree_pairing import TREE3_GAME_RECORDS
+        from gf_models.structured_tree_pairing import TREE3_GAME_RECORDS, TREE3_PACKED_GAME_RECORDS
         from gf_training.structured_tree_fit import _PreparedTreeFit
         if (type(prepared) is not _PreparedTreeFit or prepared.dataset is not self
-                or prepared.context is not TREE3_GAME_RECORDS or self._source is None
+                or prepared.context is not (TREE3_PACKED_GAME_RECORDS if self._packed else TREE3_GAME_RECORDS) or self._source is None
                 or any(prepared.blocks.values()) or any(prepared.labels.values()) or prepared._packing_arrays
                 or any(reference() is not None for reference in prepared._row_refs)):
             raise ContractError('actual same prepared row owner and physical retirement required before sink release')
@@ -981,6 +1044,48 @@ class VerifiedGameTreeDataset3:
             self.release()
 
 
+
+class VerifiedGameTreeDataset4(VerifiedGameTreeDataset3):
+    """Exact Dataset4 subtype retaining complete packed formal/public originals."""
+
+
+def verified_game_dataset_type(path: Path, expected_digest: str, settings: PreparationConfig, *, max_owned_bytes: int, deadline: float) -> type[VerifiedGameTreeDataset3]:
+    """Select a closed schema only. The returned class grants no Source rights."""
+    entry = time.monotonic()
+    _settings(settings,max_owned_bytes,deadline)
+    deadline = min(deadline,entry+settings.wall_seconds-settings.cleanup_seconds)
+    _reader_preflight(settings)
+    info = path.lstat()
+    if not stat.S_ISREG(info.st_mode) or not 0 < info.st_size <= min(64,settings.max_source_file_mib)*1024**2:
+        raise ContractError('game Dataset schema metadata requires the original bounded regular source file')
+    scan = SealedScan(max_owned_bytes=max_owned_bytes, deadline=deadline)
+    raw = scan.object(path, game.sha256(expected_digest))
+    schema = raw.get('schema_version')
+    if type(schema) is not int or schema not in (3, 4):
+        raise ContractError('explicit game Dataset3 or Dataset4 required')
+    scan.finalize()
+    return VerifiedGameTreeDataset4 if schema == 4 else VerifiedGameTreeDataset3
+
+
+def _packed_parent_variant(parents: tuple[Path, ...], *, max_owned_bytes: int, deadline: float) -> bool:
+    from gf_common.card_instance_formal import PACKED_RUN_VARIANT, RUN_VARIANT
+    from gf_common.group_pack_game import packed_state
+    if len(parents) != 3:
+        raise ContractError('exact three formal parents required for schema selection')
+    scan = SealedScan(max_owned_bytes=max_owned_bytes, deadline=deadline)
+    modes = set()
+    for directory in parents:
+        raw = scan.object(directory/'run.json')
+        mode = packed_state(raw)
+        if type(raw.get('schema_version')) is not int or raw['schema_version'] != (4 if mode else 3) or raw.get('run_variant') != (PACKED_RUN_VARIANT if mode else RUN_VARIANT):
+            raise ContractError('ordinary/fixture/short parent has no original formal declaration')
+        modes.add(mode)
+    if len(modes) != 1:
+        raise ContractError('Dataset mixed storage parents are unsupported')
+    scan.finalize()
+    return modes.pop()
+
+
 def build_game_tree_dataset(parents: tuple[Path,...], validations: tuple[Path,...], output: Path,
                             settings: PreparationConfig, *, encoder: TreeEncoderConfigV3,
                             max_owned_bytes: int = MAX_OWNED_BYTES, deadline: float,
@@ -988,9 +1093,13 @@ def build_game_tree_dataset(parents: tuple[Path,...], validations: tuple[Path,..
     """Build a recipe index by consuming SAME actual originals; no arrays cached."""
     from gf_training.structured_lineage import _ChainScan, _write
     started = time.monotonic()
+    _settings(settings,max_owned_bytes,deadline)
+    deadline = min(deadline,started+settings.wall_seconds-settings.cleanup_seconds)
+    _reader_preflight(settings)
     output,ancestors = _outside_output(output,[*parents,*validations])
+    packed = _packed_parent_variant(parents,max_owned_bytes=max_owned_bytes,deadline=deadline)
     with _GameTreeOriginals(parents,validations,settings,encoder=encoder,max_owned_bytes=max_owned_bytes,
-                           deadline=deadline,ownership=ownership) as source:
+                           deadline=deadline,ownership=ownership,packed=packed) as source:
         for _,sample in source.selected_inputs():
             del sample
         manifest = source.verify_complete()
@@ -1017,7 +1126,11 @@ def build_game_tree_dataset(parents: tuple[Path,...], validations: tuple[Path,..
 def inspect_game_tree_dataset(path: Path, *, expected_digest: str, settings: PreparationConfig,
                               max_owned_bytes: int = MAX_OWNED_BYTES, deadline: float,
                               ownership: GameSourceCustody | None = None) -> Json:
-    with VerifiedGameTreeDataset3(path,expected_digest,settings,max_owned_bytes=max_owned_bytes,
+    entry = time.monotonic()
+    _settings(settings,max_owned_bytes,deadline)
+    deadline = min(deadline,entry+settings.wall_seconds-settings.cleanup_seconds)
+    dataset_type = verified_game_dataset_type(path,expected_digest,settings,max_owned_bytes=max_owned_bytes,deadline=deadline)
+    with dataset_type(path,expected_digest,settings,max_owned_bytes=max_owned_bytes,
                                  deadline=deadline,ownership=ownership) as dataset:
         for _,sample in dataset.selected_inputs():
             del sample

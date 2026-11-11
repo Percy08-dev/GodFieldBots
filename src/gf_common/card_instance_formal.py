@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+from pathlib import PurePosixPath
 from typing import Any
 
 from gf_common.domain import ContractError, Json, canonical, clone, closed, digest, integer
@@ -21,6 +22,50 @@ STOP_FIELDS = {'schema_version', 'kind', 'recipe_id', 'recipe_sha256', 'declarat
 CLOCK_FIELDS = {'invocation_started_unix', 'invocation_started_monotonic', 'observed_monotonic',
     'admission_deadline_monotonic', 'execution_deadline_monotonic', 'wall_deadline_monotonic'}
 NATIVE_FORMAL_MARKER = 'run3-formal-parent-v1;declaration1;stop1'
+PACKED_RECIPE_SHA256 = '27853b108089667e3e5f3e8f9d54c202b2f76583334f40954f1a1ab2a6844a47'
+PACKED_RECIPE_ID = 'card-instance-formal-ppo-group-pack-v1'
+PACKED_RUN_VARIANT = 'formal-packed-parent-v1'
+PACKED_DECLARATION_FIELDS = DECLARATION_FIELDS | {'storage_binding', 'logical_config_sha256'}
+NATIVE_PACKED_FORMAL_MARKER = 'run4-formal-packed-parent-v1;declaration2;stop2'
+
+
+def packed_recipe_bytes(raw: bytes) -> Json:
+    if type(raw) is not bytes or hashlib.sha256(raw).hexdigest() != PACKED_RECIPE_SHA256:
+        raise ContractError('formal pinned storage variant recipe bytes differ')
+    value = json.loads(raw)
+    if (value['base_recipe_id'] != RECIPE_ID or value['base_recipe_sha256'] != RECIPE_SHA256
+            or value['algorithm_recipe_sha256'] != ALGORITHM_SHA256
+            or (canonical(value) + '\n').encode() != raw):
+        raise ContractError('formal storage variant base/algorithm/canonical bytes differ')
+    return value
+
+
+def checked_packed_config(value: Json, recipe: Json) -> Json:
+    """Check the exact storage table before checking the complete old literal."""
+    storage = closed(value.get('storage'), {'format', 'db_root', 'ram_root', 'budget_mib', 'queue_mib', 'max_pack_mib'})
+    if storage['format'] != 'sqlite-group-pack-v1':
+        raise ContractError('formal exact group Pack storage format required')
+    for name, expected in (('budget_mib', 2048), ('queue_mib', 512), ('max_pack_mib', 256)):
+        if type(storage[name]) is not int or storage[name] != expected:
+            raise ContractError('formal storage sizes differ from frozen variant')
+    for name in ('db_root', 'ram_root'):
+        path = storage[name]
+        if type(path) is not str or not path or not PurePosixPath(path).is_absolute():
+            raise ContractError('formal explicit absolute storage root required')
+    return checked_config({key: item for key, item in value.items() if key != 'storage'}, recipe)
+
+
+def _packed_formal(state: Json) -> bool:
+    packed = state.get('run_variant') == PACKED_RUN_VARIANT
+    if packed:
+        from gf_common.group_pack_game import checked_storage_binding
+        if type(state.get('schema_version')) is not int or state['schema_version'] != 4:
+            raise ContractError('formal packed variant requires explicit Run4')
+        checked_storage_binding(state.get('storage_binding'))
+    elif 'storage_binding' in state or 'storage' in state.get('effective_config', {}):
+        raise ContractError('formal storage requires explicit packed variant')
+    return packed
+
 
 
 def _sha(value: Any) -> str:
@@ -77,31 +122,37 @@ def planned_execution(config: Json) -> Json:
         for role, binding in (('learner', learner), ('inference', inference))}
 
 
-def declaration_reference(value: Json) -> Json:
+def declaration_reference(value: Json, *, packed: bool = False) -> Json:
     raw = closed(value, REFERENCE_FIELDS)
     for name in ('sha256', 'recipe_sha256', 'algorithm_recipe_sha256'):
         _sha(raw[name])
     integer(raw['seed_slot'], 0)
-    if (raw['relative_path'] != 'formal-declaration.json' or raw['recipe_id'] != RECIPE_ID
-            or raw['recipe_sha256'] != RECIPE_SHA256 or raw['algorithm_recipe_sha256'] != ALGORITHM_SHA256
+    if (raw['relative_path'] != 'formal-declaration.json' or raw['recipe_id'] != (PACKED_RECIPE_ID if packed else RECIPE_ID)
+            or raw['recipe_sha256'] != (PACKED_RECIPE_SHA256 if packed else RECIPE_SHA256) or raw['algorithm_recipe_sha256'] != ALGORITHM_SHA256
             or raw['seed_slot'] not in (17, 29, 43)):
         raise ContractError('formal declaration reference differs from closed recipe')
     return clone(raw)
 
 
 def validate_declaration(value: Json, state: Json, recipe: Json) -> None:
-    raw = closed(value, DECLARATION_FIELDS)
-    expected = checked_config(state['effective_config'], recipe)
-    reference = declaration_reference(state['formal_declaration'])
+    packed = _packed_formal(state)
+    raw = closed(value, PACKED_DECLARATION_FIELDS if packed else DECLARATION_FIELDS)
+    logical = (checked_packed_config if packed else checked_config)(state['effective_config'], recipe)
+    expected = state['effective_config'] if packed else logical
+    reference = declaration_reference(state['formal_declaration'], packed=packed)
     identity = state['identity']
     if canonical(identity.get('formal_parent')) != canonical(reference):
         raise ContractError('formal SAME declaration reference must bind original identity')
     base = {key: val for key, val in identity.items() if key != 'formal_parent'}
-    wanted = {'schema_version': 1, 'kind': 'card-instance-formal-parent-declaration', 'recipe_id': RECIPE_ID,
-        'recipe_sha256': RECIPE_SHA256, 'algorithm_recipe_sha256': ALGORITHM_SHA256,
+    wanted = {'schema_version': 2 if packed else 1,
+        'kind': 'card-instance-formal-packed-parent-declaration' if packed else 'card-instance-formal-parent-declaration',
+        'recipe_id': PACKED_RECIPE_ID if packed else RECIPE_ID,
+        'recipe_sha256': PACKED_RECIPE_SHA256 if packed else RECIPE_SHA256, 'algorithm_recipe_sha256': ALGORITHM_SHA256,
         'seed_slot': expected['training']['seeds'][0], 'config_sha256': digest(expected),
         'config_inputs_sha256': digest(state['config_inputs']), 'input_binding': recipe['input_binding'],
         'execution_identity_sha256': digest(planned_execution(expected)), 'identity_sha256': digest(base)}
+    if packed:
+        wanted.update(storage_binding=state['storage_binding'], logical_config_sha256=digest(logical))
     if (canonical(raw) != canonical(wanted) or reference['seed_slot'] != wanted['seed_slot']
             or canonical(state['execution']) != canonical(planned_execution(expected))
             or state['config_sha256'] != wanted['config_sha256']
@@ -120,6 +171,7 @@ def clock_values(state: Json, invocation_unix: float, invocation_monotonic: floa
 
 def stop_receipt(state: Json, *, invocation_unix: float, invocation_monotonic: float,
                  observed_monotonic: float, owned_bytes: int) -> Json | None:
+    packed = _packed_formal(state)
     clock = clock_values(state, invocation_unix, invocation_monotonic, observed_monotonic)
     for number in clock.values():
         if type(number) not in (float, int) or not math.isfinite(number):
@@ -141,8 +193,10 @@ def stop_receipt(state: Json, *, invocation_unix: float, invocation_monotonic: f
         return None
     if generation == 0:
         raise ContractError('formal zero-update completion is ineligible')
-    return {'schema_version': 1, 'kind': 'card-instance-formal-stop', 'recipe_id': RECIPE_ID,
-        'recipe_sha256': RECIPE_SHA256, 'declaration_sha256': state['formal_declaration']['sha256'],
+    return {'schema_version': 2 if packed else 1,
+        'kind': 'card-instance-formal-packed-stop' if packed else 'card-instance-formal-stop',
+        'recipe_id': PACKED_RECIPE_ID if packed else RECIPE_ID,
+        'recipe_sha256': PACKED_RECIPE_SHA256 if packed else RECIPE_SHA256, 'declaration_sha256': state['formal_declaration']['sha256'],
         'reason': reason, 'generation': generation, 'clock': clock,
         'elapsed_seconds': (invocation_unix + (observed_monotonic - invocation_monotonic)) - state['created_unix'],
         'owned_bytes': owned_bytes, 'admission_reservation_bytes': training['admission_reservation_bytes'],
@@ -167,9 +221,10 @@ def validate_stop(state: Json) -> None:
 
 
 def validate_formal_state(state: Json) -> None:
-    if state.get('run_variant') != RUN_VARIANT:
-        raise ContractError('explicit original formal Run3 variant required')
-    declaration_reference(state['formal_declaration'])
+    packed = _packed_formal(state)
+    if state.get('run_variant') != (PACKED_RUN_VARIANT if packed else RUN_VARIANT):
+        raise ContractError('explicit original formal variant required')
+    declaration_reference(state['formal_declaration'], packed=packed)
     if state['status'] in ('running', 'paused'):
         if state['formal_stop'] is not None:
             raise ContractError('running/paused formal control has no successful stop')

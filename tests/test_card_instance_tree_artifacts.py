@@ -346,7 +346,7 @@ def test_source_reportable_close_precedes_pair_complete_and_release_is_memory_on
     reached = []
     def commit(publication, completion):
         assert owner.child.closed and owner.dataset._closed and owner.dataset._source._closed
-        assert not owner.dataset._source._released
+        assert owner.dataset._source._released
         assert completion['costs']['shared_fixture_construction'] == owner.request['shared_fixture_construction']
         monkeypatch.setattr(owner.dataset._source._scan, 'finalize', lambda: pytest.fail('no late Source IO'))
         monkeypatch.setattr(owner.dataset._index, 'finalize', lambda: pytest.fail('no late index IO'))
@@ -870,3 +870,34 @@ def test_retained_copy_directory_same_inode_reuse_never_retried(trained, tmp_pat
             _, (_, state, actual_close, _) = installed[0]
             if state['replacement'] is not None:
                 actual_close(state['replacement'])
+
+
+@pytest.mark.parametrize('phase', ['before', 'after'])
+def test_actual_fixture_release_failure_is_one_use_before_healthy_completion(actual_dataset, tmp_path, monkeypatch, phase):
+    owner = new_owner(actual_dataset, tmp_path)
+    actual_release = VerifiedFixtureTreeDataset3.release
+    first = OSError('actual fixture memory release '+phase+' failure')
+    attempts = []
+    def release(dataset):
+        attempts.append(dataset)
+        if phase == 'after':
+            actual_release(dataset)
+        raise first
+    monkeypatch.setattr(VerifiedFixtureTreeDataset3, 'release', release)
+    try:
+        with pytest.raises(OSError) as caught:
+            asyncio.run(owner.execute())
+        assert caught.value is first
+        assert len(attempts) == 1 and not owner.closed
+        assert owner.child.closed and owner.child.process.returncode is not None
+        assert owner.dataset._closed and owner.dataset._source._closed
+        path = owner.directory/'training.json'
+        raw = path.read_bytes()
+        assert raw.startswith(b'!') or json.loads(raw)['status'] != 'complete'
+        with pytest.raises(OSError) as retried:
+            asyncio.run(owner.close())
+        assert retried.value is first and len(attempts) == 1 and not owner.closed
+    finally:
+        # Controlled test-only graph disposal after the failure assertions.
+        # The fit-owned failed release stage must remain failed and unqualified.
+        actual_release(owner.dataset)

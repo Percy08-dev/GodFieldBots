@@ -1,6 +1,11 @@
 use crate::json::ValueExt;
 /// Packed original-byte contract accepted after independent reviews.
 pub const CARD_INSTANCE_GROUP_PACK_CAPABILITY: &str = "provider1;proof2;plan4";
+// Explicit packed variants reviewed independently; Source admission remains separate.
+pub const CARD_INSTANCE_PACKED_FORMAL_CAPABILITY: &str =
+    "run4-formal-packed-parent-v1;declaration2;stop2";
+pub const CARD_INSTANCE_PACKED_FINAL_CAPABILITY: &str =
+    "final64-packed;provider1;request2;summary2;lease1";
 pub mod budget;
 mod card_instance_fixture;
 pub mod control_memory;
@@ -976,6 +981,7 @@ impl StructuredBridgeCore {
 /// Candidate structured Source/typed-bank path; markers remain disabled until acceptance.
 struct StructuredSessionBridge {
     provider: Option<Arc<logical_artifacts_bridge::PythonArtifactProvider>>,
+    final_provider: Mutex<Option<Arc<logical_artifacts_bridge::PythonArtifactProvider>>>,
     core: Mutex<Option<StructuredBridgeCore>>,
     retirement: Mutex<Option<retirement::Retirement<structured_session::CohortSession>>>,
     budget: Arc<Budget>,
@@ -992,6 +998,12 @@ fn retire_structured_session(core: structured_session::CohortSession) -> error::
 impl StructuredSessionBridge {
     fn callback_guard(&self) -> PyResult<()> {
         self.provider
+            .as_ref()
+            .map_or(Ok(()), |p| p.check_reentry())
+            .map_err(python_error)?;
+        self.final_provider
+            .lock()
+            .map_err(|_| python_error(Error::Closed))?
             .as_ref()
             .map_or(Ok(()), |p| p.check_reentry())
             .map_err(python_error)
@@ -1131,6 +1143,7 @@ impl StructuredSessionBridge {
         let caller = budget.reserve(0).map_err(python_error)?;
         Ok(Self {
             provider,
+            final_provider: Mutex::new(None),
             core: Mutex::new(Some(core)),
             retirement: Mutex::new(retirement),
             budget,
@@ -1643,12 +1656,13 @@ session_methods!(CardInstanceNativeSession, true, {
         .map_err(|error| provider.retain_on_error(py, error))
     }
 
-    #[pyo3(signature=(request,retained_python_bytes=0))]
+    #[pyo3(signature=(request,retained_python_bytes=0,artifact_provider=None))]
     fn inspect_final_validation<'py>(
         &self,
         py: Python<'py>,
         request: &[u8],
         retained_python_bytes: usize,
+        artifact_provider: Option<Py<PyAny>>,
     ) -> PyResult<Bound<'py, PyBytes>> {
         self.bridge.callback_guard()?;
         // Check pure mode/phase before any caller/wire allocation or poison.
@@ -1687,15 +1701,41 @@ session_methods!(CardInstanceNativeSession, true, {
             result
         })()
         .map_err(python_error)?;
+        let provider = artifact_provider.map(logical_artifacts_bridge::PythonArtifactProvider::new);
+        if let Some(provider) = &provider {
+            provider.check_reentry().map_err(python_error)?;
+            let mut slot = self
+                .bridge
+                .final_provider
+                .lock()
+                .map_err(|_| python_error(Error::Closed))?;
+            if slot.is_some() {
+                return Err(python_error(Error::contract(
+                    "final provider has one lifetime",
+                )));
+            }
+            *slot = Some(provider.clone());
+        }
         let result = py
             .detach(|| {
                 let mut core = self.bridge.core.lock().map_err(|_| Error::Closed)?;
                 let StructuredBridgeCore::Corrected(v) = core.as_mut().ok_or(Error::Closed)? else {
                     return Err(Error::Closed);
                 };
-                v.inspect_final_validation(&raw)
+                v.inspect_final_validation_artifacts(
+                    &raw,
+                    provider
+                        .clone()
+                        .map(|p| p as Arc<dyn logical_artifacts::LogicalArtifactProvider>),
+                )
             })
-            .map_err(python_error)?;
+            .map_err(|error| {
+                let error = python_error(error);
+                match &provider {
+                    Some(p) => p.retain_on_error(py, error),
+                    None => error,
+                }
+            })?;
         Ok(PyBytes::new(py, &result))
     }
     #[pyo3(signature=(episode_index,retained_python_bytes=0))]
@@ -1800,7 +1840,13 @@ session_methods!(CardInstanceNativeSession, true, {
             };
             v.close_final_validation()
         })
-        .map_err(python_error)
+        .map_err(python_error)?;
+        self.bridge
+            .final_provider
+            .lock()
+            .map_err(|_| python_error(Error::Closed))?
+            .take();
+        Ok(())
     }
 
     #[pyo3(signature=(collection_index,episode_index,retained_python_bytes=0))]
@@ -3640,6 +3686,14 @@ fn build_info() -> Vec<(&'static str, &'static str)> {
         ),
         ("card_instance_models", "mlp,gru,transformer"),
         ("card_instance_group_pack", CARD_INSTANCE_GROUP_PACK_CAPABILITY),
+        (
+            "card_instance_packed_formal_controls",
+            CARD_INSTANCE_PACKED_FORMAL_CAPABILITY,
+        ),
+        (
+            "card_instance_packed_final_validation",
+            CARD_INSTANCE_PACKED_FINAL_CAPABILITY,
+        ),
         (
             "card_instance_formal_controls",
             "run3-formal-parent-v1;declaration1;stop1",

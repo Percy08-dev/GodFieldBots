@@ -332,3 +332,112 @@ Artifacts/reviews/raw probes/patch/log inventory are retained under
 `runs/assessments/sqlite-group-pack-v1-20261111/lineage-publication/`.
 This accepts the scoped control fix; final64/Dataset/Tree, whole verification and
 a new actual concurrent comparison remain pending.
+
+## Full-parent HDD concurrency failure and revised condition
+
+Blockcd82db731f234913acbeb2f7aae8ad38 uses Main675ff8c and frozen harnessc84f9d08.
+Its first DIRECTORY parent pauses after1update (234accepted decisions), resumes
+and receives2actual updateACKs, with32recorded games/419accepted decisions and
+one source-request window overlapping the independent6game collector's action
+HTTP. Actual generation0/1/2commit-return anchors are present. At2188.729s the
+parent fails during retention: _prune_staged requires private0700, but the actual
+new D:9p staging directory reports0777. Whole parent remains FAIL/ineligible,
+completed_updates null; these partial observations are not successful runtime
+acceptance. The remaining packed/packed/directory trials stay NOT RUN.
+
+The failure ledger confirms permanent admission fence, settled creations,
+retirement of193actual Popen and19async-process capabilities, no remaining
+unknown tasks/transports/descendants, and the supervised failure-only OS boundary
+exits86. No source repair/resume/pruning skip/permission relaxation follows.
+Original raw/derivedFAIL, exact source/harness/config/device metadata, STARTED
+snapshot, bounded progress diagnostics and terminal receipt are preserved under
+`runs/assessments/sqlite-group-pack-v1-20261111/concurrent-comparison/block-cd82db731f234913acbeb2f7aae8ad38/`.
+The reducer's nested control-read status is not whole-parent Source health.
+
+Root accepts the advisor's explicit RevisedB condition in
+[comparison protocol](../design/sqlite-group-pack-comparison.md): ONE new4trial
+block with PPO parent/checkpoint/numeric/control/original storage all on common
+ext4 in BOTH formats, independent6game collector writes on the SAME D:HDD, with
+distinct DB/catalog/RAM roots. Existing wall/resource/update/device/seed budgets
+are unchanged. This measures the combined ext4PPO+HDDcollector workload, not
+successful full-parent-on-D support or isolated per-component/optimizer-I/O
+causation. PanelA already measures identical-real-byte alternating HDD archival
+storage. Do not pool these conditions or infer a default change. RevisedB
+implementation reviews/probes/execution/audit remain NOT RUN at this entry.
+
+## Final sources: candidate2 acceptance and filesystem limits
+
+Both full independent reviews accept candidate2 after one bounded fix round.
+The original wrapper acquire/refund-after-effect defect, premature last-revoker
+release in both terminal publishers and missing optional artifact preflight
+checks are resolved. Independent correctness81focused+1HOST cancellation checks
+and three actual account fault reproductions pass; conformance90checks pass.
+The broader sandbox review run was interrupted, not a successful suite. The
+candidate2 delta is d162a07d (54files), report61abc30e/manifestbb9b072f; its1469
+HOST checks/116explicit skips and exact-sourceRust157/4ignored are retained.
+
+Post-review control-only filesystem checks finish30PASS/6NOT_EXERCISED across
+ext4/D: and FormalRun3/4 plus all4Tree contexts. Healthy controlled capabilities
+close without identity drift, and visible late mutations are rejected/revoked.
+On D: the compound directory-close/move/foreign-inode construction fails before
+foreign creation when fstat of the held original itself reportsENOENT. Actual
+revoker/error/uncertainty remain retained; committed/revoked/health are not set.
+These6cases do not prove successful invalidation or application retirement.
+Each remaining case runs in its own supervised process; OS exit is separately
+confirmed. The first aggregate probe's FD inventory omitted fstat errors and
+cannot establish retirement. Source/test hashes remain frozen. The reconstructed
+probe does not establish the cause of the earlier lost timestamp-only failure.
+Detailed retained traces/limits are in final-sources/candidate2/filesystem-recovery.
+
+The Tree control primitive omits its semantic fitted-pair postcheck and formal
+metadata lacks real execution/stop evidence. All controls are unqualified, with
+no Source, final64 or fitting permission. Genuine complete formal parent/final64
+and qualified Dataset4 fitting remain NOT RUN. The actual unqualified fixture
+96train/192validation/500round fit and all own-bank directory/packed Rust64
+comparisons remain component evidence only.
+
+## Final integrated build and checks (in progress)
+
+Root integrates the exact reviewed delta, preserving accepted lineage writer
+ASTs, then activates the two specified packed capability declarations. Final
+native sourcef8dd9fa7072441562130a118f1cbb8b6a9cd41f8b843307d782839496de68cd3
+builds release/MIMALLOC with emptyRUSTFLAGS; installedELF
+da042804ecd79c9c943718e30c52903376955ff94d777e38b6e7f7817ec3bb75
+matches its wheel. The prior904038e1package/metadata are saved in final-build/
+native-rollback. Appwheel/sdist source correspondence174files, native88source/
+fixture/config files and7embedded assets pass. Distribution dependency/extras/
+entrypoint/version/Python metadata separately match projectTOML. Mandatory-only
+installed baseline passes with all optional model/native stacks absent.
+
+Final wholeRust157PASS/4ignored109.07s, actualCUDA58PASS34.53s, Ruff(src/tests)
+and fullmypy172PASS. The wholeHOSTpytest initially finishes4754PASS331SKIP with
+2failures and4NumPywarnings1027.46s: an old-binary test used mutableCargo output,
+and an old signature test omitted the accepted optional provider. The immutable
+D093archive is preserved; the reviewed test-only corrections pin it and check
+old call bindings/defaults plus both exact packed markers. Both entire testfiles
+pass137checks/64existing opt-in skips; both formerly failed cases pass and neither
+is skipped. No app/native bytes change for those corrections. Initial whole
+failure logs remain; this is combined evidence, not a fabricated fresh wholePASS.
+
+All five full old-data jobs and audits PASS against the final native: history,
+observation, Parquet index and saved-PPO1/4workers. Their source inventory predates
+only those two reviewed Python test edits and remains preserved, not rewritten.
+Root records that test-only difference explicitly. CPUpreload safety opt-ins,
+revisedB execution/audit and whole-branch final reviews remain pending here.
+
+Final CPU preload safety opt-ins PASS199checks107.08s with the documented flag;
+no production timeout/skip/import workaround. The two-file compatibility test
+delta independently passes137checks/64existing opt-in skips and both original
+failures explicitly pass (not skipped), with exact preservedD093 and installed
+ELF unchanged. Ruff/whitespace pass. These test-only edits do not change either
+built package or any application/native source.
+
+The first revised workload fails BEFORE any trainer/collector/monitor admission
+at its drive-source assertion (0.118s). The current kernel reports escaped D:\134
+rather than the earlier literal D:. All2diagnostic children retire, supervisor86;
+all workloads/remaining trials NOT RUN. Raw failed receipt35a8a62a is preserved.
+The mount parser correction is temporary measurement code only: strict single-
+pass standard mountinfo escape decoding with exact D: or D:\ root identity,
+raw token retained, all filesystem/device/root/physical-HDD checks preserved.
+Independent review and actual admission on the current mount precede execution.
+No block is extended or silently repaired.

@@ -102,7 +102,8 @@ pub(crate) fn manifest_controls(
     c: &Control,
 ) -> Result<()> {
     require(
-        field(state, "run_variant")? == "formal-parent-v1" && field(state, "status")? == "complete",
+        ["formal-parent-v1", "formal-packed-parent-v1"].contains(&field(state, "run_variant")?)
+            && field(state, "status")? == "complete",
         "complete retained formal parent required for final64",
     )?;
     let updates = state.require("updates")?.integer(1, 1000)?;
@@ -189,11 +190,11 @@ pub(crate) fn manifest_controls(
 fn manifest_kind(request: &Value) -> Result<bool> {
     let mode = request.require("manifest")?;
     match field(mode, "kind")? {
-        "canonical" => {
+        "canonical" | "packed-canonical" => {
             mode.closed(&["kind"], &[])?;
             Ok(false)
         }
-        "issued-pending" => {
+        "issued-pending" | "packed-issued-pending" => {
             mode.closed(&["kind", "evidence"], &[])?;
             Ok(true)
         }
@@ -202,7 +203,67 @@ fn manifest_kind(request: &Value) -> Result<bool> {
         )),
     }
 }
-fn pending_evidence(request: &Value, root: &Path) -> Result<()> {
+fn pending_evidence(
+    request: &Value,
+    root: &Path,
+    registry: Option<&crate::logical_artifacts::Registry>,
+) -> Result<()> {
+    if let Some(registry) = registry {
+        let source = registry
+            .roots
+            .get(root)
+            .ok_or_else(|| Error::contract("final registry has no SAME original root"))?;
+        let custody = source.description.root.require("custody")?;
+        let pending = manifest_kind(request)?;
+        if pending {
+            require(
+                request.require("manifest")?.require("evidence")? == custody,
+                "pending final custody differs from actual provider originals",
+            )?;
+        }
+        let rows = custody.require("files")?.array()?;
+        let locator = rows
+            .iter()
+            .find(|v| v.get("role").and_then(Value::as_str) == Some("locator"))
+            .ok_or(Error::Closed)?;
+        let descriptor = rows
+            .iter()
+            .find(|v| v.get("role").and_then(Value::as_str) == Some("descriptor"))
+            .ok_or(Error::Closed)?;
+        require(
+            Path::new(field(locator, "path")?)
+                == root.join(if pending {
+                    "collection.locator.json.tmp"
+                } else {
+                    "collection.locator.json"
+                })
+                && Path::new(field(descriptor, "path")?)
+                    .file_name()
+                    .and_then(|v| v.to_str())
+                    == Some(if pending {
+                        "collection.pending.json"
+                    } else {
+                        "collection.published.json"
+                    }),
+            "packed final original locator/descriptor subtype differs",
+        )?;
+        if pending {
+            for path in [
+                root.join("collection.locator.json"),
+                Path::new(field(descriptor, "path")?).with_file_name("collection.published.json"),
+            ] {
+                match fs::symlink_metadata(path) {
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    _ => {
+                        return Err(Error::contract(
+                            "pending final public originals must remain absent",
+                        ));
+                    }
+                }
+            }
+        }
+        return Ok(());
+    }
     if !manifest_kind(request)? {
         return Ok(());
     }
@@ -275,6 +336,7 @@ fn pending_evidence(request: &Value, root: &Path) -> Result<()> {
 
 pub(super) struct Slot {
     request: Option<Document>,
+    registry: Option<Arc<crate::logical_artifacts::Registry>>,
     scan: Option<CollectionScan>,
     summary: Option<Document>,
     stage: Option<Stage>,
@@ -291,6 +353,7 @@ impl Slot {
     fn empty() -> Self {
         Self {
             request: None,
+            registry: None,
             scan: None,
             summary: None,
             stage: None,
@@ -332,12 +395,12 @@ impl Slot {
         core.inputs.recheck()?;
         let request = &self.request.as_ref().ok_or(Error::Closed)?.root;
         let scan = self.scan.as_ref().ok_or(Error::Closed)?;
-        pending_evidence(request, &scan.directory)?;
+        pending_evidence(request, &scan.directory, self.registry.as_deref())?;
         for s in scan.sources.iter() {
             s.recheck()?;
             s.final_snapshots()?;
         }
-        if manifest_kind(request)? {
+        if self.registry.is_none() && manifest_kind(request)? {
             require(
                 scan.proof.root.require("manifest_sha256")?
                     == request
@@ -387,13 +450,24 @@ impl CardInstanceNativeSession {
         )
     }
     pub(crate) fn inspect_final_validation(&mut self, request: &[u8]) -> Result<BudgetVec<u8>> {
+        self.inspect_final_validation_artifacts(request, None)
+    }
+    pub(crate) fn inspect_final_validation_artifacts(
+        &mut self,
+        request: &[u8],
+        provider: Option<Arc<dyn crate::logical_artifacts::LogicalArtifactProvider>>,
+    ) -> Result<BudgetVec<u8>> {
         self.final_parent_preconditions()?;
         self.final_slot = Some(Slot::empty()); // Reachable BEFORE any admitted work.
         self.final_slot.as_mut().unwrap().working = true;
-        let result = self.inspect_final_inner(request);
+        let result = self.inspect_final_inner(request, provider);
         self.remember_final(result)
     }
-    fn inspect_final_inner(&mut self, raw: &[u8]) -> Result<BudgetVec<u8>> {
+    fn inspect_final_inner(
+        &mut self,
+        raw: &[u8],
+        provider: Option<Arc<dyn crate::logical_artifacts::LogicalArtifactProvider>>,
+    ) -> Result<BudgetVec<u8>> {
         let core = self.core.as_ref().ok_or(Error::Closed)?;
         let i = &core.inputs;
         let b = &i.budget;
@@ -404,6 +478,7 @@ impl CardInstanceNativeSession {
         i.recheck()?;
         let request = json::parse(raw, b, c)?;
         let r = &request.root;
+        let packed = i.format.packed();
         r.closed(
             &[
                 "schema_version",
@@ -413,14 +488,38 @@ impl CardInstanceNativeSession {
                 "manifest",
                 "expected_plan",
                 "returned_report",
-            ],
+            ]
+            .into_iter()
+            .chain(if packed {
+                vec!["storage_binding", "artifact_registry_sha256"]
+            } else {
+                vec![]
+            })
+            .collect::<Vec<_>>()
+            .as_slice(),
             &[],
         )?;
-        r.require("schema_version")?.integer(1, 1)?;
+        r.require("schema_version")?
+            .integer(if packed { 2 } else { 1 }, if packed { 2 } else { 1 })?;
         require(
-            field(r, "kind")? == "card-instance-final-validation-request",
+            field(r, "kind")?
+                == if packed {
+                    "card-instance-packed-final-validation-request"
+                } else {
+                    "card-instance-final-validation-request"
+                },
             "closed final64 request required",
         )?;
+        require(
+            packed == provider.is_some(),
+            "packed final request requires explicit final-only provider; ordinary requires None",
+        )?;
+        if packed {
+            require(
+                r.require("storage_binding")? == &crate::logical_artifacts::binding(),
+                "final storage binding differs",
+            )?;
+        }
         let p = &i.parents[0];
         require(
             r.require("parent_run_sha256")?.string()?
@@ -440,6 +539,33 @@ impl CardInstanceNativeSession {
         )?;
         let pending = manifest_kind(r)?;
         require(
+            field(r.require("manifest")?, "kind")?
+                == match (packed, pending) {
+                    (true, true) => "packed-issued-pending",
+                    (true, false) => "packed-canonical",
+                    (false, true) => "issued-pending",
+                    (false, false) => "canonical",
+                },
+            "final request manifest subtype differs",
+        )?;
+        let registry = if let Some(provider) = provider {
+            let registry = crate::logical_artifacts::Registry::open(
+                provider,
+                checksum(r.require("artifact_registry_sha256")?)?,
+                b,
+                c,
+                i.source_bytes,
+            )?;
+            require(
+                registry.roots.len() == 1 && registry.roots.contains_key(&root),
+                "final registry must contain exactly SAME admitted root",
+            )?;
+            Some(registry)
+        } else {
+            None
+        };
+        self.final_slot.as_mut().ok_or(Error::Closed)?.registry = registry.clone();
+        require(
             pending || r.require("returned_report")?.is_null(),
             "canonical final64 cannot claim returned live report",
         )?;
@@ -447,7 +573,7 @@ impl CardInstanceNativeSession {
             !pending || !r.require("returned_report")?.is_null(),
             "pending final64 requires actual returned report evidence",
         )?;
-        pending_evidence(r, &root)?;
+        pending_evidence(r, &root, registry.as_deref())?;
         let expected = r.require("expected_plan")?;
         expected.closed(
             &[
@@ -460,19 +586,30 @@ impl CardInstanceNativeSession {
             &[],
         )?;
         // Independent source read with full admission before JSON parsing; no publisher FD.
-        let mut evidence = Sources::new(&root, b.clone(), c.clone(), i.source_bytes)?;
-        let control_name = if pending {
+        let mut evidence = Sources::from_registry(
+            &root,
+            b.clone(),
+            c.clone(),
+            i.source_bytes,
+            registry.clone(),
+        )?;
+        let control_name = if pending && !packed {
             "manifest.json.tmp"
         } else {
             "manifest.json"
         };
-        if fs::symlink_metadata(root.join(control_name))?.len() > i.source_bytes as u64 {
+        if (if packed {
+            evidence.file_len(&root.join(control_name))? as u64
+        } else {
+            fs::symlink_metadata(root.join(control_name))?.len()
+        }) > i.source_bytes as u64
+        {
             return Err(Error::resource(
                 "final64 manifest source cap before hashing/decode",
             ));
         }
         let hash = evidence.hash(&root.join(control_name))?;
-        if pending {
+        if pending && !packed {
             require(
                 hash == checksum(
                     r.require("manifest")?
@@ -484,17 +621,29 @@ impl CardInstanceNativeSession {
         }
         let slot = self.final_slot.as_mut().ok_or(Error::Closed)?;
         slot.request = Some(request);
-        let scan = crate::structured_source::inspect_final64_collection(
-            &root,
-            (&p.directory, &p.state.root),
-            &CollectionLimits {
-                source_bytes: i.source_bytes,
-                record_bytes: i.record_bytes,
-            },
-            b.clone(),
-            c.clone(),
-            pending,
-        )?;
+        let limits = CollectionLimits {
+            source_bytes: i.source_bytes,
+            record_bytes: i.record_bytes,
+        };
+        let scan = if let Some(registry) = registry {
+            crate::structured_source::inspect_final64_artifacts(
+                &root,
+                (&p.directory, &p.state.root),
+                &limits,
+                b.clone(),
+                c.clone(),
+                registry,
+            )?
+        } else {
+            crate::structured_source::inspect_final64_collection(
+                &root,
+                (&p.directory, &p.state.root),
+                &limits,
+                b.clone(),
+                c.clone(),
+                pending,
+            )?
+        };
         slot.scan = Some(scan);
         let scan = slot.scan.as_mut().unwrap();
         scan.sources.push(evidence)?;
@@ -548,15 +697,41 @@ impl CardInstanceNativeSession {
             .ok_or(Error::Closed)?
             .json(&root.join("report.json"))?;
         report_order(m, &report.root, r.require("returned_report")?)?;
-        let summary_bound = json::canonical(&scan.manifest.root, b, c)?
+        let mut summary_bound = json::canonical(&scan.manifest.root, b, c)?
             .len()
             .checked_add(json::canonical(&scan.episodes.root, b, c)?.len())
             .and_then(|n| n.checked_add(65536))
             .ok_or_else(|| Error::resource("final64 summary copy overflow"))?;
+        if packed {
+            let description = &slot
+                .registry
+                .as_ref()
+                .ok_or(Error::Closed)?
+                .roots
+                .get(&root)
+                .ok_or(Error::Closed)?
+                .description
+                .root;
+            let extra = json::canonical(description, b, c)?
+                .len()
+                .checked_add(json::canonical(&scan.proof.root, b, c)?.len())
+                .and_then(|v| v.checked_add(65536))
+                .ok_or_else(|| Error::resource("packed final summary bound overflow"))?;
+            summary_bound = summary_bound
+                .checked_add(extra)
+                .ok_or_else(|| Error::resource("packed final summary bound overflow"))?;
+        }
         let _summary_copy = json::admit(summary_bound, b)?;
         let mut summary = json::object([
-            ("schema_version", json::integer(1)),
-            ("kind", json::text("card-instance-final-validation-summary")),
+            ("schema_version", json::integer(if packed { 2 } else { 1 })),
+            (
+                "kind",
+                json::text(if packed {
+                    "card-instance-packed-final-validation-summary"
+                } else {
+                    "card-instance-final-validation-summary"
+                }),
+            ),
             (
                 "parent_run_sha256",
                 copy(r.require("parent_run_sha256")?, c)?,
@@ -564,11 +739,7 @@ impl CardInstanceNativeSession {
             ("directory", json::text(root.to_str().ok_or(Error::Closed)?)),
             (
                 "manifest_kind",
-                json::text(if pending {
-                    "issued-pending"
-                } else {
-                    "canonical"
-                }),
+                copy(r.require("manifest")?.require("kind")?, c)?,
             ),
             (
                 "manifest_sha256",
@@ -608,6 +779,16 @@ impl CardInstanceNativeSession {
                 .as_object_mut()
                 .unwrap()
                 .insert(k.into(), copy(m.require(k)?, c)?);
+        }
+        if packed {
+            summary.as_object_mut().unwrap().insert(
+                "storage_binding".into(),
+                copy(r.require("storage_binding")?, c)?,
+            );
+            summary
+                .as_object_mut()
+                .unwrap()
+                .insert("source_proof".into(), copy(&scan.proof.root, c)?);
         }
         let encoded = json::canonical(&summary, b, c)?;
         if encoded.len() > i.record_bytes {
@@ -782,6 +963,7 @@ impl CardInstanceNativeSession {
         slot.scan = None;
         slot.summary = None;
         slot.request = None;
+        slot.registry = None;
         slot.python_control = None;
         slot.closed = true;
         match &slot.failure {
@@ -950,6 +1132,344 @@ mod tests {
             ("returned_report", Value::Null),
         ]);
         (base, session, request, fixture)
+    }
+    // Explicit synthetic storage metadata over the SAME unadmitted component
+    // logical originals. This never admits a Python formal parent or Source.
+    struct PackedDiagnostic {
+        root: String,
+        registry: Vec<u8>,
+        describe: Vec<u8>,
+        files: std::collections::BTreeMap<String, Vec<u8>>,
+    }
+    impl crate::logical_artifacts::LogicalArtifactProvider for PackedDiagnostic {
+        fn registry(&self, b: &Arc<Budget>, _: &Control) -> Result<BudgetVec<u8>> {
+            let mut v = BudgetVec::with_capacity(b, self.registry.len())?;
+            v.extend_from_slice(&self.registry)?;
+            Ok(v)
+        }
+        fn describe(&self, root: &str, b: &Arc<Budget>, _: &Control) -> Result<BudgetVec<u8>> {
+            require(root == self.root, "diagnostic root differs")?;
+            let mut v = BudgetVec::with_capacity(b, self.describe.len())?;
+            v.extend_from_slice(&self.describe)?;
+            Ok(v)
+        }
+        fn read(
+            &self,
+            root: &str,
+            name: &str,
+            length: usize,
+            sha: &str,
+            b: &Arc<Budget>,
+            _: &Control,
+        ) -> Result<BudgetVec<u8>> {
+            require(root == self.root, "diagnostic root differs")?;
+            let raw = self.files.get(name).ok_or(Error::Closed)?;
+            require(
+                raw.len() == length && format!("{:x}", Sha256::digest(raw)) == sha,
+                "diagnostic original differs",
+            )?;
+            let mut v = BudgetVec::with_capacity(b, raw.len())?;
+            v.extend_from_slice(raw)?;
+            Ok(v)
+        }
+        fn recheck(&self, root: &str, c: &Control) -> Result<()> {
+            c.check()?;
+            require(root == self.root, "diagnostic root differs")
+        }
+    }
+    fn packed_diagnostic(
+        session: &mut CardInstanceNativeSession,
+        request: &mut Value,
+        fixture: &Document,
+    ) -> Arc<PackedDiagnostic> {
+        let b = session.budget.clone();
+        let c = session.core().unwrap().inputs.control.clone();
+        let root = PathBuf::from(request["directory"].string().unwrap());
+        let mut manifest: Value =
+            serde_json::from_slice(&fs::read(root.join("manifest.json")).unwrap()).unwrap();
+        let mut state = session.core().unwrap().inputs.parents[0].state.root.clone();
+        state["run_variant"] = json::text("formal-packed-parent-v1");
+        state.as_object_mut().unwrap().insert(
+            "storage_binding".into(),
+            crate::logical_artifacts::binding(),
+        );
+        let storage_config = json::object([
+            ("format", json::text("sqlite-group-pack-v1")),
+            ("db_root", json::text("/UNADMITTED/db")),
+            ("ram_root", json::text("/UNADMITTED/ram")),
+            ("budget_mib", json::integer(2048)),
+            ("queue_mib", json::integer(512)),
+            ("max_pack_mib", json::integer(256)),
+        ]);
+        state["effective_config"]
+            .as_object_mut()
+            .unwrap()
+            .insert("storage".into(), storage_config.clone());
+        manifest["config"]
+            .as_object_mut()
+            .unwrap()
+            .insert("storage".into(), storage_config);
+        manifest["config_hash"] = json::text(&digest(&manifest["config"], &b, &c).unwrap());
+        manifest["config_projection"]["parent_config_sha256"] =
+            json::text(&digest(&state["effective_config"], &b, &c).unwrap());
+        manifest["config_projection"]["projected_config_sha256"] = manifest["config_hash"].clone();
+        request["expected_plan"]["config_projection"] = manifest["config_projection"].clone();
+        let core = session.core.as_mut().unwrap();
+        core.inputs.parents[0].state = doc(&state, &b, &c).unwrap();
+        core.inputs.format = crate::structured_controls::SourceFormat::PackedCorrected;
+        let mut files = std::collections::BTreeMap::new();
+        for name in fixture.root["files"].object().unwrap().keys() {
+            files.insert(name.clone(), fs::read(root.join(name)).unwrap());
+        }
+        files.insert(
+            "manifest.json".into(),
+            json::canonical(&manifest, &b, &c).unwrap().to_vec(),
+        );
+        let sha = "a".repeat(64);
+        let storage = json::object([
+            ("format", json::text("sqlite-group-pack-v1")),
+            ("locator_sha256", json::text(&sha)),
+            ("descriptor_sha256", json::text(&sha)),
+            ("database_sha256", json::text(&sha)),
+            ("seal_id", json::text("UNADMITTED-synthetic-storage")),
+            ("logical_sha256", json::text(&sha)),
+        ]);
+        let physical = root.join("UNADMITTED-physical");
+        let mut custody_files = vec![];
+        for (index, role, path) in [
+            (1, "locator", root.join("collection.locator.json")),
+            (2, "descriptor", physical.join("collection.published.json")),
+            (3, "database", physical.join("collection.sqlite3")),
+        ] {
+            custody_files.push(json::object([
+                ("role", json::text(role)),
+                ("path", json::text(path.to_str().unwrap())),
+                ("sha256", json::text(&sha)),
+                (
+                    "identity",
+                    json::array([1, index, 33152, 1, 1, 1].map(json::integer)),
+                ),
+            ]));
+        }
+        custody_files.sort_by_key(|v| v["path"].string().unwrap().to_owned());
+        let mut directories = [root.clone(), physical];
+        directories.sort();
+        let mut custody = json::object([
+            ("recipe", json::text("packed-original-custody-v1")),
+            ("files", json::array(custody_files)),
+            (
+                "directories",
+                json::array(directories.iter().map(|path| {
+                    json::object([
+                        ("path", json::text(path.to_str().unwrap())),
+                        ("device", json::integer(1)),
+                        ("inode", json::integer(1)),
+                    ])
+                })),
+            ),
+        ]);
+        let fingerprint = digest(&custody, &b, &c).unwrap();
+        custody
+            .as_object_mut()
+            .unwrap()
+            .insert("fingerprint".into(), json::text(&fingerprint));
+        let mut groups = vec![];
+        let mut episodes = vec![];
+        let mut membership = std::collections::BTreeMap::new();
+        for (schedule, health) in manifest["schedule"]
+            .array()
+            .unwrap()
+            .iter()
+            .zip(manifest["groups"].array().unwrap())
+        {
+            let group = schedule["episodes"][0]["episode_id"].clone();
+            groups.push(json::object([
+                ("group_id", group.clone()),
+                ("record", health.clone()),
+            ]));
+            for spec in schedule["episodes"].array().unwrap() {
+                let name = spec["episode_id"].string().unwrap();
+                let result = manifest["episodes"]
+                    .array()
+                    .unwrap()
+                    .iter()
+                    .find(|v| v["episode_id"] == spec["episode_id"])
+                    .unwrap();
+                episodes.push(json::object([
+                    ("episode_id", spec["episode_id"].clone()),
+                    ("group_id", group.clone()),
+                    ("game_id", result["game_id"].clone()),
+                    (
+                        "record",
+                        json::object([
+                            ("end_kind", result["end_kind"].clone()),
+                            ("failure", result["failure"].clone()),
+                        ]),
+                    ),
+                ]));
+                membership.insert(name.to_owned(), group.clone());
+            }
+        }
+        groups.sort_by_key(|v| v["group_id"].string().unwrap().to_owned());
+        episodes.sort_by_key(|v| v["episode_id"].string().unwrap().to_owned());
+        let rows = files.iter().map(|(name, raw)| {
+            let member_sha = format!("{:x}", Sha256::digest(raw));
+            let group = membership.get(name.split('/').next().unwrap());
+            let identity = json::object([
+                ("format", json::text("packed-member-v1")),
+                ("database_sha256", json::text(&sha)),
+                ("group_id", group.cloned().unwrap_or(Value::Null)),
+                (
+                    "pack_sha256",
+                    if group.is_some() {
+                        json::text(&sha)
+                    } else {
+                        Value::Null
+                    },
+                ),
+                ("name", json::text(name)),
+                (
+                    "offset",
+                    if group.is_some() {
+                        json::integer(0)
+                    } else {
+                        Value::Null
+                    },
+                ),
+                ("length", json::integer(raw.len() as i128)),
+                ("sha256", json::text(&member_sha)),
+            ]);
+            json::object([
+                ("name", json::text(name)),
+                ("bytes", json::integer(raw.len() as i128)),
+                ("sha256", json::text(&member_sha)),
+                ("identity", identity),
+            ])
+        });
+        let describe = json::object([
+            ("format", json::text("python-original-bytes-v1")),
+            ("root", json::text(root.to_str().unwrap())),
+            ("storage", storage.clone()),
+            ("custody", custody.clone()),
+            ("files", json::array(rows)),
+            (
+                "index",
+                json::object([
+                    ("groups", json::array(groups)),
+                    ("episodes", json::array(episodes)),
+                ]),
+            ),
+        ]);
+        let registry = json::object([
+            ("format", json::text("python-original-bytes-v1")),
+            (
+                "roots",
+                json::array([json::object([
+                    ("root", json::text(root.to_str().unwrap())),
+                    ("storage", storage),
+                    ("custody", custody),
+                ])]),
+            ),
+        ]);
+        let registry = json::canonical(&registry, &b, &c).unwrap().to_vec();
+        request["schema_version"] = json::integer(2);
+        request["kind"] = json::text("card-instance-packed-final-validation-request");
+        request["manifest"]["kind"] = json::text("packed-canonical");
+        request.as_object_mut().unwrap().insert(
+            "storage_binding".into(),
+            crate::logical_artifacts::binding(),
+        );
+        request.as_object_mut().unwrap().insert(
+            "artifact_registry_sha256".into(),
+            json::text(&format!("{:x}", Sha256::digest(&registry))),
+        );
+        Arc::new(PackedDiagnostic {
+            root: root.to_str().unwrap().to_owned(),
+            registry,
+            describe: json::canonical(&describe, &b, &c).unwrap().to_vec(),
+            files,
+        })
+    }
+    #[test]
+    fn packed_final64_unadmitted_component_four_method_packets_preserve_original_own_values() {
+        let (base, mut session, mut request, fixture) = setup();
+        // A second independent UNADMITTED reference primitive is test-only.
+        // Production final validation still borrows its SAME actual parent.
+        let (reference_base, mut reference, reference_request, _) = setup();
+        reference
+            .inspect_final_validation(&encoded(&reference, &reference_request))
+            .unwrap();
+        let provider = packed_diagnostic(&mut session, &mut request, &fixture);
+        let raw = encoded(&session, &request);
+        let summary = session
+            .inspect_final_validation_artifacts(&raw, Some(provider))
+            .unwrap();
+        let b = session.budget.clone();
+        let c = session.core().unwrap().inputs.control.clone();
+        let summary = json::parse(&summary, &b, &c).unwrap();
+        assert_eq!(summary.root["schema_version"], json::integer(2));
+        assert_eq!(summary.root["qualified"], Value::Bool(false));
+        assert_eq!(
+            summary.root["parent_qualification"],
+            json::text("not_performed")
+        );
+        assert_eq!(summary.root["zero_endpoint_games"], json::integer(16));
+        for ordinal in 0..64 {
+            session.recheck_final_validation().unwrap();
+            let packet = session.export_final_validation(ordinal).unwrap();
+            let meta = json::parse(&packet.metadata, &b, &c).unwrap();
+            let original = reference.export_final_validation(ordinal).unwrap();
+            let original_meta = json::parse(&original.metadata, &b, &c).unwrap();
+            for key in [
+                "schema_version",
+                "kind",
+                "episode_index",
+                "episode_id",
+                "viewer",
+                "episode_digest",
+                "binding",
+                "endpoint",
+                "bank",
+                "decisions",
+                "arrays",
+                "correspondence",
+            ] {
+                assert_eq!(
+                    meta.root[key], original_meta.root[key],
+                    "original packet field {ordinal}/{key}"
+                );
+            }
+            for descriptor in meta.root["arrays"].array().unwrap() {
+                assert_eq!(
+                    bytes(&packet.banks, descriptor),
+                    bytes(&original.banks, descriptor),
+                    "exact original own numeric/DTO bytes {ordinal}/{}",
+                    descriptor["key"]
+                );
+            }
+            drop(original);
+            assert_eq!(meta.root["schema_version"], json::integer(1));
+            assert_eq!(
+                meta.root["episode_digest"],
+                fixture.root["oracle"][ordinal]["digest"]
+            );
+            assert_eq!(
+                meta.root["viewer"],
+                fixture.root["oracle"][ordinal]["viewer"]
+            );
+            assert_eq!(
+                meta.root["endpoint"]["outcome"],
+                fixture.root["oracle"][ordinal]["outcome"]
+            );
+            assert!(session.close_final_validation().is_err());
+            drop(packet);
+        }
+        session.close_final_validation().unwrap();
+        session.close().unwrap();
+        reference.close_final_validation().unwrap();
+        reference.close().unwrap();
+        fs::remove_dir_all(base).unwrap();
+        fs::remove_dir_all(reference_base).unwrap();
     }
     fn encoded(s: &CardInstanceNativeSession, v: &Value) -> BudgetVec<u8> {
         json::canonical(v, &s.budget, &s.core().unwrap().inputs.control).unwrap()

@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from gf_common.domain import ContractError, Json, canonical, closed, digest, integer
+from gf_common.domain import ContractError, Json, canonical, clone, closed, digest, integer
 
 
 @dataclass(frozen=True)
@@ -29,6 +29,30 @@ INVOCATION_KEYS = {'started_unix', 'started_monotonic', 'caller_deadline_monoton
     'admission_deadline_monotonic', 'execution_deadline_monotonic', 'wall_deadline_monotonic'}
 PROJECTION_RECIPE = 'run-split-train-to-validation-v1'
 NATIVE_FINAL_VALIDATION_MARKER = 'collection5-final64;journal6;codec2'
+NATIVE_PACKED_FINAL_VALIDATION_MARKER = 'final64-packed;provider1;request2;summary2;lease1'
+FINAL_FACTS_FIELDS = {'directory', 'manifest_sha256', 'parent_run_id', 'final_generation',
+    'final_inference_sha256', 'config_projection', 'validation_invocation', 'elapsed_seconds',
+    'games', 'selected_decisions', 'zero_endpoint_games', 'qualified', 'parent_qualification'}
+PACKED_FINAL_FACTS_FIELDS = FINAL_FACTS_FIELDS | {'schema_version', 'kind', 'storage_binding',
+    'storage', 'custody', 'source_set_sha256'}
+
+
+def packed_final_facts(value: Json, *, storage: Json, custody: Json, source_set_sha256: str) -> Json:
+    """Construct closed values only; original owners retain all admission rights."""
+    from gf_common.group_pack_game import checked_storage_custody, storage_binding
+    raw = closed(value, FINAL_FACTS_FIELDS)
+    checked_storage_custody(storage, custody)
+    _sha(source_set_sha256)
+    if raw['qualified'] is not False or raw['parent_qualification'] != 'not_performed':
+        raise ContractError('packed final facts cannot grant qualification')
+    if type(raw['games']) is not int or raw['games'] != 64:
+        raise ContractError('all64 original final endpoints required')
+    integer(raw['selected_decisions'], 0)
+    integer(raw['zero_endpoint_games'], 0, 64)
+    return clone({**raw, 'schema_version': 2, 'kind': 'card-instance-packed-final-validation-facts',
+        'storage_binding': storage_binding(), 'storage': storage, 'custody': custody,
+        'source_set_sha256': source_set_sha256})
+
 
 
 def checked_role(role: GameCollectionRole) -> GameCollectionRole:

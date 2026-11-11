@@ -151,8 +151,28 @@ pub(crate) fn layout(encoder: &Value, b: &Arc<Budget>, c: &Control) -> Result<Do
     let bytes = json::canonical(&value, b, c)?;
     json::parse(&bytes, b, c)
 }
+fn packed_source(value: &Value) -> Result<bool> {
+    Ok(text(value, "source_kind")? == "card-instance-formal-ppo-packed-originals")
+}
 fn source(value: &Value) -> Result<()> {
-    is(value, "source_kind", "card-instance-formal-ppo-originals")?;
+    let packed = packed_source(value)?;
+    is(
+        value,
+        "source_kind",
+        if packed {
+            "card-instance-formal-ppo-packed-originals"
+        } else {
+            "card-instance-formal-ppo-originals"
+        },
+    )?;
+    if packed {
+        let binding = value.require("storage_binding")?;
+        binding.require("database_schema")?.integer(1, 1)?;
+        require(
+            binding == &crate::logical_artifacts::binding(),
+            "packed Tree source storage binding differs",
+        )?;
+    }
     let origin = value.require("source_origin")?;
     origin.closed(
         &[
@@ -168,7 +188,11 @@ fn source(value: &Value) -> Result<()> {
     is(
         origin,
         "qualification_recipe",
-        "three-formal-parents-final64-v1",
+        if packed {
+            "three-formal-packed-parents-final64-v1"
+        } else {
+            "three-formal-parents-final64-v1"
+        },
     )?;
     require(
         !origin.require("synthetic_capacity")?.boolean()?,
@@ -259,7 +283,15 @@ pub(crate) fn options(
             "source_kind",
             "source_origin",
             "training_pair",
-        ],
+        ]
+        .into_iter()
+        .chain(if packed_source(value)? {
+            vec!["storage_binding"]
+        } else {
+            vec![]
+        })
+        .collect::<Vec<_>>()
+        .as_slice(),
         &[],
     )?;
     is(value, "version", "3")?;
@@ -330,6 +362,7 @@ pub(crate) fn metadata(
     let safe = raw.require("policy_options")?;
     let label = options(safe, actions, b, c)?;
     let m = raw.require("inference_manifest")?;
+    let packed = packed_source(safe)?;
     m.closed(
         &[
             "schema_version",
@@ -359,7 +392,15 @@ pub(crate) fn metadata(
             "feature_layout",
             "source_kind",
             "source_origin",
-        ],
+        ]
+        .into_iter()
+        .chain(if packed {
+            vec!["storage_binding"]
+        } else {
+            vec![]
+        })
+        .collect::<Vec<_>>()
+        .as_slice(),
         &[],
     )?;
     m.require("schema_version")?.integer(4, 4)?;
@@ -367,6 +408,17 @@ pub(crate) fn metadata(
     is(m, "fit_origin", "trained")?;
     game_binding3(m, b, c)?;
     source(m)?;
+    require(
+        packed_source(m)? == packed,
+        "Tree source subtype differs from own options",
+    )?;
+    if packed {
+        eq(
+            m.require("storage_binding")?,
+            safe.require("storage_binding")?,
+            "Tree storage source differs",
+        )?;
+    }
     eq(
         m.require("source_kind")?,
         safe.require("source_kind")?,
@@ -502,11 +554,33 @@ pub(crate) fn metadata(
             "input_binding",
             "source_kind",
             "source_origin",
-        ],
+        ]
+        .into_iter()
+        .chain(if packed {
+            vec!["storage_binding"]
+        } else {
+            vec![]
+        })
+        .collect::<Vec<_>>()
+        .as_slice(),
         &[],
     )?;
-    provenance.require("schema_version")?.integer(4, 4)?;
-    is(provenance, "kind", "structured-fixed-dataset3-fit")?;
+    provenance
+        .require("schema_version")?
+        .integer(if packed { 5 } else { 4 }, if packed { 5 } else { 4 })?;
+    is(
+        provenance,
+        "kind",
+        if packed {
+            "structured-fixed-dataset4-fit"
+        } else {
+            "structured-fixed-dataset3-fit"
+        },
+    )?;
+    require(
+        packed_source(provenance)? == packed,
+        "Tree trained provenance source subtype differs",
+    )?;
     source(provenance)?;
     checksum(provenance.require("request_sha256")?)?;
     checksum(provenance.require("dataset_manifest_sha256")?)?;
@@ -652,6 +726,77 @@ mod tests {
                 value.root["feature_names"].array().unwrap().len() as i128,
                 row["width"].integer(1, 20000).unwrap()
             );
+        }
+    }
+    #[test]
+    fn packed_tree_raw_source_subtype_keeps_inference4_features_costs_and_closed_provenance5() {
+        // Value-only original fixture. No complete pair, executed formal parent,
+        // actual Source or fitting permission is represented by this mutation.
+        let (b, c) = owners();
+        let oracle = json::parse(
+            include_bytes!("../tests/fixtures/card_instance_tree3_raw_metadata.json"),
+            &b,
+            &c,
+        )
+        .unwrap();
+        let mut raw = oracle.root["tree"].clone();
+        let actions = &oracle.root["actions"];
+        for name in ["policy_options", "inference_manifest"] {
+            let value = &mut raw[name];
+            value["source_kind"] = json::text("card-instance-formal-ppo-packed-originals");
+            value["source_origin"]["qualification_recipe"] =
+                json::text("three-formal-packed-parents-final64-v1");
+            value.as_object_mut().unwrap().insert(
+                "storage_binding".into(),
+                crate::logical_artifacts::binding(),
+            );
+        }
+        let provenance = &mut raw["inference_manifest"]["provenance"];
+        provenance["source_kind"] = json::text("card-instance-formal-ppo-packed-originals");
+        provenance["source_origin"]["qualification_recipe"] =
+            json::text("three-formal-packed-parents-final64-v1");
+        provenance["schema_version"] = json::integer(5);
+        provenance["kind"] = json::text("structured-fixed-dataset4-fit");
+        provenance.as_object_mut().unwrap().insert(
+            "storage_binding".into(),
+            crate::logical_artifacts::binding(),
+        );
+        assert!(metadata(&raw, actions, &b, &c).is_ok());
+        let (caps, costs) = settings(&raw["policy_options"], actions, &b, &c).unwrap();
+        assert_eq!(caps, oracle.root["caps"]);
+        assert_eq!(costs, oracle.root["numeric_costs"]);
+        assert_eq!(
+            raw["inference_manifest"]["schema_version"],
+            json::integer(4)
+        );
+        assert_eq!(
+            raw["inference_manifest"]["feature_layout"],
+            oracle.root["tree"]["inference_manifest"]["feature_layout"]
+        );
+        for mutation in 0..5 {
+            let mut bad = raw.clone();
+            match mutation {
+                0 => bad["inference_manifest"]["provenance"]["schema_version"] = json::integer(4),
+                1 => {
+                    bad["inference_manifest"]["storage_binding"]["database_schema"] =
+                        Value::Bool(true)
+                }
+                2 => {
+                    bad["policy_options"]
+                        .as_object_mut()
+                        .unwrap()
+                        .remove("storage_binding");
+                }
+                3 => {
+                    bad["inference_manifest"]["source_kind"] =
+                        json::text("card-instance-formal-ppo-originals")
+                }
+                _ => {
+                    bad["inference_manifest"]["provenance"]["kind"] =
+                        json::text("structured-fixed-dataset3-fit")
+                }
+            }
+            assert!(metadata(&bad, actions, &b, &c).is_err());
         }
     }
     #[test]

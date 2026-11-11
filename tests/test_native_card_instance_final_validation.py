@@ -267,14 +267,28 @@ def test_private_candidate_additive_four_methods_and_closed_capabilities_before_
     if not hasattr(cls, 'inspect_final_validation'):
         pytest.skip('new isolated final64 diagnostic candidate required; installed ELF unchanged')
     fields = {
-        'inspect_final_validation': ('self','request','retained_python_bytes'),
+        'inspect_final_validation': ('self','request','retained_python_bytes','artifact_provider'),
         'export_final_validation': ('self','episode_index','retained_python_bytes'),
         'recheck_final_validation': ('self','retained_python_bytes'),
         'close_final_validation': ('self',),
     }
     for name, keys in fields.items():
         assert callable(getattr(cls, name))
-        assert tuple(inspect.signature(getattr(cls, name)).parameters) == keys
+        signature = inspect.signature(getattr(cls, name))
+        assert tuple(signature.parameters) == keys
+        defaults = {'retained_python_bytes': 0, 'artifact_provider': None}
+        for key, parameter in signature.parameters.items():
+            assert parameter.default == defaults.get(key, inspect.Parameter.empty)
+    signature = inspect.signature(cls.inspect_final_validation)
+    receiver, request, provider = object(), b'{}', object()
+    # Old calls still bind with the same positional meaning and defaults.
+    for args, retained in (((receiver, request), 0), ((receiver, request, 123), 123)):
+        bound = signature.bind(*args)
+        bound.apply_defaults()
+        assert bound.arguments == {'self': receiver, 'request': request,
+            'retained_python_bytes': retained, 'artifact_provider': None}
+    bound = signature.bind(receiver, request, 123, artifact_provider=provider)
+    assert bound.arguments['artifact_provider'] is provider
     info = dict(native.build_info())
     assert info['card_instance_contract'] == 'participant-structured-v2;journal6;rollout4;generation3;model3'
     assert info['card_instance_signature'] == 'ed0c61152b78fa984aad342be22c6b9d6ef49b12b8f0d1c0f0de89724468002f'
@@ -284,6 +298,8 @@ def test_private_candidate_additive_four_methods_and_closed_capabilities_before_
     from gf_training.native_card_instance import _require_final_validation_native
     assert info['card_instance_final_validation'] == 'collection5-final64;journal6;codec2'
     assert info['card_instance_formal_controls'] == 'run3-formal-parent-v1;declaration1;stop1'
+    assert info['card_instance_packed_formal_controls'] == 'run4-formal-packed-parent-v1;declaration2;stop2'
+    assert info['card_instance_packed_final_validation'] == 'final64-packed;provider1;request2;summary2;lease1'
     assert info['card_instance_fixture_tokens'] == 'component-envelope1;participant-structured-v2;codec2'
     config = PreparationConfig(backend='rust', reader='participant-structured-v2')
     assert _require_final_validation_native(config, native) is native

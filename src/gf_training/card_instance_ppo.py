@@ -44,7 +44,7 @@ def _validate_packed_config(config: Any, *, formal: bool = False) -> None:
     from gf_models.structured_tree_config import ConfiguredTreeModelV3
     if (type(config.actions) is not ActionConfigV3 or type(config.model) is not ConfiguredNeuralModelV3
             or type(config.training) is not PPOTrainingConfig or config.run.split != 'train'
-            or formal or config.preprocessing.backend not in ('python', 'rust')
+            or config.preprocessing.backend not in ('python', 'rust')
             or config.preprocessing.reader != 'participant-structured-v2'
             or type(config.opponent) is ConfiguredTreeModelV3):
         raise ContractError('group Pack storage PPO requires ordinary corrected PPO')
@@ -139,11 +139,8 @@ class _GameOperations:
             storage_binding=state.get('storage_binding'))
 
     def external_roots(self, state: Json) -> tuple[Path, ...]:
-        if state['schema_version'] != 4:
-            return ()
-        root = Path(state['effective_config']['storage']['db_root'])
-        return (root / state['run_id'], root / 'catalog.sqlite3',
-            root / 'catalog.sqlite3-wal', root / 'catalog.sqlite3-shm', root / 'catalog.sqlite3-journal')
+        from gf_training.group_pack_game_source import parent_external_roots
+        return parent_external_roots(state)
 
     def accept_collection(self, collection: Any, config: Any) -> None:
         from gf_training.collection import FinalizedCollection, PackedFinalizedCollection
@@ -307,8 +304,6 @@ async def train_card_instance_ppo(loaded: Any, collector: Any, directory: Path, 
 async def train_formal_card_instance_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 'fresh',
                                          pause_after_update: int | None = None) -> Json:
     """Explicit full-recipe entry, keeping completion revocable through lock exit."""
-    if hasattr(loaded.config, 'storage'):
-        raise ContractError('group Pack storage formal PPO awaits its accepted Source integration')
     from gf_training.card_instance_formal import FormalControl
     from gf_training.ppo_run import _run_ppo
     control = FormalControl(loaded)

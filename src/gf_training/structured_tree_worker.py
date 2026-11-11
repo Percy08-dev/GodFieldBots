@@ -41,6 +41,7 @@ def main()->None:
     from gf_models.structured_tree_pairing import (
         TREE2_RECORDS,
         TREE3_GAME_RECORDS,
+        TREE3_PACKED_GAME_RECORDS,
         TREE3_RECORDS,
         fit_admission,
         inspect_fit_inputs,
@@ -53,10 +54,11 @@ def main()->None:
     if not math.isfinite(deadline):raise ContractError('Tree2 bounded child deadline required')
     scan=SealedScan(max_owned_bytes=2*1024**3 if _GAME_CHILD_CAP is None else _GAME_CHILD_CAP,deadline=deadline)
     raw=scan.object(root/'request.json',expected)
-    if type(raw.get('schema_version')) is not int or raw['schema_version'] not in (3,4):
+    if type(raw.get('schema_version')) is not int or raw['schema_version'] not in (3,4,5):
         raise ContractError('closed Tree fit record schema required')
-    from gf_common.card_instance_game_tree import SOURCE_KIND
-    context=(TREE3_GAME_RECORDS if raw.get('source_kind') == SOURCE_KIND and raw['schema_version']==4
+    from gf_common.card_instance_game_tree import PACKED_SOURCE_KIND, SOURCE_KIND
+    context=(TREE3_PACKED_GAME_RECORDS if raw.get('source_kind') == PACKED_SOURCE_KIND and raw['schema_version']==5
+        else TREE3_GAME_RECORDS if raw.get('source_kind') == SOURCE_KIND and raw['schema_version']==4
         else TREE3_RECORDS if raw['schema_version']==4 else TREE2_RECORDS)
     if context.game != (_GAME_CHILD_CAP is not None):
         raise ContractError('game-only fourth resource argument/context mismatch')
@@ -105,11 +107,11 @@ def main()->None:
     inspect_artifact(root/'artifact',expected_digest=digest_bytes(root/'artifact'/'inference.json',scan),model=model,
         action_config_hash=envelope['action_config_hash'],action_contract=(context.features.layout.action_contract if context.modern else parse_action_contract(envelope['input_binding']['action_contract'])),
         purpose=envelope['input_binding']['purpose'],synthetic_capacity=envelope['input_binding']['synthetic_capacity'],deadline=deadline,_context=context,
-        _expected_source=None if not context.modern else (request['source_kind'],request['source_origin']))
+        _expected_source=None if not context.modern else context.source_identity(request))
     scan.finalize()
-    receipt={'schema_version':context.schema,'kind':'structured-tree-fit-result','request_sha256':expected,'input_files':request['input_files'],
+    receipt={'schema_version':context.numeric_schema,'kind':'structured-tree-fit-result','request_sha256':expected,'input_files':request['input_files'],
         'metrics':metrics,'inference_sha256':digest_bytes(root/'artifact'/'inference.json',scan),
-        'model_sha256':manifest['model_file']['sha256'],**{key:request[key] for key in context.extra_fields}}
+        'model_sha256':manifest['model_file']['sha256'],**{key:request[key] for key in context.numeric_extra_fields}}
     publisher=_ChainScan(directory=root,max_owned_bytes=model.resources.max_owned_bytes-fit_admission(model,fit,request['row_counts'],retained_bytes=0,_context=context)['raw_bytes'],deadline=deadline)
     _write(root/'child-result.json',receipt,scan=publisher,immutable=True)
     publisher.finalize();scan.finalize()

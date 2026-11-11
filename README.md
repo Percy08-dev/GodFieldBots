@@ -303,6 +303,24 @@ OSの強制回収やローカル保存の停止不能な待ちにはhard real-ti
 詳細は [actions.py](src/gf_common/actions.py) の版付きcoverageを参照してください。
 探索予算切れの理由・公開枝刈り・beamによる近似除外を別記録し、候補空を祈りで埋めません。
 
+## 対戦記録の保存方式
+
+既定は従来のディレクトリ形式です。`sqlite-group-pack-v1`は明示指定で利用し、
+管理対象Simulatorの1実行グループを1つのzstd圧縮PackとしてSQLiteへ保存します。
+元のJSONL・Replay・候補配列・ログは相対名とバイト列を保持します。
+
+```console
+uv run gf-bots collect --config configs/experiments/card-instance-group-pack-baseline.toml
+```
+
+[設定例](configs/experiments/card-instance-group-pack-baseline.toml)の初期値は
+DBルート`/mnt/d/godfield`、RAMルート`/dev/shm/godfieldbots`、保存系予算2048MiB、
+圧縮済みキュー512MiB、未圧縮Pack256MiBです。共有RAMを監視する管理予算で、OSの厳密な上限ではありません。
+学習用Sourceの資格は保存形式とは別に検証します。既存データの自動移行・削除は行いません。
+動作確認の範囲、未実行項目、HDD比較は[検証記録](docs/verification/sqlite-group-pack-v1.md)を参照してください。
+DB格納先とPPO親・チェックポイントの格納先は別です。現在のD:のDrvFSではprivate0700の世代整理を
+検証できないため、PPO親・チェックポイント・数値データはext4に置きます。
+
 ## 開発・検証
 
 ```console

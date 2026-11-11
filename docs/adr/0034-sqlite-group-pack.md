@@ -13,8 +13,10 @@
   50postreview checks and64real natural games/4updates with fresh parent audits;
   Native3B provider/plan4/Original16/RAW accepted after both final reviews,
   source-matched release checks and64real natural games/4updates with actual
-  CPU/CUDA inference and resume/original audits; final64/Dataset/Tree and
-  concurrent-workload/full verification remain pending
+  CPU/CUDA inference and resume/original audits; formal/final64/Dataset4/Tree
+  engineering scope accepted after both candidate2 re-reviews,1469affected HOST
+  checks and157Rust checks. Genuine formal/qualified fit remains NOT RUN;
+  concurrent-workload/final whole verification remain pending
 
 ## Context
 
@@ -93,6 +95,22 @@ uncertainty without raw-number retry. Both reviews,372scoped checks and12fresh
 actualD:/ext4 old/new-Config mutable/immutable probes pass. Scanner5tuple,
 canonical bytes, existing Source custody and persisted versions remain unchanged.
 The original failed comparison stays failed; new operational evidence is pending.
+
+The final storage-only formal variant, same-parent final-slot/physical lifetime,
+Dataset4 and packed Tree records preserve existing mathematics and qualification.
+Candidate2 fixes actual acquire/refund-after-effect accounting, retained original
+revokers during earlier close uncertainty, and optional preflight before subtype
+reads. Both independent re-reviews pass. Root activates only the reviewed packed
+formal/final capability declarations in a source-matched release; declarations
+and artifacts never grant Source or fitting authority.
+
+The current DrvFS mount cannot exercise six compound close/move/foreign recovery
+probes: even metadata lookup through a held original FD may return ENOENT after
+its name moves. Code retains the actual revoker/error and refuses success. These
+are unconfirmed application cleanup, distinct from externally observed process
+exit; they are not successful invalidation proofs. Keep parent/control/pruning
+workflows on ext4 and document this debt until supporting that mount's compound
+recovery is explicitly revisited. Thirty other terminal control cases pass.
 
 The design lists corruption/failure/ownership checks, complete runtime smoke
 coverage, old-data checks and same-HDD comparison requirements. Evidence and

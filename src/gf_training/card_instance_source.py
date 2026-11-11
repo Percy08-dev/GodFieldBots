@@ -300,8 +300,9 @@ def _borrow_original_training_episode(parent: Any, generation: int, ordinal: int
             raw_growth=sum(32*identity[2]+65536 for path,(identity,_) in parent.scan.files.items()
                 if path.is_relative_to(plan.output))
             budget_loan.admit_local(base+control_copy+raw_growth)
-            owner = _SourceOwner(plan.output,settings,min(parent.deadline,budget_loan.deadline),
-                max_owned_bytes=parent.limit,extra_owned_bytes=parent.resident_bytes+budget_loan.base_bytes+base+control_copy)
+            owner = (parent.scan.packed_owner(plan.output) if state['schema_version'] == 4 else
+                _SourceOwner(plan.output,settings,min(parent.deadline,budget_loan.deadline),
+                max_owned_bytes=parent.limit,extra_owned_bytes=parent.resident_bytes+budget_loan.base_bytes+base+control_copy))
             for path,(identity,checksum_value) in parent.scan.files.items():
                 if path.is_relative_to(plan.output):
                     owner.remember(path,identity,checksum_value)
@@ -854,7 +855,7 @@ def _open_game_parent_inputs(directory: Path, *, require_complete: bool = True, 
         if 'run_variant' in state:
             from gf_training.card_instance_formal import require_native_formal_controls
             from gf_training.native_backend import load_native
-            require_native_formal_controls(load_native())
+            require_native_formal_controls(load_native(), packed=state['schema_version'] == 4)
         from gf_training.native_card_instance import _NativeGameInputs
         native_plan = {'schema_version': 3, 'mode': 'historical_parent',
             'parents': [{'directory': str(directory), 'require_complete': require_complete}], 'collections': []}

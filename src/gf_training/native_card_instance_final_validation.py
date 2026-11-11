@@ -251,7 +251,16 @@ def _decode_original_episode_packet(payload: Any, *, summary: Json, episode_inde
 def _decode_final_validation_packet(payload: Any, *, summary: Json, episode_index: int,
         actions: ActionConfigV3, rules: CardInstanceRules, aggregate_window: int,
         max_owned_bytes: int, retained_owned_bytes: int, max_record_bytes: int,
-        reserve: Callable[[int], None], check: Callable[[], None]) -> EpisodeRecords:
+        reserve: Callable[[int], None], check: Callable[[], None], _packed_owner: Any = None) -> EpisodeRecords:
+    if summary.get('kind') == 'card-instance-packed-final-validation-summary':
+        from gf_training.native_card_instance import _NativeFinalValidationInputs
+        if (type(_packed_owner) is not _NativeFinalValidationInputs or _packed_owner._summary is not summary
+                or _packed_owner._parent._native_final_inputs is not _packed_owner
+                or _packed_owner._parent._packed_final_originals is None
+                or _packed_owner._parent._packed_final_originals.provider is not _packed_owner._provider):
+            raise ContractError('packed final decoder requires SAME actual parent/Source loan context')
+    elif _packed_owner is not None:
+        raise ContractError('packed decoder context cannot reinterpret ordinary summary')
     return _decode_original_episode_packet(payload,summary=summary,episode_index=episode_index,
         actions=actions,rules=rules,aggregate_window=aggregate_window,max_owned_bytes=max_owned_bytes,
         retained_owned_bytes=retained_owned_bytes,max_record_bytes=max_record_bytes,reserve=reserve,

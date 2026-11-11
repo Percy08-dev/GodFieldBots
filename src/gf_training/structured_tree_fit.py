@@ -6,18 +6,20 @@ from typing import Any
 
 import numpy as np
 
-from gf_common.domain import ContractError, Json, canonical
+from gf_common.domain import ContractError, Json, canonical, clone
 from gf_models.structured_tree_config import ConfiguredTreeModelV2, ConfiguredTreeModelV3
 from gf_models.structured_tree_encoder import PreparedTreeFrame, PreparedTreeFrameV3
 from gf_models.structured_tree_pairing import (
     TREE2_RECORDS,
     TREE3_GAME_RECORDS,
+    TREE3_PACKED_GAME_RECORDS,
     TREE3_RECORDS,
     _records,
     _TreeRecords,
     fit_admission,
     validate_fit_settings,
 )
+from gf_training.group_pack_resources import OwnedDescriptor
 from gf_training.structured_tree_data import VerifiedTreeDataset
 
 
@@ -80,10 +82,13 @@ def _admit(prepared:Any,*,extra_bytes:int=0)->Json:
 class _PreparedTreeFit:
     """Only this concrete active Source owner can create its private fit rows."""
     def __init__(self,dataset:Any,model:Any,fit_settings:Json,*,_context:_TreeRecords=TREE2_RECORDS)->None:
-        from gf_training.card_instance_game_tree_data import VerifiedGameTreeDataset3
+        from gf_training.card_instance_game_tree_data import (
+            VerifiedGameTreeDataset3,
+            VerifiedGameTreeDataset4,
+        )
         from gf_training.card_instance_tree_data import VerifiedFixtureTreeDataset3
         context=_records(_context)
-        expected=VerifiedGameTreeDataset3 if context.game else VerifiedFixtureTreeDataset3 if context.modern else VerifiedTreeDataset
+        expected=VerifiedGameTreeDataset4 if context.packed else VerifiedGameTreeDataset3 if context.game else VerifiedFixtureTreeDataset3 if context.modern else VerifiedTreeDataset
         if type(dataset) is not expected or not dataset._active or dataset.source is None or dataset.manifest is None:
             raise ContractError('actual active concrete verified Dataset owner required; arrays/provenance cannot enter')
         context.require_model(model)
@@ -100,7 +105,7 @@ class _PreparedTreeFit:
         self.rows={split:metadata['counts'][split]['selected_decisions'] for split in ('train','validation')}
         if context.game:
             from gf_training.card_instance_game_tree_data import _verified_fit_rows
-            assert type(dataset) is VerifiedGameTreeDataset3
+            assert type(dataset) is (VerifiedGameTreeDataset4 if context.packed else VerifiedGameTreeDataset3)
             self.rows=_verified_fit_rows(metadata,dataset._verified_rows)
         self.admission=_admit(self)
         self.blocks:dict[str,list[np.ndarray[Any,Any]]]={split:[] for split in self.rows}
@@ -220,11 +225,11 @@ def _prepare_request(prepared:_PreparedTreeFit,directory:Any,*,seed:int,deadline
         dataset.reserve_sink(5*prepared.admission['raw_bytes']+(0 if context.game else scratch+publisher.retained))
     check()
     data=write_bundle(directory/'inputs','features',arrays,_check=check)
-    envelope={'schema_version':context.schema,'kind':'structured-tree-fit-inputs',
+    envelope={'schema_version':context.numeric_schema,'kind':'structured-tree-fit-inputs',
         'action_config_hash':metadata['neural_cohort']['actions_sha256'],
         'feature_signature':metadata['tree_projection']['feature_signature'],'label_recipe':metadata['label_recipe'],
         'input_binding':metadata['input_binding'],'row_counts':prepared.rows,'data':data,
-        **{key:metadata[key] for key in context.extra_fields}}
+        **{key:metadata[key] for key in context.numeric_extra_fields}}
     check();envelope_sha=_write(directory/'inputs'/'manifest.json',envelope,scan=publisher,immutable=True)
     files={'inputs/'+name:sha for name,sha in data['files'].items()};files['inputs/manifest.json']=envelope_sha
     request={'schema_version':context.schema,'kind':'structured-tree-fit-request','run_id':uuid.uuid4().hex,
@@ -347,21 +352,58 @@ class _OwnedTreeFitChild:
 
 class _TreeFitRun:
     """Concrete per-fit owner, retaining Dataset2 originals until child cleanup."""
-    def __init__(self,dataset:Any,directory:Any,model:Any,training:Any,seed:int,*,_context:_TreeRecords=TREE2_RECORDS)->None:
+    def __init__(self,dataset:Any,directory:Any,model:Any,training:Any,seed:int,*,_context:_TreeRecords=TREE2_RECORDS,_started:float|None=None)->None:
         import time
         self.context=_records(_context)
         self.dataset,self.directory,self.model,self.training,self.seed=dataset,directory,model,training,seed
-        self.started=time.monotonic();self.deadline=min(dataset.deadline,self.started+training.wall_seconds)
+        self.started=time.monotonic() if _started is None else _started;self.deadline=min(dataset.deadline,self.started+training.wall_seconds)
         self.work_deadline=self.deadline-max(training.cleanup_seconds,dataset.settings.cleanup_seconds)
         self.child:_OwnedTreeFitChild|None=None;self.publisher:Any=None;self.publication:Any=None;self.request:Json|None=None
         self.request_sha:str|None=None;self.completion:Json|None=None;self.prepared:Any=None;self.closed=False
+        self._failure: BaseException | None = None
+        self._dataset_release_started = self._dataset_release_complete = False
+        self._dataset_release_failure: BaseException | None = None
+        self._dataset_release_source: Any = None
 
     def _note_failure(self,primary:BaseException,label:str,secondary:BaseException)->None:
         if self.context.game:
             from gf_training.card_instance_game_tree_data import _note
             _note(primary,label,secondary)
         else:
-            primary.add_note(label+str(secondary))
+            try:
+                primary.add_note(label+str(secondary))
+            except BaseException:  # noqa: BLE001, S110 - diagnostic failure cannot mask original ownership failure.
+                pass
+
+    def _release_dataset(self, *, via_exit: bool = False, initiating: BaseException | None = None) -> None:
+        """One actual modern memory-retirement route, including implicit exit."""
+        if self._dataset_release_started:
+            if self._dataset_release_complete:
+                return
+            failure = self._failure or self._dataset_release_failure or ContractError('Tree Dataset release remains uncertain')
+            vars(failure)['_structured_tree_fit_cleanup_owner'] = self
+            raise failure
+        self._dataset_release_source = (getattr(self.dataset,'_source',None) if self.context.modern
+            else self.dataset.source)
+        self._dataset_release_started = True  # BEFORE either direct release or context exit.
+        try:
+            if via_exit:
+                self.dataset.__exit__(None if initiating is None else type(initiating), initiating,
+                    None if initiating is None else initiating.__traceback__)
+            else:
+                if not self.context.modern:
+                    raise ContractError('legacy Dataset retirement uses its actual context exit only')
+                self.dataset.release()
+            source_closed=self._dataset_release_source is None or self._dataset_release_source._closed
+            terminal=(self.dataset._closed if self.context.modern else source_closed)
+            if self.dataset._active or not terminal or not source_closed:
+                raise ContractError('actual Dataset release route did not confirm terminal state')
+        except BaseException as error:
+            self._dataset_release_failure = error
+            self._failure = self._failure or initiating or error
+            vars(self._failure)['_structured_tree_fit_cleanup_owner'] = self
+            raise
+        self._dataset_release_complete = True
 
     async def _cleanup_child(self)->None:
         import asyncio
@@ -389,21 +431,60 @@ class _TreeFitRun:
             raise
         if initiating is not None:raise initiating
 
-    async def close(self)->None:
-        if self.closed:return
-        if self.publication is not None and not self.publication.committed:self.publication.revoke()
-        terminal_error:BaseException|None=None
-        try:await self._cleanup_child()
+    async def close(self) -> None:
+        if self.closed:
+            return
+        if self.publication is not None and not self.publication.committed:
+            try:
+                self.publication.revoke()
+            except BaseException as error:  # noqa: BLE001 - preserve first error and actual cleanup capabilities.
+                first = self._failure or error
+                self._note_failure(first, "completion cleanup: ", error)
+                vars(first)["_structured_tree_fit_cleanup_owner"] = self
+                raise first
+        terminal_error: BaseException | None = None
+        try:
+            await self._cleanup_child()
         except BaseException as error:
-            if self.child is not None and not self.child.closed:raise
-            terminal_error=error
-        initiating=terminal_error or RuntimeError('failed fit retirement')
-        if self.context.game and self.prepared is not None:self.prepared.retire_rows()
-        if self.dataset._active:self.dataset.__exit__(type(initiating),initiating,None)
-        self.closed=not self.dataset._active
-        if terminal_error is not None:raise terminal_error
+            if self.child is not None and not self.child.closed:
+                raise
+            terminal_error = error
+        initiating = self._failure or terminal_error or RuntimeError("failed fit retirement")
+        if self.context.game and self.prepared is not None:
+            self.prepared.retire_rows()
+        if self._dataset_release_started and not self._dataset_release_complete:
+            if self.context.modern:
+                if not self.dataset._closed:
+                    try:
+                        self.dataset.close()  # Independent physical cleanup, never another memory-release route.
+                    except BaseException as error:  # noqa: BLE001 - preserve first error and actual cleanup capabilities.
+                        self._note_failure(initiating, "physical Dataset cleanup: ", error)
+            else:
+                source = self._dataset_release_source
+                if source is not None and not source._closed:
+                    try:
+                        source.close()
+                    except BaseException as error:  # noqa: BLE001 - preserve first error and actual cleanup capabilities.
+                        self._note_failure(initiating, "legacy physical Source cleanup: ", error)
+            vars(initiating)["_structured_tree_fit_cleanup_owner"] = self
+            raise initiating
+        if self.dataset._active:
+            self._release_dataset(via_exit=True, initiating=initiating)
+        elif self.context.modern and self.dataset._closed and not self._dataset_release_started:
+            self._release_dataset(initiating=initiating)
+        elif (
+            not self.context.modern
+            and self.dataset.source is not None
+            and not self._dataset_release_started
+        ):
+            self._release_dataset(via_exit=True, initiating=initiating)
+        self.closed = self._dataset_release_complete and not self.dataset._active
+        if terminal_error is not None:
+            raise initiating
 
     async def execute(self)->Json:
+        if self._failure is not None:raise self._failure
+        if self.closed:raise ContractError('Tree fit owner has exactly one lifetime')
         import time
 
         from gf_common.action_contract import engineering_contract, parse_action_contract
@@ -449,16 +530,16 @@ class _TreeFitRun:
             validation_started=time.monotonic()
             proof=publisher.object(self.directory/'child-result.json')
             from gf_common.domain import closed
-            closed(proof,{'schema_version','kind','request_sha256','input_files','metrics','inference_sha256','model_sha256'}|context.extra_fields)
-            context.source(proof)
-            if (type(proof['schema_version']) is not int or proof['schema_version']!=context.schema or proof['kind']!='structured-tree-fit-result'
+            closed(proof,{'schema_version','kind','request_sha256','input_files','metrics','inference_sha256','model_sha256'}|context.numeric_extra_fields)
+            context.numeric_source(proof, request)
+            if (type(proof['schema_version']) is not int or proof['schema_version']!=context.numeric_schema or proof['kind']!='structured-tree-fit-result'
                     or proof['request_sha256']!=self.request_sha or proof['input_files']!=request['input_files']):
                 raise ContractError('Tree2 own child request/input receipt mismatch')
             envelope,_,_=inspect_fit_inputs(self.directory,request,publisher,_context=context)
             inference,text=inspect_artifact(self.directory/'artifact',expected_digest=proof['inference_sha256'],model=self.model,
                 action_config_hash=envelope['action_config_hash'],action_contract=(context.features.layout.action_contract if context.modern else parse_action_contract(classification['action_contract'])),
                 purpose=classification['purpose'],synthetic_capacity=classification['synthetic_capacity'],deadline=self.work_deadline,_context=context,
-                _expected_source=None if not context.modern else (request['source_kind'],request['source_origin']))
+                _expected_source=None if not context.modern else context.source_identity(request))
             from gf_models.structured_tree_pairing import validate_fitted_parameters
             validate_fitted_parameters(text,request,self.model)
             files={**request['input_files'],'request.json':self.request_sha,'artifact/inference.json':proof['inference_sha256'],
@@ -475,15 +556,27 @@ class _TreeFitRun:
                 if context.game:self.prepared.retire_rows()
                 dataset.finalize();dataset.close()
             else:
-                dataset.__exit__(None,None,None)
+                self._release_dataset(via_exit=True)
             entered=False
+            # Snapshot only the checked final cost, with a fit-owned reservation
+            # before dropping Dataset metadata and its one-use memory release.
+            if context.modern:
+                from gf_common.artifacts import json_bound
+                publisher.charge(32*json_bound(metadata[context.shared_cost])+65536)
+                shared_cost=clone(metadata[context.shared_cost])
+                metadata.clear()
+                self.prepared.metadata.clear()
+                del classification
+                self._release_dataset()
+            else:
+                shared_cost=metadata[context.shared_cost]
             validation_seconds=time.monotonic()-validation_started
             health={'exit_code':self.child.health['exit_code'],'reaped':self.child.health['reaped'],
                 'stdout_bytes':self.child.health['stdout.log_bytes'],'stderr_bytes':self.child.health['stderr.log_bytes']}
             self.completion.update(status='complete',health=health,metrics=proof['metrics'],
                 costs={'preparation_seconds':prep_seconds,'child_seconds':child_seconds,'final_validation_seconds':validation_seconds,
                     'cleanup_seconds':cleanup_seconds,'elapsed_seconds':time.monotonic()-self.started,
-                    context.shared_cost:metadata[context.shared_cost]},
+                    context.shared_cost:shared_cost},
                 outputs={'files':files,'inference_sha256':proof['inference_sha256'],'model_sha256':proof['model_sha256']})
             validate_pair_records(request,self.completion,inference,request_sha256=self.request_sha,
                 inference_sha256=proof['inference_sha256'],model_sha256=proof['model_sha256'],_context=context)
@@ -496,10 +589,10 @@ class _TreeFitRun:
             # FD release is the commit point. No later fallible work/deadline
             # check may turn this already-committed return into a failed fit.
             self.closed=True
-            if context.modern:dataset.release()  # Memory-only retirement after the completion commit.
             return self.completion
         except BaseException as error:
-            original=error
+            original=self._failure or error
+            self._failure=original
             try:await self._cleanup_child()
             except BaseException as cleanup:  # noqa: BLE001 - keep exact owner and initiating cancellation
                 self._note_failure(original,'Tree2 fit cleanup: ',cleanup)
@@ -514,10 +607,17 @@ class _TreeFitRun:
                         from gf_training.card_instance_game_tree_data import _note
                         _note(original,'game fit row retirement: ',retirement)
                         raise original
-                dataset.__exit__(type(original),original,original.__traceback__)
+                try:
+                    self._release_dataset(via_exit=True,initiating=original)
+                except BaseException as cleanup:  # noqa: BLE001 - preserve first error and actual cleanup capabilities.
+                    self._note_failure(original,'Dataset context retirement: ',cleanup)
+                    vars(original)['_structured_tree_fit_cleanup_owner']=self
                 if dataset._active:vars(original)['_structured_tree_fit_cleanup_owner']=self
-            if self.context.modern and dataset._closed:
-                dataset.release()
+            if self.context.modern and dataset._closed and not self._dataset_release_started:
+                try:self._release_dataset(initiating=original)
+                except BaseException as cleanup:  # noqa: BLE001 - preserve first error and actual cleanup capabilities.
+                    self._note_failure(original,'Dataset memory retirement: ',cleanup)
+                    vars(original)['_structured_tree_fit_cleanup_owner']=self
             if self.publisher is not None and self.completion is not None and not (self.publication is not None and self.publication.exposed):
                 self.completion['status']='failed'
                 try:_write(self.directory/'training.json',self.completion,scan=self.publisher)
@@ -525,7 +625,7 @@ class _TreeFitRun:
                     if self.context.game:
                         self._note_failure(original,'Tree2 failed record publication: ',publication)
                     else:
-                        original.add_note('Tree2 failed record publication: '+type(publication).__name__)
+                        self._note_failure(original,'Tree2 failed record publication: ',publication)
             raise
 
 
@@ -553,123 +653,342 @@ async def fit_dataset(manifest:Any,*,action_contract:Any,**options:Any)->Json:
 
 
 class _CompletionPublication:
-    """One owned completion inode; late failure invalidates only its held FD.
+    """One controlled mutable completion and its exact original revocation stages."""
 
-    A foreign current-path replacement is preserved and reported. This owner
-    cannot revoke authority of an independently supplied coherent foreign copy.
-    """
-    def __init__(self,directory:Any,publisher:Any,cleanup_deadline:float,max_owned_bytes:int,*,_context:_TreeRecords=TREE2_RECORDS)->None:
-        self.context=_records(_context)
-        self.directory,self.publisher,self.cleanup_deadline=directory,publisher,cleanup_deadline
-        self.limit=min(max_owned_bytes,publisher.limit-publisher.retained)
-        self.fd:int|None=None;self.directory_fd:int|None=None;self.snapshot:Any=None
-        self.exposed=False;self.committed=False;self.revoked=False
-        self._completion_fd_identity:Any=None
-        self._uncertain_releases:list[tuple[str,int,Any,BaseException]]=[]
-        self._commit_started=False
+    def __init__(
+        self,
+        directory: Any,
+        publisher: Any,
+        cleanup_deadline: float,
+        max_owned_bytes: int,
+        *,
+        _context: _TreeRecords = TREE2_RECORDS,
+    ) -> None:
+        self.context = _records(_context)
+        self.directory, self.publisher, self.cleanup_deadline = (
+            directory,
+            publisher,
+            cleanup_deadline,
+        )
+        self.limit = min(max_owned_bytes, publisher.limit - publisher.retained)
+        self.fd: int | None = None
+        self.directory_fd: int | None = None
+        self.snapshot: Any = None
+        self.exposed = False
+        self.committed = False
+        self.revoked = False
+        self._completion_fd_identity: Any = None
+        self._uncertain_releases: list[tuple[str, int, Any, BaseException]] = []
+        self._commit_started = False
+        self._writer = OwnedDescriptor(-1)
+        self._opened_stages: list[OwnedDescriptor] = []
+        self._recovery_names: set[str] = set()
+        self._original: Any = None
+        self._retained: Any = None
+        self._sha = ""
 
-    def _namespace(self)->None:
+    @staticmethod
+    def _full_identity(info: Any) -> tuple[int, ...]:
+        return (
+            info.st_dev,
+            info.st_ino,
+            info.st_mode,
+            info.st_size,
+            info.st_mtime_ns,
+            info.st_ctime_ns,
+        )
+
+    def _namespace(self) -> None:
         import os
         import stat
-        info=self.directory.lstat()
-        if (not stat.S_ISDIR(info.st_mode) or (info.st_dev,info.st_ino)!=self.publisher._tree_fit_directory_identity
-                or self.directory_fd is not None and (os.fstat(self.directory_fd).st_dev,os.fstat(self.directory_fd).st_ino)!=(info.st_dev,info.st_ino)):
-            raise ContractError('Tree2 completion owned directory namespace changed')
+
+        info = self.directory.lstat()
+        if (
+            not stat.S_ISDIR(info.st_mode)
+            or (info.st_dev, info.st_ino) != self.publisher._tree_fit_directory_identity
+            or self.directory_fd is not None
+            and (os.fstat(self.directory_fd).st_dev, os.fstat(self.directory_fd).st_ino)
+            != (info.st_dev, info.st_ino)
+        ):
+            raise ContractError("Tree2 completion owned directory namespace changed")
         from gf_training.structured_tree_data import _check_output_ancestors
+
         _check_output_ancestors(self.publisher._tree_fit_ancestors)
 
-    def _postcheck(self)->None:
+    def _postcheck(self) -> None:
         from gf_models.structured_tree_pairing import inspect_training
+
         self.publisher.finalize()
-        remaining=min(self.limit,self.publisher.limit-self.publisher.retained)
-        if remaining<=0:raise ContractError('completion joint retained metadata ownership exhausted')
-        pair=inspect_training(self.directory,max_owned_bytes=remaining,deadline=self.publisher.deadline,_context=self.context)
+        remaining = min(self.limit, self.publisher.limit - self.publisher.retained)
+        if remaining <= 0:
+            raise ContractError("completion joint retained metadata ownership exhausted")
+        pair = inspect_training(
+            self.directory,
+            max_owned_bytes=remaining,
+            deadline=self.publisher.deadline,
+            _context=self.context,
+        )
         pair.finalize()
         self._namespace()
 
-    def _release(self)->None:
-        from gf_models.structured_tree_pairing import _close_owned_descriptor
-        # Keep completion revocable until every other descriptor has retired.
-        if self.directory_fd is not None:
-            fd=self.directory_fd;self.directory_fd=None
-            _close_owned_descriptor(self,fd,self.publisher._tree_fit_directory_identity,'completion-directory')
-        if self.fd is not None:
-            fd=self.fd;self.fd=None
-            _close_owned_descriptor(self,fd,self._completion_fd_identity,'completion')
-        if self._uncertain_releases:
-            raise ContractError('terminal fit descriptor release remains unconfirmed; quarantined numbers are not retryable')
-
-    def revoke(self)->None:
-        import time
-
-        from gf_models.structured_tree_pairing import _invalidate_owned_completion
-        if not self.revoked and self.exposed:
-            if time.monotonic()>=self.cleanup_deadline:raise ContractError('completion revocation unconfirmed: original cleanup deadline exhausted')
-            _invalidate_owned_completion(self,self.directory/'training.json')
-            self.revoked=True
-        # Invalidation can be confirmed even when the previous release failed.
-        self._release()
-
-    def commit(self,completion:Json)->None:
+    def _hash(self, descriptor: int) -> str:
         import hashlib
         import os
 
-        from gf_models.structured_tree_artifacts import _identity, _publish, _written
+        value, offset = hashlib.sha256(), 0
+        while True:
+            self.publisher.check()
+            block = os.pread(descriptor, 65536, offset)
+            if not block:
+                return value.hexdigest()
+            value.update(block)
+            offset += len(block)
+
+    def _release(self) -> None:
+        from gf_models.structured_tree_pairing import _close_owned_descriptor
+
+        first: BaseException | None = None
+        for stage in (self._writer, *self._opened_stages):
+            try:
+                stage.close()
+            except BaseException as error:  # noqa: BLE001 - preserve first error and actual cleanup capabilities.
+                first = first or error
+        if self.directory_fd is not None:
+            descriptor, self.directory_fd = self.directory_fd, None
+            try:
+                _close_owned_descriptor(self, descriptor,
+                    self.publisher._tree_fit_directory_identity, "completion-directory")
+            except BaseException as error:  # noqa: BLE001 - preserve first error and actual cleanup capabilities.
+                first = first or error
+        # The last actual revoker depends on certainty of earlier stages.
+        # After SAME-inode invalidation it can retire even if they remain uncertain.
+        if self.fd is not None and (self.revoked or (first is None and not self._uncertain_releases)):
+            descriptor, self.fd = self.fd, None
+            try:
+                _close_owned_descriptor(self, descriptor, self._completion_fd_identity, "completion")
+            except BaseException as error:  # noqa: BLE001 - preserve the first actual close failure.
+                first = first or error
+        if first is not None:
+            raise first
+        if self._uncertain_releases:
+            raise ContractError(
+                "terminal fit descriptor release remains unconfirmed; quarantined numbers are not retryable"
+            )
+
+    def _recover_original(self) -> None:
+        import os
+        import stat
+
+        assert self.directory_fd is not None and self.snapshot is not None
+        actual = os.fstat(self.directory_fd)
+        if (actual.st_dev, actual.st_ino) != self.publisher._tree_fit_directory_identity:
+            raise ContractError("completion held recovery directory changed")
+        for name in ("training.json", "training.json.complete.tmp"):
+            if name in self._recovery_names:
+                continue
+            self._recovery_names.add(name)
+            candidate = OwnedDescriptor(-1)
+            self._opened_stages.append(candidate)
+            try:
+                current = os.stat(name, dir_fd=self.directory_fd, follow_symlinks=False)
+            except FileNotFoundError:
+                continue
+            if (
+                not stat.S_ISREG(current.st_mode)
+                or (current.st_dev, current.st_ino) != self.snapshot[:2]
+            ):
+                continue
+            try:
+                candidate.fd = os.open(
+                    name, os.O_RDWR | os.O_NONBLOCK | os.O_NOFOLLOW, dir_fd=self.directory_fd
+                )
+            except FileNotFoundError:
+                continue
+            actual = os.fstat(candidate.fd)
+            if (
+                not stat.S_ISREG(actual.st_mode)
+                or (actual.st_dev, actual.st_ino) != self.snapshot[:2]
+            ):
+                candidate.close()
+                continue
+            self.fd, candidate.fd = candidate.fd, -1
+            return
+        raise ContractError("actual completion original is absent from its fixed owned names")
+
+    def revoke(self) -> None:
+        import time
+
+        from gf_models.structured_tree_pairing import _invalidate_owned_completion
+
+        first: BaseException | None = None
+        try:
+            if not self.revoked and self.snapshot is not None:
+                if time.monotonic() >= self.cleanup_deadline:
+                    raise ContractError(
+                        "completion revocation unconfirmed: original cleanup deadline exhausted"
+                    )
+                if self.fd is None and self.directory_fd is not None:
+                    self._recover_original()
+                _invalidate_owned_completion(self, self.directory / "training.json")
+                self.revoked = True
+        except BaseException as error:  # noqa: BLE001 - preserve first error and actual cleanup capabilities.
+            first = error
+        try:
+            self._release()
+        except BaseException as error:  # noqa: BLE001 - preserve first error and actual cleanup capabilities.
+            first = first or error
+        if first is not None:
+            vars(first)["_structured_completion_cleanup_owner"] = self
+            raise first
+
+    def _final_guard(self) -> None:
+        import time
+
+        if time.monotonic() >= self.cleanup_deadline:
+            raise ContractError("completion post-close original deadline exhausted")
+        self._namespace()
+        if self._full_identity((self.directory / "training.json").lstat()) != self._retained:
+            raise ContractError("completion identity changed after actual retained close")
+
+    def commit(self, completion: Json) -> None:
+        import hashlib
+        import os
+        import stat
+
+        from gf_models.structured_tree_artifacts import _identity, _written
+
         if self._commit_started or self._uncertain_releases:
-            raise ContractError('fit publication is one-use; failed attempts are cleanup-only')
-        self._commit_started=True
-        self.publisher.check();self._namespace()
-        raw=(canonical(completion)+'\n').encode();self.publisher.charge(32*len(raw)+65536)
-        self.directory_fd=os.open(self.directory,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
+            raise ContractError("fit publication is one-use; failed attempts are cleanup-only")
+        self._commit_started = True
+        self.publisher.check()
+        self._namespace()
+        raw = (canonical(completion) + "\n").encode()
+        self.publisher.charge(32 * len(raw) + 2 * 65536 + 4 * 4096)
+        self._sha = hashlib.sha256(raw).hexdigest()
+        self.directory_fd = os.open(self.directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
         try:
             self._namespace()
-            original=self.publisher.files[self.directory/'training.json'][0]
-            if _identity((self.directory/'training.json').lstat())!=original:
-                raise ContractError('Tree2 original running completion path changed')
-            # _publish can close its FD on failure, but this name has NO complete
-            # authority. Transfer the returned FD to this owner BEFORE rename.
-            self.fd,self.snapshot,sha=_publish(self.directory,self.directory_fd,'training.json.complete.tmp',raw,self.publisher.deadline)
-            self._completion_fd_identity=self.snapshot[:2]
-            self.publisher.check();self._namespace()
-            if _identity((self.directory/'training.json').lstat())!=original:
-                raise ContractError('Tree2 running completion replaced before commit')
-            self.exposed=True
-            os.replace('training.json.complete.tmp','training.json',src_dir_fd=self.directory_fd,dst_dir_fd=self.directory_fd)
-            renamed=os.fstat(self.fd)
-            if (renamed.st_dev,renamed.st_ino,renamed.st_size,renamed.st_mtime_ns)!=self.snapshot[:4]:
-                raise ContractError('Tree2 held completion changed across rename')
-            self.snapshot=_identity(renamed)
-            _written(self.directory,self.directory_fd,'training.json',self.fd,self.snapshot,sha,self.publisher.deadline)
-            self.publisher.files[self.directory/'training.json']=(self.snapshot,hashlib.sha256(raw).hexdigest())
-            self._postcheck()
-            _written(self.directory,self.directory_fd,'training.json',self.fd,self.snapshot,sha,self.publisher.deadline)
+            original_running = self.publisher.files[self.directory / "training.json"][0]
+            if _identity((self.directory / "training.json").lstat()) != original_running:
+                raise ContractError("Tree2 original running completion path changed")
+            name = "training.json.complete.tmp"
+            self._writer.fd = os.open(
+                name,
+                os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                0o600,
+                dir_fd=self.directory_fd,
+            )
+            initial = os.fstat(self._writer.fd)
+            if not stat.S_ISREG(initial.st_mode):
+                raise ContractError("regular owned completion temporary required")
+            self._completion_fd_identity = (initial.st_dev, initial.st_ino)
+            self.snapshot = _identity(initial)
+            offset = 0
+            while offset < len(raw):
+                self.publisher.check()
+                amount = os.write(self._writer.fd, memoryview(raw)[offset:])
+                if amount <= 0:
+                    raise ContractError("completion writer made no progress")
+                offset += amount
+            os.fsync(self._writer.fd)
+            actual = os.fstat(self._writer.fd)
+            if (
+                (actual.st_dev, actual.st_ino) != self._completion_fd_identity
+                or actual.st_mode != initial.st_mode
+                or actual.st_size != len(raw)
+            ):
+                raise ContractError("completion writer differs from independently owned original")
+            expected = self._full_identity(actual)
+            if (
+                self._full_identity(os.stat(name, dir_fd=self.directory_fd, follow_symlinks=False))
+                != expected
+                or self._hash(self._writer.fd) != self._sha
+                or self._full_identity(os.fstat(self._writer.fd)) != expected
+                or self._full_identity(
+                    os.stat(name, dir_fd=self.directory_fd, follow_symlinks=False)
+                )
+                != expected
+            ):
+                raise ContractError("completion original writer identity/bytes changed")
+            self._original = expected
+            self.snapshot = _identity(actual)
+            self.publisher.check()
             self._namespace()
-            # Final close is fallible and remains within the rollback boundary.
+            self._writer.close()
+            if (
+                self._full_identity(os.stat(name, dir_fd=self.directory_fd, follow_symlinks=False))[
+                    :5
+                ]
+                != expected[:5]
+            ):
+                raise ContractError("completion temporary changed after writer close")
+            if _identity((self.directory / "training.json").lstat()) != original_running:
+                raise ContractError("Tree2 running completion replaced before commit")
+            self.exposed = True
+            os.replace(
+                name, "training.json", src_dir_fd=self.directory_fd, dst_dir_fd=self.directory_fd
+            )
+            self._namespace()
+            retained = OwnedDescriptor(-1)
+            self._opened_stages.append(retained)
+            retained.fd = os.open(
+                "training.json", os.O_RDWR | os.O_NONBLOCK | os.O_NOFOLLOW, dir_fd=self.directory_fd
+            )
+            actual = os.fstat(retained.fd)
+            captured = self._full_identity(actual)
+            if (
+                captured[:5] != expected[:5]
+                or self._full_identity(
+                    os.stat("training.json", dir_fd=self.directory_fd, follow_symlinks=False)
+                )
+                != captured
+                or self._hash(retained.fd) != self._sha
+                or self._full_identity(os.fstat(retained.fd)) != captured
+                or self._full_identity(
+                    os.stat("training.json", dir_fd=self.directory_fd, follow_symlinks=False)
+                )
+                != captured
+            ):
+                raise ContractError("fresh retained completion differs from controlled original")
+            self.fd, retained.fd = retained.fd, -1
+            self._retained = captured
+            self.snapshot = _identity(actual)
+            _written(
+                self.directory,
+                self.directory_fd,
+                "training.json",
+                self.fd,
+                self.snapshot,
+                self._sha,
+                self.publisher.deadline,
+            )
+            self.publisher.files[self.directory / "training.json"] = (self.snapshot, self._sha)
+            self._postcheck()
+            _written(
+                self.directory,
+                self.directory_fd,
+                "training.json",
+                self.fd,
+                self.snapshot,
+                self._sha,
+                self.publisher.deadline,
+            )
+            self._namespace()
             self._release()
+            self._final_guard()  # Strict6; no ctime allowance after retained nonwriting close.
         except BaseException as original:
-            if self.exposed:
-                # The first failure-path operation is OWNED-FD invalidation.
-                # Namespace diagnostics/formatting must never delay revocation.
-                try:self.revoke()
-                except BaseException as cleanup:  # noqa: BLE001 - unconfirmed authority retirement stays reachable
-                    vars(original)['_structured_completion_cleanup_owner']=self
-                    try:original.add_note('completion revocation unconfirmed: '+type(cleanup).__name__+': '+str(cleanup))
-                    except BaseException:pass  # noqa: BLE001, S110 - diagnostic allocation cannot replace the initiating error
+            try:
+                self.revoke()
+            except BaseException as cleanup:  # noqa: BLE001 - preserve first error and actual cleanup capabilities.
+                vars(original)["_structured_completion_cleanup_owner"] = self
                 try:
-                    current=(self.directory/'training.json').lstat()
-                    if (current.st_dev,current.st_ino)!=(self.snapshot[0],self.snapshot[1]):
-                        original.add_note('completion namespace changed; foreign current path preserved')
-                except BaseException:  # noqa: BLE001 - namespace/diagnostic failures preserve the original exception
-                    try:original.add_note('completion namespace diagnostic unavailable; only held inode is owned')
-                    except BaseException:pass  # noqa: BLE001, S110 - diagnostics are best effort after revocation
-            else:
-                try:self._release()
-                except BaseException as cleanup:  # noqa: BLE001 - retain original failure and exact descriptor owner
-                    vars(original)['_structured_completion_cleanup_owner']=self
-                    original.add_note('completion descriptor retirement unconfirmed: '+str(cleanup))
+                    original.add_note(
+                        "completion revocation unconfirmed: " + type(cleanup).__name__
+                    )
+                except BaseException:  # noqa: BLE001, S110 - diagnostic allocation cannot mask the original failure.
+                    pass
             raise
-        # No fallible I/O remains after confirmed descriptor retirement.
-        self.committed=True
+        self.committed = True
 
 
 async def _fit_component_fixture_dataset(manifest:Any,*,expected_digest:str,directory:Any,model:ConfiguredTreeModelV3,
@@ -702,11 +1021,16 @@ async def fit_game_dataset(manifest:Any,*,expected_digest:str,directory:Any,mode
     """
     import math
     import time
+    started=time.monotonic()
     from pathlib import Path
 
     from gf_common.domain import integer
     from gf_models.config import TrainingConfig, training_config
-    from gf_training.card_instance_game_tree_data import VerifiedGameTreeDataset3
+    from gf_training.card_instance_game_tree_data import (
+        VerifiedGameTreeDataset4,
+        _settings,
+        verified_game_dataset_type,
+    )
     TREE3_GAME_RECORDS.require_model(model)
     if type(training) is not TrainingConfig:
         raise ContractError('existing closed fresh-fit training configuration required')
@@ -714,7 +1038,11 @@ async def fit_game_dataset(manifest:Any,*,expected_digest:str,directory:Any,mode
     if (model.checkpoint is not None or training.wall_seconds>7200 or type(deadline) not in (int,float)
             or not math.isfinite(deadline) or deadline<=time.monotonic()):
         raise ContractError('qualified Tree3 requires fresh bounded configuration and original live caller deadline')
-    dataset=VerifiedGameTreeDataset3(Path(manifest),expected_digest,settings,max_owned_bytes=max_owned_bytes,
-        deadline=min(deadline,time.monotonic()+training.wall_seconds),child_limit_bytes=model.resources.max_owned_bytes,
+    _settings(settings,max_owned_bytes,deadline)
+    deadline=min(deadline,started+training.wall_seconds,started+settings.wall_seconds-settings.cleanup_seconds)
+    dataset_type=verified_game_dataset_type(Path(manifest),expected_digest,settings,max_owned_bytes=max_owned_bytes,deadline=deadline)
+    context=TREE3_PACKED_GAME_RECORDS if dataset_type is VerifiedGameTreeDataset4 else TREE3_GAME_RECORDS
+    dataset=dataset_type(Path(manifest),expected_digest,settings,max_owned_bytes=max_owned_bytes,
+        deadline=deadline,child_limit_bytes=model.resources.max_owned_bytes,
         ownership=ownership)
-    return await _TreeFitRun(dataset,Path(directory).absolute(),model,training,seed,_context=TREE3_GAME_RECORDS).execute()
+    return await _TreeFitRun(dataset,Path(directory).absolute(),model,training,seed,_context=context,_started=started).execute()

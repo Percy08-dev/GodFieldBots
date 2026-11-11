@@ -36,7 +36,9 @@ def _configured(options: Json) -> ConfiguredTreeModelV3:
 
 def safe_tree_options_game_v3(value: Any, *, actions: ActionConfigV3, rules: CardInstanceRules) -> Json:
     """Closed, pure execution declaration; no external I/O or native allocation."""
-    raw = closed(value, TREE_OPTIONS_FIELDS)
+    from gf_common.card_instance_game_tree import PACKED_SOURCE_KIND
+    packed = isinstance(value, dict) and value.get('source_kind') == PACKED_SOURCE_KIND
+    raw = closed(value, TREE_OPTIONS_FIELDS | ({'storage_binding'} if packed else set()))
     input_binding_game_v3(actions.action_contract, rules)
     if raw['version'] != '3' or type(raw['checkpoint']) is not str or not raw['checkpoint']:
         raise ContractError('explicit own Tree3 checkpoint required')
@@ -59,8 +61,8 @@ def safe_tree_options_game_v3(value: Any, *, actions: ActionConfigV3, rules: Car
         checksum(pair_digest)
     # The GAME record context owns source-origin semantics; a runtime declaration
     # validates their shape only and never grants source/fit permission.
-    from gf_models.structured_tree_pairing import TREE3_GAME_RECORDS
-    TREE3_GAME_RECORDS.source(raw)
+    from gf_models.structured_tree_pairing import game_records
+    game_records(raw)
     return clone(raw)
 
 
@@ -92,6 +94,7 @@ def validate_tree_metadata(raw: Any, *, actions: ActionConfigV3, rules: CardInst
     manifest = raw['inference_manifest']
     if (manifest['fit_origin'] != 'trained' or canonical(manifest['source_origin']) != canonical(safe['source_origin'])
             or manifest['source_kind'] != safe['source_kind']
+            or canonical(manifest.get('storage_binding')) != canonical(safe.get('storage_binding'))
             or manifest['provenance']['request_sha256'] != safe['training_pair']['request_sha256']):
         raise ContractError('Tree3 own inference request/source binding mismatch')
     expected = {'inference.json': safe['expected_manifest_digest'], 'model.txt': manifest['model_file']['sha256']}
@@ -182,7 +185,8 @@ class RetainedGamePolicyArtifacts:
                     'resources': asdict(model.resources), 'action_config_hash': digest(asdict(actions)),
                     'tree_descriptor': clone(manifest['tree_descriptor']), 'feature_signature': manifest['feature_signature'],
                     'source_kind': manifest['source_kind'], 'source_origin': clone(manifest['source_origin']),
-                    'training_pair': {'request_sha256': binding.request_sha256, 'completion_sha256': binding.completion_sha256}}
+                    'training_pair': {'request_sha256': binding.request_sha256, 'completion_sha256': binding.completion_sha256},
+                    **({'storage_binding': clone(manifest['storage_binding'])} if 'storage_binding' in manifest else {})}
                 entry = {'input_contract': TREE_INPUT_CONTRACT, 'policy_options': options,
                     'inference_manifest': clone(manifest), 'files': [
                         {'path': name, 'sha256': pair.scan.files[directory / name][1],
@@ -393,7 +397,7 @@ class _OwnGameTreePolicyV3:
         from gf_common.diverse_actions import GameGeneratedCandidatesV3
         from gf_common.structured import Selection
         from gf_models.structured_tree_artifacts import _bind_model_v3
-        from gf_models.structured_tree_pairing import TREE3_GAME_RECORDS
+        from gf_models.structured_tree_pairing import game_records
         from gf_models.structured_tree_policy import _prepare_policy, _select
         if type(generated) is not GameGeneratedCandidatesV3:
             raise ContractError('Tree3 game policy requires the original game-generated table')
@@ -406,7 +410,7 @@ class _OwnGameTreePolicyV3:
         self._scan.deadline = time.monotonic()+10
         self._scan.finalize()
         _bind_model_v3(self.tree.booster, self.tree.model, self.tree.origin)
-        prepared, candidates, token_ms = _prepare_policy(self.tree, frame, bank_view, table, TREE3_GAME_RECORDS)
+        prepared, candidates, token_ms = _prepare_policy(self.tree, frame, bank_view, table, game_records(self.tree.origin.fields()))
         index = _select(self.tree, prepared, candidates)
         self._scan.finalize()
         self.last_timing = {'tokenization_ms': token_ms}

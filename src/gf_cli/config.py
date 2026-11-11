@@ -163,20 +163,29 @@ def require_storage_command(config: ExperimentConfig, command: str, *, standalon
         return
     if command == "validate":
         return
-    if command == 'train' or command == 'collect' and not standalone:
+    if command in ('train', 'train-formal', 'validate-formal-policy') or command == 'collect' and not standalone:
         if (type(config.actions) is not ActionConfigV3 or type(config.model) is not ConfiguredNeuralModelV3
                 or config.preprocessing.backend not in ('python', 'rust') or config.preprocessing.reader != 'participant-structured-v2'
-                or type(config.training) is not PPOTrainingConfig or config.run.split != 'train'
+                or type(config.training) is not PPOTrainingConfig
+                or config.run.split not in (('train', 'validation') if command == 'validate-formal-policy' else ('train',))
                 or type(config.opponent) is ConfiguredTreeModelV3):
             raise ContractError('group Pack storage PPO requires ordinary corrected PPO')
         if config.preprocessing.backend == 'rust':
             from gf_training.native_backend import group_pack_reader_settings
             group_pack_reader_settings(config.preprocessing)
+            if command in ('train-formal', 'validate-formal-policy'):
+                from gf_training.card_instance_formal import require_native_formal_controls
+                from gf_training.native_backend import load_native
+                require_native_formal_controls(load_native(), packed=True)
+        return
+    if command in ('game-dataset', 'fit-game-tree'):
+        if (type(config.actions) is not ActionConfigV3 or type(config.model) is not ConfiguredTreeModelV3
+                or type(config.training) is not TrainingConfig or config.preprocessing.backend not in ('python', 'rust')
+                or config.preprocessing.reader != 'participant-structured-v2'):
+            raise ContractError('packed storage Dataset/Tree commands require checked corrected Tree3 configuration')
         return
     if not standalone or command not in ("smoke", "collect", "evaluate"):
         raise ContractError("group Pack storage is not integrated for this command yet")
-    if any(type(model) is ConfiguredTreeModelV3 for model in (config.model, config.opponent)):
-        raise ContractError("group Pack storage Tree3 inference awaits Source integration")
 
 
 @dataclass(frozen=True)

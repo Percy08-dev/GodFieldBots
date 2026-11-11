@@ -14,12 +14,40 @@ from gf_training.group_pack_source import OriginalFile, PackedSource, _no_symlin
 from gf_training.structured_source import _SourceOwner
 
 
+def parent_external_roots(state: Json) -> tuple[Path, ...]:
+    from gf_common.group_pack_game import packed_state
+    if not packed_state(state):
+        return ()
+    root = Path(state['effective_config']['storage']['db_root'])
+    return (root / state['run_id'], root / 'catalog.sqlite3',
+        root / 'catalog.sqlite3-wal', root / 'catalog.sqlite3-shm', root / 'catalog.sqlite3-journal')
+
+
 class PackedSourceOwner(_SourceOwner):
     def __init__(self, directory: Path, settings: Any, deadline: float, *, storage_binding: Json,
                  max_owned_bytes: int, extra_owned_bytes: int = 0,
                  storage_limit: int | None = None, pool: PackedArtifactPool | None = None,
-                 expected_descriptor_root: Path | None = None) -> None:
+                 expected_descriptor_root: Path | None = None,
+                 _issued_pending: Any = None, _final_parent: Any = None) -> None:
         checked_storage_binding(storage_binding)
+        if _issued_pending is not None:
+            from gf_training.card_instance_final_validation import _IssuedFinalValidationCollection
+            if type(_issued_pending) is not _IssuedFinalValidationCollection or _issued_pending._context is None:
+                raise ContractError('SAME actual issued packed final collection required')
+            context = _issued_pending._context
+            _issued_pending.require(context)
+            if context._parent is not _final_parent or context._output != directory.absolute():
+                raise ContractError('pending packed Source differs from SAME actual parent/context')
+        if _final_parent is not None:
+            from gf_training.card_instance_formal import FormalGameParent
+            slot = getattr(_final_parent, '_packed_final_originals', None)
+            if type(_final_parent) is not FormalGameParent or slot is None or slot.owner is not self:
+                raise ContractError('actual parent must preown this final original wrapper before effects')
+            _final_parent.require_active()
+        elif _issued_pending is not None:
+            raise ContractError('pending packed Source requires actual parent-owned originals')
+        self._issued_pending = _issued_pending
+        self._locator_name = 'collection.locator.json' if _issued_pending is None else 'collection.locator.json.tmp'
         self.root, self.settings, self.deadline = directory.absolute(), settings, deadline
         self.limit = min(max_owned_bytes, settings.memory_budget_mib * 1024**2,
                          storage_limit or max_owned_bytes)
@@ -36,10 +64,14 @@ class PackedSourceOwner(_SourceOwner):
         self.locator: OriginalFile | None = None
         self.artifacts: PackedSource | None = None
         self._charge_bytes = 0
+        self._charge_uncertain = False
+        self._acquisition_state = 'unattempted'
+        self._release_state = 'unattempted'
+        self._failure: BaseException | None = None
         try:
             self.charge(extra_owned_bytes + 65536)
             self.directory_identity = _no_symlink_path(self.root).stat()
-            self.locator = OriginalFile(self.root / 'collection.locator.json', deadline)
+            self.locator = OriginalFile(self.root / self._locator_name, deadline)
             self.charge(32 * self.locator.identity.st_size + 65536)
             value = closed(parse_json(self.locator.read(MAX_JSON)),
                 {'format', 'schema_version', 'descriptor', 'descriptor_sha256'})
@@ -51,9 +83,10 @@ class PackedSourceOwner(_SourceOwner):
             if expected_descriptor_root is not None and descriptor.parent != expected_descriptor_root.absolute():
                 raise ContractError('packed locator targets foreign parent batch root')
             self.artifacts = PackedSource(descriptor, deadline=deadline,
-                max_owned_bytes=self.limit, pool=self.pool)
+                max_owned_bytes=self.limit, pool=self.pool, _allow_pending=_issued_pending is not None)
             originals = self.artifacts._originals
-            if originals.descriptor_file is None or originals.descriptor_file.sha256 != value['descriptor_sha256']:
+            if (originals.descriptor is None or originals.descriptor['publication'] != ('pending' if _issued_pending is not None else 'published')
+                    or originals.descriptor_file is None or originals.descriptor_file.sha256 != value['descriptor_sha256']):
                 raise ContractError('original locator/descriptor hash mismatch')
             self.reader = OriginalArtifactReader(self.artifacts, self.read_raw, self.charge, self.root)
             self._entries = {m['name']: m for m in self.artifacts._index['members']}
@@ -71,12 +104,70 @@ class PackedSourceOwner(_SourceOwner):
         super().check()
         if self._closed:
             raise RuntimeError('packed original Source closed')
+        if self._failure is not None:
+            raise self._failure
 
     def charge(self, size: int) -> None:
         self.check()
-        self.pool.budget.acquire(size, self.deadline)
-        self._charge_bytes += size
-        self.used += size
+        budget = self.pool.budget
+        # The same local account is exclusive through the effect evidence check.
+        with budget._condition:
+            before = budget.used
+            self._acquisition_state = 'attempting'
+            try:
+                budget.acquire(size, self.deadline)
+            except BaseException as error:
+                self._remember_account_failure(error)
+                raise
+            finally:
+                if budget.used == before + size:
+                    self._charge_bytes += size
+                    self.used += size
+                    self._acquisition_state = 'admitted'
+                elif budget.used == before:
+                    self._acquisition_state = 'no-effect'
+                else:
+                    self._charge_uncertain = True
+                    self._acquisition_state = 'uncertain'
+            if self._acquisition_state != 'admitted':
+                admission_error = ContractError('packed wrapper admission lacks exact same-account evidence')
+                self._remember_account_failure(admission_error)
+                raise admission_error
+
+    def _remember_account_failure(self, error: BaseException) -> None:
+        self._failure = self._failure or error
+        retain_cleanup(self, error)
+        vars(self._failure)['cleanup_owner'] = self
+
+    def _release_charge(self, size: int) -> None:
+        if self._charge_uncertain:
+            error = self._failure or ContractError('packed wrapper account remains uncertain')
+            self._remember_account_failure(error)
+            raise error
+        if not size:
+            return
+        budget = self.pool.budget
+        with budget._condition:
+            before = budget.used
+            self._release_state = 'attempting'
+            try:
+                budget.release(size)
+            except BaseException as error:
+                self._remember_account_failure(error)
+                raise
+            finally:
+                if budget.used == before - size:
+                    self._charge_bytes -= size
+                    self._release_state = 'refunded'
+                elif budget.used == before:
+                    self._release_state = 'held'
+                else:
+                    self._charge_uncertain = True
+                    self._release_state = 'uncertain'
+            if self._release_state != 'refunded':
+                refund_error = ContractError('packed wrapper refund lacks exact same-account evidence')
+                self._remember_account_failure(refund_error)
+                raise refund_error
 
     def _safe(self, path: Path) -> None:
         if not path.is_relative_to(self.root):
@@ -197,8 +288,7 @@ class PackedSourceOwner(_SourceOwner):
         """Drop per-batch decode allowances after its graph has explicitly retired."""
         retained = 65536 + 1024 * len(self.files) + sum(len(str(k)) * 32 for k in self.files)
         release = max(0, self._charge_bytes - retained)
-        self.pool.budget.release(release)
-        self._charge_bytes -= release
+        self._release_charge(release)
 
     def borrow_group(self, group_id: str) -> Any:
         assert self.artifacts is not None
@@ -238,6 +328,11 @@ class PackedSourceOwner(_SourceOwner):
 
     def finalize(self) -> None:
         self.check()
+        if self._issued_pending is not None:
+            context = self._issued_pending._context
+            if context is None:
+                raise ContractError('pending packed final issued context retired')
+            self._issued_pending.require(context)
         if self.locator is not None:
             self.locator.recheck()
         current = _no_symlink_path(self.root).stat()
@@ -247,7 +342,7 @@ class PackedSourceOwner(_SourceOwner):
         with __import__('os').scandir(self.root) as entries:
             for entry in entries:
                 self.check()
-                if seen or entry.name != 'collection.locator.json' or not entry.is_file(follow_symlinks=False):
+                if seen or entry.name != self._locator_name or not entry.is_file(follow_symlinks=False):
                     raise ContractError('original packed envelope namespace changed')
                 seen = True
         if not seen:
@@ -265,8 +360,7 @@ class PackedSourceOwner(_SourceOwner):
         getattr(self, '_entries', {}).clear()
         self.files.clear()
         self.inventories.clear()
-        self.pool.budget.release(self._charge_bytes)
-        self._charge_bytes = 0
+        self._release_charge(self._charge_bytes)
         if self._owns_pool:
             self.pool.close()
         self._closed = True

@@ -496,3 +496,225 @@ All reachable engineering paths, refusals and bounded smokes must be checked;
 document that limitation separately rather than retrofitting short parents.
 Whole verification and alternating same-real-data/HDD plus simultaneous workload
 comparison remain required before complete-plan acceptance or any default choice.
+
+### Formal-completion namespace handoff (architecture READY)
+
+FormalCompletion.publish also retains its O_RDWR temporary FD across mutable
+replace. The actualHOST9p open-FD visibility evidence applies to this operation;
+closing that FD without preserving completion ownership would break revocation
+across the outer run-lock exit. This amendment changes only controlled terminal
+publication, not formal eligibility, schemas, canonical bytes, algorithms or
+original deadlines/budgets. Apply the same implementation to old Run3 and explicit
+packed Run4; no filesystem detection or permissive Source mode.
+
+Preown a distinct writer descriptor stage before its exclusive temporary open,
+in addition to the existing parent directory and retained completion stage.
+Write/fsync and verify exact canonical bytes, regular mode, held/path six-field
+identity and namespace under the existing bound. Capture this actual complete
+original's dev/inode/mode/length/mtime and full hash. Confirm one terminal writer
+close BEFORE the one replace; uncertainty retains the actual consumed stage and
+first error, forbids publication and never retries a raw number. Keep the
+original expected identity separate from any subsequent opened capability.
+
+The directory capability remains held. Set exposed before replace as today,
+since rename can take effect before reporting failure. No FD to the temporary
+original may remain open across rename. After namespace publication, open a NEW
+O_RDWR|O_NONBLOCK|O_NOFOLLOW retained completion capability through the SAME held
+directory. Bind it to the ALREADY controlled original by dev/inode/mode/length/
+mtime and full canonical hash. Allow ctime handoff only for that confirmed owned
+writer close and namespace operation; then retain strict checks. Never replace
+expected original identity with facts from an unvalidated opened file. An open,
+lookup or verification error is failed publication; actual capabilities remain
+owned and existing known-inode revocation rules apply. A foreign opened inode
+must never be written, and no polling/rename retry or reconstructed Source right
+is introduced.
+
+While the actual directory capability remains active, failed-publication recovery
+is owned by this SAME FormalCompletion and checks exactly two fixed names through
+that held directory: run.json and run.json.formal-complete.tmp. This handles both
+replace-before-effect failure and replace-after-effect/fresh-open failure,
+including substitution of the absolute parent path. Do not require the replaced
+absolute namespace to be healthy before cleanup through the original directory.
+Preown bounded recovery descriptor stages before open/stat effects; compare
+the independently preserved expected original dev/inode before ANY write. A
+foreign candidate is never invalidated or promoted to original ownership; retain
+its actual opened identity separately for checked one-attempt closure. Absent or
+foreign canonical candidate may lead only to the other fixed candidate, not a
+search or repeated opens. A validated actual original capability uses the
+UNCHANGED known-inode invalidator. Keep every uncertain opened/closed stage and
+first error reachable; never overwrite a live/uncertain field with another FD.
+After actual directory-capability retirement, preserve the existing strict
+canonical-path known-inode recovery. Failure to recover/invalidate remains
+unconfirmed cleanup and cannot set revoked/committed/healthy optimistically.
+
+The fresh retained O_RDWR capability is used only for verification and, upon
+failure, actual original invalidation. It is not written on the healthy path.
+Its actual one-attempt close and the existing post-close final guard remain
+strict; do not silently allow a second ctime change at that close. Keep the
+existing five-field public snapshot representation, adding only private mode/
+hash facts needed to check the controlled handoff. Whole FormalCompletion.finish
+still follows outer run-lock retirement, wall/disk guards and actual descriptor
+retirement before committed=True. Failure before/after rename, fresh open,
+outer-lock retirement, final guard or close revokes the actual known original
+and keeps first error/uncertainty reachable; no healthy completion from inner
+publication alone. Existing fresh known-inode recovery after close is preserved,
+not widened to an arbitrary current pathname or a foreign replacement.
+
+Charge new descriptor/bookkeeping/hash buffers before effects inside the existing
+formal admission reservation. Constructor/partial stages are owned from first
+effect; release other certain stages while retaining uncertain stages. Do not
+reset the writer's consumed close state to install the reader/revoker. No new
+session, lock, caller capability, persisted transfer token, dependency or generic
+publication framework is required.
+
+Verification: controlled unqualified FormalCompletion component fixtures for old
+and packed control variants; writer close before replace, strict retained-original
+handoff and actual revocation across outer-lock failure; fault before/after each
+close/rename/open/hash and parent/target/temp replacement; expected identity must
+survive a foreign fresh-open result; no stale-number retry/snapshot overwrite;
+first error and storage/deadline limits. Existing formal/control/terminal tests
+and8frozen algorithm ASTs remain. After reviews, bounded control-only HOST D:/tmp
+publish/finish/revoke checks must confirm the newly opened non-writing O_RDWR
+capability closes without identity drift. If that check fails, report evidence
+and return to design review rather than permitting further ctime drift. No
+1000-update campaign, genuine formal parent or successful Source handoff is
+constructed to exercise this component.
+
+### Tree fit terminal ownership closure (architecture READY)
+
+Two concrete gaps exist in the shared actual fit workflow. Its mutable
+training.json completion keeps _publish's writable original across replace,
+matching the DrvFS visibility failure. It also sets fit.closed after completion
+commit and then calls fallible modern Dataset.release; that failure can leave a
+healthy completion and be retried/masked in the exception path. This is within
+current Tree2/fixture3/game3/packed4 responsibilities, not a new fitting gate.
+No real-source qualification, numerical input/result/inference schema, model
+parameters, rounds, provenance fields, budget or dependency changes.
+
+Keep _CompletionPublication.commit's existing signature and terminal contract.
+For its mutable completion only, replace the hidden returned-FD handoff with
+explicit preowned writer, retained completion and fixed-candidate recovery
+stages. Confirm canonical writer bytes/hash/stat/namespace/fsync and one-attempt
+writer close before the ONE replace. Reacquire a NEW retained non-writing O_RDWR
+capability through the SAME held output directory, bound to the independently
+preserved controlled original dev/inode/mode/length/mtime/hash. Only that owned
+writer-close/rename permits ctime handoff, followed by strict6 checks. Preserve
+the publisher's existing5tuple representation, all output-only pair postchecks,
+strict terminal close/guards and known-inode invalidation. Do not change generic
+inference-artifact _publish or the separate immutable-copy completion.
+
+After every actual terminal close succeeds and BEFORE committed=True, compare
+the published path's full six-field identity with the verified retained snapshot
+and recheck the owned output directory/ancestor namespace. There is no second
+ctime handoff at the retained non-writing O_RDWR close. A late lookup/identity/
+namespace/deadline failure uses existing known-inode recovery and stays failed;
+do not set committed merely because the raw closes returned. Keep the original
+cleanup deadline and output-only boundary for this post-close check.
+
+Use the SAME recovery contract as FormalCompletion: while actual directory FD
+remains active, only fixed training.json and training.json.complete.tmp candidates
+through that directory, independently expected original inode before any write,
+foreign candidate preserved, actual opened identity separately retained, bounded
+preowned recovery stages and unchanged known-inode invalidator. After directory
+retirement, existing canonical recovery remains. Partial close/open/replace/
+postcheck/expiry errors retain first error and actual capabilities. No raw-number
+retry, search, visibility polling, optimistic committed flag or foreign writes.
+
+Modern Dataset.release MUST complete BEFORE any healthy completion is exposed.
+After the existing Source/parent/row/child reportable close, copy only the checked
+shared-cost scalar/JSON needed for the final record into fit/publisher-owned
+bounded metadata, charged before allocation. Drop any remaining borrowed Dataset
+metadata references before its memory release. Do not keep/reopen original
+Sources to service output-pair postchecks. Completion uses the already verified
+request, child/model outputs and that bounded cost copy; no mutation to its
+persisted contents or schema is needed. Only then build/validate and commit the
+healthy completion and set fit.closed. No fallible Dataset/Source work follows
+that terminal commit. Legacy non-modern behavior stays compatible.
+
+Treat Dataset release as an actual one-use stage on the fit owner. A failure,
+including after effects, retains the actual Dataset/prepared/control owners and
+first error, blocks healthy publication and cannot be retried automatically or
+inferred complete from empty maps/closed flags. Context-exit/cleanup failures
+must not mask the initiating fit error. Failed or uncertain release keeps
+fit.closed false; physical Source/child retirement and memory-release completion
+are distinct facts. Remaining cleanup may retire other certain actual owners,
+but does not clear uncertainty or grant new fitting/publication permission.
+Existing close/failure record paths must honor this order and preserve the
+original failure rather than skipping committed publication or invoking release
+again. There is no new public callback or serialized handoff authority.
+
+Both actual modern Dataset.__exit__ implementations already invoke release.
+Normal direct release and error-path context exit are mutually accounted routes
+through the SAME fit-owned one-use stage, marked BEFORE either call. Confirm
+only an actual successful route with the contractual closed/inactive state;
+an exit error retains uncertainty even if closed/active flags or maps changed.
+It suppresses any subsequent direct release or repeated context exit. Other
+certain physical cleanup can proceed separately without retrying that stage.
+Do not add a new public Dataset API or infer memory retirement from empty maps.
+
+The legacy non-modern Dataset has no release/_closed API: its normal/error
+__exit__ uses that SAME fit-owned one-use stage too. Retain its actual Source
+before exit if needed; confirmation requires actual successful return, inactive
+Dataset and that actual Source's closed predicate. Raised exits remain uncertain
+even if those flags changed, and cannot be repeated by the handler. Preserve
+legacy serialized records and Dataset API without adding a public release method.
+
+Verification: exact-context old/new completion records and fitted output bytes;
+controlled writer close before rename, strict reacquisition, held-dir recovery
+before/after rename and under parent/target/temp substitution, foreign inode
+refusal, actual close failures/expiry/budget and retained first error. Instrument
+an actual unqualified fixture fit's release before/after effects: no complete
+training.json can survive a failure, no second release, actual child/Source
+owners remain inspectable, no false fit.closed. Healthy fixture500-round fit,
+paired copy/load/full-Booster/score regression, all formal ASTs and static checks
+remain; genuinely qualified Dataset4 fitting stays NOT RUN. After both reviews,
+bounded control-only HOST D:/tmp completion success/revocation checks are required.
+
+### Schema selection preflight closure (architecture READY)
+
+Dataset schema selection is routing only and must preserve the concrete reader's
+allocation/preflight boundary. The new cross-module selector is
+verified_game_dataset_type(path, expected_digest, settings, *, max_owned_bytes,
+deadline), where settings is the SAME caller PreparationConfig, not default or
+reconstructed permissions. It returns only the closed Dataset3/4 class and grants
+no Source, parent, fitting or ownership right. Existing public entrypoints and
+Config serialization stay unchanged.
+
+Run the existing closed _settings validation and _reader_preflight BEFORE any
+preliminary manifest read. Apply the same existing regular-file and
+min(64,settings.max_source_file_mib)MiB cap before selector bytes/JSON allocation,
+with SealedScan's actual owned-file/hash/deadline/budget checks. The concrete
+reader still repeats its complete original/ownership validation; no temporary
+selector result or JSON is promoted into original custody or used as a default
+on failure. Whole-input resident scans and unknown-schema fallback remain refused.
+
+Keep this preliminary selector LIMITED to reading the integer schema_version
+and choosing the exact closed class. Do not call game.manifest/packed_manifest,
+canonicalize or clone the full manifest here. Those validators allocate a clone
+and belong to the concrete reader's existing separately reserved validation
+pass (additional32*stat_size+65536 before object/validator work). Selection thus
+uses only its own bounded SealedScan parse reservation; it creates no second
+unreserved full-validator allowance. Full body validation remains mandatory in
+the actual concrete reader before any Source/fitting permission.
+
+Dataset build likewise validates SAME settings/native preflight before its
+private three-parent subtype selection. That pass only distinguishes homogeneous
+original Run3 versus explicit packed Run4 declarations; it is not parent
+qualification and the actual owners still perform all checks. Keep existing
+reader versions, byte/metadata bounds and early failure behavior. Negative tests
+must prove invalid settings/backend/native marker and over-cap manifest fail
+before the preliminary read, not just before later row allocation. Root treats
+the already isolated correction as unaccepted evidence until this narrow design
+review; dependent adoption waits READY and final implementation conformance.
+
+Establish ONE original effective absolute preprocessing deadline at caller entry,
+before selection/preflight work: validate SAME closed settings with the existing
+validator, then cap by caller deadline, original training deadline and original
+entry_monotonic + settings.wall_seconds - settings.cleanup_seconds. Pass that
+SAME absolute deadline to both selector and concrete reader, so the latter's
+existing min() cannot restart preprocessing time after routing. A local reuse
+of the existing closed validator is sufficient; do not add a deadline-bearing
+selector result, new Source token or budget extension. The build selector also
+consumes its already established original absolute budget. Invalid/expired
+settings/deadlines fail before metadata reads; tests must advance a fake clock
+during routing and prove no restarted allowance at reader construction.

@@ -144,6 +144,10 @@ def test_final64_marker_cannot_replace_formal_control_support(candidate, monkeyp
 
 
 def test_actual_preserved_old_binary_refuses_all_five_before_operational_work(tmp_path):
+    preserved_binary = (ROOT / 'runs/assessments/card-instance-final-acceptance-20261108'
+        / 'native-install-rollback-v1/native/target/release/libgf_native.so')
+    if not preserved_binary.is_file():
+        pytest.skip('optional preserved pre-capability native binary is unavailable')
     code = r'''
 import importlib.util,json,sys
 from pathlib import Path
@@ -184,9 +188,9 @@ for role in ('formal','final64','history','fixture','tree'):
 assert not touched and len(results)==5
 print(json.dumps({'identity':identity,'refused':results,'operational_allocations':touched},sort_keys=True))
 '''
-    python = Path('/home/percy/develop/GodFieldBots/.venv/bin/python')
+    python = ROOT / '.venv/bin/python'
     result = subprocess.run([str(python), '-I', '-c', code, str(ROOT),
-        '/home/percy/develop/GodFieldBots/native/target/release/libgf_native.so'], check=False, capture_output=True,
+        str(preserved_binary)], check=False, capture_output=True,
         text=True, cwd=tmp_path, timeout=30)
     assert result.returncode == 0, result.stderr
     evidence = json.loads(result.stdout)

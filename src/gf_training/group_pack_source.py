@@ -411,7 +411,7 @@ class GroupLoan:
 
 class PackedSource:
     def __init__(self, path: Path, *, deadline: float, max_owned_bytes: int,
-                 pool: object = None) -> None:
+                 pool: object = None, _allow_pending: bool = False) -> None:
         from gf_training.group_pack_pool import PackedArtifactPool
         if pool is not None and type(pool) is not PackedArtifactPool:
             raise TypeError('concrete packed original pool required')
@@ -440,7 +440,7 @@ class PackedSource:
                 pool.before_open()
             self._originals = PackedOriginals(path, deadline=deadline, max_owned_bytes=max_owned_bytes,
                 budget=None if pool is None else pool.budget,
-                source_base=SOURCE_BASE if pool is None else 0)
+                source_base=SOURCE_BASE if pool is None else 0, allow_pending=_allow_pending)
             # Own the actual Originals BEFORE any allocating index construction
             # or pool registration. Every subsequent failure retires this SAME
             # partial Source or leaves it attached to the initiating exception.
