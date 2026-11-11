@@ -8,6 +8,7 @@ import os
 import random
 import subprocess
 import sys
+import threading
 import time
 from dataclasses import asdict
 from typing import Any, cast
@@ -173,32 +174,58 @@ class CardInstanceParticipantWorker(StructuredParticipantWorker):
             resource_estimate(self._tree_model, model_bytes=options["tree_descriptor"]["model_bytes"],
                 extra_bytes=self._tree_retained+frame_decode_bytes(encoded_size)+frame_decode_bytes(self._tree_reply_limit))
             artifact_inputs.guard(deadline=self._construction_deadline)
+        boundary = self._creation_boundary = threading.Event()
+        self._creation_observer_failure: BaseException | None = None
         self.lease = ledger.reserve_worker(residency)  # must precede Popen.
         self.lease._cleanup_owner = self
         if type(artifact_inputs) is RetainedGamePolicyArtifacts:
             artifact_inputs.retain_worker(self)
         process = None
         try:
-            process = subprocess.Popen(
-                [sys.executable, "-E", "-m", "gf_simulator_client.card_instance_bootstrap"]
-                + ([str(options["resources"]["max_owned_bytes"])] if self._tree and options is not None else []),
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
-                bufsize=0,
-                env={
-                    "PATH": os.defpath,
-                    "LANG": "C.UTF-8",
-                    "LC_ALL": "C.UTF-8",
-                    "PYTHONHASHSEED": "0",
-                    "OPENBLAS_NUM_THREADS": "1",
-                    "OMP_NUM_THREADS": "1",
-                    "MKL_NUM_THREADS": "1",
-                },
-            )
-            self.process = process
+            try:
+                self.lease._creation_started(self, boundary)
+            except BaseException as error:
+                self._creation_observer_failure = error
+                raise
+            creation_error = observer_error = None
+            try:
+                process = subprocess.Popen(
+                    [sys.executable, "-E", "-m", "gf_simulator_client.card_instance_bootstrap"]
+                    + ([str(options["resources"]["max_owned_bytes"])] if self._tree and options is not None else []),
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.DEVNULL,
+                    bufsize=0,
+                    env={
+                        "PATH": os.defpath,
+                        "LANG": "C.UTF-8",
+                        "LC_ALL": "C.UTF-8",
+                        "PYTHONHASHSEED": "0",
+                        "OPENBLAS_NUM_THREADS": "1",
+                        "OMP_NUM_THREADS": "1",
+                        "MKL_NUM_THREADS": "1",
+                    },
+                )
+                self.process = process
+            except BaseException as error:
+                creation_error = error
+                raise
+            finally:
+                try:
+                    self.lease._creation_finished(self, boundary, process, creation_error)
+                except BaseException as error:  # noqa: BLE001 - keep local child for original cleanup
+                    self._creation_observer_failure = error
+                    if creation_error is not None:
+                        creation_error.add_note('worker creation observation: ' + type(error).__name__)
+                    else:
+                        observer_error = error
+                finally:
+                    boundary.set()
+            if observer_error is not None:
+                raise observer_error
             self.lease.spawned(process)
         except BaseException as error:
+            boundary.set()
             _failed_spawn(process, self.lease, error)
             if not self.lease.released:
                 error._structured_startup_owner = self  # type: ignore[attr-defined]

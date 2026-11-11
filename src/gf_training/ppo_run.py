@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import importlib.metadata
 import importlib.util
+import inspect
 import json
 import os
 import resource
@@ -172,6 +173,7 @@ class LearningProcess:
         self._creation_no_child = False
         self._process_notification_attempted = False
         self._drainer_creation_attempted = False
+        self._creation_observer_failure: BaseException | None = None
 
     def _environment(self) -> dict[str, str]:
         return {'PATH': os.defpath, 'LANG': 'C.UTF-8', 'LC_ALL': 'C.UTF-8', 'PYTHONHASHSEED': '0',
@@ -180,6 +182,15 @@ class LearningProcess:
 
     def _process_created(self) -> None:
         pass
+
+    def _creation_task_created(self, creation: asyncio.Task[Any]) -> None:
+        """Optional observation of the original local creation task."""
+
+    def _creation_failed(self, error: Exception) -> None:
+        """Optional observation of the default creator's actual exception."""
+
+    def _creation_task_failed(self, error: BaseException) -> None:
+        """Optional observation after closing an actually unstarted coroutine."""
 
     def _close_request(self) -> Json:
         return {'command': 'close'}
@@ -194,11 +205,16 @@ class LearningProcess:
             return await asyncio.create_subprocess_exec(sys.executable, '-E', '-m', 'gf_training.ppo_worker',
                 stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
                 env=environment, limit=1024 * 1024)
-        except Exception:
+        except Exception as error:
             # The default stdlib creation operation failed without returning a
             # process. Alternate launchers must supply their own settlement
             # evidence; cancellation alone never establishes no child.
             self._creation_no_child = True
+            try:
+                self._creation_failed(error)
+            except BaseException as observer_error:  # noqa: BLE001 - retain the actual creation failure
+                self._creation_observer_failure = observer_error
+                error.add_note('creation failure observation: ' + type(observer_error).__name__)
             raise
 
     def _adopt_process(self, process: Any) -> None:
@@ -235,20 +251,46 @@ class LearningProcess:
         coroutine = self._create_process()
         try:
             creation = asyncio.create_task(coroutine)
-        except BaseException:
+        except BaseException as error:
+            unstarted = inspect.getcoroutinestate(coroutine) == inspect.CORO_CREATED
             coroutine.close()
             self._creation_no_child = True
+            if unstarted:
+                try:
+                    self._creation_task_failed(error)
+                except BaseException as callback_error:  # noqa: BLE001 - retain the actual task failure
+                    self._creation_observer_failure = callback_error
+                    error.add_note('creation task failure observation: ' + type(callback_error).__name__)
             raise
         self.creation_task = creation
+        observer_error: BaseException | None = None
+        try:
+            self._creation_task_created(creation)
+        except BaseException as error:  # noqa: BLE001 - defer until LOCAL creation settles/adopts
+            self._creation_observer_failure = error
+            observer_error = error
         cancelled = None
         while not creation.done():
             try:
                 await asyncio.shield(creation)
             except asyncio.CancelledError as error:
                 cancelled = cancelled or error
-        self._adopt_process(creation.result())
+            except BaseException as error:
+                if observer_error is not None:
+                    error.add_note('creation task observation: ' + type(observer_error).__name__)
+                raise
+        try:
+            self._adopt_process(creation.result())
+        except BaseException as error:
+            if observer_error is not None:
+                error.add_note('creation task observation: ' + type(observer_error).__name__)
+            raise
         if cancelled:
+            if observer_error is not None:
+                cancelled.add_note('creation task observation: ' + type(observer_error).__name__)
             raise cancelled
+        if observer_error is not None:
+            raise observer_error
 
     async def _drain(self) -> None:
         count = 0

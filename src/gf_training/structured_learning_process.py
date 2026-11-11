@@ -69,6 +69,18 @@ class StructuredLearningProcess(LearningProcess):
             raise ContractError('numerical process has no pre-spawn reservation')
         self.lease.spawned(self.process)
 
+    def _creation_task_created(self, creation: asyncio.Task[Any]) -> None:
+        if self.lease is not None:
+            self.lease._creation_task_created(self, creation)
+
+    def _creation_failed(self, error: Exception) -> None:
+        if self.lease is not None:
+            self.lease._creation_failed(self, error)
+
+    def _creation_task_failed(self, error: BaseException) -> None:
+        if self.lease is not None:
+            self.lease._creation_task_failed(self, error)
+
     async def start(self) -> None:
         if self.lease is not None or self._terminal_closed or self.close_task is not None:
             raise ContractError('wire3 process already started or closed')

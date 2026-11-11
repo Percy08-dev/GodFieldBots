@@ -8,9 +8,12 @@ from gf_common.domain import ContractError, integer
 
 
 class ReservationLedger:
+    _MAX_GLOBAL_CUDA_BYTES = 12 * 1024**3
+    _MAX_WORKERS = 4
+
     def __init__(self, global_cuda_bytes: int = 12 * 1024**3, max_workers: int = 4, *, learner_bytes: int = 0) -> None:
-        integer(global_cuda_bytes, 1, 12 * 1024**3)
-        integer(max_workers, 1, 4)
+        integer(global_cuda_bytes, 1, self._MAX_GLOBAL_CUDA_BYTES)
+        integer(max_workers, 1, self._MAX_WORKERS)
         integer(learner_bytes, 0, global_cuda_bytes)
         self.global_cuda_bytes, self.max_workers, self.learner_bytes = global_cuda_bytes, max_workers, learner_bytes
         self.workers: dict[int, WorkerReservation] = {}
@@ -65,6 +68,15 @@ class LearnerReservation:
     pid: int | None = None
     released: bool = False
 
+    def _creation_task_created(self, owner: Any, creation: Any) -> None:
+        """Optional observation; actual lifecycle ownership stays with the caller."""
+
+    def _creation_failed(self, owner: Any, error: Exception) -> None:
+        """Observe the default stdlib creator's exact no-child exception."""
+
+    def _creation_task_failed(self, owner: Any, error: BaseException) -> None:
+        """Observe failure after the actual unstarted coroutine was closed."""
+
     def spawned(self, process: Any) -> None:
         if self.released or self.pid is not None or self.ledger.learner is not self:
             raise ContractError('learner reservation already consumed')
@@ -107,6 +119,13 @@ class WorkerReservation:
     released: bool = False
     _cleanup_owner: Any = field(default=None, repr=False, compare=False)
     creation_pending: bool = False
+
+    def _creation_started(self, owner: Any, boundary: Any) -> None:
+        """Optional observation before the original synchronous Popen call."""
+
+    def _creation_finished(self, owner: Any, boundary: Any, process: Any,
+                           error: BaseException | None) -> None:
+        """Observe actual local Popen return/failure before original cleanup."""
 
     def spawned(self, process: Any) -> None:
         if self.pid is not None or self.released:

@@ -85,16 +85,42 @@ class StructuredParticipantWorker(ParticipantWorker):
         # A failed constructor remains a complete close owner, even before a
         # returned Popen has been registered with its reservation.
         self.process = cast("subprocess.Popen[bytes]", None)
+        boundary = self._creation_boundary = threading.Event()
+        self._creation_observer_failure: BaseException | None = None
         lease = ledger.reserve_worker(residency)  # before Popen/initialize, including preflight.
         process: subprocess.Popen[bytes] | None = None
         try:
             self.lease = lease
             lease._cleanup_owner = self
-            process = subprocess.Popen(arguments,
-                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=environment, bufsize=0)
-            self.process = process
+            try:
+                lease._creation_started(self, boundary)
+            except BaseException as error:
+                self._creation_observer_failure = error
+                raise
+            creation_error = observer_error = None
+            try:
+                process = subprocess.Popen(arguments,
+                    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=environment, bufsize=0)
+                self.process = process
+            except BaseException as error:
+                creation_error = error
+                raise
+            finally:
+                try:
+                    lease._creation_finished(self, boundary, process, creation_error)
+                except BaseException as error:  # noqa: BLE001 - keep local child for original cleanup
+                    self._creation_observer_failure = error
+                    if creation_error is not None:
+                        creation_error.add_note('worker creation observation: ' + type(error).__name__)
+                    else:
+                        observer_error = error
+                finally:
+                    boundary.set()
+            if observer_error is not None:
+                raise observer_error
             lease.spawned(process)
         except BaseException as error:
+            boundary.set()
             _failed_spawn(process, lease, error)
             if not lease.released:
                 error._structured_startup_owner = self  # type: ignore[attr-defined]
