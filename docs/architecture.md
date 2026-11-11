@@ -780,6 +780,19 @@ Interrupted runs get no guessed final observation, return or bootstrap.
 
 ## Persistence and evaluation
 
+[ADR0035](adr/0035-pack-checksum-read-policy.md) accepts the independently reviewed
+design separating normal Pack reading from explicit full storage audits. Normal
+admission checks bounded metadata and small controls; each acquired Pack checks
+its compressed SHA, bounded expansion and complete member index once. Cached
+member references check loan/generation/liveness without I/O. Lightweight original
+FD/namespace checks remain at boundaries, and seal-time DB SHA generation remains.
+`verify-storage` explicitly checks full databases and all reference expectations;
+its PASS grants no Source authority or later-read trust. New custody2 records a
+stored expected DB hash under `pack-checksum-v1`, with strict historical custody1
+compatibility and an additive native capability. Persisted schemas, original
+bytes, learning math and directory default remain unchanged. This supersedes
+ADR0034's eager/full-rehash read guarantee; implementation acceptance is pending.
+
 [ADR0034](adr/0034-sqlite-group-pack.md) accepts the design of an explicit
 `sqlite-group-pack-v1` storage foundation: one immutable database per collection,
 one zstd3 Pack per managed Simulator group, a Python-only Writer and catalog,

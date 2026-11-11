@@ -1,5 +1,9 @@
 # 0034: Explicit SQLite group Pack storage
 
+Ordinary read verification is superseded by [ADR0035](0035-pack-checksum-read-policy.md).
+The repeated whole-DB rehash/eager Pack guarantee below records the historical
+decision. Remaining storage, ownership, publication and learning contracts stay.
+
 - Status: Accepted (all dependent designs; implementation milestones below)
 - Date: 2026-11-10
 - Decision owner: root
