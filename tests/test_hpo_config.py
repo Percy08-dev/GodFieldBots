@@ -79,7 +79,7 @@ def test_model4_resource_default_uses_inference_suffix_and_training_explicit_tbp
 def test_hpo_recipe_keeps_tbptt_out_of_inference_identity():
     from gf_models.hpo_config import model_defaults_v4
     from gf_training.hpo_config import HPOTrainingConfig, effective_settings, hpo_training_config
-    model = model_defaults_v4()
+    model = model_defaults_v4("gru")
     recipe = HPOTrainingConfig()
     assert hpo_training_config(asdict(recipe)) == recipe
     first = effective_settings(model, recipe, {}, layout=LAYOUT)
@@ -108,7 +108,7 @@ def space_raw():
         {"path": "training.adam_learning_rate", "kind": "log", "low": 0.0001, "high": 0.001},
         {"path": "training.epochs", "kind": "int", "low": 1, "high": 4, "step": 1},
         {"path": "training.entropy_coefficient", "kind": "float", "low": 0., "high": .1},
-        {"path": "training.tbptt_length", "kind": "fixed", "value": 32},
+        {"path": "training.max_grad_norm", "kind": "fixed", "value": 0.5},
     ], "coupled": [{"name": "hand_attention", "paths": ["model.card.output_size", "model.hand.attention_heads"],
         "choices": [[32, 2], [64, 4]], "when": {"model.hand.kind": ["attention"]}}]}
 
@@ -127,7 +127,7 @@ def test_search_domains_conditions_coupling_and_effective_deduplication():
     chosen = space.resolve({"model.hand.kind": 1, "model.heads.actor_hidden_sizes": 0,
         "training.adam_learning_rate": .0003, "training.epochs": 2,
         "training.entropy_coefficient": .01, "hand_attention": 0})
-    assert chosen["model.card.output_size"] == 32 and chosen["training.tbptt_length"] == 32
+    assert chosen["model.card.output_size"] == 32 and chosen["training.max_grad_norm"] == 0.5
     settings = effective_settings(model_defaults_v4(), HPOTrainingConfig(), chosen, layout=LAYOUT)
     assert settings.model.hand.attention_heads == 2
     direct = {**chosen, "model.hand.kind": "direct"}
@@ -269,8 +269,8 @@ def test_search_conditions_drop_inactive_fields_and_fixed_dimensions_are_implici
                 "training.entropy_coefficient": .01}
     resolved = space.resolve(proposal)
     assert "model.hand.attention_heads" not in resolved
-    assert resolved["training.tbptt_length"] == 32
-    for extra in ({"hand_attention": 0}, {"training.tbptt_length": 32}):
+    assert resolved["training.max_grad_norm"] == 0.5
+    for extra in ({"hand_attention": 0}, {"training.max_grad_norm": 0.5}):
         with pytest.raises(ContractError):
             space.resolve({**proposal, **extra})
 
@@ -326,15 +326,18 @@ def test_model4_malformed_component_numbers_raise_contract_error(path, value):
         model_config_v4(raw, layout=LAYOUT)
 
 
-def test_search_conditions_can_refer_to_fixed_base_fields_and_event_cap_coupling():
+def test_search_conditions_use_fixed_base_fields_and_aggregate_window_coupling():
+    from gf_models.hpo_config import model_defaults_v4
     from gf_training.hpo_config import search_space
+    control = model_defaults_v4()
+    control = replace(control, event=replace(control.event, max_interval=64, max_episode=64, aggregate_window=32))
     raw = {"parameters": [{"path": "model.hand.latent_size", "kind": "categorical", "choices": [32, 64],
                             "when": {"model.hand.kind": ["attention"]}}],
-           "coupled": [{"name": "events", "paths": ["model.event.max_interval", "model.event.max_episode", "model.event.aggregate_window"],
-                        "choices": [[64, 64, 32]]}]}
-    space = search_space(raw, model_id="mlp")
+           "coupled": [{"name": "events", "paths": ["model.event.aggregate_window", "model.event.hidden_size"],
+                        "choices": [[32, 16]]}]}
+    space = search_space(raw, model_id="mlp", model=control)
     chosen = space.resolve({"model.hand.latent_size": 1, "events": 0})
-    assert chosen["model.hand.latent_size"] == 64 and chosen["model.event.max_episode"] == 64
+    assert chosen["model.hand.latent_size"] == 64 and chosen["model.event.aggregate_window"] == 32
 
 
 def test_search_joint_choices_and_integer_field_domains_are_prevalidated():
@@ -469,24 +472,25 @@ def test_numeric_condition_complements_and_transitive_dependencies_are_checked()
     assert space.resolve({"training.epochs": 1000})["model.card.output_size"] == 33
 
 
-def test_actual_event_control_and_reachable_joint_cap_branches(tmp_path):
+def test_actual_fixed_event_control_and_reachable_joint_window_branches(tmp_path):
     from gf_cli.hpo_config import campaign_config
     from gf_training.hpo_config import effective_settings
     raw = campaign_raw()
     raw["model"] = {"event": {"max_interval": 64, "max_episode": 64, "aggregate_window": 32}}
     raw["space"] = {"parameters": [
         {"path": "model.hand.kind", "kind": "categorical", "choices": ["attention", "direct"]},
-    ], "coupled": [{"name": "events", "paths": ["model.event.max_interval", "model.event.max_episode", "model.event.aggregate_window"],
-                    "choices": [[8, 8, 8], [16, 32, 16]], "when": {"model.hand.kind": ["direct"]}}]}
+    ], "coupled": [{"name": "events", "paths": ["model.event.aggregate_window", "model.event.hidden_size"],
+                    "choices": [[8, 8], [16, 32]], "when": {"model.hand.kind": ["direct"]}}]}
     campaign = campaign_config(raw, origin=tmp_path).config
     for proposal in ({"model.hand.kind": 0}, {"model.hand.kind": 1, "events": 0}, {"model.hand.kind": 1, "events": 1}):
-        effective_settings(campaign.model, campaign.training, campaign.space.resolve(proposal), layout=LAYOUT)
-    raw["space"] = {"parameters": [{"path": "model.event.max_episode", "kind": "int", "low": 32, "high": 1000}], "coupled": []}
+        result = effective_settings(campaign.model, campaign.training, campaign.space.resolve(proposal), layout=LAYOUT)
+        assert result.model.event.max_interval == result.model.event.max_episode == 64
+    raw["space"] = {"parameters": [{"path": "model.event.aggregate_window", "kind": "int", "low": 32, "high": 1000}], "coupled": []}
     with pytest.raises(ContractError):
         campaign_config(raw, origin=tmp_path)
-    raw["space"]["parameters"][0]["low"] = 64
+    raw["space"]["parameters"][0]["high"] = 64
     campaign = campaign_config(raw, origin=tmp_path).config
-    assert campaign.space.resolve({"model.event.max_episode": 65})["model.event.max_episode"] == 65
+    assert campaign.space.resolve({"model.event.aggregate_window": 63})["model.event.aggregate_window"] == 63
 
 
 def test_search_refuses_excessive_conditional_validation_states():
@@ -507,3 +511,111 @@ def test_search_refuses_excessive_conditional_validation_states():
                        "when": {path: [values[0]] for path, values in choices.items()}})
     with pytest.raises(ContractError, match="65536.*simplify"):
         search_space({"parameters": parameters, "coupled": []}, model_id="mlp")
+
+
+def test_mlp_tbptt_normalizes_before_effective_identity_and_campaign_materialization(tmp_path):
+    from gf_cli.hpo_config import campaign_config
+    from gf_models.hpo_config import model_defaults_v4
+    from gf_training.hpo_config import HPOTrainingConfig, effective_settings, hpo_training_config
+    model = model_defaults_v4("mlp")
+    lowlevel = hpo_training_config({**asdict(HPOTrainingConfig()), "tbptt_length": 2})
+    assert lowlevel.tbptt_length == 2  # Component parser remains model-independent.
+    first = effective_settings(model, lowlevel, {}, layout=LAYOUT)
+    second = effective_settings(model, replace(lowlevel, tbptt_length=64), {}, layout=LAYOUT)
+    assert first.training.tbptt_length == second.training.tbptt_length == 32
+    assert first.identity == second.identity
+    raw = campaign_raw()
+    raw["space"] = {"parameters": [], "coupled": []}
+    left = campaign_config({**raw, "training": {"tbptt_length": 2}}, origin=tmp_path)
+    right = campaign_config({**raw, "training": {"tbptt_length": 64}}, origin=tmp_path)
+    assert left.config.training.tbptt_length == left.effective["training"]["tbptt_length"] == 32
+    assert left.effective == right.effective and left.sha256 == right.sha256
+    assert left.config.study_identity == right.config.study_identity
+
+
+def forbidden_domain(path, form):
+    if form == "ordinary":
+        return {"parameters": [{"path": path, "kind": "fixed", "value": 32}], "coupled": []}
+    if form == "coupled":
+        return {"parameters": [], "coupled": [{"name": "forbidden", "paths": [path, "training.epochs"], "choices": [[32, 2]]}]}
+    return {"parameters": [{"path": "training.epochs", "kind": "fixed", "value": 2, "when": {path: [32]}}], "coupled": []}
+
+
+@pytest.mark.parametrize("form", ["ordinary", "coupled", "condition"])
+def test_mlp_tbptt_cannot_be_search_or_condition_path(form):
+    from gf_training.hpo_config import search_space
+    with pytest.raises(ContractError):
+        search_space(forbidden_domain("training.tbptt_length", form), model_id="mlp")
+
+
+@pytest.mark.parametrize("kind", ["mlp", "gru", "transformer"])
+@pytest.mark.parametrize("path", ["model.event.max_interval", "model.event.max_episode"])
+@pytest.mark.parametrize("form", ["ordinary", "coupled", "condition"])
+def test_event_refusal_caps_cannot_be_search_or_condition_paths(kind, path, form):
+    from gf_training.hpo_config import search_space
+    with pytest.raises(ContractError):
+        search_space(forbidden_domain(path, form), model_id=kind)
+
+
+@pytest.mark.parametrize("kind", ["gru", "transformer"])
+def test_sequence_tbptt_remains_active_in_identity_domains_and_conditions(kind):
+    from gf_models.hpo_config import model_defaults_v4
+    from gf_training.hpo_config import HPOTrainingConfig, effective_settings, search_space
+    model = model_defaults_v4(kind)
+    recipe = HPOTrainingConfig()
+    raw = {"parameters": [
+        {"path": "training.tbptt_length", "kind": "categorical", "choices": [16, 64]},
+        {"path": "training.epochs", "kind": "fixed", "value": 2, "when": {"training.tbptt_length": [64]}},
+    ], "coupled": []}
+    space = search_space(raw, model_id=kind, model=model, training=recipe)
+    left = effective_settings(model, recipe, space.resolve({"training.tbptt_length": 0}), layout=LAYOUT)
+    right = effective_settings(model, recipe, space.resolve({"training.tbptt_length": 1}), layout=LAYOUT)
+    assert left.training.tbptt_length == 16 and left.training.epochs == 4
+    assert right.training.tbptt_length == 64 and right.training.epochs == 2
+    assert left.identity != right.identity and left.model == right.model
+
+
+def test_fixed_event_caps_validate_searchable_aggregate_window_without_mutation(tmp_path):
+    from copy import deepcopy
+
+    from gf_cli.hpo_config import campaign_config
+    from gf_training.hpo_config import effective_settings
+    raw = campaign_raw()
+    raw["model"] = {"event": {"max_interval": 64, "max_episode": 64, "aggregate_window": 32}}
+    raw["space"] = {"parameters": [{"path": "model.event.aggregate_window", "kind": "int", "low": 32, "high": 64}], "coupled": []}
+    before = deepcopy(raw)
+    campaign = campaign_config(raw, origin=tmp_path).config
+    assert dict(campaign.space.control_values)["model.event.max_episode"] == 64
+    effective = effective_settings(campaign.model, campaign.training, campaign.space.resolve({"model.event.aggregate_window": 63}), layout=LAYOUT)
+    assert effective.model.event.aggregate_window == 63
+    assert effective.model.event.max_episode == effective.model.event.max_interval == 64
+    assert raw == before
+    raw["space"]["parameters"][0]["high"] = 65
+    with pytest.raises(ContractError):
+        campaign_config(raw, origin=tmp_path)
+
+
+@pytest.mark.parametrize("kind", ["gru", "transformer"])
+def test_sequence_campaign_keeps_active_tbptt_without_changing_inference(kind, tmp_path):
+    from gf_cli.hpo_config import campaign_config
+    from gf_models.hpo_config import model_defaults_v4
+    from gf_training.hpo_config import HPOTrainingConfig, effective_settings
+    model = model_defaults_v4(kind)
+    baseline = effective_settings(model, HPOTrainingConfig(), {}, layout=LAYOUT)
+    changed = effective_settings(model, HPOTrainingConfig(), {"training.tbptt_length": 64}, layout=LAYOUT)
+    assert baseline.identity != changed.identity and baseline.model == changed.model
+    raw = campaign_raw()
+    raw.update(model_id=kind, base_experiment=str(ROOT / f"configs/experiments/card-instance-{kind}-ppo-acceptance.toml"),
+               space={"parameters": [], "coupled": []})
+    left = campaign_config({**raw, "training": {"tbptt_length": 16}}, origin=tmp_path)
+    right = campaign_config({**raw, "training": {"tbptt_length": 64}}, origin=tmp_path)
+    assert left.config.training.tbptt_length == 16 and right.effective["training"]["tbptt_length"] == 64
+    assert left.config.study_identity != right.config.study_identity
+
+
+@pytest.mark.parametrize("path", ["training.tbptt_length", "model.event.max_interval", "model.event.max_episode"])
+def test_inactive_or_fixed_paths_cannot_override_effective_mlp_proposal(path):
+    from gf_models.hpo_config import model_defaults_v4
+    from gf_training.hpo_config import HPOTrainingConfig, effective_settings
+    with pytest.raises(ContractError):
+        effective_settings(model_defaults_v4(), HPOTrainingConfig(), {path: 64}, layout=LAYOUT)

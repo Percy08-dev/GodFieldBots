@@ -30,6 +30,7 @@ from gf_training.hpo_config import (
     effective_settings,
     finite_number,
     hpo_training_config,
+    normalize_training_for_model,
     search_space,
 )
 
@@ -200,7 +201,8 @@ def campaign_config(value: Json, *, origin: Path) -> LoadedHPOConfig:
     model = model_config_v4(_merge(asdict(model), value.get("model", {})), layout=CORRECTED_CARD_INSTANCE_LAYOUT)
     if model.model_id != value["model_id"]:
         raise ContractError("campaign/model kind mismatch")
-    recipe = hpo_training_config(_merge(asdict(HPOTrainingConfig()), value.get("training", {})))
+    recipe = normalize_training_for_model(model.model_id,
+        hpo_training_config(_merge(asdict(HPOTrainingConfig()), value.get("training", {}))))
     space = search_space(value["space"], model_id=model.model_id, model=model, training=recipe)
     inference = InferenceBindingV2(**_merge(asdict(InferenceBindingV2(device="cuda:0")), value.get("inference", {})))
     if inference.device != "cuda:0":
@@ -239,7 +241,7 @@ def joint_resource_admission(config: HPOCampaignConfig, *, layout: StructuredLay
     if type(config) is not HPOCampaignConfig:
         raise ContractError("closed HPO campaign required")
     limits = _operating(asdict(config.operating))
-    recipe = hpo_training_config(asdict(config.training))
+    recipe = normalize_training_for_model(config.model_id, config.training)
     model = model_config_v4(asdict(config.model), layout=layout)
     learner = resource_estimate(model, config.inference, layout=layout,
                                 suffix_decisions=recipe.tbptt_length)["total_bytes"]

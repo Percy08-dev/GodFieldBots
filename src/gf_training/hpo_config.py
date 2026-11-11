@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Iterator
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from typing import Any
 
 from gf_common.domain import ContractError, Json, canonical, clone, closed, digest, integer
@@ -67,6 +67,17 @@ def hpo_training_config(value: Json) -> HPOTrainingConfig:
     return HPOTrainingConfig(**converted)
 
 
+def normalize_training_for_model(model_id: str, training: HPOTrainingConfig) -> HPOTrainingConfig:
+    """Validate new settings and canonicalize model-inactive training fields.
+
+    MLP encodes only the latest frame, so its TBPTT setting has no behavioral
+    effect. This is for new effective settings, never a historical-data rewrite.
+    """
+    model_defaults_v4(model_id)  # Closed model-kind validation, no allocation.
+    parsed = hpo_training_config(asdict(training))
+    return replace(parsed, tbptt_length=32) if model_id == "mlp" else parsed
+
+
 @dataclass(frozen=True)
 class EffectiveSettings:
     model: ModelConfigV4
@@ -88,9 +99,13 @@ _FIXED_TRAINING = {"version", "algorithm", "optimizer", "reward", "gamma"}
 
 def searchable_paths(model_id: str) -> set[str]:
     model = asdict(model_defaults_v4(model_id))
-    return (_leaf_paths({key: item for key, item in model.items() if key not in _FIXED_MODEL | {"resources"}}, "model")
-            - {"model.event.aggregate_recipe", "model.temporal.kind", "model.temporal.max_decisions"}
-            | {"training." + name for name in HPOTrainingConfig.__dataclass_fields__ if name not in _FIXED_TRAINING})
+    paths = (_leaf_paths({key: item for key, item in model.items() if key not in _FIXED_MODEL | {"resources"}}, "model")
+             - {"model.event.aggregate_recipe", "model.event.max_interval", "model.event.max_episode",
+                "model.temporal.kind", "model.temporal.max_decisions"}
+             | {"training." + name for name in HPOTrainingConfig.__dataclass_fields__ if name not in _FIXED_TRAINING})
+    if model_id == "mlp":
+        paths.remove("training.tbptt_length")
+    return paths
 
 
 def _set_path(root: Json, path: str, value: Any) -> None:
@@ -116,7 +131,7 @@ def effective_settings(model: ModelConfigV4, training: HPOTrainingConfig, values
     for path, value in values.items():
         _set_path(root, path, value)
     effective_model = model_config_v4(root["model"], layout=layout)
-    effective_training = hpo_training_config(root["training"])
+    effective_training = normalize_training_for_model(effective_model.model_id, hpo_training_config(root["training"]))
     identity = digest({"model": architecture_identity(effective_model, layout=layout),
                        "training": asdict(effective_training)})
     return EffectiveSettings(effective_model, effective_training, identity)
@@ -255,9 +270,6 @@ def _validate_setting(path: str, value: Any, model_id: str) -> None:
         if path == "model.temporal.num_heads":
             root["model"]["temporal"]["num_heads"] = value
             root["model"]["temporal"]["hidden_size"] = integer(value, 1, 16) * 64
-    if path == "model.event.max_episode":
-        integer(value, 1, 2**31 - 1)
-        root["model"]["event"].update(max_interval=1, aggregate_window=1)
     model_config_v4(root["model"], layout=CORRECTED_CARD_INSTANCE_LAYOUT)
     hpo_training_config(root["training"])
 
@@ -272,7 +284,9 @@ def search_space(value: Json, *, model_id: str, model: ModelConfigV4 | None = No
     if control.model.model_id != model_id:
         raise ContractError("search/control model kind mismatch")
     control_root = {"model": asdict(control.model), "training": asdict(control.training)}
-    control_values = tuple((path, _freeze(_get_path(control_root, path))) for path in sorted(allowed))
+    # Refusal caps are bound validation facts, never search/condition fields.
+    bound_paths = allowed | {"model.event.max_interval", "model.event.max_episode"}
+    control_values = tuple((path, _freeze(_get_path(control_root, path))) for path in sorted(bound_paths))
     if type(value["parameters"]) is not list or type(value["coupled"]) is not list:
         raise ContractError("search parameters/coupled must be arrays")
     parameters: list[SearchParameter] = []

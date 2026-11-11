@@ -92,3 +92,46 @@ Source/native/lineage/campaign/evaluation/retention acceptance remain pending.
 The old retained registry's6neural/8total guard remains exact. Unit3 adds a
 separate bounded HPO registry route for a configurable pool above5. No Tree,
 formal-parent/final64/Dataset authority is extended by model4 inference.
+
+## Inactive-field conformance correction
+
+A later root/architecture check found two additional configuration gaps before
+campaign implementation: MLP TBPTT was treated as active even though MLP consumes
+only its current frame, and event refusal caps were exposed to search. Both are
+corrected. `normalize_training_for_model` canonicalizes MLP TBPTT32 before
+effective identity and new campaign/run materialization. GRU/Transformer retain
+active TBPTT. Event max_interval/max_episode remain fixed configuration facts,
+outside search/conditions; aggregate_window remains searchable within those caps.
+The model-independent recipe parser preserves honest numeric-component metadata.
+
+Implementer198affected checks/static pass. Independent architecture re-review
+is READY and runs110HPO cases successfully. These replace the earlier inactive/
+event-cap search guidance, without changing old recipes or saved-data semantics.
+
+## Structural lineage prerequisite4a
+
+Source/native need actual new-version lineage readers, so this bounded reader
+prerequisite precedes unit3; the coordinator and retention producer still follow.
+Run5/Generation4/Update5/Registry4 readers reuse the same scan, bundle and sealed
+artifact machinery. Both independent correctness and conformance reviews are
+READY without blockers. Source→chain dependency direction remains explicit.
+
+Root fresh command:
+`.venv/bin/python -m pytest tests/test_hpo_lineage.py tests/test_hpo_config.py
+tests/test_structured_lineage.py tests/test_card_instance_lineage.py
+tests/test_lineage_control_publication.py tests/test_ppo_lineage.py
+tests/test_hpo_numeric.py::test_all_eight_frozen_kernels_remain_exact
+-q --disable-warnings --maxfail=1 --tb=short` —341PASS in106.72s.
+This includes89new structural cases,110config cases and142legacy/AST cases.
+Root project Ruff passes; full mypy passes180source files. Independent correctness
+also runs the89new cases (21.04s), Ruff and mypy1 successfully; architecture review
+does not claim additional test execution.
+
+Fixtures save actual CPU HpoLearner artifacts and cover G0/updates, all/one/partial
+selection declarations, both storage variants, exact counters/steps/seed/policy
+registries/deadlines, rehashed corruption and per-file deletion receipts with
+G0/latest2/pool/periodic/evaluation dependency protection. Structural CPU complete
+metadata is explicitly unqualified for production HPO. Actual original Collection6
+resolution/replay, selection RNG/GAE reconstruction and exact prefix costs remain
+unit3's work. No original Source, GPU campaign, coordinator, deletion producer or
+Optuna evaluation authority is granted by these reader tests.

@@ -72,6 +72,12 @@ belongs to the training recipe/resume5 only, and must not change inference5
 identity. Keep `max_decisions=1024` as the forward-context contract. Training
 resource admission supplies suffix length explicitly; legacy temporal descriptors
 retain their exact serialized fields.
+MLP consumes only the current frame, so its inactive training TBPTT length is
+normalized to canonical32 before effective identity and new run-spec creation;
+it is not an MLP search/condition path. Low-level numeric components can still
+inspect other honest recipe values. GRU/Transformer TBPTT remains active.
+Event `max_interval`/`max_episode` are fixed resource/refusal caps, excluded from
+search and conditions; `aggregate_window` remains tunable within those caps.
 
 Expose collection games (positive multiple of8), Adam learning rate/betas/epsilon,
 PPO epochs/logical minibatch/policy clip/value and entropy coefficients/GAE lambda/
@@ -113,6 +119,10 @@ fresh initializations. Deduplicate effective settings explicitly. Run the defaul
 control; if outside the space, retain a separate control record, not sampler
 evidence. Stage promotion carries SETTINGS only to a new study; changing space,
 budget or evaluation conditions within a study rejects.
+The required contrast is the canonical model4 and training-recipe default for
+the selected model at the same D/seeds. Caller overrides define the search base;
+they do not silently replace that contrast. Bind its identity in the study/
+campaign receipt, including when it is outside the sampled space.
 Opponent-pool decision interval and size affect the training curriculum: bind
 them to study identity even though they are operating rather than search fields.
 Validate domain dependencies against the actual overridden normalized control

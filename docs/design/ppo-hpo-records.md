@@ -130,6 +130,27 @@ After natural completion, Proof3/Numeric5 bind actual complete episode counts,
 collected/used, independently derived PCG64 seed and sorted unique selected flat
 indices with hash. Source reconstructs these from actual originals before update
 authority. Optimizer delta is independently derived from the full recipe.
+Exact selection fields are `{context,derived_seed,episode_counts,
+collected_decisions,used_decisions,indices,indices_sha256}`. Selection version is
+`hpo-endpoint-selection-v1`. Derive the128bit PCG64 seed as
+`int(digest({"recipe":"hpo-ppo-selection-seed-v1","context":context})[:32],16)`;
+indices hash is `digest(indices)`. All/partial/empty selection replays the same
+versioned rule; partial uses uniform nonreplacement choice, then canonical sort.
+
+Proof3 keeps old plain/packed proof fields and adds `selection` and
+`expected_optimizer_step_delta`, with kind
+`card-instance-hpo-original-source-proof` or
+`card-instance-hpo-packed-original-source-proof`. Its `accepted_decisions`
+continues to count BOTH participants' acknowledged originals. Learner counts
+live in `selection`; Run/Generation/Update accepted aliases count used endpoints.
+
+Numeric5 keeps numeric4 structural/game-binding fields, uses inference5 semantic
+fields (old semantic set minus `reward_policy_version`), and adds complete
+`training_recipe`, `selection`, `expected_optimizer_step_delta`. Kind remains
+`structured-rollout`, explicit schema5. `decision_count` counts used endpoints;
+the sum of complete episode frames counts collected endpoints. Persist full
+targets and zero unused advantages; derive selected locations from actual
+episode counts and indices rather than a second competing location array.
 Empty selection facts are representable for validation; an empty batch cannot
 issue an optimizer update. The coordinator stops at D before another collection.
 
@@ -153,6 +174,12 @@ extra_owned_bytes=0,scan=None)->(state,records)`. The latter performs structural
 lineage/artifact/control validation with the supplied SAME `_ChainScan`.
 Unit3 owns `validate_hpo_parent` and complete original replay/selection validation;
 it calls the chain validator, never the reverse. Avoid circular Source/chain calls.
+Structural readers may honestly inspect CPU component fixture metadata; structural
+`require_complete` is not experiment qualification. Full HPO production Source/
+coordinator/campaign eligibility requires actual CUDA training and inference plus
+normal preflight/save/cleanup evidence. Never relabel a CPU fixture as GPU evidence.
+Actual Collection6 packed-original resolution/hash/replay belongs to Source,
+rather than importing Source into the structural chain reader.
 Resume identity is domain-separated hash of
 `{version:"hpo-ppo-resume-v1",config_sha256,identity,execution,classification,
 storage_binding:null|binding}`; the full config binds recipe and resources.
