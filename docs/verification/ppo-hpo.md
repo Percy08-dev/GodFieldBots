@@ -180,3 +180,43 @@ restore/bad-ack reap. No actual game, production CUDA Source/coordinator, native
 positive dispatch, deletion producer, Optuna objective or strength claim follows.
 The [native authorization design](../design/ppo-hpo-native-handshake.md) is
 architecture READY; its implementation/positive candidate checks remain pending.
+
+## Management5a: strict scores and durable GPU admission
+
+Implemented in an isolated worktree and integrated as local commit38444a9 after
+both independent fix re-reviews. Pure evaluation binds complete seed/GameSeed/
+seat panels and actual terminal results, final-D checkpoint/Source identities
+and healthy projections; it grants no Source authority itself. The fixed
+per-uid persistent GPU namespace spans campaigns/checkouts and ignores HOME/XDG
+overrides. Actual audited reservation history, durable job admission and exact
+termination receipts replace PID/flock/time assumptions. Restart recovery is an
+explicit operator confirmation and never rewrites run data/deadlines.
+
+Initial broad correctness checks passed, but architecture review reproduced two
+blockers: absent/replaced creation barriers could produce never-started evidence,
+and retry after parent fsync failure skipped uncertain ancestry durability. Both
+were fixed using the separately reviewed
+[positive creation observations](../design/ppo-hpo-creation-proof.md) and ancestry
+resync on every admission. Existing owners retain actual LOCAL Future/Popen,
+original Event and same observed stdlib failure; observer errors preserve actual
+adoption/reaping and primary errors while withholding receipt authority. Legacy
+resource bounds/accounting and eight ASTs remain exact.
+
+Independent conformance runs15targeted fixes; correctness runs79cases/65existing
+optional skips and21additional lifecycle cases, plus static checks. Both report
+ADDR/READY. Root fresh isolated command runs255PASS/65existing optional skips
+in11.80s, with Ruff9files/mypy7source passing. Root post-integration host command
+`.venv/bin/python -m pytest tests/test_hpo_evaluation.py tests/test_hpo_gpu_lease.py
+tests/test_hpo_wire.py tests/test_hpo_source.py tests/test_worker_cleanup.py
+tests/test_hpo_artifacts.py tests/test_structured_numeric_worker.py
+-q --disable-warnings --maxfail=1 --tb=short` passes167cases in42.79s.
+Full project Ruff and mypy187source pass.
+
+Cases exercise actual owned CPU processes, default stdlib missing executables,
+delayed creation/cancellation, task-creation failure, observer failure before/
+after forwarding, mismatched/forked capabilities, orphan admissions, corrupted
+state, exact receipt retry, ancestry and atomic/fsync faults, and complete-panel
+scoring/failure refusal. No GPU, Simulator, Optuna campaign or concrete Source/
+coordinator wiring was executed in this component scope. The Source exact-ledger
+allowance, complete resource projection and actual pipeline cleanup integration
+remain required before production acceptance.

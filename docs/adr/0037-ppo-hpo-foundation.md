@@ -74,3 +74,8 @@ The structural reader prerequisite4a and Python Source3a now also pass both
 reviews after generation-cap/G0-RNG fixes, with root341 and268affected checks
 respectively. Native Source3b, runtime producer and outer campaign acceptance
 remain pending; no full-foundation completion is implied.
+Management5a now passes both scoped fix reviews: explicit original creation
+evidence and ancestry-resync corrections close its two blocking findings.
+Root verifies255isolated and167post-integration cases plus project static checks.
+The per-user admission receipt is operational process evidence, not training or
+evaluation qualification; concrete runtime/campaign composition remains pending.

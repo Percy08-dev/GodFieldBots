@@ -20,6 +20,12 @@ the common coordinator/retention producer and campaign/CLI integration remain
 implementation work. Native dispatch stays strictly refused until actual support
 is accepted. Concrete [record ownership](design/ppo-hpo-records.md) and the
 [two-stage native authorization](design/ppo-hpo-native-handshake.md) are reviewed.
+Strict complete-panel evaluation and persistent per-user GPU admission also pass
+scoped independent fix reviews. [Creation evidence](design/ppo-hpo-creation-proof.md)
+uses actual owner observations, original task/event/process identities and
+durable receipts; absence of a PID or lock release never proves cleanup. The
+[management contract](design/ppo-hpo-management.md) remains separate from Source
+qualification and still needs concrete coordinator/evaluator integration.
 
 [ADR0024](adr/0024-card-instance-simulator-v2.md) begins a separately identified
 card-instance Simulator v2 migration. Contract/wire/Config/direct HTTP and pure
