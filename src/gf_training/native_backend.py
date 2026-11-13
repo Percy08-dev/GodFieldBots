@@ -34,7 +34,7 @@ def hpo_reader_settings(config: PreparationConfig, native: Any = None, *, packed
         group_pack_reader_settings(config, module)
         require_pack_checksum(module)
     cls = getattr(module, 'CardInstanceNativeSession', None)
-    methods = ('control_summary', 'authorize', 'export_cohort', 'export_recorded_cohort',
+    methods = ('control_summary', 'authorize', 'authorize_hpo', 'numeric_used_bytes', 'export_cohort', 'export_recorded_cohort',
         'bind_numeric', 'retire_payload', 'begin_update', 'prepare_commit', 'finalize_read', 'recheck', 'close')
     if any(not callable(getattr(cls, name, None)) for name in methods):
         raise ContractError('native HPO shared session ABI incomplete; no fallback')

@@ -416,6 +416,8 @@ class _NativeGameInputs(NativeStructuredSource):
                  deadline: float, extra_owned_bytes: int = 0, max_scratch_bytes: int | None = None,
                  native: Any = None, collection_index: int = 0, artifact_provider: Any = None, shared_controls: Any = None) -> None:
         self.actions = actions
+        self._hpo = type(plan.get('schema_version')) is int and plan['schema_version'] == 5
+        self._hpo_expected: Json | None = None
         input_binding_game_v3(actions.action_contract, card_instance_rules())
         self.settings = preparation_config(asdict(settings))
         if self.settings.backend != 'rust' or self.settings.reader != 'participant-structured-v2':
@@ -427,7 +429,7 @@ class _NativeGameInputs(NativeStructuredSource):
         self._shared_controls = shared_controls
         self._last_held = 0
         if artifact_provider is not None:
-            if (type(artifact_provider) is not OriginalArtifactProvider or plan.get('schema_version') != 4
+            if (type(artifact_provider) is not OriginalArtifactProvider or plan.get('schema_version') != (5 if self._hpo else 4)
                     or plan.get('artifact_registry_sha256') != artifact_provider.registry_sha256):
                 raise ContractError('plan4 requires SAME concrete registered original provider')
             from gf_common.group_pack_game import checked_storage_binding
@@ -487,7 +489,11 @@ class _NativeGameInputs(NativeStructuredSource):
             from gf_training.native_backend import require_pack_checksum
             require_pack_checksum(module)
         if not self._explicit_candidate:
-            card_instance_reader_settings(self.settings, module)
+            if self._hpo:
+                from gf_training.native_backend import hpo_reader_settings
+                hpo_reader_settings(self.settings, module, packed=self._artifact_provider is not None)
+            else:
+                card_instance_reader_settings(self.settings, module)
             if self._artifact_provider is not None:
                 from gf_training.native_backend import group_pack_reader_settings
                 group_pack_reader_settings(self.settings, module)
@@ -544,6 +550,9 @@ class _NativeGameInputs(NativeStructuredSource):
         return executor
 
     def _on_native_failure(self, error: BaseException) -> None:
+        pending_scan = getattr(error, '_hpo_authorization_cleanup_scan', None)
+        if pending_scan is not None and self.sealed is None:
+            self.sealed = pending_scan
         if self._artifact_provider is not None:
             self._artifact_provider._remember(error)
             if self._executor is not None:
@@ -677,10 +686,35 @@ class _NativeGameInputs(NativeStructuredSource):
 
     def _authorize_summary(self) -> tuple[Json, SealedScan, dict[int, Any]]:
         assert self.summary is not None
-        if self._live_run_sha256 is not None and self.summary['parent']['run_sha256'] != self._live_run_sha256:
+        if not self._hpo and self._live_run_sha256 is not None and self.summary['parent']['run_sha256'] != self._live_run_sha256:
             raise ContractError('native live Source differs from SAME preflight parent state')
+        if self._hpo:
+            from gf_training.native_hpo import authorize_controls
+            authorization, scan, models, expected = authorize_controls(self.summary, self._session, self.actions,
+                directory=Path(self.plan['parents'][0]['directory']).resolve(), max_owned_bytes=self.budget,
+                deadline=self.deadline, artifact_provider=self._artifact_provider)
+            self._hpo_expected = expected
+            if self._live_run_sha256 is not None and scan.verified_digest(Path(self.plan['parents'][0]['directory']) / 'run.json') != self._live_run_sha256:
+                raise ContractError('HPO live facts differ from SAME binary-preflight parent')
+            return authorization, scan, models
         return _authorize_game_controls(self.summary, self._session, self.actions,
             max_owned_bytes=self.budget, deadline=self.deadline, artifact_provider=self._artifact_provider)
+
+    def _authorize_owned(self) -> None:
+        if not self._hpo:
+            return super()._authorize_owned()
+        from gf_common.artifacts import json_bound
+        raw = self._native_call(self._session.authorize_hpo,
+            lambda held: (canonical(self._auth).encode(), held), envelope=8 * json_bound(self._auth) + 65536)
+        summary = json.loads(raw)
+        if canonical(summary) != canonical(self._hpo_expected):
+            raise ContractError('native final HPO proof/selection/correspondence differs from independently replayed originals')
+        self.summary = summary
+        self._hpo_expected = None
+        self._auth = {}
+        if self.plan['mode'] == 'historical_parent':
+            self._check_historical()
+            self._correspondence_done = True
 
     @property
     def collection(self) -> Json:
@@ -759,14 +793,38 @@ class _NativeGameInputs(NativeStructuredSource):
     def _read_game(self, directory: Path, expected_digest: str, collection: Json) -> Any:
         from gf_training.structured_rollout import read_game_rollout
         self.recheck()
-        result = read_game_rollout(directory, expected_digest, self.models[0], actions=self.actions,
+        result: Any
+        if self._hpo:
+            from gf_training.hpo_config import hpo_training_config
+            from gf_training.hpo_rollout import read_hpo_rollout
+            assert self.summary is not None
+            training = hpo_training_config(self.summary['parent']['state']['effective_config']['hpo_spec']['training_recipe'])
+            native_owned = self._session.used_bytes()
+            numeric_limit = self.summary['parent']['state']['effective_config']['hpo_spec']['operating']['numeric_budget_bytes']
+            result = read_hpo_rollout(directory, expected_digest, self.models[0], training, actions=self.actions,
+                rules=card_instance_rules(), expected_selection=collection['selection'],
+                expected_correspondence=collection['correspondence'], max_owned_bytes=min(self.budget, native_owned + numeric_limit),
+                extra_owned_bytes=native_owned, check=self._check, reserve=self._reserve_numeric,
+                storage_binding=self.plan.get('storage_binding'))
+        else:
+            result = read_game_rollout(directory, expected_digest, self.models[0], actions=self.actions,
             rules=card_instance_rules(), declaration=collection['semantics'],
             expected_correspondence=collection['correspondence'], max_owned_bytes=self.budget,
             extra_owned_bytes=self._session.used_bytes(), check=self._check, reserve=self._reserve_decode,
             storage_binding=self.plan.get('storage_binding'))
-        if len(result) != collection['learner_decisions'] or result.policy_version != collection['learner_label']:
+        expected_count = collection['selection']['used_decisions'] if self._hpo else collection['learner_decisions']
+        if len(result) != expected_count or result.policy_version != collection['learner_label']:
             raise ContractError('numeric4 differs from original game endpoints/policy')
         return result
+
+    def _reserve_numeric(self, size: int) -> None:
+        self._reserve_decode(size)
+        if self._hpo:
+            assert self.summary is not None
+            limit = self.summary['parent']['state']['effective_config']['hpo_spec']['operating']['numeric_budget_bytes']
+            native_working = self._session.numeric_used_bytes()
+            if size + (native_working or 0) > limit:
+                raise ContractError('HPO incremental numeric working budget exhausted before Python allocation')
 
     def _check_historical(self) -> None:
         assert self.summary is not None
@@ -809,7 +867,7 @@ class _NativeGameInputs(NativeStructuredSource):
         else:
             assert self.summary is not None
             collection = self.summary['collections'][index]
-            generation = integer(collection['generation'], 0, 999)
+            generation = integer(collection['generation'], 0, 2**63 - 1 if self._hpo else 999)
             expected = Path(self.summary['parent']['directory']) / 'numeric' / f'batch-{generation:06}'
             if directory.absolute() != expected:
                 raise ContractError('live numeric publication differs from derived SAME parent/batch target')
@@ -818,16 +876,26 @@ class _NativeGameInputs(NativeStructuredSource):
             if self._published is not None:
                 raise ContractError('one native live numeric publication required')
             payload = self._native_call(self._session.export_cohort)
-        metadata, arrays = _payload_views(payload, game=True, recorded=recorded, packed=self._artifact_provider is not None)
+        metadata, arrays = _payload_views(payload, game=True, recorded=recorded, packed=self._artifact_provider is not None, hpo=self._hpo)
         assert self.summary is not None
         collection = self.summary['collections'][index]
         if (metadata['collection_index'] != index
                 or canonical(metadata['source_proof']) != canonical(collection['source_proof'])
                 or canonical(metadata['correspondence']) != canonical(collection['correspondence'])):
             raise ContractError('native packet differs from retained original game Source')
-        self._reserve_decode(65536 + 128 * metadata['metadata']['decision_count'])
-        labels = _attach_gae(metadata['metadata'], arrays)
-        manifest = _write_prepared_game_payload(directory, metadata['metadata'], arrays, self.models[0],
+        self._reserve_numeric(65536 + 128 * (sum(len(episode['frames']) for episode in metadata['metadata']['episodes'])))
+        if self._hpo:
+            from gf_training.native_hpo import attach_gae
+            labels = attach_gae(metadata['metadata'], arrays)
+            from gf_training.structured_rollout import _RolloutContext, _write_prepared_payload
+            context = {key: metadata['metadata'][key] for key in ('training_recipe', 'selection', 'expected_optimizer_step_delta')}
+            manifest = _write_prepared_payload(directory, metadata['metadata'], arrays, self.models[0],
+                resident_bytes=_owned_bytes((self.models[0], labels)), extra_owned_bytes=self._session.used_bytes(),
+                max_owned_bytes=self.budget, shard_bytes=min(self.settings.chunk_target_mib * 1024**2, 64 * 1024**2),
+                check=self._check, reserve=self._reserve_numeric, _context=_RolloutContext(self.actions, card_instance_rules()), _hpo=context)
+        else:
+            labels = _attach_gae(metadata['metadata'], arrays)
+            manifest = _write_prepared_game_payload(directory, metadata['metadata'], arrays, self.models[0],
             actions=self.actions, rules=card_instance_rules(), resident_bytes=_owned_bytes((self.models[0], labels)),
             extra_owned_bytes=self._session.used_bytes(), max_owned_bytes=self.budget,
             shard_bytes=min(self.settings.chunk_target_mib * 1024**2, 64 * 1024**2),
@@ -865,8 +933,8 @@ class _NativeGameInputs(NativeStructuredSource):
         result = json.loads(self._native_call(self._session.finalize_read))
         closed(result, {'schema_version', 'kind', 'summary_sha256', 'qualified', 'parent_qualification'})
         packed = self._artifact_provider is not None
-        if (type(result['schema_version']) is not int or result['schema_version'] != (2 if packed else 1)
-                or result['kind'] != ('card-instance-packed-source-read-finalized' if packed else 'card-instance-source-read-finalized')
+        if (type(result['schema_version']) is not int or result['schema_version'] != (3 if self._hpo else 2 if packed else 1)
+                or result['kind'] != (('card-instance-hpo-packed-source-checked' if packed else 'card-instance-hpo-source-checked') if self._hpo else ('card-instance-packed-source-read-finalized' if packed else 'card-instance-source-read-finalized'))
                 or result['summary_sha256'] != digest(self.summary) or result['qualified'] is not False
                 or result['parent_qualification'] != 'not_performed'):
             raise ContractError('native finalized receipt differs from SAME retained Source')
@@ -883,14 +951,21 @@ class _NativeGameInputs(NativeStructuredSource):
         self.recheck()
         receipt = json.loads(self._native_call(self._session.prepare_commit))
         closed(receipt, {'schema_version', 'kind', 'summary_sha256', 'collection_manifest_sha256',
-            'source_correspondence', 'numeric_manifest_sha256', 'numeric_files_sha256', 'optimizer_steps'})
+            'source_correspondence', 'numeric_manifest_sha256', 'numeric_files_sha256', 'optimizer_steps'}
+            | ({'collected_decisions', 'used_decisions', 'expected_optimizer_step_delta', 'selection_sha256'} if self._hpo else set()))
         assert self.summary is not None
-        expected_steps = self.summary['parent']['state']['optimizer_steps'] + 4 * ((self.decision_count + 127) // 128)
+        delta = self.proof['expected_optimizer_step_delta'] if self._hpo else 4 * ((self.decision_count + 127) // 128)
+        expected_steps = self.summary['parent']['state']['optimizer_steps'] + delta
+        if self._hpo and (receipt['collected_decisions'] != self.decision_count
+                or receipt['used_decisions'] != self.collection['selection']['used_decisions']
+                or receipt['expected_optimizer_step_delta'] != delta
+                or receipt['selection_sha256'] != digest(self.collection['selection'])):
+            raise ContractError('native HPO prepared receipt differs from frozen selected/collected/delta')
         packed = self._artifact_provider is not None
-        if (receipt['schema_version'] != (2 if packed else 1) or receipt['summary_sha256'] != digest(self.summary)
+        if (receipt['schema_version'] != (3 if self._hpo else 2 if packed else 1) or receipt['summary_sha256'] != digest(self.summary)
                 or receipt['optimizer_steps'] != expected_steps
                 or receipt['collection_manifest_sha256'] != self.proof['manifest_sha256']
-                or receipt.get('kind') != ('card-instance-packed-source-prepared' if packed else 'card-instance-source-prepared')
+                or receipt.get('kind') != (('card-instance-hpo-packed-source-prepared' if packed else 'card-instance-hpo-source-prepared') if self._hpo else ('card-instance-packed-source-prepared' if packed else 'card-instance-source-prepared'))
                 or receipt.get('numeric_manifest_sha256') != self._numeric_files['rollout.json']
                 or receipt.get('numeric_files_sha256') != digest(dict(sorted(self._numeric_files.items())))
                 or canonical(receipt.get('source_correspondence')) != canonical(self.correspondence)):

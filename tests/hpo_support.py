@@ -4,6 +4,7 @@ import random
 import time
 import uuid
 from dataclasses import asdict, replace
+from pathlib import Path
 
 from gf_common.diverse_actions import PublicCandidateGeneratorV3
 from gf_common.domain import digest
@@ -105,7 +106,7 @@ def original_hpo_collection(plan, state, learner, *, decisions=True):
         owner.release()
 
 
-def original_hpo_chain(directory, *, updates=3):
+def original_hpo_chain(directory, *, updates=3, model_id='mlp', decision_budget=None, numeric_budget_bytes=None, packed=False):
     """Actual CPU numeric saves + complete hand-authored journals, unqualified."""
     from gf_common.preprocessing import preparation_config
     from gf_models.sharded_arrays import read_json
@@ -114,13 +115,21 @@ def original_hpo_chain(directory, *, updates=3):
     from gf_training.lineage import checkpoint_path, generation_path
     from gf_training.structured_lineage import _ChainScan
     from tests.hpo_lineage_support import initial_hpo_chain
-    state, records, learner = initial_hpo_chain(directory, decision_budget=8 * updates)
+    if model_id == 'mlp' and decision_budget is None and numeric_budget_bytes is None and not packed:
+        state, records, learner = initial_hpo_chain(directory, decision_budget=8 * updates)
+    else:
+        state, records, learner = variable_initial_hpo_chain(directory, games=8, model_id=model_id,
+            decision_budget=8*updates if decision_budget is None else decision_budget, numeric_budget_bytes=numeric_budget_bytes, packed=packed)
     registry = read_json(directory/'artifact-registry.json')
     for generation in range(1, updates + 1):
         deadline = time.monotonic()+60
         plan, _, after = recorded_hpo_plan(directory, state, records, generation - 1, deadline)
         original_hpo_collection(plan, state, learner)
+        if packed:
+            from tests.test_group_pack_game_source import pack_original
+            pack_original(plan.output,Path(state['effective_config']['storage']['db_root'])/state['run_id']/'collections'/plan.linkage['batch_id'])
         with _ChainScan(directory=directory, max_owned_bytes=1024**3, deadline=deadline) as scan:
+            scan.configure_packed(state)
             validate_hpo_chain(directory, max_owned_bytes=1024**3, deadline=deadline, scan=scan)
             with open_hpo_batch(plan, state, records, scan, preparation_config(state['effective_config']['preprocessing']),
                     online=None, max_owned_bytes=1024**3, deadline=deadline) as source:
@@ -144,6 +153,8 @@ def original_hpo_chain(directory, *, updates=3):
             'model_id': state['model_id'], 'model_version': '4', 'input_recipe': state['input_recipe'],
             'numeric_files': {'rollout.json': numeric_sha, **manifest['data']['files']},
             'hpo_spec_sha256': state['hpo_spec_sha256'], **learner.input_binding}
+        if packed:
+            update['storage_binding'] = state['storage_binding']
         atomic_json(directory/'updates'/f'{generation:06}.json', update)
         previous = records[-1]
         state['used_decisions'] += used
@@ -172,16 +183,28 @@ def original_hpo_chain(directory, *, updates=3):
     return state, records, learner
 
 
-def variable_initial_hpo_chain(directory, *, games=24):
+def variable_initial_hpo_chain(directory, *, games=24, model_id=None, decision_budget=3, numeric_budget_bytes=None, packed=False):
     """Override only the controlled fixture constructor BEFORE its real save."""
     from unittest.mock import patch
 
+    from gf_models.structured_binding import ConfiguredNeuralModelV4
     from gf_training.hpo_config import effective_settings
+    from gf_training.lineage import generation_path
     from tests.hpo_lineage_support import hpo_state_fixture, initial_hpo_chain
+    from tests.test_hpo_network import small_model4
     def fixture(*args, **kwargs):
         state, model, recipe, binding = hpo_state_fixture(*args, **kwargs)
+        if model_id is not None:
+            model = small_model4(model_id)
+            state['model_id'] = model_id
+            state['effective_config']['model'] = asdict(ConfiguredNeuralModelV4(
+                **{name:getattr(model,name) for name in model.__dataclass_fields__}, inference=binding))
         recipe = replace(recipe, collection_games=games)
         spec = state['effective_config']['hpo_spec']
+        if packed:
+            state['effective_config']['storage'].update(db_root=str(directory.parent/'db'),ram_root=str(directory.parent/'ram'))
+        if numeric_budget_bytes is not None:
+            spec['operating']['numeric_budget_bytes'] = numeric_budget_bytes
         spec['training_recipe'] = asdict(recipe)
         spec['effective_settings_sha256'] = effective_settings(model, recipe, {}, layout=LAYOUT).identity
         state['hpo_spec_sha256'] = digest(spec)
@@ -189,7 +212,55 @@ def variable_initial_hpo_chain(directory, *, games=24):
         state['resume_identity'] = digest({'version': 'hpo-ppo-resume-v1', 'config_sha256': state['config_sha256'],
             'identity': state['identity'], 'execution': state['execution'],
             'classification': {key: state[key] for key in ('action_contract', 'purpose', 'synthetic_capacity', 'rule_signature', 'layout_signature')},
-            'storage_binding': None})
+            'storage_binding': state.get('storage_binding')})
         return state, model, recipe, binding
     with patch('tests.hpo_lineage_support.hpo_state_fixture', fixture):
-        return initial_hpo_chain(directory, decision_budget=3)
+        state, records, learner = initial_hpo_chain(directory, decision_budget=decision_budget, packed=packed)
+    if model_id is not None:
+        records[0]['model_id'] = model_id
+        atomic_json(generation_path(directory,0),records[0])
+        state['generation_sha256'] = sha256(generation_path(directory,0))
+        atomic_json(directory/'run.json',state)
+        atomic_json(directory/'latest.json',{'generation':0,'sha256':state['generation_sha256']})
+    return state,records,learner
+
+
+def unadmitted_live_hpo_fixture(directory, *, model_id='mlp', decisions=True):
+    """Actual bytes for Rust-only live component tests, never Source qualification.
+
+    Keep the numeric and next checkpoint outside the parent's append namespace
+    until the native test has crossed the corresponding lifecycle boundary.
+    """
+    from gf_common.preprocessing import preparation_config
+    from gf_training.hpo_lineage import validate_hpo_chain
+    from gf_training.hpo_source import open_hpo_batch, recorded_hpo_plan
+    from gf_training.structured_lineage import _ChainScan
+
+    parent = directory/'parent'
+    state, records, learner = variable_initial_hpo_chain(parent, games=8,
+        model_id=model_id, decision_budget=3)
+    deadline = time.monotonic()+120
+    plan, _, _ = recorded_hpo_plan(parent, state, records, 0, deadline)
+    original_hpo_collection(plan, state, learner, decisions=decisions)
+    with _ChainScan(directory=parent, max_owned_bytes=1024**3, deadline=deadline) as scan:
+        validate_hpo_chain(parent,max_owned_bytes=1024**3,deadline=deadline,scan=scan)
+        with open_hpo_batch(plan, state, records, scan, preparation_config(state['effective_config']['preprocessing']),
+                online=None, max_owned_bytes=1024**3, deadline=deadline) as source:
+            if not decisions:
+                atomic_json(directory/'component.json', {'origin':'unqualified empty held CPU originals; cfg(test) admission only',
+                    'selection':source.selection,'training_recipe':state['effective_config']['hpo_spec']['training_recipe'],
+                    'expected_optimizer_step_delta':source.proof['expected_optimizer_step_delta'],
+                    'correspondence':source.correspondence()})
+                return parent
+            numeric = directory/'staged-numeric'
+            manifest = source.write_numeric(numeric)
+            numeric_sha = sha256(numeric/'rollout.json')
+            rollout = source.read_numeric(numeric, numeric_sha)
+            correspondence = source.correspondence()
+    metrics = learner.update(rollout)
+    learner.save(directory/'staged-checkpoint', shard_bytes=524288)
+    atomic_json(directory/'component.json', {'origin': 'unqualified held CPU originals; cfg(test) admission only',
+        'model_id':model_id, 'metrics':metrics, 'correspondence':correspondence,
+        'binding':{'directory':str(parent/'numeric'/'batch-000000'),
+            'manifest_sha256':numeric_sha, 'files':{'rollout.json':numeric_sha, **manifest['data']['files']}}})
+    return parent

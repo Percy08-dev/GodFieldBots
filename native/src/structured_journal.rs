@@ -1226,14 +1226,19 @@ impl<'a> OriginalHeader<'a> {
         }
         if let Some(model) = model {
             let tree = model.require("model_id")?.string()? == "lightgbm";
+            let hpo = !tree && model.require("version")?.string()? == "4";
             let encoder = if tree {
                 crate::structured_controls::tree3::model(model)?;
                 model.require("encoder")?
             } else {
-                crate::structured_controls::model3(model, b, c)?;
+                if hpo {
+                    crate::structured_controls::model4(model, b, c)?;
+                } else {
+                    crate::structured_controls::model3(model, b, c)?;
+                }
                 model.require("event")?
             };
-            if identity.require("model_version")?.string()? != "3"
+            if identity.require("model_version")?.string()? != if hpo { "4" } else { "3" }
                 || identity.require("model_id")? != model.require("model_id")?
                 || window != n(encoder, "aggregate_window", 1, 65536)?
             {
@@ -2038,7 +2043,8 @@ impl Journal {
                         let v = selection.require(key)?;
                         if v.is_null() {
                             if (h.require("model_version")?.string()? == "2"
-                                || corrected && h.require("model_version")?.string()? == "3")
+                                || corrected
+                                    && ["3", "4"].contains(&h.require("model_version")?.string()?))
                                 && h.require("model_id")?.string()? != "lightgbm"
                             {
                                 return fail(
@@ -2676,9 +2682,12 @@ impl ParsedJournal {
         reason: &Value,
     ) -> Result<Value> {
         s.control.check()?;
-        if self.header_value().require("model_version")?.string()?
-            != if self.corrected { "3" } else { "2" }
-            || self.header_value().require("model_id")?.string()? == "lightgbm"
+        let version = self.header_value().require("model_version")?.string()?;
+        if (if self.corrected {
+            !["3", "4"].contains(&version)
+        } else {
+            version != "2"
+        }) || self.header_value().require("model_id")?.string()? == "lightgbm"
         {
             return fail("baseline raw role cannot be a PPO payload");
         }

@@ -284,6 +284,14 @@ class NativeStructuredSource:
         assert self.summary is not None
         return _authorize_controls(self.summary, self._session, max_owned_bytes=self.budget, deadline=self.deadline)
 
+    def _authorize_owned(self) -> None:
+        if self.plan['mode'] == 'historical_parent':
+            self._check_historical()
+            self._correspondence_done = True
+        from gf_common.artifacts import json_bound
+        self._native_call(self._session.authorize, lambda held: (canonical(self._auth).encode(), held),
+            envelope=8 * json_bound(self._auth) + 65536)
+
     def __enter__(self) -> Self:
         from gf_training.lineage import _OWNED_LOCKS, run_lock
         from gf_training.native_backend import binary_identity, load_native
@@ -310,12 +318,7 @@ class NativeStructuredSource:
             encoded = self._control_summary()
             self.summary = __import__('json').loads(encoded)
             self._auth, self.sealed, self.models = self._authorize_summary()
-            if self.plan['mode'] == 'historical_parent':
-                self._check_historical()
-                self._correspondence_done = True
-            from gf_common.artifacts import json_bound
-            self._native_call(self._session.authorize, lambda held: (canonical(self._auth).encode(), held),
-                envelope=8 * json_bound(self._auth) + 65536)
+            self._authorize_owned()
             self._check()
             return self
         except BaseException as error:
@@ -513,7 +516,7 @@ class NativeStructuredSource:
         return count, proof, {'rollout.json': numeric_hash, **manifest['data']['files']}
 
 def _payload_views(payload: Any, *, game: bool = False, recorded: bool = False,
-                   packed: bool = False) -> tuple[Json, dict[str, Any]]:
+                   packed: bool = False, hpo: bool = False) -> tuple[Json, dict[str, Any]]:
     """Validate closed bank descriptors before creating any named NumPy view."""
     import json
     import math
@@ -527,16 +530,24 @@ def _payload_views(payload: Any, *, game: bool = False, recorded: bool = False,
         keys.add('control_fingerprint')
     closed(metadata, keys)
     expected_kind = ('card-instance-recorded-cohort-payload' if recorded else 'card-instance-cohort-payload') if game else 'structured-cohort-payload'
+    if hpo:
+        expected_kind = 'card-instance-hpo-recorded-cohort-payload' if recorded else 'card-instance-hpo-cohort-payload'
     if (recorded and not game or type(metadata['schema_version']) is not int
-            or metadata['schema_version'] != (2 if game else 1) or metadata['kind'] != expected_kind):
+            or hpo and not game or metadata['schema_version'] != (3 if hpo else 2 if game else 1) or metadata['kind'] != expected_kind):
         raise ContractError('unsupported structured cohort payload')
-    is_packed = metadata['source_proof'].get('kind') == 'card-instance-packed-original-source-proof'
+    is_packed = metadata['source_proof'].get('kind') == ('card-instance-hpo-packed-original-source-proof' if hpo else 'card-instance-packed-original-source-proof')
     if packed != is_packed or packed and not game:
         raise ContractError('cohort payload packed Source context differs')
     if packed:
         from gf_common.group_pack_game import checked_packed_proof
-        checked_packed_proof(metadata['source_proof'])
-        if metadata['correspondence'].get('recipe') != 'card-instance-packed-source-correspondence-v1':
+        physical = metadata['source_proof']
+        if hpo:
+            from gf_common.hpo import checked_selection
+            checked_selection(physical['selection'])
+            physical = {key: value for key, value in physical.items() if key not in ('selection', 'expected_optimizer_step_delta')}
+            physical = {**physical, 'schema_version': 2, 'kind': 'card-instance-packed-original-source-proof'}
+        checked_packed_proof(physical)
+        if metadata['correspondence'].get('recipe') != ('card-instance-hpo-packed-source-correspondence-v1' if hpo else 'card-instance-packed-source-correspondence-v1'):
             raise ContractError('packed cohort correspondence recipe differs')
     banks = {'uint8': payload[1], 'int64': payload[2], 'float32': payload[3]}
     for dtype, values in banks.items():

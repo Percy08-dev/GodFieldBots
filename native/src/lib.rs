@@ -817,6 +817,13 @@ fn structured_settings(
     settings: &[u8],
     control: &Control,
 ) -> error::Result<(usize, usize, usize, usize, usize)> {
+    structured_settings_context(settings, control, false)
+}
+fn structured_settings_context(
+    settings: &[u8],
+    control: &Control,
+    hpo: bool,
+) -> error::Result<(usize, usize, usize, usize, usize)> {
     let initial = Budget::new(1048576);
     let settings = json::parse(settings, &initial, &control)?;
     let v = &settings.root;
@@ -830,8 +837,9 @@ fn structured_settings(
         ],
         &[],
     )?;
-    let memory = v.require("memory_bytes")?.integer(1, 12i128 << 30)? as usize;
-    let scratch = v.require("scratch_bytes")?.integer(1, 12i128 << 30)? as usize;
+    let limit = if hpo { i64::MAX as i128 } else { 12i128 << 30 };
+    let memory = v.require("memory_bytes")?.integer(1, limit)? as usize;
+    let scratch = v.require("scratch_bytes")?.integer(1, limit)? as usize;
     let source = v
         .require("max_source_file_bytes")?
         .integer(1, 64i128 << 20)? as usize;
@@ -847,6 +855,9 @@ enum StructuredBridgeCore {
 impl StructuredBridgeCore {
     fn corrected(&self) -> bool {
         matches!(self, Self::Corrected(_))
+    }
+    fn hpo(&self) -> bool {
+        matches!(self,Self::Corrected(value) if value.is_hpo())
     }
     fn summary(&self) -> error::Result<budget::BudgetVec<u8>> {
         match self {
@@ -876,6 +887,14 @@ impl StructuredBridgeCore {
         match self {
             Self::Engineering(v) => v.authorize(bytes),
             Self::Corrected(v) => v.authorize(bytes),
+        }
+    }
+    fn authorize_hpo(&mut self, bytes: &[u8]) -> error::Result<budget::BudgetVec<u8>> {
+        match self {
+            Self::Corrected(value) => value.authorize_hpo(bytes),
+            _ => Err(Error::contract(
+                "HPO authorization requires corrected same session",
+            )),
         }
     }
     fn export(
@@ -1094,8 +1113,18 @@ impl StructuredSessionBridge {
         let (core, retirement, budget) = py
             .detach(|| {
                 control.check()?;
+                let hpo = if corrected {
+                    let parsed = json::parse(plan, &wire_budget, &control)?;
+                    parsed
+                        .root
+                        .get("schema_version")
+                        .and_then(json::Value::as_i64)
+                        == Some(5)
+                } else {
+                    false
+                };
                 let (memory, scratch, source, record, chunk) =
-                    structured_settings(settings, &control)?;
+                    structured_settings_context(settings, &control, hpo)?;
                 let budget = Budget::new(memory);
                 let (core, retirement) = if corrected {
                     (
@@ -1258,6 +1287,53 @@ impl StructuredSessionBridge {
         })
         .map_err(python_error)
     }
+    fn authorize_hpo<'py>(
+        &self,
+        py: Python<'py>,
+        encoded: &[u8],
+        retained_python_bytes: usize,
+    ) -> PyResult<Bound<'py, PyBytes>> {
+        let owned = self
+            .mutating(structured_session::CardInstanceOperation::Authorize, || {
+                self.python
+                    .lock()
+                    .map_err(|_| Error::Closed)?
+                    .authorization(encoded.len())?;
+                Self::owned_wire(&self.budget, encoded)
+            })
+            .map_err(python_error)?;
+        let bytes = py
+            .detach(|| {
+                self.mutating(structured_session::CardInstanceOperation::Authorize, || {
+                    self.caller
+                        .lock()
+                        .map_err(|_| Error::Closed)?
+                        .resize(retained_python_bytes)?;
+                    let bytes = self
+                        .core
+                        .lock()
+                        .map_err(|_| Error::Closed)?
+                        .as_mut()
+                        .ok_or(Error::Closed)?
+                        .authorize_hpo(&owned)?;
+                    self.python
+                        .lock()
+                        .map_err(|_| Error::Closed)?
+                        .hpo_final_summary(bytes.len())?;
+                    Ok(bytes)
+                })
+            })
+            .map_err(python_error)?;
+        if let Err(error) = self.control.check() {
+            if let Ok(mut core) = self.core.lock() {
+                if let Some(core) = core.as_mut() {
+                    core.fail_export();
+                }
+            }
+            return Err(python_error(error));
+        }
+        Ok(PyBytes::new(py, &bytes))
+    }
     fn export_selected<'py>(
         &self,
         py: Python<'py>,
@@ -1279,6 +1355,19 @@ impl StructuredSessionBridge {
                             .lock()
                             .map_err(|_| Error::Closed)?
                             .resize(retained_python_bytes)?;
+                        if self
+                            .core
+                            .lock()
+                            .map_err(|_| Error::Closed)?
+                            .as_ref()
+                            .ok_or(Error::Closed)?
+                            .hpo()
+                        {
+                            self.python
+                                .lock()
+                                .map_err(|_| Error::Closed)?
+                                .begin_data()?;
+                        }
                         self.core
                             .lock()
                             .map_err(|_| Error::Closed)?
@@ -1632,6 +1721,20 @@ session_methods!(StructuredNativeSession, false, {
     }
 });
 session_methods!(CardInstanceNativeSession, true, {
+    fn numeric_used_bytes(&self) -> Option<usize> {
+        self.bridge.budget.numeric_used()
+    }
+    #[pyo3(signature=(encoded,retained_python_bytes=0))]
+    fn authorize_hpo<'py>(
+        &self,
+        py: Python<'py>,
+        encoded: &[u8],
+        retained_python_bytes: usize,
+    ) -> PyResult<Bound<'py, PyBytes>> {
+        self.bridge.callback_guard()?;
+        self.bridge
+            .authorize_hpo(py, encoded, retained_python_bytes)
+    }
     #[staticmethod]
     #[pyo3(signature=(plan,provider,settings,deadline,cancel_handle=None))]
     fn from_artifacts(
@@ -3685,6 +3788,7 @@ fn build_info() -> Vec<(&'static str, &'static str)> {
             "ed0c61152b78fa984aad342be22c6b9d6ef49b12b8f0d1c0f0de89724468002f",
         ),
         ("card_instance_models", "mlp,gru,transformer"),
+        ("card_instance_hpo", structured_controls::hpo::CAPABILITY),
         (
             "card_instance_group_pack",
             CARD_INSTANCE_GROUP_PACK_CAPABILITY,

@@ -26,6 +26,12 @@ uses actual owner observations, original task/event/process identities and
 durable receipts; absence of a PID or lock release never proves cleanup. The
 [management contract](design/ppo-hpo-management.md) remains separate from Source
 qualification and still needs concrete coordinator/evaluator integration.
+Native Source3b now passes scoped correctness and conformance reviews against a
+source-matched private release/MIMALLOC candidate. Exact Hpo/PackedHpo plan5,
+two-stage authorization, Python-owned learning math and generation-tagged numeric
+allocation guards are implemented. Installed activation, integrated-source legacy
+proofs and genuine GPU/common-loop acceptance remain pending; the installed
+extension is still the original binary.
 
 [ADR0024](adr/0024-card-instance-simulator-v2.md) begins a separately identified
 card-instance Simulator v2 migration. Contract/wire/Config/direct HTTP and pure

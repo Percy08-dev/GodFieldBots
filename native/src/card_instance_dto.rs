@@ -868,7 +868,7 @@ pub(crate) fn diagnostic_header_envelope(
     control.check()?;
     let tree = value.require("model_version")?.string()? == "3"
         && value.require("model_id")?.string()? == "lightgbm";
-    let neural = value.require("model_version")?.string()? == "3" && !tree;
+    let neural = ["3", "4"].contains(&value.require("model_version")?.string()?) && !tree;
     value.closed(
         &[
             "kind",
@@ -1996,14 +1996,24 @@ pub(crate) fn header6(value: &Value, budget: &Arc<Budget>, control: &Control) ->
             "J6 Tree3 actual window mismatch",
         )?;
         crate::structured_controls::tree3::settings(safe, actions, budget, control)?
-    } else if value.require("model_version")?.string()? == "3" {
+    } else if ["3", "4"].contains(&value.require("model_version")?.string()?) {
         let raw = value.require("neural")?;
-        let label = crate::structured_controls::neural_metadata3(raw, actions, budget, control)?;
+        let hpo = value.require("model_version")?.string()? == "4";
+        let label = if hpo {
+            crate::structured_controls::hpo::neural_metadata(raw, actions, budget, control)?
+        } else {
+            crate::structured_controls::neural_metadata3(raw, actions, budget, control)?
+        };
         require(
             value.require("policy")?.string()? == label,
             "J6 neural execution label mismatch",
         )?;
         let options = raw.require("policy_options")?;
+        is(
+            options,
+            "version",
+            value.require("model_version")?.string()?,
+        )?;
         let model = options.require("model")?;
         require(
             value.require("model_id")? == model.require("model_id")?

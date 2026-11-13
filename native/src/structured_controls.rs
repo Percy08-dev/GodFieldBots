@@ -8,6 +8,8 @@ use crate::{
 use sha2::{Digest, Sha256};
 use std::{collections::BTreeMap, path::Path, sync::Arc};
 
+#[path = "hpo_controls.rs"]
+pub(crate) mod hpo;
 #[path = "card_instance_tree_raw.rs"]
 pub(crate) mod tree3;
 
@@ -17,18 +19,26 @@ pub(crate) enum SourceFormat {
     Engineering,
     Corrected,
     PackedCorrected,
+    Hpo,
+    PackedHpo,
 }
 impl SourceFormat {
     pub(crate) fn corrected(self) -> bool {
         self != Self::Engineering
     }
     pub(crate) fn packed(self) -> bool {
-        self == Self::PackedCorrected
+        matches!(self, Self::PackedCorrected | Self::PackedHpo)
+    }
+    pub(crate) fn hpo(self) -> bool {
+        matches!(self, Self::Hpo | Self::PackedHpo)
     }
     fn class(self) -> &'static [&'static str] {
         if self.corrected() { GAME_CLASS } else { CLASS }
     }
     fn semantics(self) -> Vec<&'static str> {
+        if self.hpo() {
+            return hpo::semantic_keys();
+        }
         let mut keys = SEMANTICS.to_vec();
         if self.corrected() {
             keys.extend(["rule_signature", "spec_inventory_sha256"]);
@@ -63,7 +73,9 @@ fn semantic_context(
     b: &Arc<Budget>,
     c: &Control,
 ) -> Result<()> {
-    if format.corrected() {
+    if format.hpo() {
+        semantic_corrected(v, m, b, c, true)
+    } else if format.corrected() {
         semantic3(v, m, b, c)
     } else {
         semantic(v, m, b, c)
@@ -75,7 +87,9 @@ fn architecture_context(
     b: &Arc<Budget>,
     c: &Control,
 ) -> Result<String> {
-    if format.corrected() {
+    if format.hpo() {
+        hpo::architecture(m, b, c)
+    } else if format.corrected() {
         architecture3(m, b, c)
     } else {
         architecture(m, b, c)
@@ -421,10 +435,73 @@ pub(crate) fn model3(
 ) -> Result<BTreeMap<String, Vec<i128>>> {
     model_context(value, budget, control, ModelFormat::Corrected)
 }
+
+pub(crate) fn model4(
+    value: &Value,
+    budget: &Arc<Budget>,
+    control: &Control,
+) -> Result<BTreeMap<String, Vec<i128>>> {
+    model_context(value, budget, control, ModelFormat::Hpo)
+}
+
+#[cfg(test)]
+mod hpo_model_tests {
+    use super::*;
+
+    #[test]
+    fn model4_has_own_temporal_activation_and_shape_contract() {
+        let budget = Budget::new(64 << 20);
+        let control = Control::new(crate::budget::monotonic() + 30.).unwrap();
+        let cases = json::parse(
+            include_bytes!("../tests/fixtures/card_instance_models3.json"),
+            &budget,
+            &control,
+        )
+        .unwrap();
+        for case in cases.root.require("cases").unwrap().array().unwrap() {
+            let original = case.require("model").unwrap();
+            let mut value = original.clone();
+            value["version"] = json::text("4");
+            value["initialization"] = json::text("orthogonal-activation-aware-v1");
+            value["temporal"]
+                .as_object_mut()
+                .unwrap()
+                .remove("sequence_length");
+            value["temporal"]["max_decisions"] = json::integer(1024);
+            assert_eq!(
+                model4(&value, &budget, &control).unwrap(),
+                model3(original, &budget, &control).unwrap()
+            );
+            value["card"]["activation"] = json::text("tanh");
+            value["heads"]["activation"] = json::text("tanh");
+            value["temporal"]["activation"] = json::text("tanh");
+            if value["model_id"].as_str() == Some("mlp") {
+                value["temporal"]["num_layers"] = json::integer(3);
+                let shapes = model4(&value, &budget, &control).unwrap();
+                let hidden = value["temporal"]["hidden_size"].integer(1, 1024).unwrap();
+                assert_eq!(shapes["temporal_dense.0.weight"], vec![hidden, hidden]);
+                assert_eq!(shapes["temporal_dense.2.bias"], vec![hidden]);
+            } else {
+                assert!(model4(&value, &budget, &control).is_ok());
+            }
+            assert!(model3(&value, &budget, &control).is_err());
+            let mut broken = value.clone();
+            broken["temporal"]["sequence_length"] = json::integer(32);
+            assert!(model4(&broken, &budget, &control).is_err());
+            broken = value.clone();
+            broken["card"]["activation"] = json::text("elu");
+            assert!(model4(&broken, &budget, &control).is_err());
+            broken = value;
+            broken["temporal"]["max_decisions"] = json::integer(8);
+            assert!(model4(&broken, &budget, &control).is_err());
+        }
+    }
+}
 #[derive(Clone, Copy)]
 enum ModelFormat {
     Engineering,
     Corrected,
+    Hpo,
 }
 fn model_context(
     value: &Value,
@@ -432,7 +509,8 @@ fn model_context(
     control: &Control,
     format: ModelFormat,
 ) -> Result<BTreeMap<String, Vec<i128>>> {
-    let corrected = matches!(format, ModelFormat::Corrected);
+    let corrected = !matches!(format, ModelFormat::Engineering);
+    let hpo = matches!(format, ModelFormat::Hpo);
     value.closed(
         &[
             "model_id",
@@ -452,7 +530,17 @@ fn model_context(
         ],
         &[],
     )?;
-    is(value, "version", if corrected { "3" } else { "2" })?;
+    is(
+        value,
+        "version",
+        if hpo {
+            "4"
+        } else if corrected {
+            "3"
+        } else {
+            "2"
+        },
+    )?;
     is(
         value,
         "input_recipe",
@@ -462,7 +550,15 @@ fn model_context(
             INPUT
         },
     )?;
-    is(value, "initialization", "orthogonal-structured-v1")?;
+    is(
+        value,
+        "initialization",
+        if hpo {
+            "orthogonal-activation-aware-v1"
+        } else {
+            "orthogonal-structured-v1"
+        },
+    )?;
     n(value, "dropout", 0, 0)?;
     is(value, "precision", "ieee-fp32")?;
     let kind = text(value, "model_id")?;
@@ -515,19 +611,19 @@ fn model_context(
     }
     event.closed(&event_keys, &[])?;
     let temporal = value.require("temporal")?;
-    temporal.closed(
-        &[
-            "kind",
-            "hidden_size",
-            "num_layers",
-            "num_heads",
-            "feedforward_size",
-            "max_decisions",
-            "sequence_length",
-            "activation",
-        ],
-        &[],
-    )?;
+    let mut temporal_keys = vec![
+        "kind",
+        "hidden_size",
+        "num_layers",
+        "num_heads",
+        "feedforward_size",
+        "max_decisions",
+        "activation",
+    ];
+    if !hpo {
+        temporal_keys.push("sequence_length");
+    }
+    temporal.closed(&temporal_keys, &[])?;
     let heads = value.require("heads")?;
     heads.closed(
         &["actor_hidden_sizes", "critic_hidden_sizes", "activation"],
@@ -545,7 +641,11 @@ fn model_context(
         &[],
     )?;
     for item in [state, card, hand, temporal, heads] {
-        is(item, "activation", "relu")?;
+        if !hpo {
+            is(item, "activation", "relu")?;
+        } else if !["relu", "tanh"].contains(&text(item, "activation")?) {
+            return Err(Error::contract("model4 dense activation unsupported"));
+        }
     }
     let sw = widths(state.require("hidden_sizes")?)?;
     let hw = widths(hand.require("hidden_sizes")?)?;
@@ -569,7 +669,11 @@ fn model_context(
     let t_heads = n(temporal, "num_heads", 1, 16)?;
     let tf = n(temporal, "feedforward_size", 1, 1024)?;
     let td = n(temporal, "max_decisions", 1, 1024)?;
-    n(temporal, "sequence_length", 1, td)?;
+    if hpo {
+        n(temporal, "max_decisions", 1024, 1024)?;
+    } else {
+        n(temporal, "sequence_length", 1, td)?;
+    }
     is(temporal, "kind", kind)?;
     let sk = text(state, "kind")?;
     let hk = text(hand, "kind")?;
@@ -579,19 +683,25 @@ fn model_context(
     {
         return Err(Error::contract("structured encoder unsupported"));
     }
-    if sk == "identity" && (sw != [128] || so != 64) {
+    if sk == "identity" && (sw != [128] || so != 64 || hpo && text(state, "activation")? != "relu")
+    {
         return Err(Error::contract("inactive state settings"));
     }
     if hk != "attention" && (h_layers, h_heads, h_feed) != (2, 4, 128) {
         return Err(Error::contract("inactive hand attention settings"));
     }
-    if hk == "direct" && (hw != [128] || hl != 128 || text(hand, "pooling")? != "mean") {
+    if hk == "direct"
+        && (hw != [128]
+            || hl != 128
+            || text(hand, "pooling")? != "mean"
+            || hpo && text(hand, "activation")? != "relu")
+    {
         return Err(Error::contract("inactive direct settings"));
     }
     if hk == "attention" && co % h_heads != 0 || kind == "transformer" && th % t_heads != 0 {
         return Err(Error::contract("attention head divisibility"));
     }
-    if kind != "transformer" && (t_heads, tf) != (4, 256) || kind == "mlp" && tl != 1 {
+    if kind != "transformer" && (t_heads, tf) != (4, 256) || !hpo && kind == "mlp" && tl != 1 {
         return Err(Error::contract("inactive temporal settings"));
     }
     let maxp = n(resources, "max_parameters", 1, 100_000_000)?;
@@ -681,6 +791,16 @@ fn model_context(
     }
     gru(&mut shapes, "event_encoder", event_width, eh, el);
     linear(&mut shapes, "frame_projection", frame, th);
+    if hpo && kind == "mlp" {
+        for index in 0..tl - 1 {
+            linear(
+                &mut shapes,
+                &format!("temporal_dense.{}", 2 * index),
+                th,
+                th,
+            );
+        }
+    }
     if kind == "gru" {
         gru(&mut shapes, "temporal", th, th, tl);
     } else if kind == "transformer" {
@@ -2907,6 +3027,15 @@ pub(crate) fn architecture3(
     )
 }
 fn semantic3(value: &Value, model: &Value, budget: &Arc<Budget>, control: &Control) -> Result<()> {
+    semantic_corrected(value, model, budget, control, false)
+}
+fn semantic_corrected(
+    value: &Value,
+    model: &Value,
+    budget: &Arc<Budget>,
+    control: &Control,
+    hpo: bool,
+) -> Result<()> {
     let pins = corrected_pins(budget, control)?;
     for (key, expected) in [
         ("input_recipe", "participant-structured-v2"),
@@ -2916,6 +3045,9 @@ fn semantic3(value: &Value, model: &Value, budget: &Arc<Budget>, control: &Contr
         ("reward_policy_version", "natural-terminal-v1"),
         ("numeric_transform", "signed-log1p-fp32-v1"),
     ] {
+        if hpo && key == "reward_policy_version" {
+            continue;
+        }
         is(value, key, expected)?;
     }
     for key in ["simulator_revision", "spec_inventory_sha256"] {
@@ -3037,6 +3169,15 @@ pub(crate) fn options3(
     budget: &Arc<Budget>,
     control: &Control,
 ) -> Result<String> {
+    options_context(value, actions, budget, control, false)
+}
+fn options_context(
+    value: &Value,
+    actions: &Value,
+    budget: &Arc<Budget>,
+    control: &Control,
+    hpo: bool,
+) -> Result<String> {
     actions3(actions, budget, control)?;
     value.closed(
         &[
@@ -3055,7 +3196,7 @@ pub(crate) fn options3(
         ],
         &[],
     )?;
-    is(value, "version", "3")?;
+    is(value, "version", if hpo { "4" } else { "3" })?;
     validation_text(value.require("checkpoint")?)?;
     game_binding3(value, budget, control)?;
     is(
@@ -3064,7 +3205,11 @@ pub(crate) fn options3(
         &digest(actions, budget, control)?,
     )?;
     let model = value.require("model")?;
-    model3(model, budget, control)?;
+    if hpo {
+        model4(model, budget, control)?;
+    } else {
+        model3(model, budget, control)?;
+    }
     n(model, "max_positions", 1, 18)?;
     let inference = value.require("inference")?;
     binding(inference)?;
@@ -3104,8 +3249,9 @@ pub(crate) fn options3(
             .insert(key.into(), json::copy(value.require(key)?, control)?);
     }
     Ok(format!(
-        "{}-ppo-v3-{manifest}-{}",
+        "{}-ppo-v{}-{manifest}-{}",
         text(model, "model_id")?,
+        if hpo { "4" } else { "3" },
         digest(&identity, budget, control)?
     ))
 }
@@ -3123,7 +3269,12 @@ pub(crate) fn resource3(
     budget: &Arc<Budget>,
     control: &Control,
 ) -> Result<Value> {
-    let shapes = model3(model, budget, control)?;
+    let hpo = text(model, "version")? == "4";
+    let shapes = if hpo {
+        model4(model, budget, control)?
+    } else {
+        model3(model, budget, control)?
+    };
     binding(inference)?;
     let recipe = json::parse(CARD_INSTANCE_RECIPE, budget, control)?;
     let cats = |name: &str| -> Result<Vec<i128>> {
@@ -3154,7 +3305,13 @@ pub(crate) fn resource3(
     if count < 1 || count > n(inference, "max_candidates", 1, 65536)? {
         return Err(Error::contract("resource candidate count mismatch"));
     }
-    let suffix = suffix.unwrap_or(decisions.min(n(temporal, "sequence_length", 1, decisions)?));
+    let suffix = if let Some(suffix) = suffix {
+        suffix
+    } else if hpo {
+        1
+    } else {
+        decisions.min(n(temporal, "sequence_length", 1, decisions)?)
+    };
     if suffix < 1 || suffix > decisions {
         return Err(Error::contract("resource suffix mismatch"));
     }
@@ -3377,6 +3534,15 @@ pub(crate) fn neural_metadata3(
     budget: &Arc<Budget>,
     control: &Control,
 ) -> Result<String> {
+    neural_metadata_context(value, actions, budget, control, false)
+}
+fn neural_metadata_context(
+    value: &Value,
+    actions: &Value,
+    budget: &Arc<Budget>,
+    control: &Control,
+    hpo: bool,
+) -> Result<String> {
     let encoded = json::canonical(value, budget, control)?;
     let _metadata = json::admit(encoded.len(), budget)?;
     value.closed(
@@ -3390,12 +3556,27 @@ pub(crate) fn neural_metadata3(
     )?;
     is(value, "input_contract", "retained-external-inference-v1")?;
     let options = value.require("policy_options")?;
-    let label = options3(options, actions, budget, control)?;
+    let label = options_context(options, actions, budget, control, hpo)?;
     let manifest = value.require("inference_manifest")?;
-    inference4(manifest, actions, budget, control)?;
+    if hpo {
+        self::hpo::inference(manifest, actions, budget, control)?;
+    } else {
+        inference4(manifest, actions, budget, control)?;
+    }
+    let mut pure = json::copy(options.require("model")?, control)?;
+    if hpo {
+        pure.as_object_mut().unwrap().remove("resources");
+        let mut encoded = json::canonical(manifest, budget, control)?;
+        encoded.push(b'\n')?;
+        is(
+            options,
+            "expected_manifest_digest",
+            &format!("{:x}", Sha256::digest(&*encoded)),
+        )?;
+    }
     eq(
         manifest.require("model")?,
-        options.require("model")?,
+        &pure,
         "neural manifest/options model mismatch",
     )?;
     let inference = options.require("inference")?;

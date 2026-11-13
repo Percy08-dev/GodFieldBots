@@ -2,7 +2,7 @@
 use crate::error::{Error, Result};
 use std::ops::{Deref, DerefMut};
 use std::sync::{
-    Arc,
+    Arc, Mutex,
     atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 
@@ -16,6 +16,37 @@ pub struct Budget {
     extend_copy_bytes: AtomicUsize,
     json_estimated_used: AtomicUsize,
     json_estimated_peak: AtomicUsize,
+    numeric: Mutex<NumericBook>,
+}
+#[derive(Debug, Default)]
+struct NumericBook {
+    next: u64,
+    active: Option<NumericPhase>,
+    failed: bool,
+}
+#[derive(Debug)]
+struct NumericPhase {
+    generation: u64,
+    limit: usize,
+    charged: usize,
+}
+#[derive(Debug)]
+pub struct NumericGuard {
+    budget: Arc<Budget>,
+    generation: u64,
+}
+impl Drop for NumericGuard {
+    fn drop(&mut self) {
+        if let Ok(mut book) = self.budget.numeric.lock() {
+            if book
+                .active
+                .as_ref()
+                .is_some_and(|phase| phase.generation == self.generation)
+            {
+                book.active = None;
+            }
+        }
+    }
 }
 impl Budget {
     pub fn new(limit: usize) -> Arc<Self> {
@@ -28,6 +59,7 @@ impl Budget {
             extend_copy_bytes: AtomicUsize::new(0),
             json_estimated_used: AtomicUsize::new(0),
             json_estimated_peak: AtomicUsize::new(0),
+            numeric: Mutex::new(NumericBook::default()),
         })
     }
     pub fn used(&self) -> usize {
@@ -61,6 +93,24 @@ impl Budget {
         )
     }
     pub fn reserve(self: &Arc<Self>, bytes: usize) -> Result<Lease> {
+        let mut book = self.numeric.lock().map_err(|_| Error::Closed)?;
+        if book.failed {
+            return Err(Error::contract(
+                "native numeric reservation accounting uncertain",
+            ));
+        }
+        let charge = if let Some(phase) = book.active.as_ref() {
+            let next = phase
+                .charged
+                .checked_add(bytes)
+                .filter(|sum| *sum <= phase.limit)
+                .ok_or_else(|| {
+                    Error::resource("HPO incremental numeric budget exhausted before allocation")
+                })?;
+            Some((phase.generation, next))
+        } else {
+            None
+        };
         let old = self
             .used
             .try_update(Ordering::AcqRel, Ordering::Acquire, |used| {
@@ -68,10 +118,67 @@ impl Budget {
             })
             .map_err(|_| Error::resource("native managed memory budget exhausted"))?;
         self.peak.fetch_max(old + bytes, Ordering::AcqRel);
+        if let Some((_, next)) = charge {
+            book.active.as_mut().ok_or(Error::Closed)?.charged = next;
+        }
         Ok(Lease {
             budget: self.clone(),
             bytes,
+            numeric: charge.map(|(generation, _)| (generation, bytes)),
+            numeric_keepalive: None,
         })
+    }
+    pub fn numeric_guard(self: &Arc<Self>, limit: usize) -> Result<Arc<NumericGuard>> {
+        if limit == 0 {
+            return Err(Error::resource("positive HPO numeric budget required"));
+        }
+        let mut book = self.numeric.lock().map_err(|_| Error::Closed)?;
+        if book.failed {
+            return Err(Error::contract(
+                "native numeric reservation accounting uncertain",
+            ));
+        }
+        if book.active.is_some() {
+            return Err(Error::contract("nested native numeric guard prohibited"));
+        }
+        let generation = book
+            .next
+            .checked_add(1)
+            .ok_or_else(|| Error::resource("numeric guard generation overflow"))?;
+        book.next = generation;
+        book.active = Some(NumericPhase {
+            generation,
+            limit,
+            charged: 0,
+        });
+        Ok(Arc::new(NumericGuard {
+            budget: self.clone(),
+            generation,
+        }))
+    }
+    pub fn numeric_used(&self) -> Option<usize> {
+        self.numeric
+            .lock()
+            .ok()
+            .and_then(|book| book.active.as_ref().map(|phase| phase.charged))
+    }
+    fn release(&self, bytes: usize, numeric: Option<(u64, usize)>) {
+        if let Ok(mut book) = self.numeric.lock() {
+            if let (Some(phase), Some((generation, amount))) = (book.active.as_mut(), numeric) {
+                if phase.generation == generation {
+                    if let Some(next) = phase.charged.checked_sub(amount) {
+                        phase.charged = next;
+                    } else {
+                        book.failed = true;
+                    }
+                }
+            }
+            self.used.fetch_sub(bytes, Ordering::AcqRel);
+        } else {
+            // This lease's reservation effect is known even if the constraint
+            // lock is poisoned. Do not invent a numeric refund in that case.
+            self.used.fetch_sub(bytes, Ordering::AcqRel);
+        }
     }
 }
 pub struct JsonAdmission {
@@ -91,6 +198,8 @@ impl Drop for JsonAdmission {
 pub struct Lease {
     budget: Arc<Budget>,
     bytes: usize,
+    numeric: Option<(u64, usize)>,
+    numeric_keepalive: Option<Arc<NumericGuard>>,
 }
 impl Lease {
     pub fn bytes(&self) -> usize {
@@ -100,20 +209,39 @@ impl Lease {
     pub fn resize(&mut self, bytes: usize) -> Result<()> {
         if bytes > self.bytes {
             let mut additional = self.budget.reserve(bytes - self.bytes)?;
+            let charge = match (self.numeric, additional.numeric) {
+                (Some((old, amount)), Some((generation, growth))) if old == generation => Some((
+                    generation,
+                    amount
+                        .checked_add(growth)
+                        .ok_or_else(|| Error::resource("numeric lease charge overflow"))?,
+                )),
+                (_, Some(charge)) => Some(charge),
+                (old, None) => old,
+            };
             self.bytes = bytes;
+            self.numeric = charge;
             additional.bytes = 0; // The existing lease now owns this admitted delta.
+            additional.numeric = None;
         } else {
-            self.budget
-                .used
-                .fetch_sub(self.bytes - bytes, Ordering::AcqRel);
+            let numeric = self
+                .numeric
+                .map(|(generation, amount)| (generation, amount.saturating_sub(bytes)));
+            self.budget.release(self.bytes - bytes, numeric);
+            self.numeric = self
+                .numeric
+                .map(|(generation, amount)| (generation, amount.min(bytes)));
             self.bytes = bytes;
         }
         Ok(())
     }
+    pub fn retain_numeric_guard(&mut self, guard: Arc<NumericGuard>) {
+        self.numeric_keepalive = Some(guard);
+    }
 }
 impl Drop for Lease {
     fn drop(&mut self) {
-        self.budget.used.fetch_sub(self.bytes, Ordering::AcqRel);
+        self.budget.release(self.bytes, self.numeric);
     }
 }
 
@@ -296,6 +424,118 @@ pub fn sort_unstable_by<T>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn numeric_guard_survives_its_retained_payload_lease_and_global_failure_is_atomic() {
+        let b = Budget::new(100);
+        let source = b.reserve(80).unwrap();
+        let guard = b.numeric_guard(50).unwrap();
+        assert!(b.reserve(30).is_err());
+        assert_eq!(b.numeric_used(), Some(0));
+        let mut payload = b.reserve(10).unwrap();
+        payload.retain_numeric_guard(guard.clone());
+        drop(guard);
+        assert!(b.numeric_guard(50).is_err());
+        drop(source);
+        assert_eq!(b.numeric_used(), Some(10));
+        drop(payload);
+        assert_eq!(b.numeric_used(), None);
+        assert_eq!(b.used(), 0);
+    }
+    #[test]
+    fn numeric_guard_installation_and_old_lease_release_races_keep_generations_isolated() {
+        let b = Budget::new(1000);
+        let running = AtomicBool::new(true);
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                while running.load(Ordering::Acquire) {
+                    if let Ok(lease) = b.reserve(1) {
+                        std::thread::yield_now();
+                        drop(lease);
+                    }
+                }
+            });
+            for _ in 0..100 {
+                let guard = b.numeric_guard(50).unwrap();
+                assert!(b.numeric_used().unwrap() <= 50);
+                drop(guard);
+            }
+            running.store(false, Ordering::Release);
+        });
+        assert_eq!(b.used(), 0);
+        assert_eq!(b.numeric_used(), None);
+    }
+    #[test]
+    fn numeric_guard_does_not_spend_refunded_original_source_credit() {
+        let b = Budget::new(1000);
+        let mut original = b.reserve(100).unwrap();
+        let guard = b.numeric_guard(50).unwrap();
+        original.resize(50).unwrap();
+        assert!(b.reserve(100).is_err());
+        assert_eq!(b.used(), 50);
+        let numeric = b.reserve(50).unwrap();
+        assert_eq!(b.numeric_used(), Some(50));
+        assert!(b.numeric_guard(50).is_err());
+        drop(numeric);
+        assert_eq!(b.numeric_used(), Some(0));
+        drop(guard);
+        drop(original);
+        assert_eq!(b.used(), 0);
+    }
+    #[test]
+    fn numeric_guard_mixed_resize_and_stale_generation_refunds_are_conservative() {
+        let b = Budget::new(1000);
+        let mut mixed = b.reserve(100).unwrap();
+        let first = b.numeric_guard(50).unwrap();
+        mixed.resize(130).unwrap();
+        assert_eq!(b.numeric_used(), Some(30));
+        mixed.resize(80).unwrap();
+        assert_eq!(b.numeric_used(), Some(30));
+        mixed.resize(10).unwrap();
+        assert_eq!(b.numeric_used(), Some(10));
+        let old = b.reserve(20).unwrap();
+        drop(first);
+        let second = b.numeric_guard(40).unwrap();
+        let current = b.reserve(40).unwrap();
+        drop(old);
+        mixed.resize(0).unwrap();
+        assert_eq!(b.numeric_used(), Some(40));
+        assert!(b.reserve(1).is_err());
+        drop(current);
+        drop(second);
+        drop(mixed);
+        assert_eq!(b.used(), 0);
+    }
+    #[test]
+    fn numeric_guard_shared_threads_and_replacement_failure_keep_exact_charges() {
+        let b = Budget::new(1000);
+        let guard = b.numeric_guard(63).unwrap();
+        let values = Arc::new(std::sync::Mutex::new(Vec::new()));
+        std::thread::scope(|scope| {
+            for _ in 0..8 {
+                let b = b.clone();
+                let values = values.clone();
+                scope.spawn(move || {
+                    if let Ok(lease) = b.reserve(10) {
+                        values.lock().unwrap().push(lease);
+                    }
+                });
+            }
+        });
+        assert_eq!(values.lock().unwrap().len(), 6);
+        assert_eq!(b.numeric_used(), Some(60));
+        values.lock().unwrap().clear();
+        let mut vector = BudgetVec::<u64>::new(&b);
+        for n in 0..4 {
+            vector.push(n).unwrap();
+        }
+        assert!(vector.push(4).is_err());
+        assert_eq!(b.numeric_used(), Some(32));
+        assert_eq!(&*vector, &[0, 1, 2, 3]);
+        drop(vector);
+        assert_eq!(b.numeric_used(), Some(0));
+        drop(guard);
+        assert_eq!(b.used(), 0);
+    }
     #[test]
     fn growth_accounts_overlap_and_releases_failure() {
         let budget = Budget::new(63);

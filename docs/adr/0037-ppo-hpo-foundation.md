@@ -79,3 +79,7 @@ evidence and ancestry-resync corrections close its two blocking findings.
 Root verifies255isolated and167post-integration cases plus project static checks.
 The per-user admission receipt is operational process evidence, not training or
 evaluation qualification; concrete runtime/campaign composition remains pending.
+Native Source3b is now scoped engineering-ready after both independent reviews,
+actual private FFI array/lifetime checks and package/source correspondence. Root
+reruns172Rust checks and five private release Model4/admission/view cases. This
+does not activate the installed extension or complete the integrated HPO gate.

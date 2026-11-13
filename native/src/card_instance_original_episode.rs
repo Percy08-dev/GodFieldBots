@@ -47,6 +47,11 @@ impl CardInstanceNativeSession {
         self.final_slot_operation(CardInstanceOperation::Recorded(collection))?;
         self.original_episode_idle()?;
         let core = self.core()?;
+        if core.inputs.format.hpo() {
+            return Err(Error::contract(
+                "HPO payload uses its guarded cohort profile, not legacy recorded16 exports",
+            ));
+        }
         core.recorded_export_preconditions(collection)?;
         if episode >= 16 || self.payload.upgrade().is_some() || core.inputs.stage.is_some() {
             return Err(Error::contract(

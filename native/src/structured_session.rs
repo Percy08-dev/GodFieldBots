@@ -1219,8 +1219,73 @@ pub(crate) struct CohortSession {
     numeric: Option<crate::json::Document>,
     expected_arrays: Option<crate::json::Document>,
     recorded_episodes: Option<crate::json::Document>,
+    numeric_guard: Option<Arc<crate::budget::NumericGuard>>,
 }
 impl CohortSession {
+    fn ensure_numeric_guard(&mut self) -> Result<()> {
+        if self.inputs.format.hpo() && self.numeric_guard.is_none() {
+            let limit = self.inputs.parents[0]
+                .state
+                .root
+                .require("effective_config")?
+                .require("hpo_spec")?
+                .require("operating")?
+                .require("numeric_budget_bytes")?
+                .integer(1, i64::MAX as i128)? as usize;
+            self.numeric_guard = Some(self.inputs.budget.numeric_guard(limit)?);
+        }
+        Ok(())
+    }
+    fn abort_empty_numeric_guard(&mut self) {
+        if self.inputs.stage.is_none() && self.inputs.budget.numeric_used() == Some(0) {
+            self.numeric_guard.take();
+        }
+    }
+    fn used_decisions(&self, index: usize) -> Result<usize> {
+        let source = self.inputs.collections.get(index).ok_or(Error::Closed)?;
+        if self.inputs.format.hpo() {
+            Ok(source
+                .proof
+                .root
+                .require("selection")?
+                .require("used_decisions")?
+                .integer(0, source.accepted_learner as i128)? as usize)
+        } else {
+            Ok(source.accepted_learner)
+        }
+    }
+    pub(crate) fn open5(
+        plan: &[u8],
+        provider: Option<Arc<dyn crate::logical_artifacts::LogicalArtifactProvider>>,
+        budget: Arc<Budget>,
+        control: Control,
+        source_bytes: usize,
+        record_bytes: usize,
+        scratch_bytes: usize,
+        chunk_bytes: usize,
+    ) -> Result<Self> {
+        let mut inputs = crate::structured_source::OriginalInputs::open5(
+            plan,
+            provider,
+            budget,
+            control,
+            source_bytes,
+            record_bytes,
+            scratch_bytes,
+            chunk_bytes,
+        )?;
+        let controls = inputs.controls()?;
+        Ok(Self {
+            inputs,
+            controls,
+            phase: Phase::Scanned,
+            numeric_permit: None,
+            numeric: None,
+            expected_arrays: None,
+            recorded_episodes: None,
+            numeric_guard: None,
+        })
+    }
     pub(crate) fn open4(
         plan: &[u8],
         provider: Arc<dyn crate::logical_artifacts::LogicalArtifactProvider>,
@@ -1250,6 +1315,7 @@ impl CohortSession {
             numeric: None,
             expected_arrays: None,
             recorded_episodes: None,
+            numeric_guard: None,
         })
     }
     pub(crate) fn is_closed(&self) -> bool {
@@ -1330,6 +1396,7 @@ impl CohortSession {
             numeric: None,
             expected_arrays: None,
             recorded_episodes: None,
+            numeric_guard: None,
         })
     }
     pub(crate) fn check(&self) -> Result<()> {
@@ -1461,6 +1528,11 @@ impl CohortSession {
             ));
         }
         self.admitted_corrected_work()?;
+        if self.inputs.format.hpo() {
+            return Err(Error::contract(
+                "HPO pending facts require additive authorize_hpo",
+            ));
+        }
         let max = self
             .controls
             .summary
@@ -1488,11 +1560,62 @@ impl CohortSession {
         self.phase = Phase::Authorized;
         Ok(())
     }
+    pub(crate) fn authorize_hpo(&mut self, encoded: &[u8]) -> Result<BudgetVec<u8>> {
+        self.transition_owner_check()?;
+        if !self.inputs.format.hpo() || self.phase != Phase::Scanned {
+            self.check()?;
+            return Err(Error::contract(
+                "one HPO pending authorization in the SAME scanned session required",
+            ));
+        }
+        self.admitted_corrected_work()?;
+        let maximum = self
+            .controls
+            .summary
+            .root
+            .require("authorization_max_bytes")?
+            .integer(1, 64i128 << 20)? as usize;
+        if encoded.len() > maximum {
+            return Err(Error::resource(
+                "HPO authorization exceeds bounded original wire",
+            ));
+        }
+        let request = json::parse(encoded, &self.inputs.budget, &self.inputs.control)?;
+        let (controls, proofs) = self.inputs.authorize_hpo(&self.controls, &request.root)?;
+        let result = json::canonical(
+            &controls.summary.root,
+            &self.inputs.budget,
+            &self.inputs.control,
+        )?;
+        if result.len() > 64 * 1024 * 1024 {
+            return Err(Error::resource(
+                "HPO final control summary exceeds wire limit",
+            ));
+        }
+        self.inputs.recheck()?;
+        for (source, proof) in self.inputs.collections.iter_mut().zip(proofs) {
+            source.proof = proof;
+        }
+        self.controls = controls;
+        self.phase = Phase::Authorized;
+        Ok(result)
+    }
     pub(crate) fn export(&mut self) -> Result<(BudgetVec<u8>, crate::structured_staging::Banks)> {
         let collection = self.export_preconditions()?;
         let corrected = self.inputs.format.corrected();
         self.admitted_corrected_work()?;
+        self.ensure_numeric_guard()?;
         self.inputs.recheck()?;
+        if self.inputs.format.hpo() {
+            self.inputs.stage = Some(crate::structured_staging::Stage::new(
+                self.inputs.budget.clone(),
+                self.inputs.scratch_bytes,
+                self.inputs.chunk_bytes,
+                self.inputs.control.clone(),
+            )?);
+            let episodes = self.inputs.restage_recorded3(collection)?;
+            self.inputs.collections[collection].episodes = episodes;
+        }
         self.export_selected(collection, false)
     }
     fn export_selected(
@@ -1501,6 +1624,7 @@ impl CohortSession {
         recorded: bool,
     ) -> Result<(BudgetVec<u8>, crate::structured_staging::Banks)> {
         let corrected = self.inputs.format.corrected();
+        let hpo = self.inputs.format.hpo();
         let source = &self.inputs.collections[collection];
         let model = source
             .model
@@ -1529,7 +1653,9 @@ impl CohortSession {
         let mut metadata = json::object([
             (
                 "architecture_identity",
-                json::text(&(if corrected {
+                json::text(&(if hpo {
+                    crate::structured_controls::hpo::architecture
+                } else if corrected {
                     crate::structured_controls::architecture3
                 } else {
                     crate::structured_controls::architecture
@@ -1565,7 +1691,16 @@ impl CohortSession {
             ),
             (
                 "decision_count",
-                json::integer(source.accepted_learner as i128),
+                json::integer(if hpo {
+                    source
+                        .proof
+                        .root
+                        .require("selection")?
+                        .require("used_decisions")?
+                        .integer(0, i64::MAX as i128)?
+                } else {
+                    source.accepted_learner as i128
+                }),
             ),
             (
                 "episodes",
@@ -1579,6 +1714,30 @@ impl CohortSession {
                 )?,
             ),
         ]);
+        if hpo {
+            metadata.as_object_mut().unwrap().insert(
+                "training_recipe".into(),
+                self.inputs.parents[0]
+                    .state
+                    .root
+                    .require("effective_config")?
+                    .require("hpo_spec")?
+                    .require("training_recipe")?
+                    .clone(),
+            );
+            metadata.as_object_mut().unwrap().insert(
+                "selection".into(),
+                source.proof.root.require("selection")?.clone(),
+            );
+            metadata.as_object_mut().unwrap().insert(
+                "expected_optimizer_step_delta".into(),
+                source
+                    .proof
+                    .root
+                    .require("expected_optimizer_step_delta")?
+                    .clone(),
+            );
+        }
         for (key, value) in declaration.root.object()? {
             metadata
                 .as_object_mut()
@@ -1642,8 +1801,14 @@ impl CohortSession {
                 .as_object_mut()
                 .unwrap()
                 .remove("control_fingerprint");
-            payload["schema_version"] = json::integer(2);
-            payload["kind"] = json::text(if recorded {
+            payload["schema_version"] = json::integer(if hpo { 3 } else { 2 });
+            payload["kind"] = json::text(if hpo {
+                if recorded {
+                    "card-instance-hpo-recorded-cohort-payload"
+                } else {
+                    "card-instance-hpo-cohort-payload"
+                }
+            } else if recorded {
                 "card-instance-recorded-cohort-payload"
             } else {
                 "card-instance-cohort-payload"
@@ -1701,6 +1866,7 @@ impl CohortSession {
     ) -> Result<(BudgetVec<u8>, crate::structured_staging::Banks)> {
         self.recorded_export_preconditions(index)?;
         self.admitted_corrected_work()?;
+        self.ensure_numeric_guard()?;
         self.inputs.recheck()?;
         self.inputs.stage = Some(crate::structured_staging::Stage::new(
             self.inputs.budget.clone(),
@@ -1733,6 +1899,7 @@ impl CohortSession {
         }
         drop(stage);
         self.recorded_episodes.take();
+        self.numeric_guard.take();
         self.phase = if recorded {
             Phase::Authorized
         } else {
@@ -1770,7 +1937,7 @@ impl CohortSession {
                 crate::structured_source::ScanMode::Live { collection, .. } => collection,
                 _ => return Err(Error::contract("historical update prohibited")),
             };
-            if self.inputs.collections[collection].accepted_learner == 0 {
+            if self.used_decisions(collection)? == 0 {
                 self.check()?;
                 return Err(Error::contract("empty cohort cannot update"));
             }
@@ -1904,6 +2071,21 @@ impl CohortSession {
             .numeric_permit
             .take()
             .ok_or_else(|| Error::contract("one-use numeric append permit absent"))?;
+        let hpo = self.inputs.format.hpo();
+        let recipe = if hpo {
+            Some(
+                self.inputs.parents[parent]
+                    .state
+                    .root
+                    .require("effective_config")?
+                    .require("hpo_spec")?
+                    .require("training_recipe")?
+                    .clone(),
+            )
+        } else {
+            None
+        };
+        let used = self.used_decisions(collection)?;
         let source = &self.inputs.collections[collection];
         let model = &source.model.as_ref().ok_or(Error::Closed)?.root;
         let declaration = &self.controls.declarations[collection]
@@ -1935,17 +2117,39 @@ impl CohortSession {
             "layout_signature",
         ];
         required.extend(declaration.object()?.keys().map(String::as_str));
+        if hpo {
+            required.extend([
+                "training_recipe",
+                "selection",
+                "expected_optimizer_step_delta",
+            ]);
+        }
         v.closed(&required, &[])?;
-        v.require("schema_version")?.integer(4, 4)?;
+        v.require("schema_version")?
+            .integer(if hpo { 5 } else { 4 }, if hpo { 5 } else { 4 })?;
         if v.require("kind")?.string()? != "structured-rollout"
             || v.require("architecture_identity")?.string()?
-                != crate::structured_controls::architecture3(model, &b, &c)?
+                != (if hpo {
+                    crate::structured_controls::hpo::architecture
+                } else {
+                    crate::structured_controls::architecture3
+                })(model, &b, &c)?
             || v.require("action_config_hash")?
                 != source.manifest.root.require("action_config_hash")?
-            || v.require("decision_count")?.integer(0, i32::MAX as i128)?
-                != source.accepted_learner as i128
+            || v.require("decision_count")?.integer(0, i32::MAX as i128)? != used as i128
         {
             return Err(Error::contract("numeric4 model/config/decision mismatch"));
+        }
+        if hpo {
+            if v.require("training_recipe")? != recipe.as_ref().ok_or(Error::Closed)?
+                || v.require("selection")? != source.proof.root.require("selection")?
+                || v.require("expected_optimizer_step_delta")?
+                    != source.proof.root.require("expected_optimizer_step_delta")?
+            {
+                return Err(Error::contract(
+                    "numeric5 full recipe/selection/delta differs from SAME authorized originals",
+                ));
+            }
         }
         crate::structured_controls::game_binding3(v, &b, &c)?;
         for (key, value) in declaration.object()? {
@@ -2071,18 +2275,32 @@ impl CohortSession {
         self.inputs.recheck()?;
         let b = self.inputs.budget.clone();
         let c = self.inputs.control.clone();
-        let count = self.inputs.collections[collection].accepted_learner;
+        let hpo = self.inputs.format.hpo();
+        let count = self.used_decisions(collection)?;
         let before = self.inputs.parents[parent]
             .state
             .root
             .require("optimizer_steps")?
             .integer(0, i32::MAX as i128)? as usize;
+        let delta = if hpo {
+            self.inputs.collections[collection]
+                .proof
+                .root
+                .require("expected_optimizer_step_delta")?
+                .integer(1, i64::MAX as i128)? as usize
+        } else {
+            4 * ((count + 127) / 128)
+        };
         let after = before
-            .checked_add(4 * ((count + 127) / 128))
+            .checked_add(delta)
             .ok_or_else(|| Error::resource("optimizer count overflow"))?;
         {
             let original_parent = &mut self.inputs.parents[parent];
-            crate::structured_controls::verify_derived_artifact3(
+            (if hpo {
+                crate::structured_controls::hpo::verify_derived_artifact
+            } else {
+                crate::structured_controls::verify_derived_artifact3
+            })(
                 &mut original_parent.sources,
                 &original_parent.state.root,
                 generation,
@@ -2095,14 +2313,26 @@ impl CohortSession {
         self.inputs.stage.take();
         self.inputs.recheck()?;
         let numeric = self.numeric.as_ref().ok_or(Error::Closed)?;
-        let receipt = json::object([
+        let mut receipt = json::object([
             (
                 "schema_version",
-                json::integer(if self.inputs.format.packed() { 2 } else { 1 }),
+                json::integer(if hpo {
+                    3
+                } else if self.inputs.format.packed() {
+                    2
+                } else {
+                    1
+                }),
             ),
             (
                 "kind",
-                json::text(if self.inputs.format.packed() {
+                json::text(if hpo {
+                    if self.inputs.format.packed() {
+                        "card-instance-hpo-packed-source-prepared"
+                    } else {
+                        "card-instance-hpo-source-prepared"
+                    }
+                } else if self.inputs.format.packed() {
                     "card-instance-packed-source-prepared"
                 } else {
                     "card-instance-source-prepared"
@@ -2143,6 +2373,32 @@ impl CohortSession {
             ),
             ("optimizer_steps", json::integer(after as i128)),
         ]);
+        if hpo {
+            for (key, value) in [
+                (
+                    "collected_decisions",
+                    json::integer(self.inputs.collections[collection].accepted_learner as i128),
+                ),
+                ("used_decisions", json::integer(count as i128)),
+                (
+                    "expected_optimizer_step_delta",
+                    json::integer(delta as i128),
+                ),
+                (
+                    "selection_sha256",
+                    json::text(&crate::structured_controls::digest(
+                        self.inputs.collections[collection]
+                            .proof
+                            .root
+                            .require("selection")?,
+                        &b,
+                        &c,
+                    )?),
+                ),
+            ] {
+                receipt.as_object_mut().unwrap().insert(key.into(), value);
+            }
+        }
         let bytes = json::canonical(&receipt, &b, &c)?;
         self.phase = Phase::Prepared;
         Ok(bytes)
@@ -2165,14 +2421,27 @@ impl CohortSession {
         }
         self.admitted_corrected_work()?;
         self.inputs.recheck()?;
+        let hpo = self.inputs.format.hpo();
         let receipt = json::object([
             (
                 "schema_version",
-                json::integer(if self.inputs.format.packed() { 2 } else { 1 }),
+                json::integer(if hpo {
+                    3
+                } else if self.inputs.format.packed() {
+                    2
+                } else {
+                    1
+                }),
             ),
             (
                 "kind",
-                json::text(if self.inputs.format.packed() {
+                json::text(if hpo {
+                    if self.inputs.format.packed() {
+                        "card-instance-hpo-packed-source-checked"
+                    } else {
+                        "card-instance-hpo-source-checked"
+                    }
+                } else if self.inputs.format.packed() {
                     "card-instance-packed-source-read-finalized"
                 } else {
                     "card-instance-source-read-finalized"
@@ -2266,13 +2535,20 @@ impl CardInstanceNativeSession {
         scratch_bytes: usize,
         chunk_bytes: usize,
     ) -> Result<Self> {
-        if budget.limit() > 12usize * 1024 * 1024 * 1024
+        if plan.len() > 65536 {
+            return Err(Error::resource("corrected plan bounded wire required"));
+        }
+        let hpo = {
+            let parsed = json::parse(plan, &budget, &control)?;
+            parsed.root.get("schema_version").and_then(Value::as_i64) == Some(5)
+        };
+        if (!hpo && budget.limit() > 12usize * 1024 * 1024 * 1024)
             || source_bytes == 0
             || source_bytes > 64 * 1024 * 1024
             || record_bytes == 0
             || record_bytes > source_bytes
             || scratch_bytes == 0
-            || scratch_bytes > 12usize * 1024 * 1024 * 1024
+            || (!hpo && scratch_bytes > 12usize * 1024 * 1024 * 1024)
             || chunk_bytes == 0
             || chunk_bytes > 64 * 1024 * 1024
         {
@@ -2284,7 +2560,18 @@ impl CardInstanceNativeSession {
             drop(core);
             Ok(())
         })?;
-        let core = if let Some(provider) = provider {
+        let core = if hpo {
+            CohortSession::open5(
+                plan,
+                provider,
+                budget.clone(),
+                control,
+                source_bytes,
+                record_bytes,
+                scratch_bytes,
+                chunk_bytes,
+            )?
+        } else if let Some(provider) = provider {
             CohortSession::open4(
                 plan,
                 provider,
@@ -2325,11 +2612,19 @@ impl CardInstanceNativeSession {
     pub(crate) fn control_summary(&self) -> Result<BudgetVec<u8>> {
         self.core()?.summary()
     }
+    pub(crate) fn is_hpo(&self) -> bool {
+        self.core
+            .as_ref()
+            .is_some_and(|core| core.inputs.format.hpo())
+    }
     pub(crate) fn original_config_inputs(&self, parent: usize) -> Result<BudgetVec<u8>> {
         self.core()?.original_config_inputs(parent)
     }
     pub(crate) fn authorize(&mut self, encoded: &[u8]) -> Result<()> {
         self.core_mut()?.authorize(encoded)
+    }
+    pub(crate) fn authorize_hpo(&mut self, encoded: &[u8]) -> Result<BudgetVec<u8>> {
+        self.core_mut()?.authorize_hpo(encoded)
     }
     pub(crate) fn recheck(&self) -> Result<()> {
         self.core()?.recheck()
@@ -2340,14 +2635,26 @@ impl CardInstanceNativeSession {
             self.core_mut()?.phase = Phase::Failed;
             return Err(error);
         }
-        let lease = match self.budget.reserve(1024) {
+        self.core_mut()?.ensure_numeric_guard()?;
+        let mut lease = match self.budget.reserve(1024) {
             Ok(lease) => lease,
             Err(error) => {
                 self.core_mut()?.phase = Phase::Failed;
+                self.core_mut()?.abort_empty_numeric_guard();
                 return Err(error);
             }
         };
-        let (metadata, banks) = self.core_mut()?.export()?;
+        let (metadata, banks) = match self.core_mut()?.export() {
+            Ok(value) => value,
+            Err(error) => {
+                drop(lease);
+                self.core_mut()?.abort_empty_numeric_guard();
+                return Err(error);
+            }
+        };
+        if let Some(guard) = self.core()?.numeric_guard.as_ref() {
+            lease.retain_numeric_guard(guard.clone());
+        }
         let guard = Arc::new(());
         self.payload = Arc::downgrade(&guard);
         Ok(CardInstancePayload {
@@ -2368,14 +2675,26 @@ impl CardInstanceNativeSession {
             self.core_mut()?.phase = Phase::Failed;
             return Err(error);
         }
-        let lease = match self.budget.reserve(1024) {
+        self.core_mut()?.ensure_numeric_guard()?;
+        let mut lease = match self.budget.reserve(1024) {
             Ok(lease) => lease,
             Err(error) => {
                 self.core_mut()?.phase = Phase::Failed;
+                self.core_mut()?.abort_empty_numeric_guard();
                 return Err(error);
             }
         };
-        let (metadata, banks) = self.core_mut()?.export_recorded_cohort(index)?;
+        let (metadata, banks) = match self.core_mut()?.export_recorded_cohort(index) {
+            Ok(value) => value,
+            Err(error) => {
+                drop(lease);
+                self.core_mut()?.abort_empty_numeric_guard();
+                return Err(error);
+            }
+        };
+        if let Some(guard) = self.core()?.numeric_guard.as_ref() {
+            lease.retain_numeric_guard(guard.clone());
+        }
         let guard = Arc::new(());
         self.payload = Arc::downgrade(&guard);
         Ok(CardInstancePayload {
@@ -2892,6 +3211,7 @@ mod card_instance_lifecycle_primitives {
             numeric: None,
             expected_arrays: None,
             recorded_episodes: None,
+            numeric_guard: None,
         };
         let retirement = crate::retirement::Retirement::start(&b, |core: CohortSession| {
             drop(core);
@@ -3413,7 +3733,12 @@ impl CardInstanceNativeSession {
                     }
                     CardInstanceOperation::Begin => {
                         core.phase == Phase::NumericBound
-                            && matches!(core.inputs.mode,crate::structured_source::ScanMode::Live{collection,..} if core.inputs.collections[collection].accepted_learner>0)
+                            && match core.inputs.mode {
+                                crate::structured_source::ScanMode::Live { collection, .. } => {
+                                    core.used_decisions(collection)? > 0
+                                }
+                                _ => false,
+                            }
                     }
                     CardInstanceOperation::Prepare => {
                         core.phase == Phase::Updating

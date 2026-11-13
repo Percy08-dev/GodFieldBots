@@ -14,10 +14,15 @@ pub(super) fn manifest(
     role: CorrectedCollectionRole,
 ) -> Result<()> {
     require(
-        m.require("schema_version")?.integer(5, 5)? == 5
+        m.require("schema_version")?.integer(
+            if role.hpo() { 6 } else { 5 },
+            if role.hpo() { 6 } else { 5 },
+        )? == if role.hpo() { 6 } else { 5 }
             && field(m, "status")? == "complete"
             && field(m, "collection_role")?
-                == if role.final64() {
+                == if role.hpo() {
+                    "hpo-ppo-batch"
+                } else if role.final64() {
                     "ppo-final-validation"
                 } else {
                     "ppo-batch"
@@ -30,7 +35,7 @@ pub(super) fn manifest(
     controls::actions3(actions, b, c)?;
     for (key, expected) in [
         ("input_recipe", "participant-structured-v2"),
-        ("model_version", "3"),
+        ("model_version", if role.hpo() { "4" } else { "3" }),
         ("candidate_codec", "candidate-columns-v2"),
     ] {
         require(
@@ -85,9 +90,35 @@ pub(super) fn manifest(
                 "schedule_digest",
                 "policy_registry_digest",
             ],
-            &[],
+            if role.hpo() {
+                &["selection_context"]
+            } else {
+                &[]
+            },
         )?;
-        let generation = integer(link, "collection_generation", 0, 999)?;
+        let generation = integer(
+            link,
+            "collection_generation",
+            0,
+            if role.hpo() { i64::MAX as i128 } else { 999 },
+        )?;
+        if role.hpo() {
+            let selection_context = link.require("selection_context")?;
+            controls::hpo::context(selection_context)?;
+            require(
+                selection_context
+                    .require("batch")?
+                    .integer(generation as i128, generation as i128)?
+                    == generation as i128
+                    && selection_context.require("learning_seed")? == state.require("seed")?
+                    && selection_context.require("decision_budget")?
+                        == state
+                            .require("effective_config")?
+                            .require("hpo_spec")?
+                            .require("decision_budget")?,
+                "HPO original selection context differs from parent",
+            )?;
+        }
         require(
             link.require("parent_run_id")? == state.require("run_id")?
                 && field(link, "parent_run_path")?
@@ -358,6 +389,19 @@ mod packed_index_tests {
 }
 // Typed registry validation never selects a PPO learner.
 fn retained_registry(m: &Value, actions: &Value, b: &Arc<Budget>, c: &Control) -> Result<()> {
+    // The registry kernel is also used by metadata-only old Tree3 diagnostics.
+    // Only an explicit Collection6 selects the new HPO registry contract; full
+    // Source admission has already required the exact collection version.
+    let hpo = match m.get("schema_version") {
+        None => false,
+        Some(version) => version.integer(5, 6)? == 6,
+    };
+    if hpo {
+        require(
+            m.get("tree_inputs").is_none(),
+            "HPO collection cannot adopt Tree inputs",
+        )?;
+    }
     let registry = m.require("policy_bindings")?.object()?;
     let mut expected_neural = BTreeSet::new();
     let mut expected_tree = BTreeSet::new();
@@ -396,6 +440,8 @@ fn retained_registry(m: &Value, actions: &Value, b: &Arc<Budget>, c: &Control) -
             let raw = m.require(key)?.require("policies")?.require(label)?;
             let actual = if tree {
                 controls::tree3::metadata(raw, actions, b, c)?
+            } else if hpo {
+                controls::hpo::neural_metadata(raw, actions, b, c)?
             } else {
                 controls::neural_metadata3(raw, actions, b, c)?
             };
@@ -414,7 +460,20 @@ fn retained_registry(m: &Value, actions: &Value, b: &Arc<Budget>, c: &Control) -
         }
     }
     require(
-        expected_neural.len() <= 6,
+        expected_neural.len()
+            <= if hpo {
+                integer(
+                    m.require("config")?
+                        .require("hpo_spec")?
+                        .require("operating")?,
+                    "opponent_pool_size",
+                    1,
+                    i64::MAX as i128,
+                )?
+                .saturating_add(1)
+            } else {
+                6
+            },
         "original neural registry capacity exceeded",
     )?;
     for (key, expected) in [

@@ -9,6 +9,8 @@ use std::sync::Arc;
 
 #[path = "card_instance_source.rs"]
 mod card_instance;
+#[path = "hpo_source.rs"]
+mod hpo;
 use crate::structured_controls::SourceFormat;
 pub(crate) fn episode_digest(
     classification: &Value,
@@ -325,13 +327,21 @@ use std::{
 pub(crate) enum CorrectedCollectionRole {
     PpoBatch16,
     Final64 { pending: bool },
+    HpoBatch { games: usize },
 }
 impl CorrectedCollectionRole {
     pub(crate) fn final64(self) -> bool {
         matches!(self, Self::Final64 { .. })
     }
     pub(crate) fn games(self) -> usize {
-        if self.final64() { 64 } else { 16 }
+        match self {
+            Self::Final64 { .. } => 64,
+            Self::HpoBatch { games } => games,
+            Self::PpoBatch16 => 16,
+        }
+    }
+    pub(crate) fn hpo(self) -> bool {
+        matches!(self, Self::HpoBatch { .. })
     }
     pub(crate) fn manifest(self) -> &'static str {
         if matches!(self, Self::Final64 { pending: true }) {
@@ -357,6 +367,7 @@ pub(crate) struct CollectionScan {
     pub learner_label: Option<String>,
     pub model: Option<Document>,
     pub accepted_learner: usize,
+    pub learner_counts: Vec<usize>,
     _metadata: BudgetVec<Lease>,
 }
 // Preserve S1's explicit nullable management-field semantics, not descriptor defaults.
@@ -697,6 +708,42 @@ pub(crate) fn inspect_card_instance_collection(
         None,
     )
 }
+
+fn inspect_hpo_collection(
+    directory: &Path,
+    parent: (&Path, &Value),
+    limits: &CollectionLimits,
+    stage: Option<&mut Stage>,
+    budget: Arc<Budget>,
+    control: Control,
+    format: SourceFormat,
+    registry: Option<Arc<crate::logical_artifacts::Registry>>,
+) -> Result<CollectionScan> {
+    require(format.hpo(), "explicit native HPO Source format required")?;
+    let games = integer(
+        parent
+            .1
+            .require("effective_config")?
+            .require("hpo_spec")?
+            .require("training_recipe")?,
+        "collection_games",
+        8,
+        65536,
+    )?;
+    require(games % 8 == 0, "HPO whole paired collection required")?;
+    inspect_collection_inner(
+        directory,
+        Some(parent),
+        limits,
+        stage,
+        budget,
+        control,
+        None,
+        format,
+        CorrectedCollectionRole::HpoBatch { games },
+        registry,
+    )
+}
 pub(crate) fn inspect_final64_collection(
     directory: &Path,
     parent: (&Path, &Value),
@@ -791,9 +838,22 @@ fn inspect_collection_inner(
     let manifest = sources.json(&root.join(role.manifest()))?;
     let m = &manifest.root;
     let corrected = format.corrected();
-    let schema = m
-        .require("schema_version")?
-        .integer(if corrected { 5 } else { 3 }, if corrected { 5 } else { 4 })?;
+    let schema = m.require("schema_version")?.integer(
+        if format.hpo() {
+            6
+        } else if corrected {
+            5
+        } else {
+            3
+        },
+        if format.hpo() {
+            6
+        } else if corrected {
+            5
+        } else {
+            4
+        },
+    )?;
     let cfg = m.require(if corrected {
         "config"
     } else {
@@ -1004,12 +1064,21 @@ fn inspect_collection_inner(
                     "learner_seats",
                 ],
                 if corrected {
-                    &["schedule_digest", "policy_registry_digest"]
+                    if format.hpo() {
+                        &[
+                            "schedule_digest",
+                            "policy_registry_digest",
+                            "selection_context",
+                        ]
+                    } else {
+                        &["schedule_digest", "policy_registry_digest"]
+                    }
                 } else {
                     &[]
                 },
             )?;
-            link.require("collection_generation")?.integer(0, 1000)?;
+            link.require("collection_generation")?
+                .integer(0, if format.hpo() { i64::MAX as i128 } else { 1000 })?;
         }
         for key in ["parent_run_id", "parent_run_path", "batch_id"] {
             link.require(key)?.string()?;
@@ -1018,7 +1087,8 @@ fn inspect_collection_inner(
             || (!corrected && field(m, "collection_kind")? == "ppo_batch")
         {
             require(
-                specs.len() == 16 && m.require("schedule")?.array()?.len() == 8,
+                specs.len() == role.games()
+                    && m.require("schedule")?.array()?.len() == role.games() / 2,
                 "PPO batch requires all eight original swapped pairs",
             )?;
         }
@@ -1136,6 +1206,7 @@ fn inspect_collection_inner(
     let mut learner_label = None;
     let mut learner_model = None;
     let mut accepted_learner = 0;
+    let mut learner_counts = Vec::new();
     let mut accepted_total = 0;
     if tree.is_some() {
         require(
@@ -1375,7 +1446,13 @@ fn inspect_collection_inner(
             if selected {
                 require(
                     field(input.header_value(), "model_version")?
-                        == if corrected { "3" } else { "2" }
+                        == if format.hpo() {
+                            "4"
+                        } else if corrected {
+                            "3"
+                        } else {
+                            "2"
+                        }
                         && ["mlp", "gru", "transformer"]
                             .contains(&field(input.header_value(), "model_id")?),
                     "learner role must be a neural model2",
@@ -1403,6 +1480,7 @@ fn inspect_collection_inner(
                     format,
                 )?);
                 accepted_learner += input.accepted_count();
+                learner_counts.push(input.accepted_count());
                 if role.final64() {
                     staged.push(json::object([
                         ("episode_index", json::integer((digests.len() - 1) as i128)),
@@ -1588,6 +1666,7 @@ fn inspect_collection_inner(
         learner_label,
         model: learner_model,
         accepted_learner,
+        learner_counts,
         _metadata,
     })
 }
@@ -1967,6 +2046,26 @@ pub(crate) struct OriginalInputs {
     _plan: Document,
     _metadata: BudgetVec<Lease>,
 }
+
+// Component tests use actual saved CPU originals but cannot claim production
+// Rust/HPO backend admission. This scoped switch does not exist in a release
+// build and skips only that admission check, never records, custody or phases.
+#[cfg(test)]
+thread_local! {
+    static UNADMITTED_HPO_COMPONENT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+#[cfg(test)]
+pub(crate) fn unadmitted_hpo_component<T>(f: impl FnOnce() -> T) -> T {
+    assert!(!UNADMITTED_HPO_COMPONENT.replace(true));
+    struct Reset;
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            UNADMITTED_HPO_COMPONENT.set(false);
+        }
+    }
+    let _reset = Reset;
+    f()
+}
 pub(crate) fn owned_relative(root: &Path, value: &Value) -> Result<PathBuf> {
     let text = value.string()?;
     let path = Path::new(text);
@@ -2033,10 +2132,70 @@ impl OriginalInputs {
         scratch_bytes: usize,
         chunk_bytes: usize,
     ) -> Result<Self> {
+        Self::open_artifacts_context(
+            encoded,
+            provider,
+            budget,
+            control,
+            source_bytes,
+            record_bytes,
+            scratch_bytes,
+            chunk_bytes,
+            SourceFormat::PackedCorrected,
+        )
+    }
+    pub(crate) fn open5(
+        encoded: &[u8],
+        provider: Option<Arc<dyn crate::logical_artifacts::LogicalArtifactProvider>>,
+        budget: Arc<Budget>,
+        control: Control,
+        source_bytes: usize,
+        record_bytes: usize,
+        scratch_bytes: usize,
+        chunk_bytes: usize,
+    ) -> Result<Self> {
+        if let Some(provider) = provider {
+            Self::open_artifacts_context(
+                encoded,
+                provider,
+                budget,
+                control,
+                source_bytes,
+                record_bytes,
+                scratch_bytes,
+                chunk_bytes,
+                SourceFormat::PackedHpo,
+            )
+        } else {
+            Self::open_context(
+                encoded,
+                budget,
+                control,
+                source_bytes,
+                record_bytes,
+                scratch_bytes,
+                chunk_bytes,
+                SourceFormat::Hpo,
+                None,
+            )
+        }
+    }
+    fn open_artifacts_context(
+        encoded: &[u8],
+        provider: Arc<dyn crate::logical_artifacts::LogicalArtifactProvider>,
+        budget: Arc<Budget>,
+        control: Control,
+        source_bytes: usize,
+        record_bytes: usize,
+        scratch_bytes: usize,
+        chunk_bytes: usize,
+        format: SourceFormat,
+    ) -> Result<Self> {
         require(encoded.len() <= 65536, "plan4 bounded wire required")?;
         let plan = crate::logical_artifacts::parse(encoded, &budget, &control)?;
         let p = &plan.root;
-        p.require("schema_version")?.integer(4, 4)?;
+        let version = if format.hpo() { 5 } else { 4 };
+        p.require("schema_version")?.integer(version, version)?;
         let live = field(p, "mode")? == "live_cohort";
         p.closed(
             &[
@@ -2077,9 +2236,15 @@ impl OriginalInputs {
                 .to_str()
                 .ok_or_else(|| Error::contract("nonUTF8 registered original root"))?;
             require(
-                name.len() == 12
-                    && name.starts_with("batch-")
-                    && name[6..].bytes().all(|c| c.is_ascii_digit()),
+                if format.hpo() {
+                    name.strip_prefix("batch-")
+                        .and_then(|raw| raw.parse::<i64>().ok())
+                        .is_some_and(|number| number >= 0 && name == format!("batch-{number:06}"))
+                } else {
+                    name.len() == 12
+                        && name.starts_with("batch-")
+                        && name[6..].bytes().all(|c| c.is_ascii_digit())
+                },
                 "registered original root must be prescribed parent batch",
             )?;
         }
@@ -2091,7 +2256,7 @@ impl OriginalInputs {
             record_bytes,
             scratch_bytes,
             chunk_bytes,
-            SourceFormat::PackedCorrected,
+            format,
             Some(registry),
         )
     }
@@ -2119,14 +2284,18 @@ impl OriginalInputs {
             "structured Source plan cannot be entirely empty",
         )?;
         p.require("schema_version")?.integer(
-            if format.packed() {
+            if format.hpo() {
+                5
+            } else if format.packed() {
                 4
             } else if format.corrected() {
                 3
             } else {
                 2
             },
-            if format.packed() {
+            if format.hpo() {
+                5
+            } else if format.packed() {
                 4
             } else if format.corrected() {
                 3
@@ -2213,7 +2382,9 @@ impl OriginalInputs {
                 parent_paths.insert(sources.root.clone()),
                 "duplicate original parent directory",
             )?;
-            let summary = if format.packed() {
+            let summary = if format.hpo() {
+                crate::structured_controls::hpo::parent(&mut sources, format.packed())?
+            } else if format.packed() {
                 crate::structured_controls::parent4(&mut sources)?
             } else if format.corrected() {
                 crate::structured_controls::parent3(&mut sources)?
@@ -2299,7 +2470,12 @@ impl OriginalInputs {
         // from the caller's optional explicit selection list.
         let mut committed: BudgetVec<CommittedSource> = BudgetVec::new(&budget);
         for (pi, parent) in parents.iter_mut().enumerate() {
-            let count = integer(&parent.state.root, "updates", 0, 1000)?;
+            let count = integer(
+                &parent.state.root,
+                "updates",
+                0,
+                if format.hpo() { i64::MAX as i128 } else { 1000 },
+            )?;
             for generation in 1..=count {
                 control.check()?;
                 let record = parent.sources.json(
@@ -2351,17 +2527,25 @@ impl OriginalInputs {
                 field(&parent.state.root, "status")? == "running",
                 "live cohort requires running original parent",
             )?;
-            let generation = integer(&parent.state.root, "updates", 0, 999)?;
+            let generation = integer(
+                &parent.state.root,
+                "updates",
+                0,
+                if format.hpo() { i64::MAX as i128 } else { 999 },
+            )?;
             if format.corrected() {
+                let admitted = field(
+                    parent
+                        .state
+                        .root
+                        .require("effective_config")?
+                        .require("preprocessing")?,
+                    "backend",
+                )? == "rust";
+                #[cfg(test)]
+                let admitted = admitted || (format.hpo() && UNADMITTED_HPO_COMPONENT.get());
                 require(
-                    field(
-                        parent
-                            .state
-                            .root
-                            .require("effective_config")?
-                            .require("preprocessing")?,
-                        "backend",
-                    )? == "rust",
+                    admitted,
                     "live corrected native provider requires recorded Rust backend",
                 )?;
             }
@@ -2388,7 +2572,7 @@ impl OriginalInputs {
         } else {
             ScanMode::Historical
         };
-        let mut stage = if live {
+        let mut stage = if live && !format.hpo() {
             Some(Stage::new(
                 budget.clone(),
                 scratch_bytes,
@@ -2425,7 +2609,13 @@ impl OriginalInputs {
             )?;
             let first = peek.json(&peek.root.join("manifest.json"))?;
             if first.root.get("schema_version").and_then(Value::as_i64)
-                == Some(if format.corrected() { 5 } else { 4 })
+                == Some(if format.hpo() {
+                    6
+                } else if format.corrected() {
+                    5
+                } else {
+                    4
+                })
             {
                 require(
                     selected == Some(index)
@@ -2441,7 +2631,25 @@ impl OriginalInputs {
                 ));
             }
             let parent = pi.map(|pi| (&*parents[pi].directory, &parents[pi].state.root));
-            let mut scan = if format.packed() {
+            let mut scan = if format.hpo() {
+                inspect_hpo_collection(
+                    directory,
+                    parent.ok_or_else(|| Error::contract("HPO original parent missing"))?,
+                    &CollectionLimits {
+                        source_bytes,
+                        record_bytes,
+                    },
+                    if selected == Some(index) {
+                        stage.as_mut()
+                    } else {
+                        None
+                    },
+                    budget.clone(),
+                    control.clone(),
+                    format,
+                    registry.clone(),
+                )?
+            } else if format.packed() {
                 inspect_collection_inner(
                     directory,
                     parent,
@@ -2522,12 +2730,25 @@ impl OriginalInputs {
                         .root
                         .require(if format.corrected() { "linkage" } else { "ppo" })?
                         .require("collection_generation")?
-                        .integer(0, 999)?
-                        == entry.update.root.require("generation")?.integer(1, 1000)? - 1,
+                        .integer(0, if format.hpo() { i64::MAX as i128 } else { 999 })?
+                        == entry
+                            .update
+                            .root
+                            .require("generation")?
+                            .integer(1, if format.hpo() { i64::MAX as i128 } else { 1000 })?
+                            - 1,
                     "committed original source generation differs",
                 )?;
                 require(
-                    if format.packed() {
+                    if format.hpo() {
+                        hpo::original_facts_equal(
+                            &scan.proof.root,
+                            entry.update.root.require("source_proof")?,
+                            format.packed(),
+                            &budget,
+                            &control,
+                        )?
+                    } else if format.packed() {
                         crate::logical_artifacts::same_proof(
                             &scan.proof.root,
                             entry.update.root.require("source_proof")?,
@@ -2644,7 +2865,17 @@ pub(crate) struct Controls {
     pub fingerprint: String,
 }
 impl OriginalInputs {
+    pub(crate) fn authorize_hpo(
+        &self,
+        pending: &Controls,
+        request: &Value,
+    ) -> Result<(Controls, Vec<Document>)> {
+        hpo::authorize(self, pending, request)
+    }
     pub(crate) fn controls(&mut self) -> Result<Controls> {
+        if self.format.hpo() {
+            return hpo::pending(self);
+        }
         if self.format.corrected() {
             return self.controls3();
         }
@@ -3586,6 +3817,7 @@ impl OriginalInputs {
             learner_label: Some("unadmitted-not-a-policy".into()),
             model: Some(doc(model, &budget, &control)?),
             accepted_learner: 1,
+            learner_counts: vec![1],
             _metadata: BudgetVec::new(&budget),
         })?;
         let _ = declaration; // Caller installs this separately in its private Controls fixture.
@@ -3621,6 +3853,7 @@ impl OriginalInputs {
     /// No owner, file identity baseline or original record is adopted/replaced.
     pub(crate) fn restage_recorded3(&mut self, index: usize) -> Result<Document> {
         self.recheck()?;
+        let hpo = self.format.hpo();
         let source = self
             .collections
             .get_mut(index)
@@ -3692,13 +3925,26 @@ impl OriginalInputs {
                     &Value::Null,
                     b,
                     c,
-                    SourceFormat::Corrected,
+                    self.format,
                 )?);
                 episodes.push(parsed.staged_episode(owner, stage, episodes.len(), &Value::Null)?);
             }
         }
         require(
-            digests == source.digests && episodes.len() == 16,
+            digests == source.digests
+                && episodes.len()
+                    == if hpo {
+                        integer(
+                            m.require("config")?
+                                .require("hpo_spec")?
+                                .require("training_recipe")?,
+                            "collection_games",
+                            8,
+                            65536,
+                        )?
+                    } else {
+                        16
+                    },
             "recorded restage ordered original correspondence differs",
         )?;
         let result = doc(&json::array(episodes), b, c)?;

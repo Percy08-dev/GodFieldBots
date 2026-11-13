@@ -567,7 +567,8 @@ def _publish_payload(directory: Path, *, model: Any, classification: Json, decla
 def _write_prepared_payload(directory: Path, metadata: Json, arrays: dict[str, Any], model: Any, *,
                             resident_bytes: int, extra_owned_bytes: int, max_owned_bytes: int,
                             shard_bytes: int = MAX_ARRAY_BYTES, check: Callable[[], None],
-                            reserve: Callable[[int], None], _context: _RolloutContext | None = None) -> Json:
+                            reserve: Callable[[int], None], _context: _RolloutContext | None = None,
+                            _hpo: Json | None = None) -> Json:
     """Private native payload publication, never a Source authority boundary.
 
     Input buffers stay owned by the caller's live leases through publication.
@@ -578,7 +579,7 @@ def _write_prepared_payload(directory: Path, metadata: Json, arrays: dict[str, A
     from gf_models.structured_sealed import checksum
     layout = LEGACY_LAYOUT if _context is None else _context.layout
     validate_config(model, layout=layout)
-    semantic_keys = SEMANTIC_KEYS if _context is None else SEMANTIC_KEYS_V3
+    semantic_keys = SEMANTIC_KEYS_V3 - {'reward_policy_version'} if _hpo is not None else SEMANTIC_KEYS if _context is None else SEMANTIC_KEYS_V3
     poll = check
     poll()
     limit = min(max_owned_bytes, model.resources.max_owned_bytes)
@@ -592,7 +593,11 @@ def _write_prepared_payload(directory: Path, metadata: Json, arrays: dict[str, A
         reserve(size)
     admit(resident_bytes + 65536)
     class_keys = {'action_contract', 'purpose', 'synthetic_capacity'} if _context is None else set(_context.classification())
-    closed(metadata, {'architecture_identity', 'action_config_hash', 'policy_version', 'decision_count', 'episodes'} | class_keys | set(semantic_keys))
+    closed(metadata, {'architecture_identity', 'action_config_hash', 'policy_version', 'decision_count', 'episodes'} | class_keys | set(semantic_keys) | (set(_hpo) if _hpo is not None else set()))
+    if _hpo is not None:
+        for key, expected in _hpo.items():
+            if canonical(metadata[key]) != canonical(expected):
+                raise ContractError('prepared numeric5 full recipe/selection/delta mismatch')
     classification: Json = {key: metadata[key] for key in class_keys}
     from gf_common.action_contract import parse_action_contract
     contract = parse_action_contract(classification['action_contract']) if _context is None else _context.actions.action_contract
@@ -604,7 +609,9 @@ def _write_prepared_payload(directory: Path, metadata: Json, arrays: dict[str, A
             _context.check(value)
     binding_check(classification)
     declaration = {key: metadata[key] for key in semantic_keys}
-    if _context is None:
+    if _hpo is not None:
+        expected_semantics = _hpo_semantics(model, _context)
+    elif _context is None:
         validate_recorded_semantics(declaration, model)
         expected_semantics = semantics(model)
     else:
@@ -751,7 +758,12 @@ def _write_prepared_payload(directory: Path, metadata: Json, arrays: dict[str, A
         if episode['has_targets']:
             take(prefix + '.advantage', np.float32, (count,))
             take(prefix + '.target', np.float32, (count,))
-    if total != metadata['decision_count'] or total and metadata['policy_version'] is None:
+    decision_count = total
+    if _hpo is not None:
+        from gf_training.hpo_collection import replay_selection
+        replay_selection(_hpo['selection'], tuple(len(episode['frames']) for episode in metadata['episodes']))
+        decision_count = _hpo['selection']['used_decisions']
+    if decision_count != metadata['decision_count'] or total and metadata['policy_version'] is None:
         raise ContractError('prepared decision count/policy identity mismatch')
     if not planned:
         take('empty', np.uint8, (0,))
@@ -760,9 +772,9 @@ def _write_prepared_payload(directory: Path, metadata: Json, arrays: dict[str, A
     create_output_directory(directory, 'rollout.json')
     return _publish_payload(directory, model=model, classification=classification, declaration=declaration,
         action_config_hash=metadata['action_config_hash'], policy_version=metadata['policy_version'],
-        decision_count=total, episodes=metadata['episodes'], planned=planned, resident_bytes=resident_bytes,
+        decision_count=decision_count, episodes=metadata['episodes'], planned=planned, resident_bytes=resident_bytes,
         planning_bytes=planning_bytes, planned_bytes=planned_bytes, shard_bytes=shard_bytes,
-        admit=admit, poll=poll, check=check, _context=_context)
+        admit=admit, poll=poll, check=check, _context=_context, _hpo=_hpo)
 
 def _write_prepared_game_payload(directory: Path, metadata: Json, arrays: dict[str, Any], model: ModelConfigV3, *,
                                  actions: ActionConfigV3, rules: CardInstanceRules, resident_bytes: int,

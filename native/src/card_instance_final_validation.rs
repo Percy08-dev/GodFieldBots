@@ -437,6 +437,10 @@ impl Slot {
 impl CardInstanceNativeSession {
     pub(crate) fn final_parent_preconditions(&self) -> Result<()> {
         let core = self.core()?;
+        require(
+            !core.inputs.format.hpo(),
+            "HPO exploratory source cannot enter the legacy final64 profile",
+        )?;
         core.transition_owner_check()?;
         require(
             core.phase == Phase::Authorized
@@ -1093,6 +1097,7 @@ mod tests {
             numeric: None,
             expected_arrays: None,
             recorded_episodes: None,
+            numeric_guard: None,
         };
         let retirement = crate::retirement::Retirement::start(&b, |core: CohortSession| {
             drop(core);

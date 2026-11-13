@@ -220,3 +220,43 @@ scoring/failure refusal. No GPU, Simulator, Optuna campaign or concrete Source/
 coordinator wiring was executed in this component scope. The Source exact-ledger
 allowance, complete resource projection and actual pipeline cleanup integration
 remain required before production acceptance.
+
+## Native Source3b private-candidate acceptance
+
+Both independent correctness and implementation-conformance reviews are READY
+with no blocking findings. Native uses exact Hpo/PackedHpo plan5, pending/final
+controls5 and additive authorize_hpo on SAME Source/provider/session/custody.
+Python independently derives schedule/subset/GAE/normalization; native only
+validates facts and structural correspondence. Selected/collected/optimizer
+deltas remain distinct through bind/begin/prepare. Test-only CPU admission is
+cfg(test), with no release API or flag. Historical deletion receipts and active
+policy dependencies retain their exact meaning.
+
+The generation-tagged numeric guard lives inside existing Budget/Lease. Source
+refunds cannot credit numeric allocations; mixed shrink is conservative, stale/
+nested guards refuse, and actual NumPy base owners keep charges after session
+close. Private positive cases cover all3Model4 kinds, plain/packed complete
+originals, partial/all/one/empty decisions, every regenerated numeric array,
+authorization faults, source mutation/cancellation, pruning, quotas and views.
+
+Independent correctness runs20selected private-release FFI cases,5guard and3held-
+original/live Rust cases, scoped static checks and package hashes. Architecture
+inspects phase/math/ownership boundaries and independently rehashes binaries.
+Root fresh private release command
+`GFB_HPO_NATIVE_CANDIDATE=/tmp/gfb-hpo-native-wheel-extracted/gf_native/gf_native.cpython-314-x86_64-linux-gnu.so
+.venv/bin/python -m pytest tests/test_hpo_native.py -q -k
+'public_hpo_admission or three_models_partial or view_keeps'
+--disable-warnings --maxfail=1 --tb=short` passes5cases in25.17s.
+Root `cargo test --manifest-path native/Cargo.toml --lib --offline` with the
+documented test-only libpython link flags passes172checks/7explicit opt-in ignored
+in39.08s. Root full project Ruff passes; full mypy passes188source files.
+
+Private wheel SHA7295d1c779f80a2d550ab7590d68df4fcbbe7665f04b0b2f912ea666cbd9cb79;
+ELF SHA8164d5c07969e95d7a501ced62e31cdecd618dde1080b4b85ad79f5218ee9e85;
+embedded source5db7cf1519722ba5df1aaac9b5a806cce1e6b0d5374720dfb5b38532d993d4b0.
+RECORD/stub methods/Cargo.lock/profile/allocator/current source checks match.
+The private capability is exact; the installed old extension remains
+SHA9b1377daac7c93c97a4f267d5f20c2204eb37401a53daa1275019614d1b6767f
+with no HPO marker. No install or heavyweight old-data proof was run for this
+scoped acceptance. Genuine integrated CUDA/native/live/common-loop/Simulator
+and whole-HPO acceptance remain pending runtime4/5b integration and final freeze.

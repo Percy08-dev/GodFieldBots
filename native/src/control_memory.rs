@@ -19,6 +19,7 @@ pub struct ControlMemory {
     authorization: usize,
     proof: usize,
     data_started: bool,
+    hpo_finalized: bool,
     released: bool,
     lease: Option<Lease>,
 }
@@ -47,6 +48,25 @@ impl ControlMemory {
                 "serialized authorization exceeds pre-admitted bound",
             ));
         }
+        Ok(())
+    }
+    pub fn hpo_final_summary(&mut self, length: usize) -> Result<()> {
+        if self.released || self.data_started || self.hpo_finalized || length == 0 {
+            return Err(Error::contract(
+                "one HPO final control delivery before data required",
+            ));
+        }
+        let combined = self
+            .summary
+            .checked_add(length)
+            .ok_or_else(|| Error::resource("HPO control tree size overflow"))?;
+        let lease = self
+            .lease
+            .as_mut()
+            .ok_or_else(|| Error::contract("HPO pending control admission required"))?;
+        lease.resize(reservation_bytes(combined, self.authorization)?)?;
+        self.summary = combined;
+        self.hpo_finalized = true;
         Ok(())
     }
     pub fn begin_data(&mut self) -> Result<()> {
@@ -88,6 +108,19 @@ impl ControlMemory {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn hpo_final_control_tree_retains_pending_and_final_until_actual_release() {
+        let b = Budget::new(128 << 20);
+        let mut value = ControlMemory::default();
+        value.summary(&b, 1024, 8192).unwrap();
+        value.hpo_final_summary(2048).unwrap();
+        assert_eq!(value.reserved(), reservation_bytes(3072, 8192).unwrap());
+        assert!(value.hpo_final_summary(2048).is_err());
+        value.begin_data().unwrap();
+        assert_eq!(value.reserved(), reservation_bytes(3072, 0).unwrap());
+        value.release();
+        assert_eq!(b.used(), 0);
+    }
     #[test]
     fn control_lease_survives_core_and_exports_until_explicit_release() {
         let budget = Budget::new(128 * 1024 * 1024);
