@@ -397,3 +397,28 @@ No tests were weakened. Implementer251cases pass in4.64s; root fresh251pass in
 10existing boundary cases plus four direct nonconcrete Model4 refusals and reports
 READY. Final current-source proof/package refresh, whole Python completion and
 the predeclared actual functional protocol remain required after this correction.
+
+## Native test-module isolation correction
+
+The next whole run reaches4021PASS/211explicit SKIP, then waits in the existing
+native constructor-cancellation test. Root identifies a test-only module leak:
+the HPO candidate fixture replaced sys.modules[gf_native] and never restored it.
+The legacy test patched its module captured during collection, while the runtime
+loaded the leaked candidate, so its constructor-entered event never fired.
+Root verifies the owned pytest PID/arguments and interrupts that process normally;
+the preserved partial run exits2 after1219.19s and is not a whole-suite pass.
+
+The fixture now restores the exact previous module in finally, including module
+creation/execution failures. Four failure cases cover existing/absent entries.
+The legacy test bounds its hook wait, checks the actual module identity and
+closes its owner after joining, preserving all original cancellation/lock checks.
+The real same-process HPO-admission→legacy-cancellation sequence passes on HOST;
+the combined two modules pass90cases in71.66s. Root and independent correctness
+each run6covering cases in0.21s; Ruff/diff pass and independent review is READY.
+Ordinary-sandbox later asyncio Future wakeup behavior is recorded separately and
+does not justify a production lifecycle change or a claimed specific cause.
+
+Only tests change; all197application runtime files and the native binary remain
+identical to the0f4f300 package proof. The following full run enables the existing
+pytest faulthandler timeout diagnostic and retains the same test scope. Actual
+GPU/Simulator protocol and whole-suite completion remain pending at this point.

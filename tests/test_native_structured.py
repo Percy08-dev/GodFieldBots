@@ -245,6 +245,8 @@ def test_expired_or_insufficient_budget_has_no_result(tmp_path):
 
 def test_async_constructor_cancellation_joins_before_releasing_parent_lock(tmp_path, monkeypatch):
     from gf_training.lineage import run_lock
+    from gf_training.native_backend import load_native
+    assert load_native() is native
     root = tmp_path / 'parent'
     metadata_parent(root, model_defaults_v2().architecture())
     actual = native.StructuredParentControls
@@ -261,8 +263,12 @@ def test_async_constructor_cancellation_joins_before_releasing_parent_lock(tmp_p
         owner = NativeStructuredControls(root, SETTINGS, deadline=time.monotonic() + 60)
         task = asyncio.create_task(owner.__aenter__())
         try:
-            while not entered.is_set():
-                await asyncio.sleep(.001)
+            async with asyncio.timeout(5):
+                while not entered.is_set():
+                    if task.done():
+                        await task
+                        pytest.fail('native constructor completed without entering the patched callback')
+                    await asyncio.sleep(.001)
             task.cancel('original native constructor cancellation')
             await asyncio.sleep(.01)
             assert not task.done() and not finished.is_set()
@@ -277,6 +283,7 @@ def test_async_constructor_cancellation_joins_before_releasing_parent_lock(tmp_p
         finally:
             release.set()
             await asyncio.gather(task, return_exceptions=True)
+            await owner.aclose()
     asyncio.run(run())
 
 

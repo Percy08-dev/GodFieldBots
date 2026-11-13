@@ -31,11 +31,51 @@ def candidate():
     assert path.is_relative_to('/tmp')
     spec=importlib.util.spec_from_file_location('gf_native',path)
     assert spec is not None and spec.loader is not None
-    module=importlib.util.module_from_spec(spec)
-    sys.modules['gf_native']=module
-    spec.loader.exec_module(module)
-    assert callable(getattr(module.CardInstanceNativeSession,'authorize_hpo',None))
-    return module
+    absent=object()
+    previous=sys.modules.get('gf_native',absent)
+    try:
+        module=importlib.util.module_from_spec(spec)
+        sys.modules['gf_native']=module
+        spec.loader.exec_module(module)
+        assert callable(getattr(module.CardInstanceNativeSession,'authorize_hpo',None))
+        yield module
+    finally:
+        if previous is absent:
+            sys.modules.pop('gf_native',None)
+        else:
+            sys.modules['gf_native']=previous
+
+
+@pytest.mark.parametrize('present',[False,True])
+@pytest.mark.parametrize('failure',['create','execute'])
+def test_candidate_fixture_restores_exact_previous_module_on_loader_failure(tmp_path,monkeypatch,present,failure):
+    path=tmp_path/'unqualified-loader-failure.so'
+    path.touch()
+    monkeypatch.setenv('GFB_HPO_NATIVE_CANDIDATE',str(path))
+    previous=SimpleNamespace(origin='previous module object')
+    temporary=SimpleNamespace(origin='unqualified loader test')
+    if present:
+        monkeypatch.setitem(sys.modules,'gf_native',previous)
+    else:
+        monkeypatch.delitem(sys.modules,'gf_native',raising=False)
+    def fail(*args):
+        assert sys.modules['gf_native'] is temporary
+        raise ImportError('unqualified loader failure')
+    def create(*args):
+        if failure=='create':
+            sys.modules['gf_native']=temporary
+            fail()
+        return temporary
+    monkeypatch.setattr(importlib.util,'spec_from_file_location',
+        lambda *args:SimpleNamespace(loader=SimpleNamespace(exec_module=fail)))
+    monkeypatch.setattr(importlib.util,'module_from_spec',create)
+    fixture=candidate.__wrapped__()
+    with pytest.raises(ImportError,match='unqualified loader failure'):
+        next(fixture)
+    if present:
+        assert sys.modules['gf_native'] is previous
+    else:
+        assert 'gf_native' not in sys.modules
 
 
 @pytest.fixture(scope='module')
