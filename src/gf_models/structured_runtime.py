@@ -155,6 +155,13 @@ def admit_game_workers_v3(actions: ActionConfigV3, roles: tuple[RuntimePolicyBin
     integer(game_concurrency, 1, 2)
     integer(max_workers, 1, 4)
     integer(global_cuda_bytes, 1, 12 * 1024**3)
+    return _admit_game_workers(actions,roles,rules=rules,game_concurrency=game_concurrency,
+        global_cuda_bytes=global_cuda_bytes,max_workers=max_workers,learner_cuda_bytes=learner_cuda_bytes)
+
+
+def _admit_game_workers(actions: ActionConfigV3,roles: tuple[RuntimePolicyBinding,RuntimePolicyBinding],*,
+                        rules: CardInstanceRules,game_concurrency: int,global_cuda_bytes: int,
+                        max_workers: int,learner_cuda_bytes: int) -> Json:
     integer(learner_cuda_bytes, 0, global_cuda_bytes)
     if type(roles) is not tuple or len(roles) != 2 or any(type(role) is not RuntimePolicyBinding for role in roles):
         raise ContractError("joint admission requires both configured player roles")
@@ -168,6 +175,65 @@ def admit_game_workers_v3(actions: ActionConfigV3, roles: tuple[RuntimePolicyBin
         "workers": 2 * game_concurrency, "worker_resident_bytes": resident,
         "decision_temporary_bytes": temporary, "learner_cuda_bytes": learner_cuda_bytes,
         "peak_cuda_bytes": peak, "global_cuda_bytes": global_cuda_bytes, "max_workers": max_workers}
+
+
+def admit_hpo_game_workers(actions: ActionConfigV3,roles: tuple[RuntimePolicyBinding,RuntimePolicyBinding],*,
+                            rules: CardInstanceRules,game_concurrency: int,global_cuda_bytes: int,
+                            max_workers: int,learner_cuda_bytes: int=0) -> Json:
+    integer(game_concurrency,1,2)
+    integer(max_workers,1,4)
+    integer(global_cuda_bytes,1,2**63-1)
+    if type(roles) is not tuple or len(roles)!=2:
+        raise ContractError('HPO admission requires both atomic player roles')
+    for role in roles:
+        if type(role) is not RuntimePolicyBinding or role.policy_options is not None and role.policy_options.get('version')!='4':
+            raise ContractError('HPO runtime admits exact model4 or canonical baseline roles')
+    return _admit_game_workers(actions,roles,rules=rules,game_concurrency=game_concurrency,
+        global_cuda_bytes=global_cuda_bytes,max_workers=max_workers,learner_cuda_bytes=learner_cuda_bytes)
+
+
+def admit_hpo_training(actions: ActionConfigV3,model: ModelConfigV4,inference: InferenceBindingV2,
+                        tbptt_length: int,operating: Json,*,rules: CardInstanceRules) -> Json:
+    """Action-bound runtime entry to the shared pure HPO admission calculation."""
+    input_binding_game_v3(actions.action_contract,rules)
+    return hpo_training_admission(model,inference,tbptt_length,operating,
+        layout=layout_for_contract(actions.action_contract))
+
+
+def hpo_training_admission(model: ModelConfigV4,inference: InferenceBindingV2,tbptt_length: int,
+                            operating: Json,*,layout: StructuredLayout) -> Json:
+    """One conservative phase calculation for both CLI and actual runtime.
+
+    Parent Source remains live through child save and acknowledgement inspection.
+    The numeric allowance is retained conservatively too: deleting the worker's
+    rollout does not prove all request/selection/array metadata has disappeared.
+    """
+    if type(model) is not ModelConfigV4:
+        raise ContractError('explicit HPO Model4 required')
+    integer(tbptt_length,1,1024)
+    integer(operating['game_concurrency'],1,2)
+    integer(operating['max_participant_workers'],1,4)
+    integer(operating['managed_cuda_bytes'],1,2**63-1)
+    for name in ('managed_ram_bytes','parent_budget_bytes','source_budget_bytes','numeric_budget_bytes',
+            'save_budget_bytes','collector_budget_bytes'):
+        integer(operating[name],1,2**63-1)
+    learner=resource_estimate(model,inference,layout=layout,suffix_decisions=tbptt_length)['total_bytes']
+    worker=resource_estimate(model,inference,layout=layout,suffix_decisions=1)['total_bytes']
+    workers=2*operating['game_concurrency']
+    if workers>operating['max_participant_workers']:
+        raise ContractError('HPO concurrent roles exceed declared workers')
+    total=workers*worker
+    phases={'collection':operating['parent_budget_bytes']+learner+total+operating['collector_budget_bytes'],
+        'update':operating['parent_budget_bytes']+learner+operating['source_budget_bytes']+operating['numeric_budget_bytes'],
+        'save':operating['parent_budget_bytes']+learner+operating['source_budget_bytes']
+            +operating['numeric_budget_bytes']+operating['save_budget_bytes']}
+    peak_ram=max(phases.values())
+    peak_cuda=learner+total
+    if peak_ram>operating['managed_ram_bytes']: raise ContractError('joint HPO RAM demand exceeds managed budget')
+    if peak_cuda>operating['managed_cuda_bytes']: raise ContractError('joint HPO CUDA demand exceeds managed budget')
+    return {'recipe':'hpo-joint-process-envelope-v1','workers':workers,'learner_bytes':learner,'worker_bytes':total,
+        'ram_phases':phases,'peak_ram_bytes':peak_ram,'peak_cuda_bytes':peak_cuda,
+        'managed_ram_bytes':operating['managed_ram_bytes'],'managed_cuda_bytes':operating['managed_cuda_bytes']}
 
 
 def admit_planned_game_training_v3(actions: ActionConfigV3, model: ModelConfigV3,

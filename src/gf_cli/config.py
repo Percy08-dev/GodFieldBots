@@ -48,6 +48,7 @@ from gf_models.config import (
 from gf_models.structured_binding import (
     ConfiguredNeuralModelV2,
     ConfiguredNeuralModelV3,
+    ConfiguredNeuralModelV4,
     model_defaults_v2,
     model_defaults_v3,
 )
@@ -119,7 +120,7 @@ class ExperimentConfig:
     run: RunConfig | RunConfigV2 = field(default_factory=RunConfig)
     server: ServerConfig | ServerConfigV2 = field(default_factory=ServerConfig)
     actions: ActionConfig | ActionConfigV2 | ActionConfigV3 = field(default_factory=ActionConfig)
-    model: ModelConfig | MLPModelConfig | GRUModelConfig | TransformerModelConfig | ConfiguredNeuralModelV2 | ConfiguredNeuralModelV3 | ConfiguredTreeModelV2 | ConfiguredTreeModelV3 = field(default_factory=ModelConfig)
+    model: ModelConfig | MLPModelConfig | GRUModelConfig | TransformerModelConfig | ConfiguredNeuralModelV2 | ConfiguredNeuralModelV3 | ConfiguredNeuralModelV4 | ConfiguredTreeModelV2 | ConfiguredTreeModelV3 = field(default_factory=ModelConfig)
     opponent: ModelConfig | MLPModelConfig | GRUModelConfig | TransformerModelConfig | ConfiguredNeuralModelV2 | ConfiguredNeuralModelV3 | ConfiguredTreeModelV2 | ConfiguredTreeModelV3 = field(default_factory=ModelConfig)
     evaluation: EvaluationConfig = field(default_factory=EvaluationConfig)
     training: TrainingConfig | PPOTrainingConfig = field(default_factory=TrainingConfig)
@@ -159,6 +160,13 @@ class GroupPackExperimentConfig(ExperimentConfig):
 
 
 def require_storage_command(config: ExperimentConfig, command: str, *, standalone: bool = True) -> None:
+    if type(config.model) is ConfiguredNeuralModelV4:
+        from gf_cli.hpo_config import HPOExperimentConfig
+        if type(config) is not HPOExperimentConfig or command not in ('collect','evaluate') or standalone:
+            raise ContractError('HPO Model4 storage requires its concrete owned collector')
+        if config.run.split!=('validation' if command=='evaluate' else 'train'):
+            raise ContractError('HPO collector role differs from its exact runtime split')
+        return
     if not isinstance(config, GroupPackExperimentConfig):
         return
     if command == "validate":

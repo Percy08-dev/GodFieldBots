@@ -105,7 +105,7 @@ def test_structural_cpu_parent_cannot_become_production_source(tmp_path):
             deadline=time.monotonic()+60)
 
 
-def test_hpo_retirement_freezes_distinct_collected_used_and_nonlegacy_delta(issued):  # noqa: F811 - fixture imported above
+def test_hpo_retirement_freezes_distinct_collected_used_and_nonlegacy_delta(issued, monkeypatch):  # noqa: F811 - fixture imported above
     """Inert lifecycle owner, no collection or optimizer permission is created."""
     from gf_common.domain import canonical
     from gf_common.group_pack_game import storage_binding
@@ -113,6 +113,9 @@ def test_hpo_retirement_freezes_distinct_collected_used_and_nonlegacy_delta(issu
     from gf_training.hpo_collection import selection_for_counts
     old, original, reference = issued
     source = old.source
+    # This inert component fixture predates actual GPU-job authority. Bypass
+    # ONLY that new boundary; all original process/lease/delta/custody checks stay.
+    monkeypatch.setattr(type(source.online),'_require_hpo_job',lambda self: None)
     source.state.update(schema_version=5, run_variant='hpo-ppo-v1', model_version='4',
         storage_binding=storage_binding())
     source._hpo_selection = canonical(selection_for_counts((236,), learning_seed=17,

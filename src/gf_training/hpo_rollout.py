@@ -159,6 +159,33 @@ def read_hpo_rollout(directory: Path, expected_digest: str, model: ModelConfigV4
     from gf_training.structured_rollout import _hpo_semantics, _read_rollout
     validate_model_v4(model, layout=CORRECTED_CARD_INSTANCE_LAYOUT)
     training = hpo_training_config(asdict(training))
+    from gf_models.sharded_arrays import read_json, validate_bundle_metadata
+    from gf_training.hpo_artifacts import checked_phase_limits
+    from gf_training.structured_rollout import _read_reservation
+    numeric_limit=options.pop('numeric_budget_bytes',checked_phase_limits()['numeric_budget_bytes'])
+    integer(numeric_limit,1,2**63-1)
+    poll=options.get('check') or (lambda:None)
+    reserve=options.get('reserve') or (lambda _size:None)
+    poll()
+    manifest=read_json(directory/'rollout.json',expected_digest=expected_digest,max_owned_bytes=min(numeric_limit,12*1024**3))
+    descriptors=validate_bundle_metadata(manifest['data'],max_decoded_bytes=numeric_limit)
+    base=_read_reservation(manifest,descriptors)
+    snapshots={}
+    encoded=sidecar=0
+    for name in manifest['data']['files']:
+        poll()
+        info=(directory/name).lstat()
+        import stat
+        if not stat.S_ISREG(info.st_mode): raise ContractError('numeric5 requires regular admitted bundle files')
+        snapshots[name]=tuple(getattr(info,key) for key in ('st_dev','st_ino','st_size','st_mtime_ns','st_ctime_ns'))
+        if name.endswith('.npz'): encoded=max(encoded,info.st_size)
+        else: sidecar=max(sidecar,info.st_size)
+    scratch=32*(encoded+sidecar)+65536
+    if base+scratch>numeric_limit:
+        raise ContractError('HPO additional numeric decode envelope exceeded before arrays')
+    reserve(base+scratch)
+    options.update(original_manifest=manifest,snapshots=snapshots,encoded_scratch=scratch,
+        json_budget=max(1,numeric_limit-base-32*encoded))
     selection = checked_selection(expected_selection)
     context = _RolloutContext(actions, rules)
     hpo = {'training_recipe': asdict(training), 'selection': selection,

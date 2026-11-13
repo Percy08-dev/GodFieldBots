@@ -136,6 +136,13 @@ def require_hpo_production(state: Json) -> None:
     if (state['device'] != 'cuda:0' or state['execution']['inference']['binding']['device'] != 'cuda:0'
             or canonical(asdict(normalize_training_for_model(model.model_id, recipe))) != canonical(spec['training_recipe'])):
         raise ContractError('HPO production requires actual CUDA execution and normalized training recipe')
+    if spec['storage']['numeric_root']!=spec['storage']['parent_root']:
+        raise ContractError('HPO production currently requires colocated numeric and parent roots')
+    if state['effective_config']['run']['output_dir']!=spec['storage']['parent_root']:
+        raise ContractError('HPO production output root differs from sole storage spec')
+    storage=state['effective_config'].get('storage')
+    if storage is None or storage['budget_mib']*1024**2>spec['operating']['collector_budget_bytes']:
+        raise ContractError('HPO production requires packed originals within collector RAM envelope')
 
 
 def validate_hpo_parent(directory: Path, *, require_complete: bool = True, max_owned_bytes: int,
@@ -150,6 +157,9 @@ def validate_hpo_parent(directory: Path, *, require_complete: bool = True, max_o
             max_owned_bytes=max_owned_bytes - extra_owned_bytes, deadline=deadline))
         state, records = validate_hpo_chain(directory, require_complete=require_complete,
             max_owned_bytes=max_owned_bytes, deadline=deadline, extra_owned_bytes=extra_owned_bytes, scan=scan)
+        declared=Path(hpo_spec(state)['storage']['parent_root']).resolve()
+        if directory==declared or not directory.is_relative_to(declared):
+            raise ContractError('HPO source parent is outside its declared colocated root')
         _initial_schedule(state, records)
         require_hpo_production(state)
         scan.configure_packed(state)

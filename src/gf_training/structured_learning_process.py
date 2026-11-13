@@ -28,7 +28,7 @@ class StructuredLearningProcess(LearningProcess):
                  action_config_hash: str, resume_identity: str, *, action_contract: Any,
                  ledger: ReservationLedger, cuda_visible_devices: str | None, cleanup_deadline: float,
                  _actions: ActionConfigV3 | None = None, storage_binding: Json | None = None,
-                 _hpo_training: Any = None) -> None:
+                 _hpo_training: Any = None, _hpo_phase_limits: Json | None = None) -> None:
         super().__init__(directory, max_log_bytes)
         self.actions = _actions
         self.storage_binding = storage_binding
@@ -40,7 +40,7 @@ class StructuredLearningProcess(LearningProcess):
         if _hpo_training is not None:
             from gf_training.hpo_numeric_worker import wire_identity as hpo_identity
             self.identity = hpo_identity(model, _hpo_training, binding, action_config_hash, resume_identity,
-                actions=self.actions, cuda_visible_devices=self.visibility, storage_binding=storage_binding)
+                actions=self.actions, cuda_visible_devices=self.visibility, storage_binding=storage_binding,phase_limits=_hpo_phase_limits)
         else:
             self.identity = wire_identity(model, binding, action_config_hash, resume_identity,
                 action_contract=action_contract, purpose='component', synthetic_capacity=False,
@@ -237,7 +237,8 @@ class StructuredLearningProcess(LearningProcess):
         if self.hardware is not None and canonical(reply['hardware']) != canonical(self.hardware):
             raise ContractError('wire3 numerical hardware changed')
         output = Path(request['restore'] or request['output']) if command == 'initialize' else Path(request['output'])
-        scan = SealedScan(max_owned_bytes=self.model.resources.max_owned_bytes, deadline=deadline)
+        scan = SealedScan(max_owned_bytes=min(self.model.resources.max_owned_bytes,self.identity['phase_limits']['save_budget_bytes'])
+            if self.hpo_training is not None else self.model.resources.max_owned_bytes, deadline=deadline)
         if self.hpo_training is not None:
             from gf_models.structured_artifacts import adam_recipe
             from gf_models.structured_sealed import inspect_retained_game_artifact_v4

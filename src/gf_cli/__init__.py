@@ -323,10 +323,14 @@ async def _run_experiment(loaded: LoadedConfig, command: str, *, collection: Col
     if collection is None and structured:
         registry, labels = structured_bindings(config.model, config.opponent,actions=config.actions,deadline=preflight_deadline)
     elif collection is None:
-        from gf_models.structured_binding import ConfiguredNeuralModelV2, ConfiguredNeuralModelV3
+        from gf_models.structured_binding import (
+            ConfiguredNeuralModelV2,
+            ConfiguredNeuralModelV3,
+            ConfiguredNeuralModelV4,
+        )
         from gf_models.structured_tree_config import ConfiguredTreeModelV2, ConfiguredTreeModelV3
         assert isinstance(config.actions, ActionConfig)
-        assert not isinstance(config.model, (ConfiguredNeuralModelV2, ConfiguredNeuralModelV3, ConfiguredTreeModelV2, ConfiguredTreeModelV3))
+        assert not isinstance(config.model, (ConfiguredNeuralModelV2, ConfiguredNeuralModelV3, ConfiguredNeuralModelV4, ConfiguredTreeModelV2, ConfiguredTreeModelV3))
         assert not isinstance(config.opponent, (ConfiguredNeuralModelV2, ConfiguredNeuralModelV3, ConfiguredTreeModelV2, ConfiguredTreeModelV3))
         registry, labels = bindings(config.model, config.opponent, config.actions, deadline=preflight_deadline)
     else:

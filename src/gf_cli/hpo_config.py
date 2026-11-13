@@ -9,21 +9,27 @@ import hashlib
 import re
 import tomllib
 import uuid
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
-from gf_cli.config import LoadedConfig, load_config
+from gf_cli.config import (
+    GroupPackExperimentConfig,
+    GroupPackStorageConfig,
+    LoadedConfig,
+    RunConfigV2,
+    load_config,
+)
 from gf_common.card_instance import (
     CORRECTED_SIMULATOR_REVISION,
     ActionConfigV3,
     corrected_card_instance_contract,
 )
-from gf_common.domain import ContractError, Json, clone, closed, digest, integer
+from gf_common.domain import ContractError, Json, canonical, clone, closed, digest, integer
 from gf_common.structured_layout import CORRECTED_CARD_INSTANCE_LAYOUT, StructuredLayout
 from gf_models.hpo_config import model_config_v4, model_defaults_v4
-from gf_models.structured_binding import ConfiguredNeuralModelV3
-from gf_models.structured_config import InferenceBindingV2, ModelConfigV4, resource_estimate
+from gf_models.structured_binding import ConfiguredNeuralModelV3, ConfiguredNeuralModelV4
+from gf_models.structured_config import InferenceBindingV2, ModelConfigV4
 from gf_training.hpo_config import (
     HPOTrainingConfig,
     SearchSpace,
@@ -47,7 +53,7 @@ class HPOOperatingConfig:
     source_budget_bytes: int = 2 * GIB
     numeric_budget_bytes: int = 512 * 1024**2
     save_budget_bytes: int = 512 * 1024**2
-    collector_budget_bytes: int = 256 * 1024**2
+    collector_budget_bytes: int = 2 * GIB
     parent_budget_bytes: int = 256 * 1024**2
     max_updates: int = 1000
     inference_latest: int = 2
@@ -60,7 +66,7 @@ class HPOOperatingConfig:
 @dataclass(frozen=True)
 class HPOStorageConfig:
     parent_root: str = "runs/hpo"
-    numeric_root: str = "runs/hpo/numeric"
+    numeric_root: str = "runs/hpo"
     optuna_path: str = "runs/hpo/optuna.sqlite3"
     originals_root: str | None = None
     windows_c_root: str = "/mnt/c"
@@ -112,6 +118,83 @@ class LoadedHPOConfig:
     effective: Json
     sha256: str
     inputs: tuple[Json, ...]
+
+
+@dataclass(frozen=True)
+class HPOExperimentConfig(GroupPackExperimentConfig):
+    model: ConfiguredNeuralModelV4 = field(default_factory=ConfiguredNeuralModelV4)
+    hpo_spec: Json = field(default_factory=dict)
+
+
+def materialize_hpo_run(loaded_campaign: LoadedHPOConfig, settings: Any, *, learning_seed: int,
+                        run_id: str) -> LoadedConfig:
+    """Pure checked per-seed composition; filesystem/GPU work is caller-owned."""
+    from gf_common.preprocessing import preparation_config
+    from gf_models.config import PPOTrainingConfig
+    from gf_training.hpo_artifacts import save_estimate
+    from gf_training.hpo_config import EffectiveSettings
+    if type(loaded_campaign) is not LoadedHPOConfig or type(settings) is not EffectiveSettings:
+        raise ContractError('explicit loaded campaign and normalized effective settings required')
+    campaign=loaded_campaign.config
+    if settings.model.model_id!=campaign.model_id:
+        raise ContractError('effective model settings belong to a different HPO model study')
+    if learning_seed not in campaign.learning_seeds or type(learning_seed) is not int:
+        raise ContractError('run learning seed is outside declared campaign')
+    try:
+        if str(uuid.UUID(run_id))!=run_id: raise ValueError('noncanonical UUID')
+    except (ValueError,TypeError,AttributeError) as error:
+        raise ContractError('predeclared canonical run UUID required') from error
+    effective=effective_settings(settings.model,settings.training,{},layout=CORRECTED_CARD_INSTANCE_LAYOUT)
+    if effective.identity!=settings.identity or canonical(asdict(effective.training))!=canonical(asdict(settings.training)):
+        raise ContractError('HPO materialization requires canonical effective training')
+    operating=_operating(asdict(campaign.operating))
+    storage=campaign.storage
+    if storage.numeric_root!=storage.parent_root:
+        raise ContractError('HPO currently requires numeric_root==parent_root for colocated per-run numeric storage')
+    if save_estimate(effective.model)['additional_bytes']>operating.save_budget_bytes:
+        raise ContractError('HPO save envelope insufficient before GPU admission')
+    proposal=replace(campaign,model=effective.model,training=effective.training)
+    joint_resource_admission(proposal,layout=CORRECTED_CARD_INSTANCE_LAYOUT)
+    base=loaded_campaign.base.config
+    if type(base.model) is not ConfiguredNeuralModelV3 or not isinstance(base.run,RunConfigV2) or type(base.training) is not PPOTrainingConfig:
+        raise ContractError('HPO materialization requires the original corrected PPO base')
+    pack=base.storage if isinstance(base,GroupPackExperimentConfig) else GroupPackStorageConfig()
+    pack=replace(pack,db_root=storage.originals_root or pack.db_root)
+    if pack.budget_mib*1024**2>operating.collector_budget_bytes:
+        raise ContractError('actual packed collector RAM exceeds declared HPO collector envelope')
+    wall=campaign.run_wall_seconds
+    final=base.run.finalization_seconds
+    if not wall>final>0 or not 0<base.run.admission_seconds<base.run.execution_seconds:
+        raise ContractError('HPO base/request deadlines inconsistent')
+    if base.training.cleanup_seconds+base.run.report_reserve_seconds>final:
+        raise ContractError('HPO original learner cleanup/report reserves exceed finalization')
+    execute=wall-final
+    run=replace(base.run,name=run_id,output_dir=storage.parent_root,wall_seconds=wall,
+        execution_seconds=execute,admission_seconds=execute*base.run.admission_seconds/base.run.execution_seconds,
+        concurrency=operating.game_concurrency,global_cuda_budget_bytes=operating.managed_cuda_bytes,
+        max_participant_workers=operating.max_participant_workers)
+    source_mib=min(base.preprocessing.memory_budget_mib,operating.source_budget_bytes//1024**2)
+    if source_mib>12*1024:
+        raise ContractError('HPO current original snapshot codec supports at most12GiB; select a narrower base preprocessing envelope')
+    preprocessing=preparation_config(asdict(replace(base.preprocessing,memory_budget_mib=source_mib)))
+    training=replace(base.training,device='cuda:0',seeds=(learning_seed,),max_updates=operating.max_updates,
+        max_owned_bytes=storage.destination_capacity_bytes,admission_reservation_bytes=storage.admission_reservation_bytes)
+    if type(training) is not PPOTrainingConfig:
+        raise ContractError('ordinary runtime PPO controls required')
+    model=ConfiguredNeuralModelV4(**{name:getattr(effective.model,name) for name in effective.model.__dataclass_fields__},
+        inference=campaign.inference,cuda_visible_devices=base.model.cuda_visible_devices)
+    spec={'schema_version':1,'kind':'ppo-hpo-run','decision_budget':campaign.decision_budget,
+        'training_recipe':asdict(effective.training),'effective_settings_sha256':effective.identity,
+        'base_config_sha256':loaded_campaign.base.sha256,'campaign_config_sha256':loaded_campaign.sha256,
+        'study_identity':campaign.study_identity,'operating':asdict(operating),'storage':asdict(storage),
+        'selection_version':'hpo-endpoint-selection-v1','deadline_version':'hpo-deadline-v1',
+        'deadline_inputs':{'run_wall_seconds':wall,'base_wall_seconds':base.run.wall_seconds,
+            'base_admission_seconds':base.run.admission_seconds,'base_execution_seconds':base.run.execution_seconds,
+            'base_finalization_seconds':final}}
+    config=HPOExperimentConfig(run=run,server=base.server,actions=base.actions,model=model,opponent=base.opponent,
+        evaluation=base.evaluation,training=training,preprocessing=preprocessing,storage=pack,hpo_spec=spec)
+    raw=clone(asdict(config))
+    return LoadedConfig(config,raw,digest(raw),loaded_campaign.inputs)
 
 
 def _merge(base: Json, override: Any) -> Json:
@@ -243,25 +326,8 @@ def joint_resource_admission(config: HPOCampaignConfig, *, layout: StructuredLay
     limits = _operating(asdict(config.operating))
     recipe = normalize_training_for_model(config.model_id, config.training)
     model = model_config_v4(asdict(config.model), layout=layout)
-    learner = resource_estimate(model, config.inference, layout=layout,
-                                suffix_decisions=recipe.tbptt_length)["total_bytes"]
-    worker = resource_estimate(model, config.inference, layout=layout, suffix_decisions=1)["total_bytes"]
-    workers = 2 * limits.game_concurrency
-    worker_total = workers * worker
-    ram_phases = {
-        "collection": limits.parent_budget_bytes + learner + worker_total + limits.collector_budget_bytes,
-        "update": limits.parent_budget_bytes + learner + limits.source_budget_bytes + limits.numeric_budget_bytes,
-        "save": limits.parent_budget_bytes + learner + limits.save_budget_bytes,
-    }
-    peak_ram, peak_cuda = max(ram_phases.values()), learner + worker_total
-    if peak_ram > limits.managed_ram_bytes:
-        raise ContractError("joint HPO RAM demand exceeds managed budget")
-    if peak_cuda > limits.managed_cuda_bytes:
-        raise ContractError("joint HPO CUDA demand exceeds managed budget")
-    return {"recipe": "hpo-joint-process-envelope-v1", "workers": workers,
-        "learner_bytes": learner, "worker_bytes": worker_total, "ram_phases": ram_phases,
-        "peak_ram_bytes": peak_ram, "peak_cuda_bytes": peak_cuda,
-        "managed_ram_bytes": limits.managed_ram_bytes, "managed_cuda_bytes": limits.managed_cuda_bytes}
+    from gf_models.structured_runtime import hpo_training_admission
+    return hpo_training_admission(model,config.inference,recipe.tbptt_length,asdict(limits),layout=layout)
 
 
 def load_hpo_config(path: str | Path) -> LoadedHPOConfig:

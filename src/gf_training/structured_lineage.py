@@ -92,6 +92,7 @@ class _ChainScan(SealedScan):
         self._game_source_settings: Any = None
         self._game_source_extra_bytes = 0
         self._game_source_max_owned_bytes = max_owned_bytes
+        self._hpo_reference_snapshot: Any = None
 
     def admit_pool_controls(self) -> None:
         if self._packed_pool is not None and self.retained > self._pool_control_charge:
@@ -270,6 +271,19 @@ class _ChainScan(SealedScan):
 
 
     def finalize(self) -> None:
+        if self._hpo_reference_snapshot is not None:
+            identity, names = self._hpo_reference_snapshot
+            root = self.root/'evaluation-reference-receipts'
+            if identity is None:
+                if root.exists() or root.is_symlink():
+                    raise ContractError('HPO reference namespace appeared after snapshot')
+            else:
+                if _stat_identity(root.lstat()) != identity or root.is_symlink():
+                    raise ContractError('HPO reference namespace changed since snapshot')
+                with os.scandir(root) as entries:
+                    actual = tuple(sorted(entry.name for entry in entries if entry.is_dir(follow_symlinks=False)))
+                if actual != names:
+                    raise ContractError('HPO reference transaction inventory changed')
         for owner in self._packed_owners.values():
             owner.finalize()
         if self.artifact_snapshot is not None:
@@ -1006,6 +1020,50 @@ def _prune_parent(parent: Path, parent_fd: int, original_identity: tuple[int, in
     scan.check()
 
 
+def _retire_staged_file(parent: Path, parent_fd: int, original_parent: tuple[int, int], path: Path,
+                        source_fd: int, staging: str, stage_fd: int, name: str, expected: str,
+                        scan: _ChainScan, *, phase_info: Json | None = None) -> None:
+    """One verified held-original move/hash/private-unlink operation, shared by HPO."""
+    phase_info = {} if phase_info is None else phase_info
+    phase_info['phase'] = 'verify_public'
+    _prune_parent(parent, parent_fd, original_parent, scan)
+    _directory_entry(parent_fd, path.name, source_fd)
+    _directory_entry(parent_fd, staging, stage_fd)
+    held = None
+    try:
+        with scan.file(path / name, expected) as (original, before):
+            held = os.dup(original.fileno())
+        try:
+            os.stat(name, dir_fd=stage_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            pass
+        else:
+            raise ContractError('private staged target already exists')
+        phase_info['phase'] = 'rename_to_stage'
+        os.rename(name, name, src_dir_fd=source_fd, dst_dir_fd=stage_fd)
+        phase_info['phase'] = 'verify_moved'
+        _directory_entry(parent_fd, staging, stage_fd)
+        moved = os.stat(name, dir_fd=stage_fd, follow_symlinks=False)
+        current = os.fstat(held)
+        if (not stat.S_ISREG(moved.st_mode) or (moved.st_dev, moved.st_ino) != (before.st_dev, before.st_ino)
+                or (current.st_dev, current.st_ino, current.st_size, current.st_mtime_ns)
+                != (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
+                or _stat_identity(moved) != _stat_identity(current)):
+            raise ContractError('moved pruning object differs from verified original')
+        if _fd_hash(held, current.st_size, scan) != expected:
+            raise ContractError('moved pruning content differs from verified original')
+        if (_stat_identity(os.fstat(held)) != _stat_identity(moved)
+                or _stat_identity(os.stat(name, dir_fd=stage_fd, follow_symlinks=False)) != _stat_identity(moved)):
+            raise ContractError('staged pruning object changed during verification')
+        phase_info['phase'] = 'unlink_private'
+        _directory_entry(parent_fd, staging, stage_fd)
+        os.unlink(name, dir_fd=stage_fd)  # never unlink an untrusted public artifact basename.
+        scan.files.pop(path / name)
+    finally:
+        if held is not None:
+            os.close(held)
+
+
 def _prune_staged(directory: Path, path: Path, registry: Json, receipt: Json, targets: Json,
                   inference_sha: str, scan: _ChainScan) -> None:
     flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
@@ -1035,39 +1093,13 @@ def _prune_staged(directory: Path, path: Path, registry: Json, receipt: Json, ta
             target_name, phase = basename(name), 'verify_public'
             _directory_entry(parent_fd, path.name, source_fd)
             _directory_entry(parent_fd, staging, stage_fd)
-            held = None
+            phase_info: Json = {}
             try:
-                with scan.file(path / name, expected) as (original, before):
-                    held = os.dup(original.fileno())
-                try:
-                    os.stat(name, dir_fd=stage_fd, follow_symlinks=False)
-                except FileNotFoundError:
-                    pass
-                else:
-                    raise ContractError('private staged target already exists')
-                phase = 'rename_to_stage'
-                os.rename(name, name, src_dir_fd=source_fd, dst_dir_fd=stage_fd)
-                phase = 'verify_moved'
-                _directory_entry(parent_fd, staging, stage_fd)
-                moved = os.stat(name, dir_fd=stage_fd, follow_symlinks=False)
-                current = os.fstat(held)
-                if (not stat.S_ISREG(moved.st_mode) or (moved.st_dev, moved.st_ino) != (before.st_dev, before.st_ino)
-                        or (current.st_dev, current.st_ino, current.st_size, current.st_mtime_ns)
-                        != (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
-                        or _stat_identity(moved) != _stat_identity(current)):
-                    raise ContractError('moved pruning object differs from verified original')
-                if _fd_hash(held, current.st_size, scan) != expected:
-                    raise ContractError('moved pruning content differs from verified original')
-                if (_stat_identity(os.fstat(held)) != _stat_identity(moved)
-                        or _stat_identity(os.stat(name, dir_fd=stage_fd, follow_symlinks=False)) != _stat_identity(moved)):
-                    raise ContractError('staged pruning object changed during verification')
-                phase = 'unlink_private'
-                _directory_entry(parent_fd, staging, stage_fd)
-                os.unlink(name, dir_fd=stage_fd)  # never unlink an untrusted public artifact basename.
-                scan.files.pop(path / name)
-            finally:
-                if held is not None:
-                    os.close(held)
+                _retire_staged_file(parent, parent_fd, original_parent, path, source_fd,
+                    staging, stage_fd, name, expected, scan, phase_info=phase_info)
+            except BaseException:
+                phase = phase_info.get('phase', phase)
+                raise
         phase, target_name = 'verify_completion', None
         _directory_entry(parent_fd, path.name, source_fd)
         _directory_entry(parent_fd, staging, stage_fd)

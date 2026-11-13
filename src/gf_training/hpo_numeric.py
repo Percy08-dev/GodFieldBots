@@ -157,9 +157,9 @@ class HpoLearner(Learner):
             "suffix_decisions": suffix_decisions, "update_seconds": time.perf_counter() - started}
 
     def save(self, directory: Path, *, code_revision: str | None = None,
-             shard_bytes: int = MAX_ARRAY_BYTES) -> Json:
+             shard_bytes: int = MAX_ARRAY_BYTES, save_budget_bytes: int = 512*1024**2) -> Json:
         from gf_training.hpo_artifacts import save_learner
-        return save_learner(self, directory, code_revision=code_revision, shard_bytes=shard_bytes)
+        return save_learner(self, directory, code_revision=code_revision, shard_bytes=shard_bytes,save_budget_bytes=save_budget_bytes)
 
     def restore(self, directory: Path) -> None:
         from gf_training.hpo_artifacts import restore_learner

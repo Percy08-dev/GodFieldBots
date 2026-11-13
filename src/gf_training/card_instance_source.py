@@ -447,8 +447,19 @@ class _OnlineGameOwner:
     collection_generation: int | None = None
     formal_control: Any = None
     packed_batch: Any = None
+    hpo_job: Any = None
+
+    def _require_hpo_job(self) -> None:
+        from gf_training.lineage import require_hpo_run_owner
+        require_hpo_run_owner(self.ownership.directory,self.ownership)
+        from gf_training.hpo_gpu_lease import require_training_job
+        from gf_training.hpo_lineage import hpo_spec
+        op=hpo_spec(self.state)['operating']
+        require_training_job(self.hpo_job,ledger=self.ledger,run_id=self.state['run_id'],
+            global_cuda_bytes=op['managed_cuda_bytes'],max_workers=op['max_participant_workers'])
 
     def check(self, *, steps: int | None = None) -> None:
+        if _hpo(self.state): self._require_hpo_job()
         child, ledger = self.process, self.ledger
         lease = ledger.learner
         if (not self.active or _OWNED_LOCKS.get(self.ownership.directory) != self.ownership.token
@@ -466,14 +477,17 @@ class _OnlineGameOwner:
 def validate_owned_collection(plan: CollectionPlan, ledger: Any, *, max_owned_bytes: int,
                               deadline: float) -> _OnlineGameOwner:
     from gf_simulator_client.structured_resources import ReservationLedger
+    from gf_training.hpo_gpu_lease import _AuditedLedger
     from gf_training.hpo_learning_process import HpoLearningProcess
     from gf_training.structured_learning_process import GameLearningProcess
-    if type(ledger) is not ReservationLedger or ledger.learner is None or ledger.workers or ledger.updating:
+    if type(ledger) not in (ReservationLedger,_AuditedLedger) or ledger.learner is None or ledger.workers or ledger.updating:
         raise ContractError('online collection requires idle SAME learner ledger')
     child = ledger.learner._cleanup_owner
     if type(child) not in (GameLearningProcess, HpoLearningProcess) or type(getattr(child, 'online_owner', None)) is not _OnlineGameOwner:
         raise ContractError('online collection requires concrete wire4 live owner')
     owner = child.online_owner
+    if type(ledger) is _AuditedLedger and (type(child) is not HpoLearningProcess or not _hpo(owner.state)):
+        raise ContractError('audited HPO ledger cannot enter an ordinary Source')
     owner.check()
     generation = plan.linkage.get('collection_generation')
     if owner.collection_controls is None:
@@ -508,7 +522,8 @@ def validate_owned_collection(plan: CollectionPlan, ledger: Any, *, max_owned_by
         expected_identity = hpo_identity(model, hpo_training_config(hpo_spec(state)['training_recipe']),
             InferenceBindingV2(**state['execution']['learner']['binding']), digest(asdict(actions)),
             state['resume_identity'], actions=actions, cuda_visible_devices=state['execution']['learner']['cuda_visible_devices'],
-            storage_binding=state.get('storage_binding'))
+            storage_binding=state.get('storage_binding'),phase_limits={key:hpo_spec(state)['operating'][key]
+                for key in ('numeric_budget_bytes','save_budget_bytes')})
     if (canonical(child.identity) != canonical(expected_identity) or canonical(asdict(child.model)) != canonical(asdict(model))
             or canonical(asdict(child.binding)) != canonical(state['execution']['learner']['binding'])
             or child.visibility != state['execution']['learner']['cuda_visible_devices']
@@ -798,8 +813,15 @@ class _GameBatchSource:
             return self.native_inputs.publish_numeric(directory)
         assert self.snapshot is not None and self.records is not None
         extra = self.snapshot.extra_bytes_for(self.records) + self._selection_owned
+        predicted=_predicted_token_bytes(self.records)
+        numeric_limit=None
+        if _hpo(self.state):
+            from gf_training.hpo_lineage import hpo_spec
+            numeric_limit=hpo_spec(self.state)['operating']['numeric_budget_bytes']
+            if predicted>numeric_limit:
+                raise ContractError('HPO numeric token envelope exceeded before allocation')
         self.snapshot.reserve(self.snapshot.additional_bytes((self.records, self.model))
-            + _predicted_token_bytes(self.records) + self._selection_owned)
+            + predicted + self._selection_owned)
         rollout: Any
         extra_context: Json
         if _hpo(self.state):
@@ -815,10 +837,16 @@ class _GameBatchSource:
         else:
             rollout = game_rollout(self.records, self.model, actions=self.actions, rules=card_instance_rules(), reserved_bytes=extra)
             extra_context = {}
+        additional=self.snapshot.additional_bytes((rollout.model,rollout.episodes,rollout.locations))
+        snapshot=self.snapshot
+        def numeric_reserve(peak: int) -> None:
+            if numeric_limit is not None and additional+max(0,peak-rollout.resident_bytes)>numeric_limit:
+                raise ContractError('HPO additional numeric encoding envelope exceeded')
+            snapshot.reserve(peak)
         return _write_rollout(directory, rollout, **extra_context, max_owned_bytes=self.snapshot.max_owned_bytes,
             extra_owned_bytes=self.snapshot.extra_bytes_for((rollout.model, rollout.episodes, rollout.locations,
                 rollout.action_config_hash, rollout.policy_version, rollout.input_binding)) + self._selection_owned,
-            check=self.snapshot.check, reserve=self.snapshot.reserve)
+            check=self.snapshot.check, reserve=numeric_reserve)
 
     def read_numeric(self, directory: Path, expected_digest: str) -> Any:
         if self.native_inputs is not None:
@@ -841,7 +869,8 @@ class _GameBatchSource:
             from gf_training.hpo_lineage import hpo_spec
             from gf_training.hpo_rollout import read_hpo_rollout
             reader = read_hpo_rollout
-            parameters = {'training': hpo_training_config(hpo_spec(self.state)['training_recipe']), 'expected_selection': self.selection}
+            parameters = {'training': hpo_training_config(hpo_spec(self.state)['training_recipe']), 'expected_selection': self.selection,
+                'numeric_budget_bytes':hpo_spec(self.state)['operating']['numeric_budget_bytes']}
         rollout = reader(directory, expected_digest, self.model, actions=self.actions, rules=card_instance_rules(),
             **parameters, expected_correspondence=self.correspondence(),
             max_owned_bytes=self.snapshot.max_owned_bytes, extra_owned_bytes=self.snapshot.resident_bytes + growth + self._selection_owned,

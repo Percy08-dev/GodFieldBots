@@ -6,7 +6,10 @@ training run, a live projection, a formal parent or an evaluation receipt.
 """
 from __future__ import annotations
 
+import os
 import re
+import stat
+import uuid
 from contextlib import ExitStack
 from dataclasses import asdict, replace
 from pathlib import Path
@@ -39,7 +42,12 @@ from gf_models.structured_sealed import (
     pruning_basename,
 )
 from gf_training.hpo_config import effective_settings, finite_number, hpo_training_config
-from gf_training.lineage import checkpoint_path, generation_path
+from gf_training.lineage import (
+    RunOwnership,
+    checkpoint_path,
+    generation_path,
+    require_hpo_run_owner,
+)
 from gf_training.structured_lineage import (
     GAME_EXTRA,
     GEN_FIELDS,
@@ -49,6 +57,8 @@ from gf_training.structured_lineage import (
     _artifact_directories,
     _ChainScan,
     _filemap,
+    _stat_identity,
+    _write,
 )
 from gf_training.structured_lineage import (
     _relative as _owned_relative,
@@ -56,6 +66,8 @@ from gf_training.structured_lineage import (
 
 SELECTION_VERSION = "hpo-endpoint-selection-v1"
 HPO_NATIVE_CAPABILITY = "model4;collection6;proof3;numeric5;selection1;provider1"
+REFERENCE_DIRECTORY = 'evaluation-reference-receipts'
+REFERENCE_FILES = {'acquire.intent.json', 'acquire.receipt.json', 'release.intent.json', 'release.receipt.json'}
 HPO_RUN_FIELDS = RUN_REQUIRED | GAME_EXTRA | {
     "run_variant", "hpo_spec_sha256", "collected_decisions", "used_decisions", "stop_reason"}
 _OPERATING = {"managed_ram_bytes", "managed_cuda_bytes", "game_concurrency", "max_participant_workers",
@@ -154,11 +166,11 @@ def _runtime_training(value: Json, spec: Json) -> PPOTrainingConfig:
     return PPOTrainingConfig(**{**value, "seeds": tuple(value["seeds"])})
 
 
-def _deadlines(state: Json, spec: Json, training: PPOTrainingConfig) -> None:
-    run = closed(state["effective_config"]["run"], _RUN)
+def _run_projection(config: Json, spec: Json, training: PPOTrainingConfig) -> tuple[float,float,float]:
+    run = closed(config["run"], _RUN)
     if run["split"] != "train":
         raise ContractError("HPO requires training split")
-    operating = spec["operating"]
+    operating = spec['operating']
     for field, source in (("concurrency", "game_concurrency"), ("global_cuda_budget_bytes", "managed_cuda_bytes"),
             ("max_participant_workers", "max_participant_workers")):
         integer(run[field], 1, 2**63 - 1)
@@ -177,6 +189,11 @@ def _deadlines(state: Json, spec: Json, training: PPOTrainingConfig) -> None:
     report = _number(run["report_reserve_seconds"], positive=True)
     if training.cleanup_seconds + report > final:
         raise ContractError("HPO original cleanup/report reserves exceed finalization")
+    return float(wall),float(execute),float(admission)
+
+
+def _deadlines(state: Json, spec: Json, training: PPOTrainingConfig) -> None:
+    wall,execute,admission=_run_projection(state['effective_config'],spec,training)
     created = _number(state["created_unix"], positive=True)
     last = _number(state["last_unix"], positive=True)
     if not created <= last <= created + wall:
@@ -442,15 +459,7 @@ def _registry(registry: Json, records: list[Json], state: Json, scan: _ChainScan
     if type(generations) is not dict or set(generations) != {str(index) for index in range(len(records))}:
         raise ContractError("HPO per-file registry generation inventory mismatch")
     spec = hpo_spec(state)
-    operating = spec["operating"]
     count = len(records)
-    resume_required = {0, *range(max(0, count - operating["resume_latest"]), count)}
-    inference_required = {0, *range(max(0, count - operating["inference_latest"]), count),
-        *records[-1]["parent_controls"]["snapshot_pool"], *resume_required}
-    interval = operating["inference_periodic_decisions"]
-    for index in range(1, count):
-        if records[index]["used_decisions"] // interval > records[index - 1]["used_decisions"] // interval:
-            inference_required.add(index)
     refs = registry["evaluation_references"]
     if type(refs) is not dict:
         raise ContractError("HPO evaluation reference map required")
@@ -462,7 +471,7 @@ def _registry(registry: Json, records: list[Json], state: Json, scan: _ChainScan
         index = integer(value["generation"], 0, count - 1)
         if checksum(value["inference_sha256"]) != records[index]["inference_sha256"]:
             raise ContractError("HPO evaluation reference inference mismatch")
-        inference_required.add(index)
+    protected = protected_hpo_files(state, records, registry, reference_journal(scan, state, records, registry))
     recipe = hpo_training_config(spec["training_recipe"])
     optimizer = adam_recipe(recipe.adam_learning_rate, recipe.adam_beta1, recipe.adam_beta2, recipe.adam_epsilon)
     for index, record in enumerate(records):
@@ -476,8 +485,7 @@ def _registry(registry: Json, records: list[Json], state: Json, scan: _ChainScan
             raise ContractError("HPO uncertain deletion cannot form a healthy structural chain")
         inference_files = {name for name in originals if name == "inference.json" or name.startswith("weights-")}
         resume_files = set(originals)
-        if ((index in inference_required and not inference_files <= retained)
-                or (index in resume_required and not resume_files <= retained)):
+        if not protected[index] <= retained:
             raise ContractError("HPO protected file/dependency closure missing")
         if "resume.json" in retained and not resume_files <= retained:
             raise ContractError("HPO retained resume lost inference/weights/state dependencies")
@@ -506,6 +514,165 @@ def _registry(registry: Json, records: list[Json], state: Json, scan: _ChainScan
         else:
             continue
         _same(artifact.inference["model"], inference_model(model), "HPO resource-free inference architecture mismatch")
+
+
+def protected_hpo_files(state: Json, records: list[Json], registry: Json,
+                        pending_bindings: list[Json] | None = None) -> dict[int, set[str]]:
+    """One pure protection calculation shared by the reader and owned retirement."""
+    op = hpo_spec(state)['operating']
+    count = len(records)
+    resumes = {0, *range(max(0, count-op['resume_latest']), count)}
+    inference = {0, *resumes, *range(max(0, count-op['inference_latest']), count),
+        *records[-1]['parent_controls']['snapshot_pool']}
+    interval = op['inference_periodic_decisions']
+    inference.update(g for g in range(1, count)
+        if records[g]['used_decisions']//interval > records[g-1]['used_decisions']//interval)
+    inference.update(row['generation'] for row in registry['evaluation_references'].values())
+    inference.update(row['generation'] for row in pending_bindings or ())
+    return {g: set(record['artifact_files']) if g in resumes else
+        {name for name in record['artifact_files'] if name == 'inference.json' or name.startswith('weights-')}
+        if g in inference else set() for g, record in enumerate(records)}
+
+
+def sync_hpo_ancestry(path: Path, *, ownership: RunOwnership) -> None:
+    """Reconcile directory durability on every attempt, including existing paths."""
+    require_hpo_run_owner(ownership.directory,ownership)
+    if not path.is_relative_to(ownership.directory):
+        raise ContractError('HPO synchronization target is outside the owned parent')
+    identities = []
+    for directory in (path, *path.parents):
+        require_hpo_run_owner(ownership.directory,ownership)
+        before = directory.lstat()
+        if not stat.S_ISDIR(before.st_mode):
+            raise ContractError('HPO control ancestry must be nonsymlink directories')
+        fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            held = os.fstat(fd)
+            if (held.st_dev, held.st_ino) != (before.st_dev, before.st_ino):
+                raise ContractError('HPO control ancestry replaced before sync')
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        identities.append((directory, before.st_dev, before.st_ino))
+    for directory, device, inode in identities:
+        current = directory.lstat()
+        if not stat.S_ISDIR(current.st_mode) or (current.st_dev, current.st_ino) != (device, inode):
+            raise ContractError('HPO control ancestry changed during sync')
+
+
+def write_hpo_control(path: Path, value: Json, *, scan: _ChainScan, immutable: bool = False,
+                        ownership: RunOwnership | None = None) -> str:
+    owner=require_hpo_run_owner(scan.root,ownership)
+    try:
+        sync_hpo_ancestry(path.parent,ownership=owner)
+        if path.exists() or path.is_symlink():
+            if immutable or path not in scan.files:
+                raise ContractError('HPO publication refuses foreign/preexisting control entry')
+            with scan.file(path,scan.verified_digest(path)): pass
+        require_hpo_run_owner(scan.root,owner)
+        result = _write(path, value, scan=scan, immutable=immutable)
+        sync_hpo_ancestry(path.parent,ownership=owner)
+        scan.check()
+        return result
+    except BaseException as error:
+        error.__dict__['_hpo_storage_uncertain']=str(path)
+        raise
+
+
+def checked_reference_binding(value: Json, state: Json, records: list[Json], scan: _ChainScan) -> Json:
+    closed(value, {'run_id', 'token', 'generation', 'inference_sha256', 'generation_sha256'})
+    if (value['run_id'] != state['run_id'] or type(value['token']) is not str
+            or re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,127}', value['token']) is None):
+        raise ContractError('HPO reference run/token binding invalid')
+    generation = integer(value['generation'], 0, len(records)-1)
+    if (checksum(value['inference_sha256']) != records[generation]['inference_sha256']
+            or checksum(value['generation_sha256']) != scan.verified_digest(generation_path(scan.root, generation))):
+        raise ContractError('HPO reference immutable generation binding mismatch')
+    return value
+
+
+def reference_journal(scan: _ChainScan, state: Json, records: list[Json], registry: Json) -> list[Json]:
+    """Validate only this bounded write-ahead journal; pending pins stay protected."""
+    root = scan.root/REFERENCE_DIRECTORY
+    if not root.exists() and not root.is_symlink():
+        scan._hpo_reference_snapshot = (None, ())
+        return []
+    before = root.lstat()
+    if not stat.S_ISDIR(before.st_mode):
+        raise ContractError('HPO reference control namespace must be a directory')
+    names = []
+    with os.scandir(root) as entries:
+        for entry in entries:
+            scan.charge(1024+len(entry.name)*4)
+            if (not entry.is_dir(follow_symlinks=False)
+                    or re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,127}', entry.name) is None):
+                raise ContractError('foreign HPO reference namespace entry')
+            names.append(entry.name)
+    pending = []
+    for token in sorted(names):
+        directory = root/token
+        files = set()
+        with os.scandir(directory) as entries:
+            for entry in entries:
+                scan.charge(512)
+                if entry.name not in REFERENCE_FILES or not entry.is_file(follow_symlinks=False):
+                    raise ContractError('foreign HPO reference transaction file')
+                files.add(entry.name)
+        if 'acquire.intent.json' not in files or ('release.intent.json' in files and 'acquire.receipt.json' not in files):
+            raise ContractError('HPO reference transaction has no original acquire intent/receipt')
+        scan.inventory(directory, files)
+        binding = None
+        for phase in ('acquire', 'release'):
+            name = phase+'.intent.json'
+            if name not in files:
+                if phase+'.receipt.json' in files:
+                    raise ContractError('HPO reference completion lacks its intent')
+                continue
+            intent = closed(scan.object(directory/name), {'schema_version','kind','operation_id','binding'}
+                | ({'acquire_receipt_sha256'} if phase=='release' else set()))
+            integer(intent['schema_version'],1,1)
+            if intent['kind'] != 'hpo-evaluation-reference-'+phase+'-intent':
+                raise ContractError('HPO reference intent kind mismatch')
+            try:
+                if str(uuid.UUID(intent['operation_id'])) != intent['operation_id']:
+                    raise ValueError('noncanonical UUID')
+            except (ValueError, TypeError, AttributeError) as error:
+                raise ContractError('HPO reference operation UUID required') from error
+            checked_reference_binding(intent['binding'], state, records, scan)
+            if intent['binding']['token'] != token:
+                raise ContractError('HPO reference path/token mismatch')
+            if binding is None:
+                binding = intent['binding']
+            _same(intent['binding'], binding, 'HPO reference transaction binding changed')
+            if phase=='release' and checksum(intent['acquire_receipt_sha256']) != scan.verified_digest(directory/'acquire.receipt.json'):
+                raise ContractError('HPO reference release changed acquire receipt')
+            receipt_name = phase+'.receipt.json'
+            if receipt_name in files:
+                receipt = closed(scan.object(directory/receipt_name), {'schema_version','kind','binding',
+                    'intent_sha256','registry_sha256','confirmed_unix'})
+                integer(receipt['schema_version'],1,1)
+                if (receipt['kind'] != 'hpo-evaluation-reference-'+phase+'-receipt'
+                        or checksum(receipt['intent_sha256']) != scan.verified_digest(directory/name)):
+                    raise ContractError('HPO reference completion/intent link mismatch')
+                _same(receipt['binding'],binding,'HPO reference completion binding mismatch')
+                checksum(receipt['registry_sha256'])  # Historical fact, not perpetual registry equality.
+                _number(receipt['confirmed_unix'],positive=True)
+        assert binding is not None
+        expected = {'generation':binding['generation'],'inference_sha256':binding['inference_sha256']}
+        actual = registry['evaluation_references'].get(token)
+        if actual is not None:
+            _same(actual,expected,'HPO active reference differs from original intent')
+        released = 'release.receipt.json' in files
+        if released and actual is not None:
+            raise ContractError('released HPO reference token became active again')
+        if 'acquire.receipt.json' in files and 'release.intent.json' not in files and actual is None:
+            raise ContractError('acquired HPO reference vanished without release intent')
+        if not released:
+            pending.append(binding)
+    if _stat_identity(root.lstat()) != _stat_identity(before):
+        raise ContractError('HPO reference namespace changed during inspection')
+    scan._hpo_reference_snapshot = (_stat_identity(before), tuple(sorted(names)))
+    return pending
 
 
 def _selection(value: Json, state: Json, previous: Json, batch: int) -> Json:
@@ -620,11 +787,11 @@ def _policies(state: Json, records: list[Json], directory: Path, model: ModelCon
 
 
 def _update(directory: Path, state: Json, records: list[Json], current: Json, scan: _ChainScan,
-            model: ModelConfigV4) -> None:
+            model: ModelConfigV4, *, value: Json | None = None) -> None:
     previous = records[-1]
     generation = current["generation"]
     packed = "storage_binding" in state
-    update = closed(scan.object(directory / "updates" / f"{generation:06}.json", current["update_sha256"]),
+    update = closed(scan.object(directory / "updates" / f"{generation:06}.json", current["update_sha256"]) if value is None else value,
         HPO_UPDATE_FIELDS | ({"storage_binding"} if packed else set()))
     integer(update["schema_version"], 5, 5)
     integer(update["generation"], generation, generation)
@@ -717,8 +884,8 @@ def _update(directory: Path, state: Json, records: list[Json], current: Json, sc
     values = {"optimizer_steps": current["optimizer_steps"], "optimizer_step_delta": delta,
         "collected_decisions": collected, "used_decisions": used, "tbptt_length": recipe.tbptt_length,
         "epochs": recipe.epochs, "endpoint_evaluations": recipe.epochs * used}
-    for key, value in values.items():
-        integer(metrics[key], value, value)
+    for key, expected_value in values.items():
+        integer(metrics[key], expected_value, expected_value)
     integer(metrics["context_decisions"], recipe.epochs * used, recipe.epochs * used * 1024)
     integer(metrics["suffix_decisions"], recipe.epochs * used,
         min(metrics["context_decisions"], recipe.epochs * used * recipe.tbptt_length))
@@ -734,6 +901,93 @@ def _update(directory: Path, state: Json, records: list[Json], current: Json, sc
             _number(metrics[key])
     if "peak_cpu_memory_bytes" in metrics:
         integer(metrics["peak_cpu_memory_bytes"], 0)
+
+
+def commit_hpo_generation(directory: Path,state: Json,*,generation: int,update: Json | None,
+                           controls: Json,artifact_files: Json,max_owned_bytes: int,deadline: float,
+                           projection: Any = None,ownership: RunOwnership | None = None) -> Json:
+    """Append verified state under the original lock and actual Source capability."""
+    import hashlib
+
+    owner=require_hpo_run_owner(directory,ownership)
+    directory=owner.directory
+    actions,model,_=hpo_state(state)
+    if state['status']!='running': raise ContractError('HPO commit requires running parent')
+    spec=hpo_spec(state)
+    recipe=hpo_training_config(spec['training_recipe'])
+    with ExitStack() as scope:
+        if generation:
+            from gf_training.card_instance_source import IssuedGameProjection
+            if type(projection) is not IssuedGameProjection or projection.source.online is None:
+                raise ContractError('HPO append requires actual Source-issued completed projection')
+            require_hpo_run_owner(directory,projection.source.online.ownership)
+            projection.require(projection.source.online.process,after=True)
+            projection.retire_packed_decoded()
+            scan=projection.source.controls
+            records=[scan.object(generation_path(directory,number)) for number in range(generation)]
+            durable=scan.object(directory/'run.json')
+            mutable={'accepted_decisions','used_decisions','collected_decisions','optimizer_steps',
+                'collection_seconds','update_seconds','last_unix','hardware'}
+            for key in set(state)-mutable:
+                _same(durable.get(key),state[key],'HPO append changed durable frozen parent state')
+            if generation!=state['updates']+1 or update is None or state['generation_sha256']!=scan.verified_digest(generation_path(directory,generation-1)):
+                raise ContractError('HPO append must follow exactly one committed generation')
+            registry=scan.object(directory/'artifact-registry.json')
+            parent=state['generation_sha256']
+        else:
+            if projection is not None or update is not None or state['updates']!=0 or state['generation_sha256'] is not None:
+                raise ContractError('HPO G0 must be a fresh untrained initialization')
+            scan=scope.enter_context(_ChainScan(directory=directory,max_owned_bytes=max_owned_bytes,deadline=deadline))
+            records=[]
+            durable=scan.object(directory/'run.json')
+            if durable['config_sha256']!=state['config_sha256'] or durable['run_id']!=state['run_id']:
+                raise ContractError('HPO G0 differs from original parent declaration')
+            registry=scan.object(directory/'artifact-registry.json')
+            _same(registry,{'schema_version':4,'generations':{},'evaluation_references':{}},'HPO G0 registry is not fresh')
+            parent=None
+        files=_filemap(artifact_files,{'inference.json','resume.json'})
+        if scan.artifact_snapshot is not None and scan.artifact_snapshot[:2] != _stat_identity((directory/'artifacts').lstat())[:2]:
+            raise ContractError('HPO update replaced the original artifacts parent')
+        scan.artifact_snapshot=None
+        _artifact_directories(directory,generation,scan)
+        # The parent child adapter already checked this pair within its explicit
+        # save envelope. Commit independently rechecks the actual same bytes.
+        artifact=inspect_retained_game_artifact_v4(checkpoint_path(directory,generation),
+            expected_inference_digest=files['inference.json'],actions=actions,rules=card_instance_rules(),
+            training_recipe=asdict(recipe),optimizer_recipe=adam_recipe(recipe.adam_learning_rate,
+                recipe.adam_beta1,recipe.adam_beta2,recipe.adam_epsilon),scan=scan)
+        _same(artifact.files,files,'HPO commit actual full saved files differ')
+        assert artifact.resume is not None
+        if artifact.resume['resume_identity']!=state['resume_identity'] or artifact.resume['optimizer_steps']!=state['optimizer_steps']:
+            raise ContractError('HPO commit actual resume/counter mismatch')
+        _same(artifact.resume['model'],asdict(model),'HPO commit actual model/resources mismatch')
+        _same(artifact.resume['binding'],state['execution']['learner']['binding'],'HPO commit execution mismatch')
+        update_sha=None if update is None else hashlib.sha256((canonical(update)+'\n').encode()).hexdigest()
+        record={'schema_version':4,'run_id':state['run_id'],'generation':generation,'parent_sha256':parent,
+            **{key:state[key] for key in ('model_id','model_version','input_recipe','hpo_spec_sha256',*_CLASSIFICATION)},
+            'inference_sha256':files['inference.json'],'resume_sha256':files['resume.json'],'artifact_files':dict(files),
+            'accepted_decisions':state['used_decisions'],'used_decisions':state['used_decisions'],
+            'collected_decisions':state['collected_decisions'],'optimizer_steps':state['optimizer_steps'],
+            'update_sha256':update_sha,'parent_controls':controls}
+        _generation(record,state,generation,parent,records[-1] if records else None,
+            records[-1]['parent_controls']['snapshot_pool'] if records else [0])
+        if update is not None: _update(directory,state,records,record,scan,model,value=update)
+        scan.finalize()
+        if projection is not None: projection.prepare_commit()
+        if update is not None and write_hpo_control(directory/'updates'/f'{generation:06}.json',update,scan=scan,immutable=True,ownership=owner)!=update_sha:
+            raise ContractError('HPO update serialization changed during commit')
+        sha=write_hpo_control(generation_path(directory,generation),record,scan=scan,immutable=True,ownership=owner)
+        registry['generations'][str(generation)]={'files':{name:{'sha256':value,'status':'retained',
+            'deletion_intent':None,'deletion_receipt':None} for name,value in files.items()}}
+        write_hpo_control(directory/'artifact-registry.json',registry,scan=scan,ownership=owner)
+        write_hpo_control(directory/'latest.json',{'generation':generation,'sha256':sha},scan=scan,ownership=owner)
+        state.update(updates=generation,generation_sha256=sha)
+        write_hpo_control(directory/'run.json',state,scan=scan,ownership=owner)
+        # Own immutable appends update exactly the two known control inventories.
+        scan.inventories[directory/'generations']=tuple(f'{n:06}.json' for n in range(generation+1))
+        scan.inventories[directory/'updates']=tuple(f'{n:06}.json' for n in range(1,generation+1))
+        scan.finalize()
+        return record
 
 
 def validate_hpo_chain(directory: Path, *, require_complete: bool = False, max_owned_bytes: int,

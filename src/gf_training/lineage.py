@@ -4,13 +4,16 @@ from __future__ import annotations
 import fcntl
 import json
 import math
+import os
+import stat
+import threading
 import time
 import uuid
 from collections.abc import Iterator
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, TextIO
 
 from gf_common.domain import (
     ContractError,
@@ -44,6 +47,52 @@ class RunOwnership:
     token: str
 
 
+@dataclass(frozen=True)
+class _HeldRunOwner:
+    """Observation of the ONE real run_lock context; not another lock/owner."""
+    ownership: RunOwnership
+    file: TextIO
+    descriptor: int
+    file_identity: tuple[int,int]
+    directory_identity: tuple[int,int]
+    pid: int
+    thread: int
+
+
+_HELD_RUN_OWNERS: dict[Path,_HeldRunOwner] = {}
+
+
+def require_hpo_run_owner(directory: Path,ownership: RunOwnership | None = None) -> RunOwnership:
+    """Require the original live flock observation and its issuing process/thread.
+
+    The legacy token map/public dataclass remain unchanged. Equal-field copies,
+    a reinserted stale token or a caller on another thread are not capabilities.
+    """
+    # Keep the original locked pathname: resolving a replacement symlink could
+    # accidentally borrow an unrelated parent that this thread also owns.
+    directory=Path(os.path.abspath(directory))
+    held=_HELD_RUN_OWNERS.get(directory)
+    if (held is None or held.pid!=os.getpid() or held.thread!=threading.get_ident()
+            or _OWNED_LOCKS.get(directory)!=held.ownership.token or held.file.closed
+            or ownership is not None and ownership is not held.ownership):
+        raise ContractError('HPO mutation requires the original current-thread held parent owner')
+    try:
+        if held.file.fileno()!=held.descriptor:
+            raise ContractError('HPO parent lock descriptor changed')
+        descriptor=os.fstat(held.descriptor)
+        current=(directory/'.lock').lstat()
+        parent=directory.lstat()
+        if (not stat.S_ISREG(descriptor.st_mode) or not stat.S_ISREG(current.st_mode)
+                or not stat.S_ISDIR(parent.st_mode)
+                or (descriptor.st_dev,descriptor.st_ino)!=held.file_identity
+                or (current.st_dev,current.st_ino)!=held.file_identity
+                or (parent.st_dev,parent.st_ino)!=held.directory_identity):
+            raise ContractError('HPO parent lock/path differs from original held owner')
+    except OSError as error:
+        raise ContractError('HPO parent lock is no longer held by its original context') from error
+    return held.ownership
+
+
 @contextmanager
 def run_lock(directory: Path, *, create: bool = False) -> Iterator[RunOwnership]:
     directory = directory.resolve()
@@ -56,9 +105,18 @@ def run_lock(directory: Path, *, create: bool = False) -> Iterator[RunOwnership]
             raise ContractError('PPO run already owned') from exc
         token = uuid.uuid4().hex
         _OWNED_LOCKS[directory] = token
+        observed=None
         try:
-            yield RunOwnership(directory, token)
+            ownership=RunOwnership(directory,token)
+            file_info=os.fstat(lock.fileno())
+            directory_info=directory.lstat()
+            observed=_HeldRunOwner(ownership,lock,lock.fileno(),(file_info.st_dev,file_info.st_ino),
+                (directory_info.st_dev,directory_info.st_ino),os.getpid(),threading.get_ident())
+            _HELD_RUN_OWNERS[directory]=observed
+            yield ownership
         finally:
+            if observed is not None and _HELD_RUN_OWNERS.get(directory) is observed:
+                _HELD_RUN_OWNERS.pop(directory)
             _OWNED_LOCKS.pop(directory, None)
             fcntl.flock(lock, fcntl.LOCK_UN)
 

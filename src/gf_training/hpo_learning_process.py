@@ -11,7 +11,8 @@ class HpoLearningProcess(GameLearningProcess):
     def __init__(self, directory: Path, max_log_bytes: int, model: Any, training: Any,
                  binding: Any, action_config_hash: str, resume_identity: str, **options: Any) -> None:
         actions = options.pop('actions')
+        phase_limits=options.pop('phase_limits',None)
         StructuredLearningProcess.__init__(self, directory, max_log_bytes, model, binding,
             action_config_hash, resume_identity, action_contract=actions.action_contract,
-            _actions=actions, _hpo_training=training, **options)
+            _actions=actions, _hpo_training=training, _hpo_phase_limits=phase_limits, **options)
         self.online_owner: Any = None

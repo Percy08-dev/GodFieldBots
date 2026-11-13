@@ -18,7 +18,8 @@ HPO_PROJECTION_KEYS = {'recipe', 'parent_run_id', 'batch_id', 'collection_genera
 
 def wire_identity(model: Any, training: HPOTrainingConfig, binding: Any, action_hash: str,
                   resume_identity: str, *, actions: Any, cuda_visible_devices: str | None,
-                  storage_binding: Json | None = None) -> Json:
+                  storage_binding: Json | None = None, phase_limits: Json | None = None) -> Json:
+    from gf_training.hpo_artifacts import checked_phase_limits
     from gf_training.structured_numeric_worker import wire_identity as legacy_identity
     # The shared identity establishes all public action/input/visibility fields;
     # the exact new model version selects its new execution descriptor explicitly.
@@ -26,7 +27,7 @@ def wire_identity(model: Any, training: HPOTrainingConfig, binding: Any, action_
         purpose='qualified_game', synthetic_capacity=False, cuda_visible_devices=cuda_visible_devices,
         _actions=actions, storage_binding=storage_binding, _hpo=True)
     recipe = hpo_training_config(asdict(training))
-    raw.update(training_recipe=asdict(recipe), execution_digest=execution_binding_v4(model, binding,
+    raw.update(training_recipe=asdict(recipe), phase_limits=checked_phase_limits(phase_limits), execution_digest=execution_binding_v4(model, binding,
         layout=LAYOUT, cuda_visible_devices=raw['execution']['cuda_visible_devices']))
     return raw
 

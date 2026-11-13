@@ -200,13 +200,17 @@ def serve(initial: Json, lines: Iterable[str]) -> None:
     if type(initial['protocol_version']) is not int or initial['protocol_version'] != protocol or initial['command'] != 'initialize':
         raise ContractError('wire3 initialize required')
     identity = closed(initial['identity'], {'model_id', 'model_version', 'architecture_identity', 'action_config_hash',
-        'resume_identity', 'action_contract', 'purpose', 'synthetic_capacity', 'execution', 'execution_digest'} | ({'actions', 'rule_signature', 'layout_signature'} if game else set()) | ({'storage_binding'} if packed else set()) | ({'training_recipe'} if hpo else set()))
+        'resume_identity', 'action_contract', 'purpose', 'synthetic_capacity', 'execution', 'execution_digest'} | ({'actions', 'rule_signature', 'layout_signature'} if game else set()) | ({'storage_binding'} if packed else set()) | ({'training_recipe','phase_limits'} if hpo else set()))
     training: Any = None
     if hpo:
         from gf_models.hpo_config import model_config_v4
         from gf_training.hpo_config import hpo_training_config
         model: Any = model_config_v4(initial['model'], layout=GAME_LAYOUT)
         training = hpo_training_config(identity['training_recipe'])
+        from gf_training.hpo_artifacts import checked_phase_limits, save_estimate
+        limits=checked_phase_limits(identity['phase_limits'])
+        if save_estimate(model)['additional_bytes']>limits['save_budget_bytes']:
+            raise ContractError('wire6 additional save envelope insufficient before learner allocation')
     else:
         model = model_config_v3(initial['model'], layout=GAME_LAYOUT) if game else model_config_v2(initial['model'])
     execution = closed(identity['execution'], {'binding', 'cuda_visible_devices'})
@@ -219,7 +223,7 @@ def serve(initial: Json, lines: Iterable[str]) -> None:
     if hpo:
         from gf_training.hpo_numeric_worker import wire_identity as hpo_identity
         expected = hpo_identity(model, training, binding, identity['action_config_hash'], identity['resume_identity'],
-            actions=actions, cuda_visible_devices=execution['cuda_visible_devices'], storage_binding=identity.get('storage_binding'))
+            actions=actions, cuda_visible_devices=execution['cuda_visible_devices'], storage_binding=identity.get('storage_binding'),phase_limits=identity['phase_limits'])
     else:
         expected = wire_identity(model, binding, identity['action_config_hash'], identity['resume_identity'],
             action_contract=contract, purpose='component', synthetic_capacity=False,
@@ -248,6 +252,15 @@ def serve(initial: Json, lines: Iterable[str]) -> None:
             action_contract=contract, purpose='component', synthetic_capacity=False))
     if initial['restore'] is not None:
         directory = Path(initial['restore'])
+        if hpo:
+            assert actions is not None
+            from gf_models.arrays import sha256
+            from gf_models.structured_artifacts import adam_recipe
+            from gf_models.structured_sealed import SealedScan, inspect_retained_game_artifact_v4
+            inspect_retained_game_artifact_v4(directory,expected_inference_digest=sha256(directory/'inference.json'),
+                actions=actions,rules=card_instance_rules(),training_recipe=asdict(training),
+                optimizer_recipe=adam_recipe(training.adam_learning_rate,training.adam_beta1,training.adam_beta2,training.adam_epsilon),
+                scan=SealedScan(max_owned_bytes=min(limits['save_budget_bytes'],12*1024**3),deadline=float('inf')))
         learner.restore(directory)
         inference, resume = read_json(directory / 'inference.json'), read_json(directory / 'resume.json')
         from gf_models.arrays import sha256
@@ -257,7 +270,7 @@ def serve(initial: Json, lines: Iterable[str]) -> None:
         save_seconds = 0.
     else:
         saving = time.monotonic()
-        saved = learner.save(Path(initial['output']))
+        saved = learner.save(Path(initial['output']),**({'save_budget_bytes':limits['save_budget_bytes']} if hpo else {}))
         save_seconds = time.monotonic() - saving
     actual_hardware = hardware(binding.device)
 
@@ -321,7 +334,9 @@ def serve(initial: Json, lines: Iterable[str]) -> None:
                 from gf_training.hpo_rollout import read_hpo_rollout
                 rollout = read_hpo_rollout(Path(request['batch']), request['batch_digest'], model, training,
                     actions=actions, rules=card_instance_rules(), expected_selection=projection['selection'],
-                    expected_correspondence=projection['source_correspondence'], storage_binding=identity.get('storage_binding'))
+                    expected_correspondence=projection['source_correspondence'], storage_binding=identity.get('storage_binding'),
+                    max_owned_bytes=identity['phase_limits']['numeric_budget_bytes'],
+                    numeric_budget_bytes=identity['phase_limits']['numeric_budget_bytes'])
             else:
                 rollout = read_game_rollout(Path(request['batch']), request['batch_digest'], model, actions=actions, rules=card_instance_rules(), declaration=declaration, expected_correspondence=projection['source_correspondence'], storage_binding=identity.get('storage_binding'))
         else:
@@ -341,7 +356,7 @@ def serve(initial: Json, lines: Iterable[str]) -> None:
         learner.synchronize()
         update_seconds = time.monotonic() - started
         saving = time.monotonic()
-        saved = learner.save(Path(request['output']))
+        saved = learner.save(Path(request['output']),**({'save_budget_bytes':limits['save_budget_bytes']} if hpo else {}))
         acknowledge('update', started, saved, **({'transaction_id': request['transaction_id'], 'collection_generation': projection['collection_generation'], 'expected_optimizer_steps': projection['expected_optimizer_steps']} if game else {}), metrics=metrics,
             timings={'update_seconds': update_seconds, 'save_seconds': time.monotonic() - saving})
     raise ContractError('wire3 EOF before explicit close')

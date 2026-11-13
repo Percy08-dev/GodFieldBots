@@ -1,13 +1,14 @@
 """Recipe-aware resume5 ownership; shared safe model/shard/Adam/RNG mechanics."""
 from __future__ import annotations
 
+import math
 from dataclasses import asdict
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from gf_common.card_instance import ActionConfigV3
 from gf_common.card_instance_rules import CardInstanceRules
-from gf_common.domain import ContractError, Json, digest
+from gf_common.domain import ContractError, Json, closed, digest, integer
 from gf_models.arrays import MAX_ARRAY_BYTES, sha256
 from gf_models.structured_artifacts import (
     _game_context_v4,
@@ -20,11 +21,45 @@ from gf_models.structured_artifacts import (
     save_game_inference_v4,
     validate_save_context,
 )
-from gf_models.structured_config import InferenceBindingV2, ModelConfigV4, resource_estimate
+from gf_models.structured_config import (
+    InferenceBindingV2,
+    ModelConfigV4,
+    parameter_shapes,
+    resource_estimate,
+)
 from gf_training.hpo_config import HPOTrainingConfig, hpo_training_config
 
 if TYPE_CHECKING:
     from gf_training.hpo_numeric import HpoLearner
+
+
+def checked_phase_limits(value: Json | None = None) -> Json:
+    """Component defaults are explicit; production supplies its exact run spec."""
+    limits = {'numeric_budget_bytes':512*1024**2,'save_budget_bytes':512*1024**2} if value is None else value
+    closed(limits,{'numeric_budget_bytes','save_budget_bytes'})
+    for number in limits.values(): integer(number,1,2**63-1)
+    return dict(limits)
+
+
+def save_estimate(model: ModelConfigV4, *, shard_bytes: int = MAX_ARRAY_BYTES,
+                  cuda_devices: int = 1) -> Json:
+    """Conservative additional CPU snapshot/codec/sealed-inspection envelope.
+
+    Full Adam moments are admitted even at G0. SealedScan's largest scratch is
+    32*archive +3*decoded. ZIP/header overhead and named metadata are separately
+    reserved; learner/network residency is not charged to this phase twice.
+    """
+    from gf_common.structured_layout import CORRECTED_CARD_INSTANCE_LAYOUT
+    integer(shard_bytes,1,MAX_ARRAY_BYTES)
+    integer(cuda_devices,0,1024)
+    shapes=parameter_shapes(model,layout=CORRECTED_CARD_INSTANCE_LAYOUT)
+    weights=4*sum(math.prod(shape) for shape in shapes.values())
+    state=2*weights+8*len(shapes)+(cuda_devices+1)*65536
+    metadata=65536*(len(shapes)+cuda_devices+8)
+    largest=min(shard_bytes,max(weights,state))+4096*(len(shapes)+cuda_devices+8)
+    additional=max(weights,state)+35*largest+metadata
+    return {'recipe':'hpo-save-envelope-v1','weights_bytes':weights,'resume_bytes':state,
+        'metadata_bytes':metadata,'additional_bytes':additional}
 
 
 def _recipe_options(training: HPOTrainingConfig) -> dict[str, Any]:
@@ -46,7 +81,11 @@ def read_resume(directory: Path, model: ModelConfigV4, binding: InferenceBinding
 
 
 def save_learner(learner: HpoLearner, directory: Path, *, code_revision: str | None = None,
-                 shard_bytes: int = MAX_ARRAY_BYTES) -> Json:
+                 shard_bytes: int = MAX_ARRAY_BYTES, save_budget_bytes: int = 512*1024**2) -> Json:
+    integer(save_budget_bytes,1,2**63-1)
+    devices=0 if learner.binding.device=='cpu' else learner.torch.cuda.device_count()
+    if save_estimate(learner.model,shard_bytes=shard_bytes,cuda_devices=devices)['additional_bytes']>save_budget_bytes:
+        raise ContractError('HPO additional save snapshot/inspection envelope exceeded before allocation')
     options = _recipe_options(learner.training)
     learner._context.bind(learner.network)
     learner._context.check(learner.input_binding)

@@ -402,10 +402,13 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
     config = loaded.config
     ops: Any = None
     game = _game_ops is not None
+    hpo = False
     if game:
         from gf_training import structured_ppo
         from gf_training.card_instance_ppo import _GameOperations
-        if type(_game_ops) is not _GameOperations or _structured_component or _structured_ops is not None:
+        from gf_training.hpo_ppo import _HpoOperations
+        hpo=type(_game_ops) is _HpoOperations
+        if type(_game_ops) not in (_GameOperations,_HpoOperations) or _structured_component or _structured_ops is not None:
             raise ContractError("closed corrected game operations required")
         ops = _game_ops
     if _structured_ops is not None and not _structured_component:
@@ -427,7 +430,7 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
         else:
             ops = _structured_ops if _structured_ops is not None else structured_ppo
     def measure_owned(deadline: float) -> int:
-        if game and state['schema_version'] == 4:
+        if game and (state['schema_version'] == 4 or hpo and 'storage_binding' in state):
             return owned_bytes(directory, deadline, external_roots=ops.external_roots(state))
         return owned_bytes(directory, deadline)
 
@@ -441,7 +444,7 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
         raise ContractError("PPO model/sequence training mismatch")
     if config.server.external_url is not None:
         raise ContractError('PPO requires owned distinct-seed Simulator groups')
-    if not (config.run.wall_seconds <= 7200 and config.run.admission_seconds <= 5400 and config.run.execution_seconds <= 7140 and config.run.finalization_seconds >= 60):
+    if not hpo and not (config.run.wall_seconds <= 7200 and config.run.admission_seconds <= 5400 and config.run.execution_seconds <= 7140 and config.run.finalization_seconds >= 60):
         raise ContractError('PPO original deadline caps exceeded')
     if mode not in ('fresh', 'resume'):
         raise ContractError('unsupported PPO mode')
@@ -477,7 +480,7 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
         if mode == 'fresh':
             for name in ('generations', 'updates', 'artifacts', 'collections', 'numeric'):
                 (directory / name).mkdir()
-            state = {'schema_version': 1, 'algorithm': 'ppo', 'run_id': str(uuid.uuid4()), 'status': 'running',
+            state = {'schema_version': 1, 'algorithm': 'ppo', 'run_id': config.run.name if hpo else str(uuid.uuid4()), 'status': 'running',
                      'config_sha256': loaded.sha256, 'effective_config': loaded.effective, 'config_inputs': list(loaded.inputs), 'identity': identity,
                      'seed': training.seeds[0], 'device': training.device, 'created_unix': now, 'last_unix': now,
                      'wall_deadline_unix': now + config.run.wall_seconds,
@@ -488,7 +491,8 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
             if ops:
                 ops.initialize_state(state, config)
             if ops:
-                ops.persist_control(directory / 'artifact-registry.json', {'schema_version': 3 if game else 2, 'generations': {}}, config, deadline=identity_deadline)
+                ops.persist_control(directory / 'artifact-registry.json', ({'schema_version':4,'generations':{},'evaluation_references':{}} if hpo else
+                    {'schema_version': 3 if game else 2, 'generations': {}}), config, deadline=identity_deadline)
                 ops.persist_control(directory / 'run.json', state, config, deadline=identity_deadline)
             else:
                 atomic_json(directory / 'artifact-registry.json', {})
@@ -513,7 +517,7 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
             rng = np.random.Generator(np.random.PCG64())
             rng.bit_generator.state = controls['schedule_opponent_rng']
             pool = controls['snapshot_pool']
-            if controls['collection_position'] != state['updates'] or pool != [number for number in range(state['updates'] + 1) if number % 10 == 0][-5:]:
+            if controls['collection_position'] != state['updates'] or not hpo and pool != [number for number in range(state['updates'] + 1) if number % 10 == 0][-5:]:
                 raise ContractError('resume collection position/pool mismatch')
         if pause_after_update is not None and (type(pause_after_update) is not int or pause_after_update <= state['updates'] or pause_after_update > training.max_updates):
             raise ContractError('pause target must exceed current absolute committed-update count')
@@ -523,6 +527,7 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
         admission = invocation_started + state['admission_deadline_unix'] - now
         # Even initialization and source-identity work consume the original clock.
         state['status'] = 'running'
+        if hpo: state['stop_reason']=None
         if ops:
             ops.persist_control(directory / 'run.json', state, config, deadline=execution, original=initial_scan)
             initial_scan = None
@@ -551,7 +556,7 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
             if mode == 'fresh':
                 state['hardware'] = initial['hardware']
                 if ops:
-                    ops.commit(directory, state, config, generation=0, update=None, controls=_controls(rng, pool, 0), acknowledgement=initial, deadline=execution)
+                    ops.commit(directory, state, config, generation=0, update=None, controls=ops.controls(rng,pool,0) if hpo else _controls(rng, pool, 0), acknowledgement=initial, deadline=execution)
                 else:
                     commit_generation(directory, state, generation=0, update=None, controls=_controls(rng, pool, 0), deadline=execution)
             elif initial['hardware'] != state['hardware']:
@@ -562,7 +567,11 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
             while True:
                 check_clock()
                 usage = measure_owned(execution)
-                if formal is not None:
+                if hpo:
+                    if ops.stop(state,config,usage,time.monotonic(),execution,admission):
+                        final_status='complete' if state['used_decisions']==config.hpo_spec['decision_budget'] else 'incomplete'
+                        break
+                elif formal is not None:
                     observed = time.monotonic()
                     if formal.observe_stop(state, operation_unix, invocation_started, observed, usage):
                         break
@@ -585,7 +594,8 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
                         label, binding = ops.binding(directory, snapshot, config, execution) if ops else owned_binding(directory, snapshot)
                         registry[label] = binding
                         snapshots.append(label)
-                    groups = (training_groups(training.seeds[0], generation, learner_label, tuple(snapshots), rng, actions_version=3 if game else 2)
+                    groups = (ops.groups(config,generation,learner_label,tuple(snapshots),rng) if hpo else
+                              training_groups(training.seeds[0], generation, learner_label, tuple(snapshots), rng, actions_version=3 if game else 2)
                               if ops else training_groups(training.seeds[0], generation, learner_label, tuple(snapshots), rng))
                     batch_id = f'batch-{generation:06}'
                     linkage = {'parent_run_id': state['run_id'], 'parent_run_path': str(directory), 'batch_id': batch_id,
@@ -641,6 +651,10 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
                                     **projection_options))
                             if game:
                                 decision_count, proof, numeric_files, issued_projection = projected
+                                if hpo and decision_count==0:
+                                    ops.stop_reason='empty_collection'
+                                    final_status='incomplete'
+                                    break
                             else:
                                 decision_count, proof, numeric_files = projected
                         else:
@@ -683,17 +697,26 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
                     if collection_scan is not None:
                         collection_scan.finalize()
                     state['accepted_decisions'] += decision_count
+                    if hpo:
+                        previous_used=state['used_decisions']
+                        state['used_decisions']+=decision_count
+                        state['collected_decisions']+=proof['selection']['collected_decisions']
                     state['optimizer_steps'] = metrics['optimizer_steps']
                     state['collection_seconds'] += collection_seconds
                     state['update_seconds'] += update_seconds
-                    if next_generation % 10 == 0:
+                    if hpo:
+                        operating=config.hpo_spec['operating']
+                        interval=operating['pool_every_decisions']
+                        if state['used_decisions']//interval>previous_used//interval:
+                            pool=(pool+[next_generation])[-operating['opponent_pool_size']:]
+                    elif next_generation % 10 == 0:
                         pool = (pool + [next_generation])[-5:]
                     update = {'schema_version': 1, 'status': 'complete', 'run_id': state['run_id'], 'generation': next_generation,
                               'parent_sha256': state['generation_sha256'], 'batch_id': batch_id,
                               'collection': str(collection.directory.relative_to(directory)), 'collection_manifest_sha256': proof['manifest_sha256'],
                               'numeric': str(numeric.relative_to(directory)), 'numeric_sha256': numeric_hash,
                               'accepted_decisions': decision_count, 'source_proof': proof, 'metrics': metrics,
-                              'planned_games': 16, 'actual_games': proof['games'], 'health': {},
+                              'planned_games': config.hpo_spec['training_recipe']['collection_games'] if hpo else 16, 'actual_games': proof['games'], 'health': {},
                               'policy_bindings': {key: asdict(value) for key, value in registry.items()},
                               'learner_seats': linkage['learner_seats'], 'collection_seconds': collection_seconds, 'update_seconds': update_seconds}
                     if ops:
@@ -704,7 +727,7 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
                                           action_contract=state['action_contract'], purpose='component', synthetic_capacity=False,
                                           numeric_files=numeric_files)
                         ops.commit(directory, state, config, generation=next_generation, update=update,
-                            controls=_controls(rng, pool, next_generation), acknowledgement=acknowledgement, deadline=execution)
+                            controls=ops.controls(rng,pool,next_generation) if hpo else _controls(rng, pool, next_generation), acknowledgement=acknowledgement, deadline=execution)
                         ops.retain(directory, next_generation, config, execution)
                     else:
                         commit_generation(directory, state, generation=next_generation, update=update, controls=_controls(rng, pool, next_generation), deadline=execution)
@@ -746,11 +769,19 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
         state['peak_coordinator_memory_bytes'] = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024
         state['coordinator_memory_scope'] = 'process lifetime peak RSS, distinct from learner child metrics'
         state['timing_scope'] = 'pre-final-write snapshot; original wall includes paused time'
+        if hpo:
+            try:
+                ops.finish_cleanup(error)
+            except BaseException as cleanup:  # noqa: BLE001 -- preserve original failure after actual cleanup.
+                if error is not None: error.add_note('HPO final cleanup: '+str(cleanup))
+                error=error or cleanup
+                state['cleanup_failure']=str(cleanup)
         if error is not None or time.monotonic() >= wall or storage_bytes is None or storage_bytes > training.max_owned_bytes:
             state.update(status='failed', failure=type(error).__name__ if error else 'LimitOverrun', quarantine=True)
         else:
             state['status'] = final_status
             state['completed_updates'] = state['updates'] if final_status == 'complete' else None
+            if hpo: state['stop_reason']='pause' if final_status=='paused' else ops.stop_reason
         try:
             if ops:
                 ops.persist_control(directory / 'run.json', state, config, deadline=wall)
@@ -782,4 +813,6 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
         if state['status'] == 'failed':
             raise RuntimeError('PPO run failed original limits')
         return {'run_dir': str(directory), 'status': state['status'], 'updates': state['updates'], 'accepted_decisions': state['accepted_decisions'],
-                'elapsed_seconds': time.time() - state['created_unix'], 'generation_sha256': state['generation_sha256']}
+                'elapsed_seconds': time.time() - state['created_unix'], 'generation_sha256': state['generation_sha256'],
+                **({'used_decisions':state['used_decisions'],'collected_decisions':state['collected_decisions'],
+                    'decision_budget':config.hpo_spec['decision_budget'],'stop_reason':state['stop_reason']} if hpo else {})}

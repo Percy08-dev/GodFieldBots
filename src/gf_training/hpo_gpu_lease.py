@@ -678,6 +678,23 @@ def admit_gpu_job(context: JobContext, *, global_cuda_bytes: int, max_workers: i
         raise
 
 
+def require_training_job(job: GpuJob, *, ledger: ReservationLedger, run_id: str,
+                          global_cuda_bytes: int, max_workers: int) -> None:
+    """The exact caller-owned live capability, never an empty replacement ledger."""
+    if type(job) is not GpuJob:
+        raise ContractError('actual caller GpuJob required')
+    job._require_open()
+    context=job._admission['context']
+    if (context['kind']!='training' or context['run_id']!=run_id or context['evaluation_id'] is not None
+            or type(ledger) is not _AuditedLedger or ledger is not job.ledger
+            or ledger.global_cuda_bytes!=global_cuda_bytes or ledger.max_workers!=max_workers):
+        raise ContractError('HPO run differs from the SAME caller GPU job/context/ledger/limits')
+    try:
+        if str(uuid.UUID(run_id))!=run_id: raise ValueError('noncanonical UUID')
+    except (ValueError,TypeError,AttributeError) as error:
+        raise ContractError('HPO training requires predeclared canonical run UUID') from error
+
+
 def confirm_environment_restart(*, expected_ticket: str, operator: str, confirmation: str) -> RestartReceipt:
     """Explicit operator recovery only. Boot changes themselves grant nothing."""
     _ticket(expected_ticket)
