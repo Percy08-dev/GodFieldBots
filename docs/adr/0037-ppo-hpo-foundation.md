@@ -97,3 +97,21 @@ fixes: actual collector ABI, namespaced per-evaluation episode identities, and
 complete final-D policy/registry binding before scoring/tell. Its durable Optuna
 and final-policy composition is integrated as27721bf. Final foundation acceptance
 still requires the predeclared real GPU/Simulator protocol and final checks.
+
+The first actual CUDA functional parent fails at saved-G1 preparation after eight
+natural games and one update: the native bridge owns a separate Python seal that
+still expects G0. Keep that parent failed/ineligible and its unresolved GPU ticket
+blocked. The accepted [save-transition correction](../design/ppo-hpo-native-save-transition.md)
+records the actual verified child ACK on its SAME issued projection, checks the
+complete pair/map/generation/steps/actual parent owner, then admits only that
+native capsule's one-next namespace through the existing Rust permit. Automatic
+generic recheck advancement from a begun flag was rejected because it does not
+establish acknowledgement provenance. Both scans and downstream prepare remain
+checked; failure poisons the one-shot transition. HPO's accepted widened numeric
+generation domain is explicit; old native1000/order guards stay exact.
+
+The correction passes both scoped reviews, real CPU/native plain/packed continuous
+versus pause/resume equality, negative ACK/namespace tests and Rust checks.
+Physical functional acceptance still requires actual environment recovery and a
+fresh same-condition GPU attempt. Neither code repair nor an absent PID supplies
+the missing termination/restart receipt. No automatic reboot/reset is introduced.

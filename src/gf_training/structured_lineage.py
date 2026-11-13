@@ -324,6 +324,30 @@ def _retained_values(scan: SealedScan, *values: Any) -> None:
 
 
 def _artifact_directories(directory: Path, count: int, scan: SealedScan) -> None:
+    snapshot = _artifact_directory_snapshot(directory, count, scan)
+    if isinstance(scan, _ChainScan):
+        if scan.artifact_snapshot is not None and scan.artifact_snapshot != snapshot:
+            raise ContractError('artifact directory changed since chain validation')
+        scan.artifact_snapshot, scan.artifact_count = snapshot, count
+    scan.check()
+
+
+def _admit_hpo_artifact_append(scan: _ChainScan, generation: int) -> None:
+    """Reflect one separately ACK-authorized append on this SAME sealed owner."""
+    integer(generation, 1, 2**63 - 1)
+    previous = scan.artifact_snapshot
+    if type(scan) is not _ChainScan or previous is None or scan.artifact_count != generation - 1:
+        raise ContractError('HPO saved namespace requires its exact previous sealed generation')
+    # Recheck all prior physical hashes and file inventories without inventing a
+    # permissive root snapshot. The capsule has already checked Rust's permit.
+    SealedScan.finalize(scan)
+    current = _artifact_directory_snapshot(scan.root, generation, scan)
+    if current[:2] != previous[:2] or scan.artifact_snapshot != previous:
+        raise ContractError('HPO saved namespace replaced its original artifacts root')
+    scan.artifact_snapshot, scan.artifact_count = current, generation
+
+
+def _artifact_directory_snapshot(directory: Path, count: int, scan: SealedScan) -> tuple[int, ...]:
     scan.charge(1024 * (count + 2), temporary=True)
     expected = {f'{number:06}' for number in range(count + 1)}
     seen = set()
@@ -345,11 +369,8 @@ def _artifact_directories(directory: Path, count: int, scan: SealedScan) -> None
         raise ContractError('missing component artifact generation directory')
     if _stat_identity(root.lstat()) != _stat_identity(before):
         raise ContractError('artifact directory changed while enumerating')
-    if isinstance(scan, _ChainScan):
-        if scan.artifact_snapshot is not None and scan.artifact_snapshot != _stat_identity(before):
-            raise ContractError('artifact directory changed since chain validation')
-        scan.artifact_snapshot, scan.artifact_count = _stat_identity(before), count
     scan.check()
+    return _stat_identity(before)
 
 
 def _number(value: Any) -> float:

@@ -315,6 +315,8 @@ class GameLearningProcess(StructuredLearningProcess):
                 'batch': str(projection.numeric), 'batch_digest': projection.expectation['numeric_manifest_sha256'],
                 'expected_policy_version': projection.expectation['expected_policy_version'], 'output': str(output),
                 'transaction_id': projection_hash(projection.expectation, storage_binding=self.storage_binding), 'projection': projection.expectation}, deadline)
+            if self.hpo_training is not None:
+                projection._record_hpo_save_ack(self, reply)
             projection.completed = True
             return reply
         finally:

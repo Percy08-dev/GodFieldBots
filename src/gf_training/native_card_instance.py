@@ -469,6 +469,61 @@ class _NativeGameInputs(NativeStructuredSource):
         self._final_artifact_provider: Any = None
         self._numeric_files: Json | None = None
         self._prepared_receipt: Json | None = None
+        self._hpo_save_phase = 'empty'
+        self._hpo_save_error: BaseException | None = None
+
+    def _poison_hpo_save(self, error: BaseException) -> None:
+        self._hpo_save_phase = 'failed'
+        if self._hpo_save_error is None:
+            self._hpo_save_error = error
+
+    def _admit_hpo_saved_output(self, projection: Any, generation: int, files: Json) -> None:
+        try:
+            self._check()
+            from gf_training.card_instance_source import IssuedGameProjection
+            from gf_training.lineage import checkpoint_path, require_hpo_run_owner
+            from gf_training.structured_lineage import _admit_hpo_artifact_append, _ChainScan
+            if (not self._hpo or self.plan['mode'] != 'live_cohort' or not self._begun
+                    or self._prepared or self._hpo_save_phase != 'empty'
+                    or type(projection) is not IssuedGameProjection
+                    or projection.source.native_inputs is not self
+                    or projection._hpo_save_phase != 'admitting'
+                    or type(self.sealed) is not _ChainScan
+                    or generation != self.collection['generation'] + 1):
+                raise ContractError('SAME live native capsule and acknowledged next save required')
+            require_hpo_run_owner(self.sealed.root, projection.source.online.ownership)
+            ack = projection._require_hpo_save_ack(projection.process, generation, files)
+            self._hpo_save_phase = 'admitting'
+            if self._binary_scan is not None:
+                self._binary_scan.finalize()
+            # The existing native owner independently enforces its armed exact
+            # one-next-directory permit before Python changes its frozen view.
+            self._native_call(self._session.recheck)
+            _admit_hpo_artifact_append(self.sealed, generation)
+            from gf_models.structured_artifacts import adam_recipe
+            from gf_models.structured_sealed import inspect_retained_game_artifact_v4
+            from gf_training.hpo_config import hpo_training_config
+            assert self.summary is not None
+            state = self.summary['parent']['state']
+            recipe = hpo_training_config(state['effective_config']['hpo_spec']['training_recipe'])
+            artifact = inspect_retained_game_artifact_v4(checkpoint_path(self.sealed.root, generation),
+                expected_inference_digest=ack['artifact']['inference_digest'], actions=self.actions,
+                rules=card_instance_rules(), training_recipe=asdict(recipe),
+                optimizer_recipe=adam_recipe(recipe.adam_learning_rate, recipe.adam_beta1,
+                    recipe.adam_beta2, recipe.adam_epsilon), scan=self.sealed)
+            if (canonical(artifact.files) != canonical(files) or artifact.resume is None
+                    or artifact.resume['optimizer_steps'] != ack['artifact']['optimizer_steps']
+                    or artifact.resume['resume_identity'] != state['resume_identity']
+                    or canonical(artifact.resume['model']) != canonical(asdict(self.models[0]))
+                    or canonical(artifact.resume['binding']) != canonical(state['execution']['learner']['binding'])):
+                raise ContractError('native saved pair differs from the actual child ACK/model/steps')
+            self.sealed.finalize()
+            if self._binary_scan is not None:
+                self._binary_scan.finalize()
+            self._hpo_save_phase = 'admitted'
+        except BaseException as error:
+            self._poison_hpo_save(error)
+            raise
 
     def __enter__(self) -> Self:
         from gf_training.native_backend import (
@@ -559,6 +614,9 @@ class _NativeGameInputs(NativeStructuredSource):
                 self._executor._remember(error)
 
     def _check(self) -> None:
+        failure = getattr(self, '_hpo_save_error', None)
+        if failure is not None:
+            raise failure
         super()._check()
         if getattr(self, '_artifact_provider', None) is not None:
             self._artifact_provider._check()
@@ -947,6 +1005,8 @@ class _NativeGameInputs(NativeStructuredSource):
 
     def prepare_commit(self) -> None:
         self._check()
+        if self._hpo and self._hpo_save_phase != 'admitted':
+            raise ContractError('native HPO preparation requires acknowledged saved-output admission')
         if self.plan['mode'] != 'live_cohort' or not self._begun or self._numeric_files is None:
             raise ContractError('native preparation requires its completed live projection')
         self.recheck()

@@ -906,6 +906,20 @@ def _update(directory: Path, state: Json, records: list[Json], current: Json, sc
 def commit_hpo_generation(directory: Path,state: Json,*,generation: int,update: Json | None,
                            controls: Json,artifact_files: Json,max_owned_bytes: int,deadline: float,
                            projection: Any = None,ownership: RunOwnership | None = None) -> Json:
+    try:
+        return _commit_hpo_generation(directory,state,generation=generation,update=update,
+            controls=controls,artifact_files=artifact_files,max_owned_bytes=max_owned_bytes,
+            deadline=deadline,projection=projection,ownership=ownership)
+    except BaseException as error:
+        from gf_training.card_instance_source import IssuedGameProjection
+        if type(projection) is IssuedGameProjection:
+            projection._poison_hpo_save(error)
+        raise
+
+
+def _commit_hpo_generation(directory: Path,state: Json,*,generation: int,update: Json | None,
+                           controls: Json,artifact_files: Json,max_owned_bytes: int,deadline: float,
+                           projection: Any = None,ownership: RunOwnership | None = None) -> Json:
     """Append verified state under the original lock and actual Source capability."""
     import hashlib
 
@@ -973,7 +987,9 @@ def commit_hpo_generation(directory: Path,state: Json,*,generation: int,update: 
             records[-1]['parent_controls']['snapshot_pool'] if records else [0])
         if update is not None: _update(directory,state,records,record,scan,model,value=update)
         scan.finalize()
-        if projection is not None: projection.prepare_commit()
+        if projection is not None:
+            projection._admit_hpo_saved_output(projection.source.online.process,generation,files,owner)
+            projection.prepare_commit()
         if update is not None and write_hpo_control(directory/'updates'/f'{generation:06}.json',update,scan=scan,immutable=True,ownership=owner)!=update_sha:
             raise ContractError('HPO update serialization changed during commit')
         sha=write_hpo_control(generation_path(directory,generation),record,scan=scan,immutable=True,ownership=owner)

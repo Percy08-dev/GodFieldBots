@@ -1,5 +1,6 @@
 """Actual common-loop CPU components; no GPU/Simulator qualification."""
 import asyncio
+import os
 import time
 import uuid
 from dataclasses import asdict, dataclass, field
@@ -8,7 +9,7 @@ import pytest
 
 pytest.importorskip('torch')
 
-from gf_cli.config import ExperimentConfig, LoadedConfig
+from gf_cli.config import ExperimentConfig, GroupPackExperimentConfig, LoadedConfig
 from gf_common.domain import ContractError, digest
 from gf_models.sharded_arrays import read_json
 from gf_training.collection import FinalizedCollection
@@ -16,6 +17,15 @@ from gf_training.hpo_gpu_lease import JobContext, admit_gpu_job
 from tests.hpo_lineage_support import hpo_state_fixture
 from tests.hpo_support import original_hpo_collection
 from tests.test_card_instance_learning import ACTIONS, RULES
+from tests.test_hpo_native import candidate as native_save_candidate  # noqa: F401 - scoped private-binary fixture
+
+
+@pytest.fixture(scope='module')
+def native_save_backend(request):
+    if os.environ.get('GFB_HPO_NATIVE_CANDIDATE'):
+        return request.getfixturevalue('native_save_candidate')
+    from gf_training.native_backend import load_native
+    return load_native()
 
 
 @dataclass(frozen=True)
@@ -23,10 +33,15 @@ class ControlledHpoConfig(ExperimentConfig):
     hpo_spec: dict=field(default_factory=dict)
 
 
-def controlled_run(tmp_path,monkeypatch,*,budget=3,max_updates=4,numeric_budget=None,storage_cap=None):
+@dataclass(frozen=True)
+class ControlledPackedHpoConfig(GroupPackExperimentConfig):
+    hpo_spec: dict=field(default_factory=dict)
+
+
+def controlled_run(tmp_path,monkeypatch,*,budget=3,max_updates=4,numeric_budget=None,storage_cap=None,native=False,packed=False):
     import gf_training.hpo_gpu_lease as gpu
     import gf_training.hpo_source as source
-    from gf_cli.config import CorrectedServerConfigV2, RunConfigV2
+    from gf_cli.config import CorrectedServerConfigV2, GroupPackStorageConfig, RunConfigV2
     from gf_common.card_instance import action_config_v3
     from gf_common.preprocessing import preparation_config
     from gf_common.structured_layout import CORRECTED_CARD_INSTANCE_LAYOUT
@@ -47,9 +62,14 @@ def controlled_run(tmp_path,monkeypatch,*,budget=3,max_updates=4,numeric_budget=
     if storage_cap is not None:
         raw['hpo_spec']['storage'].update(destination_capacity_bytes=storage_cap,admission_reservation_bytes=storage_cap)
         raw['training'].update(max_owned_bytes=storage_cap,admission_reservation_bytes=storage_cap)
-    config=ControlledHpoConfig(run=RunConfigV2(**raw['run']),server=CorrectedServerConfigV2(**raw['server']),
+    if native:
+        raw['preprocessing']['backend']='rust'
+    storage={}
+    if packed:
+        storage={'storage':GroupPackStorageConfig(db_root=str(tmp_path/'database'),ram_root=str(tmp_path/'ram'),budget_mib=1024)}
+    config=(ControlledPackedHpoConfig if packed else ControlledHpoConfig)(run=RunConfigV2(**raw['run']),server=CorrectedServerConfigV2(**raw['server']),
         actions=action_config_v3(raw['actions']),model=configured_model_v4(raw['model'],layout=CORRECTED_CARD_INSTANCE_LAYOUT),
-        training=PPOTrainingConfig(**raw['training']),preprocessing=preparation_config(raw['preprocessing']),hpo_spec=raw['hpo_spec'])
+        training=PPOTrainingConfig(**raw['training']),preprocessing=preparation_config(raw['preprocessing']),hpo_spec=raw['hpo_spec'],**storage)
     raw=asdict(config)
     loaded=LoadedConfig(config,raw,digest(raw),())
     # The sole explicitly replaced production gates keep honest CPU metadata.
@@ -76,6 +96,20 @@ def collector_for(loaded,model,recipe,binding,*,decisions=True):
         learner=HpoLearner(model,recipe,17,binding,state['resume_identity'],actions=ACTIONS,rules=RULES)
         learner.restore(checkpoint_path(plan.output.parent.parent,state['updates']))
         original_hpo_collection(plan,state,learner,decisions=decisions)
+        if hasattr(loaded.config,'storage'):
+            import json
+            from pathlib import Path
+
+            from gf_models.arrays import sha256
+            from gf_training.collection import PackedFinalizedCollection
+            from gf_training.group_pack_source import CollectionLocator
+            from tests.test_group_pack_game_source import pack_original
+            destination=Path(loaded.config.storage.db_root)/state['run_id']/'collections'/plan.linkage['batch_id']
+            pack_original(plan.output,destination)
+            pointer=json.loads((plan.output/'collection.locator.json').read_bytes())
+            return PackedFinalizedCollection(plan.output,{'comparison_valid':True,'healthy':True},
+                CollectionLocator('sqlite-group-pack-v1',Path(pointer['descriptor'])),
+                sha256(plan.output/'collection.locator.json'),{'publication_scope':'published'})
         return FinalizedCollection(plan.output,{'comparison_valid':True})
     return collect
 
@@ -117,6 +151,145 @@ def invoke(loaded,collector,directory,run_id,*,mode='fresh',pause=None):
     try:
         return asyncio.run(train_hpo_ppo(loaded,collector,directory,gpu_job=job,mode=mode,pause_after_update=pause))
     finally: job.close()
+
+
+@pytest.mark.parametrize('packed',[False,True])
+def test_actual_cpu_native_common_loop_ack_save_two_updates_and_resume(tmp_path,monkeypatch,packed,native_save_backend):
+    """Isolated CPU leases and held originals grant no real GPU recovery/authority."""
+    from gf_common.hpo import NATIVE_CAPABILITY
+    from gf_training.card_instance_source import IssuedGameProjection
+    from gf_training.native_backend import load_native
+    from gf_training.native_card_instance import _NativeGameInputs
+    native=load_native()
+    assert native is native_save_backend
+    if dict(native.build_info()).get('card_instance_hpo')!=NATIVE_CAPABILITY:
+        pytest.skip('actual installed HPO native support required; no fallback')
+    seen=[]
+    original=_NativeGameInputs._authorize_owned
+    def observed(self):
+        assert self._hpo and not self._explicit_candidate
+        assert self.native is native
+        original(self)
+        if self.plan['mode']=='live_cohort':
+            seen.append(self)
+    monkeypatch.setattr(_NativeGameInputs,'_authorize_owned',observed)
+    charged=[]
+    original_record=IssuedGameProjection._record_hpo_save_ack
+    original_prepare=IssuedGameProjection._prepare_commit
+    def record(self,process,reply):
+        assert process._issued_handle is self and not process.ledger.updating and not self.completed
+        original_record(self,process,reply)
+        assert self.source.controls.retained>=self._hpo_ack_source_floor>=self._hpo_ack_charge>0
+        with pytest.raises(AttributeError): self._hpo_save_ack=b'forged'
+        charged.append(self)
+    def prepare(self):
+        original_prepare(self)
+        control=self.source.controls
+        assert control.retained>=self._hpo_ack_source_floor
+        if control._packed_pool is not None:
+            assert control._pool_control_charge>=control.retained
+        assert self.source.native_inputs.sealed is not control
+        assert self.source.native_inputs.sealed.artifact_count==control.artifact_count
+    monkeypatch.setattr(IssuedGameProjection,'_record_hpo_save_ack',record)
+    monkeypatch.setattr(IssuedGameProjection,'_prepare_commit',prepare)
+    loaded,model,recipe,binding,run_id=controlled_run(tmp_path,monkeypatch,budget=9,native=True,packed=packed)
+    collector=collector_for(loaded,model,recipe,binding)
+    first=invoke(loaded,collector,tmp_path/'parent',run_id,pause=1)
+    assert first.report['status']=='paused' and first.report['updates']==1
+    resumed=invoke(loaded,collector,tmp_path/'parent',run_id,mode='resume')
+    assert resumed.report['status']=='complete' and resumed.report['updates']==2
+    continuous=tmp_path/'continuous'
+    continuous.mkdir()
+    loaded2,model2,recipe2,binding2,run_id2=controlled_run(continuous,monkeypatch,budget=9,native=True,packed=packed)
+    result=invoke(loaded2,collector_for(loaded2,model2,recipe2,binding2),continuous/'parent',run_id2)
+    assert result.report['status']=='complete' and result.report['updates']==2
+    from tests.test_structured_numeric_worker import assert_artifacts_equal
+    assert_artifacts_equal(continuous/'parent/artifacts/000002',tmp_path/'parent/artifacts/000002')
+    assert len(seen)>=4 and all(owner._prepared and owner.cleanup_complete for owner in seen)
+    assert len(charged)==4 and all(projection._hpo_save_phase=='admitted' for projection in charged)
+    for generation in (1,2):
+        record=read_json(tmp_path/'parent/generations'/f'{generation:06}.json')
+        update=read_json(tmp_path/'parent/updates'/f'{generation:06}.json')
+        assert record['used_decisions']==min(generation*8,9)
+        assert update['expected_optimizer_step_delta']==update['metrics']['optimizer_step_delta']
+
+
+@pytest.mark.parametrize('fault',['missing','duplicate_ack','foreign_process','foreign_owner','generation',
+    'steps','map','handle','extra','symlink','replaced_root','old_file','saved_payload','partial','cancel'])
+def test_actual_cpu_native_ack_transition_faults_never_publish(tmp_path,monkeypatch,fault,native_save_backend):
+    from dataclasses import replace
+
+    from gf_training.card_instance_source import IssuedGameProjection
+    from gf_training.native_backend import load_native
+    assert load_native() is native_save_backend
+    if 'card_instance_hpo' not in dict(load_native().build_info()):
+        pytest.skip('actual HPO native required')
+    loaded,model,recipe,binding,run_id=controlled_run(tmp_path,monkeypatch,budget=1,native=True)
+    captured=[]
+    original_record=IssuedGameProjection._record_hpo_save_ack
+    original_admit=IssuedGameProjection._admit_hpo_saved_output
+    def record(self,process,reply):
+        captured.append(self)
+        assert self.source.native_inputs is not None and process._issued_handle is self
+        if fault=='missing': return
+        original_record(self,process,reply)
+        if fault=='duplicate_ack': original_record(self,process,reply)
+    def admit(self,process,generation,files,ownership):
+        if fault=='foreign_process': process=object()
+        elif fault=='foreign_owner': ownership=replace(ownership,token='foreign')
+        elif fault=='generation': generation+=1
+        elif fault=='steps': process.steps+=1
+        elif fault=='map':
+            files={**files,'inference.json':'f'*64}
+        elif fault=='handle': process._issued_handle=object()
+        artifacts=tmp_path/'parent/artifacts'
+        if fault=='extra': (artifacts/'000002').mkdir()
+        elif fault=='symlink':
+            (artifacts/'000001').rename(tmp_path/'saved-elsewhere')
+            (artifacts/'000001').symlink_to(tmp_path/'saved-elsewhere',target_is_directory=True)
+        elif fault=='replaced_root':
+            artifacts.rename(tmp_path/'original-artifacts')
+            artifacts.mkdir()
+        elif fault=='old_file':
+            with (artifacts/'000000/inference.json').open('ab') as out: out.write(b' ')
+        elif fault=='saved_payload':
+            name=next(name for name in files if name.startswith('weights-') and name.endswith('.npz'))
+            with (artifacts/'000001'/name).open('ab') as out: out.write(b'changed')
+        try:
+            return original_admit(self,process,generation,files,ownership)
+        finally:
+            if fault=='handle': self.process._issued_handle=None
+    monkeypatch.setattr(IssuedGameProjection,'_record_hpo_save_ack',record)
+    monkeypatch.setattr(IssuedGameProjection,'_admit_hpo_saved_output',admit)
+    if fault in ('partial','cancel'):
+        # Fault after the actual Rust permit and Python namespace admission,
+        # before the native capsule can publish a successful saved-pair phase.
+        import gf_training.structured_lineage as lineage
+        original_append=lineage._admit_hpo_artifact_append
+        def append(*args,**kwargs):
+            original_append(*args,**kwargs)
+            if fault=='cancel': raise asyncio.CancelledError('admission cancellation')
+            raise OSError('partial admission fault')
+        monkeypatch.setattr(lineage,'_admit_hpo_artifact_append',append)
+    with pytest.raises((ContractError,ValueError,RuntimeError,OSError,asyncio.CancelledError)):
+        invoke(loaded,collector_for(loaded,model,recipe,binding),tmp_path/'parent',run_id)
+    assert captured
+    projection=captured[0]
+    assert not projection.prepared and projection._hpo_save_error is not None
+    error=projection._hpo_save_error
+    with pytest.raises(BaseException) as retry:
+        original_admit(projection,projection.process,1,{},projection.source.online.ownership)
+    assert retry.value is error
+    assert not (tmp_path/'parent/generations/000001.json').exists()
+    assert not (tmp_path/'parent/updates/000001.json').exists()
+    state=read_json(tmp_path/'parent/run.json')
+    if state['status']!='failed':
+        # Poisoned physical namespaces can also prevent the failure-marker
+        # write. They must remain structurally ineligible, never be repaired.
+        assert fault in ('symlink','replaced_root')
+        from gf_training.hpo_lineage import validate_hpo_chain
+        with pytest.raises(ContractError):
+            validate_hpo_chain(tmp_path/'parent',require_complete=False,max_owned_bytes=1024**3,deadline=time.monotonic()+30)
 
 
 def test_actual_pause_resume_uses_same_original_deadlines_and_arrays(tmp_path,monkeypatch):

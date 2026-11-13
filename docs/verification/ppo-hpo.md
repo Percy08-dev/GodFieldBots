@@ -422,3 +422,98 @@ Only tests change; all197application runtime files and the native binary remain
 identical to the0f4f300 package proof. The following full run enables the existing
 pytest faulthandler timeout diagnostic and retains the same test scope. Actual
 GPU/Simulator protocol and whole-suite completion remain pending at this point.
+
+## Whole-suite pass and first actual CUDA functional attempt
+
+The3d1504f HOST whole command with the explicit source-matched native candidate,
+`-o faulthandler_timeout=60` and JUnit output completes5462PASS/341explicit SKIP/
+29warnings in1244.89s. A slow JSON case prints a faulthandler diagnostic without
+failing. The previous constructor wait is fixed. The same runtime197files pass
+fresh package correspondence and all five HOST proof-a04 run/data audits;
+mandatory-only installed CLI proof remains valid for these unchanged bytes.
+
+Root then executes the predeclared MLP inner case with actual CUDA learning and
+inference on NVIDIA GeForce RTX5070Ti/CUDA13.2. Eight natural games produce84
+learner decisions; the final-batch selector uses8 and the child performs one
+optimizer step. The run FAILS during generation preparation, before Gen1/Update1
+publication: the native bridge's separate Python _ChainScan still expects G0
+when the actual saved G1 directory is rechecked. The coordinator's own scan has
+advanced, which does not advance that separate owner. Saved G1 exists but is
+not a committed checkpoint. No final-policy evaluation, objective, trial or study
+is created. The whole parent remains failed/quarantined/ineligible and is retained
+at `runs/hpo-functional-20261114-a01/matrix-mlp/parents/09c81085-c1e5-47c1-8424-4c174b47a44e`.
+
+Cleanup retains uncertain native executor/provider/original ownership. Actual
+global ticketf6150b31a5e04244a1a2d918da8ccfc8 has admission only, no termination
+or restart receipt, and remains current. Owner PID absence is not cleanup proof.
+All subsequent physical GPU work is refused pending explicit actual environment
+restart confirmation under the accepted recovery rules; root does not reboot,
+reset the namespace, fabricate a receipt or reuse the failed parent.
+
+The [bounded save-transition correction](../design/ppo-hpo-native-save-transition.md)
+passes independent architecture review before implementation. It latches the
+actual verified learner ACK on the SAME projection, independently checks the
+saved pair/map/expected generation/steps/parent-lock owner, and advances only that
+native capsule's owned Python namespace through the existing Rust append permit.
+Both scans, all old originals and normal native prepare/retirement remain checked.
+CPU/native common-loop plain/packed update/resume regressions and negative
+transition tests are required; isolated honest CPU test leases grant no physical
+GPU recovery or production Source authority. Implementation and re-reviews remain
+pending here, followed by a fresh same-condition functional attempt after recovery.
+
+An interim after-a01 data audit rehashes all29814protected originals and24fits:
+bytes, device/inode/size/mtime/ctime match `/tmp/hpo-originals-before.json` exactly,
+PASS in9.46s. Its receipt is `originals-after-failed-a01.json` under the functional
+assessment. Future real attempts still require the final after-comparison.
+
+## ACK-bound save correction scoped acceptance
+
+The correction now passes independent correctness and conformance reviews, with
+no blocking findings. Actual verified ACK capture occurs before the child request
+handle clears; immutable bytes and decoded aliases remain charged to Source
+controls. Commit independently checks the saved pair and exact map/g+1/steps/
+actual lock owner, then the owned native capsule checks Rust's append permit and
+advances only its separate Python scan. Original hashes, inventories, providers,
+root identity and ordinary native prepare/retirement remain checked. Partial
+transition/prepare/publication failures retain the first error and poison reuse.
+Native packed ACK metadata stays charged to controls, without duplicating a
+consumed graph floor; Python snapshot growth is admitted before serialization.
+
+An actual CPU/native common loop reproduces the original G1 failure in4.86s.
+The fixed plain and packed cases both complete continuous2updates and pause1→
+resume2 with equal saved weights, Adam and RNG arrays. Fifteen actual child/native
+fault cases reject missing/duplicate/mutated ACK, foreign process/owner, wrong
+generation/steps/map/handle, extra/symlink/replaced directories, changed old/new
+files, partial admission and cancellation before lineage publication. When a
+damaged namespace prevents writing the failed marker itself, tests require
+structural ineligibility and terminal capability rather than repairing the marker.
+
+Implementer private-candidate regression168PASS in256.84s includes affected
+Source/wire/retention/decoded accounting, legacy packed PPO/CPU workers and eight
+ASTs. Independent correctness runs8CPU/native cases in58.45s plus kernel pins,
+the Rust append primitive and static checks; conformance runs4CPU/native equality/
+partial/cancel cases in44.16s. Both report READY. Root's new-private continuous/
+resume2cases pass in38.77s; a separate ABI-compatible installed-native check also
+passes2cases in38.11s. Root full Ruff/mypy195source/diff pass. These tests retain
+honest CPU metadata and isolated component leases; none authorizes physical GPU
+work or qualification while the actual pending ticket remains unresolved.
+
+Rust now distinguishes the existing closed Hpo/PackedHpo formats for widened
+canonical numeric generation names, leaving old1000-directory/order guards exact.
+Bounded primitive cases exercise1001directories, six-digit lexical boundaries and
+2^63 without large training. All Rust173PASS/7opt-in ignored in38.69s, rustfmt
+and independently recomputed source/Cargo/RECORD/sdist checks pass.
+
+The new private release/MIMALLOC wheel is SHA92390e03…e6253b; ELFdae8bb36…7dc8a4;
+source56df546f…2cc064; Cargo.lock unchangedf81e4cc1…c6576. It is not installed yet.
+Fresh app/native wheel/sdist correspondence passes197/91files and7embedded assets,
+and fresh installed mandatory-only baseline/CLI/HPO validation passes for the
+same-condition retry inputs. Root-owned final current-source corpus/whole checks,
+local acceptance commit and any installed activation remain separately recorded.
+
+No new physical GPU run, recovery action or mutation of a01/f615 occurred during
+this correction. Fresh a02 inputs change only storage namespaces; all nonstorage
+config fields/base identities match a01. The unresolved actual ticket still
+requires explicit real environment-restart confirmation before the remaining
+functional protocol can continue. Foundation acceptance and strength claims are
+not implied by these CPU/source results.

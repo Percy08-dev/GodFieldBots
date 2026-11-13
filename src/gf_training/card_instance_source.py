@@ -577,6 +577,13 @@ class IssuedGameProjection:
     _verified_delta: int = field(init=False, repr=False)
     _decoded_retired: bool = field(default=False, init=False, repr=False)
     _decoded_retirement_error: BaseException | None = field(default=None, init=False, repr=False)
+    _hpo_save_ack: bytes | None = field(default=None, init=False, repr=False)
+    _hpo_ack_process: Any = field(default=None, init=False, repr=False)
+    _hpo_ack_capsule: Any = field(default=None, init=False, repr=False)
+    _hpo_ack_charge: int = field(default=0, init=False, repr=False)
+    _hpo_ack_source_floor: int = field(default=0, init=False, repr=False)
+    _hpo_save_phase: str = field(default='empty', init=False, repr=False)
+    _hpo_save_error: BaseException | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
         hpo = _hpo(self.source.state)
@@ -588,6 +595,11 @@ class IssuedGameProjection:
     def __setattr__(self, name: str, value: Any) -> None:
         if name in ('_verified_decisions', '_verified_collected', '_verified_delta') and name in vars(self):
             raise AttributeError('verified issued decision count is immutable')
+        if (name in ('_hpo_save_ack', '_hpo_ack_process', '_hpo_ack_capsule', '_hpo_ack_charge', '_hpo_ack_source_floor')
+                and vars(self).get('_hpo_save_phase', 'empty') != 'empty'):
+            raise AttributeError('acknowledged HPO save binding is immutable')
+        if name == '_hpo_save_phase' and vars(self).get(name) == 'failed' and value != 'failed':
+            raise AttributeError('failed HPO save admission is terminal')
         object.__setattr__(self, name, value)
 
     @property
@@ -595,6 +607,8 @@ class IssuedGameProjection:
         return json.loads(self._expectation)
 
     def require(self, process: Any, *, after: bool = False) -> None:
+        if self._hpo_save_error is not None:
+            raise self._hpo_save_error
         if self._decoded_retirement_error is not None:
             raise self._decoded_retirement_error
         if self._decoded_retired and not after:
@@ -615,6 +629,95 @@ class IssuedGameProjection:
             self.source.recheck_originals()
             self.source.controls.finalize()
             self.source.online.collection_controls.finalize()
+
+    def _poison_hpo_save(self, error: BaseException) -> None:
+        self._hpo_save_phase = 'failed'
+        if self._hpo_save_error is None:
+            self._hpo_save_error = error
+        if self.source.native_inputs is not None:
+            self.source.native_inputs._poison_hpo_save(self._hpo_save_error)
+
+    def _record_hpo_save_ack(self, process: Any, reply: Json) -> None:
+        """Only the actual completed child request can seal this control value."""
+        try:
+            if (not _hpo(self.source.state) or self._hpo_save_phase != 'empty'
+                    or self.completed or process is not self.process
+                    or process._issued_handle is not self or process.ledger.updating):
+                raise ContractError('HPO save ACK requires the SAME just-verified child request')
+            self.require(process, after=True)
+            expected = self.expectation
+            from gf_training.hpo_numeric_worker import digest_projection
+            if (reply['transaction_id'] != digest_projection(expected, storage_binding=self.source.state.get('storage_binding'))
+                    or reply['collection_generation'] != expected['collection_generation']
+                    or reply['expected_optimizer_steps'] != expected['expected_optimizer_steps']
+                    or reply['artifact']['optimizer_steps'] != process.steps):
+                raise ContractError('HPO child save ACK differs from the issued transaction')
+            value = {'transaction_id': reply['transaction_id'],
+                'expectation_sha256': hashlib.sha256(self._expectation).hexdigest(),
+                'collection_generation': reply['collection_generation'],
+                'expected_optimizer_steps': reply['expected_optimizer_steps'],
+                'artifact': reply['artifact']}
+            from gf_models.sharded_arrays import json_bytes
+            size = json_bytes(value)
+            # Retained canonical bytes and bounded decoded aliases stay Source
+            # metadata; never refund them with the consumed token graph.
+            charge = 64 * size + 131072
+            self.source.controls.charge(charge)
+            self._hpo_ack_charge = charge
+            self._hpo_ack_source_floor = self.source.controls.retained
+            if self.source.snapshot is not None:
+                self.source.snapshot.reserve(self.source.snapshot._external_bytes + charge)
+            self._hpo_save_ack = canonical(value).encode()
+            self._hpo_ack_process = process
+            self._hpo_ack_capsule = self.source.native_inputs
+            self._hpo_save_phase = 'latched'
+        except BaseException as error:
+            self._poison_hpo_save(error)
+            raise
+
+    def _require_hpo_save_ack(self, process: Any, generation: int, files: Json) -> Json:
+        self.require(process, after=True)
+        control = self.source.controls
+        if (not _hpo(self.source.state) or self._hpo_save_ack is None
+                or self._hpo_ack_process is not process or self._hpo_ack_capsule is not self.source.native_inputs
+                or not self.completed or self.prepared or process._issued_handle is not None
+                or process.ledger.updating or self._hpo_save_phase not in ('latched', 'admitting')
+                or control._closed or control.retained < self._hpo_ack_source_floor
+                or control._packed_pool is not None and control._pool_control_charge < control.retained):
+            raise ContractError('SAME completed HPO child ACK/projection/capsule required')
+        ack = json.loads(self._hpo_save_ack)
+        expected = self.expectation
+        from gf_training.hpo_numeric_worker import digest_projection
+        if (generation != expected['collection_generation'] + 1
+                or ack['collection_generation'] != expected['collection_generation']
+                or ack['transaction_id'] != digest_projection(expected, storage_binding=self.source.state.get('storage_binding'))
+                or ack['expectation_sha256'] != hashlib.sha256(self._expectation).hexdigest()
+                or ack['expected_optimizer_steps'] != expected['expected_optimizer_steps']
+                or ack['artifact']['optimizer_steps'] != expected['expected_optimizer_steps'] + self._verified_delta
+                or process.steps != ack['artifact']['optimizer_steps']
+                or canonical(files) != canonical(ack['artifact']['files'])
+                or files['inference.json'] != ack['artifact']['inference_digest']
+                or files['resume.json'] != ack['artifact']['resume_digest']):
+            raise ContractError('HPO saved pair/map/generation differs from the immutable child ACK')
+        return ack
+
+    def _admit_hpo_saved_output(self, process: Any, generation: int, files: Json, ownership: Any) -> None:
+        try:
+            if self._hpo_save_error is not None:
+                raise self._hpo_save_error
+            from gf_training.lineage import require_hpo_run_owner
+            if self._hpo_save_phase != 'latched' or ownership is not self.source.online.ownership:
+                raise ContractError('one SAME-owner HPO acknowledged save admission required')
+            require_hpo_run_owner(self.source.controls.root, ownership)
+            self._require_hpo_save_ack(process, generation, files)
+            self._hpo_save_phase = 'admitting'
+            if self.source.native_inputs is not None:
+                self.source.native_inputs.caller_growth(self.source.controls.retained - self.source._control_base)
+                self.source.native_inputs._admit_hpo_saved_output(self, generation, files)
+            self._hpo_save_phase = 'admitted'
+        except BaseException as error:
+            self._poison_hpo_save(error)
+            raise
 
     def retire_packed_decoded(self) -> None:
         """One guarded consumed-graph boundary; physical originals remain live."""
@@ -653,7 +756,7 @@ class IssuedGameProjection:
             # These serialized values can still be decoded by later reportable
             # guards. Preserve their existing conservative JSON allowances too.
             parsing = 32*(len(source.snapshot.collection._manifest)+len(source.snapshot.collection._proof))+131072
-            remaining = source.snapshot._retained_bytes + parsing + _owned_bytes((self._expectation, self.files, numeric_metadata, source._hpo_selection))
+            remaining = source.snapshot._retained_bytes + parsing + self._hpo_ack_charge + _owned_bytes((self._expectation, self.files, numeric_metadata, source._hpo_selection, self._hpo_save_ack))
             owner.retire_decoded(retained_bytes=remaining)
         except BaseException as error:
             self._decoded_retirement_error = error
@@ -662,7 +765,17 @@ class IssuedGameProjection:
         self._decoded_retired = True
 
     def prepare_commit(self) -> None:
+        try:
+            self._prepare_commit()
+        except BaseException as error:
+            if _hpo(self.source.state):
+                self._poison_hpo_save(error)
+            raise
+
+    def _prepare_commit(self) -> None:
         self.require(self.process, after=True)
+        if _hpo(self.source.state) and self._hpo_save_phase != 'admitted':
+            raise ContractError('HPO preparation requires the actual acknowledged saved pair')
         if not self.completed or self.prepared:
             raise ContractError('Source update has not completed exactly once')
         self.source.recheck_originals()
@@ -687,6 +800,8 @@ class IssuedGameProjection:
                     self.retire_packed_decoded()
             else:
                 # Native owns its separate existing payload-retirement boundary.
+                # ACK metadata belongs to source.controls and its independent
+                # shared control reservation, not this consumed native graph.
                 self.source.online.packed_batch.owner.retire_decoded()
             self.source.online.packed_batch.prepare(proof)
         # No remaining reportable per-batch I/O. Old run/registry snapshots are

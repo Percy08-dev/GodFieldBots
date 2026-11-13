@@ -25,13 +25,15 @@ scoped independent fix reviews. [Creation evidence](design/ppo-hpo-creation-proo
 uses actual owner observations, original task/event/process identities and
 durable receipts; absence of a PID or lock release never proves cleanup. The
 [management contract](design/ppo-hpo-management.md) remains separate from Source
-qualification and still needs concrete coordinator/evaluator integration.
+qualification and is composed with the common coordinator/evaluator.
 Native Source3b now passes scoped correctness and conformance reviews against a
 source-matched private release/MIMALLOC candidate. Exact Hpo/PackedHpo plan5,
 two-stage authorization, Python-owned learning math and generation-tagged numeric
 allocation guards are implemented. Installed activation, integrated-source legacy
-proofs and genuine GPU/common-loop acceptance remain pending; the installed
-extension is still the original binary.
+proofs and the pre-correction whole Python suite now pass for the reviewed release
+candidate. The first genuine GPU/common-loop functional run fails at the
+acknowledged-save namespace transition; foundation acceptance remains pending
+its correction and repeated real execution.
 
 The [runtime contract](design/ppo-hpo-runtime.md) uses the common coordinator,
 the caller's actual GPU job and audited ledger, original absolute deadlines,
@@ -45,8 +47,15 @@ Optuna/CLI, final-policy evaluation and direct comparison composition. Its
 implementation passes scoped correctness/conformance after fixes for the actual
 collector callback contract, evaluation namespace identities across training
 seeds, and complete independently derived final-D policy/registry binding.
+The [acknowledged-save correction](design/ppo-hpo-native-save-transition.md) is
+implemented and passes scoped correctness/conformance plus actual CPU/native
+common-loop update/resume checks. It binds the actual verified learner ACK to its
+SAME projection, independently verifies the complete next saved pair, and advances
+only the native bridge's owned scan using the existing Rust append permit. The failed a01 parent
+is preserved and ineligible. Its GPU ticket has no termination receipt; explicit
+actual environment-restart confirmation is required before new physical GPU work.
 The [predeclared functional protocol](verification/hpo-functional-protocol.md)
-and final package/legacy proofs remain required before foundation acceptance.
+and refreshed final checks remain required before foundation acceptance.
 
 [ADR0024](adr/0024-card-instance-simulator-v2.md) begins a separately identified
 card-instance Simulator v2 migration. Contract/wire/Config/direct HTTP and pure

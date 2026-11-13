@@ -845,7 +845,10 @@ impl Sources {
         }
         Ok(())
     }
-    pub(crate) fn begin_live_output(&mut self) -> Result<()> {
+    pub(crate) fn begin_live_output(
+        &mut self,
+        format: crate::structured_controls::SourceFormat,
+    ) -> Result<()> {
         self.recheck()?;
         let path = self.root.join("artifacts");
         let index = self
@@ -856,12 +859,12 @@ impl Sources {
         let item = &self.inventories[index];
         if item.append.is_some()
             || item.names.is_empty()
-            || item.names.len() > 1000
+            || !live_artifact_count_allowed(format, item.names.len())
             || item
                 .names
                 .iter()
                 .enumerate()
-                .any(|(i, name)| *name != format!("{i:06}"))
+                .any(|(i, name)| !live_artifact_name_allowed(format, name, i, item.names.len()))
         {
             return Err(Error::contract(
                 "one derived live output phase requires exact original generation inventory",
@@ -1944,7 +1947,9 @@ impl CohortSession {
         }
         self.admitted_corrected_work()?;
         self.inputs.recheck()?;
-        self.inputs.parents[parent].sources.begin_live_output()?;
+        self.inputs.parents[parent]
+            .sources
+            .begin_live_output(self.inputs.format)?;
         self.phase = Phase::Updating;
         Ok(())
     }
@@ -2782,6 +2787,34 @@ impl Drop for CardInstanceNativeSession {
     }
 }
 
+fn live_artifact_count_allowed(
+    format: crate::structured_controls::SourceFormat,
+    count: usize,
+) -> bool {
+    count > 0
+        && count
+            <= if format.hpo() {
+                i64::MAX as usize
+            } else {
+                1000
+            }
+}
+fn live_artifact_name_allowed(
+    format: crate::structured_controls::SourceFormat,
+    name: &str,
+    index: usize,
+    count: usize,
+) -> bool {
+    if !format.hpo() {
+        return name == format!("{index:06}");
+    }
+    // Physical inventories are unique and lexically sorted. Above six digits
+    // that order differs from generation order; canonical range membership
+    // still proves the complete 0..count prefix without another allocation.
+    name.parse::<usize>()
+        .is_ok_and(|generation| generation < count && name == format!("{generation:06}"))
+}
+
 #[cfg(test)]
 mod card_instance_permit_tests {
     use super::*;
@@ -2805,6 +2838,60 @@ mod card_instance_permit_tests {
             Budget::new(64 * 1024 * 1024),
             Control::new(crate::budget::monotonic() + 30.).unwrap(),
         )
+    }
+    #[test]
+    fn hpo_owned_artifact_append_crosses_legacy_thousand_without_a_new_abi() {
+        let (root, b, c) = fixture();
+        let artifacts = root.join("artifacts");
+        fs::create_dir(&artifacts).unwrap();
+        let names = (0..1001).map(|g| format!("{g:06}")).collect::<Vec<_>>();
+        for name in &names {
+            fs::create_dir(artifacts.join(name)).unwrap();
+        }
+        let mut source = Sources::new(&root, b, c, 1024 * 1024).unwrap();
+        source.inventory(&artifacts, names, true).unwrap();
+        use crate::structured_controls::SourceFormat;
+        assert!(!live_artifact_count_allowed(SourceFormat::Corrected, 1001));
+        assert!(live_artifact_count_allowed(
+            SourceFormat::Hpo,
+            i64::MAX as usize
+        ));
+        assert!(!live_artifact_count_allowed(
+            SourceFormat::PackedHpo,
+            i64::MAX as usize + 1
+        ));
+        assert!(source.begin_live_output(SourceFormat::Corrected).is_err());
+        assert!(source.begin_live_output(SourceFormat::Hpo).is_ok());
+        assert!(live_artifact_name_allowed(
+            SourceFormat::Hpo,
+            "1000000",
+            100001,
+            1000001
+        ));
+        assert!(!live_artifact_name_allowed(
+            SourceFormat::Corrected,
+            "1000000",
+            100001,
+            1000001
+        ));
+        assert!(!live_artifact_name_allowed(
+            SourceFormat::Hpo,
+            "01000000",
+            100001,
+            1000001
+        ));
+        assert!(!live_artifact_name_allowed(
+            SourceFormat::PackedHpo,
+            "1000001",
+            100001,
+            1000001
+        ));
+        fs::create_dir(artifacts.join("001001")).unwrap();
+        source.recheck().unwrap();
+        fs::create_dir(artifacts.join("001002")).unwrap();
+        assert!(source.recheck().is_err());
+        drop(source);
+        fs::remove_dir_all(root).unwrap();
     }
     #[test]
     fn card_instance_numeric_append_pins_complete_prior_subtrees_and_exact_target() {
