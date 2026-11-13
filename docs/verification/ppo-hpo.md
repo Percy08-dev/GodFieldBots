@@ -260,3 +260,66 @@ SHA9b1377daac7c93c97a4f267d5f20c2204eb37401a53daa1275019614d1b6767f
 with no HPO marker. No install or heavyweight old-data proof was run for this
 scoped acceptance. Genuine integrated CUDA/native/live/common-loop/Simulator
 and whole-HPO acceptance remain pending runtime4/5b integration and final freeze.
+
+## Runtime4 and evaluation6 scoped acceptance
+
+Evaluation6 is a distinct HPO validation role with no formal/final64/Dataset
+authority. Independent review caught actual unhealthy process/group evidence
+being accepted despite a healthy report, then a nonfinite JSON exponent bypass.
+Both were corrected without changing original outcomes or legacy JSON semantics.
+Both final role reviews are READY. Root's combined316checks pass in16.15s;
+scoped Ruff/mypy also pass. This is component evidence, not an actual panel.
+
+Runtime4 uses the common coordinator with the actual caller GPU job/ledger,
+complete-original selection and per-update full saves. Independent review found
+retained Source missing from the save-phase joint RAM estimate and HPO mutators
+accepting an unowned or foreign-thread parent-lock handle. Both were corrected;
+an additional cleanup error-preservation finding was also closed. Both final
+runtime reviews are READY. Root's focused22phase/ownership/retention cases pass
+in17.44s and7cleanup cases in0.24s; project Ruff/mypy190source pass. Local commit
+c298938 integrates the reviewed runtime;06db3d9 integrates evaluation6.
+
+The post-integration native payload fixture initially failed at the new Source
+numeric admission guard before reaching its intended native allocation check.
+Commit6b31aac changes only tests: ordinary Source keeps its early refusal, while
+an explicitly unqualified component fixture exercises native preallocation.
+Root's2focused cases pass in4.80s and independent recheck in4.49s. No production
+guard, native binary or Source authority was changed. Project Ruff/mypy191 pass.
+
+## Campaign5b scoped acceptance
+
+The outer campaign implementation is integrated as local commit27721bf after
+both independent correctness/conformance fix re-reviews. Actual Optuna5 SQLite
+is exercised by management tests, while synthetic verification fixtures explicitly
+remain unqualified. Before fixes, root's333management/evaluation/configuration
+cases passed in17.25s despite the integration gaps listed below; this historical
+pass did not establish acceptance.
+
+Independent review found the training collector wrapper accepted one argument although the
+common coordinator supplies the plan and actual ledger; it also found that
+evaluation verification did not bind all played-policy fields to the independently
+inspected final-D checkpoint. A third P1 made valid multiple-seed panels collide
+because projection preserved collection-local episode names. All three have
+separate reproduced failures and passing regressions: the wrapper now verifies
+and forwards the supplied SAME ledger; projection scopes episode IDs to the
+actual original evaluation namespace while retaining global GameID checks; and
+the verifier derives the complete final-parent reference/actual policy registry
+from independently inspected saved artifacts before projection/tell. The genuine
+older-checkpoint negative retains honest CPU identity and grants no production
+Source authority.
+
+Implementer395combined cases pass in87.28s. Independent correctness runs68affected
+cases, including16integration tests; conformance independently runs those16 in
+8.33s and checks authority/guide alignment. Both report all3P1ADDR/READY, with no
+remaining scoped blocker. Root fresh same management command now passes347cases
+in25.90s after14new regressions, with full project Ruff/mypy195source and diff
+checks passing. The predeclared functional inputs and pure resource checks do not
+constitute actual GPU or Simulator evidence.
+
+Real GPU/Simulator execution, native installation, whole Python suite,
+package/optional-free proof, protected-original after-comparison and final
+whole-HPO reviews remain NOT RUN.
+Separately, root's unchanged-native final Rust rerun passes172cases/7explicit
+opt-in ignored in43.70s, and cargo fmt check passes; no CLI change alters those
+Rust source bytes. The source-matched native sdist is also built, but combined
+final package correspondence and installed activation remain pending.

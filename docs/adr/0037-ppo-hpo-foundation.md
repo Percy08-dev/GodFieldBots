@@ -83,3 +83,17 @@ Native Source3b is now scoped engineering-ready after both independent reviews,
 actual private FFI array/lifetime checks and package/source correspondence. Root
 reruns172Rust checks and five private release Model4/admission/view cases. This
 does not activate the installed extension or complete the integrated HPO gate.
+
+The runtime4 coordinator/retention producer and distinct evaluation6 role also
+pass both scoped reviews. Runtime admission includes the retained Source during
+save/acknowledgement, all HPO mutations check the actual parent-lock owner, and
+cleanup preserves primary errors while withholding uncertain termination.
+Numeric storage is initially colocated with parents; the current snapshot codec
+and conservative Source limits refuse unsupported combinations before GPU work.
+These restrictions are recorded in the runtime contract and should be revisited
+when a real supported workload needs independent numeric storage or wider Source
+envelopes. Campaign5b also passes scoped correctness/conformance after three P1
+fixes: actual collector ABI, namespaced per-evaluation episode identities, and
+complete final-D policy/registry binding before scoring/tell. Its durable Optuna
+and final-policy composition is integrated as27721bf. Final foundation acceptance
+still requires the predeclared real GPU/Simulator protocol and final checks.

@@ -15,10 +15,10 @@ will be recorded in [the verification record](verification/ppo-hpo.md).
 No formal HPO, experiment sizing or strength evidence is claimed here.
 Scoped implementation now accepts configurable model/numeric/artifact components,
 structural lineage readers, and the Python complete-original Source/selection/
-Wire6 path after independent reviews and root verification. Native HPO support,
-the common coordinator/retention producer and campaign/CLI integration remain
-implementation work. Native dispatch stays strictly refused until actual support
-is accepted. Concrete [record ownership](design/ppo-hpo-records.md) and the
+Wire6 path after independent reviews and root verification. The common HPO
+coordinator/retention producer, distinct evaluation6 role and campaign/CLI
+composition now also pass both scoped reviews.
+Concrete [record ownership](design/ppo-hpo-records.md) and the
 [two-stage native authorization](design/ppo-hpo-native-handshake.md) are reviewed.
 Strict complete-panel evaluation and persistent per-user GPU admission also pass
 scoped independent fix reviews. [Creation evidence](design/ppo-hpo-creation-proof.md)
@@ -32,6 +32,21 @@ two-stage authorization, Python-owned learning math and generation-tagged numeri
 allocation guards are implemented. Installed activation, integrated-source legacy
 proofs and genuine GPU/common-loop acceptance remain pending; the installed
 extension is still the original binary.
+
+The [runtime contract](design/ppo-hpo-runtime.md) uses the common coordinator,
+the caller's actual GPU job and audited ledger, original absolute deadlines,
+and complete saves before per-file retention. Admission includes retained Source
+memory during save/acknowledgement; HPO mutations require the actual parent-lock
+owner. Evaluation references use durable acquire/release transactions. Numeric
+and parent roots are currently colocated; unsupported Source/codec envelopes
+are refused before GPU admission rather than silently reduced.
+The [campaign contract](design/ppo-hpo-campaign.md) specifies the concrete
+Optuna/CLI, final-policy evaluation and direct comparison composition. Its
+implementation passes scoped correctness/conformance after fixes for the actual
+collector callback contract, evaluation namespace identities across training
+seeds, and complete independently derived final-D policy/registry binding.
+The [predeclared functional protocol](verification/hpo-functional-protocol.md)
+and final package/legacy proofs remain required before foundation acceptance.
 
 [ADR0024](adr/0024-card-instance-simulator-v2.md) begins a separately identified
 card-instance Simulator v2 migration. Contract/wire/Config/direct HTTP and pure

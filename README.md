@@ -161,6 +161,15 @@ CUDA学習・CPU推論・2GiB/16MiBの型付きRust前処理を使います。�
 停止再開はMLPと同じ正常batch境界に限り、窓長・コード・実行環境を変えた通常resumeは拒否します。
 今回の実装受入は2更新と資源測定までで、正式な多seed比較・最終testの結果ではありません。
 
+## PPOのHPO設定
+
+model4のMLP・GRU・TransformerとPPO recipeを共同で調整する明示的なHPO経路を追加します。
+学習量は損失に使う一意な意思決定数Dでそろえ、全学習seedの最終D方策を共通の
+席交換評価で比較します。Optuna5.0.0はoptionalな`hpo` extraです。
+探索範囲・試行数・学習量・seed群は実行者が設定します。
+`hpo validate`、`run --mode fresh|resume`、`inspect`、`compare`の設定と保存・回復条件は
+[利用手順](docs/hpo.md)、実装の受入状況は[検証記録](docs/verification/ppo-hpo.md)を参照してください。
+
 ## 固定データでのLightGBM比較
 
 事前指定したPPO seed 17／29／43を順番に正常終了させてから、最終方策のvalidationを収集します。

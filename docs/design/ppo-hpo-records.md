@@ -110,6 +110,28 @@ pool_size; collection_position=g. Replay controls from the chain/recipe instead
 of persisting a second mutable threshold counter. Preserve frozen `_controls`;
 use an explicit HPO control producer.
 
+## Supported storage materialization
+
+Use one colocated ext4 base for parent/model/numeric data:
+`numeric_root==parent_root`, actual per-run bundles under `<root>/<run>/numeric`.
+New HPO input defaults therefore use `runs/hpo` for both roots. Reject an
+independent numeric root before GPU work; do not ignore it, create symlink/bind
+overlays or change parent-relative Numeric5/Source/native path semantics.
+This is accepted implementation debt: independent numeric volumes are unsupported;
+revisit if the user actually requires them. Old explicit recorded component
+metadata is inspected honestly rather than rewritten with new defaults.
+
+Production HPO originals use the existing compressed SQLite collector. Preserve
+the base Pack budget/queue/max-Pack settings and require its managed memory
+budget to fit the declared collector RAM envelope. The new HPO collector default
+is2GiB, matching the existing2048MiB Pack budget; do not silently shrink its queue
+or Pack caps to the previous256MiB HPO estimate. Explicit smaller envelopes need
+explicit valid smaller Pack settings. If the base lacks storage settings, use
+existing GroupPack defaults, with explicit HPO originals_root when provided,
+otherwise the supported default `/mnt/d/godfield`. Record resolved storage in the
+run spec and check destination limits/actual Windows-C free space before work.
+These are new HPO operating defaults, not changes to old Configs/data semantics.
+
 ## Retention and original authority
 
 Protect G0 full state; newest at least2resume states and each resume's inference/
