@@ -160,7 +160,7 @@ class GroupPackExperimentConfig(ExperimentConfig):
 
 
 def require_storage_command(config: ExperimentConfig, command: str, *, standalone: bool = True) -> None:
-    if type(config.model) is ConfiguredNeuralModelV4:
+    if type(getattr(config, 'model', None)) is ConfiguredNeuralModelV4:
         from gf_cli.hpo_config import HPOExperimentConfig
         if type(config) is not HPOExperimentConfig or command not in ('collect','evaluate') or standalone:
             raise ContractError('HPO Model4 storage requires its concrete owned collector')

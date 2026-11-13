@@ -368,3 +368,32 @@ assets. Installed mandatory-only checks pass all seven optional-package absences
 actual baseline startup/close, HPO module/two-console help and configuration
 validation without creating an Optuna DB. These receipts predate this numeric
 correction; a fresh application package proof is required after its source freeze.
+
+## Current-source compatibility, activation and early-entry correction
+
+The a460e1b source freeze passes a fresh application/native package correspondence
+proof and installed mandatory-only CLI/baseline checks. All five fresh host
+legacy jobs and data audits pass: history17.07s, Observation15.45s, index13.42s,
+saved PPO workers1/4 in2.96s/2.16s. Both saved-PPO cases preserve16episodes,
+224decisions and three-reader array parity, with zero updates. The source/plan
+inventory guards pass. This supersedes no failed attempt: proof-a01 remains
+preserved as failed for its one-worker timeout.
+
+After checking those receipts and preserving14old installed files byte-for-byte,
+root installs the accepted private release/MIMALLOC wheel into the main venv.
+Fresh installed identity/capability checks pass: ELF8164d5c…ee9e85, source5db7cf…
+93d4b0, cp314-gil, empty wheel rustflags and the exact additive HPO capability.
+The rollback files and activation receipts remain under the functional assessment.
+This activates implementation support; it does not establish actual GPU/Simulator
+or trained-strength evidence.
+
+The first whole Python run stops at72PASS/1FAIL in3.46s. The added HPO storage
+probe accessed model unconditionally before the existing engineering-input guard;
+an actions-only early-entry input therefore raised AttributeError instead of the
+required engineering_only refusal. A one-line optional model probe restores that
+legacy behavior, leaving concrete Model4 owned-collector checks unchanged.
+No tests were weakened. Implementer251cases pass in4.64s; root fresh251pass in
+4.97s with full Ruff/mypy195source/diff checks. Independent correctness passes
+10existing boundary cases plus four direct nonconcrete Model4 refusals and reports
+READY. Final current-source proof/package refresh, whole Python completion and
+the predeclared actual functional protocol remain required after this correction.
