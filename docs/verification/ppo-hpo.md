@@ -517,3 +517,44 @@ config fields/base identities match a01. The unresolved actual ticket still
 requires explicit real environment-restart confirmation before the remaining
 functional protocol can continue. Foundation acceptance and strength claims are
 not implied by these CPU/source results.
+
+## Save-correction CPU acceptance and recovery prerequisite
+
+The reviewed correction is saved in local commit0c2b5b1. Root then runs the whole
+suite with CUDA_VISIBLE_DEVICES empty before Torch import, single-thread BLAS
+settings, the new private native site first on PYTHONPATH and the explicit
+candidate fixture. Result:5479PASS/341explicit SKIP/29warnings in1300.88s. A
+candidate-storage fixture produces the60s diagnostic while progressing; no test
+fails. JUnit: `whole-cpu-0c2b5b1.xml` in the functional assessment. This is
+CPU-only whole-suite evidence; it does not supply the pending physical CUDA
+functional results or remove the real GPU admission block.
+
+All five fresh HOST legacy jobs and data audits pass against new native source
+56df546f…2cc064/ELFdae8bb36…7dc8a4: history12.50s, Observation11.70s,
+index10.45s, saved PPO workers1/4 in1.83s/1.68s. Source-inventory guards pass.
+The fresh package/mandatory-only receipts are `package-proof-save-transition.json`
+and `optional-free-save-transition.json`; all197/91runtime files,7embedded assets,
+seven optional-package absences and actual baseline/CLI startup checks pass.
+
+Root preserves the previously installed8164… extension and all14distribution
+files separately, then installs the new reviewed wheel offline without changing
+other dependencies. CPU-only installed identity/capability checks match the exact
+dae8… ELF/56df… source/release/MIMALLOC/cp314-gil/empty-rustflags recipe. The actual
+installed backend, with no private-candidate override, then passes both plain/
+packed CPU continuous/resume checks in37.38s. Ruff, mypy195source and diff checks
+pass. Earlier9b137… and8164… rollback copies remain retained.
+
+A second protected-original after-check passes29814originals/24fits with exact
+bytes/device/inode/size/mtime/ctime in4.09s, saved as
+`originals-after-save-correction-cpu.json`. No failed parent, original data or
+actual f615 ticket is changed by these checks.
+
+All code repair, non-GPU verification, reviewed distributions and retry inputs
+are concrete before asking for recovery. The real ticket still has admission
+only. Remaining work requires the operator to actually restart the environment,
+confirm all previous GPU jobs terminated, and then authorize the exact existing
+`hpo recover` confirmation path. The agent must not assert that event itself,
+reboot automatically or use a different GPU namespace. After recovery, repeat
+MLP in fresh a02 and finish GRU/Transformer, cap-resume, actual CLI multi-seed/
+session/tell/direct-comparison cases and final audits/reviews. The a01 failed
+population remains ineligible permanently. Foundation acceptance is still pending.

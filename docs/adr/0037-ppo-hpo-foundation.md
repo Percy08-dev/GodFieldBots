@@ -115,3 +115,7 @@ versus pause/resume equality, negative ACK/namespace tests and Rust checks.
 Physical functional acceptance still requires actual environment recovery and a
 fresh same-condition GPU attempt. Neither code repair nor an absent PID supplies
 the missing termination/restart receipt. No automatic reboot/reset is introduced.
+Current corrected-source CPU whole verification passes5479checks/341explicit
+skips, with both scoped reviews,173Rust checks and fresh package/legacy/baseline
+proofs. The reviewed new native is installed with exact rollback copies. Physical
+functional acceptance remains pending the required operator restart confirmation.

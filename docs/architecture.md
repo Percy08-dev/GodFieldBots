@@ -54,8 +54,12 @@ SAME projection, independently verifies the complete next saved pair, and advanc
 only the native bridge's owned scan using the existing Rust append permit. The failed a01 parent
 is preserved and ineligible. Its GPU ticket has no termination receipt; explicit
 actual environment-restart confirmation is required before new physical GPU work.
-The [predeclared functional protocol](verification/hpo-functional-protocol.md)
-and refreshed final checks remain required before foundation acceptance.
+The corrected CPU whole suite passes5479checks/341explicit skips, current-source
+legacy/package/optional-free proofs pass, and the new source-matched native is
+installed with rollback copies retained. The
+[predeclared physical functional protocol](verification/hpo-functional-protocol.md)
+remains blocked by actual environment-recovery confirmation and is required
+before foundation acceptance.
 
 [ADR0024](adr/0024-card-instance-simulator-v2.md) begins a separately identified
 card-instance Simulator v2 migration. Contract/wire/Config/direct HTTP and pure
