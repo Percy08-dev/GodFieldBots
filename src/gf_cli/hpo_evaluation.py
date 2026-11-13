@@ -5,13 +5,17 @@ Only an actual held global job can admit its concrete collector invocation.
 """
 from __future__ import annotations
 
+import importlib
 import json
 import math
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
+from types import ModuleType
+from typing import TYPE_CHECKING
 
 from gf_cli.config import GroupPackExperimentConfig, LoadedConfig
+from gf_cli.hpo_config import LoadedHPOConfig
 from gf_common.card_instance import ActionConfigV3
 from gf_common.card_instance_collection import checked_linkage, hpo_evaluation_role
 from gf_common.domain import (
@@ -21,9 +25,35 @@ from gf_common.domain import (
     Json,
     RuntimePolicyBinding,
     canonical,
+    digest,
 )
 from gf_common.schedule import serialize_schedule
 from gf_training.hpo_gpu_lease import GpuJob
+
+if TYPE_CHECKING:
+    from gf_evaluation.hpo_compare import ComparisonPanel
+    from gf_training.hpo_retention import HpoReferenceReceipt
+
+_TRAINING_RECEIPT_FIELDS = {'proposal_sha256', 'training_seed', 'run_path', 'run_id', 'config_sha256',
+    'state_sha256', 'generation', 'generation_sha256', 'inference_sha256', 'used_decisions',
+    'source_receipt_sha256', 'gpu_termination_sha256'}
+_EVALUATION_RECEIPT_FIELDS = {'training_receipt_sha256', 'linkage_sha256', 'manifest_sha256', 'originals_digest',
+    'projection', 'conditions_sha256', 'pin_acquire_sha256', 'pin_release_sha256', 'gpu_termination_sha256',
+    'directory', 'linkage', 'config_sha256'}
+
+
+def owned_runtime_module(name: str, required: tuple[str, ...]) -> ModuleType:
+    """Only fixed caller-selected HPO modules from this exact owned build."""
+    allowed = {'gf_training.hpo_retention', 'gf_training.hpo_ppo', 'gf_cli.card_instance', 'gf_cli.hpo_config'}
+    if name not in allowed:
+        raise ContractError('unknown HPO runtime dependency')
+    expected = Path(__file__).resolve().parents[1] / (name.replace('.', '/') + '.py')
+    if not expected.is_file():
+        raise ContractError('required HPO runtime support is unavailable in this build')
+    module = importlib.import_module(name)
+    if module.__file__ is None or Path(module.__file__).resolve() != expected or any(not hasattr(module, item) for item in required):
+        raise ContractError('required HPO runtime support is not the owned compatible build')
+    return module
 
 
 @dataclass(frozen=True)
@@ -108,3 +138,578 @@ class HpoEvaluationPlan:
                 or self.execution_deadline > start + config.run.execution_seconds
                 or self.work_deadline > self.wall_deadline - config.run.report_reserve_seconds):
             raise ContractError('evaluation request extends declared operation deadlines')
+
+
+def _receipt(value: Json, kind: str, fields: set[str]) -> Json:
+    from gf_common.domain import closed, integer
+    closed(value, {'schema_version', 'kind'} | fields)
+    integer(value['schema_version'], 1, 1)
+    if value['kind'] != kind:
+        raise ContractError('unexpected closed HPO evaluation receipt')
+    return value
+
+
+@dataclass(frozen=True)
+class ParentInspection:
+    state: Json
+    generations: tuple[Json, ...]
+    source: Json
+
+
+def _final_policy_reference(inspection: ParentInspection, source_sha: str) -> tuple[Json, RuntimePolicyBinding]:
+    """Derive final-D identity/label from the independently inspected parent."""
+    from gf_common.card_instance_collection import checked_hpo_evaluation_parent
+    from gf_training.hpo_source import hpo_binding
+    state, source = inspection.state, inspection.source
+    generation = state['updates']
+    if (len(inspection.generations) != generation + 1 or inspection.generations[-1]['generation'] != generation
+            or source['run_id'] != state['run_id'] or source['training_seed'] != state['seed']
+            or source['generation'] != generation
+            or source['inference_sha256'] != inspection.generations[-1]['inference_sha256']):
+        raise ContractError('inspected final parent/generation facts are inconsistent')
+    label, binding = hpo_binding(Path(source['run_path']), state, inspection.generations[-1], generation)
+    reference = {'run_id': state['run_id'], 'run_path': source['run_path'], 'training_seed': state['seed'],
+        'generation': generation, 'generation_sha256': source['generation_sha256'],
+        'inference_sha256': inspection.generations[-1]['inference_sha256'], 'source_receipt_sha256': source_sha,
+        'policy_label': label}
+    return checked_hpo_evaluation_parent(reference), binding
+
+
+def _parent_conditions(inspection: ParentInspection, campaign: Json) -> None:
+    conditions = campaign['conditions']
+    producer = conditions.get('producer_identity')
+    if type(producer) is not dict or type(conditions.get('integration_identity')) is not dict:
+        raise ContractError('actual measured campaign source/Simulator conditions required')
+    identity = inspection.state['identity']
+    if (any(canonical(identity.get(key)) != canonical(value) for key, value in producer.items())
+            or canonical(identity.get('integration')) != canonical(conditions['integration_identity'])
+            or canonical(inspection.state['execution']['inference']['binding']) != canonical(conditions['inference_binding'])
+            or inspection.state['execution']['inference']['cuda_visible_devices'] != conditions['cuda_visible_devices']):
+        raise ContractError('original parent source/runtime/inference conditions differ from campaign')
+    if 'native_identity' in conditions and canonical(identity['preprocessing'].get('binary')) != canonical(conditions['native_identity']):
+        raise ContractError('original parent native preprocessing identity changed')
+
+
+def inspect_training_parent(directory: Path, loaded: LoadedHPOConfig, settings: object, *,
+                            training_seed: int, run_id: str, deadline: float) -> ParentInspection:
+    """Actually validate complete originals; Run5/JSON alone is never authority."""
+    from gf_models.arrays import sha256
+    from gf_training.hpo_config import EffectiveSettings
+    from gf_training.hpo_lineage import hpo_spec, hpo_state
+    from gf_training.hpo_source import validate_hpo_parent
+    from gf_training.lineage import generation_path, run_lock
+
+    if type(loaded) is not LoadedHPOConfig or type(settings) is not EffectiveSettings:
+        raise ContractError('actual loaded campaign and normalized proposal required')
+    directory = directory.resolve()
+    if training_seed not in loaded.config.learning_seeds or not directory.is_relative_to(Path(loaded.config.storage.parent_root)):
+        raise ContractError('parent is outside the declared campaign run/seed namespace')
+    with run_lock(directory):
+        state, records = validate_hpo_parent(directory, require_complete=True,
+            max_owned_bytes=loaded.config.operating.source_budget_bytes, deadline=deadline)
+        spec = hpo_spec(state)
+        _, model, _ = hpo_state(state)
+        if (state['run_id'] != run_id or state['seed'] != training_seed
+                or state['used_decisions'] != loaded.config.decision_budget
+                or spec['campaign_config_sha256'] != loaded.sha256 or spec['base_config_sha256'] != loaded.base.sha256
+                or spec['study_identity'] != loaded.config.study_identity or spec['effective_settings_sha256'] != settings.identity
+                or canonical(asdict(model)) != canonical(asdict(settings.model))
+                or canonical(spec['training_recipe']) != canonical(asdict(settings.training))):
+            raise ContractError('full original parent differs from exact campaign/proposal/final-D identity')
+        generation = state['updates']
+        source = {'schema_version': 1, 'kind': 'hpo-parent-source-validation', 'run_id': run_id,
+            'run_path': str(directory), 'training_seed': training_seed, 'config_sha256': state['config_sha256'],
+            'state_sha256': sha256(directory / 'run.json', deadline), 'generation': generation,
+            'generation_sha256': sha256(generation_path(directory, generation), deadline),
+            'generations_sha256': digest(records), 'inference_sha256': records[-1]['inference_sha256'],
+            'used_decisions': state['used_decisions'], 'effective_settings_sha256': settings.identity}
+        return ParentInspection(state, tuple(records), source)
+
+
+def verify_gpu_termination(value: Json, *, campaign_id: str, operation_id: str,
+                           run_id: str, evaluation_id: str | None) -> None:
+    """Verify the fixed namespace's exact receipt; a copied JSON is not proof."""
+    from gf_common.domain import closed
+    from gf_training import hpo_gpu_lease as gpu
+    ticket = value.get('ticket')
+    if not isinstance(ticket, str):
+        raise ContractError('actual GPU receipt ticket required')
+    gpu._ticket(ticket)
+    directory = gpu._GLOBAL_ROOT / 'jobs' / ticket
+    for ancestor in (gpu._GLOBAL_ROOT, gpu._GLOBAL_ROOT / 'jobs', directory):
+        gpu._directory(ancestor)
+    admission = gpu._read(directory / 'admission.json')
+    gpu._admission(admission, ticket)
+    gpu._termination(value, admission)
+    stored = gpu._termination(gpu._read(directory / 'termination.json'), admission)
+    if canonical(asdict(stored)) != canonical(value):
+        raise ContractError('campaign GPU termination differs from the actual fixed namespace receipt')
+    context = closed(admission['context'], {'campaign_id', 'operation_id', 'kind', 'run_id', 'evaluation_id'})
+    expected = {'campaign_id': campaign_id, 'operation_id': operation_id,
+        'kind': 'training' if evaluation_id is None else 'evaluation', 'run_id': run_id, 'evaluation_id': evaluation_id}
+    if context != expected:
+        raise ContractError('GPU termination belongs to a different campaign/run/evaluation')
+
+
+def verify_saved_evaluation(directory: Path, loaded: LoadedHPOConfig, linkage: Json, *,
+                            deadline: float, extra_owned_bytes: int = 0) -> tuple[Json, Json]:
+    """Reopen actual packed members and reconcile BOTH original participant views."""
+    from gf_common.group_pack_game import storage_binding
+    from gf_common.preprocessing import preparation_config
+    from gf_training.group_pack_game_source import PackedSourceOwner
+    from gf_training.structured_source import _inspect_component_collection
+
+    settings = preparation_config(asdict(loaded.base.config.preprocessing))
+    root = Path(loaded.config.storage.originals_root or (
+        loaded.base.config.storage.db_root if isinstance(loaded.base.config, GroupPackExperimentConfig) else '/mnt/d/godfield'))
+    owner = PackedSourceOwner(directory, settings, deadline, storage_binding=storage_binding(),
+        max_owned_bytes=loaded.config.operating.source_budget_bytes, extra_owned_bytes=extra_owned_bytes,
+        expected_descriptor_root=root / linkage['evaluation_id'])
+    try:
+        collection = _inspect_component_collection(owner, loaded.base.config.actions, 'validation', _game=True,
+            _game_role=hpo_evaluation_role(2 * len(linkage['game_seeds'])))
+        manifest = collection.manifest
+        if canonical(manifest['linkage']) != canonical(linkage):
+            raise ContractError('actual saved evaluation differs from exact original request')
+        proof = collection.proof
+        if proof['games'] != 2 * len(linkage['game_seeds']) or proof['missing_replays'] or proof['closure_counts'] != {'natural': proof['games']}:
+            raise ContractError('saved original evaluation is not a complete natural panel')
+        owner.finalize()
+        return manifest, proof
+    finally:
+        owner.close()
+
+
+def _projection(manifest: Json, parent: Json, source_sha: str, conditions_sha: str) -> Json:
+    from gf_evaluation.hpo import (
+        GameIdentity,
+        GameProjection,
+        RunIdentity,
+        SeedEvaluationProjection,
+    )
+    identities = []
+    games = []
+    evaluation_id = manifest['linkage']['evaluation_id']
+    if type(evaluation_id) is not str or not evaluation_id or manifest['run_id'] != evaluation_id:
+        raise ContractError('projection requires the actual original evaluation namespace')
+    for row in manifest['episodes']:
+        identity = GameIdentity(row['seed'], manifest['linkage']['learner_seats'][row['episode_id']],
+            evaluation_id + '/' + row['episode_id'], row['game_id'])
+        identities.append(identity)
+        game = GameProjection.from_result(identity, result=row['outcome'], decisions=row['decisions'])
+        games.append(replace(game, elapsed_seconds=row.get('elapsed_seconds', 0.)))
+    run = RunIdentity(parent['training_seed'], parent['run_id'], parent['inference_sha256'], source_sha, tuple(identities))
+    return asdict(SeedEvaluationProjection(run, parent['used_decisions'], conditions_sha, tuple(games)))
+
+
+def verify_seed_evaluation(store: object, loaded: LoadedHPOConfig, campaign: Json, proposal: object,
+                           seed: int, *, deadline: float) -> tuple[object, str, str]:
+    """Reopen every actual parent/original/cleanup link for one closed seed."""
+    from gf_cli.hpo_campaign import Proposal
+    from gf_cli.hpo_storage import CampaignStore
+    from gf_evaluation.hpo import (
+        GameIdentity,
+        GameProjection,
+        RunIdentity,
+        SeedEvaluationProjection,
+    )
+    if type(store) is not CampaignStore or type(proposal) is not Proposal:
+        raise ContractError('actual campaign owner and durable proposal required')
+    if seed not in loaded.config.learning_seeds or type(seed) is not int:
+        raise ContractError('seed evaluation is outside declared complete group')
+    root = f'proposals/{proposal.number:06}'
+    if store.exists(root + '/failure.json'):
+        raise ContractError('failed proposal cannot be requalified by success-looking files')
+    folder = root + f'/seeds/{seed}'
+    training, train_sha = store.get(folder + '/training.json')
+    _receipt(training, 'hpo-seed-training', _TRAINING_RECEIPT_FIELDS)
+    if training['proposal_sha256'] != proposal.sha256 or training['training_seed'] != seed:
+        raise ContractError('seed training receipt belongs to another proposal/seed')
+    inspection = inspect_training_parent(Path(training['run_path']), loaded, proposal.settings,
+        training_seed=seed, run_id=training['run_id'], deadline=deadline)
+    _parent_conditions(inspection, campaign)
+    source, source_sha = store.get(folder + '/source-validation.json')
+    if canonical(source) != canonical(inspection.source) or source_sha != training['source_receipt_sha256']:
+        raise ContractError('saved parent Source receipt differs from actual originals')
+    for key in ('run_id', 'run_path', 'training_seed', 'config_sha256', 'state_sha256', 'generation',
+                'generation_sha256', 'inference_sha256', 'used_decisions'):
+        if canonical(training[key]) != canonical(source[key]):
+            raise ContractError('training receipt differs from full final-D Source facts')
+    termination, term_sha = store.get(folder + '/training-gpu-termination.json')
+    verify_gpu_termination(termination, campaign_id=campaign['campaign_id'], operation_id=training['run_id'],
+        run_id=training['run_id'], evaluation_id=None)
+    if term_sha != training['gpu_termination_sha256']:
+        raise ContractError('training receipt does not bind exact actual termination')
+    evaluation, eval_sha = store.get(folder + '/evaluation.json')
+    _receipt(evaluation, 'hpo-seed-evaluation', _EVALUATION_RECEIPT_FIELDS)
+    link = evaluation['linkage']
+    final_reference, final_binding = _final_policy_reference(inspection, source_sha)
+    if (evaluation['training_receipt_sha256'] != train_sha or evaluation['conditions_sha256'] != campaign['conditions_sha256']
+            or evaluation['linkage_sha256'] != digest(link) or link['purpose'] != 'objective'
+            or link['conditions_sha256'] != campaign['conditions_sha256']
+            or canonical(link['left_parent']) != canonical(final_reference)):
+        raise ContractError('seed evaluation differs from exact training/conditions identity')
+    manifest, proof = verify_saved_evaluation(Path(evaluation['directory']), loaded, link, deadline=deadline)
+    if canonical(manifest['policy_bindings'].get(final_reference['policy_label'])) != canonical(asdict(final_binding)):
+        raise ContractError('original evaluated policy differs from the inspected final-D binding')
+    expected_request, _ = store.get(folder + '/evaluation.intent.json')
+    if (proof['manifest_sha256'] != evaluation['manifest_sha256'] or proof['source_set_sha256'] != evaluation['originals_digest']
+            or manifest['config_hash'] != evaluation['config_sha256']
+            or expected_request.get('config_sha256') != evaluation['config_sha256']):
+        raise ContractError('seed evaluation original bytes differ from closed receipt')
+    reference = {'run_id': training['run_id'], 'token': link['gpu_ticket'], 'generation': training['generation'],
+        'inference_sha256': training['inference_sha256'], 'generation_sha256': training['generation_sha256']}
+    # Editable dependency paths must never supply a missing private runtime
+    # implementation from another checkout.
+    retention = owned_runtime_module('gf_training.hpo_retention', ('release_hpo_evaluation',))
+    released = retention.release_hpo_evaluation(Path(training['run_path']), reference,
+        max_owned_bytes=loaded.config.operating.source_budget_bytes, deadline=deadline)
+    journal = Path(training['run_path']) / 'evaluation-reference-receipts' / link['gpu_ticket']
+    from gf_models.arrays import sha256
+    if (released.receipt_sha256 != evaluation['pin_release_sha256']
+            or sha256(journal / 'acquire.receipt.json', deadline) != evaluation['pin_acquire_sha256']):
+        raise ContractError('evaluation pin/release transaction receipt changed')
+    termination, term_sha = store.get(folder + '/evaluation-gpu-termination.json')
+    verify_gpu_termination(termination, campaign_id=campaign['campaign_id'], operation_id=link['evaluation_id'],
+        run_id=training['run_id'], evaluation_id=link['evaluation_id'])
+    if term_sha != evaluation['gpu_termination_sha256']:
+        raise ContractError('evaluation does not bind actual cleanup termination')
+    projected = _projection(manifest, training, source_sha, campaign['conditions_sha256'])
+    if canonical(projected) != canonical(evaluation['projection']):
+        raise ContractError('saved score projection differs from actual natural terminal DTOs')
+    raw_run = projected['run']
+    run = RunIdentity(**{**raw_run, 'games': tuple(GameIdentity(**value) for value in raw_run['games'])})
+    games = tuple(GameProjection(**{**value, 'identity': GameIdentity(**value['identity'])}) for value in projected['games'])
+    return SeedEvaluationProjection(run, projected['used_decisions'], projected['conditions_sha256'], games), train_sha, eval_sha
+
+
+def aggregate_trial_evaluation(store: object, loaded: LoadedHPOConfig, campaign: Json, proposal: object,
+                               *, deadline: float) -> Json:
+    from gf_cli.hpo_campaign import Proposal
+    from gf_cli.hpo_storage import CampaignStore
+    from gf_evaluation.hpo import EvaluationPlan, SeedEvaluationProjection, aggregate_evaluation
+    if type(store) is not CampaignStore or type(proposal) is not Proposal:
+        raise ContractError('actual campaign owner and durable proposal required')
+    projections = []
+    training_hashes = []
+    evaluation_hashes = []
+    for seed in loaded.config.learning_seeds:
+        projected, training_sha, evaluation_sha = verify_seed_evaluation(store, loaded, campaign, proposal, seed, deadline=deadline)
+        if type(projected) is not SeedEvaluationProjection:
+            raise ContractError('actual checked seed projection required')
+        projections.append(projected)
+        training_hashes.append(training_sha)
+        evaluation_hashes.append(evaluation_sha)
+    plan = EvaluationPlan(loaded.config.learning_seeds, loaded.config.evaluation_game_seeds,
+        loaded.config.decision_budget, campaign['conditions_sha256'], tuple(value.run for value in projections))
+    actual = aggregate_evaluation(plan, tuple(projections))
+    return {'schema_version': 1, 'kind': 'hpo-evaluation', 'proposal_sha256': proposal.sha256,
+        'training_receipts': training_hashes, 'evaluation_receipts': evaluation_hashes, 'value': actual.value,
+        'projection_sha256': actual.projection_sha256, 'label': actual.label}
+
+
+def verify_trial_evaluation(store: object, loaded: LoadedHPOConfig, campaign: Json, proposal: object, *,
+                            deadline: float) -> tuple[Json, float, str]:
+    from gf_cli.hpo_campaign import Proposal
+    from gf_cli.hpo_storage import CampaignStore
+    if type(store) is not CampaignStore or type(proposal) is not Proposal:
+        raise ContractError('actual campaign owner and durable proposal required')
+    aggregate, aggregate_sha = store.get(f'proposals/{proposal.number:06}/evaluation.json')
+    _receipt(aggregate, 'hpo-evaluation', {'proposal_sha256', 'training_receipts', 'evaluation_receipts',
+        'value', 'projection_sha256', 'label'})
+    expected = aggregate_trial_evaluation(store, loaded, campaign, proposal, deadline=deadline)
+    if canonical(aggregate) != canonical(expected):
+        raise ContractError('aggregate differs from complete independently verified Source/originals')
+    return aggregate, float(expected['value']), aggregate_sha
+
+
+def persist_training_receipt(store: object, loaded: LoadedHPOConfig, campaign: Json, proposal: object, *,
+                             training_seed: int, run_id: str, directory: Path, termination: object,
+                             deadline: float) -> Json:
+    from gf_cli.hpo_campaign import Proposal
+    from gf_cli.hpo_storage import CampaignStore
+    from gf_common.domain import clone
+    from gf_training.hpo_gpu_lease import TerminationReceipt
+
+    if type(store) is not CampaignStore or type(proposal) is not Proposal or type(termination) is not TerminationReceipt:
+        raise ContractError('actual campaign/proposal/termination outputs required')
+    inspection = inspect_training_parent(directory, loaded, proposal.settings,
+        training_seed=training_seed, run_id=run_id, deadline=deadline)
+    _parent_conditions(inspection, campaign)
+    value = clone(asdict(termination))
+    verify_gpu_termination(value, campaign_id=campaign['campaign_id'], operation_id=run_id, run_id=run_id, evaluation_id=None)
+    folder = f'proposals/{proposal.number:06}/seeds/{training_seed}'
+    gpu_sha = store.put(folder + '/training-gpu-termination.json', value)
+    source_sha = store.put(folder + '/source-validation.json', inspection.source)
+    source = inspection.source
+    receipt = {'schema_version': 1, 'kind': 'hpo-seed-training', 'proposal_sha256': proposal.sha256,
+        **{key: source[key] for key in ('training_seed', 'run_path', 'run_id', 'config_sha256', 'state_sha256',
+            'generation', 'generation_sha256', 'inference_sha256', 'used_decisions')},
+        'source_receipt_sha256': source_sha, 'gpu_termination_sha256': gpu_sha}
+    store.put(folder + '/training.json', receipt)
+    return receipt
+
+
+def verify_training_receipt(store: object, loaded: LoadedHPOConfig, campaign: Json, proposal: object,
+                            training_seed: int, *, deadline: float) -> Json:
+    from gf_cli.hpo_campaign import Proposal
+    from gf_cli.hpo_storage import CampaignStore
+    if type(store) is not CampaignStore or type(proposal) is not Proposal:
+        raise ContractError('actual campaign/proposal required')
+    folder = f'proposals/{proposal.number:06}/seeds/{training_seed}'
+    value, _ = store.get(folder + '/training.json')
+    _receipt(value, 'hpo-seed-training', _TRAINING_RECEIPT_FIELDS)
+    if value['proposal_sha256'] != proposal.sha256 or value['training_seed'] != training_seed:
+        raise ContractError('closed seed receipt differs from exact proposal')
+    actual = inspect_training_parent(Path(value['run_path']), loaded, proposal.settings,
+        training_seed=training_seed, run_id=value['run_id'], deadline=deadline)
+    _parent_conditions(actual, campaign)
+    source, source_sha = store.get(folder + '/source-validation.json')
+    if canonical(source) != canonical(actual.source) or value['source_receipt_sha256'] != source_sha:
+        raise ContractError('closed training receipt no longer matches full original Source')
+    gpu_value, gpu_sha = store.get(folder + '/training-gpu-termination.json')
+    if gpu_sha != value['gpu_termination_sha256']:
+        raise ContractError('training termination receipt hash differs')
+    verify_gpu_termination(gpu_value, campaign_id=campaign['campaign_id'], operation_id=value['run_id'],
+        run_id=value['run_id'], evaluation_id=None)
+    for key in ('training_seed', 'run_path', 'run_id', 'config_sha256', 'state_sha256', 'generation',
+                'generation_sha256', 'inference_sha256', 'used_decisions'):
+        if value[key] != source[key]:
+            raise ContractError('training receipt changed its original final-D identity')
+    return value
+
+
+async def evaluate_seed(store: object, loaded: LoadedHPOConfig, campaign: Json, proposal: object,
+                        training: Json, *, output: Path) -> Json:
+    """One actual primary evaluation; no interrupted request is silently rerun."""
+    from gf_cli.hpo_campaign import Proposal
+    from gf_cli.hpo_storage import CampaignStore
+    from gf_common.card_instance_collection import hpo_evaluation_groups
+    from gf_common.card_instance_rules import card_instance_rules
+    from gf_common.domain import clone
+    from gf_models.card_instance_artifacts import RetainedGameArtifacts
+    from gf_training.hpo_gpu_lease import JobContext, admit_gpu_job
+
+    if type(store) is not CampaignStore or type(proposal) is not Proposal:
+        raise ContractError('actual campaign/proposal required')
+    core = owned_runtime_module('gf_cli.card_instance', ('collect_hpo_evaluation', 'hpo_artifact_budget'))
+    composition = owned_runtime_module('gf_cli.hpo_config', ('materialize_hpo_run',))
+    retention = owned_runtime_module('gf_training.hpo_retention', ('pin_hpo_evaluation', 'release_hpo_evaluation'))
+    seed = training['training_seed']
+    folder = f'proposals/{proposal.number:06}/seeds/{seed}'
+    if store.exists(folder + '/evaluation.intent.json'):
+        raise ContractError('interrupted evaluation cannot be restarted or requalified')
+    import uuid
+    evaluation_id = str(uuid.uuid4())
+    base = composition.materialize_hpo_run(loaded, proposal.settings, learning_seed=seed, run_id=training['run_id'])
+    run = replace(base.config.run, split='validation', name=evaluation_id, output_dir=str(output.parent),
+        seeds=loaded.config.evaluation_game_seeds, sampling_seeds=(loaded.config.sampler_seed,), pairs_per_seed=1)
+    config = replace(base.config, run=run)
+    raw = clone(asdict(config))
+    projected = LoadedConfig(config, raw, digest(raw), base.inputs)
+    started = time.monotonic()
+    store.put(folder + '/evaluation.intent.json', {'schema_version': 1, 'kind': 'hpo-evaluation-intent',
+        'evaluation_id': evaluation_id, 'directory': str(output), 'config_sha256': projected.sha256,
+        'training_receipt_sha256': store.get(folder + '/training.json')[1],
+        'started_unix': time.time(), 'started_monotonic': started})
+    job = admit_gpu_job(JobContext(campaign['campaign_id'], evaluation_id, 'evaluation', training['run_id'], evaluation_id),
+        global_cuda_bytes=loaded.config.operating.managed_cuda_bytes, max_workers=loaded.config.operating.max_participant_workers)
+    try:
+        store.put(folder + '/evaluation.admission.json', {'schema_version': 1, 'kind': 'hpo-evaluation-admission',
+            'gpu_ticket': job.ticket, 'evaluation_id': evaluation_id})
+        wall = started + run.wall_seconds
+        work = wall - run.report_reserve_seconds
+        execution = started + run.execution_seconds
+        reference = retention.pin_hpo_evaluation(Path(training['run_path']), job.ticket, training['generation'], training['inference_sha256'],
+            max_owned_bytes=loaded.config.operating.source_budget_bytes, deadline=execution)
+        try:
+            inspected = inspect_training_parent(Path(training['run_path']), loaded, proposal.settings,
+                training_seed=seed, run_id=training['run_id'], deadline=execution)
+            parent_reference, binding = _final_policy_reference(inspected, training['source_receipt_sha256'])
+            label = parent_reference['policy_label']
+            bindings = {label: binding, 'heuristic-card-instance-v2': RuntimePolicyBinding('heuristic')}
+            link = {'schema_version': 1, 'kind': 'hpo-evaluation-linkage', 'campaign_id': campaign['campaign_id'],
+                'evaluation_id': evaluation_id, 'gpu_ticket': job.ticket, 'purpose': 'objective',
+                'conditions_sha256': campaign['conditions_sha256'], 'left_parent': parent_reference,
+                'right_parent': None, 'game_seeds': list(loaded.config.evaluation_game_seeds),
+                'learner_seats': {}, 'schedule_digest': '0' * 64,
+                'policy_registry_digest': digest({key: asdict(value) for key, value in bindings.items()})}
+            groups = hpo_evaluation_groups(link)
+            schedule = clone(serialize_schedule(groups, 4))
+            link['learner_seats'] = {spec['episode_id']: spec['learner_viewer'] for group in schedule for spec in group['episodes']}
+            link['schedule_digest'] = digest(schedule)
+            plan = HpoEvaluationPlan.create(groups, bindings, output, link, started_monotonic=started,
+                admission_deadline=started + run.admission_seconds, execution_deadline=execution,
+                work_deadline=work, wall_deadline=wall)
+            owner = RetainedGameArtifacts.for_hpo_registry(bindings, config.actions, rules=card_instance_rules(),
+                pool_size=config.hpo_spec['operating']['opponent_pool_size'], max_owned_bytes=core.hpo_artifact_budget(projected, bindings),
+                preflight_deadline=execution, finalization_deadline=work)
+            try:
+                result = await core.collect_hpo_evaluation(projected, plan, gpu_job=job, artifact_inputs=owner)
+                if result.report.get('healthy') is not True:
+                    raise ContractError('primary evaluation did not finish/save/clean up normally')
+                manifest, proof = verify_saved_evaluation(result.directory, loaded, link, deadline=work,
+                    extra_owned_bytes=owner._scan.peak)
+                owner.finalize(deadline=work)
+            except BaseException as error:
+                try:
+                    owner.release()
+                except BaseException as cleanup:  # noqa: BLE001 - preserve original and reachable actual owner
+                    error.__dict__['hpo_artifact_cleanup_owner'] = owner
+                    error.add_note('HPO evaluation artifact cleanup: ' + type(cleanup).__name__)
+                raise
+            else:
+                owner.release()
+        except BaseException as error:
+            try:
+                retention.release_hpo_evaluation(Path(training['run_path']), reference.binding,
+                    max_owned_bytes=loaded.config.operating.source_budget_bytes, deadline=work)
+            except BaseException as cleanup:  # noqa: BLE001 - preserve initiating failure and exact pin evidence
+                error.__dict__['hpo_reference_cleanup'] = (training['run_path'], reference.binding)
+                error.add_note('HPO evaluation pin release: ' + type(cleanup).__name__)
+            raise
+        else:
+            released = retention.release_hpo_evaluation(Path(training['run_path']), reference.binding,
+                max_owned_bytes=loaded.config.operating.source_budget_bytes, deadline=work)
+        termination = job.confirm_termination()
+        gpu_sha = store.put(folder + '/evaluation-gpu-termination.json', clone(asdict(termination)))
+        receipt = {'schema_version': 1, 'kind': 'hpo-seed-evaluation',
+            'training_receipt_sha256': store.get(folder + '/training.json')[1], 'linkage_sha256': digest(link),
+            'manifest_sha256': proof['manifest_sha256'], 'originals_digest': proof['source_set_sha256'],
+            'projection': _projection(manifest, training, training['source_receipt_sha256'], campaign['conditions_sha256']),
+            'conditions_sha256': campaign['conditions_sha256'], 'pin_acquire_sha256': reference.receipt_sha256,
+            'pin_release_sha256': released.receipt_sha256, 'gpu_termination_sha256': gpu_sha, 'directory': str(result.directory),
+            'linkage': link, 'config_sha256': projected.sha256}
+        store.put(folder + '/evaluation.json', receipt)
+        return receipt
+    finally:
+        job.close()
+
+
+async def evaluate_comparison(store: object, left: LoadedHPOConfig, right: LoadedHPOConfig,
+                              left_proposal: object, right_proposal: object, left_training: Json,
+                              right_training: Json, *, comparison_id: str, conditions_sha256: str,
+                              output: Path) -> ComparisonPanel:
+    """One complete declared seed-pair matchup through the actual shared collector."""
+    from gf_cli.hpo_campaign import Proposal
+    from gf_cli.hpo_storage import CampaignStore
+    from gf_common.card_instance_collection import hpo_evaluation_groups
+    from gf_common.card_instance_rules import card_instance_rules
+    from gf_common.domain import clone
+    from gf_evaluation.hpo import (
+        GameIdentity,
+        GameProjection,
+        RunIdentity,
+        SeedEvaluationProjection,
+    )
+    from gf_evaluation.hpo_compare import ComparisonPanel
+    from gf_models.card_instance_artifacts import RetainedGameArtifacts
+    from gf_training.hpo_gpu_lease import JobContext, admit_gpu_job
+
+    if type(store) is not CampaignStore or type(left_proposal) is not Proposal or type(right_proposal) is not Proposal:
+        raise ContractError('actual comparison store and closed normalized trial proposals required')
+    core = owned_runtime_module('gf_cli.card_instance', ('collect_hpo_evaluation', 'hpo_artifact_budget'))
+    composition = owned_runtime_module('gf_cli.hpo_config', ('materialize_hpo_run',))
+    retention = owned_runtime_module('gf_training.hpo_retention', ('pin_hpo_evaluation', 'release_hpo_evaluation'))
+    import uuid
+    evaluation_id = str(uuid.uuid4())
+    folder = f'matchups/{left_training["training_seed"]}-{right_training["training_seed"]}'
+    base = composition.materialize_hpo_run(left, left_proposal.settings,
+        learning_seed=left_training['training_seed'], run_id=left_training['run_id'])
+    run = replace(base.config.run, split='validation', name=evaluation_id, output_dir=str(output.parent),
+        seeds=left.config.evaluation_game_seeds, sampling_seeds=(left.config.sampler_seed,), pairs_per_seed=1)
+    config = replace(base.config, run=run)
+    raw = clone(asdict(config))
+    projected = LoadedConfig(config, raw, digest(raw), base.inputs)
+    started = time.monotonic()
+    wall, execution = started + run.wall_seconds, started + run.execution_seconds
+    work = wall - run.report_reserve_seconds
+    store.put(folder + '/intent.json', {'schema_version': 1, 'kind': 'hpo-comparison-matchup-intent',
+        'evaluation_id': evaluation_id, 'config_sha256': projected.sha256, 'directory': str(output),
+        'left_source_receipt_sha256': left_training['source_receipt_sha256'],
+        'right_source_receipt_sha256': right_training['source_receipt_sha256']})
+    job = admit_gpu_job(JobContext(comparison_id, evaluation_id, 'evaluation', left_training['run_id'], evaluation_id),
+        global_cuda_bytes=left.config.operating.managed_cuda_bytes, max_workers=left.config.operating.max_participant_workers)
+    pins: list[tuple[Path, HpoReferenceReceipt]] = []
+    released = []
+    try:
+        store.put(folder + '/admission.json', {'schema_version': 1, 'kind': 'hpo-comparison-matchup-admission',
+            'gpu_ticket': job.ticket, 'evaluation_id': evaluation_id})
+        try:
+            inspected = []
+            parent_refs = []
+            bindings = {}
+            for loaded, proposal, training in ((left, left_proposal, left_training), (right, right_proposal, right_training)):
+                directory = Path(training['run_path'])
+                if not any(existing[0] == directory for existing in pins):
+                    acquired = retention.pin_hpo_evaluation(directory, job.ticket, training['generation'], training['inference_sha256'],
+                        max_owned_bytes=left.config.operating.source_budget_bytes, deadline=execution)
+                    pins.append((directory, acquired))
+                parent = inspect_training_parent(directory, loaded, proposal.settings, training_seed=training['training_seed'],
+                    run_id=training['run_id'], deadline=execution)
+                inspected.append(parent)
+                parent_reference, binding = _final_policy_reference(parent, training['source_receipt_sha256'])
+                label = parent_reference['policy_label']
+                bindings[label] = binding
+                parent_refs.append(parent_reference)
+            if any(parent.source['used_decisions'] != left.config.decision_budget for parent in inspected):
+                raise ContractError('comparison requires both exact final-D parents')
+            link = {'schema_version': 1, 'kind': 'hpo-evaluation-linkage', 'campaign_id': comparison_id,
+                'evaluation_id': evaluation_id, 'gpu_ticket': job.ticket, 'purpose': 'comparison', 'conditions_sha256': conditions_sha256,
+                'left_parent': parent_refs[0], 'right_parent': parent_refs[1], 'game_seeds': list(left.config.evaluation_game_seeds),
+                'learner_seats': {}, 'schedule_digest': '0' * 64,
+                'policy_registry_digest': digest({label: asdict(value) for label, value in bindings.items()})}
+            groups = hpo_evaluation_groups(link)
+            schedule = clone(serialize_schedule(groups, 4))
+            link.update(learner_seats={spec['episode_id']: spec['learner_viewer'] for group in schedule for spec in group['episodes']},
+                schedule_digest=digest(schedule))
+            plan = HpoEvaluationPlan.create(groups, bindings, output, link, started_monotonic=started,
+                admission_deadline=started + run.admission_seconds, execution_deadline=execution, work_deadline=work, wall_deadline=wall)
+            owner = RetainedGameArtifacts.for_hpo_registry(bindings, config.actions, rules=card_instance_rules(),
+                pool_size=config.hpo_spec['operating']['opponent_pool_size'], max_owned_bytes=core.hpo_artifact_budget(projected, bindings),
+                preflight_deadline=execution, finalization_deadline=work)
+            try:
+                result = await core.collect_hpo_evaluation(projected, plan, gpu_job=job, artifact_inputs=owner)
+                if result.report.get('healthy') is not True:
+                    raise ContractError('comparison did not finish/save/clean up normally')
+                manifest, proof = verify_saved_evaluation(result.directory, left, link, deadline=work, extra_owned_bytes=owner._scan.peak)
+                owner.finalize(deadline=work)
+            except BaseException as error:
+                try:
+                    owner.release()
+                except BaseException as cleanup:  # noqa: BLE001 - preserve original and actual custody owner
+                    error.__dict__['hpo_artifact_cleanup_owner'] = owner
+                    error.add_note('comparison artifact cleanup: ' + type(cleanup).__name__)
+                raise
+            else:
+                owner.release()
+        except BaseException as error:
+            for directory, acquired in reversed(pins):
+                try:
+                    retention.release_hpo_evaluation(directory, acquired.binding,
+                        max_owned_bytes=left.config.operating.source_budget_bytes, deadline=work)
+                except BaseException as cleanup:  # noqa: BLE001 - attempt all actual pin retirements
+                    error.add_note('comparison pin cleanup: ' + type(cleanup).__name__)
+                    error.__dict__.setdefault('hpo_reference_cleanup', []).append((directory, acquired.binding))
+            raise
+        else:
+            for directory, acquired in reversed(pins):
+                released.append(retention.release_hpo_evaluation(directory, acquired.binding,
+                    max_owned_bytes=left.config.operating.source_budget_bytes, deadline=work))
+        termination = job.confirm_termination()
+        gpu_sha = store.put(folder + '/gpu-termination.json', clone(asdict(termination)))
+        projection = _projection(manifest, left_training, left_training['source_receipt_sha256'], conditions_sha256)
+        run_value = projection['run']
+        run_identity = RunIdentity(**{**run_value, 'games': tuple(GameIdentity(**value) for value in run_value['games'])})
+        games = tuple(GameProjection(**{**value, 'identity': GameIdentity(**value['identity'])}) for value in projection['games'])
+        seed_projection = SeedEvaluationProjection(run_identity, left_training['used_decisions'], conditions_sha256, games)
+        panel = ComparisonPanel(left_training['training_seed'], right_training['training_seed'], right_training['run_id'],
+            right_training['inference_sha256'], right_training['source_receipt_sha256'], right_training['used_decisions'], seed_projection)
+        store.put(folder + '/receipt.json', {'schema_version': 1, 'kind': 'hpo-comparison-matchup',
+            'linkage': link, 'manifest_sha256': proof['manifest_sha256'], 'originals_digest': proof['source_set_sha256'],
+            'pin_acquire_receipts': [value.receipt_sha256 for _, value in pins],
+            'pin_release_receipts': [value.receipt_sha256 for value in released], 'gpu_termination_sha256': gpu_sha,
+            'panel': asdict(panel), 'left_profile': left.effective, 'right_profile': right.effective})
+        return panel
+    finally:
+        job.close()

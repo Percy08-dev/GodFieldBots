@@ -580,9 +580,14 @@ def _require_implemented_pipeline(actions: ActionConfig | ActionConfigV2 | Actio
 
 
 def main(argv: list[str] | None = None) -> int:
+    selected = sys.argv[1:] if argv is None else argv
+    if selected and selected[0] == 'hpo':
+        from gf_cli.hpo import main as hpo_main
+        return hpo_main(selected[1:])
     command_started = time.monotonic()
     parser = argparse.ArgumentParser(prog="gf-bots", description="Public-information GodField baselines")
     subcommands = parser.add_subparsers(dest="command", required=True)
+    subcommands.add_parser('hpo', add_help=False, help='explicit local PPO hyperparameter campaigns; use hpo --help')
     for command in ("smoke", "collect", "evaluate", "benchmark", "validate", "train", "train-formal", "validate-policy", "validate-formal-policy"):
         child = subcommands.add_parser(command)
         child.add_argument("--config", required=True, type=Path)
