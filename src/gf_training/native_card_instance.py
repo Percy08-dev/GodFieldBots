@@ -804,7 +804,8 @@ class _NativeGameInputs(NativeStructuredSource):
             result = read_hpo_rollout(directory, expected_digest, self.models[0], training, actions=self.actions,
                 rules=card_instance_rules(), expected_selection=collection['selection'],
                 expected_correspondence=collection['correspondence'], max_owned_bytes=min(self.budget, native_owned + numeric_limit),
-                extra_owned_bytes=native_owned, check=self._check, reserve=self._reserve_numeric,
+                extra_owned_bytes=native_owned, numeric_budget_bytes=numeric_limit,
+                check=self._check, reserve=self._reserve_numeric,
                 storage_binding=self.plan.get('storage_binding'))
         else:
             result = read_game_rollout(directory, expected_digest, self.models[0], actions=self.actions,

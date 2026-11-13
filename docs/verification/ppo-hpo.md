@@ -323,3 +323,48 @@ Separately, root's unchanged-native final Rust rerun passes172cases/7explicit
 opt-in ignored in43.70s, and cargo fmt check passes; no CLI change alters those
 Rust source bytes. The source-matched native sdist is also built, but combined
 final package correspondence and installed activation remain pending.
+
+## Final numeric-read integration correction
+
+The whole-source correctness audit found two additional integration gaps after
+the unit reviews. The native adapter calculated the declared numeric phase limit
+but omitted it from the decoder call, selecting the component default512MiB.
+The Wire6 worker also parsed its preliminary numeric manifest against the model
+budget before the phase-limited decoder. An actual CPU probe with a1-byte phase
+parsed23,210bytes/eight episodes before later refusal; no optimizer or G1 was
+created. Related parent Source metadata was independently Source-budgeted, but
+its first numeric parse likewise lacked the declared phase admission.
+
+The correction forwards the exact native limit, admits worker JSON/descriptors
+before their first parse, and releases preliminary metadata/file-map copies before
+the second decoder. Parent admission uses the SAME sealed file/hash/stat custody
+before parsing and retains its Source accounting. Original Source/model bounds,
+legacy branches, formats, eight kernels and Rust binary remain unchanged.
+Tests exercise actual64MiB/1GiB native readers, clean CPU Wire6 refusal/success/
+copy lifetime, and same-bytes inode replacement before parent parsing.
+
+Implementer103affected cases pass in188.68s, including legacy CPU numerical
+workers and eight ASTs. Independent correctness runs7covering/kernel cases in
+11.66s and reports both findings ADDRESSED/source READY. Root fresh6new cases
+pass in11.57s; full project Ruff/mypy195source and diff checks pass. Independent
+conformance runs the same6cases in11.23s and reports READY, including the frozen
+functional helper's authority/API alignment. Overall functional acceptance still
+requires actual GPU/Simulator execution and the final integrated proofs.
+
+The initial25f9266 source-bound legacy attempt passes history26.69s,
+Observation16.36s and index14.43s plus all three data audits. Its one-worker saved
+PPO probe times out at600s in the ordinary sandbox, and the four-worker probe is
+not run. All failed outputs remain preserved and unaudited. Forensics locates
+the timeout in the first legacy native stage after the Python oracle succeeds;
+this CPU-only path has no Torch/CUDA or project subprocess/IPC, so no specific
+IPC cause is claimed. A separate host diagnostic using the same native candidate
+passes16episodes/224decisions and all three reader array comparisons within its
+30-second diagnostic bound, with zero updates. This does not replace the final
+current-source five-job proof, which will use fresh host-executed outputs.
+
+The25f9266 application wheel/sdist and private native artifacts separately pass
+strict source correspondence:197application files,91native files and7embedded
+assets. Installed mandatory-only checks pass all seven optional-package absences,
+actual baseline startup/close, HPO module/two-console help and configuration
+validation without creating an Optuna DB. These receipts predate this numeric
+correction; a fresh application package proof is required after its source freeze.

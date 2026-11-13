@@ -858,8 +858,20 @@ class _GameBatchSource:
         assert self.snapshot is not None
         snapshot = self.snapshot
         prior = snapshot._external_bytes
-        self.snapshot.reserve(prior + 32 * (directory / 'rollout.json').lstat().st_size + 65536)
-        manifest = self.controls.object(directory / 'rollout.json', expected_digest)
+        if _hpo(self.state):
+            from gf_training.hpo_lineage import hpo_spec
+            numeric_limit = hpo_spec(self.state)['operating']['numeric_budget_bytes']
+            # Seal the SAME file/hash/stat snapshot before admitting its JSON.
+            # The retained object remains charged to the existing Source scan.
+            with self.controls.file(directory / 'rollout.json', expected_digest) as (_, info):
+                envelope = 32 * info.st_size + 65536
+                if envelope > numeric_limit:
+                    raise ContractError('HPO numeric JSON envelope exceeded before parse')
+                self.snapshot.reserve(prior + envelope)
+                manifest = self.controls.object(directory / 'rollout.json', expected_digest)
+        else:
+            self.snapshot.reserve(prior + 32 * (directory / 'rollout.json').lstat().st_size + 65536)
+            manifest = self.controls.object(directory / 'rollout.json', expected_digest)
         growth = self.controls.retained - self._control_base
         self.snapshot.reserve(prior + growth)
         reader: Any = read_game_rollout

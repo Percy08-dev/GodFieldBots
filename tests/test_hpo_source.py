@@ -45,6 +45,74 @@ def test_complete_original_source_preserves_schedule_and_selected_correspondence
                 with pytest.raises(ContractError): source.issue(numeric, {'rollout.json': 'a'*64})
 
 
+@pytest.mark.parametrize('mutation',[False,True])
+def test_parent_source_numeric_preparse_phase_and_sealed_file_guard(tmp_path,monkeypatch,mutation):
+    import hashlib
+    import time
+    from contextlib import nullcontext
+
+    from gf_common.preprocessing import preparation_config
+    from gf_models import structured_sealed
+    from gf_training.hpo_lineage import validate_hpo_chain
+    from gf_training.hpo_source import open_hpo_batch, recorded_hpo_plan
+    from gf_training.structured_lineage import _ChainScan
+    from tests.hpo_support import (
+        original_hpo_chain,
+        original_hpo_collection,
+        variable_initial_hpo_chain,
+    )
+    directory=tmp_path/'parent'
+    if mutation:
+        state,records,learner=variable_initial_hpo_chain(directory,games=8,decision_budget=8)
+    else:
+        state,records,_=original_hpo_chain(directory,updates=1,numeric_budget_bytes=1,
+            _unqualified_numeric_components=True)
+    numeric=directory/'numeric/batch-000000'
+    path=numeric/'rollout.json'
+    deadline=time.monotonic()+60
+    plan,_,_=recorded_hpo_plan(directory,state,records,0,deadline)
+    if mutation:
+        original_hpo_collection(plan,state,learner)
+    with _ChainScan(directory=directory,max_owned_bytes=1024**3,deadline=deadline) as scan:
+        validate_hpo_chain(directory,max_owned_bytes=1024**3,deadline=deadline,scan=scan)
+        attempted=False
+        # A changed original remains poisoned at final SAME-scan recheck.
+        with (
+            pytest.raises(ContractError) if mutation else nullcontext(),
+            open_hpo_batch(plan,state,records,scan,preparation_config(state['effective_config']['preprocessing']),
+                online=None,max_owned_bytes=1024**3,deadline=deadline) as source,
+        ):
+            if mutation:
+                source.write_numeric(numeric)
+                assert path not in scan.files
+            expected=sha256(path)
+            parsed=[]
+            original_load=structured_sealed.json.loads
+            def observed(raw,*args,**kwargs):
+                data=raw.encode() if isinstance(raw,str) else raw
+                if hashlib.sha256(data).hexdigest()==expected:
+                    parsed.append(len(data))
+                return original_load(raw,*args,**kwargs)
+            monkeypatch.setattr(structured_sealed.json,'loads',observed)
+            if mutation:
+                original_object=scan.object
+                def replaced(target,*args,**kwargs):
+                    if target==path:
+                        # Same bytes/hash, different actual inode between
+                        # preliminary admission and the owned object read.
+                        replacement=numeric/'replacement.tmp'
+                        replacement.write_bytes(path.read_bytes())
+                        replacement.replace(path)
+                    return original_object(target,*args,**kwargs)
+                monkeypatch.setattr(scan,'object',replaced)
+            attempted=True
+            with pytest.raises(ContractError):
+                source.read_numeric(numeric,expected)
+            assert parsed==[]
+            assert source._numeric is None
+        assert attempted
+
+
 def test_numeric5_complete_history_roundtrip_selected_targets_and_tamper(tmp_path):
     from gf_training.hpo_collection import selection_for_counts
     from gf_training.hpo_rollout import HpoRollout, read_hpo_rollout, write_hpo_rollout

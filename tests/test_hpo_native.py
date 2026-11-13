@@ -189,6 +189,34 @@ def test_actual_candidate_same_native_inputs_reads_hpo_original_numeric(candidat
     assert owner.cleanup_complete
 
 
+@pytest.mark.parametrize('numeric_limit',[64*1024**2,1024**3])
+def test_actual_native_read_forwards_declared_nondefault_numeric_limit(candidate,tmp_path,monkeypatch,numeric_limit):
+    from gf_models.arrays import sha256
+    from gf_training import hpo_rollout
+    from gf_training.native_card_instance import _NativeGameInputs
+    from tests.hpo_support import original_hpo_chain
+    from tests.test_card_instance_learning import ACTIONS
+    directory=tmp_path/'parent'
+    original_hpo_chain(directory,updates=1,numeric_budget_bytes=numeric_limit)
+    calls=[]
+    original=hpo_rollout.read_hpo_rollout
+    def checked(*args,**kwargs):
+        calls.append(kwargs.get('numeric_budget_bytes'))
+        assert kwargs.get('numeric_budget_bytes')==numeric_limit
+        return original(*args,**kwargs)
+    monkeypatch.setattr(hpo_rollout,'read_hpo_rollout',checked)
+    plan={'schema_version':5,'mode':'historical_parent','parents':[{'directory':str(directory),
+        'require_complete':False}],'collections':[]}
+    with _NativeGameInputs(plan,PreparationConfig(backend='rust',reader='participant-structured-v2',memory_budget_mib=1024),
+            actions=ACTIONS,max_owned_bytes=1024**3,deadline=time.monotonic()+120,native=candidate) as owner:
+        numeric=directory/'numeric/batch-000000'
+        rollout=owner.read_numeric(numeric,sha256(numeric/'rollout.json'))
+        assert rollout.used_decisions==rollout.collected_decisions==8
+        del rollout
+    assert calls==[numeric_limit,numeric_limit]
+    assert owner.cleanup_complete
+
+
 @pytest.mark.parametrize('kind',['mlp','gru','transformer'])
 def test_actual_candidate_three_models_partial_last_originals_and_arrays(candidate,tmp_path,kind):
     import numpy as np

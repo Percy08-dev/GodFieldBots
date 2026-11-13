@@ -91,6 +91,88 @@ def test_wire6_wrong_recipe_and_counts_reject_before_update(tmp_path):
             batch_digest=requests[1]['batch_digest'], training=learner.training)
 
 
+@pytest.mark.parametrize('numeric_limit',[1,64*1024**2])
+def test_actual_cpu_serve_admits_first_manifest_and_releases_preliminary_copies(tmp_path,numeric_limit):
+    _, _, requests=numerical_request(tmp_path)
+    for request in requests:
+        request['identity']['phase_limits']['numeric_budget_bytes']=numeric_limit
+    # A clean process preserves actual visibility selection, CPU learner/save,
+    # request validation, file custody and decoder/optimizer behavior.
+    probe=r'''
+import hashlib,inspect,json,sys,weakref
+from pathlib import Path
+from gf_common.domain import ContractError
+from gf_models import sharded_arrays
+from gf_training import hpo_rollout,structured_numeric_worker
+from gf_training.hpo_numeric import HpoLearner
+requests=json.loads(sys.stdin.read())
+batch_digest=requests[1]['batch_digest']
+report={'parsed':0,'optimizer_calls':0,'decoder_calls':0,'budgets':[],'descriptor_limits':[],'released':False,'error':None}
+refs=[]
+original_json=json.loads
+def observed_json(raw,*args,**kwargs):
+    data=raw.encode() if isinstance(raw,str) else raw
+    if hashlib.sha256(data).hexdigest()==batch_digest:
+        report['parsed']+=1
+    return original_json(raw,*args,**kwargs)
+json.loads=observed_json
+original_read=sharded_arrays.read_json
+class Manifest(dict):
+    pass
+def observed_read(path,*args,**kwargs):
+    if Path(path).name!='rollout.json':
+        return original_read(path,*args,**kwargs)
+    report['budgets'].append(kwargs.get('max_owned_bytes'))
+    value=Manifest(original_read(path,*args,**kwargs))
+    refs.append(weakref.ref(value))
+    return value
+sharded_arrays.read_json=observed_read
+original_descriptors=sharded_arrays.validate_bundle_metadata
+def observed_descriptors(*args,**kwargs):
+    if report['budgets']:
+        report['descriptor_limits'].append(kwargs.get('max_decoded_bytes'))
+    return original_descriptors(*args,**kwargs)
+sharded_arrays.validate_bundle_metadata=observed_descriptors
+original_decode=hpo_rollout.read_hpo_rollout
+def observed_decode(*args,**kwargs):
+    report['decoder_calls']+=1
+    caller=inspect.currentframe().f_back
+    report['released']=refs[0]() is None and all(name not in caller.f_locals for name in ('manifest','files','descriptors'))
+    return original_decode(*args,**kwargs)
+hpo_rollout.read_hpo_rollout=observed_decode
+original_update=HpoLearner.update
+def observed_update(self,*args,**kwargs):
+    report['optimizer_calls']+=1
+    return original_update(self,*args,**kwargs)
+HpoLearner.update=observed_update
+try:
+    structured_numeric_worker.serve(requests[0],(json.dumps(row) for row in requests[1:]))
+except ContractError as error:
+    report['error']=str(error)
+print('PROBE:'+json.dumps(report),flush=True)
+'''
+    result=subprocess.run([sys.executable,'-E','-c',probe],input=json.dumps(requests),
+        text=True,capture_output=True,timeout=60,check=False)
+    assert result.returncode==0,result.stderr
+    lines=result.stdout.splitlines()
+    report=json.loads(next(line.removeprefix('PROBE:') for line in lines if line.startswith('PROBE:')))
+    replies=[json.loads(line) for line in lines if not line.startswith('PROBE:')]
+    assert report['budgets'][0]==numeric_limit
+    if numeric_limit==1:
+        assert report['error'] and 'before parse' in report['error']
+        assert report['parsed']==report['decoder_calls']==report['optimizer_calls']==0
+        assert report['descriptor_limits']==[]
+        assert [reply['command'] for reply in replies]==['initialize']
+        assert not (tmp_path/'g1').exists()
+    else:
+        assert report['error'] is None and report['released']
+        assert report['budgets']==[numeric_limit,numeric_limit]
+        assert report['descriptor_limits'][0]==numeric_limit
+        assert report['parsed']==2 and report['optimizer_calls']==1
+        assert [reply['command'] for reply in replies]==['initialize','update','close']
+        assert replies[1]['artifact']['optimizer_steps']==4
+
+
 def test_owned_parent_initialize_close_reaps_and_rejects_raw_update(tmp_path):
     import asyncio
     import time

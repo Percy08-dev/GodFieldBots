@@ -321,9 +321,15 @@ def serve(initial: Json, lines: Iterable[str]) -> None:
             from gf_models.structured_artifacts import semantics_v3
             declaration = (learner._context.semantics(model) if hpo else semantics_v3(model, layout=GAME_LAYOUT, action_contract=contract, rules=card_instance_rules()))
             from gf_models.arrays import sha256
-            manifest = read_json(Path(request['batch']) / 'rollout.json', expected_digest=request['batch_digest'], max_owned_bytes=model.resources.max_owned_bytes)
             from gf_models.sharded_arrays import validate_bundle_metadata
-            validate_bundle_metadata(manifest['data'], max_decoded_bytes=model.resources.max_owned_bytes)
+            if hpo:
+                numeric_limit = identity['phase_limits']['numeric_budget_bytes']
+                manifest = read_json(Path(request['batch']) / 'rollout.json', expected_digest=request['batch_digest'],
+                    max_owned_bytes=min(numeric_limit,12*1024**3))
+                validate_bundle_metadata(manifest['data'],max_decoded_bytes=numeric_limit)
+            else:
+                manifest = read_json(Path(request['batch']) / 'rollout.json', expected_digest=request['batch_digest'], max_owned_bytes=model.resources.max_owned_bytes)
+                validate_bundle_metadata(manifest['data'], max_decoded_bytes=model.resources.max_owned_bytes)
             files = {'rollout.json': request['batch_digest'], **manifest['data']['files']}
             if digest_files(files) != projection['numeric_files_sha256']:
                 raise ContractError('wire4 numeric original file inventory mismatch')
@@ -331,6 +337,9 @@ def serve(initial: Json, lines: Iterable[str]) -> None:
                 if sha256(Path(request['batch']) / name) != expected_hash:
                     raise ContractError('wire4 numeric original file hash mismatch')
             if hpo:
+                # The next reader admits its own metadata and arrays. No first
+                # manifest/file-map copy may survive into that separate parse.
+                del manifest, files
                 from gf_training.hpo_rollout import read_hpo_rollout
                 rollout = read_hpo_rollout(Path(request['batch']), request['batch_digest'], model, training,
                     actions=actions, rules=card_instance_rules(), expected_selection=projection['selection'],
