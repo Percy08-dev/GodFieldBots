@@ -296,14 +296,29 @@ def test_explicit_candidate_never_grants_live_hpo_source(candidate,tmp_path):
         owner.__enter__()
 
 
-def test_actual_candidate_tiny_declared_numeric_budget_refuses_payload(candidate,tmp_path):
+def test_source_one_byte_numeric_budget_refuses_before_publication(tmp_path):
+    from gf_models.sharded_arrays import read_json
+    from tests.hpo_support import original_hpo_chain
+    rejected=tmp_path/'source-refused'
+    with pytest.raises(ContractError,match='numeric token envelope exceeded before allocation'):
+        original_hpo_chain(rejected,updates=1,numeric_budget_bytes=1)
+    assert read_json(rejected/'run.json')['updates']==0
+    assert not (rejected/'numeric/batch-000000').exists()
+    assert not (rejected/'artifacts/000001').exists()
+
+
+def test_actual_candidate_unqualified_components_one_byte_budget_refuses_native_payload(candidate,tmp_path):
     from gf_common.domain import canonical
     from tests.hpo_support import original_hpo_chain
     directory=tmp_path/'parent'
-    original_hpo_chain(directory,numeric_budget_bytes=1)
+    # The native preallocation counterexample needs actual persisted components.
+    # These unqualified CPU bytes do not claim a production Source update under
+    # the 1-byte limit; the ordinary Source test separately proves early refusal.
+    original_hpo_chain(directory,updates=1,numeric_budget_bytes=1,_unqualified_numeric_components=True)
     session=_ffi_open(candidate,directory)
     try:
         pending=json.loads(session.control_summary())
+        assert pending['parent']['state']['effective_config']['hpo_spec']['operating']['numeric_budget_bytes']==1
         session.authorize_hpo(canonical(_authorization(directory,pending)).encode())
         before=session.used_bytes()
         with pytest.raises(MemoryError,match='incremental numeric'): session.export_recorded_cohort(0)

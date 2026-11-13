@@ -106,8 +106,17 @@ def original_hpo_collection(plan, state, learner, *, decisions=True):
         owner.release()
 
 
-def original_hpo_chain(directory, *, updates=3, model_id='mlp', decision_budget=None, numeric_budget_bytes=None, packed=False):
-    """Actual CPU numeric saves + complete hand-authored journals, unqualified."""
+def original_hpo_chain(directory, *, updates=3, model_id='mlp', decision_budget=None, numeric_budget_bytes=None, packed=False,
+                       _unqualified_numeric_components=False):
+    """Actual CPU numeric saves + complete hand-authored journals, unqualified.
+
+    The explicit 1-byte native allocation fixture uses admitted numeric component
+    APIs instead of the production Source writer. Its completed metadata is only
+    structural test input; it cannot claim a valid completed 1-byte production
+    parent. The ordinary fixture still exercises all Source phase guards.
+    """
+    if _unqualified_numeric_components and (numeric_budget_bytes != 1 or packed):
+        raise ValueError('unqualified numeric components are only for the plain native 1-byte fixture')
     from gf_common.preprocessing import preparation_config
     from gf_models.sharded_arrays import read_json
     from gf_training.hpo_lineage import validate_hpo_chain
@@ -134,9 +143,13 @@ def original_hpo_chain(directory, *, updates=3, model_id='mlp', decision_budget=
             with open_hpo_batch(plan, state, records, scan, preparation_config(state['effective_config']['preprocessing']),
                     online=None, max_owned_bytes=1024**3, deadline=deadline) as source:
                 numeric = directory/'numeric'/plan.linkage['batch_id']
-                manifest = source.write_numeric(numeric)
-                numeric_sha = sha256(numeric/'rollout.json')
-                rollout = source.read_numeric(numeric, numeric_sha)
+                if _unqualified_numeric_components:
+                    manifest, rollout = _unqualified_numeric_components_for_native(source, numeric)
+                    numeric_sha = sha256(numeric/'rollout.json')
+                else:
+                    manifest = source.write_numeric(numeric)
+                    numeric_sha = sha256(numeric/'rollout.json')
+                    rollout = source.read_numeric(numeric, numeric_sha)
                 proof = source.proof
         metrics = learner.update(rollout)
         saved = learner.save(checkpoint_path(directory, generation), shard_bytes=524288)
@@ -181,6 +194,35 @@ def original_hpo_chain(directory, *, updates=3, model_id='mlp', decision_budget=
         atomic_json(directory/'latest.json', {'generation': generation, 'sha256': state['generation_sha256']})
         atomic_json(directory/'artifact-registry.json', registry)
     return state, records, learner
+
+
+def _unqualified_numeric_components_for_native(source, directory):
+    """Component bytes under the SAME actual original owner, no Source authority.
+
+    This explicit component admission is separate from the parent's deliberately
+    unusable 1-byte production phase limit. Neither Source guard is patched.
+    """
+    from gf_training.hpo_collection import replay_selection
+    from gf_training.hpo_config import hpo_training_config
+    from gf_training.hpo_rollout import HpoRollout, read_hpo_rollout, write_hpo_rollout
+
+    snapshot, records = source.snapshot, source.records
+    assert snapshot is not None and records is not None
+    recipe = hpo_training_config(source.state['effective_config']['hpo_spec']['training_recipe'])
+    extra = snapshot.extra_bytes_for(records) + source._selection_owned
+    rollout = HpoRollout(records, source.model, recipe, actions=source.actions, rules=RULES,
+        selected_locations=replay_selection(source.selection, tuple(len(record.frames) for record in records)),
+        _reserved_bytes=extra)
+    manifest = write_hpo_rollout(directory, rollout, selection=source.selection,
+        max_owned_bytes=snapshot.max_owned_bytes, extra_owned_bytes=extra,
+        check=snapshot.check, reserve=snapshot.reserve)
+    del rollout
+    decoded = read_hpo_rollout(directory, sha256(directory/'rollout.json'), source.model, recipe,
+        actions=source.actions, rules=RULES, expected_selection=source.selection,
+        expected_records=records, numeric_budget_bytes=snapshot.max_owned_bytes,
+        max_owned_bytes=snapshot.max_owned_bytes, extra_owned_bytes=extra,
+        check=snapshot.check, reserve=snapshot.reserve)
+    return manifest, decoded
 
 
 def variable_initial_hpo_chain(directory, *, games=24, model_id=None, decision_budget=3, numeric_budget_bytes=None, packed=False):
