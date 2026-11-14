@@ -616,3 +616,36 @@ only/current, without a surviving capability or termination/restart receipt.
 This correction cannot retroactively confirm it. No new physical GPU work or
 recovery is performed. A fresh same-condition a03 input set changes storage paths
 only and remains unexecuted pending code verification and actual external recovery.
+
+## Clock observation correction
+
+The separately gated [clock design](../design/ppo-clock-observation.md) is now
+implemented in the common coordinator. It keeps the original first monotonic and
+wall reads, brackets the latter, and bounds subsequent net-offset comparisons
+without replacing deadlines. Invalid, imprecise or ambiguous observations retry
+at most three times and then fail as uncertainty. A helper-local frontier retains
+all finite monotonic observations across attempts. This closes the independently
+confirmed counterexample where a sample preceding the original anchor could
+otherwise appear to have a valid wall offset. The six ordering regressions fail
+before that correction and pass afterward.
+
+Successful checks preserve the wall high-water mark. Initial sampling validation
+occurs inside owned cleanup before starting the learner; cleanup sampling errors
+preserve the initiating error and cannot confer completion. The existing formal
+test's accepted-small-skew elapsed assertion now reflects that high-water mark;
+the original stop, tolerance and rollback rejection are preserved.
+
+Owner final CPU-hidden HOST verification passes91cases in161.37s, including actual
+CPU ownership/cleanup, HPO plain/packed coordinator, old lineage/card PPO,
+pause/resume, formal tolerance and all eight frozen kernels. Root independently
+passes31focused clock/kernel cases in9.77s. The architecture recheck passes the
+six ordering cases; correctness recheck passes29cases with5explicit deselections.
+Both scoped reviews are READY. Full project Ruff, mypy195source and diff checks
+pass. No system clock, GPU ticket, failed parent or Simulator is changed.
+
+After the restart, missing old-data optional dependencies are restored exactly
+from the existing lockfile with hashes: PyArrow26.0.0, LightGBM4.7.0,
+SciPy1.18.1 and Narwhals2.27.1. This changes no project dependency declaration.
+The latest Eval/clock source still requires fresh whole-suite, installed-package,
+legacy-data proofs and the predeclared physical functional protocol. Ticket4868
+remains unconfirmed; earlier whole-suite evidence is historical.

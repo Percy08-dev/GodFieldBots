@@ -185,7 +185,9 @@ def test_inert_formal_close_keeps_original_coordinator_point_one_clock_tolerance
         state = json.loads((parent / 'run.json').read_text())
         assert result['status'] == 'complete'
         assert abs(state['formal_stop']['elapsed_seconds'] - 5401.) < .001
-        assert abs(state['elapsed_seconds'] - (5401. + skew)) < .001
+        # Accepted small wall loss cannot lower the last successfully checked
+        # observation; elapsed provenance now preserves that high-water mark.
+        assert abs(state['elapsed_seconds'] - max(5401., 5401. + skew)) < .001
     else:
         with pytest.raises(ContractError, match='rollback'):
             asyncio.run(train_formal_card_instance_ppo(value, collector, parent))

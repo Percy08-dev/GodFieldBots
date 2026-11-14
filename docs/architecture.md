@@ -70,6 +70,16 @@ Source/artifact/pin retirement, and allows operational termination of failed dat
 only while the original job capability survives. It never creates an evaluation
 objective. The already unconfirmed4868 ticket still requires explicit recovery.
 
+The separately reviewed [clock observation correction](design/ppo-clock-observation.md)
+now uses bounded monotonic/wall/monotonic observations against the original
+invocation anchor. Scheduler gaps fail as uncertainty when they prevent a useful
+measurement; they cannot alone prove wall rollback. A helper-local frontier also
+rejects backward monotonic observations across retries. Original deadlines and
+resume expiry remain unchanged, checked wall observations retain a high-water
+mark, and sampling failures follow existing owned cleanup. Both scoped reviews
+are READY. Transient or masked clock steps and persisted wall-only pause records
+retain the explicit limits in the design; this creates no cross-boot time authority.
+
 [ADR0024](adr/0024-card-instance-simulator-v2.md) begins a separately identified
 card-instance Simulator v2 migration. Contract/wire/Config/direct HTTP and pure
 opaque-reference frames/layouts/tokens pass both independent reviews and scoped

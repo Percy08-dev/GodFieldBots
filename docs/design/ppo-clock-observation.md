@@ -1,7 +1,7 @@
 # PPO clock observation without scheduler-induced rollback
 
-Bounded root proposal after CPU regression failures. Independent architecture
-review is required before implementation. This clarification changes no persisted
+Accepted bounded root design after CPU regression failures. Independent architecture
+review is READY before implementation. This clarification changes no persisted
 run/deadline format, original deadline field, hpo-deadline-v1 projection, numerical
 kernel, reward or policy input. GPU ticket4868 remains unresolved and untouched.
 
@@ -29,7 +29,12 @@ uncertainty, not as a proven wall rollback.
 At each existing clock-check boundary, sample mb=monotonic, w=wall, ma=monotonic.
 An acceptable bracket has finite values and0<=ma-mb<=0.025s. Make at most three
 attempts, without sleeping, replacing any deadline or excluding their elapsed
-time from the original budget. For an accepted bracket compute:
+time from the original budget. A helper-local monotonic frontier starts at m1.
+The current mb cannot precede that frontier, including finite monotonic reads
+observed in an invalid prior attempt. Advance the frontier from both finite
+monotonic reads of each attempt. Backward ordering retries within the same limit
+and, if unresolved, fails as uncertainty. It never establishes wall rollback or
+creates global/persisted clock state. For an accepted bracket compute:
 
 ```
 rollback_min = (w0-m1) - (w-mb)

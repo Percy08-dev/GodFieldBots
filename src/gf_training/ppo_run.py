@@ -6,6 +6,7 @@ import importlib.metadata
 import importlib.util
 import inspect
 import json
+import math
 import os
 import resource
 import stat
@@ -382,6 +383,50 @@ class LearningProcess:
             raise cancellation
 
 
+_CLOCK_BRACKET_SECONDS = .025
+_CLOCK_SAMPLE_ATTEMPTS = 3
+_CLOCK_ROLLBACK_SECONDS = .1
+type _ClockBracket = tuple[float, float, float]
+
+
+def _precise_clock_bracket(before: float, wall: float, after: float) -> bool:
+    return (all(type(value) in (int, float) and math.isfinite(value) for value in (before, wall, after))
+        and 0 <= after - before <= _CLOCK_BRACKET_SECONDS)
+
+
+def _validate_clock_anchor(before: float, wall: float, after: float) -> None:
+    if not _precise_clock_bracket(before, wall, after):
+        raise ContractError('PPO initial clock observation uncertain')
+
+
+def _checked_wall_clock(anchor: _ClockBracket, *, scope: str) -> float:
+    """Bound net wall-offset loss using observations, not scheduler read gaps."""
+    _validate_clock_anchor(*anchor)  # The captured original anchor is never retried/replaced.
+    m0, w0, m1 = anchor
+    frontier = m1
+    for _attempt in range(_CLOCK_SAMPLE_ATTEMPTS):
+        before = time.monotonic()
+        wall = time.time()
+        after = time.monotonic()
+        previous_frontier = frontier
+        # Invalid brackets still observed time: a retry cannot precede either
+        # finite monotonic read, including one from a decreasing bracket.
+        for observed in (before, after):
+            if type(observed) in (int, float) and math.isfinite(observed):
+                frontier = max(frontier, observed)
+        if not _precise_clock_bracket(before, wall, after) or before < previous_frontier:
+            continue
+        rollback_min = (w0 - m1) - (wall - before)
+        rollback_max = (w0 - m0) - (wall - after)
+        if not math.isfinite(rollback_min) or not math.isfinite(rollback_max):
+            continue
+        if rollback_min > _CLOCK_ROLLBACK_SECONDS:
+            raise ContractError('wall clock rollback during PPO ' + scope)
+        if rollback_max <= _CLOCK_ROLLBACK_SECONDS:
+            return wall
+    raise ContractError('PPO clock observation uncertain during ' + scope)
+
+
 def _controls(rng: Any, pool: list[int], collection_position: int) -> Json:
     return {'schedule_opponent_rng': rng.bit_generator.state, 'snapshot_pool': pool, 'collection_position': collection_position}
 
@@ -399,6 +444,8 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
                    _structured_ops: Any = None, _game_ops: Any = None) -> Json:
     operation_started = time.monotonic()
     operation_unix = time.time()
+    operation_monotonic_after = time.monotonic()
+    clock_anchor = (operation_started, operation_unix, operation_monotonic_after)
     config = loaded.config
     ops: Any = None
     game = _game_ops is not None
@@ -542,7 +589,12 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
             child = LearningProcess(directory, training.max_log_bytes)
         error: BaseException | None = None
         final_status = 'complete'
+        def check_clock(*, scope: str = 'invocation') -> float:
+            checked = _checked_wall_clock(clock_anchor, scope=scope)
+            state['last_unix'] = max(state['last_unix'], checked)
+            return state['last_unix']
         try:
+            _validate_clock_anchor(*clock_anchor)
             await child.start()
             request = {'command': 'initialize', 'model': asdict(model), 'seed': training.seeds[0], 'device': training.device,
                        'output': str(checkpoint_path(directory, 0)), 'action_hash': digest(asdict(config.actions))}
@@ -561,9 +613,6 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
                     commit_generation(directory, state, generation=0, update=None, controls=_controls(rng, pool, 0), deadline=execution)
             elif initial['hardware'] != state['hardware']:
                 raise ContractError('resume hardware identity mismatch')
-            def check_clock() -> None:
-                if time.time() < operation_unix + (time.monotonic() - operation_started) - .1:
-                    raise ContractError('wall clock rollback during PPO invocation')
             while True:
                 check_clock()
                 usage = measure_owned(execution)
@@ -735,7 +784,6 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
                 check_clock()
                 if time.monotonic() >= execution or measure_owned(execution) > training.max_owned_bytes:
                     raise RuntimeError('PPO commit/retention execution/storage overrun')
-                state['last_unix'] = time.time()
                 if pause_after_update == next_generation:
                     final_status = 'paused'
                     break
@@ -755,9 +803,13 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
                 state['cleanup_failure'] = str(cleanup_error)
         if set(child.health) - {'exit_code', 'stderr_bytes'} or child.health.get('exit_code') != 0:
             error = error or RuntimeError('PPO learner cleanup health failed')
-        if time.time() < operation_unix + (time.monotonic() - operation_started) - .1:
-            error = error or ContractError('wall clock rollback during PPO cleanup')
-        state['last_unix'] = time.time()
+        try:
+            check_clock(scope='cleanup')
+        except BaseException as clock_failure:  # noqa: BLE001 -- finish owned bookkeeping and preserve the initiating error.
+            if error is None:
+                error = clock_failure
+            else:
+                error.add_note('PPO cleanup clock observation: ' + str(clock_failure))
         state['invocations'].append({'mode': mode, 'elapsed_seconds': time.monotonic() - invocation_started, 'child_health': child.health})
         state['elapsed_seconds'] = state['last_unix'] - state['created_unix']
         try:

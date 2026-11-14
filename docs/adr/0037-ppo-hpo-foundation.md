@@ -128,3 +128,13 @@ resource termination using the actual invocation/owners. No empty-ledger/PID
 inference or evaluation success follows. The already unconfirmed evaluation job
 cannot be repaired retrospectively. Broader CPU clock failures remain a separate
 gated correction; no whole-foundation acceptance is implied.
+
+The [clock observation correction](../design/ppo-clock-observation.md) is now
+accepted after advisor/design review and independent correctness/conformance
+review. Bracketed observations distinguish established net wall-offset loss from
+scheduler-induced ambiguity, with a local monotonic frontier across bounded
+retries. The original anchor, tolerance, absolute deadlines and resume checks
+remain unchanged. Checked wall high-water replaces unchecked persistence; errors
+continue through owned cleanup. The documented transient/masked and offline
+wall-only timing limitations remain. Scoped CPU verification passes; physical
+functional acceptance and the unresolved evaluation ticket remain separate gates.
