@@ -29,6 +29,7 @@ from gf_common.domain import (
     Json,
     RuntimePolicyBinding,
     canonical,
+    clone,
     digest,
     integer,
 )
@@ -51,7 +52,7 @@ from gf_training.card_instance_journal import CardInstanceJournal, read_card_ins
 from gf_training.collection import CollectionPlan, FinalizedCollection, PackedRunResult
 
 if TYPE_CHECKING:
-    from gf_cli.hpo_evaluation import HpoEvaluationPlan
+    from gf_cli.hpo_evaluation import HpoEvaluationPlan, _HpoEvaluationCleanupObservation
     from gf_models.card_instance_artifacts import RetainedGameArtifacts
     from gf_training.card_instance_final_validation import GameFinalValidationPlan
     from gf_training.hpo_gpu_lease import GpuJob
@@ -247,13 +248,19 @@ async def _run_corrected(loaded: LoadedConfig, command: str,
                          collection: CollectionPlan | GameFinalValidationPlan | HpoEvaluationPlan | None = None,
                          owned_ledger: ReservationLedger | None = None,
                          _final_validation_context: Any = None,
-                         _hpo_evaluation_job: Any = None) -> tuple[Path, Any] | PackedRunResult:
+                         _hpo_evaluation_job: Any = None,
+                         _hpo_evaluation_cleanup: Any = None) -> tuple[Path, Any] | PackedRunResult:
     config = loaded.config
     from gf_cli.hpo_config import HPOExperimentConfig
     from gf_cli.hpo_evaluation import HpoEvaluationPlan
     eval_plan=cast(HpoEvaluationPlan,collection) if type(collection) is HpoEvaluationPlan else None
+    observation = _hpo_evaluation_cleanup
     hpo_training=type(config) is HPOExperimentConfig and type(collection) is CollectionPlan
     if eval_plan is not None:
+        observation.require_identity(eval_plan, _hpo_evaluation_job, artifact_inputs)
+        if observation._core_phase != 'entered' or observation._run_phase != 'requested':
+            raise ContractError('original evaluation collector invocation required')
+        observation._run_phase = 'entered'
         eval_plan.require(loaded,gpu_job=_hpo_evaluation_job)
         if command!='evaluate' or owned_ledger is not _hpo_evaluation_job.ledger or _final_validation_context is not None:
             raise ContractError('evaluation requires its actual job ledger and distinct role')
@@ -309,6 +316,9 @@ async def _run_corrected(loaded: LoadedConfig, command: str,
     admission_closed = False
     diagnostics: Json = {}
     packed = None
+    packed_publication = None
+    if observation is not None:
+        observation._tasks = tasks
     if isinstance(config, GroupPackExperimentConfig):
         from gf_training.group_pack_collection import GroupPackCollection
         owned_directory = None
@@ -323,8 +333,25 @@ async def _run_corrected(loaded: LoadedConfig, command: str,
                 owned_directory = Path(config.storage.db_root) / online.state['run_id'] / 'collections' / collection.linkage['batch_id']
             else:
                 _validate_final_collection(loaded, collection, owned_ledger, _final_validation_context, preflight_deadline)
-        packed = GroupPackCollection(config.storage.settings(), run_id, deadline=work_deadline,
-                                     owned_directory=owned_directory)
+        if observation is not None:
+            observation._pack_phase = 'creating'
+            packed = GroupPackCollection.__new__(GroupPackCollection)
+            observation._pack = packed
+            try:
+                GroupPackCollection.__init__(packed, config.storage.settings(), run_id, deadline=work_deadline,
+                    owned_directory=owned_directory)
+            except BaseException as error:
+                vars(error)['hpo_partial_pack_owner'] = packed
+                try:
+                    await packed.close()
+                except BaseException as cleanup:  # noqa: BLE001 -- preserve partial original owner and primary.
+                    error.add_note('partial packed construction cleanup: ' + str(cleanup))
+                raise
+        else:
+            packed = GroupPackCollection(config.storage.settings(), run_id, deadline=work_deadline,
+                                         owned_directory=owned_directory)
+        if observation is not None:
+            observation._pack, observation._pack_phase = packed, 'owned'
 
     async def group_run(group: Any) -> GroupResult:
         nonlocal admission_closed
@@ -335,16 +362,31 @@ async def _run_corrected(loaded: LoadedConfig, command: str,
                 if packed is None:
                     return await environment.run_group(group)
                 from gf_training.group_pack_memory import MemoryCardInstanceJournal
+                if observation is not None:
+                    observation._creating_environment(group)
                 memory_group = packed.new_group(group.episodes[0].episode_id)
                 task = asyncio.current_task()
                 assert task is not None
                 packed.track_group_task(task)
-                own_environment = CardInstanceSimulatorEnvironment(settings,
-                    partial(MemoryCardInstanceJournal, artifact_sink=memory_group.sink),
-                    ledger=ledger, runtime_evidence=evidence, artifact_sink=memory_group.sink,
-                    server_output_root=memory_group.server_root, **extra)
+                if observation is not None:
+                    own_environment = CardInstanceSimulatorEnvironment.__new__(CardInstanceSimulatorEnvironment)
+                    memory_group.runtime_owner = own_environment
+                    observation._partial_environment(group, own_environment)
+                    CardInstanceSimulatorEnvironment.__init__(own_environment, settings,
+                        partial(MemoryCardInstanceJournal, artifact_sink=memory_group.sink),
+                        ledger=ledger, runtime_evidence=evidence, artifact_sink=memory_group.sink,
+                        server_output_root=memory_group.server_root, **extra)
+                else:
+                    own_environment = CardInstanceSimulatorEnvironment(settings,
+                        partial(MemoryCardInstanceJournal, artifact_sink=memory_group.sink),
+                        ledger=ledger, runtime_evidence=evidence, artifact_sink=memory_group.sink,
+                        server_output_root=memory_group.server_root, **extra)
                 memory_group.runtime_owner = own_environment
+                if observation is not None:
+                    observation._environment(group, own_environment)
                 result = await own_environment.run_group(group)
+                if observation is not None:
+                    observation._group_result(group, result)
                 if not own_environment.storage_cleanup_complete(result):
                     from gf_training.group_pack_resources import CleanupError
                     raise CleanupError("Simulator/participant reap and drain are not confirmed", packed)
@@ -373,7 +415,28 @@ async def _run_corrected(loaded: LoadedConfig, command: str,
             await packed.start()
         environment = CardInstanceSimulatorEnvironment(settings, CardInstanceJournal, ledger=ledger,
                                                       runtime_evidence=evidence, **extra)
-        tasks = [asyncio.create_task(group_run(group)) for group in planned]
+        if observation is not None:
+            observation._task_phase = 'creating'
+        for group in planned:
+            coroutine = group_run(group)
+            try:
+                task = asyncio.create_task(coroutine)
+            except BaseException as creation_error:
+                # A custom factory may have transferred the coroutine before
+                # raising. Retain it without closing possibly scheduled work;
+                # no never-started proof follows from an absent returned Task.
+                if observation is not None:
+                    observation._task_creation_failure = (coroutine, creation_error)
+                    observation._task_phase = 'uncertain'
+                    vars(creation_error)['hpo_task_creation_coroutine'] = coroutine
+                else:
+                    coroutine.close()
+                raise
+            tasks.append(task)
+            if observation is not None:
+                observation._register_task(group, task)
+        if observation is not None:
+            observation._task_phase = 'settled'
         groups = await asyncio.gather(*tasks)
         episodes = [episode for group in groups for episode in group.episodes]
         if packed is not None:
@@ -446,7 +509,8 @@ async def _run_corrected(loaded: LoadedConfig, command: str,
         manifest.update(kind="card-instance-collection", run_id=run_id, command=command,
             status="complete" if summary["comparison_valid"] else "incomplete", schedule_schema_version=4,
             code=producer, inputs=loaded.inputs, groups=[group.health for group in groups],
-            episodes=[asdict(episode) for episode in episodes])
+            episodes=(clone([asdict(episode) for episode in episodes]) if eval_plan is not None
+                      else [asdict(episode) for episode in episodes]))
         if _final_validation_context is None:
             summary.update(healthy=summary["comparison_valid"], artifact_bytes=sum(row["bytes"] for row in inventory))
             summary["wall_seconds"] = time.monotonic() - started
@@ -456,16 +520,40 @@ async def _run_corrected(loaded: LoadedConfig, command: str,
                 _write_diagnostic(directory, "incomplete.json", {"manifest": manifest, "report": summary})
             else:
                 from gf_training.group_pack_publication import GroupPackCollectionPublication
-                return await GroupPackCollectionPublication(packed, directory).diagnostic(summary, manifest)
+                if observation is not None:
+                    observation._publication_phase = 'creating'
+                    packed_publication = GroupPackCollectionPublication.__new__(GroupPackCollectionPublication)
+                    observation._publication = packed_publication
+                    GroupPackCollectionPublication.__init__(packed_publication, packed, directory)
+                else:
+                    packed_publication = GroupPackCollectionPublication(packed, directory)
+                if observation is not None:
+                    observation._publication, observation._publication_phase = packed_publication, 'owned'
+                return await packed_publication.diagnostic(summary, manifest)
             return directory, summary
         manifest["report_sha256"] = hashlib.sha256((canonical(summary) + "\n").encode()).hexdigest()
-        packed_publication = None
         if packed is not None:
             from gf_training.group_pack_publication import GroupPackCollectionPublication
-            packed_publication = GroupPackCollectionPublication(packed, directory)
+            if observation is not None:
+                observation._publication_phase = 'creating'
+                packed_publication = GroupPackCollectionPublication.__new__(GroupPackCollectionPublication)
+                observation._publication = packed_publication
+                GroupPackCollectionPublication.__init__(packed_publication, packed, directory)
+            else:
+                packed_publication = GroupPackCollectionPublication(packed, directory)
+            if observation is not None:
+                observation._publication, observation._publication_phase = packed_publication, 'owned'
             await packed_publication.prepare(summary, manifest)
-        publication = CollectionPublication(directory, work_deadline=work_deadline,
-            cleanup_deadline=wall_deadline, group_pack=packed_publication)
+        if observation is not None:
+            observation._composite_phase = 'creating'
+            publication = CollectionPublication.__new__(CollectionPublication)
+            observation._composite = publication
+            CollectionPublication.__init__(publication, directory, work_deadline=work_deadline,
+                cleanup_deadline=wall_deadline, group_pack=packed_publication)
+            observation._composite_phase = 'owned'
+        else:
+            publication = CollectionPublication(directory, work_deadline=work_deadline,
+                cleanup_deadline=wall_deadline, group_pack=packed_publication)
         if _final_validation_context is not None:
             issued = _final_validation_context.begin_collection(publication, summary, manifest)
             return directory, issued  # Actual pending owner; canonical manifest remains absent.
@@ -487,9 +575,22 @@ async def _run_corrected(loaded: LoadedConfig, command: str,
         if _final_validation_context is not None:
             _final_validation_context._record_failure(error)  # Invalidate FIRST, before reap/diagnostics.
         from gf_cli import _join_owned_groups
-        await _join_owned_groups(tasks, wall_deadline, diagnostics)
+        try:
+            await _join_owned_groups(tasks, wall_deadline, diagnostics)
+        except BaseException as cleanup:
+            if observation is None:
+                raise
+            vars(error)['hpo_group_cleanup_tasks'] = tasks
+            error.add_note('owned group cleanup: ' + str(cleanup))
         if packed is not None:
             storage_cleanup: BaseException | None = None
+            if observation is not None and packed_publication is not None:
+                try:
+                    if not packed_publication.committed:
+                        packed_publication.revoke()
+                except BaseException as cleanup:  # noqa: BLE001 -- independent Pack close still required.
+                    storage_cleanup = cleanup
+                    vars(error)['hpo_publication_cleanup_owner'] = packed_publication
             try:
                 if not packed._closed and all(group.archived for group in packed._groups):
                     pending = await packed.prepare_diagnostic("failure.json",
@@ -669,8 +770,27 @@ def _require_hpo_evaluation_retirement(plan: HpoEvaluationPlan,gpu_job: GpuJob,
     _check(min(plan.execution_deadline,plan.work_deadline,plan.wall_deadline))
 
 
-async def collect_hpo_evaluation(loaded: LoadedConfig,plan: HpoEvaluationPlan,*,gpu_job: GpuJob,
-                                   artifact_inputs: RetainedGameArtifacts) -> PackedRunResult:
+async def collect_hpo_evaluation(loaded: LoadedConfig, plan: HpoEvaluationPlan, *, gpu_job: GpuJob,
+                               artifact_inputs: RetainedGameArtifacts,
+                               _cleanup_observation: _HpoEvaluationCleanupObservation) -> PackedRunResult:
+    from gf_cli.hpo_evaluation import _HpoEvaluationCleanupObservation
+    if type(_cleanup_observation) is not _HpoEvaluationCleanupObservation:
+        raise ContractError('actual invocation-bound evaluation cleanup observation required')
+    observation = _cleanup_observation
+    observation._enter(plan, gpu_job, artifact_inputs)
+    try:
+        result = await _collect_hpo_evaluation(loaded, plan, gpu_job=gpu_job,
+            artifact_inputs=artifact_inputs, _cleanup_observation=observation)
+    except BaseException as error:
+        observation._core_error, observation._core_phase = error, 'failed'
+        raise
+    observation._result, observation._core_phase = result, 'returned'
+    return result
+
+
+async def _collect_hpo_evaluation(loaded: LoadedConfig,plan: HpoEvaluationPlan,*,gpu_job: GpuJob,
+                                   artifact_inputs: RetainedGameArtifacts,
+                                   _cleanup_observation: _HpoEvaluationCleanupObservation) -> PackedRunResult:
     """Borrow the outer evaluator's exact custody owner through the one collector."""
     from gf_cli.hpo_config import HPOExperimentConfig
     from gf_cli.hpo_evaluation import HpoEvaluationPlan
@@ -713,9 +833,11 @@ async def collect_hpo_evaluation(loaded: LoadedConfig,plan: HpoEvaluationPlan,*,
         rules=card_instance_rules(),game_concurrency=config.run.concurrency,global_cuda_bytes=ledger.global_cuda_bytes,
         max_workers=ledger.max_workers,learner_cuda_bytes=0) for group in plan.groups for spec in group.episodes]
     if not admissions: raise ContractError('empty HPO evaluation panel')
+    _cleanup_observation._run_phase = 'requested'
     result=await _run_corrected(loaded,'evaluate',bindings,tuple(bindings),started=plan.started_monotonic,
         artifact_inputs=artifact_inputs,runtime_evidence=evidence,resource_admission=max(admissions,key=lambda row:row['peak_cuda_bytes']),
-        collection=plan,owned_ledger=ledger,_hpo_evaluation_job=gpu_job)
+        collection=plan,owned_ledger=ledger,_hpo_evaluation_job=gpu_job,
+        _hpo_evaluation_cleanup=_cleanup_observation)
     _require_hpo_evaluation_retirement(plan,gpu_job,ledger)
     if (type(result) is not PackedRunResult or result.directory!=plan.output or result.report.get('healthy') is not True
             or result.report.get('comparison_valid') is not True or result.storage_metrics.get('publication_scope')!='published'):

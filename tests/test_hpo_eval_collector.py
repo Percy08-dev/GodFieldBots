@@ -4,6 +4,7 @@ CPU-saved inference weights support a planned CUDA binding without running GPU
 inference. No returned spy result is treated as Source or evaluation authority.
 """
 import asyncio
+import math
 import time
 import uuid
 from dataclasses import asdict, replace
@@ -55,16 +56,20 @@ def scenario(tmp_path,monkeypatch):
     raw=asdict(config)
     loaded=LoadedConfig(config,raw,digest(raw),loaded.inputs)
     start=time.monotonic()
+    wall=start+config.run.wall_seconds
     plan=HpoEvaluationPlan.create(groups,registry,tmp_path/'evaluation',link,started_monotonic=start,
-        admission_deadline=start+20,execution_deadline=start+90,work_deadline=start+119,wall_deadline=start+120)
+        admission_deadline=start+20,execution_deadline=start+90,
+        work_deadline=wall-config.run.report_reserve_seconds,wall_deadline=wall)
     return loaded,plan,job,owner,configured,start
 
 
 @pytest.mark.parametrize('finish_seconds,accept',[(30,True),(100,False)])
 def test_admitted_eval_can_finish_after_admission_but_never_after_execution(tmp_path,monkeypatch,finish_seconds,accept):
     import gf_cli.card_instance as core
+    from gf_cli.hpo_evaluation import _HpoEvaluationCleanupObservation
     from gf_training.group_pack_source import CollectionLocator
     loaded,plan,job,owner,configured,start=scenario(tmp_path,monkeypatch)
+    observation=_HpoEvaluationCleanupObservation(plan,job,owner)
     clock=[start]
     class Runtime:
         def __init__(self,*args,**kwargs): pass
@@ -83,11 +88,13 @@ def test_admitted_eval_can_finish_after_admission_but_never_after_execution(tmp_
     monkeypatch.setattr(core.time,'monotonic',lambda:clock[0])
     try:
         if accept:
-            result=asyncio.run(core.collect_hpo_evaluation(loaded,plan,gpu_job=job,artifact_inputs=owner))
+            result=asyncio.run(core.collect_hpo_evaluation(loaded,plan,gpu_job=job,artifact_inputs=owner,_cleanup_observation=observation))
             assert result.directory==plan.output
+            with pytest.raises(ContractError, match='not observed'):
+                observation.require_core_retired(error=ValueError('a spy return grants no cleanup proof'))
         else:
             with pytest.raises(TimeoutError):
-                asyncio.run(core.collect_hpo_evaluation(loaded,plan,gpu_job=job,artifact_inputs=owner))
+                asyncio.run(core.collect_hpo_evaluation(loaded,plan,gpu_job=job,artifact_inputs=owner,_cleanup_observation=observation))
         assert owner.binding(configured)[0]==plan.linkage['left_parent']['policy_label']
         assert not job._sealed  # Outer owns pin/artifact retirement and confirmation.
     finally:
@@ -98,10 +105,27 @@ def test_admitted_eval_can_finish_after_admission_but_never_after_execution(tmp_
 
 def test_eval_collector_refuses_path_or_dict_instead_of_actual_retained_owner(tmp_path,monkeypatch):
     from gf_cli.card_instance import collect_hpo_evaluation
+    from gf_cli.hpo_evaluation import _HpoEvaluationCleanupObservation
     loaded,plan,job,owner,_,_=scenario(tmp_path,monkeypatch)
     try:
         with pytest.raises(ContractError):
-            asyncio.run(collect_hpo_evaluation(loaded,plan,gpu_job=job,artifact_inputs={'checkpoint':'not-an-owner'}))
+            asyncio.run(collect_hpo_evaluation(loaded,plan,gpu_job=job,artifact_inputs={'checkpoint':'not-an-owner'},
+                _cleanup_observation=_HpoEvaluationCleanupObservation(plan,job,owner)))
+    finally:
+        owner.release()
+        job.confirm_termination()
+        job.close()
+
+
+def test_fixture_deadlines_use_actual_declared_bound_at_float_boundary(tmp_path, monkeypatch):
+    # Across this binary exponent boundary, (start+119) > ((start+120)-1).
+    # Exercise the real fixture and unchanged plan guard, not a math-only copy.
+    anchor = math.nextafter(3976.0, math.inf)
+    monkeypatch.setattr(time, 'monotonic', lambda: anchor)
+    loaded, plan, job, owner, _, _ = scenario(tmp_path, monkeypatch)
+    try:
+        plan.require(loaded, gpu_job=job)
+        assert plan.work_deadline == plan.wall_deadline - loaded.config.run.report_reserve_seconds
     finally:
         owner.release()
         job.confirm_termination()

@@ -119,3 +119,12 @@ Current corrected-source CPU whole verification passes5479checks/341explicit
 skips, with both scoped reviews,173Rust checks and fresh package/legacy/baseline
 proofs. The reviewed new native is installed with exact rollback copies. Physical
 functional acceptance remains pending the required operator restart confirmation.
+
+The user-confirmed restart permits a02 to complete actual CUDA training/Gen1, but
+evaluation publication fails on producer tuple/list shape. The reviewed
+[failure-termination design](../design/ppo-hpo-evaluation-failure-termination.md)
+normalizes only Eval6 producer JSON shape and separates failed data from proven
+resource termination using the actual invocation/owners. No empty-ledger/PID
+inference or evaluation success follows. The already unconfirmed evaluation job
+cannot be repaired retrospectively. Broader CPU clock failures remain a separate
+gated correction; no whole-foundation acceptance is implied.

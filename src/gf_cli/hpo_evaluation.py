@@ -5,6 +5,7 @@ Only an actual held global job can admit its concrete collector invocation.
 """
 from __future__ import annotations
 
+import asyncio
 import importlib
 import json
 import math
@@ -12,7 +13,7 @@ import time
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from types import ModuleType
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from gf_cli.config import GroupPackExperimentConfig, LoadedConfig
 from gf_cli.hpo_config import LoadedHPOConfig
@@ -22,6 +23,7 @@ from gf_common.domain import (
     ContractError,
     EpisodeGroup,
     EpisodeSpec,
+    GroupResult,
     Json,
     RuntimePolicyBinding,
     canonical,
@@ -140,6 +142,178 @@ class HpoEvaluationPlan:
             raise ContractError('evaluation request extends declared operation deadlines')
 
 
+class _HpoEvaluationCleanupObservation:
+    """One invocation's existing owners; never a cleanup or data capability itself.
+
+    Phases are advanced at the actual creation boundaries in the collector.
+    Retirement always rechecks the retained concrete owners, not those phases
+    alone. Partial construction without an obtainable owner remains uncertain.
+    """
+
+    def __init__(self, plan: HpoEvaluationPlan, job: GpuJob, artifacts: Any) -> None:
+        from gf_models.card_instance_artifacts import RetainedGameArtifacts
+        if type(plan) is not HpoEvaluationPlan or type(artifacts) is not RetainedGameArtifacts:
+            raise ContractError('exact evaluation cleanup inputs required')
+        plan.require_job(job)
+        self._identity = (plan, job, job.ledger, artifacts)
+        self._core_phase = 'unentered'
+        self._run_phase = 'unentered'
+        self._core_error: BaseException | None = None
+        self._result: Any = None
+        self._tasks: list[asyncio.Task[GroupResult]] | None = None
+        self._task_phase = 'unentered'
+        self._task_creation_failure: tuple[Any, BaseException] | None = None
+        self._groups: dict[asyncio.Task[GroupResult], tuple[EpisodeGroup, str, Any, GroupResult | None]] = {}
+        self._runtime_originals: dict[asyncio.Task[GroupResult], tuple[Any, Any, Any, tuple[Any, ...]]] = {}
+        self._pack_phase, self._publication_phase = 'unentered', 'unentered'
+        self._pack: Any = None
+        self._publication: Any = None
+        self._composite_phase = 'unentered'
+        self._composite: Any = None
+        self._verifier_phase = 'unentered'
+        self._verifier: Any = None
+        self._verifier_originals: tuple[Any, Any, Any] | None = None
+        self._verifier_error: BaseException | None = None
+        self._artifact_phase = 'unentered'
+
+    def require_identity(self, plan: HpoEvaluationPlan, job: GpuJob, artifacts: Any) -> None:
+        if (type(self) is not _HpoEvaluationCleanupObservation or
+                any(left is not right for left, right in zip(self._identity,
+                    (plan, job, job.ledger, artifacts), strict=True))):
+            raise ContractError('foreign evaluation cleanup observation')
+        job._require_owner()
+        if job._receipt is None:
+            job._require_open()
+        plan.__post_init__()
+
+    def _enter(self, plan: HpoEvaluationPlan, job: GpuJob, artifacts: Any) -> None:
+        self.require_identity(plan, job, artifacts)
+        if self._core_phase != 'unentered':
+            raise ContractError('evaluation cleanup observation already invoked')
+        self._core_phase = 'entered'
+
+    def _register_task(self, group: EpisodeGroup, task: asyncio.Task[GroupResult]) -> None:
+        if self._task_phase != 'creating' or self._tasks is None or self._tasks[-1] is not task:
+            raise ContractError('original incrementally registered evaluation task required')
+        self._groups[task] = (group, 'scheduled', None, None)
+
+    def _creating_environment(self, group: EpisodeGroup) -> None:
+        task = asyncio.current_task()
+        if task not in self._groups or self._groups[task][0] is not group:
+            raise ContractError('original evaluation task/group required')
+        self._groups[task] = (group, 'creating', None, None)
+
+    def _environment(self, group: EpisodeGroup, environment: Any) -> None:
+        task = asyncio.current_task()
+        if (task not in self._groups or self._groups[task][:2] != (group, 'creating')
+                or self._groups[task][2] is not environment):
+            raise ContractError('original evaluation environment creation required')
+        self._groups[task] = (group, 'owned', environment, None)
+
+    def _partial_environment(self, group: EpisodeGroup, environment: Any) -> None:
+        task = asyncio.current_task()
+        if task not in self._groups or self._groups[task] != (group, 'creating', None, None):
+            raise ContractError('original evaluation environment construction required')
+        self._groups[task] = (group, 'creating', environment, None)
+
+    def _group_result(self, group: EpisodeGroup, result: GroupResult) -> None:
+        task = asyncio.current_task()
+        if task not in self._groups or self._groups[task][:2] != (group, 'owned'):
+            raise ContractError('original evaluation environment/result required')
+        self._groups[task] = (group, 'returned', self._groups[task][2], result)
+        environment = self._groups[task][2]
+        runtime = environment._storage_group_owner
+        server = None if runtime is None else runtime._managed_server
+        self._runtime_originals[task] = (runtime, server, None if server is None else server.process,
+            () if server is None else tuple(server.drainers))
+
+    def require_core_retired(self, *, error: BaseException) -> None:
+        from gf_simulator_client.card_instance_environment import CardInstanceSimulatorEnvironment
+        from gf_training.card_instance_collection import CollectionPublication
+        from gf_training.collection import PackedRunResult
+        from gf_training.group_pack_collection import GroupPackCollection
+        from gf_training.group_pack_publication import GroupPackCollectionPublication
+        plan, job, _, artifacts = self._identity
+        self.require_identity(plan, job, artifacts)
+        if not ((self._core_phase == 'failed' and self._core_error is error) or
+                (self._core_phase == 'returned' and type(self._result) is PackedRunResult)):
+            raise ContractError('actual returned result or SAME original collector error required')
+        if self._run_phase == 'requested' or (self._core_phase == 'returned' and self._run_phase != 'entered'):
+            raise ContractError('actual core collection invocation was not observed')
+        if self._task_phase != 'unentered':
+            if self._tasks is None or set(self._tasks) != set(self._groups):
+                raise ContractError('partial evaluation task registration')
+            if self._task_phase != 'settled':
+                raise ContractError('evaluation task creation not settled')
+            for task, (group, phase, environment, result) in self._groups.items():
+                if not task.done():
+                    raise ContractError('actual evaluation task still running')
+                if phase == 'scheduled':
+                    # This coroutine never reached the environment creation site.
+                    if not task.cancelled():
+                        raise ContractError('scheduled evaluation work not positively cancelled')
+                    continue
+                if (phase != 'returned' or type(environment) is not CardInstanceSimulatorEnvironment
+                        or type(result) is not GroupResult or task.cancelled() or task.exception() is not None
+                        or task.result() is not result or not environment.storage_cleanup_complete(result)):
+                    raise ContractError('actual evaluation group reap/drain remains unconfirmed')
+                runtime, server, process, drainers = self._runtime_originals[task]
+                if runtime is None:
+                    raise ContractError('original evaluation runtime owner missing')
+                if (runtime._managed_server is not server or environment._storage_group_owner is not runtime
+                        or (server is not None and (server.process is not process or tuple(server.drainers) != drainers))):
+                    raise ContractError('evaluation runtime owners changed after actual group settlement')
+        if self._pack_phase != 'unentered':
+            pack = self._pack
+            environments = [value[2] for value in self._groups.values() if value[2] is not None]
+            if (self._pack_phase != 'owned' or type(pack) is not GroupPackCollection or not pack._closed
+                    or pack._futures or pack._archival_tasks or pack._cleanup_children
+                    or not pack._executor._shutdown or pack.budget.used or pack._metadata_reservations
+                    or any(not group.archived for group in pack._groups)
+                    or (pack._monitor is not None and not pack._monitor.done())
+                    or pack.writer is None or pack.writer.returncode is None or not pack.writer._base_released
+                    or len(pack._groups) != len(environments)
+                    or any(sum(group.runtime_owner is environment for environment in environments) != 1 for group in pack._groups)
+                    or (pack.pending is not None and (pack.pending.fd >= 0 or pack.pending.database.fd >= 0))):
+                raise ContractError('actual evaluation Pack retirement remains unconfirmed')
+        if self._publication_phase != 'unentered':
+            publication = self._publication
+            if (self._publication_phase != 'owned' or type(publication) is not GroupPackCollectionPublication
+                    or publication.collection is not self._pack or not publication.cleanup_complete):
+                raise ContractError('actual evaluation publication retirement remains unconfirmed')
+            if self._core_phase == 'returned' and self._result is not publication._result:
+                raise ContractError('returned evaluation differs from the actual publication result')
+        if (self._composite_phase != 'unentered' and (self._composite_phase != 'owned'
+                or type(self._composite) is not CollectionPublication or self._composite.group_pack is not self._publication
+                or not self._composite.cleanup_complete)):
+            raise ContractError('original composite publication retirement remains unconfirmed')
+
+    def release_artifacts(self) -> None:
+        if self._artifact_phase != 'unentered':
+            return  # A failed release is uncertainty, not permission to retry it.
+        self._artifact_phase = 'releasing'
+        self._identity[3].release()
+        self._artifact_phase = 'retired'
+
+    def require_outer_retired(self, *, error: BaseException) -> None:
+        self.require_core_retired(error=error)
+        artifacts = self._identity[3]
+        if (self._artifact_phase != 'retired' or not artifacts._released or artifacts._entries or artifacts._models
+                or artifacts._scan.files or artifacts._scan.inventories):
+            raise ContractError('actual retained evaluation artifacts remain unconfirmed')
+        if self._verifier_phase != 'unentered':
+            source = self._verifier
+            if self._verifier_phase != 'retired' or self._verifier_error is not None or self._verifier_originals is None:
+                raise ContractError('actual evaluation verifier construction/close remains unconfirmed')
+            pool, packed, locator = self._verifier_originals
+            if (source.pool is not pool or source.artifacts is not packed or source.locator is not locator
+                    or not source._closed or source._charge_uncertain or source._cleanup_children or source._charge_bytes
+                    or not pool.closed or pool._close_holds or pool.sources or pool._cleanup_children
+                    or pool._base_uncertain or pool.budget.used or not packed._closed or packed._loans
+                    or locator.fd >= 0 or locator._uncertain_releases):
+                raise ContractError('actual evaluation verifier originals remain owned')
+
+
 def _receipt(value: Json, kind: str, fields: set[str]) -> Json:
     from gf_common.domain import closed, integer
     closed(value, {'schema_version', 'kind'} | fields)
@@ -252,7 +426,8 @@ def verify_gpu_termination(value: Json, *, campaign_id: str, operation_id: str,
 
 
 def verify_saved_evaluation(directory: Path, loaded: LoadedHPOConfig, linkage: Json, *,
-                            deadline: float, extra_owned_bytes: int = 0) -> tuple[Json, Json]:
+                            deadline: float, extra_owned_bytes: int = 0,
+                            _cleanup_observation: _HpoEvaluationCleanupObservation | None = None) -> tuple[Json, Json]:
     """Reopen actual packed members and reconcile BOTH original participant views."""
     from gf_common.group_pack_game import storage_binding
     from gf_common.preprocessing import preparation_config
@@ -262,9 +437,29 @@ def verify_saved_evaluation(directory: Path, loaded: LoadedHPOConfig, linkage: J
     settings = preparation_config(asdict(loaded.base.config.preprocessing))
     root = Path(loaded.config.storage.originals_root or (
         loaded.base.config.storage.db_root if isinstance(loaded.base.config, GroupPackExperimentConfig) else '/mnt/d/godfield'))
-    owner = PackedSourceOwner(directory, settings, deadline, storage_binding=storage_binding(),
-        max_owned_bytes=loaded.config.operating.source_budget_bytes, extra_owned_bytes=extra_owned_bytes,
-        expected_descriptor_root=root / linkage['evaluation_id'])
+    observation = _cleanup_observation
+    owner = PackedSourceOwner.__new__(PackedSourceOwner)
+    if observation is not None:
+        if observation._verifier_phase != 'unentered':
+            raise ContractError('evaluation verifier observation already consumed')
+        observation._verifier, observation._verifier_phase = owner, 'creating'
+    try:
+        PackedSourceOwner.__init__(owner, directory, settings, deadline, storage_binding=storage_binding(),
+            max_owned_bytes=loaded.config.operating.source_budget_bytes, extra_owned_bytes=extra_owned_bytes,
+            expected_descriptor_root=root / linkage['evaluation_id'])
+    except BaseException as error:
+        if observation is not None:
+            observation._verifier_error = error
+            vars(error)['hpo_verifier_cleanup_owner'] = owner
+        try:
+            owner.close()
+        except BaseException as cleanup:  # noqa: BLE001 -- partial constructor still retains its actual owner.
+            vars(error)['hpo_verifier_cleanup_owner'] = owner
+            error.add_note('partial evaluation verifier cleanup: ' + str(cleanup))
+        raise
+    if observation is not None:
+        observation._verifier_originals = (owner.pool, owner.artifacts, owner.locator)
+        observation._verifier_phase = 'owned'
     try:
         collection = _inspect_component_collection(owner, loaded.base.config.actions, 'validation', _game=True,
             _game_role=hpo_evaluation_role(2 * len(linkage['game_seeds'])))
@@ -275,9 +470,28 @@ def verify_saved_evaluation(directory: Path, loaded: LoadedHPOConfig, linkage: J
         if proof['games'] != 2 * len(linkage['game_seeds']) or proof['missing_replays'] or proof['closure_counts'] != {'natural': proof['games']}:
             raise ContractError('saved original evaluation is not a complete natural panel')
         owner.finalize()
-        return manifest, proof
-    finally:
+    except BaseException as error:
+        try:
+            owner.close()
+        except BaseException as cleanup:  # noqa: BLE001 -- keep primary and the SAME original Source.
+            if observation is not None:
+                observation._verifier_error = cleanup
+            vars(error)['hpo_verifier_cleanup_owner'] = owner
+            error.add_note('evaluation verifier cleanup: ' + str(cleanup))
+        else:
+            if observation is not None:
+                observation._verifier_phase = 'retired'
+        raise
+    try:
         owner.close()
+    except BaseException as error:
+        if observation is not None:
+            observation._verifier_error = error
+        vars(error)['hpo_verifier_cleanup_owner'] = owner
+        raise
+    if observation is not None:
+        observation._verifier_phase = 'retired'
+    return manifest, proof
 
 
 def _projection(manifest: Json, parent: Json, source_sha: str, conditions_sha: str) -> Json:
@@ -479,6 +693,65 @@ def verify_training_receipt(store: object, loaded: LoadedHPOConfig, campaign: Js
     return value
 
 
+def _release_evaluation_pins(pins: list[tuple[Path, HpoReferenceReceipt]],
+                             attempts: dict[int, HpoReferenceReceipt | BaseException], *,
+                             max_owned_bytes: int, deadline: float, primary: BaseException | None = None) -> None:
+    """Attempt every original pin once, preserving uncertain transaction owners."""
+    retention = owned_runtime_module('gf_training.hpo_retention', ('release_hpo_evaluation',))
+    first = primary
+    for directory, acquired in reversed(pins):
+        if id(acquired) in attempts:
+            continue
+        try:
+            attempts[id(acquired)] = retention.release_hpo_evaluation(directory, acquired.binding,
+                max_owned_bytes=max_owned_bytes, deadline=deadline)
+        except BaseException as cleanup:  # noqa: BLE001 -- comparison must attempt BOTH real parent transactions.
+            attempts[id(acquired)] = cleanup
+            if first is None:
+                first = cleanup
+            else:
+                first.add_note('evaluation pin cleanup: ' + str(cleanup))
+    if first is not None:
+        vars(first)['hpo_reference_cleanup'] = (pins, attempts)
+        if primary is None:
+            raise first
+
+
+def _confirm_failed_evaluation(error: BaseException, store: Any, name: str,
+                               observation: _HpoEvaluationCleanupObservation | None, job: GpuJob,
+                               pins: list[tuple[Path, HpoReferenceReceipt]],
+                               releases: dict[int, HpoReferenceReceipt | BaseException]) -> None:
+    """Operational termination only; the caller always rethrows its data failure."""
+    from gf_training.hpo_retention import HpoReferenceReceipt
+    vars(error)['hpo_evaluation_cleanup_observation'] = observation
+    try:
+        if type(observation) is not _HpoEvaluationCleanupObservation or observation._identity[1] is not job:
+            raise ContractError('positive original evaluation cleanup observation unavailable')
+        observation.require_outer_retired(error=error)
+        if not pins or len(releases) != len(pins):
+            raise ContractError('every original acquired evaluation pin needs its actual release receipt')
+        for _, acquired in pins:
+            released = releases.get(id(acquired))
+            if (type(acquired) is not HpoReferenceReceipt or acquired.phase != 'acquire'
+                    or acquired.binding['token'] != job.ticket or type(released) is not HpoReferenceReceipt
+                    or released.phase != 'release' or canonical(released.binding) != canonical(acquired.binding)):
+                raise ContractError('evaluation pin retirement lacks exact typed release evidence')
+        receipt = job.confirm_termination()
+    except BaseException as cleanup:  # noqa: BLE001 -- global fsync/actual owner failure never masks data failure.
+        vars(error)['hpo_termination_cleanup_error'] = cleanup
+        error.add_note('evaluation resource termination unconfirmed: ' + str(cleanup))
+        return
+    vars(error)['hpo_gpu_termination_receipt'] = receipt
+    try:
+        store.put(name, {'schema_version': 1, 'kind': 'hpo-failed-evaluation-termination',
+            'evaluation_id': observation._identity[0].linkage['evaluation_id'],
+            'gpu_termination': asdict(receipt), 'error_type': type(error).__name__,
+            'evaluation_eligible': False})
+    except BaseException as copy_error:  # noqa: BLE001 -- global receipt remains durable even when local copy fails.
+        vars(error)['hpo_failed_termination_copy_error'] = copy_error
+        error.add_note('global GPU termination confirmed; failed-operation local record failed: ' + str(copy_error))
+
+
 async def evaluate_seed(store: object, loaded: LoadedHPOConfig, campaign: Json, proposal: object,
                         training: Json, *, output: Path) -> Json:
     """One actual primary evaluation; no interrupted request is silently rerun."""
@@ -514,6 +787,10 @@ async def evaluate_seed(store: object, loaded: LoadedHPOConfig, campaign: Json, 
         'started_unix': time.time(), 'started_monotonic': started})
     job = admit_gpu_job(JobContext(campaign['campaign_id'], evaluation_id, 'evaluation', training['run_id'], evaluation_id),
         global_cuda_bytes=loaded.config.operating.managed_cuda_bytes, max_workers=loaded.config.operating.max_participant_workers)
+    pins: list[tuple[Path, HpoReferenceReceipt]] = []
+    releases: dict[int, HpoReferenceReceipt | BaseException] = {}
+    observation = None
+    owner = None
     try:
         store.put(folder + '/evaluation.admission.json', {'schema_version': 1, 'kind': 'hpo-evaluation-admission',
             'gpu_ticket': job.ticket, 'evaluation_id': evaluation_id})
@@ -522,6 +799,7 @@ async def evaluate_seed(store: object, loaded: LoadedHPOConfig, campaign: Json, 
         execution = started + run.execution_seconds
         reference = retention.pin_hpo_evaluation(Path(training['run_path']), job.ticket, training['generation'], training['inference_sha256'],
             max_owned_bytes=loaded.config.operating.source_budget_bytes, deadline=execution)
+        pins.append((Path(training['run_path']), reference))
         try:
             inspected = inspect_training_parent(Path(training['run_path']), loaded, proposal.settings,
                 training_seed=seed, run_id=training['run_id'], deadline=execution)
@@ -544,33 +822,33 @@ async def evaluate_seed(store: object, loaded: LoadedHPOConfig, campaign: Json, 
             owner = RetainedGameArtifacts.for_hpo_registry(bindings, config.actions, rules=card_instance_rules(),
                 pool_size=config.hpo_spec['operating']['opponent_pool_size'], max_owned_bytes=core.hpo_artifact_budget(projected, bindings),
                 preflight_deadline=execution, finalization_deadline=work)
+            observation = _HpoEvaluationCleanupObservation(plan, job, owner)
             try:
-                result = await core.collect_hpo_evaluation(projected, plan, gpu_job=job, artifact_inputs=owner)
+                result = await core.collect_hpo_evaluation(projected, plan, gpu_job=job, artifact_inputs=owner,
+                    _cleanup_observation=observation)
                 if result.report.get('healthy') is not True:
                     raise ContractError('primary evaluation did not finish/save/clean up normally')
                 manifest, proof = verify_saved_evaluation(result.directory, loaded, link, deadline=work,
-                    extra_owned_bytes=owner._scan.peak)
+                    extra_owned_bytes=owner._scan.peak, _cleanup_observation=observation)
                 owner.finalize(deadline=work)
             except BaseException as error:
                 try:
-                    owner.release()
+                    observation.release_artifacts()
                 except BaseException as cleanup:  # noqa: BLE001 - preserve original and reachable actual owner
                     error.__dict__['hpo_artifact_cleanup_owner'] = owner
                     error.add_note('HPO evaluation artifact cleanup: ' + type(cleanup).__name__)
                 raise
             else:
-                owner.release()
+                observation.release_artifacts()
         except BaseException as error:
-            try:
-                retention.release_hpo_evaluation(Path(training['run_path']), reference.binding,
-                    max_owned_bytes=loaded.config.operating.source_budget_bytes, deadline=work)
-            except BaseException as cleanup:  # noqa: BLE001 - preserve initiating failure and exact pin evidence
-                error.__dict__['hpo_reference_cleanup'] = (training['run_path'], reference.binding)
-                error.add_note('HPO evaluation pin release: ' + type(cleanup).__name__)
+            _release_evaluation_pins(pins, releases, max_owned_bytes=loaded.config.operating.source_budget_bytes,
+                deadline=work, primary=error)
             raise
         else:
-            released = retention.release_hpo_evaluation(Path(training['run_path']), reference.binding,
-                max_owned_bytes=loaded.config.operating.source_budget_bytes, deadline=work)
+            _release_evaluation_pins(pins, releases, max_owned_bytes=loaded.config.operating.source_budget_bytes, deadline=work)
+            released = releases[id(reference)]
+            if isinstance(released, BaseException):
+                raise released
         termination = job.confirm_termination()
         gpu_sha = store.put(folder + '/evaluation-gpu-termination.json', clone(asdict(termination)))
         receipt = {'schema_version': 1, 'kind': 'hpo-seed-evaluation',
@@ -582,6 +860,21 @@ async def evaluate_seed(store: object, loaded: LoadedHPOConfig, campaign: Json, 
             'linkage': link, 'config_sha256': projected.sha256}
         store.put(folder + '/evaluation.json', receipt)
         return receipt
+    except BaseException as error:
+        if owner is not None:
+            try:
+                if observation is not None:
+                    observation.release_artifacts()
+                else:
+                    owner.release()
+            except BaseException as cleanup:  # noqa: BLE001 -- actual artifact owner remains reachable.
+                vars(error)['hpo_artifact_cleanup_owner'] = owner
+                error.add_note('evaluation artifact cleanup: ' + str(cleanup))
+        _release_evaluation_pins(pins, releases, max_owned_bytes=loaded.config.operating.source_budget_bytes,
+            deadline=started + run.wall_seconds - run.report_reserve_seconds, primary=error)
+        _confirm_failed_evaluation(error, store, folder + '/evaluation-failed-gpu-termination.json',
+            observation, job, pins, releases)
+        raise
     finally:
         job.close()
 
@@ -631,7 +924,9 @@ async def evaluate_comparison(store: object, left: LoadedHPOConfig, right: Loade
     job = admit_gpu_job(JobContext(comparison_id, evaluation_id, 'evaluation', left_training['run_id'], evaluation_id),
         global_cuda_bytes=left.config.operating.managed_cuda_bytes, max_workers=left.config.operating.max_participant_workers)
     pins: list[tuple[Path, HpoReferenceReceipt]] = []
-    released = []
+    releases: dict[int, HpoReferenceReceipt | BaseException] = {}
+    observation = None
+    owner = None
     try:
         store.put(folder + '/admission.json', {'schema_version': 1, 'kind': 'hpo-comparison-matchup-admission',
             'gpu_ticket': job.ticket, 'evaluation_id': evaluation_id})
@@ -668,34 +963,30 @@ async def evaluate_comparison(store: object, left: LoadedHPOConfig, right: Loade
             owner = RetainedGameArtifacts.for_hpo_registry(bindings, config.actions, rules=card_instance_rules(),
                 pool_size=config.hpo_spec['operating']['opponent_pool_size'], max_owned_bytes=core.hpo_artifact_budget(projected, bindings),
                 preflight_deadline=execution, finalization_deadline=work)
+            observation = _HpoEvaluationCleanupObservation(plan, job, owner)
             try:
-                result = await core.collect_hpo_evaluation(projected, plan, gpu_job=job, artifact_inputs=owner)
+                result = await core.collect_hpo_evaluation(projected, plan, gpu_job=job, artifact_inputs=owner,
+                    _cleanup_observation=observation)
                 if result.report.get('healthy') is not True:
                     raise ContractError('comparison did not finish/save/clean up normally')
-                manifest, proof = verify_saved_evaluation(result.directory, left, link, deadline=work, extra_owned_bytes=owner._scan.peak)
+                manifest, proof = verify_saved_evaluation(result.directory, left, link, deadline=work, extra_owned_bytes=owner._scan.peak, _cleanup_observation=observation)
                 owner.finalize(deadline=work)
             except BaseException as error:
                 try:
-                    owner.release()
+                    observation.release_artifacts()
                 except BaseException as cleanup:  # noqa: BLE001 - preserve original and actual custody owner
                     error.__dict__['hpo_artifact_cleanup_owner'] = owner
                     error.add_note('comparison artifact cleanup: ' + type(cleanup).__name__)
                 raise
             else:
-                owner.release()
+                observation.release_artifacts()
         except BaseException as error:
-            for directory, acquired in reversed(pins):
-                try:
-                    retention.release_hpo_evaluation(directory, acquired.binding,
-                        max_owned_bytes=left.config.operating.source_budget_bytes, deadline=work)
-                except BaseException as cleanup:  # noqa: BLE001 - attempt all actual pin retirements
-                    error.add_note('comparison pin cleanup: ' + type(cleanup).__name__)
-                    error.__dict__.setdefault('hpo_reference_cleanup', []).append((directory, acquired.binding))
+            _release_evaluation_pins(pins, releases, max_owned_bytes=left.config.operating.source_budget_bytes,
+                deadline=work, primary=error)
             raise
         else:
-            for directory, acquired in reversed(pins):
-                released.append(retention.release_hpo_evaluation(directory, acquired.binding,
-                    max_owned_bytes=left.config.operating.source_budget_bytes, deadline=work))
+            _release_evaluation_pins(pins, releases, max_owned_bytes=left.config.operating.source_budget_bytes, deadline=work)
+        released = [value for value in releases.values() if not isinstance(value, BaseException)]
         termination = job.confirm_termination()
         gpu_sha = store.put(folder + '/gpu-termination.json', clone(asdict(termination)))
         projection = _projection(manifest, left_training, left_training['source_receipt_sha256'], conditions_sha256)
@@ -711,5 +1002,20 @@ async def evaluate_comparison(store: object, left: LoadedHPOConfig, right: Loade
             'pin_release_receipts': [value.receipt_sha256 for value in released], 'gpu_termination_sha256': gpu_sha,
             'panel': asdict(panel), 'left_profile': left.effective, 'right_profile': right.effective})
         return panel
+    except BaseException as error:
+        if owner is not None:
+            try:
+                if observation is not None:
+                    observation.release_artifacts()
+                else:
+                    owner.release()
+            except BaseException as cleanup:  # noqa: BLE001 -- actual artifact owner remains reachable.
+                vars(error)['hpo_artifact_cleanup_owner'] = owner
+                error.add_note('comparison artifact cleanup: ' + str(cleanup))
+        _release_evaluation_pins(pins, releases, max_owned_bytes=left.config.operating.source_budget_bytes,
+            deadline=work, primary=error)
+        _confirm_failed_evaluation(error, store, folder + '/failed-gpu-termination.json',
+            observation, job, pins, releases)
+        raise
     finally:
         job.close()

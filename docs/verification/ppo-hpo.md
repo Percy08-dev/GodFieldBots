@@ -558,3 +558,61 @@ reboot automatically or use a different GPU namespace. After recovery, repeat
 MLP in fresh a02 and finish GRU/Transformer, cap-resume, actual CLI multi-seed/
 session/tell/direct-comparison cases and final audits/reviews. The a01 failed
 population remains ineligible permanently. Foundation acceptance is still pending.
+
+## User-confirmed restart and a02 evaluation publication correction
+
+The user confirms actual environment restart. Root checks that boot ID changed
+and invokes the existing exact f615 recovery path with that user assertion. The
+old admission and failed a01 parent are preserved. After restart the venv's old
+Homebrew Python3.14 target and optional Torch/Optuna/native packages are absent.
+Root restores CPython3.14.10/GIL, lockfile-pinned/hash-checked CUDA Torch2.14.1+
+cu132/Optuna5.0.0 dependencies and the durable reviewed dae8 native wheel. Source,
+lockfile and scientific case parameters stay unchanged; actual restored runtime
+identity is recorded rather than inferred from the old environment.
+
+Fresh a02 MLP parent8e14d9dd-43fc-4a13-8009-c19fb3a66db4 completes generation1
+normally: eight natural games,84collected/8used decisions, one actual CUDA update
+and a confirmed training termination receipt. Thus the acknowledged-save fix
+passes its original physical failure boundary. Its following evaluation executes
+two natural, healthy, Replay-reconciled games, then fails during publication.
+The valid pending SQLite report/rows match the schedule after JSON decoding.
+Reconstructing the real CardInstanceEpisodeResult and its actual asdict producer
+recreates the mismatch: in-memory policy tuples versus JSON schedule lists.
+No objective/study/evaluation receipt is produced. Preserve a02's pending Pack and
+functional failure; the healthy training parent is not rewritten.
+
+The accepted [evaluation failure correction](../design/ppo-hpo-evaluation-failure-termination.md)
+normalizes only actual Eval6 producer rows to JSON values, preserving the strict
+checker and old paths. A concrete invocation-bound observation retains original
+tasks/environments/results/Pack/prepared-publication and verifier Source owners.
+Core failure cleanup explicitly revokes only its uncommitted prepared owner and
+independently joins/closes existing owners. Outer primary/comparison failures
+attempt every acquired pin and actual artifact/Source release. Only positive
+concrete owner states plus actual audited exit proofs on the SAME live job allow
+a resource-only failed-operation termination receipt. The primary error survives;
+no evaluation/projection/objective or COMPLETE tell follows. Uncertainty remains
+blocked. A committed publication is not revoked for later verifier failure.
+
+Both independent source/design reviews report READY. Each independently runs the
+35focused CPU-hidden cases (16.50s/16.12s). Root fresh35pass in16.33s, then36pass
+in15.03s after a deterministic test-only floating boundary correction. At
+nextafter3976, the old fixture work=start+119 rounded above the actual declared
+wall-minus-reserve bound. The fixture now derives exactly that production bound;
+independent boundary recheck1PASS1.35s. Production deadline guards are unchanged.
+Full Ruff/mypy195source and diff checks pass; affected legacy150cases pass.
+
+The broader HPO wave is explicitly not a whole pass:654PASS/37SKIP/4FAIL/1ERROR.
+Earlier parents were GPU-visible with CPU fixtures selected; incidental Torch
+probing is not excluded. Subsequent checks hide CUDA before Python import.
+Isolated CPU replay passes4of5 affected nodes; remaining packed/native coordinator
+failure is the pre-existing clock-rollback guard, separately investigated without
+loosening it or waiving failure. A controlled-clock reproduction establishes a
+possible scheduler-induced false positive; it does not prove the broad run's
+actual wall-clock history. The [clock sampling proposal](../design/ppo-clock-observation.md)
+requires a separate gate before any implementation.
+
+The already failed evaluation job4868caaf7d1145b88f48ec4a3fe49e83 remains admission-
+only/current, without a surviving capability or termination/restart receipt.
+This correction cannot retroactively confirm it. No new physical GPU work or
+recovery is performed. A fresh same-condition a03 input set changes storage paths
+only and remains unexecuted pending code verification and actual external recovery.

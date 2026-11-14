@@ -61,6 +61,15 @@ installed with rollback copies retained. The
 remains blocked by actual environment-recovery confirmation and is required
 before foundation acceptance.
 
+After the user-confirmed restart, the a02 GPU training/save/Source commit completes
+normally at D8. Its evaluation exposes an in-memory tuple/list publication mismatch
+despite two healthy natural games. The separately reviewed
+[evaluation failure contract](design/ppo-hpo-evaluation-failure-termination.md)
+preserves strict persisted validation, records positive actual collector/storage/
+Source/artifact/pin retirement, and allows operational termination of failed data
+only while the original job capability survives. It never creates an evaluation
+objective. The already unconfirmed4868 ticket still requires explicit recovery.
+
 [ADR0024](adr/0024-card-instance-simulator-v2.md) begins a separately identified
 card-instance Simulator v2 migration. Contract/wire/Config/direct HTTP and pure
 opaque-reference frames/layouts/tokens pass both independent reviews and scoped
