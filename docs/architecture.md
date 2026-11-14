@@ -750,6 +750,13 @@ invalid attempts 3, shutdown 30s, idle 0. Future model settings follow user plan
 
 ## Policy and search
 
+[ADR0039](adr/0039-refresh-heuristic-and-mixed-opponents.md) accepts the separately
+selectable corrected-v2 refresh heuristic and opt-in mixed16 ordinary/HPO training
+opponents. [The design](design/heuristic-refresh.md) keeps participant-local
+observed-window outcome proxies distinct from causal damage, shared identity
+distinct from learned-model metadata, and historical fixed/formal/evaluation
+recipes unchanged. Implementation and final acceptance are pending.
+
 `DecisionInput` contains a serialized copy of the viewer's validated Observation,
 Player-visible Events, history end position, typed metadata, optional same-revision
 actor-scoped ActionOptions, and only pinned

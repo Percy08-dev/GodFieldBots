@@ -14,6 +14,10 @@
 
 ## 一覧
 
+追加: [0039](0039-refresh-heuristic-and-mixed-opponents.md) — Accepted design:
+独立した手札更新型ヒューリスティックと、通常PPO/HPOの明示的な混合16試合相手構成。
+実装・最終受入は進行記録と検証証跡で区別する。
+
 | ADR | 状態 | 判断 |
 | --- | --- | --- |
 | [0001](0001-simulator-boundary.md) | Accepted | シミュレーターを外部のルール権威とする |
