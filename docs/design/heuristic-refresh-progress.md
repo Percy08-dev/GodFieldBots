@@ -42,8 +42,18 @@
   tests/test_card_instance_actions.py tests/test_card_instance_baseline_runtime.py
   tests/test_card_instance_cli.py` — 176 passed in3.46s; verifier
   /root/refresh_baseline_checks. No games/training launched.
-- Task1: IN PROGRESS, /root/refresh_policy_impl, brief /tmp/gfb-refresh-task1.md;
+- Task1: COMPLETE, /root/refresh_policy_impl, brief /tmp/gfb-refresh-task1.md;
   owns only the five new common/model/test files listed there.
+  Report /tmp/gfb-refresh-task1-report.md:44 new +224 legacy PASS; Ruff/mypy PASS.
+  Architecture conformance READY, /tmp/gfb-refresh-task1-architecture.md;
+  independent correctness/quality READY, /tmp/gfb-refresh-task1-review.md.
+  Root fresh acceptance `.venv/bin/python -m pytest -q
+  tests/test_refresh_heuristic.py` PASS44 in0.44s. Local code milestone pending.
+  Principal retention table2097152bytes, tracked transform peak2295560bytes,
+  local0.011340s diagnostic (facts preallocated; not process RSS/performance guarantee).
+- Hardware preflight: ordinary sandbox NVML blocked; scoped read-only escalation
+  sees RTX5070Ti16303MiB/2096MiB used. Approved Simulator release exists. GPU
+  functional jobs still require production admission/ownership, not this query.
 - Task2: NOT STARTED.
 - Task3: NOT STARTED.
 - Task4: NOT STARTED.
