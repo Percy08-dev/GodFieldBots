@@ -105,10 +105,12 @@ def hpo_spec(state: Json) -> Json:
     config = state.get("effective_config")
     if type(config) is not dict:
         raise ContractError("HPO effective config required")
+    from gf_common.training_opponents import training_opponents
+    mixed = training_opponents(config)
     spec = closed(config.get("hpo_spec"), {"schema_version", "kind", "decision_budget", "training_recipe",
         "effective_settings_sha256", "base_config_sha256", "campaign_config_sha256", "study_identity",
-        "operating", "storage", "selection_version", "deadline_version", "deadline_inputs"})
-    integer(spec["schema_version"], 1, 1)
+        "operating", "storage", "selection_version", "deadline_version", "deadline_inputs"} | ({"training_opponents"} if mixed is not None else set()))
+    integer(spec["schema_version"], 2 if mixed is not None else 1, 2 if mixed is not None else 1)
     if (spec["kind"] != "ppo-hpo-run" or spec["selection_version"] != SELECTION_VERSION
             or spec["deadline_version"] != "hpo-deadline-v1"):
         raise ContractError("unsupported explicit HPO spec version")
@@ -768,6 +770,11 @@ def _policies(state: Json, records: list[Json], directory: Path, model: ModelCon
     classification = input_binding_game_v3(actions.action_contract, card_instance_rules())
     registry: Json = {"random-card-instance-v2": {"model_id": "random", "policy_options": None},
         "heuristic-card-instance-v2": {"model_id": "heuristic", "policy_options": None}}
+    from gf_common.training_opponents import refresh_opponent, training_opponents
+    mixed = training_opponents(state['effective_config'])
+    if mixed is not None:
+        name, binding_value = refresh_opponent(actions, mixed)
+        registry[name] = asdict(binding_value)
     learner_label = ""
     indices = [records[-1]["generation"], *records[-1]["parent_controls"]["snapshot_pool"]]
     for index in indices:

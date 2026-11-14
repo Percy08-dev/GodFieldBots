@@ -46,6 +46,7 @@ fn absolute(value: &Value) -> Result<()> {
 
 pub(crate) fn spec<'a>(state: &'a Value, b: &Arc<Budget>, c: &Control) -> Result<&'a Value> {
     let value = state.require("effective_config")?.require("hpo_spec")?;
+    let mixed = refresh_training(state.require("effective_config")?, b, c)?.is_some();
     value.closed(
         &[
             "schema_version",
@@ -62,9 +63,9 @@ pub(crate) fn spec<'a>(state: &'a Value, b: &Arc<Budget>, c: &Control) -> Result
             "deadline_version",
             "deadline_inputs",
         ],
-        &[],
+        if mixed { &["training_opponents"] } else { &[] },
     )?;
-    n(value, "schema_version", 1, 1)?;
+    n(value, "schema_version", if mixed { 2 } else { 1 }, if mixed { 2 } else { 1 })?;
     is(value, "kind", "ppo-hpo-run")?;
     is(value, "selection_version", SELECTION_VERSION)?;
     is(value, "deadline_version", "hpo-deadline-v1")?;
@@ -1422,6 +1423,12 @@ fn frozen_registry(
             ]),
         ),
     ]);
+    let cfg = state.require("effective_config")?;
+    if let Some(options) = refresh_training(cfg, b, c)? {
+        let label = crate::structured_journal::card_instance::refresh_label(cfg.require("actions")?, options, b, c)?;
+        registry.as_object_mut().unwrap().insert(label, json::object([
+            ("model_id", json::text("heuristic_refresh")), ("policy_options", options.clone())]));
+    }
     let mut numbers = vec![generation];
     for index in records[generation]
         .root

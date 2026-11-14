@@ -22,6 +22,7 @@ CARD_INSTANCE_TREE_RAW = 'journal6;lightgbm3;inference4;codec2'
 CARD_INSTANCE_GROUP_PACK = 'provider1;proof2;plan4'
 CARD_INSTANCE_PACK_CHECKSUM = 'pack-checksum-v1;custody2'
 CARD_INSTANCE_REFRESH_BASELINE = 'baseline1;options1;identity1'
+CARD_INSTANCE_REFRESH_OPPONENTS = 'mixed16-v1;ordinary1;hpo2'
 
 
 def require_native_refresh_baseline(native: Any = None) -> None:
@@ -29,6 +30,14 @@ def require_native_refresh_baseline(native: Any = None) -> None:
     module = load_native() if native is None else native
     if dict(module.build_info()).get('card_instance_refresh') != CARD_INSTANCE_REFRESH_BASELINE:
         raise ContractError('native refresh baseline capability unavailable; no fallback')
+
+
+def require_native_refresh_opponents(native: Any = None) -> None:
+    """Refuse new training parents before native Source or resource admission."""
+    module = load_native() if native is None else native
+    require_native_refresh_baseline(module)
+    if dict(module.build_info()).get('card_instance_refresh_opponents') != CARD_INSTANCE_REFRESH_OPPONENTS:
+        raise ContractError('native refresh training opponents capability unavailable; no fallback')
 
 
 def hpo_reader_settings(config: PreparationConfig, native: Any = None, *, packed: bool = False) -> Json:

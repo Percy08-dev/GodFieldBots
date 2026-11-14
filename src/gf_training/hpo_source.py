@@ -100,8 +100,19 @@ def recorded_hpo_plan(directory: Path, state: Json, records: list[Json], generat
         snapshots.append(name)
     rng = np.random.Generator(np.random.PCG64())
     rng.bit_generator.state = controls['schedule_opponent_rng']
-    groups = training_groups_hpo(state['seed'], generation, label, tuple(snapshots), rng,
-        collection_games=recipe.collection_games)
+    from gf_common.training_opponents import refresh_opponent, training_opponents
+    mixed = training_opponents(state['effective_config'])
+    if mixed is not None:
+        from gf_common.card_instance import action_config_v3
+        from gf_training.hpo_collection import training_groups_hpo_refresh
+        actions = action_config_v3(state['effective_config']['actions'])
+        name, binding = refresh_opponent(actions, mixed)
+        registry[name] = binding
+        groups = training_groups_hpo_refresh(state['seed'], generation, label, tuple(snapshots), rng,
+            collection_games=recipe.collection_games, actions=actions, training_opponents=mixed)
+    else:
+        groups = training_groups_hpo(state['seed'], generation, label, tuple(snapshots), rng,
+            collection_games=recipe.collection_games)
     from gf_training.card_instance_source import frozen_linkage
     link = frozen_linkage(state, directory, generation, groups, registry)
     link['selection_context'] = selection_context(decision_budget=spec['decision_budget'],
@@ -164,6 +175,10 @@ def validate_hpo_parent(directory: Path, *, require_complete: bool = True, max_o
         require_hpo_production(state)
         scan.configure_packed(state)
         settings = preparation_config(state['effective_config']['preprocessing'])
+        from gf_common.training_opponents import training_opponents
+        if training_opponents(state['effective_config']) is not None:
+            from gf_training.native_backend import require_native_refresh_opponents
+            require_native_refresh_opponents()
         if settings.backend == 'rust':
             from gf_training.native_backend import hpo_reader_settings
             hpo_reader_settings(settings, packed='storage_binding' in state)

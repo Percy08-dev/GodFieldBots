@@ -32,7 +32,7 @@ from tests.test_card_instance_baseline_runtime import receipt
 from tests.test_card_instance_learning import ACTIONS, LAYOUT, RULES, learner_for
 
 
-def initial_parent(directory, *, updates=2, device='cpu'):
+def initial_parent(directory, *, updates=2, device='cpu', training_opponents=None, native=None):
     base = learner_for(device=device)
     settings = PreparationConfig(reader='participant-structured-v2', memory_budget_mib=1024)
     config = asdict(ExperimentConfig())
@@ -40,6 +40,8 @@ def initial_parent(directory, *, updates=2, device='cpu'):
         preprocessing=asdict(settings),
         model=asdict(ConfiguredNeuralModelV3(**{key: getattr(base.model, key) for key in base.model.__dataclass_fields__}, inference=base.binding, cuda_visible_devices='0' if device != 'cpu' else None)),
         training=asdict(PPOTrainingConfig(seeds=(17,), max_updates=updates, device=device)))
+    if training_opponents is not None:
+        config['training_opponents'] = copy.deepcopy(training_opponents)
     server_config = directory.parent / 'server.toml'
     server_config.write_text('[fixture]\n')
     config['server']['config'] = str(server_config)
@@ -52,6 +54,12 @@ def initial_parent(directory, *, updates=2, device='cpu'):
             'declared_simulator_revision': ACTIONS.action_contract.simulator_revision,
             'source_revision': ACTIONS.action_contract.simulator_revision,
             'source_spec_sha256': dict(CORRECTED_REVIEWED_SPEC_HASHES)}}
+    if native is not None:
+        from gf_training.native_backend import binary_identity
+        settings = replace(settings, backend='rust')
+        config['preprocessing'] = asdict(settings)
+        identity['preprocessing'] = {'backend': 'rust', 'reader_contract': 'participant-structured-v2',
+            'implementation': 'rust-player-card-refs-v2', 'binary': binary_identity(native), **classification}
     resume = resume_identity(digest(config), identity, execution, classification)
     learner = GameLearner(base.model, 17, base.binding, resume, actions=ACTIONS, rules=RULES)
     now = time.time()
@@ -92,7 +100,7 @@ def original_collection(plan, state, learner, *, decisions=True):
                     label = spec.policies[viewer - 1]
                     binding = plan.bindings[label]
                     caps, costs, _, _ = own_game_worker_settings_v3(binding.model_id, ACTIONS, binding.policy_options, rules=RULES)
-                    neural = None if binding.policy_options is None else owner.journal_metadata(label)
+                    neural = None if binding.model_id in ('random', 'heuristic', 'heuristic_refresh') else owner.journal_metadata(label)
                     value = inputs([], can_pray=True)
                     if viewer == 2:
                         obs, hints = copy.deepcopy(value.observation), copy.deepcopy(value.action_options)
@@ -108,7 +116,7 @@ def original_collection(plan, state, learner, *, decisions=True):
                     frame = DecisionFrame.from_input(value, bank, 0, layout=LAYOUT)
                     journal = CardInstanceJournal(folder, spec.episode_id, viewer, label, run_id='fixture-collection', game_id=game,
                         actions=ACTIONS, bank_episode=bank.episode, caps=asdict(caps), numeric_costs=asdict(costs),
-                        model_id=binding.model_id, runtime_evidence=receipt(), sampling_seed=spec.sampling_seeds[viewer - 1], neural=neural)
+                        model_id=binding.model_id, runtime_evidence=receipt(), sampling_seed=spec.sampling_seeds[viewer - 1], neural=neural, **({'baseline_options': binding.policy_options} if binding.model_id == 'heuristic_refresh' else {}))
                     accepted = []
                     if decisions and neural is not None:
                         seed = int(digest({'recipe': 'structured-search-stream-v1', 'sampling_seed': spec.sampling_seeds[viewer - 1]})[:16], 16)

@@ -96,3 +96,23 @@ def hpo_collection_metadata(*, linkage: Json, **options: object) -> Json:
     value.update(collection_role='hpo-ppo-batch', linkage=linkage)
     check_hpo_collection(value)
     return value
+
+
+def training_groups_hpo_refresh(seed: int, batch: int, learner: str, snapshots: tuple[str, ...], rng: object,
+                                *, collection_games: int, actions: object,
+                                training_opponents: Json) -> tuple[EpisodeGroup, ...]:
+    """The concrete HPO mixed16 variant preserves the original HPO streams."""
+    from dataclasses import replace
+
+    from gf_common.card_instance import ActionConfigV3
+    from gf_common.training_opponents import refresh_opponent
+    if type(collection_games) is not int or collection_games != 16:
+        raise ContractError('mixed-refresh-16-v1 requires collection_games=16')
+    if type(actions) is not ActionConfigV3:
+        raise ContractError('mixed opponents require corrected actions3')
+    label, _ = refresh_opponent(actions, training_opponents)
+    groups = list(training_groups_hpo(seed, batch, learner, snapshots, rng, collection_games=16))
+    group = groups[3]
+    groups[3] = replace(group, episodes=tuple(replace(spec, policies=(spec.policies[0] if spec.learner_viewer == 1 else label,
+        label if spec.learner_viewer == 1 else spec.policies[1])) for spec in group.episodes))
+    return tuple(groups)

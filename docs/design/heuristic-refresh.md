@@ -138,6 +138,17 @@ collection games; reject rather than resize other counts. Keep canonical final64
 and HPO evaluation objectives unchanged. Mixed parents are nonformal and cannot
 qualify under the historical formal recipe.
 
+Here campaign schema2 names the campaign TOML/effective Config and hpo_spec2,
+not the existing management envelope: management record schema1 and its
+schema_versions.campaign=1 retain their prior envelope meaning. New study/config
+identities still bind the explicit descriptor; no management format is invented.
+
+Mixed ordinary Python execution stays native-optional. Mixed HPO execution
+requires the additive mixed marker for Python as well as Rust Source, before
+owned GPU/admission work; HPO already requires native production/packed I/O.
+This is a conservative compatibility gate, not a new dependency. Pure parsing,
+validate and help do not load/check native. Ordinary Rust requires both markers.
+
 ## Verification and acceptance
 
 Meaningful tests first: threshold and half boundaries, max-damage/ties, zero and

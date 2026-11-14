@@ -1,0 +1,42 @@
+# One fixed functional proposal; this is not a strength/HPO experiment.
+schema_version = 2
+kind = "ppo-hpo"
+base_experiment = "../experiments/heuristic-refresh-ppo-base.toml"
+model_id = "mlp"
+stage = "refresh-functional"
+trial_count = 1
+decision_budget = 64
+learning_seeds = [17]
+evaluation_game_seeds = ["00000000-0000-0000-0000-000000000001"]
+sampler_seed = 17
+startup_trials = 1
+session_seconds = 900
+run_wall_seconds = 600
+
+[space]
+coupled = []
+
+[[space.parameters]]
+path = "training.epochs"
+kind = "fixed"
+value = 1
+
+[training]
+collection_games = 16
+
+[operating]
+max_updates = 2
+
+[storage]
+parent_root = "../../runs/heuristic-refresh/hpo/parents"
+numeric_root = "../../runs/heuristic-refresh/hpo/parents"
+optuna_path = "../../runs/heuristic-refresh/hpo/search.sqlite3"
+originals_root = "../../runs/heuristic-refresh/hpo/originals"
+
+[training_opponents]
+version = "1"
+preset = "mixed-refresh-16-v1"
+
+[training_opponents.refresh]
+version = "1"
+attack_threshold = 12

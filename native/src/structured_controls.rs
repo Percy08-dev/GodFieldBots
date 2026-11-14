@@ -13,6 +13,56 @@ pub(crate) mod hpo;
 #[path = "card_instance_tree_raw.rs"]
 pub(crate) mod tree3;
 
+/// Closed curriculum options. This changes training identity only; no policy math.
+pub(crate) fn refresh_training<'a>(cfg: &'a Value, b: &Arc<Budget>, c: &Control) -> Result<Option<&'a Value>> {
+    let descriptor = if let Some(spec) = cfg.get("hpo_spec") {
+        if cfg.get("training_opponents").is_some() {
+            return Err(Error::contract("HPO opponents belong exclusively to spec2"));
+        }
+        match n(spec, "schema_version", 1, 2)? {
+            1 => {
+                if spec.get("training_opponents").is_some() {
+                    return Err(Error::contract("HPO spec1 rejects training_opponents"));
+                }
+                return Ok(None);
+            }
+            _ => {
+                n(spec.require("training_recipe")?, "collection_games", 16, 16)?;
+                spec.require("training_opponents")?
+            }
+        }
+    } else if let Some(value) = cfg.get("training_opponents") {
+        value
+    } else {
+        return Ok(None);
+    };
+    descriptor.closed(&["version", "preset", "refresh"], &[])?;
+    is(descriptor, "version", "1")?;
+    is(descriptor, "preset", "mixed-refresh-16-v1")?;
+    let options = descriptor.require("refresh")?;
+    crate::structured_journal::card_instance::refresh_label(cfg.require("actions")?, options, b, c)?;
+    Ok(Some(options))
+}
+
+pub(crate) fn refresh_training_registry(cfg: &Value, registry: &Value, b: &Arc<Budget>, c: &Control) -> Result<Option<String>> {
+    let options = refresh_training(cfg, b, c)?;
+    let mut found = 0;
+    let expected = options.map(|value| crate::structured_journal::card_instance::refresh_label(cfg.require("actions")?, value, b, c)).transpose()?;
+    for (label, binding) in registry.object()? {
+        if text(binding, "model_id")? == "heuristic_refresh" {
+            found += 1;
+            binding.closed(&["model_id", "policy_options"], &[])?;
+            if expected.as_deref() != Some(label.as_str()) || Some(binding.require("policy_options")?) != options {
+                return Err(Error::contract("training refresh registry differs from frozen descriptor"));
+            }
+        }
+    }
+    if found != usize::from(expected.is_some()) {
+        return Err(Error::contract("training refresh registry population differs from frozen descriptor"));
+    }
+    Ok(expected)
+}
+
 pub const INPUT: &str = "participant-structured-v1";
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SourceFormat {
@@ -1636,6 +1686,9 @@ fn update_metadata(
         &budget,
         &control,
     )?;
+    if format.corrected() {
+        refresh_training_registry(state.require("effective_config")?, u.require("policy_bindings")?, &budget, &control)?;
+    }
     n(u, "planned_games", 16, 16)?;
     n(u, "actual_games", 16, 16)?;
     if !u.require("health")?.object()?.is_empty() {
@@ -1965,6 +2018,9 @@ fn parent_context(s: &mut Sources, format: SourceFormat) -> Result<Document> {
         self::formal::validate(s, r)?;
     }
     let cfg = r.require("effective_config")?;
+    if refresh_training(cfg, &budget, &control)?.is_some() && (!format.corrected() || formal) {
+        return Err(Error::contract("mixed opponents require nonformal corrected PPO"));
+    }
     if format.packed() {
         eq(
             r.require("storage_binding")?,
@@ -3800,4 +3856,56 @@ pub(crate) fn verify_derived_artifact3(
         SourceFormat::Corrected,
     )?;
     Ok(record)
+}
+
+
+#[cfg(test)]
+mod refresh_opponents_tests {
+    use super::*;
+    #[test]
+    fn mixed_training_descriptor_and_registry_are_closed_and_preserve_large_thresholds() {
+        let b = Budget::new(128 << 20);
+        let c = Control::new(crate::budget::monotonic() + 30.).unwrap();
+        let fixture = json::parse(include_bytes!("../tests/fixtures/card_instance_journal6.json"), &b, &c).unwrap();
+        let actions = fixture.root["journals"][0]["rows"][0]["actions"].clone();
+        let descriptor = json::object([
+            ("version", json::text("1")), ("preset", json::text("mixed-refresh-16-v1")),
+            ("refresh", json::object([("version", json::text("1")), ("attack_threshold", json::integer(12))]))]);
+        let mut cfg = json::object([("actions", actions), ("training_opponents", descriptor)]);
+        for threshold in [json::integer(12), json::parse(b"1361129467683753853853498429727072845824", &b, &c).unwrap().root.clone()] {
+            cfg["training_opponents"]["refresh"]["attack_threshold"] = threshold;
+            let options = refresh_training(&cfg, &b, &c).unwrap().unwrap();
+            let label = crate::structured_journal::card_instance::refresh_label(&cfg["actions"], options, &b, &c).unwrap();
+            let mut registry = json::object([]);
+            registry.as_object_mut().unwrap().insert(label.clone(), json::object([
+                ("model_id", json::text("heuristic_refresh")), ("policy_options", options.clone())]));
+            assert_eq!(refresh_training_registry(&cfg, &registry, &b, &c).unwrap(), Some(label.clone()));
+            let mut wrong = registry.clone();
+            wrong[&label]["policy_options"]["attack_threshold"] = json::integer(13);
+            assert!(refresh_training_registry(&cfg, &wrong, &b, &c).is_err());
+            assert!(refresh_training_registry(&cfg, &json::object([]), &b, &c).is_err());
+            let mut old = cfg.clone();
+            old.as_object_mut().unwrap().remove("training_opponents");
+            assert!(refresh_training_registry(&old, &registry, &b, &c).is_err());
+        }
+        for (key, bad) in [("version", json::text("2")), ("preset", json::text("other")), ("extra", Value::Null)] {
+            let mut wrong = cfg.clone();
+            wrong["training_opponents"].as_object_mut().unwrap().insert(key.into(), bad);
+            assert!(refresh_training(&wrong, &b, &c).is_err());
+        }
+        for threshold in [json::integer(0), json::integer(-1), Value::Bool(true), json::float(12.).unwrap()] {
+            let mut wrong = cfg.clone();
+            wrong["training_opponents"]["refresh"]["attack_threshold"] = threshold;
+            assert!(refresh_training(&wrong, &b, &c).is_err());
+        }
+        let descriptor = cfg.as_object_mut().unwrap().remove("training_opponents").unwrap();
+        cfg.as_object_mut().unwrap().insert("hpo_spec".into(), json::object([
+            ("schema_version", json::integer(2)), ("training_opponents", descriptor),
+            ("training_recipe", json::object([("collection_games", json::integer(16))]))]));
+        assert!(refresh_training(&cfg, &b, &c).unwrap().is_some());
+        cfg["hpo_spec"]["training_recipe"]["collection_games"] = json::integer(8);
+        assert!(refresh_training(&cfg, &b, &c).is_err());
+        cfg["hpo_spec"]["schema_version"] = json::integer(1);
+        assert!(refresh_training(&cfg, &b, &c).is_err());
+    }
 }

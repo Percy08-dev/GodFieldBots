@@ -439,6 +439,10 @@ def _state(state: Json, *, recorded_signature: str | None = None, _game: bool = 
     config = state['effective_config']
     if not isinstance(config, dict) or digest(config) != state['config_sha256']:
         raise ContractError('component frozen Config hash mismatch')
+    from gf_common.training_opponents import training_opponents
+    mixed = training_opponents(config)
+    if mixed is not None and (not _game or formal):
+        raise ContractError('mixed training opponents require nonformal corrected PPO')
     if packed:
         from gf_common.group_pack import MIB, StorageSettings
         storage = closed(config['storage'], {'format', 'db_root', 'ram_root', 'budget_mib', 'queue_mib', 'max_pack_mib'})

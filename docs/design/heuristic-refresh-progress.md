@@ -21,6 +21,13 @@
   architecture/ADR workflow; no unrelated ignore-rule changes are required.
 - Ruling: incremental windows use selected calculated total attack, not a
   supposedly causally linked declaration — user accepted observed-window proxy.
+- Ruling: campaign Config/spec schema2 leaves the separate management envelope1
+  unchanged — envelope version did not describe Config — avoids an unnecessary
+  management migration while all new descriptor identities remain bound.
+- Ruling: mixed HPO requires new native mixed marker even with Python Source —
+  production/Pack I/O already requires native and new envelopes must refuse old
+  code before GPU admission — cost is requiring an updated native for all mixed
+  HPO runs. Ordinary Python stays native-optional; parse/validate/help stay pure.
 
 ## Preflight conflict scan
 
@@ -64,15 +71,34 @@
   on otherwise unbounded positive threshold. Root reproduced; fix round1 addressed,
   both scoped re-reviews READY.20new regression cases/63coveringPASS; fullsrc
   mypy198/RuffPASS. Root fresh runtime/native66PASS in3.24s, command in verification.
-  Native unchanged after fix. Local milestone pending.
+  Native unchanged after fix. Local milestone4f91782.
 - Task2 actual functional:4natural games, zero failures, comparison_valid true;
   new-vs-old0W/2L, new-vs-Random2W/0L, no strength conclusion. Frozen311source/
   config files unchanged across games. Evidence runs/assessments/heuristic-refresh-20261115/t2-baseline-a01/.
   Baseline runtime before isolated CLI large-int correction; policy unchanged.
   Independent8Journal6/manifest/inventory/report/Replay audit PASS,72refresh
   selections reproduced exactly using only each actor frame's own event prefix.
-- Task3: NOT STARTED.
-- Task4: NOT STARTED.
+- Task3: COMPLETE (code/scoped acceptance), /root/refresh_opponents_impl, brief /tmp/gfb-refresh-task3.md;
+  report /tmp/gfb-refresh-task3-report.md. Both model3 ordinary and model4/HPO.
+  Root owns ordinary base/mixed smoke and HPO schema2 TOML presets; worker owns
+  code/tests. Old Task2 candidate immutable; Task3 builds a separate candidate.
+  First integrated31PASS/1FAIL exposed native summary lacking effective_config;
+  fixed via SAME sealed scan/original run SHA without expanding summary ABI.
+  Subsequent helper double-finalization corrected only in tests. Frozen covering
+  375PASS/11deselected, Rust175PASS/7ignored, mypy199/RuffPASS; final HPOPython
+  early-marker186PASS/1deselected. Candidate separate immutable
+  /tmp/gfb-refresh-native-task3-final/gf_native.so, ELF
+  5c726c41afafccee433a4e2aed6deb893e94a50120f922af1c5d3b8306878edc,
+  native source d45b39c6d3827bb1d190269f5401780f52fa502796b5500423962f556b7eeb75.
+  Both reviews found repeated per-generation SealedScan config charge. Fix1 hoists
+  SAME sealed config once per corrected parent; RED3FAIL/2PASS ->GREEN5,
+  covering81PASS/2opt-inSKIP/10deselected, finalstatic/8ASTPASS. Both re-reviews READY.
+  Root wheel-built ELFf94f290ae013050a7b574b30383c3fde24e0667ef9045f8603619cdf4f1674ce
+  differs from directCargo but build_info allkeysidentical. Root fresh wheel-ELF
+  verification60PASS in64.30s. Python wheel/sdist all199modules exactbyte match.
+  Local milestone pending; installed native still unchanged before Task4.
+- Task4: IN PROGRESS: actual mixed-game/PPO/HPO checks, installed package,
+  whole-suite, historical proofs and final review/acceptance pending.
 
 ## Supplementary Task1 diagnostic
 

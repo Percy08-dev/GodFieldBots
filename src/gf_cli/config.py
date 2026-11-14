@@ -160,6 +160,16 @@ class GroupPackExperimentConfig(ExperimentConfig):
     storage: GroupPackStorageConfig = field(default_factory=GroupPackStorageConfig)
 
 
+@dataclass(frozen=True, kw_only=True)
+class RefreshOpponentsExperimentConfig(ExperimentConfig):
+    training_opponents: Json
+
+
+@dataclass(frozen=True, kw_only=True)
+class PackedRefreshOpponentsExperimentConfig(GroupPackExperimentConfig):
+    training_opponents: Json
+
+
 def require_storage_command(config: ExperimentConfig, command: str, *, standalone: bool = True) -> None:
     if type(getattr(config, 'model', None)) is ConfiguredNeuralModelV4:
         from gf_cli.hpo_config import HPOExperimentConfig
@@ -300,14 +310,14 @@ def load_config(path: str | Path, overrides: Json | None = None) -> LoadedConfig
         stack.add(source)
         raw_bytes = source.read_bytes()
         data = tomllib.loads(raw_bytes.decode())
-        closed(data, {"schema_version", "kind"}, set(_TABLES) | {"references", "training", "storage"})
+        closed(data, {"schema_version", "kind"}, set(_TABLES) | {"references", "training", "storage", "training_opponents"})
         if type(data["schema_version"]) is not int or data["schema_version"] != 1:
             raise ContractError("unsupported config schema_version")
         if data["kind"] not in ("experiment", "actions", "model", "training", "preprocessing") or expected_kind is not None and data["kind"] != expected_kind:
             raise ContractError("unsupported/mismatched preset kind")
         if data["kind"] == "preprocessing" and "preprocessing" not in data:
             raise ContractError("preprocessing preset requires its settings table")
-        allowed = set(_TABLES) | {"storage"} if data["kind"] == "experiment" else {data["kind"]} | ({"training"} if data["kind"] == "model" else set())
+        allowed = set(_TABLES) | {"storage", "training_opponents"} if data["kind"] == "experiment" else {data["kind"]} | ({"training"} if data["kind"] == "model" else set())
         if set(data) - allowed - {"schema_version", "kind", "references"}:
             raise ContractError("preset contains unrelated tables")
         refs = data.get("references", {})
@@ -315,6 +325,9 @@ def load_config(path: str | Path, overrides: Json | None = None) -> LoadedConfig
         if data["kind"] != "experiment" and refs:
             raise ContractError("only experiments may reference presets")
         merged: Json = {}
+        if "training_opponents" in data:
+            from gf_common.training_opponents import parse_training_opponents
+            merged["training_opponents"] = parse_training_opponents(data["training_opponents"])
         if "storage" in data:
             storage = data["storage"]
             closed(storage, set(), set(GroupPackStorageConfig.__dataclass_fields__))
@@ -564,12 +577,17 @@ def load_config(path: str | Path, overrides: Json | None = None) -> LoadedConfig
         defaults = asdict(cls())
         values = {k: tuple(v) if isinstance(defaults[k], tuple) else v for k, v in values.items()}
         converted[name] = cls(**values)
+    mixed = data.get("training_opponents")
+    if mixed is not None and (not card_instance_actions or card_revision != CORRECTED_SIMULATOR_REVISION
+            or type(models["model"]) is not ConfiguredNeuralModelV3 or type(training) is not PPOTrainingConfig):
+        raise ContractError("training_opponents requires corrected ordinary Model3 PPO")
     if "storage" in data:
         if (not card_instance_actions or card_revision != CORRECTED_SIMULATOR_REVISION
                 or server["external_url"] is not None):
             raise ContractError("storage requires corrected actions3 and a locally managed server")
-        config: ExperimentConfig = GroupPackExperimentConfig(**converted,
-            storage=GroupPackStorageConfig(**data["storage"]))
+        config: ExperimentConfig = (PackedRefreshOpponentsExperimentConfig(**converted,
+            storage=GroupPackStorageConfig(**data["storage"]), training_opponents=mixed) if mixed is not None else
+            GroupPackExperimentConfig(**converted, storage=GroupPackStorageConfig(**data["storage"])))
     else:
-        config = ExperimentConfig(**converted)
+        config = RefreshOpponentsExperimentConfig(**converted, training_opponents=mixed) if mixed is not None else ExperimentConfig(**converted)
     return LoadedConfig(config, clone(asdict(config)), digest(asdict(config)), tuple(inputs))

@@ -438,7 +438,17 @@ def recorded_plan(directory: Path, state: Json, records: list[Json], generation:
         snapshots.append(key)
     rng = np.random.Generator(np.random.PCG64())
     rng.bit_generator.state = controls['schedule_opponent_rng']
-    groups = training_groups(state['seed'], generation, label, tuple(snapshots), rng, actions_version=3)
+    from gf_common.training_opponents import refresh_opponent, training_opponents
+    mixed = training_opponents(state['effective_config'])
+    if mixed is not None:
+        from gf_training.collection import training_groups_refresh
+        actions, _ = _state(state, _game=True)
+        name, binding = refresh_opponent(actions, mixed)
+        registry[name] = binding
+        groups = training_groups_refresh(state['seed'], generation, label, tuple(snapshots), rng,
+            actions=actions, training_opponents=mixed)
+    else:
+        groups = training_groups(state['seed'], generation, label, tuple(snapshots), rng, actions_version=3)
     link = frozen_linkage(state, directory, generation, groups, registry)
     return CollectionPlan(groups, registry, directory / 'collections' / link['batch_id'], link, deadline, deadline), label, dict(rng.bit_generator.state)
 
@@ -1081,6 +1091,10 @@ def _open_batch(plan: CollectionPlan, state: Json, records: list[Json], controls
         else:
             previous = controls.object(checkpoint_path(controls.root, generation) / 'inference.json', records[generation]['inference_sha256'])
         native_inputs = None
+        from gf_common.training_opponents import training_opponents
+        if (hpo or settings.backend == 'rust') and training_opponents(state['effective_config']) is not None:
+            from gf_training.native_backend import require_native_refresh_opponents
+            require_native_refresh_opponents()
         if settings.backend == 'rust':
             if any(binding.model_id == 'heuristic_refresh' for binding in plan.bindings.values()):
                 from gf_training.native_backend import require_native_refresh_baseline
@@ -1228,6 +1242,10 @@ def _open_game_parent_inputs(directory: Path, *, require_complete: bool = True, 
         raise ContractError('original generation0 PCG64 differs from frozen seed')
     settings = preparation_config(state['effective_config']['preprocessing'])
     if settings.backend == 'rust':
+        from gf_common.training_opponents import training_opponents
+        if training_opponents(state['effective_config']) is not None:
+            from gf_training.native_backend import require_native_refresh_opponents
+            require_native_refresh_opponents()
         if 'run_variant' in state:
             from gf_training.card_instance_formal import require_native_formal_controls
             from gf_training.native_backend import load_native

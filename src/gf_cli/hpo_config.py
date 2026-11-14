@@ -27,6 +27,7 @@ from gf_common.card_instance import (
 )
 from gf_common.domain import ContractError, Json, canonical, clone, closed, digest, integer
 from gf_common.structured_layout import CORRECTED_CARD_INSTANCE_LAYOUT, StructuredLayout
+from gf_common.training_opponents import parse_training_opponents
 from gf_models.hpo_config import model_config_v4, model_defaults_v4
 from gf_models.structured_binding import ConfiguredNeuralModelV3, ConfiguredNeuralModelV4
 from gf_models.structured_config import InferenceBindingV2, ModelConfigV4
@@ -111,6 +112,16 @@ class HPOCampaignConfig:
                               "opponent_pool_size": self.operating.opponent_pool_size}})
 
 
+@dataclass(frozen=True, kw_only=True)
+class RefreshOpponentsHPOCampaignConfig(HPOCampaignConfig):
+    training_opponents: Json
+
+    @property
+    def study_identity(self) -> str:
+        return digest({'recipe': 'hpo-mixed-refresh-study-v1', 'base': super().study_identity,
+            'training_opponents': parse_training_opponents(self.training_opponents)})
+
+
 @dataclass(frozen=True)
 class LoadedHPOConfig:
     config: HPOCampaignConfig
@@ -191,6 +202,9 @@ def materialize_hpo_run(loaded_campaign: LoadedHPOConfig, settings: Any, *, lear
         'deadline_inputs':{'run_wall_seconds':wall,'base_wall_seconds':base.run.wall_seconds,
             'base_admission_seconds':base.run.admission_seconds,'base_execution_seconds':base.run.execution_seconds,
             'base_finalization_seconds':final}}
+    if isinstance(campaign, RefreshOpponentsHPOCampaignConfig):
+        _mixed_collection_games(campaign)
+        spec.update(schema_version=2, training_opponents=parse_training_opponents(campaign.training_opponents))
     config=HPOExperimentConfig(run=run,server=base.server,actions=base.actions,model=model,opponent=base.opponent,
         evaluation=base.evaluation,training=training,preprocessing=preprocessing,storage=pack,hpo_spec=spec)
     raw=clone(asdict(config))
@@ -266,8 +280,10 @@ def campaign_config(value: Json, *, origin: Path) -> LoadedHPOConfig:
     required = {"schema_version", "kind", "base_experiment", "model_id", "stage", "trial_count",
                 "decision_budget", "learning_seeds", "evaluation_game_seeds", "sampler_seed",
                 "startup_trials", "session_seconds", "run_wall_seconds", "space"}
-    closed(value, required, {"model", "training", "inference", "operating", "storage"})
-    integer(value["schema_version"], 1, 1)
+    mixed = value.get("schema_version") == 2 and type(value.get("schema_version")) is int
+    closed(value, required | ({"training_opponents"} if mixed else set()), {"model", "training", "inference", "operating", "storage"})
+    integer(value["schema_version"], 1, 2)
+    descriptor = parse_training_opponents(value["training_opponents"]) if mixed else None
     if type(value["kind"]) is not str or value["kind"] != "ppo-hpo":
         raise ContractError("explicit ppo-hpo campaign kind required")
     model = model_defaults_v4(value["model_id"])
@@ -305,11 +321,17 @@ def campaign_config(value: Json, *, origin: Path) -> LoadedHPOConfig:
     if (base.config.actions.max_sequence_length > model.max_positions
             or base.config.actions.max_candidates > inference.max_candidates):
         raise ContractError("HPO model/actions capacity mismatch")
-    config = HPOCampaignConfig(**{name: value[name] for name in (
+    cls: Any = RefreshOpponentsHPOCampaignConfig if mixed else HPOCampaignConfig
+    config: HPOCampaignConfig = cls(**{name: value[name] for name in (
         "schema_version", "kind", "model_id", "stage", "trial_count", "decision_budget", "sampler_seed", "startup_trials")},
         base_experiment=base_path, base_config_sha256=base.sha256, learning_seeds=learning, evaluation_game_seeds=games,
         session_seconds=session, run_wall_seconds=wall, space=space, model=model, training=recipe,
-        inference=inference, operating=operating, storage=storage)
+        inference=inference, operating=operating, storage=storage,
+        **({'training_opponents': descriptor} if mixed else {}))
+    if mixed:
+        _mixed_collection_games(config)
+    if hasattr(base.config, 'training_opponents'):
+        raise ContractError('HPO requires an ordinary base without training_opponents; declare it in campaign2')
     effective = clone(asdict(config))
     return LoadedHPOConfig(config, base, effective, digest({"campaign": effective, "base": base.sha256}), base.inputs)
 
@@ -321,8 +343,13 @@ def joint_resource_admission(config: HPOCampaignConfig, *, layout: StructuredLay
     conservative reservation, not measured RSS or proof of physical availability.
     Later runtime owners must retain the SAME reservation until actual reap.
     """
-    if type(config) is not HPOCampaignConfig:
+    if type(config) not in (HPOCampaignConfig, RefreshOpponentsHPOCampaignConfig):
         raise ContractError("closed HPO campaign required")
+    expected_schema = 2 if isinstance(config, RefreshOpponentsHPOCampaignConfig) else 1
+    integer(config.schema_version, expected_schema, expected_schema)
+    if isinstance(config, RefreshOpponentsHPOCampaignConfig):
+        parse_training_opponents(config.training_opponents)
+        _mixed_collection_games(config)
     limits = _operating(asdict(config.operating))
     recipe = normalize_training_for_model(config.model_id, config.training)
     model = model_config_v4(asdict(config.model), layout=layout)
@@ -341,3 +368,18 @@ def load_hpo_config(path: str | Path) -> LoadedHPOConfig:
     joint_resource_admission(loaded.config, layout=CORRECTED_CARD_INSTANCE_LAYOUT)
     receipt = {"path": str(source), "sha256": hashlib.sha256(raw).hexdigest(), "kind": "ppo-hpo"}
     return LoadedHPOConfig(loaded.config, loaded.base, loaded.effective, loaded.sha256, (*loaded.inputs, receipt))
+
+
+def _mixed_collection_games(config: HPOCampaignConfig) -> None:
+    if config.training.collection_games != 16:
+        raise ContractError('mixed-refresh-16-v1 requires collection_games=16')
+    for item in config.space.parameters:
+        if item.path == 'training.collection_games':
+            values = item.choices if item.kind == 'categorical' else (item.value,) if item.kind == 'fixed' else (item.low, item.high)
+            if any(type(value) is not int or value != 16 for value in values):
+                raise ContractError('mixed-refresh-16-v1 requires every collection_games search value=16')
+    for coupled in config.space.coupled:
+        if 'training.collection_games' in coupled.paths:
+            index = coupled.paths.index('training.collection_games')
+            if any(type(row[index]) is not int or row[index] != 16 for row in coupled.choices):
+                raise ContractError('mixed-refresh-16-v1 requires every coupled collection_games=16')

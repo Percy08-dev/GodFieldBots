@@ -41,7 +41,7 @@ def original_hpo_collection(plan, state, learner, *, decisions=True):
                     label = spec.policies[viewer - 1]
                     binding = plan.bindings[label]
                     caps, costs, _, _ = own_game_worker_settings_v3(binding.model_id, ACTIONS, binding.policy_options, rules=RULES)
-                    neural = None if binding.policy_options is None else owner.journal_metadata(label)
+                    neural = None if binding.model_id in ('random', 'heuristic', 'heuristic_refresh') else owner.journal_metadata(label)
                     value = inputs([], can_pray=True)
                     if viewer == 2:
                         obs, hints = copy.deepcopy(value.observation), copy.deepcopy(value.action_options)
@@ -57,7 +57,7 @@ def original_hpo_collection(plan, state, learner, *, decisions=True):
                     frame = DecisionFrame.from_input(value, bank, 0, layout=LAYOUT)
                     journal = CardInstanceJournal(folder, spec.episode_id, viewer, label, run_id='fixture-collection', game_id=game,
                         actions=ACTIONS, bank_episode=bank.episode, caps=asdict(caps), numeric_costs=asdict(costs),
-                        model_id=binding.model_id, runtime_evidence=receipt(), sampling_seed=spec.sampling_seeds[viewer - 1], neural=neural)
+                        model_id=binding.model_id, runtime_evidence=receipt(), sampling_seed=spec.sampling_seeds[viewer - 1], neural=neural, **({'baseline_options': binding.policy_options} if binding.model_id == 'heuristic_refresh' else {}))
                     accepted = []
                     if decisions and neural is not None:
                         seed = int(digest({'recipe': 'structured-search-stream-v1', 'sampling_seed': spec.sampling_seeds[viewer - 1]})[:16], 16)
@@ -225,7 +225,7 @@ def _unqualified_numeric_components_for_native(source, directory):
     return manifest, decoded
 
 
-def variable_initial_hpo_chain(directory, *, games=24, model_id=None, decision_budget=3, numeric_budget_bytes=None, packed=False):
+def variable_initial_hpo_chain(directory, *, games=24, model_id=None, decision_budget=3, numeric_budget_bytes=None, packed=False, training_opponents=None, native=None):
     """Override only the controlled fixture constructor BEFORE its real save."""
     from unittest.mock import patch
 
@@ -243,12 +243,19 @@ def variable_initial_hpo_chain(directory, *, games=24, model_id=None, decision_b
                 **{name:getattr(model,name) for name in model.__dataclass_fields__}, inference=binding))
         recipe = replace(recipe, collection_games=games)
         spec = state['effective_config']['hpo_spec']
+        if training_opponents is not None:
+            spec.update(schema_version=2, training_opponents=copy.deepcopy(training_opponents))
         if packed:
             state['effective_config']['storage'].update(db_root=str(directory.parent/'db'),ram_root=str(directory.parent/'ram'))
         if numeric_budget_bytes is not None:
             spec['operating']['numeric_budget_bytes'] = numeric_budget_bytes
         spec['training_recipe'] = asdict(recipe)
         spec['effective_settings_sha256'] = effective_settings(model, recipe, {}, layout=LAYOUT).identity
+        if native is not None:
+            from gf_training.native_backend import binary_identity
+            state['effective_config']['preprocessing']['backend'] = 'rust'
+            state['identity']['preprocessing'] = {'backend': 'rust', 'reader_contract': 'participant-structured-v2',
+                'implementation': 'rust-player-card-refs-v2', 'binary': binary_identity(native), **{key: state[key] for key in ('action_contract', 'purpose', 'synthetic_capacity', 'rule_signature', 'layout_signature')}}
         state['hpo_spec_sha256'] = digest(spec)
         state['config_sha256'] = digest(state['effective_config'])
         state['resume_identity'] = digest({'version': 'hpo-ppo-resume-v1', 'config_sha256': state['config_sha256'],

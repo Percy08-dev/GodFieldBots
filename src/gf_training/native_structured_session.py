@@ -33,6 +33,13 @@ def _verify_parent_controls(original_parents: list[Json], contract: Any, scan: S
         scan.check()
         if parent['parent_index'] != pi:
             raise ContractError('ordered original parent index mismatch')
+        from gf_common.training_opponents import refresh_opponent, training_opponents
+        mixed = None
+        if game_actions is not None:
+            original = scan.object(Path(parent['directory']) / 'run.json', parent['run_sha256'])
+            if digest(original['effective_config']) != parent['state']['config_sha256']:
+                raise ContractError('original Config differs from native parent checksum')
+            mixed = training_opponents(original['effective_config'])
         if game_actions is None:
             model = recorded_model_config_v2(parent['model'], parent['semantics']['token_signature'])
         else:
@@ -122,7 +129,16 @@ def _verify_parent_controls(original_parents: list[Json], contract: Any, scan: S
                 name, value = policy(number)
                 registry[name] = value
                 snapshots.append(name)
-            groups = training_groups(parent['state']['seed'], gi, label, tuple(snapshots), rng, actions_version=2 if game_actions is None else 3)
+            if mixed is not None:
+                if game_actions is None:
+                    raise ContractError('mixed opponents require corrected game actions')
+                from gf_training.collection import training_groups_refresh
+                name, binding_value = refresh_opponent(game_actions, mixed)
+                registry[name] = binding_value
+                groups = training_groups_refresh(parent['state']['seed'], gi, label, tuple(snapshots), rng,
+                    actions=game_actions, training_opponents=mixed)
+            else:
+                groups = training_groups(parent['state']['seed'], gi, label, tuple(snapshots), rng, actions_version=2 if game_actions is None else 3)
             schedules[pi, gi] = digest(serialize_schedule(groups, 4))
             registries[pi, gi] = digest({name: asdict(value) for name, value in registry.items()})
             if gi + 1 < len(generations):

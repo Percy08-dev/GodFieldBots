@@ -110,3 +110,21 @@ class OnlinePPOContext:
     batch_id: str
     generation: int
     ownership_token: str
+
+
+def training_groups_refresh(seed: int, batch: int, learner: str, snapshots: tuple[str, ...], rng: object,
+                            *, actions: object, training_opponents: Json) -> tuple[EpisodeGroup, ...]:
+    """Exactly16 games; retain the original four snapshot draws and paired streams."""
+    from dataclasses import replace
+
+    from gf_common.card_instance import ActionConfigV3
+    from gf_common.domain import ContractError
+    from gf_common.training_opponents import refresh_opponent
+    if type(actions) is not ActionConfigV3:
+        raise ContractError('mixed opponents require corrected actions3')
+    label, _ = refresh_opponent(actions, training_opponents)
+    groups = list(training_groups(seed, batch, learner, snapshots, rng, actions_version=3))
+    group = groups[3]
+    groups[3] = replace(group, episodes=tuple(replace(spec, policies=(spec.policies[0] if spec.learner_viewer == 1 else label,
+        label if spec.learner_viewer == 1 else spec.policies[1])) for spec in group.episodes))
+    return tuple(groups)

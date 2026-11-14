@@ -638,14 +638,29 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
                                 if ops else {'random': RuntimePolicyBinding('random'), 'heuristic': RuntimePolicyBinding('heuristic')})
                     learner_label, learner_binding = ops.binding(directory, generation, config, execution) if ops else owned_binding(directory, generation)
                     registry[learner_label] = learner_binding
+                    mixed = None
+                    if game:
+                        from gf_common.training_opponents import (
+                            refresh_opponent,
+                            training_opponents,
+                        )
+                        mixed = training_opponents(loaded.effective)
+                        if mixed is not None:
+                            refresh_label, refresh_binding = refresh_opponent(config.actions, mixed)
+                            registry[refresh_label] = refresh_binding
                     snapshots = []
                     for snapshot in pool:
                         label, binding = ops.binding(directory, snapshot, config, execution) if ops else owned_binding(directory, snapshot)
                         registry[label] = binding
                         snapshots.append(label)
-                    groups = (ops.groups(config,generation,learner_label,tuple(snapshots),rng) if hpo else
-                              training_groups(training.seeds[0], generation, learner_label, tuple(snapshots), rng, actions_version=3 if game else 2)
-                              if ops else training_groups(training.seeds[0], generation, learner_label, tuple(snapshots), rng))
+                    if game and not hpo and mixed is not None:
+                        from gf_training.collection import training_groups_refresh
+                        groups = training_groups_refresh(training.seeds[0], generation, learner_label,
+                            tuple(snapshots), rng, actions=config.actions, training_opponents=mixed)
+                    else:
+                        groups = (ops.groups(config,generation,learner_label,tuple(snapshots),rng) if hpo else
+                                  training_groups(training.seeds[0], generation, learner_label, tuple(snapshots), rng, actions_version=3 if game else 2)
+                                  if ops else training_groups(training.seeds[0], generation, learner_label, tuple(snapshots), rng))
                     batch_id = f'batch-{generation:06}'
                     linkage = {'parent_run_id': state['run_id'], 'parent_run_path': str(directory), 'batch_id': batch_id,
                                'collection_generation': generation,

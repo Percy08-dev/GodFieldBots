@@ -63,6 +63,10 @@ class _HpoOperations(_GameOperations):
         _run_projection(raw,spec,training)
         if canonical(asdict(normalize_training_for_model(config.model.model_id,recipe)))!=canonical(spec['training_recipe']):
             raise ContractError('HPO production recipe must already be canonical')
+        from gf_common.training_opponents import training_opponents
+        if training_opponents(raw) is not None:
+            from gf_training.native_backend import require_native_refresh_opponents
+            require_native_refresh_opponents()
         op=spec['operating']
         require_training_job(self.job,ledger=self.job.ledger,run_id=config.run.name,
             global_cuda_bytes=op['managed_cuda_bytes'],max_workers=op['max_participant_workers'])
@@ -151,6 +155,13 @@ class _HpoOperations(_GameOperations):
         return hpo_binding(directory,state,records[generation],generation)
 
     def groups(self,config: Any,generation: int,label: str,snapshots: tuple[str,...],rng: Any) -> Any:
+        from gf_common.training_opponents import training_opponents
+        mixed = training_opponents(asdict(config))
+        if mixed is not None:
+            from gf_training.hpo_collection import training_groups_hpo_refresh
+            return training_groups_hpo_refresh(config.training.seeds[0],generation,label,snapshots,rng,
+                collection_games=config.hpo_spec['training_recipe']['collection_games'],
+                actions=config.actions,training_opponents=mixed)
         return training_groups_hpo(config.training.seeds[0],generation,label,snapshots,rng,
             collection_games=config.hpo_spec['training_recipe']['collection_games'])
 

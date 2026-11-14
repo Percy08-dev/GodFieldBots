@@ -86,9 +86,16 @@ class _GameOperations:
                 or config.preprocessing.backend not in ('python', 'rust') or config.preprocessing.reader != 'participant-structured-v2'):
             raise ContractError('corrected PPO requires fresh game Model3/actions3/python/participant-structured-v2')
         input_binding_game_v3(config.actions.action_contract, card_instance_rules())
+        from gf_common.training_opponents import training_opponents
+        mixed = training_opponents(asdict(config))
+        if mixed is not None and self.formal is not None:
+            raise ContractError('mixed training opponents are nonformal')
         if config.preprocessing.backend == 'rust':
             from gf_training.native_backend import card_instance_reader_settings, load_native
             self.native = self.native or load_native()
+            if mixed is not None:
+                from gf_training.native_backend import require_native_refresh_opponents
+                require_native_refresh_opponents(self.native)
             card_instance_reader_settings(config.preprocessing, self.native)
         return config.model.architecture(layout=LAYOUT)
 

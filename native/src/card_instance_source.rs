@@ -163,6 +163,28 @@ pub(super) fn manifest(
     }
     let registry = m.require("policy_bindings")?.object()?;
     retained_registry(m, actions, b, c)?;
+    if !role.final64() {
+        if let Some(refresh) = controls::refresh_training_registry(cfg, m.require("policy_bindings")?, b, c)? {
+            require(schedule.len() == 8, "mixed opponents require exactly eight pairs")?;
+            for (pair, group) in schedule.iter().enumerate() {
+                let episodes = group.require("episodes")?.array()?;
+                require(episodes.len() == 2, "mixed opponents require swapped pairs")?;
+                let left = episodes[0].require("policies")?.array()?;
+                let right = episodes[1].require("policies")?.array()?;
+                require(left.len() == 2 && right.len() == 2 && left[0] == right[1] && left[1] == right[0],
+                    "mixed opponents require identical swapped roles")?;
+                let opponent = left[1].string()?;
+                let expected = match pair { 0 | 1 => Some("random-card-instance-v2"), 2 => Some("heuristic-card-instance-v2"), 3 => Some(refresh.as_str()), _ => None };
+                if let Some(expected) = expected {
+                    require(opponent == expected, "mixed pair opponent differs from frozen descriptor")?;
+                } else {
+                    let binding = registry.get(opponent).ok_or_else(|| Error::contract("mixed snapshot registry missing"))?;
+                    require(!["random", "heuristic", "heuristic_refresh"].contains(&field(binding, "model_id")?),
+                        "mixed snapshot pair must retain a learned policy")?;
+                }
+            }
+        }
+    }
     let policies = m
         .require("policies")?
         .array()?

@@ -76,6 +76,9 @@ def _conditions(loaded: LoadedHPOConfig) -> Json:
     config = loaded.base.config
     if type(config.actions) is not ActionConfigV3 or type(config.model) is not ConfiguredNeuralModelV3:
         raise ContractError('HPO conditions require the exact corrected model3 base')
+    if hasattr(loaded.config, 'training_opponents'):
+        from gf_training.native_backend import require_native_refresh_opponents
+        require_native_refresh_opponents()
     deadline = time.monotonic() + loaded.config.run_wall_seconds
     if config.server.source_dir is None or config.server.external_url is not None:
         raise ContractError('HPO requires its approved locally managed Simulator source/binary')
@@ -147,6 +150,10 @@ async def _train_seed(store: CampaignStore, loaded: LoadedHPOConfig, campaign: J
     store.put(folder + '/training.intent.json', {'schema_version': 1, 'kind': 'hpo-training-intent',
         'proposal_sha256': proposal.sha256, 'training_seed': seed, 'run_id': run_id, 'run_path': str(directory),
         'config_sha256': materialized.sha256})
+    from gf_common.training_opponents import training_opponents
+    if training_opponents(materialized.effective) is not None:
+        from gf_training.native_backend import require_native_refresh_opponents
+        require_native_refresh_opponents()
     with admit_gpu_job(JobContext(campaign['campaign_id'], run_id, 'training', run_id, None),
             global_cuda_bytes=loaded.config.operating.managed_cuda_bytes,
             max_workers=loaded.config.operating.max_participant_workers) as job:
