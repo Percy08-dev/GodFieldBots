@@ -39,7 +39,7 @@ shorten budgets, replace seeds or drop failed games to claim acceptance.
    seeds[17,23], D8. Candidate space has fixed collection8/epoch1 and categorical
    learning rate[0.0002,0.0004]; other model/training settings use current defaults.
    Canonical default contrast is outside this space and runs separately at the
-   SAME D/seeds with canonical collection16/epoch4. Set a10-second session budget
+   SAME D/seeds with canonical collection16/epoch4. Set a300-second session budget
    so a completed operation boundary is
    saved, then resume with unchanged conditions until all required runs/evaluations
    and the exact tell receipt complete. Check actual sampler/distributions,
@@ -68,6 +68,16 @@ and Simulator paths. The initial output namespace is
 The MLP candidate remains collection8/epoch1; the MLP contrast and GRU canonical
 proposal retain collection16/epoch4. No GPU/Simulator run is implied by pure
 configuration admission, and no functional harness result is an Optuna trial.
+
+Before the first actual CLI campaign, the initial10-second session was amended
+to300seconds. A read-only full-parent audit measured15.740seconds, making10seconds
+shorter than historical receipt verification. The original config remains intact;
+`configs-session-a03/mlp-campaign.toml` changes only this operational setting.
+`campaign-session-amendment.json` records both hashes, unchanged learning/D/seeds/
+evaluation/resources/storage and1200-second run deadlines, and the absence of an
+existing study at amendment time. Independent prelaunch conformance is READY.
+Execution observes three actual normal session pauses and exact closed-receipt
+replay; the adjustment is not a post-trial budget extension.
 
 ## Acceptance evidence
 

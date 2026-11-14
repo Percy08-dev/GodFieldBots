@@ -3,9 +3,10 @@
 ## Status and scope
 
 [ADR0037](adr/0037-ppo-hpo-foundation.md) accepts the explicit configurable PPO
-and outer HPO campaign design. Implementation is in progress under
-[the supplied plan](design/ppo-hpo.md); current-context independent architecture
-mapping is READY. Model4 and HPO-only inference/resume5, run5/generation4/update5/
+and outer HPO campaign design. Implementation and the predeclared physical
+functional protocol pass under [the supplied plan](design/ppo-hpo.md). Both final
+independent reviews are READY and root accepts the functional foundation. Model4 and HPO-only
+inference/resume5, run5/generation4/update5/
 registry4, collection6/proof3/numeric5/wire6 preserve old meanings and the eight
 fixed kernel ASTs. TBPTT belongs to training/resume rather than inference identity.
 The common coordinator/network and complete-original Source owners are reused;
@@ -33,8 +34,9 @@ allocation guards are implemented. Installed activation, current-source legacy
 proofs and the corrected whole CPU Python suite pass for the reviewed release.
 The first physical attempts expose acknowledged-save and evaluation-publication
 failures, both now corrected and independently reviewed. The a02 GPU training
-reaches its exact decision budget normally; full functional acceptance still
-requires the remaining predeclared real execution.
+reaches its exact decision budget normally. The corrected a03 execution completes
+all three model matrices, run/session resume, real CLI campaigns and direct
+comparison; the verification record preserves the two failed attempts.
 
 The [runtime contract](design/ppo-hpo-runtime.md) uses the common coordinator,
 the caller's actual GPU job and audited ledger, original absolute deadlines,
@@ -67,7 +69,8 @@ despite two healthy natural games. The separately reviewed
 preserves strict persisted validation, records positive actual collector/storage/
 Source/artifact/pin retirement, and allows operational termination of failed data
 only while the original job capability survives. It never creates an evaluation
-objective. The already unconfirmed4868 ticket still requires explicit recovery.
+objective. Its old unconfirmed4868 ticket is later resolved for admission only
+under ADR0038, without inventing a termination or restart receipt.
 
 The separately reviewed [clock observation correction](design/ppo-clock-observation.md)
 now uses bounded monotonic/wall/monotonic observations against the original
@@ -78,11 +81,13 @@ resume expiry remain unchanged, checked wall observations retain a high-water
 mark, and sampling failures follow existing owned cleanup. Both scoped reviews
 are READY. Transient or masked clock steps and persisted wall-only pause records
 retain the explicit limits in the design; this creates no cross-boot time authority.
-Current-source CPU verification passes5542checks/341explicit skips, project static
+Current-source CPU verification passes5592checks/341explicit skips, project static
 checks, all five legacy-data proofs, exact application/native package correspondence
 and installed mandatory-only CLI/baseline checks. Protected original byte/stat
-identities remain unchanged. These checks do not replace the remaining physical
-protocol or the actual recovery required for the a02 evaluation ticket.
+identities remain unchanged. Actual a03 execution also completes124natural games,
+including104training and20evaluation/comparison games, with20new normally closed
+GPU jobs. Eight parents finish exactly at D8; the separate145-decision cap parent
+correctly remains incomplete and supplies no objective.
 
 [ADR0038](adr/0038-explicit-gpu-admission-release.md) subsequently accepts the
 user's operational correction: an explicit operator may release one unconfirmed
@@ -91,9 +96,12 @@ admission for scheduling without claiming termination or restart. The bounded
 lock, immutable original admission, exact retry and all data-completion gates.
 Possible residual contention is accepted by that decision; diagnostics never
 become an automatic cleanup oracle. Implementation passes scoped verification
-and both independent reviews. Root's100covering cases
-and project static checks pass. The prior restart request is withdrawn; the
-operational release and remaining physical protocol are separate acceptance steps.
+and both independent reviews. Root's100covering cases and project static checks
+pass. The explicit operational release succeeds on the unchanged boot; all old
+admission bytes and failed evidence survive. The physical protocol then completes
+normally. The prior restart request is withdrawn. Exact conditions, the
+prelaunch session adjustment and final audit/review limits are in the verification
+record; no formal HPO sizing or strength conclusion follows.
 
 [ADR0024](adr/0024-card-instance-simulator-v2.md) begins a separately identified
 card-instance Simulator v2 migration. Contract/wire/Config/direct HTTP and pure

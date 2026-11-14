@@ -163,7 +163,7 @@ CUDA学習・CPU推論・2GiB/16MiBの型付きRust前処理を使います。�
 
 ## PPOのHPO設定
 
-model4のMLP・GRU・TransformerとPPO recipeを共同で調整する明示的なHPO経路を追加します。
+model4のMLP・GRU・TransformerとPPO recipeを共同で調整する明示的なHPO経路を提供します。
 学習量は損失に使う一意な意思決定数Dでそろえ、全学習seedの最終D方策を共通の
 席交換評価で比較します。Optuna5.0.0はoptionalな`hpo` extraです。
 探索範囲・試行数・学習量・seed群は実行者が設定します。

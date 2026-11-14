@@ -1,7 +1,7 @@
 # 0037: Explicit configurable PPO and outer HPO campaigns
 
-- Status: Accepted design; implementation in progress. Current-context
-  `bot_architecture_reviewer` mapping READY for units1–5, no blockers.
+- Status: Accepted; implemented and functionally verified. Final independent
+  correctness and architecture-conformance reviews READY; root acceptance complete.
 - Date: 2026-11-12
 - Owner: root
 - Baseline: `040184223a4bdcde85875f556daeb4a160ee7027`

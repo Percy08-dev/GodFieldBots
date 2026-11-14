@@ -1,8 +1,9 @@
 # Explicit admission recovery without a restart
 
 Independent design and implementation-conformance review READY. Correctness
-review READY; scoped implementation verification passes. Operational execution
-and full foundation acceptance remain separate.
+review READY; implementation verification and actual operational release pass.
+Both final whole-foundation reviews are READY. Admission release remains distinct
+from cleanup proof and data qualification.
 
 ## Intent and revised requirement
 

@@ -1,6 +1,6 @@
 # 0038: Explicit recovery of GPU admission without certifying termination
 
-- Status: Accepted; implemented with scoped verification.
+- Status: Accepted; implemented and operationally verified.
 - Date: 2026-11-15
 - Owner: root
 - Supersedes: ADR0037's mandatory-restart fallback for an unconfirmed GPU job.
@@ -63,4 +63,7 @@ where actual termination is required. Both independent correctness and
 implementation-conformance reviews are READY; each independently passes all50new
 cases. Owner affected verification passes116CPU cases; root independently passes
 100covering cases, full project Ruff, mypy195source and diff checks. Operational
-release and the remaining physical protocol are separate acceptance steps.
+release and the remaining physical protocol subsequently pass: the old admission
+is preserved on the unchanged boot, no termination/restart is invented, and20new
+GPU jobs close normally across124natural functional games. Whole-foundation final
+correctness and conformance reviews are READY. This changes no data authority.

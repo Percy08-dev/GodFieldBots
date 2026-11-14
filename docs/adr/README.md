@@ -74,7 +74,7 @@ native Sourceの構造化収集テストへTorch先読みを拡張。設計・�
 可変PPOモデル・一意な学習決定数・Optuna探索・評価と保存管理。
 全体受入は検証記録に従う。異常終了時の受付回復条件は0038で一部更新。
 
-追加: [0038](0038-explicit-gpu-admission-release.md) — Accepted design:
+追加: [0038](0038-explicit-gpu-admission-release.md) — Accepted:
 終了未確認を保持したまま、明示的な判断を記録してGPU受付を再開する。
 終了・再起動・学習評価の成立を証明する記録とは区別する。
 

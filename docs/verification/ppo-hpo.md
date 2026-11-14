@@ -719,3 +719,116 @@ command matches, and14285MiB GPU free out of16303MiB. These are diagnostics, not
 termination proof. `admission-release-preflight.json` preserves the exact old
 admission hash/current pointer on unchanged boot74cf. Normal actual release and
 the remaining fresh a03 protocol are not implied by these scoped checks.
+
+## Final a03 functional execution and current-source verification
+
+All production/test source stays frozen at8669cd0 throughout execution. Python
+3.14.10/GIL, NumPy2.5.4, Torch2.14.1+cu132, Optuna5.0.0, RTX5070Ti and the exact
+installed native dae8/source56df are used. Simulator91d5926 is unchanged. The
+actual recovery CLI records an operator admission release for4868 on the same
+boot, preserving its original admission bytes and absence of termination/restart
+records. `admission-release-verification.json` records that limited decision.
+
+The predeclared protocol completes with the following new natural games:
+
+| Functional case | Parents | Training games | Evaluation/comparison games | Result |
+| --- | ---: | ---: | ---: | --- |
+| MLP/GRU/Transformer matrices | 3 | 24 | 6 | Each reaches D8; one optimizer step and final-policy receipt |
+| MLP pause1/resume2 cap | 1 | 16 | 0 | 145used; unchanged deadlines; incomplete below D1M; no objective |
+| MLP outside canonical control, seeds17/23 | 2 | 32 | 4 | Both D8; four optimizer steps each; separate control |
+| MLP sampled candidate, seeds17/23 | 2 | 16 | 4 | Both D8; one step each; complete Optuna trial |
+| GRU canonical CLI, seed17 | 1 | 16 | 2 | D8; four steps; complete Optuna trial |
+| Full MLP-seed × GRU-seed comparison | 0 | 0 | 4 | Both seed pairs, each with swapped seats; exploratory table |
+| Total | 9 | 104 | 20 | 124natural games; eight exactly-D parents and one expected-incomplete parent |
+
+Inner-case summaries retain full original/native/Numeric validation and protected
+G0/latest states. The cap's84+61used decisions and two optimizer steps do not
+qualify a complete parent. All successful complete parents use their final D
+checkpoint, never a best intermediate checkpoint. Original selection/collected
+counts and all saves remain available under each parent.
+
+Both real CLI wrappers exit0. MLP completes the separate outside-space canonical
+control and one in-space proposal, observes three normal session pauses, and
+passes exact immutable intent/tell replay. GRU completes one in-space canonical
+proposal and passes the same closed-record replay. Each retains its own fresh
+seed runs. MLP objective0.0 values are derived from complete healthy natural
+panels; no infrastructure failure or missing seed is converted to zero.
+
+The initial MLP10-second operational session is amended to300seconds before the
+first study, following a15.740-second read-only parent-audit measurement. Only
+`session_seconds` differs; original configs and the prelaunch amendment receipt
+are preserved. D, seed groups, recipes, evaluation, resources and1200-second run
+deadlines are unchanged. Independent prelaunch conformance is READY. This does
+not trim learning or extend an existing run/study.
+
+The real compare CLI exits0 and persists `comparison.json` under
+`mlp-campaign/parents/direct-comparison-gru`. Its two matchup rows are(17,17) and
+(23,17), four distinct GameIDs, one common GameSeed, both seats in each pair, and
+all natural/transport/save/cleanup flags healthy. Each matchup has its actual
+GPU termination and pin/source receipts. The equal-pair left mean is0.5; four
+games at this learning budget are functional evidence only, not strength or
+final-test evidence. `direct-comparison-audit.json` rechecks the saved table.
+
+Current full HOST CPU pytest with CUDA hidden and the exact native candidate
+passes5592checks/341explicit skips/29warnings in1178.59s, exit0. JUnit
+`whole-cpu-8669cd0.xml` has5933cases and zero failures/errors. The late60-second
+Tree-fixture diagnostic stack does not fail execution. This low-priority CPU
+check overlaps some sequential GPU functional work; observed costs are not an
+isolated performance benchmark. Project Ruff/mypy195source and diff checks pass.
+
+Fresh current-source package correspondence passes197application/91native files
+and seven embedded assets; the mandatory-only installed wheel passes baseline,
+all21help commands and validation with all seven optional modules absent.
+All five `legacy-proof-admission-release` jobs pass exact output/data audits and
+source-inventory guards (20.22/11.59/10.36/1.64/1.43s). Native source is unchanged
+from the173PASS/7ignored Rust evidence; its wheel/source/ELF identity is verified,
+so no redundant rebuild or Rust rerun is claimed.
+
+After all physical operations, `originals-after-final-a03.json` rehashes all29814
+protected originals and24fit files: exact bytes and device/inode/size/mtime/ctime
+match in4.38s. `final-gpu-admission-audit.json` validates23preserved admissions:
+21actual termination receipts (20new normal jobs plus the prior a02 training),
+one historical user-confirmed restart and one admission-only release. There are
+zero unresolved admissions; no new job is admitted by this final check. Old a01
+and a02 failed functional evidence remains preserved, with18earlier natural games
+separate from the124accepted new functional games. The healthy a02 training
+parent is not rewritten.
+
+The final postexecution record audit passes: nine parents,1045collected and209used
+decisions including the expected-incomplete cap,10updates and19optimizer steps;
+114retained artifact files rehashed against19generation registry maps;12complete
+pin transactions with exact four-record hash/binding links and no current
+evaluation references; all20new normal termination copies verified against their
+actual fixed namespace/context. Eight training and eight evaluation receipts match
+their saved state/generation/source-validation/termination hashes, plus the two
+cap-phase and two comparison terminations. The machine-readable result is
+`functional-record-audit.json` beside `final_record_audit.py` in the assessment.
+
+The bounded verifier supplies independent persisted-record observations. Root
+completes its explicitly unexecuted cross-parent count/artifact/termination/pin
+checks. This final audit does not rerun Source/Numeric reconstruction, which the
+actual runtime and CLI already perform before tell and during closed-record
+replay. It grants no new qualification by itself. Both final independent reviewers
+inspect the completed audit implementation/records, raw comparison and original
+row equality, and report READY with no unresolved blocking findings or required
+code changes. Their reviewed test evidence remains distinct from tests they
+independently execute; neither claims another whole-suite or physical rerun.
+
+The final application wheel/sdist and unchanged native wheel/sdist are copied
+byte-for-byte to `final-artifacts`, with a hash manifest. Fresh
+`package-proof-final.json` again passes197/91/7source correspondence and
+`optional-free-final.json` passes the mandatory-only installed-wheel checks.
+Runtime/test source remains exactly8669cd0; subsequent acceptance commits change
+documentation only. The exact whole-suite command is:
+
+```console
+CUDA_VISIBLE_DEVICES='' GFB_HPO_NATIVE_CANDIDATE=/tmp/gfb-hpo-native-clock-site/gf_native/gf_native.cpython-314-x86_64-linux-gnu.so nice -n 10 .venv/bin/python -m pytest -q --disable-warnings --maxfail=1 -o faulthandler_timeout=60 --junitxml=runs/assessments/ppo-hpo-foundation-20261114/whole-cpu-8669cd0.xml
+```
+
+Root accepts the implemented HPO foundation after both final reviews and the
+completed verification above. Caller-supplied ranges/trial count/D/seeds/evaluation
+can now drive HPO without application-code edits, using `docs/hpo.md` and the
+actual CLI. Formal HPO sizing, large search, final-test qualification and strength
+claims remain outside this accepted functional scope. Seed-only deterministic
+training and isolated performance are not established. Keep the feature branch
+and all historical failure evidence; no push or merge is performed.
