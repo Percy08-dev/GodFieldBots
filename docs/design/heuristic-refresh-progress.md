@@ -48,12 +48,39 @@
   Architecture conformance READY, /tmp/gfb-refresh-task1-architecture.md;
   independent correctness/quality READY, /tmp/gfb-refresh-task1-review.md.
   Root fresh acceptance `.venv/bin/python -m pytest -q
-  tests/test_refresh_heuristic.py` PASS44 in0.44s. Local code milestone pending.
+  tests/test_refresh_heuristic.py` PASS44 in0.44s. Local milestone1339b39.
   Principal retention table2097152bytes, tracked transform peak2295560bytes,
   local0.011340s diagnostic (facts preallocated; not process RSS/performance guarantee).
 - Hardware preflight: ordinary sandbox NVML blocked; scoped read-only escalation
   sees RTX5070Ti16303MiB/2096MiB used. Approved Simulator release exists. GPU
   functional jobs still require production admission/ownership, not this query.
-- Task2: NOT STARTED.
+- Task2: COMPLETE, /root/refresh_runtime_impl; brief /tmp/gfb-refresh-task2.md,
+  report target /tmp/gfb-refresh-task2-report.md. Root owns TOML presets/docs only.
+  Initial frozen226Python PASS/22CUDA deselected;174Rust PASS/7ignored;
+  native candidate /tmp/gfb-refresh-native-task2-final/gf_native.so immutable,
+  ELFa4e51e954dd6663b885b99e6386c9e1fa37fc3f44eaf733c7f671ccae3c40ac2,
+  source18e1424c0f1fccb386ad695ed6ba25b0917d8fab36697d19a52f2b4a16dd7436.
+  Architecture READY. Correctness one P2: CLI partial validation imposed u64 cap
+  on otherwise unbounded positive threshold. Root reproduced; fix round1 addressed,
+  both scoped re-reviews READY.20new regression cases/63coveringPASS; fullsrc
+  mypy198/RuffPASS. Root fresh runtime/native66PASS in3.24s, command in verification.
+  Native unchanged after fix. Local milestone pending.
+- Task2 actual functional:4natural games, zero failures, comparison_valid true;
+  new-vs-old0W/2L, new-vs-Random2W/0L, no strength conclusion. Frozen311source/
+  config files unchanged across games. Evidence runs/assessments/heuristic-refresh-20261115/t2-baseline-a01/.
+  Baseline runtime before isolated CLI large-int correction; policy unchanged.
+  Independent8Journal6/manifest/inventory/report/Replay audit PASS,72refresh
+  selections reproduced exactly using only each actor frame's own event prefix.
 - Task3: NOT STARTED.
 - Task4: NOT STARTED.
+
+## Supplementary Task1 diagnostic
+
+Verifier /root/refresh_baseline_checks executed a timeout30s standalone corrected
+default-generator/full18-possession selection diagnostic (17abyss-dart instances
+and smile-dew, threshold1e9 to force renewal). PASS,23801candidates, generation
+0.983s, policy0.575s, process peak77.78MiB. count_time/search_time cutoffs, no18-slot
+sequence facts, so this does NOT prove all32768candidates/max-length behavior.
+Selected own smile-dew. Initial diagnostic output formatting used nonexistent
+Selection.label and failed after selection; corrected to policy_version and rerun.
+No source changes, games, GPU job or native build.

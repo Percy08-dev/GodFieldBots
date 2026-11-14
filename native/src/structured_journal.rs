@@ -1213,7 +1213,18 @@ impl<'a> OriginalHeader<'a> {
             "rule_signature",
             "layout_signature",
         ];
-        identity.closed(&base, &[])?;
+        let refresh = identity.require("model_id")?.string()? == "heuristic_refresh";
+        identity.closed(&base, if refresh { &["baseline_options"] } else { &[] })?;
+        if refresh {
+            if model.is_some() || identity.require("model_version")?.string()? != "1" {
+                return fail("corrected refresh is a configured baseline");
+            }
+            let options = identity.require("baseline_options")?;
+            options.closed(&["version", "attack_threshold"], &[])?;
+            if options.require("version")?.string()? != "1" {
+                return fail("corrected refresh options differ");
+            }
+        }
         crate::structured_controls::game_binding3(identity, b, c)?;
         if !identity.require("generation_schema")?.is_null() {
             return fail("J6 generation schema must remain null");
@@ -1245,7 +1256,8 @@ impl<'a> OriginalHeader<'a> {
                 return fail("corrected original learned role differs");
             }
         } else if identity.require("model_version")?.string()? != "1"
-            || !["random", "heuristic"].contains(&identity.require("model_id")?.string()?)
+            || !["random", "heuristic", "heuristic_refresh"]
+                .contains(&identity.require("model_id")?.string()?)
         {
             return fail("corrected original baseline role differs");
         }

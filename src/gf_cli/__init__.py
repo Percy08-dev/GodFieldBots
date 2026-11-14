@@ -332,6 +332,9 @@ async def _run_experiment(loaded: LoadedConfig, command: str, *, collection: Col
         assert isinstance(config.actions, ActionConfig)
         assert not isinstance(config.model, (ConfiguredNeuralModelV2, ConfiguredNeuralModelV3, ConfiguredNeuralModelV4, ConfiguredTreeModelV2, ConfiguredTreeModelV3))
         assert not isinstance(config.opponent, (ConfiguredNeuralModelV2, ConfiguredNeuralModelV3, ConfiguredTreeModelV2, ConfiguredTreeModelV3))
+        from gf_models.refresh_heuristic_config import RefreshHeuristicConfig
+        assert not isinstance(config.model, RefreshHeuristicConfig)
+        assert not isinstance(config.opponent, RefreshHeuristicConfig)
         registry, labels = bindings(config.model, config.opponent, config.actions, deadline=preflight_deadline)
     else:
         registry, labels = collection.bindings, ("owned", "owned")

@@ -128,6 +128,10 @@ def own_game_worker_settings_v3(model_id: str, actions: ActionConfigV3, options:
     if type(actions) is not ActionConfigV3 or actions.max_sequence_length > 18:
         raise ContractError("game worker requires real18 actions3")
     input_binding_game_v3(actions.action_contract, rules)
+    if model_id == "heuristic_refresh":
+        from gf_common.refresh_heuristic import parse_refresh_options, refresh_policy_label
+        refresh_policy_label(actions, rules, parse_refresh_options(options if options is not None else {}))
+        return WorkerCaps(max_positions=actions.max_sequence_length, max_candidates=actions.max_candidates), NumericCosts(), 0, 0
     if model_id in ("random", "heuristic"):
         if options is not None:
             raise ContractError("baseline forbids policy options")
@@ -186,7 +190,7 @@ def admit_hpo_game_workers(actions: ActionConfigV3,roles: tuple[RuntimePolicyBin
     if type(roles) is not tuple or len(roles)!=2:
         raise ContractError('HPO admission requires both atomic player roles')
     for role in roles:
-        if type(role) is not RuntimePolicyBinding or role.policy_options is not None and role.policy_options.get('version')!='4':
+        if type(role) is not RuntimePolicyBinding or role.model_id != 'heuristic_refresh' and role.policy_options is not None and role.policy_options.get('version')!='4':
             raise ContractError('HPO runtime admits exact model4 or canonical baseline roles')
     return _admit_game_workers(actions,roles,rules=rules,game_concurrency=game_concurrency,
         global_cuda_bytes=global_cuda_bytes,max_workers=max_workers,learner_cuda_bytes=learner_cuda_bytes)

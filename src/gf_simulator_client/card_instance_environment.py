@@ -28,6 +28,7 @@ from gf_common.domain import (
     canonical,
     integer,
 )
+from gf_common.refresh_heuristic import parse_refresh_options, refresh_policy_label
 from gf_common.structured import DecisionFrame, EventBank, EventDelta, Selection, event_delta
 from gf_common.structured_layout import CORRECTED_CARD_INSTANCE_LAYOUT
 from gf_models.card_instance_artifacts import RetainedGameArtifacts
@@ -97,7 +98,10 @@ class CardInstanceSimulatorEnvironment(SimulatorEnvironment):
         runtime_evidence.preflight()  # before output, server or participant allocation.
         for label, binding in settings.policy_bindings.items():
             own_game_worker_settings_v3(binding.model_id, settings.actions, binding.policy_options, rules=card_instance_rules())
-            if binding.policy_options is None:
+            if binding.model_id == "heuristic_refresh":
+                if label != refresh_policy_label(settings.actions, card_instance_rules(), parse_refresh_options(binding.policy_options if binding.policy_options is not None else {})):
+                    raise ContractError("configured baseline label/options mismatch")
+            elif binding.policy_options is None:
                 if label != binding.model_id + "-card-instance-v2":
                     raise ContractError("baseline label differs from fixed execution")
             else:
@@ -268,7 +272,7 @@ class CardInstanceSimulatorEnvironment(SimulatorEnvironment):
                 self.settings.worker_seconds,
                 ledger=self.ledger,
                 policy_options=binding.policy_options,
-                artifact_inputs=self.artifact_inputs if binding.policy_options is not None else None,
+                artifact_inputs=self.artifact_inputs if binding.policy_options is not None and binding.model_id != "heuristic_refresh" else None,
                 **({"deadline": self.settings.work_deadline} if binding.model_id == "lightgbm" else {}),
             )
         except BaseException as error:
@@ -300,6 +304,7 @@ class CardInstanceSimulatorEnvironment(SimulatorEnvironment):
             model_id=binding.model_id,
             sampling_seed=spec.sampling_seeds[viewer - 1],
             runtime_evidence=self.runtime_evidence.receipt(require_executed=True),
+            **({"baseline_options": worker.baseline_options} if worker.baseline_options is not None else {}),
             **({"neural": worker.neural_metadata} if worker.neural_metadata is not None else {}),
             **({"tree": worker.tree_metadata} if worker.tree_metadata is not None else {}),
         )

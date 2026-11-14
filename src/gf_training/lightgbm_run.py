@@ -318,6 +318,9 @@ async def train_experiments(loaded: LoadedConfig, mode: str = "fresh", *,
     if mode != "fresh":
         raise ContractError("resume is unsupported; no work performed")
     config = loaded.config
+    from gf_models.refresh_heuristic_config import RefreshHeuristicConfig
+    if isinstance(config.model, RefreshHeuristicConfig):
+        raise ContractError("fresh lightgbm model configuration required")
     if config.model.model_id != "lightgbm" or config.model.checkpoint is not None:
         raise ContractError("fresh lightgbm model configuration required")
     training = config.training

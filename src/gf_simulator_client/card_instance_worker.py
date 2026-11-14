@@ -18,6 +18,7 @@ from gf_common.card_instance_rules import card_instance_rules, rule_signature
 from gf_common.card_instance_runtime import check_game_binding, game_binding
 from gf_common.diverse_actions import GameGeneratedCandidatesV3
 from gf_common.domain import ContractError, Json, closed, digest, integer
+from gf_common.refresh_heuristic import parse_refresh_options, refresh_policy_label
 from gf_common.structured import DecisionFrame, EventBank, EventDelta, Selection
 from gf_common.structured_layout import CORRECTED_CARD_INSTANCE_LAYOUT
 from gf_common.structured_wire import (
@@ -76,7 +77,9 @@ class CardInstanceParticipantWorker(StructuredParticipantWorker):
         self._tree = model_id == "lightgbm"
         v4 = type(policy_options) is dict and policy_options.get("version") == "4"
         parser = safe_tree_options_game_v3 if self._tree else safe_options_game_v4 if v4 else safe_options_game_v3
-        options = parser(policy_options, actions=actions, rules=self.rules) if policy_options is not None else None
+        refresh = model_id == "heuristic_refresh"
+        options = (asdict(parse_refresh_options(policy_options if policy_options is not None else {})) if refresh else
+            parser(policy_options, actions=actions, rules=self.rules) if policy_options is not None else None)
         if self._tree and (deadline is None or type(deadline) not in (int, float) or not math.isfinite(deadline) or deadline <= time.monotonic()):
             raise ContractError("Tree3 worker requires the original finite live session deadline")
         self._session_deadline = deadline
@@ -93,7 +96,12 @@ class CardInstanceParticipantWorker(StructuredParticipantWorker):
         self.artifact_inputs = artifact_inputs
         self.neural_metadata: Json | None = None
         self.tree_metadata: Json | None = None
-        if options is None:
+        self.baseline_options: Json | None = options if refresh else None
+        if refresh:
+            if artifact_inputs is not None:
+                raise ContractError("configured baseline forbids artifact inputs")
+            self.expected_policy = refresh_policy_label(actions, self.rules, parse_refresh_options(options if options is not None else {}))
+        elif options is None:
             if artifact_inputs is not None:
                 raise ContractError("baseline worker forbids neural artifact inputs")
             self.expected_policy = model_id + "-card-instance-v2"

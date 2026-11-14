@@ -35,6 +35,7 @@ from gf_common.domain import (
     digest,
     integer,
 )
+from gf_common.refresh_heuristic import parse_refresh_options, refresh_policy_label
 from gf_common.structured import EventBank, Selection
 from gf_common.structured_layout import CORRECTED_CARD_INSTANCE_LAYOUT
 from gf_common.structured_tokens import signature
@@ -109,6 +110,7 @@ class _Context:
             raise ContractError("journal6 exact baseline game report/config/rules required")
 
     def validate_header(self, header: Json) -> tuple[WorkerCaps, EventBank]:
+        refresh = header.get("model_id") == "heuristic_refresh"
         tree = header.get("model_id") == "lightgbm" and header.get("model_version") == "3"
         neural = header.get("model_version") in ("3", "4") and not tree
         learned = neural or tree
@@ -148,7 +150,7 @@ class _Context:
                 "protocol_version",
                 "actions",
                 "runtime_evidence",
-            } | ({"neural"} if neural else {"tree"} if tree else set()),
+            } | ({"baseline_options"} if refresh else {"neural"} if neural else {"tree"} if tree else set()),
         )
         if (
             type(header["schema_version"]) is not int
@@ -163,10 +165,10 @@ class _Context:
             or header["end_projection_version"] != END_PROJECTION_VERSION
             or header["catalog"] != CATALOG_META
             or header["generator_version"] != GENERATOR_VERSION
-            or not learned and (header["model_id"] not in ("random", "heuristic") or header["model_version"] != "1")
+            or not learned and (header["model_id"] not in ("random", "heuristic", "heuristic_refresh") or header["model_version"] != "1")
             or header["generation_schema"] is not None
             or header["use_action_options"] is not True
-            or not learned and header["policy"] != header["model_id"] + "-card-instance-v2"
+            or not learned and not refresh and header["policy"] != header["model_id"] + "-card-instance-v2"
             or action_config_v3(header["actions"]) != self.actions
             or header["action_config_hash"] != digest(asdict(self.actions))
         ):
@@ -181,7 +183,18 @@ class _Context:
         ):
             raise ContractError("journal6 action/capacity mismatch")
         NumericCosts(**closed(header["numeric_costs"], set(NumericCosts.__dataclass_fields__)))
-        if learned:
+        if refresh:
+            options = parse_refresh_options(header["baseline_options"])
+            expected_caps, expected_costs, _, _ = own_game_worker_settings_v3(
+                "heuristic_refresh", self.actions, asdict(options), rules=self.rules)
+            if (header["model_version"] != "1"
+                    or header["policy"] != refresh_policy_label(self.actions, self.rules, options)
+                    or header["caps"] != asdict(expected_caps)
+                    or header["numeric_costs"] != asdict(expected_costs)
+                    or header["aggregate_window"] != 128):
+                raise ContractError("journal6 configured baseline identity/settings mismatch")
+            self.neural = None
+        elif learned:
             key, validator = ("tree", validate_tree_metadata) if tree else ("neural", validate_neural_metadata)
             safe, label = validator(header[key], actions=self.actions, rules=self.rules)
             expected_caps, expected_costs, _, _ = own_game_worker_settings_v3(
@@ -233,6 +246,7 @@ class CardInstanceJournal(StructuredJournal):
         rules: CardInstanceRules | None = None,
         neural: Json | None = None,
         tree: Json | None = None,
+        baseline_options: Json | None = None,
     ) -> None:
         context = _Context(actions, card_instance_rules() if rules is None else rules)
         aggregate_window = 128
@@ -275,6 +289,8 @@ class CardInstanceJournal(StructuredJournal):
             "actions": asdict(actions),
             "runtime_evidence": runtime_evidence,
         }
+        if baseline_options is not None:
+            header["baseline_options"] = clone(baseline_options)
         if neural is not None:
             header["neural"] = clone(neural)
         if tree is not None:

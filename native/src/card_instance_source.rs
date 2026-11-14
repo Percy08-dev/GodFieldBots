@@ -428,7 +428,12 @@ fn retained_registry(m: &Value, actions: &Value, b: &Arc<Budget>, c: &Control) -
         c.check()?;
         binding.closed(&["model_id", "policy_options"], &[])?;
         let options = binding.require("policy_options")?;
-        if options.is_null() {
+        if field(binding, "model_id")? == "heuristic_refresh" {
+            require(
+                *label == dto::refresh_label(actions, options, b, c)?,
+                "original configured baseline registry mismatch",
+            )?;
+        } else if options.is_null() {
             require(
                 ["random", "heuristic"].contains(&field(binding, "model_id")?)
                     && *label == format!("{}-card-instance-v2", field(binding, "model_id")?),
@@ -541,7 +546,21 @@ pub(super) fn role<'a>(
         header.require("runtime_evidence")? == &m.require("runtime_evidence")?.array()?[group],
         "original participant runtime declaration differs",
     )?;
-    let model = if binding.require("policy_options")?.is_null() {
+    let refresh = field(binding, "model_id")? == "heuristic_refresh";
+    let model = if refresh {
+        require(
+            header.require("baseline_options")? == binding.require("policy_options")?
+                && label
+                    == dto::refresh_label(
+                        header.require("actions")?,
+                        binding.require("policy_options")?,
+                        b,
+                        c,
+                    )?,
+            "original configured baseline header/registry mismatch",
+        )?;
+        None
+    } else if binding.require("policy_options")?.is_null() {
         None
     } else {
         let tree = field(binding, "model_id")? == "lightgbm";
@@ -582,12 +601,96 @@ pub(super) fn role<'a>(
             .unwrap()
             .insert(key.into(), json::copy(header.require(key)?, c)?);
     }
+    if refresh {
+        identity.as_object_mut().unwrap().insert(
+            "baseline_options".into(),
+            json::copy(header.require("baseline_options")?, c)?,
+        );
+    }
     Ok((identity, model))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn refresh_registry_dispatches_before_retained_neural_inputs() {
+        let b = Budget::new(512 << 20);
+        let c = Control::new(crate::budget::monotonic() + 60.).unwrap();
+        let fixture = json::parse(
+            include_bytes!("../tests/fixtures/card_instance_journal6.json"),
+            &b,
+            &c,
+        )
+        .unwrap();
+        let actions = &fixture.root["journals"][0]["rows"][0]["actions"];
+        let label = "heuristic_refresh-card-instance-v2-2f59f18e55cdaff8d82004b2b7867d80001e1aa24a4f28ad695332b8fefa9ce4";
+        let binding = json::object([
+            ("model_id", json::text("heuristic_refresh")),
+            (
+                "policy_options",
+                json::object([
+                    ("version", json::text("1")),
+                    ("attack_threshold", json::integer(12)),
+                ]),
+            ),
+        ]);
+        let mut registry = json::object([]);
+        registry
+            .as_object_mut()
+            .unwrap()
+            .insert(label.into(), binding);
+        let m = json::object([
+            ("schema_version", json::integer(5)),
+            ("policy_bindings", registry),
+        ]);
+        retained_registry(&m, actions, &b, &c).unwrap();
+        let neural = &fixture.root["journals"][1]["rows"][0];
+        let nn_label = neural["policy"].string().unwrap();
+        let mut mixed = m.clone();
+        mixed["policy_bindings"].as_object_mut().unwrap().insert(
+            nn_label.into(),
+            json::object([
+                ("model_id", neural["model_id"].clone()),
+                ("policy_options", neural["neural"]["policy_options"].clone()),
+            ]),
+        );
+        let mut policies = json::object([]);
+        policies
+            .as_object_mut()
+            .unwrap()
+            .insert(nn_label.into(), neural["neural"].clone());
+        mixed.as_object_mut().unwrap().insert(
+            "neural_inputs".into(),
+            json::object([
+                (
+                    "input_contract",
+                    json::text("retained-external-inference-v1"),
+                ),
+                ("policies", policies),
+            ]),
+        );
+        retained_registry(&mixed, actions, &b, &c).unwrap();
+        mixed["neural_inputs"]["policies"]
+            .as_object_mut()
+            .unwrap()
+            .clear();
+        assert!(retained_registry(&mixed, actions, &b, &c).is_err());
+        let mut changed = m.clone();
+        changed["policy_bindings"][label]["policy_options"]["attack_threshold"] = json::integer(13);
+        assert!(retained_registry(&changed, actions, &b, &c).is_err());
+        for invalid in [
+            Value::Bool(true),
+            json::integer(0),
+            json::integer(-1),
+            json::text("12"),
+        ] {
+            let mut bad = m.clone();
+            bad["policy_bindings"][label]["policy_options"]["attack_threshold"] = invalid;
+            assert!(retained_registry(&bad, actions, &b, &c).is_err());
+        }
+    }
+
     #[test]
     fn card_instance_tree3_typed_mixed_registry_never_reinterprets_neural_or_baseline() {
         let b = Budget::new(512 << 20);

@@ -46,6 +46,48 @@ fn is(value: &Value, key: &str, expected: &str) -> Result<()> {
 fn pins(budget: &Arc<Budget>, control: &Control) -> Result<Document> {
     json::parse(PINS, budget, control)
 }
+pub(crate) fn refresh_label(
+    actions: &Value,
+    options: &Value,
+    budget: &Arc<Budget>,
+    control: &Control,
+) -> Result<String> {
+    options.closed(&["version", "attack_threshold"], &[])?;
+    is(options, "version", "1")?;
+    let number = options
+        .require("attack_threshold")?
+        .as_number()
+        .ok_or_else(|| Error::contract("refresh positive integer threshold required"))?;
+    let raw = number.as_str();
+    require(
+        json::integer_token(number)
+            && !raw.starts_with('-')
+            && raw.bytes().any(|byte| byte != b'0'),
+        "refresh positive integer threshold required",
+    )?;
+    crate::structured_controls::actions3(actions, budget, control)?;
+    let pins = pins(budget, control)?;
+    let identity = json::object([
+        ("options", json::copy(options, control)?),
+        (
+            "action_contract",
+            json::copy(actions.require("action_contract")?, control)?,
+        ),
+        (
+            "rule_signature",
+            json::copy(pins.root.require("rule_signature")?, control)?,
+        ),
+        (
+            "action_config_hash",
+            json::text(&digest(actions, budget, control)?),
+        ),
+    ]);
+    Ok(format!(
+        "heuristic_refresh-card-instance-v2-{}",
+        digest(&identity, budget, control)?
+    ))
+}
+
 pub(crate) fn card_ref(value: &Value) -> Result<&str> {
     let text = value.string()?;
     require(
@@ -866,6 +908,7 @@ pub(crate) fn diagnostic_header_envelope(
     control: &Control,
 ) -> Result<()> {
     control.check()?;
+    let refresh = value.require("model_id")?.string()? == "heuristic_refresh";
     let tree = value.require("model_version")?.string()? == "3"
         && value.require("model_id")?.string()? == "lightgbm";
     let neural = ["3", "4"].contains(&value.require("model_version")?.string()?) && !tree;
@@ -905,7 +948,9 @@ pub(crate) fn diagnostic_header_envelope(
             "actions",
             "runtime_evidence",
         ],
-        if neural {
+        if refresh {
+            &["baseline_options"]
+        } else if neural {
             &["neural"]
         } else if tree {
             &["tree"]
@@ -1059,6 +1104,21 @@ pub(crate) fn diagnostic_header_envelope(
         require(
             expected.tree == Some(recorded) && expected.neural.is_none(),
             "J6 expected own Tree declaration mismatch",
+        )?;
+    } else if refresh {
+        is(value, "model_version", "1")?;
+        require(
+            expected.neural.is_none()
+                && expected.tree.is_none()
+                && value.require("aggregate_window")?.integer(128, 128)? == 128
+                && value.require("policy")?.string()?
+                    == refresh_label(
+                        expected.actions,
+                        value.require("baseline_options")?,
+                        budget,
+                        control,
+                    )?,
+            "J6 configured baseline identity mismatch",
         )?;
     } else {
         is(value, "model_version", "1")?;

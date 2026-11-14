@@ -11,6 +11,7 @@ from gf_common.structured_layout import (
     LEGACY_LAYOUT,
     StructuredLayout,
 )
+from gf_models.refresh_heuristic_config import RefreshHeuristicConfig, parse_refresh_model
 from gf_models.structured_binding import (
     ConfiguredNeuralModelV2,
     ConfiguredNeuralModelV3,
@@ -85,7 +86,11 @@ def encoder_config(value: Json) -> EncoderConfig:
     return config
 
 
-def model_config(value: Json, *, layout: StructuredLayout = LEGACY_LAYOUT) -> ModelConfig | MLPModelConfig | SequenceModelConfig | ConfiguredNeuralModelV2 | ConfiguredNeuralModelV3 | ConfiguredTreeModelV2 | ConfiguredTreeModelV3:
+def model_config(value: Json, *, layout: StructuredLayout = LEGACY_LAYOUT) -> ModelConfig | RefreshHeuristicConfig | MLPModelConfig | SequenceModelConfig | ConfiguredNeuralModelV2 | ConfiguredNeuralModelV3 | ConfiguredTreeModelV2 | ConfiguredTreeModelV3:
+    if value.get("model_id") == "heuristic_refresh":
+        if layout is not CORRECTED_CARD_INSTANCE_LAYOUT:
+            raise ContractError("refresh baseline requires the corrected card-instance layout")
+        return parse_refresh_model(value)
     if value.get("version") == "3":
         if value.get("model_id") == "lightgbm":
             if layout is not CORRECTED_CARD_INSTANCE_LAYOUT:
@@ -155,7 +160,9 @@ def training_config(value: Json) -> TrainingConfig | PPOTrainingConfig:
     return TrainingConfig(**converted)
 
 
-def validate_capacity(model: ModelConfig | MLPModelConfig | SequenceModelConfig | ConfiguredNeuralModelV2 | ConfiguredNeuralModelV3 | ConfiguredTreeModelV2 | ConfiguredTreeModelV3, max_sequence_length: int) -> None:
+def validate_capacity(model: RefreshHeuristicConfig | ModelConfig | MLPModelConfig | SequenceModelConfig | ConfiguredNeuralModelV2 | ConfiguredNeuralModelV3 | ConfiguredTreeModelV2 | ConfiguredTreeModelV3, max_sequence_length: int) -> None:
+    if isinstance(model, RefreshHeuristicConfig):
+        return
     if isinstance(model, (ConfiguredTreeModelV2, ConfiguredTreeModelV3)):
         if not 1 <= max_sequence_length <= model.encoder.max_positions:
             raise ContractError("generator exceeds Tree2 position capacity")

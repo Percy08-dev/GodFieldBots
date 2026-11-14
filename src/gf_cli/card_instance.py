@@ -71,12 +71,30 @@ def _require_actions(loaded: LoadedConfig) -> None:
         raise ContractError("corrected baseline collection requires the corrected contract and real18card limits")
 
 
+def _require_refresh_native(loaded: LoadedConfig) -> None:
+    if (loaded.config.preprocessing.backend == "rust"
+            and any(model.model_id == "heuristic_refresh" for model in (loaded.config.model, loaded.config.opponent))):
+        from gf_training.native_backend import require_native_refresh_baseline
+        require_native_refresh_baseline()
+
+
 def _baseline_labels(loaded: LoadedConfig, *, artifact_inputs: Any = None) -> tuple[dict[str, RuntimePolicyBinding], tuple[str, str]]:
     _require_actions(loaded)
     config = loaded.config
+    _require_refresh_native(loaded)
+    assert type(config.actions) is ActionConfigV3
     labels = []
     bindings = {}
+    from gf_common.card_instance_rules import card_instance_rules
+    from gf_common.refresh_heuristic import RefreshOptions, refresh_policy_label
+    from gf_models.refresh_heuristic_config import RefreshHeuristicConfig
     for model in (config.model, config.opponent):
+        if type(model) is RefreshHeuristicConfig:
+            options = RefreshOptions(model.version, model.attack_threshold)
+            label = refresh_policy_label(config.actions, card_instance_rules(), options)
+            labels.append(label)
+            bindings[label] = RuntimePolicyBinding(model.model_id, asdict(options))
+            continue
         if type(model) in (ConfiguredNeuralModelV3, ConfiguredTreeModelV3) and artifact_inputs is not None:
             label, binding = artifact_inputs.binding(model)
             labels.append(label)
@@ -176,6 +194,7 @@ async def run_inference(loaded: LoadedConfig, command: str) -> tuple[Path, Json]
     if command not in ("smoke", "collect", "evaluate"):
         raise ContractError("corrected neural inference supports smoke/collect/evaluate only")
     _require_actions(loaded)
+    _require_refresh_native(loaded)
     config = loaded.config
     assert type(config.actions) is ActionConfigV3 and isinstance(config.run, RunConfigV2)
     neural = tuple(cast(ConfiguredNeuralModelV3 | ConfiguredTreeModelV3, model)
@@ -183,7 +202,10 @@ async def run_inference(loaded: LoadedConfig, command: str) -> tuple[Path, Json]
                    if type(model) in (ConfiguredNeuralModelV3, ConfiguredTreeModelV3))
     if not neural or any(model.checkpoint is None for model in neural):
         raise ContractError("corrected neural inference requires an explicit game checkpoint")
+    from gf_models.refresh_heuristic_config import RefreshHeuristicConfig
     for model in (config.model, config.opponent):
+        if type(model) is RefreshHeuristicConfig:
+            continue
         if type(model) in (ConfiguredNeuralModelV3, ConfiguredTreeModelV3):
             continue
         if (type(model) is not ModelConfig or model.model_id not in ("random", "heuristic")
@@ -484,7 +506,9 @@ async def _run_corrected(loaded: LoadedConfig, command: str,
         from gf_cli import _code_provenance
         producer = _code_provenance(work_deadline)
         receipts = [group.health["runtime_evidence"] for group in groups]
+        configured_baseline = any(binding.model_id == "heuristic_refresh" for binding in bindings.values())
         metadata_options: dict[str, Any] = ({"policy_bindings": bindings, **typed_inputs} if typed_inputs is not None else
+            {"policy_bindings": bindings} if neural_inputs is None and configured_baseline else
             {} if neural_inputs is None else {"policy_bindings": bindings, "neural_inputs": neural_inputs})
         metadata_producer: Any = collection_metadata if collection is None else ppo_collection_metadata
         if hpo_training:

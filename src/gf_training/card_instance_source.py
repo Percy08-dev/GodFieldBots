@@ -25,6 +25,7 @@ from gf_common.domain import (
     integer,
 )
 from gf_common.preprocessing import PreparationConfig, preparation_config
+from gf_common.refresh_heuristic import parse_refresh_options, refresh_policy_label
 from gf_common.schedule import serialize_schedule
 from gf_models.card_instance_artifacts import validate_neural_metadata
 from gf_models.structured_binding import (
@@ -386,7 +387,14 @@ def _game_header(header: Json, manifest: Json, episode: Json, spec: Json,
     index = next(index for index, group in enumerate(manifest['schedule']) if any(row['episode_id'] == spec['episode_id'] for row in group['episodes']))
     if canonical(header.get('runtime_evidence')) != canonical(manifest['runtime_evidence'][index]):
         raise ContractError('original participant runtime receipt mismatch')
-    if binding['policy_options'] is None:
+    if binding['model_id'] == 'heuristic_refresh':
+        options = parse_refresh_options(binding['policy_options'])
+        if (header['model_version'] != '1'
+                or header['policy'] != refresh_policy_label(actions, card_instance_rules(), options)
+                or canonical(header.get('baseline_options')) != canonical(asdict(options))
+                or 'neural' in header or 'tree' in header):
+            raise ContractError('original configured baseline identity mismatch')
+    elif binding['policy_options'] is None:
         if header['model_version'] != '1' or header['policy'] != binding['model_id'] + '-card-instance-v2':
             raise ContractError('original baseline identity mismatch')
     else:
@@ -1074,6 +1082,9 @@ def _open_batch(plan: CollectionPlan, state: Json, records: list[Json], controls
             previous = controls.object(checkpoint_path(controls.root, generation) / 'inference.json', records[generation]['inference_sha256'])
         native_inputs = None
         if settings.backend == 'rust':
+            if any(binding.model_id == 'heuristic_refresh' for binding in plan.bindings.values()):
+                from gf_training.native_backend import require_native_refresh_baseline
+                require_native_refresh_baseline()
             if hpo:
                 from gf_training.native_backend import hpo_reader_settings
                 hpo_reader_settings(settings, packed=_packed(state))

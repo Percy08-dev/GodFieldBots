@@ -45,6 +45,7 @@ from gf_models.config import (
     training_config,
     validate_capacity,
 )
+from gf_models.refresh_heuristic_config import RefreshHeuristicConfig
 from gf_models.structured_binding import (
     ConfiguredNeuralModelV2,
     ConfiguredNeuralModelV3,
@@ -120,8 +121,8 @@ class ExperimentConfig:
     run: RunConfig | RunConfigV2 = field(default_factory=RunConfig)
     server: ServerConfig | ServerConfigV2 = field(default_factory=ServerConfig)
     actions: ActionConfig | ActionConfigV2 | ActionConfigV3 = field(default_factory=ActionConfig)
-    model: ModelConfig | MLPModelConfig | GRUModelConfig | TransformerModelConfig | ConfiguredNeuralModelV2 | ConfiguredNeuralModelV3 | ConfiguredNeuralModelV4 | ConfiguredTreeModelV2 | ConfiguredTreeModelV3 = field(default_factory=ModelConfig)
-    opponent: ModelConfig | MLPModelConfig | GRUModelConfig | TransformerModelConfig | ConfiguredNeuralModelV2 | ConfiguredNeuralModelV3 | ConfiguredTreeModelV2 | ConfiguredTreeModelV3 = field(default_factory=ModelConfig)
+    model: RefreshHeuristicConfig | ModelConfig | MLPModelConfig | GRUModelConfig | TransformerModelConfig | ConfiguredNeuralModelV2 | ConfiguredNeuralModelV3 | ConfiguredNeuralModelV4 | ConfiguredTreeModelV2 | ConfiguredTreeModelV3 = field(default_factory=ModelConfig)
+    opponent: RefreshHeuristicConfig | ModelConfig | MLPModelConfig | GRUModelConfig | TransformerModelConfig | ConfiguredNeuralModelV2 | ConfiguredNeuralModelV3 | ConfiguredTreeModelV2 | ConfiguredTreeModelV3 = field(default_factory=ModelConfig)
     evaluation: EvaluationConfig = field(default_factory=EvaluationConfig)
     training: TrainingConfig | PPOTrainingConfig = field(default_factory=TrainingConfig)
     preprocessing: PreparationConfig = field(default_factory=PreparationConfig)
@@ -247,6 +248,9 @@ def _validate_table(name: str, values: Json, *, context: Json | None = None) -> 
                 item_type = type(default[0]) if default else str
                 if any(type(item) is not item_type for item in value):
                     raise ContractError(f"{name}.{key}: invalid array element")
+            elif name in ("model", "opponent") and values.get("model_id") == "heuristic_refresh" and key == "attack_threshold":
+                if type(value) is not int or value <= 0:
+                    raise ContractError("refresh attack threshold must be a positive integer")
             elif type(default) is int and not key.endswith("seconds"):
                 integer(value, 0)
             elif isinstance(default, (int, float)):
@@ -258,7 +262,9 @@ def _validate_table(name: str, values: Json, *, context: Json | None = None) -> 
     # Partial model presets may specify closed structural keys before dispatch.
     defaults = asdict(cls())
     structured_model = name in ("model", "opponent") and values.get("version") in ("2", "3")
-    if structured_model:
+    if name in ("model", "opponent") and values.get("model_id") == "heuristic_refresh":
+        defaults = asdict(RefreshHeuristicConfig())
+    elif structured_model:
         if values.get("version") == "3":
             defaults = asdict(ConfiguredTreeModelV3() if values.get("model_id") == "lightgbm"
                               else model_defaults_v3(values.get("model_id", "mlp")))
@@ -410,6 +416,9 @@ def load_config(path: str | Path, overrides: Json | None = None) -> LoadedConfig
             and (not card_instance_actions or card_revision != CORRECTED_SIMULATOR_REVISION)):
         raise ContractError("model3 experiment Config requires the corrected card-instance contract")
     for name in ("model", "opponent"):
+        if data.get(name, {}).get("model_id") == "heuristic_refresh":
+            base[name] = asdict(RefreshHeuristicConfig())
+            continue
         if data.get(name, {}).get("version") == "3":
             base[name] = asdict(ConfiguredTreeModelV3() if data[name].get("model_id") == "lightgbm"
                                 else model_defaults_v3(data[name].get("model_id", "mlp")))
@@ -451,8 +460,11 @@ def load_config(path: str | Path, overrides: Json | None = None) -> LoadedConfig
         integer(run["global_cuda_budget_bytes"], 1, 12884901888)
         if run["max_participant_workers"] < 2 * run["concurrency"]:
             raise ContractError("participant capacity must cover both players of every concurrent game")
+    if (any(effective[name].get("model_id") == "heuristic_refresh" for name in ("model", "opponent"))
+            and (not card_instance_actions or card_revision != CORRECTED_SIMULATOR_REVISION)):
+        raise ContractError("refresh baseline requires the corrected card-instance layout")
     models = {name: model_config(effective[name], layout=layout_for_contract(selected_contract))
-              if effective[name].get("version") == "3" else model_config(effective[name])
+              if effective[name].get("version") == "3" or effective[name].get("model_id") == "heuristic_refresh" else model_config(effective[name])
               for name in ("model", "opponent")}
     training = training_config(effective["training"])
     preprocessing = preparation_config(effective["preprocessing"])
@@ -473,7 +485,7 @@ def load_config(path: str | Path, overrides: Json | None = None) -> LoadedConfig
                  or type(models["model"]) is ConfiguredTreeModelV3 and type(training) is TrainingConfig))
         if not game_reader and (preprocessing.backend != "python" or preprocessing.reader != "legacy"):
             raise ContractError("actions3 preprocessing is not implemented; only inert Python/legacy settings are supported")
-        if any(not isinstance(model, (ConfiguredNeuralModelV3, ConfiguredTreeModelV3))
+        if any(not isinstance(model, (ConfiguredNeuralModelV3, ConfiguredTreeModelV3, RefreshHeuristicConfig))
                and (type(model) is not ModelConfig or model.model_id not in ("random", "heuristic"))
                for model in models.values()):
             raise ContractError("actions3 requires model3 or baseline Config; legacy artifacts are incompatible")

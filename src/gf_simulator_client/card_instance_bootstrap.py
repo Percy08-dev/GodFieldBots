@@ -42,6 +42,7 @@ from gf_common.card_instance_rules import parse_card_instance_rules, rule_signat
 from gf_common.card_instance_runtime import check_game_binding, game_binding
 from gf_common.diverse_actions import PublicCandidateGeneratorV3
 from gf_common.domain import ContractError, closed, digest, integer
+from gf_common.refresh_heuristic import parse_refresh_options
 from gf_common.structured import EventBank
 from gf_common.structured_layout import CORRECTED_CARD_INSTANCE_LAYOUT
 from gf_common.structured_wire import game_generated_dict_v3, parse_delta, parse_frame
@@ -70,11 +71,12 @@ def main() -> None:
         initial = (read_frame(source) if _MANAGED is None else
             read_frame_admitted(source, max_owned_bytes=_MANAGED))
         model_id = initial.get("model_id")
+        refresh = model_id == "heuristic_refresh"
         neural = model_id in ("mlp", "gru", "transformer")
         tree = model_id == "lightgbm"
         if tree != (_MANAGED is not None):
             raise ContractError("Tree3 alone requires the sanitized managed argv control")
-        if model_id not in ("random", "heuristic", "mlp", "gru", "transformer", "lightgbm"):
+        if model_id not in ("random", "heuristic", "heuristic_refresh", "mlp", "gru", "transformer", "lightgbm"):
             raise ContractError("unknown fixed protocol3 model ID")
         closed(
             initial,
@@ -91,7 +93,7 @@ def main() -> None:
                 "layout_signature",
                 "purpose",
                 "synthetic_capacity",
-            } | ({"policy_options"} if neural or tree else set()),
+            } | ({"policy_options"} if neural or tree or refresh else set()),
         )
         if type(initial["protocol_version"]) is not int or initial["protocol_version"] != 3:
             raise ContractError("explicit protocol3 initialization required")
@@ -113,7 +115,8 @@ def main() -> None:
         raw_options = initial.get("policy_options")
         v4 = type(raw_options) is dict and raw_options.get("version") == "4"
         parser = safe_tree_options_game_v3 if tree else safe_options_game_v4 if v4 else safe_options_game_v3
-        options = parser(initial["policy_options"], actions=actions, rules=rules) if neural or tree else None
+        options = (asdict(parse_refresh_options(initial["policy_options"])) if refresh else
+            parser(initial["policy_options"], actions=actions, rules=rules) if neural or tree else None)
         if tree and options is not None and options["resources"]["max_owned_bytes"] != _MANAGED:
             raise ContractError("Tree3 argv/decoded resources must match before model allocation")
         if neural and options is not None and options["cuda_visible_devices"] != child_cuda_visibility(
@@ -124,7 +127,10 @@ def main() -> None:
             raise ContractError("protocol3 baseline limits/cost mismatch")
         policy: Any
         load_started = time.perf_counter()
-        if options is None:
+        if refresh:
+            from gf_models.refresh_heuristic import RefreshHeuristicPolicy
+            policy = RefreshHeuristicPolicy(actions, rules=rules, options=parse_refresh_options(options if options is not None else {}))
+        elif options is None:
             policy = CardInstanceBaseline(model_id, actions, rules=rules)
         elif tree:
             from gf_models.card_instance_game_tree_runtime import _OwnGameTreePolicyV3

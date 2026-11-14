@@ -116,18 +116,23 @@ class RetainedGameArtifacts:
         input_binding_game_v3(actions.action_contract, rules)
         if _hpo_pool_size is not None:
             integer(_hpo_pool_size, 1, 2**31 - 1)
+        from gf_common.refresh_heuristic import parse_refresh_options, refresh_policy_label
         limit = 6 if _hpo_pool_size is None else _hpo_pool_size + 1
-        if type(frozenbindings) is not dict or not frozenbindings or len(frozenbindings) > limit + 2:
+        if type(frozenbindings) is not dict or not frozenbindings or len(frozenbindings) > limit + 3:
             raise ContractError('closed frozen game policy registry required')
         if any(type(value) is not RuntimePolicyBinding for value in frozenbindings.values()):
             raise ContractError('closed frozen runtime policy bindings required')
-        neural = [value for value in frozenbindings.values() if value.policy_options is not None]
-        if not 1 <= len(neural) <= limit or len(frozenbindings) > len(neural) + 2:
+        neural = [value for value in frozenbindings.values() if value.policy_options is not None and value.model_id != "heuristic_refresh"]
+        if not 1 <= len(neural) <= limit or len(frozenbindings) > len(neural) + 3:
             raise ContractError('registry requires one to six exact neural identities and canonical baselines')
         models = []
         expected: dict[str, tuple[str, Json]] = {}
         layout = layout_for_contract(actions.action_contract)
         for label, value in frozenbindings.items():
+            if value.model_id == "heuristic_refresh":
+                if label != refresh_policy_label(actions, rules, parse_refresh_options(value.policy_options if value.policy_options is not None else {})):
+                    raise ContractError("configured baseline registry label mismatch")
+                continue
             if value.policy_options is None:
                 if value.model_id not in ('random', 'heuristic') or label != value.model_id + '-card-instance-v2':
                     raise ContractError('noncanonical registry baseline binding')

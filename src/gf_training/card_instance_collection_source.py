@@ -31,6 +31,7 @@ from gf_common.domain import (
     group_health_failures,
     integer,
 )
+from gf_common.refresh_heuristic import parse_refresh_options, refresh_policy_label
 from gf_common.structured_layout import CORRECTED_CARD_INSTANCE_LAYOUT as LAYOUT
 from gf_common.structured_tokens import signature
 from gf_models.card_instance_artifacts import EXTERNAL_INPUT_CONTRACT, validate_neural_metadata
@@ -206,7 +207,10 @@ def inspect_game_manifest(owner: _SourceOwner, manifest: Json, actions: ActionCo
     expected_neural = set()
     for label, binding in registry.items():
         closed(binding, {'model_id', 'policy_options'})
-        if binding['policy_options'] is None:
+        if binding['model_id'] == 'heuristic_refresh':
+            if label != refresh_policy_label(actions, card_instance_rules(), parse_refresh_options(binding['policy_options'])):
+                raise ContractError('original configured baseline registry mismatch')
+        elif binding['policy_options'] is None:
             if binding['model_id'] not in ('random', 'heuristic') or label != binding['model_id'] + '-card-instance-v2':
                 raise ContractError('original baseline registry binding mismatch')
         else:

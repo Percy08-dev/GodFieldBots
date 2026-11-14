@@ -28,6 +28,7 @@ from gf_common.domain import (
     digest,
     integer,
 )
+from gf_common.refresh_heuristic import parse_refresh_options, refresh_policy_label
 from gf_common.structured_layout import CORRECTED_CARD_INSTANCE_LAYOUT
 from gf_common.structured_tokens import signature
 from gf_models.card_instance_artifacts import EXTERNAL_INPUT_CONTRACT, validate_neural_metadata
@@ -75,9 +76,9 @@ def collection_metadata(
     neural_fields: Json = {}
     inputs = {"neural_inputs": neural_inputs, "tree_inputs": tree_inputs}
     supplied = {key: value for key, value in inputs.items() if value is not None}
-    if (policy_bindings is None) != (not supplied):
+    if policy_bindings is None and supplied:
         raise ContractError("learned collection requires both policy bindings and retained inputs")
-    if supplied:
+    if policy_bindings is not None:
         assert policy_bindings is not None
         for key, raw_inputs in supplied.items():
             closed(raw_inputs, {"input_contract", "policies"})
@@ -91,6 +92,11 @@ def collection_metadata(
         for label, execution in policy_bindings.items():
             if type(execution) is not RuntimePolicyBinding:
                 raise ContractError("closed runtime policy binding required")
+            if execution.model_id == "heuristic_refresh":
+                options = parse_refresh_options(execution.policy_options if execution.policy_options is not None else {})
+                if label != refresh_policy_label(actions, card_instance_rules(), options):
+                    raise ContractError("collection configured baseline binding mismatch")
+                continue
             if execution.policy_options is None:
                 if execution.model_id not in ("random", "heuristic") or label != execution.model_id + "-card-instance-v2":
                     raise ContractError("collection baseline binding mismatch")
@@ -132,7 +138,7 @@ def collection_metadata(
         "derived_schema_version": 6,
         "participant_protocol_version": 3,
         "candidate_codec": "candidate-columns-v2",
-        "model_version": "4" if _hpo else "3" if neural_fields else "1",
+        "model_version": "4" if _hpo and supplied else "3" if supplied else "1",
         "input_recipe": CORRECTED_CARD_INSTANCE_LAYOUT.input_recipe,
         "token_signature": signature(128, layout=CORRECTED_CARD_INSTANCE_LAYOUT),
         "source_eligibility": "not-authorized-by-collection-metadata",
