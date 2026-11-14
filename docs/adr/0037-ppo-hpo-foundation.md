@@ -39,6 +39,9 @@ history digests before work; exact receipt equality gates idempotent tell.
 One durable GPU admission lease spans all campaigns. Unconfirmed cleanup after
 an abnormal exit blocks further GPU work until confirmed termination or explicit
 environment-restart recovery. A released lock or stale PID is insufficient.
+The mandatory-restart fallback is subsequently superseded by
+[ADR0038](0038-explicit-gpu-admission-release.md), which adds a distinct explicit
+operator admission release without certifying termination or data eligibility.
 
 ## Alternatives and consequences
 

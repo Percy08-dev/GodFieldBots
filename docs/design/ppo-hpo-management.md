@@ -1,5 +1,10 @@
 # HPO evaluation and global GPU admission
 
+The original restart-only fallback below is superseded by
+[ADR0038](../adr/0038-explicit-gpu-admission-release.md) and the explicit
+[admission-release contract](ppo-hpo-admission-release.md). Normal termination,
+ownership and data qualifications remain unchanged.
+
 Bounded concrete unit5a design under [the HPO plan](ppo-hpo.md). Implementation
 uses an isolated worktree while the main Source/native unit proceeds. Root owns
 integration; these new components do not change Source or process ownership.

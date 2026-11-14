@@ -142,7 +142,17 @@ trial全体を失敗として残します。inner runtimeの正常な更新境�
 
 全campaignで一つのGPU admissionを共有します。異常終了後、実際の回収を確認できない
 jobが残ると`RECOVERY_REQUIRED`となり、次のGPU処理を拒否します。
-flock解放・保存PID・経過時間では回収済みと判断しません。
-実際に環境を再起動して全jobが終了したことをoperatorが確認した場合だけ、
-`hpo recover --ticket ... --operator ... --confirm-environment-restarted`を使用します。
-このコマンドは再起動せず、失敗データの資格や期限も変更しません。
+flock解放・保存PID・経過時間だけでは回収済みと判断しません。
+回復操作には次の二つがあります。
+
+```console
+gf-bots hpo recover --ticket TICKET --operator OPERATOR --confirm-environment-restarted
+gf-bots hpo recover --ticket TICKET --operator OPERATOR --release-unconfirmed --reason "受付を再開する判断の理由"
+```
+
+前者は、実際に環境を再起動して全jobが終了したことを確認した場合に使います。
+後者は、終了未確認の事実を残し、残存処理による資源競合の可能性を受け入れて
+GPU受付を再開する操作です。再起動を必須にせず、対象ticket・操作者・理由を
+別の記録に保存します。実行中の管理処理がlockを保持している間は使えません。
+自動解除は行わず、失敗データの資格・評価結果・元の期限も変更しません。
+どちらのコマンドも、プロセスの停止や再起動自体は行いません。

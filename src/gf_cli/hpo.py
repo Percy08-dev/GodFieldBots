@@ -434,18 +434,37 @@ def main(argv: list[str] | None = None) -> int:
     comparison.add_argument('--left', type=Path, required=True)
     comparison.add_argument('--right', type=Path, required=True)
     comparison.add_argument('--output', type=Path, required=True)
-    recovery = commands.add_parser('recover')
+    recovery = commands.add_parser('recover', description='Resolve admission through a confirmed restart or an explicit '
+        'operator release. Release accepts possible residual resource use and does not certify termination.')
     recovery.add_argument('--ticket', required=True)
     recovery.add_argument('--operator', required=True)
-    recovery.add_argument('--confirm-environment-restarted', action='store_true', required=True)
+    resolution = recovery.add_mutually_exclusive_group(required=True)
+    resolution.add_argument('--confirm-environment-restarted', action='store_true')
+    resolution.add_argument('--release-unconfirmed', action='store_true',
+        help='authorize new admission without confirming termination of the previous job')
+    recovery.add_argument('--reason', help='mandatory reason for --release-unconfirmed; rejected for restart')
     args = parser.parse_args(argv)
+    if args.command == 'recover':
+        if args.release_unconfirmed and args.reason is None:
+            recovery.error('--release-unconfirmed requires --reason')
+        if args.confirm_environment_restarted and args.reason is not None:
+            recovery.error('--reason is only valid with --release-unconfirmed')
     try:
         if args.command == 'inspect':
             result = inspect(args.campaign_dir.resolve(), max_owned_bytes=HPOOperatingConfig().parent_budget_bytes)
         elif args.command == 'recover':
-            from gf_training.hpo_gpu_lease import RESTART_CONFIRMATION, confirm_environment_restart
-            result = asdict(confirm_environment_restart(expected_ticket=args.ticket, operator=args.operator,
-                confirmation=RESTART_CONFIRMATION))
+            from gf_training.hpo_gpu_lease import (
+                RELEASE_CONFIRMATION,
+                RESTART_CONFIRMATION,
+                confirm_environment_restart,
+                release_unconfirmed_admission,
+            )
+            if args.release_unconfirmed:
+                result = asdict(release_unconfirmed_admission(expected_ticket=args.ticket, operator=args.operator,
+                    reason=args.reason, confirmation=RELEASE_CONFIRMATION))
+            else:
+                result = asdict(confirm_environment_restart(expected_ticket=args.ticket, operator=args.operator,
+                    confirmation=RESTART_CONFIRMATION))
         else:
             loaded = load_hpo_config(args.config)
             if args.command == 'validate':

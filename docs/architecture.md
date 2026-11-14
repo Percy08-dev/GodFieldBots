@@ -84,6 +84,17 @@ and installed mandatory-only CLI/baseline checks. Protected original byte/stat
 identities remain unchanged. These checks do not replace the remaining physical
 protocol or the actual recovery required for the a02 evaluation ticket.
 
+[ADR0038](adr/0038-explicit-gpu-admission-release.md) subsequently accepts the
+user's operational correction: an explicit operator may release one unconfirmed
+admission for scheduling without claiming termination or restart. The bounded
+[release contract](design/ppo-hpo-admission-release.md) preserves the same global
+lock, immutable original admission, exact retry and all data-completion gates.
+Possible residual contention is accepted by that decision; diagnostics never
+become an automatic cleanup oracle. Implementation passes scoped verification
+and both independent reviews. Root's100covering cases
+and project static checks pass. The prior restart request is withdrawn; the
+operational release and remaining physical protocol are separate acceptance steps.
+
 [ADR0024](adr/0024-card-instance-simulator-v2.md) begins a separately identified
 card-instance Simulator v2 migration. Contract/wire/Config/direct HTTP and pure
 opaque-reference frames/layouts/tokens pass both independent reviews and scoped

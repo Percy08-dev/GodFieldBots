@@ -174,6 +174,12 @@ elapsed time and saved PID alone never prove reaping. Recovery requires a verifi
 termination receipt or EXPLICIT environment-restart confirmation; never reboot
 automatically, rewrite deadlines or grant data qualification through recovery.
 
+The user's subsequent operational correction is recorded in
+[ADR0038](../adr/0038-explicit-gpu-admission-release.md) and the bounded
+[admission-release contract](ppo-hpo-admission-release.md). It adds explicit
+operator admission release without claiming that an unconfirmed job terminated;
+automatic admission and all data qualifications remain strict.
+
 ## Verification and implementation units
 
 1. Closed configuration/model4/training/search contracts and joint resources.

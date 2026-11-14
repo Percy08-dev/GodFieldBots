@@ -30,6 +30,7 @@ from gf_simulator_client.structured_resources import (
 # HOME/XDG settings of a particular campaign must not split a user's namespace.
 _GLOBAL_ROOT = Path(pwd.getpwuid(os.getuid()).pw_dir) / ".local/state/godfieldbots/hpo-gpu-admission-v1"
 RESTART_CONFIRMATION = "I confirm the environment restarted and all previous GPU jobs terminated."
+RELEASE_CONFIRMATION = "I authorize GPU admission to resume without confirming termination of the previous job."
 
 
 class AdmissionBusy(ContractError):
@@ -80,6 +81,20 @@ class RestartReceipt:
     operator: str
     confirmation: str
     confirmed_unix: float
+
+
+@dataclass(frozen=True)
+class AdmissionReleaseReceipt:
+    schema_version: int
+    kind: str
+    ticket: str
+    admission_sha256: str
+    admitted_boot_id: str
+    current_boot_id: str
+    operator: str
+    reason: str
+    confirmation: str
+    released_unix: float
 
 
 def _text(value: Any) -> None:
@@ -296,8 +311,29 @@ def _restart(value: Json, admission: Json) -> RestartReceipt:
     return RestartReceipt(**value)
 
 
+def _release(value: Json, admission: Json) -> AdmissionReleaseReceipt:
+    closed(value, {"schema_version", "kind", "ticket", "admission_sha256", "admitted_boot_id",
+        "current_boot_id", "operator", "reason", "confirmation", "released_unix"})
+    if (type(value["schema_version"]) is not int or value["schema_version"] != 1
+            or value["kind"] != "hpo-gpu-admission-release" or value["ticket"] != admission["ticket"]
+            or value["admission_sha256"] != digest(admission) or value["admitted_boot_id"] != admission["boot_id"]
+            or value["confirmation"] != RELEASE_CONFIRMATION):
+        raise ContractError("GPU admission release receipt identity mismatch")
+    _text(value["current_boot_id"])
+    _text(value["operator"])
+    _text(value["reason"])
+    if not value["reason"].strip():
+        raise ContractError("non-whitespace admission release reason required")
+    _time(value["released_unix"])
+    return AdmissionReleaseReceipt(**value)
+
+
 def _scan(lock: _Lock, *, allow_missing_current: bool = False) -> dict[str, tuple[Json, bool]]:
-    """Validate all preserved admissions, including pointer-publication orphans."""
+    """Validate admissions/orphans; the boolean means admission resolved only.
+
+    An operator release permits new admission without confirming termination.
+    Data verifiers must independently require an actual termination receipt.
+    """
     root = lock.root
     if any(path.name not in {"lock", "current.json", "jobs"} for path in root.iterdir()):
         raise ContractError("uncertain GPU admission storage entry")
@@ -306,21 +342,22 @@ def _scan(lock: _Lock, *, allow_missing_current: bool = False) -> dict[str, tupl
         _ticket(directory.name)
         _directory(directory)
         names = {path.name for path in directory.iterdir()}
-        if "admission.json" not in names or not names <= {"admission.json", "termination.json", "restart.json"}:
+        resolutions = {"termination.json", "restart.json", "release.json"}
+        if "admission.json" not in names or not names <= {"admission.json"} | resolutions:
             raise ContractError("incomplete/corrupt GPU job records")
-        if {"termination.json", "restart.json"} <= names:
-            raise ContractError("conflicting GPU job termination/restart receipts")
+        if len(names & resolutions) > 1:
+            raise ContractError("conflicting GPU admission resolution receipts")
         admission = _read(directory / "admission.json")
         _admission(admission, directory.name)
-        confirmed = False
-        for name, check in (("termination.json", _termination), ("restart.json", _restart)):
+        resolved = False
+        for name, check in (("termination.json", _termination), ("restart.json", _restart), ("release.json", _release)):
             if name in names:
                 check(_read(directory / name), admission)
                 # A visible exact receipt after a prior directory-fsync failure
                 # can be conservatively reconciled only by fully syncing now.
                 _resync(directory / name)
-                confirmed = True
-        jobs[directory.name] = (admission, confirmed)
+                resolved = True
+        jobs[directory.name] = (admission, resolved)
     current = root / "current.json"
     if current.exists() or current.is_symlink():
         pointer = closed(_read(current), {"schema_version", "ticket", "admission_sha256"})
@@ -333,8 +370,8 @@ def _scan(lock: _Lock, *, allow_missing_current: bool = False) -> dict[str, tupl
         _resync(current)
     elif jobs:
         # Admissions without a pointer may be legitimate failed publications;
-        # preserve them for explicit restart recovery rather than infer idle.
-        if not allow_missing_current and not any(not confirmed for _, confirmed in jobs.values()):
+        # preserve them for explicit recovery rather than infer idle.
+        if not allow_missing_current and not any(not resolved for _, resolved in jobs.values()):
             raise ContractError("missing GPU current pointer")
     return jobs
 
@@ -659,9 +696,9 @@ def admit_gpu_job(context: JobContext, *, global_cuda_bytes: int, max_workers: i
     lock = _Lock()
     try:
         jobs = _scan(lock)
-        unfinished = [ticket for ticket, (_, confirmed) in jobs.items() if not confirmed]
-        if unfinished:
-            raise RecoveryRequired("RECOVERY_REQUIRED: " + ",".join(sorted(unfinished)))
+        unresolved = [ticket for ticket, (_, resolved) in jobs.items() if not resolved]
+        if unresolved:
+            raise RecoveryRequired("RECOVERY_REQUIRED: " + ",".join(sorted(unresolved)))
         ticket = uuid.uuid4().hex
         admission = {"schema_version": 1, "kind": "hpo-gpu-admission", "ticket": ticket,
             "context": asdict(context), "boot_id": _boot_id(), "owner_pid": os.getpid(), "admitted_unix": time.time()}
@@ -705,8 +742,8 @@ def confirm_environment_restart(*, expected_ticket: str, operator: str, confirma
     try:
         jobs = _scan(lock, allow_missing_current=True)
         if expected_ticket not in jobs:
-            raise ContractError("restart does not identify an admitted unfinished job")
-        admission, confirmed = jobs[expected_ticket]
+            raise ContractError("restart does not identify an admitted job")
+        admission, resolved = jobs[expected_ticket]
         path = lock.root / "jobs" / expected_ticket / "restart.json"
         if path.exists():
             receipt = _restart(_read(path), admission)
@@ -717,13 +754,53 @@ def confirm_environment_restart(*, expected_ticket: str, operator: str, confirma
                 _write(lock.root / "current.json", {"schema_version": 1, "ticket": expected_ticket,
                     "admission_sha256": digest(admission)}, immutable=False)
             return receipt
-        if confirmed:
-            raise ContractError("normally terminated job does not need restart recovery")
+        if resolved:
+            raise ContractError("GPU admission already resolved by another receipt")
         receipt = RestartReceipt(1, "hpo-gpu-environment-restart", expected_ticket,
             digest(admission), admission["boot_id"], _boot_id(), operator, confirmation, time.time())
         _write(path, asdict(receipt), immutable=True)
         # A crash before initial current publication may leave a valid orphan.
         # Explicit recovery supplies its exact original pointer, never an idle reset.
+        if not (lock.root / "current.json").exists():
+            _write(lock.root / "current.json", {"schema_version": 1, "ticket": expected_ticket,
+                "admission_sha256": digest(admission)}, immutable=False)
+        return receipt
+    finally:
+        lock.close()
+
+
+def release_unconfirmed_admission(*, expected_ticket: str, operator: str, reason: str,
+                                   confirmation: str) -> AdmissionReleaseReceipt:
+    """Explicit operator admission decision; does not certify cleanup or data."""
+    _ticket(expected_ticket)
+    _text(operator)
+    _text(reason)
+    if not reason.strip():
+        raise ContractError("non-whitespace admission release reason required")
+    if confirmation != RELEASE_CONFIRMATION:
+        raise ContractError("explicit unconfirmed admission release authorization required")
+    lock = _Lock()
+    try:
+        jobs = _scan(lock, allow_missing_current=True)
+        if expected_ticket not in jobs:
+            raise ContractError("release does not identify an admitted job")
+        admission, resolved = jobs[expected_ticket]
+        path = lock.root / "jobs" / expected_ticket / "release.json"
+        if path.exists():
+            receipt = _release(_read(path), admission)
+            if (receipt.operator != operator or receipt.reason != reason or receipt.confirmation != confirmation
+                    or receipt.current_boot_id != _boot_id()):
+                raise ContractError("admission release retry differs from exact receipt")
+            _resync(path)
+            if not (lock.root / "current.json").exists():
+                _write(lock.root / "current.json", {"schema_version": 1, "ticket": expected_ticket,
+                    "admission_sha256": digest(admission)}, immutable=False)
+            return receipt
+        if resolved:
+            raise ContractError("GPU admission already resolved by another receipt")
+        receipt = AdmissionReleaseReceipt(1, "hpo-gpu-admission-release", expected_ticket,
+            digest(admission), admission["boot_id"], _boot_id(), operator, reason, confirmation, time.time())
+        _write(path, asdict(receipt), immutable=True)
         if not (lock.root / "current.json").exists():
             _write(lock.root / "current.json", {"schema_version": 1, "ticket": expected_ticket,
                 "admission_sha256": digest(admission)}, immutable=False)

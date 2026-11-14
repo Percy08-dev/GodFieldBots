@@ -693,3 +693,29 @@ existing exact recovery CLI and the remaining GPU protocol can run. Foundation
 acceptance, final physical audits and final independent acceptance reviews remain
 NOT RUN. Reuse this whole-suite evidence while runtime/test source stays unchanged;
 do not rerun the whole suite for every physical trial.
+
+## Explicit admission recovery without a restart
+
+The user challenges repeated restart requests, points out available memory and
+authorizes continuing after root withdraws the request. [ADR0038](../adr/0038-explicit-gpu-admission-release.md)
+supersedes the restart-only fallback with the independently reviewed
+[admission-release contract](../design/ppo-hpo-admission-release.md). A distinct
+operator/reason/admission-bound receipt resolves scheduling while preserving
+unconfirmed termination. Actual termination and all training/evaluation/data
+verification stay strict. This is not retrospective cleanup or restart evidence.
+
+Implementation changes only the existing GPU admission module, recover CLI and
+one focused test module. Core API/CLI fail RED before implementation and pass
+afterward. Owner116affected CPU cases pass in8.11s; root100lease/release/CLI cases
+pass in2.86s. Both independent reviews are READY and independently run all50new
+cases (1.12s/1.17s). Tests cover actual child-held lock exclusion, exact replay,
+malformed/conflicting receipts, unresolved other orphans, file/directory/pointer
+faults and strict training/evaluation rejection of release as termination.
+Full project Ruff, mypy195source and diff checks pass. All test admissions are
+isolated temporary CPU fixtures; they do not change the actual global ticket.
+
+Root's fresh read-only preflight records the old owner's absence, no known job
+command matches, and14285MiB GPU free out of16303MiB. These are diagnostics, not
+termination proof. `admission-release-preflight.json` preserves the exact old
+admission hash/current pointer on unchanged boot74cf. Normal actual release and
+the remaining fresh a03 protocol are not implied by these scoped checks.
