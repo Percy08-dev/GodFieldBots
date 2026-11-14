@@ -1,5 +1,27 @@
 # SDD ledger — plan: docs/design/heuristic-refresh-implementation.md
 
+## Final status
+
+ALL authorized tasks COMPLETE in the bounded scope; root final acceptance2026-11-15.
+Final code237d094; one subsequent TESTONLY current-native fake marker line,
+independently re-reviewed READY. Whole correctness /root/refresh_final_review and
+conformance /root/refresh_heuristic_design READY with no blockers/optional findings.
+Full CPU6404PASS/341SKIP/2fixtureFAIL ->affected2/74/13PASS with unchangedproduction;
+Rust176PASS/7ignored, source199mypy/trackedRuff/whitespace PASS. GlobalRuff4findings
+remain in pre-existing untracked codex_analysis.py (not edited).
+Official HOSTlegacy5jobs+audits/guards PASS; original sandboxworker1 600sFAIL kept,
+HOSTdirect diagnostic not counted asacceptance. Actuala02 successful132games
++4baseline,8updates total acrossordinary2+2/cap2/CLI1+1; alloriginal/receipt audits
+PASS. Faileda01 stays whollyineligible. Finalwheel/optional-free/source proofs
+PASS; native44a/source95b active with rollbackbackups. See verification for all
+commands, paths, raw-payload differences and reproducibility/qualification limits.
+Final documentation/test-only closure is the last local milestone (see git log);
+no push/merge requested. Root final provider-guard27PASS in0.17s, trackedRuff,
+mypy199, whitespace and local documentation links PASS after closure edits.
+
+Earlier milestone pending wording below is historical, superseded by this final
+status and the verification record; no failed evidence was rewritten.
+
 ## Identity and recovery
 
 - Base: 4dd6b8ae822aceff38145c085d053beac21fef1a.

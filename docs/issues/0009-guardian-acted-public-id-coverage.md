@@ -1,7 +1,7 @@
 # 0009: GuardianActed can carry both known public identifier families
 
-Status: diagnosed and implementation independently reviewed; fresh actuala02 and
-whole acceptance pending under ADR0040.
+Status: resolved by ADR0040's bounded public representation repair; independent
+reviews and fresh actuala02 pass. Faileda01 remains wholly ineligible.
 
 Actual mixed PPO parent `runs/heuristic-refresh/ppo-python-a01/parent-a01` failed
 before update1,14natural/2incomplete. Both pair5 failures are

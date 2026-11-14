@@ -1,7 +1,7 @@
 # 0040: Preserve both public GuardianActed identifier representations
 
-- Status: Accepted; scoped implementation and both independent reviews READY.
-  Fresh actuala02 and whole-project acceptance remain pending.
+- Status: Accepted and implemented; scoped/final independent reviews READY.
+  Fresh actuala02 and whole-project/legacy verification PASS with documented limits.
 - Date: 2026-11-15. Owner: root.
 - Supersedes only ADR0024§14.2's exclusive card-ID partition for corrected
   guardian_acted. Its historical evidence and other decisions remain intact.

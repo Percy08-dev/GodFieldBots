@@ -1,6 +1,7 @@
 # Refresh heuristic verification
 
-Status: implementation in progress. This record distinguishes design readiness,
+Status: root accepts the implemented bounded functional scope on2026-11-15.
+Final independent correctness and architecture conformance are READY. This record distinguishes design readiness,
 component correctness, runtime compatibility and actual-game/learning checks.
 No strength or formal-source/learning qualification is claimed.
 
@@ -10,7 +11,7 @@ Accepted [design](../design/heuristic-refresh.md), [ADR0039](../adr/0039-refresh
 and [progress](../design/heuristic-refresh-progress.md). Simulator91d5926,
 corrected-v2/public-ja-v3; old data/defaults/formal kernels preserved.
 
-## Evidence so far
+## Initial milestone evidence
 
 - Persisted design architecture recheck: READY, no blocking findings.
 - Baseline: `.venv/bin/python -m pytest -q tests/test_card_instance_rules.py
@@ -110,7 +111,103 @@ Before final acceptance, run affected/whole project static/tests, historical
 proofs and source/package correspondence, inspect bounded worst-case retention
 memory/time, then obtain independent correctness and architecture conformance.
 
-## Results
+## Final acceptance
+
+Production code is237d094, followed only by one current-runtime test-fixture
+marker correction and documentation closure. No production source/config changes
+occurred during the fresh actuala02 protocol or whole-project checks. All315
+frozen source/config hashes still match its receipt. Simulator/binary unchanged.
+
+### Project and compatibility checks
+
+- Whole CPU command (CUDA hidden, final wheel-native candidate):6404PASS,
+  341SKIP,29warnings,2FAIL in1235.19s. The only failures were the current fake
+  provider missing ADR0040's capability marker, so it failed before the intended
+  cancellation-ABI assertions. One test-fixture line adds that marker; assertions
+  and production code unchanged. Covering reruns:both failures PASS2, affected
+  modules PASS74, preflight regressions PASS13. Independent scoped re-review READY.
+  This is full-suite coverage plus affected reruns, not a claimed second all-green
+  whole-suite invocation. Full log: `whole-cpu-pytest.log` in the assessment root.
+  Root final whole provider-guard module rerun:27PASS in0.17s; trackedRuff/mypy199,
+  whitespace and7documentation local-link checks PASS after documentation closure.
+- Full Rust library:176PASS/7explicit ignored/0FAIL,36.95s, `whole-rust-test.log`.
+- Mypy:199source files PASS. Ruff on all tracked Python files PASS. `ruff check .`
+  additionally sees4pre-existing findings in untracked codex_analysis.py; that
+  unrelated user file remains untouched. Whitespace checks PASS.
+- Final Python wheel/sdist:all199modules match current source byte-for-byte;
+  wheel4c4cb957c416ef36ecc86a785071fb8dcd86fc2eb84893d86611df88d44c287e,
+  sdist34d502758d06c385278b532f725eba6413ee00e3b7f5b535b68a96ddcd126b1c.
+  Installed native44a13f42…bb9f77/source95b52bb5…451f00 verified, exact new markers,
+  unchanged dependency versions; two prior package/metadata rollback copies kept.
+- Installed mandatory-only environment:all7optional packages absent, legacy/
+  corrected baseline startup/cleanup, configured refresh startup/cleanup, public
+  GuardianActed frame,21CLI help surfaces and schema2 HPO pure validation PASS.
+  No game, device allocation, Source grant or Optuna DB was created by these checks.
+- Exact official legacy5job HOST sequence and all DATA_AUDIT/guard checks PASS:
+  history12.257s, observation11.761s, Parquet index10.153s, savedPPO workers1/4
+  1.631s/1.532s. Protected originals, source inventories and golden output hashes
+  unchanged; zero optimizer updates. Evidence `legacy-proof-final-host/`.
+  Earlier sandbox worker1 timed out at its unchanged600s limit after3other job
+  audits passed; it remains FAIL in `legacy-proof-final/`, worker4 NOT RUN there.
+  A separate diagnostic-only HOST run passed; final acceptance used unwrapped
+  official HOST commands, not that diagnostic. Malformed parquet argv was rejected
+  before job entry and corrected. No lock/timeout/golden or source was altered.
+
+### Actual functional acceptance and independent audits
+
+| Condition | Natural games | Updates / used decisions | Outcome |
+| --- | ---: | --- | --- |
+| New baseline vs old/Random | 4 | no learning | functional/integrity PASS |
+| Ordinary CPU/Python mixed16 | 32 | 2 /361 | pause1→resume2, complete |
+| Ordinary CPU/native mixed16 | 32 | 2 /361 | pause1→resume2, complete |
+| HPO GPU/native cap | 32 | 2 /284 | incomplete/update_cap; no objective |
+| CLI HPO D64 control+trial | 36 | 1update/64 each parent | training+canonical eval+tell complete |
+
+Successful actual populations total136natural games including the baseline,
+separate from faileda01's14natural/2incomplete. Every a01 game stays ineligible.
+Actual paths/requests/results and independent audit summary are under
+`runs/assessments/heuristic-refresh-20261115/t3-physical-a02/`.
+
+Both ordinary parents pass complete-original validation,32natural games/
+64Journal6 files/32Replay closure pairs and946inventory hashes each. All30refresh
+selections per parent reproduced exactly from its own frame-prefix/supplied
+candidates. Each has16optimizer steps and fresh→resume invocations. Observed
+Python/native G0/G2 weight arrays (58each) and resume arrays (1/175) match exactly;
+all non-payload numeric arrays match, while180/165opaque payload arrays differ.
+Their cause is not inferred. This is one observed pair, not seed determinism.
+
+The cap parent passes require_complete=False original/numeric validation;
+both genuine GPU receipts verify1learner+32workers reaped. The harness initially
+passed raw asdict tuple resources to the strict JSON verifier after a healthy
+pause; the actual durable termination.json was verified and preserved, then the
+same parent/materialized hash/context resumed within its original deadline.
+Only the diagnostic harness changed, with no fake termination/release or budget
+extension. The recovery driver asserts unchanged original absolute clocks.
+
+CLI campaign00aba7d4-f3e0-4fbc-93b3-69ab1222c95f has canonical outside-control
+proposal000000 and one Optuna trial000001, both complete atD64; each trains16games
+and evaluates2against the old heuristic. Both values are0.0. Four distinct actual
+training/evaluation GPU receipts verify; completed-campaign resume creates no
+extra proposal/tell. Read-only SQLite/record audits leave original bytes unchanged.
+Six actual GPU jobs across cap+campaign close normally with genuine receipts.
+
+Independent audits revalidate Source/numeric hashes, full schedule/learner roles,
+threshold bindings, pruning intents/receipts and actual GPU termination authority.
+Ordinary final clocks match600/540/480s config offsets; no separately persisted
+pre-resume clock copy exists for an independent before/after comparison. Exact
+driver build is unverified in captured GPU hardware metadata. Neither limit is
+hidden by the functional acceptance.
+
+### Scope of acceptance
+
+Selectable new policy, strict recording/identity, ordinary and HPO mixed training,
+save/resume, deployment/optional-free compatibility and the public-event coverage
+repair are accepted. Proxy accuracy, strategy strength, full training/HPO sizing,
+formal Source/learning qualification, final-test results and trajectory
+determinism remain unclaimed. Canonical evaluation and historical formats/values
+remain unchanged. All blocking review findings are resolved.
+
+## Milestone details
 
 ### Actual a01 failure and representation repair
 

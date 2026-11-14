@@ -1,7 +1,8 @@
 # Refresh heuristic and mixed PPO opponents
 
-Status: accepted user plan, 2026-11-15. Preliminary architecture review READY;
-implementation and final correctness/conformance acceptance remain required.
+Status: accepted and implemented, 2026-11-15. Final correctness/conformance READY;
+root accepts bounded functional scope in verification/heuristic-refresh.md.
+Heuristic strength, formal qualification and trajectory determinism are not claimed.
 
 ## Authority and scope
 

@@ -1,6 +1,7 @@
 # 0039: Selectable refresh heuristic and mixed training opponents
 
-- Status: Accepted design; implementation/acceptance pending.
+- Status: Accepted and implemented; scoped/final independent reviews and bounded
+  functional acceptance PASS. No formal/strength qualification.
 - Date: 2026-11-15. Owner: root.
 - Authority: user's accepted plan and explicit implementation request.
 - Architecture review: /root/refresh_heuristic_design, READY on bounded design
@@ -43,4 +44,7 @@ parents never acquire eligibility under the old formal recipe.
 
 Behavior, identity, old-data, live/reconstructed schedule, Source/native and
 functional game/update/resume evidence and independent reviews are required.
-Current implementation evidence: NOT RUN.
+Current evidence is in [verification](../verification/heuristic-refresh.md):
+actual baseline, ordinary CPU Python/native pause-resume, HPO GPU/native cap,
+CLI/Optuna completion and read-only Source/receipt audits. ADR0040's necessary
+public-event repair preserves the faileda01 parent as wholly ineligible.

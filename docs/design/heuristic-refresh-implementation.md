@@ -27,35 +27,35 @@ existing client, collection/Source and native structural owners.
 
 ## Task 1: Policy and closed identity
 
-- [ ] Add stdlib-only common options/label identity, distinct model config and
+- [x] Add stdlib-only common options/label identity, distinct model config and
   participant-local refresh policy; keep old ModelConfig exact.
-- [ ] Test first: history/threshold/ranking/retention/renewal/capacity/reset/ties
+- [x] Test first: history/threshold/ranking/retention/renewal/capacity/reset/ties
   and strict identity. Run affected tests/static checks; report RED/GREEN evidence.
-- [ ] Independent scoped review and root verified milestone commit.
+- [x] Independent scoped review and root verified milestone commit.
 
 ## Task 2: Selectable runtime and persisted records
 
-- [ ] Wire new config through CLI, worker/protocol, pure options/settings,
+- [x] Wire new config through CLI, worker/protocol, pure options/settings,
   baseline and learned-mixed collection, conditional Journal6 metadata.
-- [ ] Extend Python/native Source validation/capability dispatch; retain old
+- [x] Extend Python/native Source validation/capability dispatch; retain old
   defaults, goldens, labels and no-fake-neural-input rule.
-- [ ] Add presets and real baseline-game/installed-baseline tests.
-- [ ] Independent scoped review and root verified milestone commit.
+- [x] Add presets and real baseline-game/installed-baseline tests.
+- [x] Independent scoped review and root verified milestone commit.
 
 ## Task 3: Ordinary and HPO mixed16
 
-- [ ] Add explicit descriptor/config variants and concrete schedule wrappers,
+- [x] Add explicit descriptor/config variants and concrete schedule wrappers,
   old scheduler AST exact. Hook live and independently reconstructed paths.
-- [ ] Bind ordinary resume and HPO schema2/study identity; extend both native
+- [x] Bind ordinary resume and HPO schema2/study identity; extend both native
   structural paths and formal rejection. Preserve canonical evaluation.
-- [ ] Test schedule/registry/resume/tampering/native agreement; bounded real
+- [x] Test schedule/registry/resume/tampering/native agreement; bounded real
   mixed16 collection and PPO update/save/resume for both supported paths.
-- [ ] Independent correctness/conformance reviews and milestone commit.
+- [x] Independent correctness/conformance reviews and milestone commit.
 
 ## Task 4: Final acceptance
 
-- [ ] Whole pytest/Ruff/mypy and affected Rust tests, legacy-data proofs and
+- [x] Whole pytest/Ruff/mypy and affected Rust tests, legacy-data proofs and
   installed package checks appropriate to these changed interfaces.
-- [ ] Final independent correctness and implementation-conformance reviews.
-- [ ] Record evidence in verification, update architecture/ADR status and
+- [x] Final independent correctness and implementation-conformance reviews.
+- [x] Record evidence in verification, update architecture/ADR status and
   coherent local commit. No performance/strength claim beyond actual evidence.

@@ -93,6 +93,34 @@ smokeは1つのGameSeedと方策seedで先後を交換した2試合、最大180�
 外部URLでは `server.external_url`、明示的な固定seed実験設定、期待fingerprintが必要です。
 外部サーバーを停止することはありません。
 
+## 手札更新型ヒューリスティック
+
+現行カード個体v2では、既存の`heuristic`と別に`heuristic_refresh`を選択できます。
+[モデル設定](configs/models/heuristic-refresh.toml)の`attack_threshold`は初期値12です。
+直近の自分の3行動ターンに攻撃履歴がある間は、公開イベントの観測区間から求めた
+予測ダメージが攻撃値の半分以上なら攻撃を優先します。それ以外は、攻撃用のカードを
+残しながら更新し、更新できなければ低い攻撃値を選びます。
+
+```console
+uv run gf-bots evaluate --config configs/experiments/heuristic-refresh-baseline.toml
+uv run gf-bots validate --config configs/experiments/heuristic-refresh-baseline.toml --set model.attack_threshold=16
+```
+
+実験設定の`references.model`または`references.opponent`からモデルpresetを参照します。
+通常PPOでは[混合16試合smoke](configs/experiments/heuristic-refresh-ppo-smoke.toml)、
+HPOでは[schema2設定例](configs/hpo/heuristic-refresh-mlp-smoke.toml)を使用できます。
+混合構成はRandom4・既存heuristic2・新方策2・過去snapshot8です。従来presetは維持します。
+
+```console
+uv run gf-bots train --config configs/experiments/heuristic-refresh-ppo-smoke.toml --mode fresh --run-dir runs/heuristic-refresh/ppo/my-parent --pause-after-update 1
+uv run gf-bots train --config configs/experiments/heuristic-refresh-ppo-smoke.toml --mode resume --run-dir runs/heuristic-refresh/ppo/my-parent
+```
+
+baselineには学習用extraは不要です。native経路とHPOには、現行ソースに対応するnative拡張が
+必要です。古い拡張は開始前に拒否します。HPOの新規実行では保存先・DBを新しくしてください。
+これらの短いpresetは機能確認用で、正式学習・強さ・適格Sourceを意味しません。
+[仕様](docs/design/heuristic-refresh.md)と[検証記録](docs/verification/heuristic-refresh.md)を参照してください。
+
 ## LightGBM
 
 各候補の内容を採点する`Q(o,a)`を、実際に受理された行動の自然終了returnで回帰します。

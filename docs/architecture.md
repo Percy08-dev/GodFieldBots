@@ -755,7 +755,12 @@ selectable corrected-v2 refresh heuristic and opt-in mixed16 ordinary/HPO traini
 opponents. [The design](design/heuristic-refresh.md) keeps participant-local
 observed-window outcome proxies distinct from causal damage, shared identity
 distinct from learned-model metadata, and historical fixed/formal/evaluation
-recipes unchanged. Implementation and final acceptance are pending.
+recipes unchanged. Implementation and bounded functional acceptance pass, including
+actual ordinary Python/native pause-resume, HPO GPU cap and CLI/Optuna evaluation;
+[verification](verification/heuristic-refresh.md) separates failed/historical data
+and remaining strength/formal limits. [ADR0040](adr/0040-guardian-acted-public-id-union.md)
+repairs corrected GuardianActed public identifier coverage without changing306-ID
+encoding or signatures; active native readers require its additive capability.
 
 `DecisionInput` contains a serialized copy of the viewer's validated Observation,
 Player-visible Events, history end position, typed metadata, optional same-revision
