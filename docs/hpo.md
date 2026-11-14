@@ -68,6 +68,44 @@ Attention幅とheadsなどは`[[space.coupled]]`の`name`、`paths`、`choices`�
 対照を置き換えません。対照が探索範囲内なら1提案として数え、範囲外なら追加対照として
 保存し、samplerの学習履歴には混ぜません。どちらも同じDと学習seed群を使います。
 
+### 次回のPPO設定探索で固定するモデル
+
+2026-11-15の合意では、MLP・GRU・Transformerとも主要部の幅192、主幹2層を
+採用します。モデル構造自体のHPOは後段に回し、この段階ではPPOの学習設定を
+探索します。既存の動作確認用campaignやモデルの既定値は変更しません。
+
+新しい各モデルのcampaignには、次の固定overrideを設定します。
+`model_id`と`base_experiment`はモデル種別ごとに指定します。
+
+```toml
+[model.state]
+hidden_sizes = [192]
+
+[model.hand]
+hidden_sizes = [192]
+latent_size = 192
+
+[model.temporal]
+hidden_size = 192
+num_layers = 2
+feedforward_size = 384
+
+[model.heads]
+actor_hidden_sizes = [192]
+critic_hidden_sizes = [192]
+```
+
+MLPの主幹2層はframe projectionと追加の全結合層を数えます。GRUは2層、
+Transformerは2ブロック・4heads・FFN幅384です。`feedforward_size`は
+Transformerでのみ有効で、他のモデルでは既定値に正規化されます。
+状態・手札encoderとActor/Criticの隠れ層数は各1段を維持し、カード埋め込み、
+状態encoder出力幅、Event encoderなどは既定値を使います。
+総パラメータ数はMLP約174万、GRU約215万、Transformer約230万です。
+
+必須の対照は従来どおり既定モデルと既定PPO recipeを使います。上記の固定値で
+対照を置き換えません。探索範囲・D・試行数・seed群・運用予算は別途設定し、
+新しいcampaign・study・保存先を使います。ここでは学習や探索の実行を開始しません。
+
 ## 資源と保存先
 
 `[operating]`でRAM・CUDA・Source・数値配列・保存・収集の各予算、対戦並列数、
