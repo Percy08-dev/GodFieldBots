@@ -29,11 +29,12 @@ qualification and is composed with the common coordinator/evaluator.
 Native Source3b now passes scoped correctness and conformance reviews against a
 source-matched private release/MIMALLOC candidate. Exact Hpo/PackedHpo plan5,
 two-stage authorization, Python-owned learning math and generation-tagged numeric
-allocation guards are implemented. Installed activation, integrated-source legacy
-proofs and the pre-correction whole Python suite now pass for the reviewed release
-candidate. The first genuine GPU/common-loop functional run fails at the
-acknowledged-save namespace transition; foundation acceptance remains pending
-its correction and repeated real execution.
+allocation guards are implemented. Installed activation, current-source legacy
+proofs and the corrected whole CPU Python suite pass for the reviewed release.
+The first physical attempts expose acknowledged-save and evaluation-publication
+failures, both now corrected and independently reviewed. The a02 GPU training
+reaches its exact decision budget normally; full functional acceptance still
+requires the remaining predeclared real execution.
 
 The [runtime contract](design/ppo-hpo-runtime.md) uses the common coordinator,
 the caller's actual GPU job and audited ledger, original absolute deadlines,
@@ -51,15 +52,13 @@ The [acknowledged-save correction](design/ppo-hpo-native-save-transition.md) is
 implemented and passes scoped correctness/conformance plus actual CPU/native
 common-loop update/resume checks. It binds the actual verified learner ACK to its
 SAME projection, independently verifies the complete next saved pair, and advances
-only the native bridge's owned scan using the existing Rust append permit. The failed a01 parent
-is preserved and ineligible. Its GPU ticket has no termination receipt; explicit
-actual environment-restart confirmation is required before new physical GPU work.
-The corrected CPU whole suite passes5479checks/341explicit skips, current-source
-legacy/package/optional-free proofs pass, and the new source-matched native is
-installed with rollback copies retained. The
+only the native bridge's owned scan using the existing Rust append permit. The
+failed a01 parent is preserved and ineligible. Its operational GPU ticket is
+recovered only after the user's actual environment-restart confirmation; that
+recovery grants no data eligibility. The source-matched native is installed with
+rollback copies retained. The
 [predeclared physical functional protocol](verification/hpo-functional-protocol.md)
-remains blocked by actual environment-recovery confirmation and is required
-before foundation acceptance.
+is required before foundation acceptance.
 
 After the user-confirmed restart, the a02 GPU training/save/Source commit completes
 normally at D8. Its evaluation exposes an in-memory tuple/list publication mismatch
@@ -79,6 +78,11 @@ resume expiry remain unchanged, checked wall observations retain a high-water
 mark, and sampling failures follow existing owned cleanup. Both scoped reviews
 are READY. Transient or masked clock steps and persisted wall-only pause records
 retain the explicit limits in the design; this creates no cross-boot time authority.
+Current-source CPU verification passes5542checks/341explicit skips, project static
+checks, all five legacy-data proofs, exact application/native package correspondence
+and installed mandatory-only CLI/baseline checks. Protected original byte/stat
+identities remain unchanged. These checks do not replace the remaining physical
+protocol or the actual recovery required for the a02 evaluation ticket.
 
 [ADR0024](adr/0024-card-instance-simulator-v2.md) begins a separately identified
 card-instance Simulator v2 migration. Contract/wire/Config/direct HTTP and pure

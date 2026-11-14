@@ -82,6 +82,9 @@ absolute deadline and failed/incomplete evidence remains ineligible.
 After functional source freeze, run whole Python/static/Rust checks, independent
 final correctness/conformance, optional-free wheel/CLI startup and the original
 legacy corpus/index/saved-PPO proofs. Compare protected29814original/24fit hashes
-and stat identities with `/tmp/hpo-originals-before.json`. Record PASS/FAIL/
+and stat identities with the initial `/tmp/hpo-originals-before.json`, whose
+byte-identical durable copy is now in
+`runs/assessments/ppo-hpo-foundation-20261114/recovery-bundle/originals-before.json`.
+Record PASS/FAIL/
 NOT RUN with actual commands and limitations in `ppo-hpo.md`. No seed-only
 determinism or trained strength conclusion follows from these checks.

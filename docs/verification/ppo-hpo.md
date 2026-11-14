@@ -649,3 +649,47 @@ SciPy1.18.1 and Narwhals2.27.1. This changes no project dependency declaration.
 The latest Eval/clock source still requires fresh whole-suite, installed-package,
 legacy-data proofs and the predeclared physical functional protocol. Ticket4868
 remains unconfirmed; earlier whole-suite evidence is historical.
+
+## Current-source CPU acceptance after Eval/clock corrections
+
+Frozen source02e070d passes the full HOST command with CUDA hidden before Python
+imports, using the exact reviewed private dae8 native candidate:
+
+```console
+CUDA_VISIBLE_DEVICES='' GFB_HPO_NATIVE_CANDIDATE=/tmp/gfb-hpo-native-clock-site/gf_native/gf_native.cpython-314-x86_64-linux-gnu.so .venv/bin/python -m pytest -q --disable-warnings --maxfail=1 -o faulthandler_timeout=60 --junitxml=runs/assessments/ppo-hpo-foundation-20261114/whole-cpu-02e070d.xml
+```
+
+Result:5542PASS/341SKIP/29warnings in1169.07s, exit0. The60-second JSON-fixture
+faulthandler dump is diagnostic; execution continues to100percent. This is CPU
+engineering verification, not a physical CUDA acceptance or qualification claim.
+Full project Ruff/mypy195source and diff checks also pass on this frozen source.
+Rust remains unchanged from the173PASS/7ignored reviewed save-transition source;
+the strict package proof confirms that exact native source/ELF rather than
+rebuilding it unnecessarily.
+
+Fresh `legacy-proof-clock` passes all five run/audit/source-inventory checks:
+history21.89s, observation11.96s, Parquet index10.45s and saved-PPO workers1/4
+1.58s/1.54s. These are read-only diagnostics with zero optimizer updates.
+`package-proof-clock.json` verifies197application files,91native source files and
+seven embedded assets. `optional-free-clock.json` and its baseline report pass
+with all seven optional modules absent: actual baseline startup/close,21help
+commands and HPO validation, with no Optuna database or model allocation.
+`originals-after-eval-clock-cpu.json` matches all29814protected original and24fit
+byte/stat identities in4.38s against the original snapshot.
+
+The current application wheel/sdist, exact native wheel/sdist, original snapshot
+and three hash-pinned dependency lists are copied and verified under
+`recovery-bundle-eval-clock` in the same assessment. The original historical
+recovery bundle remains intact. Installed Python3.14.10/GIL, NumPy2.5.4,
+Torch2.14.1+cu132, Optuna5.0.0 and native dae8 identities are rechecked without
+GPU allocation. All six fresh a03 inputs pass pure protocol/resource validation
+and retain the original nonstorage parameters; no a03 parent is created.
+
+The actual global admission remains ticket4868 with only its admission record,
+on the same boot as the failed a02 evaluation. No termination or restart receipt
+is invented. No test/native/package action bypasses that admission. Another
+actual environment restart and operator confirmation are required before the
+existing exact recovery CLI and the remaining GPU protocol can run. Foundation
+acceptance, final physical audits and final independent acceptance reviews remain
+NOT RUN. Reuse this whole-suite evidence while runtime/test source stays unchanged;
+do not rerun the whole suite for every physical trial.
