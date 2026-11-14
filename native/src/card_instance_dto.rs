@@ -885,7 +885,8 @@ pub(crate) fn event(
             recipe.definition_ids()?
         };
         require(
-            namespace.contains(name),
+            namespace.contains(name)
+                || (tag == "guardian_acted" && recipe.guardian_ids()?.contains(name)),
             "event identifier namespace mismatch",
         )?;
     }
@@ -1479,6 +1480,32 @@ mod tests {
         }
     }
     #[test]
+    fn guardian_acted_closed_union_accepts_every_pinned_id_and_rejects_unknowns() {
+        let (b, c) = owners();
+        let recipe = Recipe::corrected(128, &b, &c).unwrap();
+        for name in recipe
+            .definition_ids()
+            .unwrap()
+            .iter()
+            .chain(recipe.guardian_ids().unwrap())
+        {
+            let raw = json::object([
+                ("type", json::text("guardian_acted")),
+                ("player", json::integer(1)),
+                ("definition_id", name.clone()),
+            ]);
+            event(&raw, &recipe, &b, &c).unwrap();
+        }
+        for tag in ["guardian_acted", "guardian_set", "guardian_left", "artifact_used"] {
+            let raw = json::object([
+                ("type", json::text(tag)),
+                ("player", json::integer(1)),
+                ("definition_id", json::text("unknown-public-id")),
+            ]);
+            assert!(event(&raw, &recipe, &b, &c).is_err());
+        }
+    }
+    #[test]
     fn guardian_namespaces_safe_history_offsets_and_future_tail_are_exact() {
         let (b, c) = owners();
         let recipe = Recipe::corrected(2, &b, &c).unwrap();
@@ -1518,7 +1545,8 @@ mod tests {
         for (tag, wrong) in [
             ("guardian_set", definition.clone()),
             ("guardian_left", definition),
-            ("guardian_acted", guardian),
+            ("artifact_used", guardian),
+            ("guardian_acted", json::text("unknown-public-id")),
         ] {
             assert!(
                 event(

@@ -112,6 +112,32 @@ memory/time, then obtain independent correctness and architecture conformance.
 
 ## Results
 
+### Actual a01 failure and representation repair
+
+Ordinary Python actual mixed16 a01 at55e6410 yielded14natural/2incomplete and
+0updates. Wholeparent `runs/heuristic-refresh/ppo-python-a01/parent-a01` is failed
+and ineligible. Both selfplay pair5 failures report unknown public event-time
+definition namespace; no Action rejection/new-policy failure. Raw participant
+Event API evidence contains earth/moon GuardianActed, supplementing prior recorded
+seafood-soup card-ID evidence. No canonical/hidden/engine-rule data was used.
+
+Advisor recommendation and mandatory architecture review accepted ADR0040's
+corrected-only known-card|known-Guardian union. Original306vocab/indices/formats/
+signatures/math remain exact. Active native preflights gain an explicit capability;
+historical recorded identities are not retrospectively relabelled. Both final
+scoped reviews READY; public fixture/HTTP SHA/provenance independently verified.
+
+Repair scope751PASS/10deselected (661new),287oldgoldens/contract checks PASS,
+affectedRust57PASS/2ignored plus2focused; mypy199/Ruff/all8ASTPASS. Root fresh
+actual wheel ELF check:676passed in2.47s with tests/test_guardian_acted_union.py
+and tests/test_refresh_native.py. New wheelELF
+44a13f42d3330c64834400762cfd07836d0b27e21eddebe3d2b2e0929cbb9f77,
+native source95b52bb5caa55da8dbad66e8b0188c1162e21b8d3f13205e11b6823334451f00.
+DirectCargo be73912f…0f414ac has identical build_info; wheel-specific tests were
+run because ELF differs. Final Pythonwheel/sdist all199source modules exact.
+No old journal reconstruction, population promotion or experimental narrowing.
+Fresh a02 must use the original seed/budget/action conditions after activation.
+
 ### Task3 scoped implementation acceptance
 
 Ordinary/Packed mixed Config variants and HPO campaign/spec2 are explicit. All

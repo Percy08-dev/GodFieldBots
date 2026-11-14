@@ -145,7 +145,6 @@ def test_guardian_events_refuse_unknown_and_card_namespace_ids(family, name):
     ("artifact_used", "artifact_drawn", "devil_appeared", "artifact_discarded")
 ] + [
     {"type": "miracle_used", "player": 1, "mp_spent": 0},
-    {"type": "guardian_acted", "player": 1},
     {"type": "buy_offered", "buyer": 1, "seller": 2, "price": 0},
     {"type": "sale_offered", "seller": 1, "target": 2, "price": 0},
     {"type": "artifact_transferred", "from": 1, "to": 2, "price": 0},
@@ -158,9 +157,9 @@ def test_card_events_refuse_guardian_namespace_and_unknown_ids(event, name):
 
 
 @pytest.mark.parametrize("guardian", vocab.GUARDIANS)
-def test_guardian_acted_refuses_every_guardian_identity(guardian):
-    with pytest.raises(ContractError, match="namespace"):
-        own_frame(({"type": "guardian_acted", "player": 1, "definition_id": guardian},))
+def test_guardian_acted_accepts_every_guardian_identity_in_existing_namespace(guardian):
+    index = vocab.GUARDIANS.index(guardian)
+    assert_event_time_tokens(guardian, "guardian_acted", 1, 298 + index, 359 + index)
 
 
 def test_stale_corrected_signature_refuses_even_current_equal_width_tokens():

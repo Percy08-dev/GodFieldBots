@@ -18,6 +18,10 @@
 独立した手札更新型ヒューリスティックと、通常PPO/HPOの明示的な混合16試合相手構成。
 実装・最終受入は進行記録と検証証跡で区別する。
 
+追加: [0040](0040-guardian-acted-public-id-union.md) — Accepted design:
+実対戦で確認したGuardianActedの既知カードID／守護神ID両表現を、corrected限定で保持する。
+語彙・既存索引・スキーマは維持し、旧失敗実行は不適格のまま保存する。
+
 | ADR | 状態 | 判断 |
 | --- | --- | --- |
 | [0001](0001-simulator-boundary.md) | Accepted | シミュレーターを外部のルール権威とする |

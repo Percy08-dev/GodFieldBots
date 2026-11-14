@@ -21,8 +21,15 @@ CARD_INSTANCE_ORIGINAL_HISTORY = 'journal6;codec2;episode-dto1;recorded16'
 CARD_INSTANCE_TREE_RAW = 'journal6;lightgbm3;inference4;codec2'
 CARD_INSTANCE_GROUP_PACK = 'provider1;proof2;plan4'
 CARD_INSTANCE_PACK_CHECKSUM = 'pack-checksum-v1;custody2'
+CARD_INSTANCE_GUARDIAN_ACTED = 'card-or-guardian-v1'
 CARD_INSTANCE_REFRESH_BASELINE = 'baseline1;options1;identity1'
 CARD_INSTANCE_REFRESH_OPPONENTS = 'mixed16-v1;ordinary1;hpo2'
+
+
+def require_native_guardian_acted(native: Any) -> None:
+    """Require corrected closed-union validation before active native work."""
+    if dict(native.build_info()).get('card_instance_guardian_acted') != CARD_INSTANCE_GUARDIAN_ACTED:
+        raise ContractError('native GuardianActed union capability unavailable; no fallback')
 
 
 def require_native_refresh_baseline(native: Any = None) -> None:
@@ -30,6 +37,7 @@ def require_native_refresh_baseline(native: Any = None) -> None:
     module = load_native() if native is None else native
     if dict(module.build_info()).get('card_instance_refresh') != CARD_INSTANCE_REFRESH_BASELINE:
         raise ContractError('native refresh baseline capability unavailable; no fallback')
+    require_native_guardian_acted(module)
 
 
 def require_native_refresh_opponents(native: Any = None) -> None:
@@ -223,6 +231,7 @@ def card_instance_reader_settings(config: PreparationConfig, native: ModuleType 
             or information.get('card_instance_signature') != signature(128, layout=CORRECTED_CARD_INSTANCE_LAYOUT)
             or information.get('card_instance_models') != 'mlp,gru,transformer'):
         raise ContractError('native binary lacks accepted card-instance capability/signature/models')
+    require_native_guardian_acted(native or load_native())
     checksum(information.get('native_source_sha256'))
     module = native or load_native()
     session = getattr(module, 'CardInstanceNativeSession', None)

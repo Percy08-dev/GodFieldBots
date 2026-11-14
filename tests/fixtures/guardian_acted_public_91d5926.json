@@ -1,0 +1,26 @@
+{
+  "records": [
+    {
+      "endpoint": "/v2/games/01M7DVZY2MN836EPAY49HP9V8S/events/1",
+      "event": {
+        "definition_id": "moon",
+        "player": 2,
+        "type": "guardian_acted"
+      },
+      "viewer": 1
+    },
+    {
+      "endpoint": "/v2/games/01M7DW00CGS2VNDVEKYA4WTY6R/events/2",
+      "event": {
+        "definition_id": "earth",
+        "player": 1,
+        "type": "guardian_acted"
+      },
+      "viewer": 2
+    }
+  ],
+  "scope": "participant-visible Event API responses only; no canonical/private data",
+  "simulator_revision": "91d5926a7572db327eaea3751e7c24f428120996",
+  "source": "runs/heuristic-refresh/ppo-python-a01/parent-a01/collections/batch-000000/server-b000000-p5-seat0/http/http.jsonl",
+  "source_sha256": "661a6c91b7e699eadaa4083a4cc43333fb0535eba5a681d281b570519744aecb"
+}

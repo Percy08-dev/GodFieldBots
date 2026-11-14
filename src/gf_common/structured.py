@@ -68,7 +68,9 @@ def _validate_events(events: list[Json], layout: StructuredLayout) -> None:
             guardian = (layout is CORRECTED_CARD_INSTANCE_LAYOUT
                 and event["type"] in ("guardian_set", "guardian_left"))
             namespace = vocab.GUARDIANS if guardian else DEFINITION_SHA256
-            if event["definition_id"] not in namespace:
+            acted_guardian = (layout is CORRECTED_CARD_INSTANCE_LAYOUT
+                and event["type"] == "guardian_acted" and event["definition_id"] in vocab.GUARDIANS)
+            if event["definition_id"] not in namespace and not acted_guardian:
                 raise ContractError("unknown public event-time definition namespace")
 
 

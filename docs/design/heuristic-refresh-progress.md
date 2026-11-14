@@ -99,6 +99,25 @@
   Local milestone pending; installed native still unchanged before Task4.
 - Task4: IN PROGRESS: actual mixed-game/PPO/HPO checks, installed package,
   whole-suite, historical proofs and final review/acceptance pending.
+  Task3 code milestone55e6410. Native wheelF94 activated with rollback backup13files,
+  all dependency versions unchanged; evidence native-installed.json and native-install-before/.
+  First fresh ordinary launch without --run-dir rejected prelaunch (zero games),
+  corrected with explicit parent. Actual a01 batch:14natural/2incomplete,0updates,
+  failed/ineligible whole parent preserved. Both failures are GuardianActed known
+  Guardian IDs rejected by ADR0024§14.2's card-only validator, not a new-policy
+  or action rejection. Advisor /root/guardian_acted_advisor recommends bounded
+  public-representation repair, ADR0040 DESIGN READY and accepted before code.
+  Minimal public Event API evidence saved t3-physical-a01/public-guardian-events.json
+  (viewer1 saw player2 moon, viewer2 saw player1 earth); no canonical/hidden inputs.
+  ADR0040 implementation /root/guardian_acted_impl report /tmp/gfb-guardian-acted-report.md:
+  scoped751PASS/10deselected incl661new, separate287goldensPASS, affectedRust57/2ignored
+  +2focusedPASS,199mypy/Ruff/all8ASTPASS. Both independent reviews READY; fixture
+  provenance independently rechecked against actualpublicHTTP sourceSHA.
+  Root actualwheel676PASS in2.47s. Newwheel ELF
+  44a13f42d3330c64834400762cfd07836d0b27e21eddebe3d2b2e0929cbb9f77,
+  source95b52bb5caa55da8dbad66e8b0188c1162e21b8d3f13205e11b6823334451f00,
+  all build_info identical to directcandidatebe739. Pythonwheel/sdist199modules
+  exact. Nativeactivation/commit/fresha02 pending; no existing parent repaired.
 
 ## Supplementary Task1 diagnostic
 

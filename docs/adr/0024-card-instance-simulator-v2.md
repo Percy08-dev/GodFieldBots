@@ -1226,6 +1226,11 @@ uses the repaired input, never a reduced candidate or event domain.
 
 ## 14.2 Guardian action-definition representation (design accepted)
 
+The exclusive card-only GuardianActed partition below is superseded by
+[ADR0040](0040-guardian-acted-public-id-union.md). Newly retained public Event API
+records also contain known Guardian IDs. The historical reasoning/evidence and
+failed-population disposition below remain intact; no old artifacts are repaired.
+
 Independent architecture DESIGN READY after correcting the catalog subset count;
 root accepts this validator/fixture correction. Implementation and both
 independent reviews are now READY, with551CPU and31actual HOST CUDA checks
