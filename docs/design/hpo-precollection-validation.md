@@ -3,7 +3,9 @@
 Status: accepted preimplementation design, 2026-11-15. Root design was reviewed
 by `bot_architecture_reviewer`: READY, including admission-binding and cleanup
 clarifications. Implementation passes independent correctness/conformance and
-whole CPU verification on2026-11-16; matched physical acceptance remains pending.
+whole CPU verification on2026-11-16. Declared matched physical trials and full
+Source/numeric/receipt audits PASS10; both final independent reviews FINAL READY,
+and root accepts the implemented/measured scope and its verification limits.
 Baseline
 `050713d`; see the [investigation](hpo-validation-reuse-investigation.md) and
 [measurement](../verification/ppo-runtime-profiling.md).

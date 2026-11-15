@@ -9,8 +9,11 @@ CPU6557PASS/408SKIP, plus Source accounting/failure/native/compatibility tests.
 The explicit resident CLI path retains original historical validation across the
 first three precollection checks, with fresh live guards and actual closure before
 mkdir. Checks after mkdir/games stay full; no persisted authority, math or
-Simulator contract changes. Matched GPU/Simulator timing acceptance is pending
-device availability; current evidence and its limits are in
+Simulator contract changes. All10matched GPU/Simulator trials and complete
+original Source/numeric/receipt audits pass. MLP3pair medians reduce second-collect
+wall40.840->30.082s (26.34%) and whole2update helper119.429->107.762s (9.77%);
+GRU/Transformer single pairs are descriptive. Both final independent reviews are
+FINAL READY and root accepts this scope; conditions and limits are in
 [the verification record](verification/hpo-precollection-validation.md).
 
 [ADR0041](adr/0041-hpo-resident-workers-and-progress.md) accepts the reviewed

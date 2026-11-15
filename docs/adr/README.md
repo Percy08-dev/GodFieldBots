@@ -17,7 +17,8 @@
 追加: [0042](0042-hpo-precollection-validation-reuse.md) — Accepted design:
 resident HPOの収集前3回で実際の検証scanを保持し、元データ・native・所有権を再確認する。
 mkdir前に終了し、その後の完全検証は維持。実装レビューと全CPU6557PASS/408SKIP、
-静的・配布・保護対象確認は完了。GPU比較測定による受入はデバイス空き待ち。
+静的・配布・保護対象確認は完了。GPU10試行と元データ監査も通過し、MLP3組中央値の
+第2収集26.34%・全体9.77%短縮を確認。最終の両独立レビューはFINAL READY、root受入済み。
 
 追加: [0041](0041-hpo-resident-workers-and-progress.md) — Accepted design:
 HPO限定の常駐CUDA参加者、更新境界の重み同期、明示的な待機証明・キャッシュ参照、

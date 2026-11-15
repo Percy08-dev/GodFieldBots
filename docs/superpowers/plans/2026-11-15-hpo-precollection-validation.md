@@ -45,8 +45,8 @@
 
 **Interfaces:** Task1 private toggle provides same-code baselineFalse/candidateTrue. Existing thin timing hook, actual termination receipt and original Source/numeric verification remain required.
 
-- [ ] Freeze new run paths/config/seeds, code/native/Simulator/schema identities, private toggle and paired order; validate instrumentation delegation/error/restore behavior without GPU.
+- [x] Freeze new run paths/config/seeds, code/native/Simulator/schema identities, private toggle and paired order; validate instrumentation delegation/error/restore behavior without GPU.
 - [x] Run the stable whole CPU suite, project static checks and fixed-math/compatibility checks once. Preserve unrelated historical artifacts.
-- [ ] Execute3matchedMLP pairs and1pair eachGRU/Transformer,192/main2,4workers,16games/collection,2updates, original timers/budgets. Attribute full/recheck/close/collect times; do not mix failures or shorten conditions to claim acceptance.
-- [ ] Audit actual Source/numeric correspondence, references, owners and original termination receipts. Require3->1 precollection replay and improved MLP median second-collect time; report cutoff and reproducibility limits.
-- [ ] Independent final reviews of stable code and acceptance evidence; root updates architecture/ADR/verification, commits and reports scope/results without formal-HPO or strength claims.
+- [x] Execute3matchedMLP pairs and1pair eachGRU/Transformer,192/main2,4workers,16games/collection,2updates, original timers/budgets. Attribute full/recheck/close/collect times; do not mix failures or shorten conditions to claim acceptance.
+- [x] Audit actual Source/numeric correspondence, references, owners and original termination receipts. Require3->1 precollection replay and improved MLP median second-collect time; report cutoff and reproducibility limits.
+- [x] Independent final reviews of stable code and acceptance evidence; root updates architecture/ADR/verification, commits and reports scope/results without formal-HPO or strength claims.
