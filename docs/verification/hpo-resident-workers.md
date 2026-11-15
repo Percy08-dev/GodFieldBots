@@ -42,6 +42,10 @@ interpreted as PCIe bus traffic. All3pause1/resume2 cases return original receip
 rebuild workers, preserve all4original clocks, and preserve all6G1artifact files
 byte-for-byte. They end incomplete/update_cap at2, not formal completion.
 
+Subsequent wall/CPU attribution is recorded in
+[the runtime profiling report](ppo-runtime-profiling.md). It changes no application
+behavior or the scope of these earlier measurements.
+
 ## Decision latency and memory
 
 The following pool all recorded **neural-family** decisions from the3samples/
