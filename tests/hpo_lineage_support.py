@@ -24,7 +24,7 @@ from tests.test_card_instance_learning import ACTIONS, LAYOUT, RULES
 from tests.test_hpo_network import small_model4
 
 
-def hpo_state_fixture(directory: Path, *, decision_budget: int = 6, packed=False):
+def hpo_state_fixture(directory: Path, *, decision_budget: int = 6, packed=False, resident=False):
     model = small_model4()
     binding = InferenceBindingV2(device="cpu", max_candidates=64, candidate_chunk=2)
     recipe = replace(HPOTrainingConfig(), epochs=2, minibatch_size=2, collection_games=8)
@@ -41,6 +41,8 @@ def hpo_state_fixture(directory: Path, *, decision_budget: int = 6, packed=False
         "deadline_inputs": {"run_wall_seconds": 14400, "base_wall_seconds": 7200,
             "base_admission_seconds": 5400, "base_execution_seconds": 7140,
             "base_finalization_seconds": 60}}
+    if resident:
+        spec.update(schema_version=3, runtime={'mode':'resident-worker-v1', 'cache_entries':6, 'cache_weight_bytes':134217728})
     run = RunConfigV2(split="train", wall_seconds=14400, execution_seconds=14340,
         admission_seconds=14340 * 5400 / 7140)
     configured = ConfiguredNeuralModelV4(**{name: getattr(model, name) for name in model.__dataclass_fields__},
@@ -76,7 +78,7 @@ def hpo_state_fixture(directory: Path, *, decision_budget: int = 6, packed=False
         "identity": identity, "execution": execution, "classification": classification, "storage_binding": storage_binding})
     now = time.time()
     state = {"schema_version": 5, "algorithm": "ppo", "run_id": "controlled-hpo-fixture",
-        "status": "running", "run_variant": "hpo-ppo-v1", "hpo_spec_sha256": digest(spec),
+        "status": "running", "run_variant": "hpo-ppo-resident-v1" if resident else "hpo-ppo-v1", "hpo_spec_sha256": digest(spec),
         "effective_config": config, "config_sha256": digest(config), "config_inputs": [],
         "identity": identity, "seed": 17, "device": "cpu", "created_unix": now, "last_unix": now,
         "wall_deadline_unix": now + run.wall_seconds,
@@ -92,11 +94,11 @@ def hpo_state_fixture(directory: Path, *, decision_budget: int = 6, packed=False
     return state, model, recipe, binding
 
 
-def initial_hpo_chain(directory: Path, *, decision_budget=6, packed=False):
+def initial_hpo_chain(directory: Path, *, decision_budget=6, packed=False, resident=False):
     directory.mkdir()
     for name in ("artifacts", "generations", "updates", "collections", "numeric"):
         (directory / name).mkdir()
-    state, model, recipe, binding = hpo_state_fixture(directory, decision_budget=decision_budget, packed=packed)
+    state, model, recipe, binding = hpo_state_fixture(directory, decision_budget=decision_budget, packed=packed, resident=resident)
     learner = HpoLearner(model, recipe, 17, binding, state["resume_identity"], actions=ACTIONS, rules=RULES)
     saved = learner.save(checkpoint_path(directory, 0), shard_bytes=524288)
     classification = input_binding_game_v3(ACTIONS.action_contract, RULES)
@@ -116,6 +118,8 @@ def initial_hpo_chain(directory: Path, *, decision_budget=6, packed=False):
     registry = {"schema_version": 4, "generations": {"0": {"files": {name: {
         "sha256": checksum, "status": "retained", "deletion_intent": None, "deletion_receipt": None}
         for name, checksum in saved["files"].items()}}}, "evaluation_references": {}}
+    if resident:
+        registry.update(schema_version=5, cache_references={})
     atomic_json(directory / "artifact-registry.json", registry)
     return state, [record], learner
 

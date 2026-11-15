@@ -1,6 +1,9 @@
 # 0041: HPO resident participant workers and diagnostic progress
 
 - Status: Accepted design; implementation and final acceptance pending.
+- Foundation: Task1 contracts/readers/resources/references accepted after fix1,
+  covering165PASS and both independent scoped re-reviews READY. Execution remains
+  explicitly guarded until actual Task2 pool/readiness integration is verified.
 - Date: 2026-11-15. Owner: root.
 - Authority: user-approved plan and explicit implementation request.
 - Architecture review: `/root/resident_inference_design_check`, READY after
@@ -43,6 +46,11 @@ closed. Accept small duplicated weights/serialized requests initially; revisit
 with measured GPU/context/IPC need. Progress may stale during blocking work;
 revisit stronger observation only for demonstrated needs. Managed VRAM limits
 are soft, not physical guarantees. No speedup/strength result is preaccepted.
+Loss of the entire invoker retains pending cache pins and failed-parent storage;
+JSON/PID/admission release cannot recreate original release authority. Revisit a
+separate administrative reclamation design when that retained storage needs
+recovery. Normal failure/pause cleanup with surviving custody must still release
+references after actual eviction/reap.
 
 ## Verification
 

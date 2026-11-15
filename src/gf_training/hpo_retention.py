@@ -12,7 +12,10 @@ from typing import Any
 
 from gf_common.domain import ContractError, Json, canonical, integer
 from gf_training.hpo_lineage import (
+    CACHE_REFERENCE_DIRECTORY,
     REFERENCE_DIRECTORY,
+    cache_reference_journal,
+    checked_cache_reference_binding,
     checked_reference_binding,
     protected_hpo_files,
     reference_journal,
@@ -62,20 +65,28 @@ def _mkdir(path: Path, *, ownership: RunOwnership) -> None:
 
 
 def _transition(directory: Path, binding: Json, phase: str, *, max_owned_bytes: int,
-                deadline: float, ownership: RunOwnership | None = None) -> HpoReferenceReceipt:
+                deadline: float, ownership: RunOwnership | None = None, cache: bool = False, release_evidence: Json | None = None) -> HpoReferenceReceipt:
     with ExitStack() as scope:
-        ownership=ownership or scope.enter_context(run_lock(directory))
+        if ownership is None:
+            ownership=scope.enter_context(run_lock(directory))
         ownership=require_hpo_run_owner(directory,ownership)
         scan=scope.enter_context(_ChainScan(directory=directory,max_owned_bytes=max_owned_bytes,deadline=deadline))
         state, records = validate_hpo_chain(directory,max_owned_bytes=max_owned_bytes,deadline=deadline,scan=scan)
-        checked_reference_binding(binding,state,records,scan)
+        checker = checked_cache_reference_binding if cache else checked_reference_binding
+        journal = cache_reference_journal if cache else reference_journal
+        checker(binding,state,records,scan)
         registry=scan.object(directory/'artifact-registry.json')
         token=binding['token']
-        root=directory/REFERENCE_DIRECTORY
+        root=directory/(CACHE_REFERENCE_DIRECTORY if cache else REFERENCE_DIRECTORY)
+        kind = 'hpo-cache-reference-' if cache else 'hpo-evaluation-reference-'
+        refs = registry['cache_references' if cache else 'evaluation_references']
         folder=root/token
         # An existing namespace is admitted by the reader. Do not adopt a foreign
         # empty token directory as a successful transaction.
-        scan._hpo_reference_snapshot=None
+        if cache:
+            scan._hpo_cache_reference_snapshot=None
+        else:
+            scan._hpo_reference_snapshot=None
         if phase=='acquire':
             _mkdir(root,ownership=ownership)
             _mkdir(folder,ownership=ownership)
@@ -93,18 +104,21 @@ def _transition(directory: Path, binding: Json, phase: str, *, max_owned_bytes: 
         else:
             if phase=='release' and not (folder/'acquire.receipt.json').exists():
                 raise ContractError('HPO reference release lacks completed acquisition')
-            intent={'schema_version':1,'kind':'hpo-evaluation-reference-'+phase+'-intent',
+            intent={'schema_version':1,'kind':kind+phase+'-intent',
                 'operation_id':str(uuid.uuid4()),'binding':binding}
             if phase=='release':
                 scan.object(folder/'acquire.receipt.json')
                 intent['acquire_receipt_sha256']=scan.verified_digest(folder/'acquire.receipt.json')
+                if cache:
+                    from gf_common.hpo_resident import checked_cache_release
+                    intent['release_evidence'] = checked_cache_release(binding,release_evidence)
             _write_control(intent_path,intent,scan=scan,immutable=True,ownership=ownership)
-        intended={'generation':binding['generation'],'inference_sha256':binding['inference_sha256']}
-        actual=registry['evaluation_references'].get(token)
+        intended=binding if cache else {'generation':binding['generation'],'inference_sha256':binding['inference_sha256']}
+        actual=refs.get(token)
         if receipt_path.exists():
             receipt=scan.object(receipt_path)
             # Full journal validation binds the intent and immutable receipt.
-            reference_journal(scan,state,records,registry)
+            journal(scan,state,records,registry)
             if phase=='acquire' and canonical(actual)!=canonical(intended) or phase=='release' and actual is not None:
                 raise ContractError('completed HPO reference transaction changed registry fact')
             scan.finalize()
@@ -112,19 +126,19 @@ def _transition(directory: Path, binding: Json, phase: str, *, max_owned_bytes: 
         if actual is not None and canonical(actual)!=canonical(intended):
             raise ContractError('HPO active reference has foreign binding')
         if phase=='acquire':
-            registry['evaluation_references'][token]=intended
+            refs[token]=intended
         else:
-            registry['evaluation_references'].pop(token,None)
+            refs.pop(token,None)
         # The matching durable intent is the ONLY authority to reconcile an
         # already-mutated registry when the prior process stopped before receipt.
         registry_sha=_write_control(directory/'artifact-registry.json',registry,scan=scan,ownership=ownership)
-        receipt={'schema_version':1,'kind':'hpo-evaluation-reference-'+phase+'-receipt','binding':binding,
+        receipt={'schema_version':1,'kind':kind+phase+'-receipt','binding':binding,
             'intent_sha256':scan.verified_digest(intent_path),'registry_sha256':registry_sha,'confirmed_unix':time.time()}
         sha=_write_control(receipt_path,receipt,scan=scan,immutable=True,ownership=ownership)
         # Own writes change token directory inventories. Rebuild only these
         # known namespace snapshots, then perform the last reportable checks.
         scan.inventories.pop(folder,None)
-        reference_journal(scan,state,records,registry)
+        journal(scan,state,records,registry)
         scan.finalize()
         return HpoReferenceReceipt(dict(binding),sha,phase)
 
@@ -160,7 +174,10 @@ def retain_hpo_generations(directory: Path, generation: int, *, max_owned_bytes:
         state,records=validate_hpo_chain(directory,max_owned_bytes=max_owned_bytes,deadline=deadline,scan=scan)
         integer(generation,state['updates'],state['updates'])
         registry=scan.object(directory/'artifact-registry.json')
-        protected=protected_hpo_files(state,records,registry,reference_journal(scan,state,records,registry))
+        pending=reference_journal(scan,state,records,registry)
+        if 'cache_references' in registry:
+            pending += cache_reference_journal(scan,state,records,registry)
+        protected=protected_hpo_files(state,records,registry,pending)
         for number,record in enumerate(records):
             targets={name:sha for name,sha in record['artifact_files'].items()
                 if name not in protected[number] and registry['generations'][str(number)]['files'][name]['status']=='retained'}
@@ -219,3 +236,47 @@ def _delete_files(directory: Path, number: int, targets: Json, registry: Json, s
     finally:
         for fd in (stage_fd,source_fd,parent_fd):
             if fd is not None: os.close(fd)
+
+
+def pin_hpo_cache(directory: Path, token: str, generation: int, inference_sha256: str, *,
+                  owner: Json, max_owned_bytes: int, deadline: float,
+                  ownership: RunOwnership | None = None) -> HpoReferenceReceipt:
+    """Durably protect exact immutable cache bytes BEFORE the worker reads them."""
+    from dataclasses import asdict
+
+    from gf_common.domain import digest
+    from gf_common.hpo_resident import cache_owner
+    from gf_training.hpo_source import hpo_binding
+    directory=directory.resolve()
+    with ExitStack() as scope:
+        if ownership is None:
+            ownership=scope.enter_context(run_lock(directory))
+        ownership=require_hpo_run_owner(directory,ownership)
+        scan=scope.enter_context(_ChainScan(directory=directory,max_owned_bytes=max_owned_bytes,deadline=deadline))
+        state,records=validate_hpo_chain(directory,max_owned_bytes=max_owned_bytes,deadline=deadline,scan=scan)
+        integer(generation,0,len(records)-1)
+        _,policy=hpo_binding(directory,state,records[generation],generation)
+        policy_sha=digest(asdict(policy))
+        weights=digest({key:sha for key,sha in records[generation]['artifact_files'].items() if key.startswith('weights-')})
+        binding={'run_id':state['run_id'],'token':token,'generation':generation,
+            'inference_sha256':inference_sha256,'generation_sha256':scan.verified_digest(generation_path(directory,generation)),
+            **cache_owner(owner),'policy_sha256':policy_sha,'weights_sha256':weights,
+            'cache_identity':digest({'policy_sha256':policy_sha,'inference_sha256':inference_sha256,'weights_sha256':weights})}
+        checked_cache_reference_binding(binding,state,records,scan)
+        registry=scan.object(directory/'artifact-registry.json')
+        expected={name for name in records[generation]['artifact_files'] if name=='inference.json' or name.startswith('weights-')}
+        if any(registry['generations'][str(generation)]['files'][name]['status']!='retained' for name in expected):
+            raise ContractError('HPO cache pin requires actual retained inference and weights')
+        scan.finalize()
+        return _transition(directory,binding,'acquire',max_owned_bytes=max_owned_bytes,deadline=deadline,ownership=ownership,cache=True)
+
+
+def release_hpo_cache(directory: Path, binding: Json, *, authority: Any,
+                      max_owned_bytes: int, deadline: float,
+                      ownership: RunOwnership | None = None) -> HpoReferenceReceipt:
+    """Only SAME live custody's eviction or audited reap permits pin retirement."""
+    from gf_training.hpo_resident import CacheReleaseAuthority
+    if type(authority) is not CacheReleaseAuthority:
+        raise ContractError('original live resident cache-release authority required')
+    authority.require(binding)
+    return _transition(directory.resolve(),binding,'release',max_owned_bytes=max_owned_bytes,deadline=deadline,ownership=ownership,cache=True,release_evidence=authority.evidence)

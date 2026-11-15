@@ -16,7 +16,7 @@ from types import ModuleType
 from typing import TYPE_CHECKING, Any
 
 from gf_cli.config import GroupPackExperimentConfig, LoadedConfig
-from gf_cli.hpo_config import LoadedHPOConfig
+from gf_cli.hpo_config import LoadedHPOConfig, require_hpo_runtime_execution
 from gf_common.card_instance import ActionConfigV3
 from gf_common.card_instance_collection import checked_linkage, hpo_evaluation_role
 from gf_common.domain import (
@@ -755,6 +755,7 @@ def _confirm_failed_evaluation(error: BaseException, store: Any, name: str,
 async def evaluate_seed(store: object, loaded: LoadedHPOConfig, campaign: Json, proposal: object,
                         training: Json, *, output: Path) -> Json:
     """One actual primary evaluation; no interrupted request is silently rerun."""
+    require_hpo_runtime_execution(loaded.config)
     from gf_cli.hpo_campaign import Proposal
     from gf_cli.hpo_storage import CampaignStore
     from gf_common.card_instance_collection import hpo_evaluation_groups
@@ -884,6 +885,8 @@ async def evaluate_comparison(store: object, left: LoadedHPOConfig, right: Loade
                               right_training: Json, *, comparison_id: str, conditions_sha256: str,
                               output: Path) -> ComparisonPanel:
     """One complete declared seed-pair matchup through the actual shared collector."""
+    require_hpo_runtime_execution(left.config)
+    require_hpo_runtime_execution(right.config)
     from gf_cli.hpo_campaign import Proposal
     from gf_cli.hpo_storage import CampaignStore
     from gf_common.card_instance_collection import hpo_evaluation_groups

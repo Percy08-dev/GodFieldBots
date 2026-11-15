@@ -416,7 +416,8 @@ class _NativeGameInputs(NativeStructuredSource):
                  deadline: float, extra_owned_bytes: int = 0, max_scratch_bytes: int | None = None,
                  native: Any = None, collection_index: int = 0, artifact_provider: Any = None, shared_controls: Any = None) -> None:
         self.actions = actions
-        self._hpo = type(plan.get('schema_version')) is int and plan['schema_version'] == 5
+        self._hpo = type(plan.get('schema_version')) is int and plan['schema_version'] in (5, 6)
+        self._resident = type(plan.get('schema_version')) is int and plan['schema_version'] == 6
         self._hpo_expected: Json | None = None
         input_binding_game_v3(actions.action_contract, card_instance_rules())
         self.settings = preparation_config(asdict(settings))
@@ -429,7 +430,7 @@ class _NativeGameInputs(NativeStructuredSource):
         self._shared_controls = shared_controls
         self._last_held = 0
         if artifact_provider is not None:
-            if (type(artifact_provider) is not OriginalArtifactProvider or plan.get('schema_version') != (5 if self._hpo else 4)
+            if (type(artifact_provider) is not OriginalArtifactProvider or plan.get('schema_version') not in ((5,6) if self._hpo else (4,))
                     or plan.get('artifact_registry_sha256') != artifact_provider.registry_sha256):
                 raise ContractError('plan4 requires SAME concrete registered original provider')
             from gf_common.group_pack_game import checked_storage_binding
@@ -546,7 +547,7 @@ class _NativeGameInputs(NativeStructuredSource):
         if not self._explicit_candidate:
             if self._hpo:
                 from gf_training.native_backend import hpo_reader_settings
-                hpo_reader_settings(self.settings, module, packed=self._artifact_provider is not None)
+                hpo_reader_settings(self.settings, module, packed=self._artifact_provider is not None, resident=self._resident)
             else:
                 card_instance_reader_settings(self.settings, module)
             if self._artifact_provider is not None:

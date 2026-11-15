@@ -8,6 +8,7 @@ from typing import Any
 
 from gf_common.domain import ContractError, Json, canonical, closed, digest, integer
 from gf_common.hpo import PROOF_KINDS, optimizer_delta
+from gf_common.hpo_resident import checked_retirement, is_resident
 from gf_common.schedule import serialize_schedule
 from gf_models.structured_sealed import SEMANTIC_KEYS_V3, checksum
 from gf_training.hpo_collection import selection_for_counts
@@ -68,6 +69,7 @@ def authorize_controls(value: Json, native: Any, actions: Any, *, directory: Pat
             _same(value[key], state[key], 'native HPO pending input boundary differs')
             _same(parent[key], state[key], 'native HPO parent input boundary differs')
         spec = hpo_spec(state)
+        resident = is_resident(state)
         recipe = spec['training_recipe']
         if packed:
             from gf_common.group_pack_game import checked_storage_binding
@@ -86,7 +88,12 @@ def authorize_controls(value: Json, native: Any, actions: Any, *, directory: Pat
         final['pending_sha256'] = digest(value)
         generations = set()
         for index, raw in enumerate(value['collections']):
-            closed(raw, _COLLECTION)
+            closed(raw, _COLLECTION | ({'logical_retirement'} if resident else set()))
+            if resident:
+                retirement = checked_retirement(raw['logical_retirement'])
+                if (retirement['run_id'] != state['run_id'] or retirement['generation'] != raw['generation']
+                        or retirement['collection_id'] != raw['linkage']['batch_id']):
+                    raise ContractError('native logical retirement has foreign original run/collection/generation')
             integer(raw['collection_index'], index, index)
             generation = integer(raw['generation'], 0, state['updates'])
             if generation in generations:
@@ -125,7 +132,7 @@ def authorize_controls(value: Json, native: Any, actions: Any, *, directory: Pat
                 _same(raw['numeric'], {'directory': str(directory / stored['numeric']), 'sha256': stored['numeric_sha256'],
                     'files': stored['numeric_files']}, 'HPO numeric original inventory differs')
                 expected_proof = {key: item for key, item in stored['source_proof'].items()
-                    if key not in ('selection', 'expected_optimizer_step_delta')}
+                    if key not in ('selection', 'expected_optimizer_step_delta', 'logical_retirement')}
                 expected_proof.update(schema_version=2 if packed else 1,
                     kind='card-instance-packed-original-source-proof' if packed else 'card-instance-original-source-proof')
                 if packed:
@@ -136,6 +143,8 @@ def authorize_controls(value: Json, native: Any, actions: Any, *, directory: Pat
                     _same(proof, expected_proof, 'HPO native facts differ from actual committed originals')
             elif value['mode'] != 'live_cohort' or raw['numeric'] is not None:
                 raise ContractError('uncommitted HPO facts require the actual live collection')
+            if resident and stored is not None:
+                _same(raw['logical_retirement'],stored['source_proof']['logical_retirement'],'native Proof4 retirement differs from committed originals')
             control = {'run_id': state['run_id'], 'config_sha256': state['config_sha256'],
                 'identity': state['identity'], 'execution': state['execution'], 'plan': plan.linkage,
                 'files': {f'generations/{generation:06}.json': scan.verified_digest(directory / 'generations' / f'{generation:06}.json'),
@@ -152,10 +161,11 @@ def authorize_controls(value: Json, native: Any, actions: Any, *, directory: Pat
             authorization.append({'collection_index': index, 'selection': selection, 'training_recipe': recipe,
                 'expected_optimizer_step_delta': delta, 'expected_correspondence': correspondence})
             item = final['collections'][index]
-            for key in ('original_proof', 'episode_counts', 'episode_digests', 'control'):
-                item.pop(key)
+            for key in ('original_proof', 'episode_counts', 'episode_digests', 'control', 'logical_retirement'):
+                item.pop(key, None)
             item.update(selection=selection, correspondence=correspondence,
-                source_proof={**proof, 'schema_version': 3, 'kind': PROOF_KINDS[int(packed)],
+                source_proof={**proof, **({'logical_retirement':raw['logical_retirement']} if resident else {}),
+                    'schema_version': 4 if resident else 3, 'kind': PROOF_KINDS[int(packed)],
                     'selection': selection, 'expected_optimizer_step_delta': delta})
         expected_generations = set(range(state['updates'])) | ({state['updates']} if value['mode'] == 'live_cohort' else set())
         if generations != expected_generations:

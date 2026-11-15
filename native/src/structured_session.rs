@@ -91,6 +91,7 @@ pub struct Sources {
     logical_files: BudgetVec<(PathBuf, Lease)>,
     files: BudgetVec<Evidence>,
     inventories: BudgetVec<Inventory>,
+    absent_controls: BudgetVec<(PathBuf, Lease)>,
 }
 enum SourceAccess {
     Physical(Identity),
@@ -121,6 +122,7 @@ impl Sources {
             logical_files: BudgetVec::new(&budget),
             files: BudgetVec::new(&budget),
             inventories: BudgetVec::new(&budget),
+            absent_controls: BudgetVec::new(&budget),
             budget,
             control,
             max_json,
@@ -150,6 +152,7 @@ impl Sources {
                 logical_files: BudgetVec::new(&budget),
                 files: BudgetVec::new(&budget),
                 inventories: BudgetVec::new(&budget),
+            absent_controls: BudgetVec::new(&budget),
                 budget,
                 control,
                 max_json,
@@ -762,7 +765,16 @@ impl Sources {
         }
         self.current_directories()
     }
+    pub(crate) fn absent_control(&mut self, path: &Path) -> Result<()> {
+        self.safe(path)?;
+        if path.exists() || path.is_symlink() { return Err(Error::contract("resident absent control appeared")); }
+        let lease = self.budget.reserve(1024 + path.as_os_str().len() * 4)?;
+        self.absent_controls.push((path.into(),lease))
+    }
     fn current_directories(&self) -> Result<()> {
+        for (path,_) in self.absent_controls.iter() {
+            if path.exists() || path.is_symlink() { return Err(Error::contract("resident absent control appeared after snapshot")); }
+        }
         self.control.check()?;
         source_io();
         let SourceAccess::Physical(root_identity) = &self.access else {
@@ -2545,7 +2557,7 @@ impl CardInstanceNativeSession {
         }
         let hpo = {
             let parsed = json::parse(plan, &budget, &control)?;
-            parsed.root.get("schema_version").and_then(Value::as_i64) == Some(5)
+            matches!(parsed.root.get("schema_version").and_then(Value::as_i64), Some(5 | 6))
         };
         if (!hpo && budget.limit() > 12usize * 1024 * 1024 * 1024)
             || source_bytes == 0

@@ -10,6 +10,8 @@ use std::{collections::BTreeMap, path::Path, sync::Arc};
 
 #[path = "hpo_controls.rs"]
 pub(crate) mod hpo;
+#[path = "hpo_resident.rs"]
+pub(crate) mod resident;
 #[path = "card_instance_tree_raw.rs"]
 pub(crate) mod tree3;
 
@@ -19,13 +21,14 @@ pub(crate) fn refresh_training<'a>(cfg: &'a Value, b: &Arc<Budget>, c: &Control)
         if cfg.get("training_opponents").is_some() {
             return Err(Error::contract("HPO opponents belong exclusively to spec2"));
         }
-        match n(spec, "schema_version", 1, 2)? {
+        match n(spec, "schema_version", 1, 3)? {
             1 => {
                 if spec.get("training_opponents").is_some() {
                     return Err(Error::contract("HPO spec1 rejects training_opponents"));
                 }
                 return Ok(None);
             }
+            3 if spec.get("training_opponents").is_none() => return Ok(None),
             _ => {
                 n(spec.require("training_recipe")?, "collection_games", 16, 16)?;
                 spec.require("training_opponents")?
@@ -71,16 +74,21 @@ pub(crate) enum SourceFormat {
     PackedCorrected,
     Hpo,
     PackedHpo,
+    ResidentHpo,
+    PackedResidentHpo,
 }
 impl SourceFormat {
     pub(crate) fn corrected(self) -> bool {
         self != Self::Engineering
     }
     pub(crate) fn packed(self) -> bool {
-        matches!(self, Self::PackedCorrected | Self::PackedHpo)
+        matches!(self, Self::PackedCorrected | Self::PackedHpo | Self::PackedResidentHpo)
     }
     pub(crate) fn hpo(self) -> bool {
-        matches!(self, Self::Hpo | Self::PackedHpo)
+        matches!(self, Self::Hpo | Self::PackedHpo | Self::ResidentHpo | Self::PackedResidentHpo)
+    }
+    pub(crate) fn resident(self) -> bool {
+        matches!(self, Self::ResidentHpo | Self::PackedResidentHpo)
     }
     fn class(self) -> &'static [&'static str] {
         if self.corrected() { GAME_CLASS } else { CLASS }

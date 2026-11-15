@@ -59,6 +59,37 @@ Reset/verify ALL EventBank/previous frame, policy/search RNG, GRU/KV/history,
 positions/owners/revisions, timings and pending I/O/responses, including inactive
 cached policies. CUDA synchronization precedes PARK. No batching or CUDA IPC.
 
+Evaluation runtime choice is explicit and independent of each parent's producer
+mode. Evaluation custody binds SAME admission plus the full immutable parent-set,
+seed-pair, checkpoint hashes and policy bindings before allocation. Its cache
+uses only those declared artifacts under genuine evaluation-reference pins kept
+through actual pool reap. This applies to Registry4 and Registry5 parents without
+fabricating training cache references or modifying Registry4 schema. Training
+alone needs Registry5 cache pins across commits/retention. No cross-panel cache.
+
+Borrowing an idle physical owner reserves only additional activation/cache/
+decision/transition demand on the SAME ledger, not a second worker slot or a
+second copy of existing residency. Positive residency increases reserve before
+allocation; logical close never refunds physical residency. A done/cancelled
+async wrapper alone cannot prove its actual underlying I/O thread retired.
+
+Task2 adds live phase-aware readiness, distinct from completed-collection PARK:
+collection admission binds SAME job/ledger/pool, original immutable plan/bindings,
+next generation and collection identity, and transitions admitting→collecting→
+retired. It is only precollection authority; no Proof4/update/commit authority.
+Per-owner readiness comes from actual clean-bootstrap READY or verified END/PARK
+or SYNC/PARK, bound to selected checkpoint/cache identity, viewer/owner/lease epoch
+and positively retired original I/O/decisions/responses. Recheck immediately before
+BEGIN and dispatch; another owner's game does not invalidate untouched per-owner
+readiness. Global collection-retirement/update authority still invalidates on
+BEGIN/SYNC/owner changes. Collection generation is separate from old frozen
+checkpoint/control generations: never rewrite ENDs to fabricate G+1 retirement.
+Lazy process registration alone is insufficient; new owners require actual clean
+readiness and admission. BEGIN/SELECT wrap unchanged protocol3 ready/selection
+payloads; SELECT retains own legitimate episode state and never claims reset.
+This activation design's architecture review is READY; actual Task2 conformance
+and fault/equivalence checks remain required.
+
 ### Cache, update and retirement
 
 Per physical worker: at most6immutable checkpoint identities/128MiB of weights,
@@ -70,6 +101,9 @@ otherwise preserve a distinct frozen copy. Never overwrite opponent snapshots.
 Synchronize inference weights only, not optimizer/moments. Account contexts,
 temporal/activation/allocator residency and staged old+new weights separately;
 the previous~7.9GiB estimate does not prove this expanded implementation fits.
+An uncertain/failed SYNC retains its staged-byte reservation until exact audited
+reap of all original physical owners proves retirement. Successful release needs
+verified sync/CUDA/PARK completion, not exception-free control flow alone.
 
 Required ordering:
 1. Drain games; validate END/reset ACKs; synchronize CUDA; PARK all physical
@@ -97,12 +131,26 @@ Logical retirement differs from physical termination. Timeout, bad identity,
 partial copy, reset/cancel/cleanup failure poison the job and use owned cleanup;
 no policy reproposal, invented outcomes, deadline extension or unproved release.
 
+Malformed ACKs set sticky failed resident work authority; they do not by themselves
+destroy SAME GpuJob resource ownership. Failed custody forbids all new work and
+PARK/update/ACK-release authority. Exact original ownership still permits real
+reap and cache release backed by that audited reap, then operational termination
+of FAILED data. No cleanup bypass or successful objective is created. Actual
+ownership/cleanup/publication uncertainty still withholds termination/admission.
+
 ### Compatibility and interfaces
 
 New campaign3/run-spec3 explicitly select `resident-worker-v1` in a runtime table
 and may include the existing optional mixed16 descriptor. Use dedicated variants
 so old dataclass/asdict/hash outputs stay exact; bind mode/cache limits into
 study/config/resume identity. Old campaign/spec1/2 remain fresh.
+
+The runtime table is closed and explicit: `mode="resident-worker-v1"`,
+`cache_entries=6`, `cache_weight_bytes=134217728`. All three v1 values are fixed,
+not search knobs. Persisted retirement facts bind collection/run/job/pool,
+generation/pool epoch, actual owner keys/PIDs/viewers/lease epochs and verified
+END/reset/PARK ACK evidence. These diagnostic identities never become policy
+features. Persisted JSON cannot construct the live original-owner capability.
 
 `run_variant="hpo-ppo-resident-v1"`+spec3 selects Collection7/Proof4/Registry5/
 native HPO plan6. Keep Run5/Update5/Generation4 with exact historical branches and
@@ -137,6 +185,22 @@ latest<=3intervals and no pause gaps. Terminal success requires actual authorita
 completion/cleanup. Write failure warns once/disables persistence without changing
 training gates or deadlines.
 
+Resident learner diagnostics use a distinct versioned JSON-line tag on the
+EXISTING owned bounded stderr/log drain, with bounded line/reassembly size and
+invocation/update sequence. Invalid/oversized/stale messages are ignored;
+callback/parser errors never stop draining or suppress numerical/CUDA failures.
+Keep original stderr accounting/storage/hard limits and cancellation semantics.
+Training updates bounded in-memory facts; CLI alone writes telemetry. Emit save
+immediately before actual saving, and allocator allocated/reserved/high-water
+facts at EXISTING synchronization boundaries, never synchronize just for display.
+Label process/device/invocation lifetime and reset semantics. Missing facts are
+unavailable, not estimates; missing required hardware evidence leaves performance
+acceptance incomplete without invalidating independently healthy training data.
+Explicitly enable for new resident mode; fresh instrumentation is harness-only
+and recorded equally within timing pairs. Numeric5/Wire6/stdout remain exact.
+Per-worker memory in new pool ACKs is diagnostic only; summed process maxima are
+not simultaneous global device peaks. This interface's architecture review READY.
+
 ## Review focus
 
 - SAME-owner parked proof cannot be replaced with flags/hashes or hide pending I/O.
@@ -153,13 +217,13 @@ native/src changes and focused tests. Root: ALL docs/config TOMLs. No pool activ
 **Interfaces:** accepted design -> explicit new variants/readers/capability,
 cache-reference transactions and parked authority seams; old entry points exact.
 
-- [ ] Add meaningful failing tests for old/new dispatch/hash, foreign/invalid
+- [x] Add meaningful failing tests for old/new dispatch/hash, foreign/invalid
   lifecycle, cache pin recovery/protection, memory transitions and optional-free load.
-- [ ] Implement only accepted new branches. Return unforeseen boundary decisions
+- [x] Implement only accepted new branches. Return unforeseen boundary decisions
   to root before dependent changes; no simulator/dependency changes.
-- [ ] Run focused Python/Rust tests, scoped Ruff/source mypy, report RED/GREEN,
+- [x] Run focused Python/Rust tests, scoped Ruff/source mypy, report RED/GREEN,
   changed files, exact results and concerns to root. No agent commits.
-- [ ] Independent correctness/conformance review; root resolves blockers/commits.
+- [x] Independent correctness/conformance review; root resolves blockers/commits.
 
 ## Task 2: Resident actor pool and HPO runtime integration
 
@@ -223,3 +287,10 @@ justify the broader information/failure boundary. Best-effort progress may stale
 during blocking work; reconsider independent observation only for demonstrated
 liveness needs. Managed memory is soft and accompanied by device measurements.
 Formal search ranges/D/trials/seeds/time budget remain a separate decision.
+Whole-invoker loss cannot reconstruct original cache-release authority. Pending
+pins/intents remain protective and the interrupted parent stays ineligible;
+admission restart/operator-release changes scheduling only. Normal/owned failure
+cleanup and successful pause must retire references with surviving custody and
+actual eviction/reap. Accepted debt is retained storage in orphaned failed
+parents; revisit with a separate reviewed administrative reclamation design only
+when that storage needs recovery, never infer it from PID absence or lock release.

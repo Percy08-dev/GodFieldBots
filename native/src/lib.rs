@@ -1115,11 +1115,7 @@ impl StructuredSessionBridge {
                 control.check()?;
                 let hpo = if corrected {
                     let parsed = json::parse(plan, &wire_budget, &control)?;
-                    parsed
-                        .root
-                        .get("schema_version")
-                        .and_then(json::Value::as_i64)
-                        == Some(5)
+                    matches!(parsed.root.get("schema_version").and_then(json::Value::as_i64), Some(5 | 6))
                 } else {
                     false
                 };
@@ -3792,6 +3788,7 @@ fn build_info() -> Vec<(&'static str, &'static str)> {
         ("card_instance_refresh", "baseline1;options1;identity1"),
         ("card_instance_refresh_opponents", "mixed16-v1;ordinary1;hpo2"),
         ("card_instance_hpo", structured_controls::hpo::CAPABILITY),
+        ("card_instance_hpo_resident", structured_controls::resident::CAPABILITY),
         (
             "card_instance_group_pack",
             CARD_INSTANCE_GROUP_PACK_CAPABILITY,

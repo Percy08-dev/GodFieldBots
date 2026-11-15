@@ -13,11 +13,13 @@ pub(super) fn manifest(
     c: &Control,
     role: CorrectedCollectionRole,
 ) -> Result<()> {
+    let resident = parent.is_some_and(|(_, state)| controls::resident::is_resident(state));
+    let version = if resident {7} else if role.hpo() {6} else {5};
     require(
         m.require("schema_version")?.integer(
-            if role.hpo() { 6 } else { 5 },
-            if role.hpo() { 6 } else { 5 },
-        )? == if role.hpo() { 6 } else { 5 }
+            version,
+            version,
+        )? == version
             && field(m, "status")? == "complete"
             && field(m, "collection_role")?
                 == if role.hpo() {
@@ -29,6 +31,14 @@ pub(super) fn manifest(
                 },
         "complete corrected PPO Collection5 required",
     )?;
+    if resident {
+        controls::resident::retirement(m.require("logical_retirement")?,b,c)?;
+        let retirement = m.require("logical_retirement")?;
+        let link = m.require("linkage")?;
+        for (left,right) in [("run_id","parent_run_id"),("collection_id","batch_id"),("generation","collection_generation")] {
+            require(retirement.require(left)? == link.require(right)?,"Collection7 original retirement binding differs")?;
+        }
+    } else { require(m.get("logical_retirement").is_none(),"Collection6 forbids resident retirement")?; }
     controls::game_binding3(m, b, c)?;
     let cfg = m.require("config")?;
     let actions = cfg.require("actions")?;
@@ -416,7 +426,7 @@ fn retained_registry(m: &Value, actions: &Value, b: &Arc<Budget>, c: &Control) -
     // Source admission has already required the exact collection version.
     let hpo = match m.get("schema_version") {
         None => false,
-        Some(version) => version.integer(5, 6)? == 6,
+        Some(version) => version.integer(5, 7)? >= 6,
     };
     if hpo {
         require(

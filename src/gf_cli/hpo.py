@@ -28,6 +28,7 @@ from gf_cli.hpo_config import (
     LoadedHPOConfig,
     joint_resource_admission,
     load_hpo_config,
+    require_hpo_runtime_execution,
 )
 from gf_cli.hpo_evaluation import (
     aggregate_trial_evaluation,
@@ -173,6 +174,7 @@ async def _train_seed(store: CampaignStore, loaded: LoadedHPOConfig, campaign: J
 async def run_campaign(loaded: LoadedHPOConfig, directory: Path, *, mode: str,
                         seed_paths: tuple[Path, ...] = ()) -> Json:
     """Concrete sequential operations; session time never interrupts an operation."""
+    require_hpo_runtime_execution(loaded.config)
     if mode not in ('fresh', 'resume') or mode == 'resume' and seed_paths:
         raise ContractError('explicit fresh/resume required; stage settings are fresh-only')
     started, started_unix = time.monotonic(), time.time()
@@ -372,6 +374,7 @@ def _closed_trial(path: Path, stack: ExitStack, stores: dict[Path, CampaignStore
 
 
 async def compare_trials(common: LoadedHPOConfig, left_path: Path, right_path: Path, output: Path) -> Json:
+    require_hpo_runtime_execution(common.config)
     from gf_cli.hpo_evaluation import evaluate_comparison
     from gf_evaluation.hpo_compare import comparison_table
     validate(common)

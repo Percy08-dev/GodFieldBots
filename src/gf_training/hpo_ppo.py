@@ -54,6 +54,8 @@ class _HpoOperations(_GameOperations):
         self.stop_reason: str | None=None
 
     def validate_config(self,config: Any) -> Any:
+        from gf_common.hpo_resident import require_hpo_runtime_execution
+        require_hpo_runtime_execution(config.hpo_spec)
         if type(config.actions) is not ActionConfigV3 or type(config.model) is not ConfiguredNeuralModelV4 or config.model.checkpoint is not None:
             raise ContractError('HPO requires exact fresh Model4/actions3')
         raw=asdict(config)

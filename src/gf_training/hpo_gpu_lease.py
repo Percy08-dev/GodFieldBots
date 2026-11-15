@@ -383,9 +383,17 @@ class _AuditedLedger(ReservationLedger):
         super().__init__(global_cuda_bytes, max_workers)
         self._job = job
         self._history: list[_Worker | _Learner] = []
+        self._resident_pool: Any = None
+        self._resident_temporary = 0
+        self._resident_update = False
+        self._resident_transition: Any = None
 
     def reserve_worker(self, resident_bytes: int) -> WorkerReservation:
         self._job._require_open()
+        if self._resident_pool is not None:
+            self._resident_pool._require()
+        if self._resident_transition:
+            raise ContractError('resident physical creation overlaps transition')
         token = super().reserve_worker(resident_bytes)
         try:
             audited = _Worker(**{field.name: getattr(token, field.name) for field in fields(WorkerReservation)})
@@ -398,6 +406,8 @@ class _AuditedLedger(ReservationLedger):
 
     def reserve_learner(self, resident_bytes: int, owner: Any) -> LearnerReservation:
         self._job._require_open()
+        if self._resident_pool is not None:
+            self._resident_pool._require()
         token = super().reserve_learner(resident_bytes, owner)
         try:
             audited = _Learner(**{field.name: getattr(token, field.name) for field in fields(LearnerReservation)})
@@ -416,7 +426,44 @@ class _AuditedLedger(ReservationLedger):
 
     def begin_update(self, temporary_bytes: int) -> None:
         self._job._require_open()
+        if self._resident_pool is not None:
+            self._resident_pool._require()
         super().begin_update(temporary_bytes)
+
+
+    @property
+    def cuda_bytes(self) -> int:
+        return super().cuda_bytes + getattr(self, '_resident_temporary', 0)
+
+    def _parked(self, authority: Any) -> None:
+        from gf_training.hpo_resident import ParkedAuthority
+        self._job._require_open()
+        if type(authority) is not ParkedAuthority:
+            raise ContractError('SAME live resident PARK authority required')
+        authority.require(self)
+
+    def begin_resident_update(self, temporary_bytes: int, *, authority: Any) -> None:
+        self._parked(authority)
+        integer(temporary_bytes, 0, self.global_cuda_bytes)
+        if self.updating or self._resident_transition or self._resident_temporary or self.cuda_bytes + temporary_bytes > self.global_cuda_bytes:
+            raise ContractError('resident update/transition overlaps or exceeds shared CUDA budget')
+        self._resident_temporary = temporary_bytes
+        self._resident_update = self.updating = True
+        self.peak_cuda_bytes = max(self.peak_cuda_bytes,self.cuda_bytes)
+
+    def finish_update(self) -> None:
+        if self._resident_update:
+            self._job._require_open()
+            self._resident_temporary = 0
+            self._resident_update = False
+        super().finish_update()
+
+    def reserve_resident_transition(self, temporary_bytes: int, *, authority: Any,
+                                    target_generation: int, target_checkpoint_sha256: str, affected_workers: tuple[_Worker,...]) -> Any:
+        from gf_training.hpo_resident import ResidentTransition
+        self._parked(authority)
+        return ResidentTransition(self,temporary_bytes,authority,target_generation=target_generation,
+            target_checkpoint_sha256=target_checkpoint_sha256,affected_workers=affected_workers)
 
 
 def _job(token: Any) -> GpuJob:
@@ -472,7 +519,10 @@ class _Worker(WorkerReservation):
             raise ContractError("actual synchronous stdlib no-child exception required")
 
     def reserve_decision(self, temporary_bytes: int) -> int:
-        _job(self)
+        job = _job(self)
+        pool = job._ledger._resident_pool
+        if pool is not None:
+            pool.require_decision(self)
         return super().reserve_decision(temporary_bytes)
 
     def spawned(self, process: Any) -> None:
@@ -648,9 +698,11 @@ class GpuJob:
             return self._receipt
         self._require_open()
         ledger = self._ledger
-        if ledger.workers or ledger.learner is not None or ledger.updating or any(
+        if ledger.workers or ledger.learner is not None or ledger.updating or ledger._resident_temporary or ledger._resident_transition or any(
                 not token.released or token.creation_pending or token._proof is None for token in ledger._history):
             raise ContractError("GPU resource creation/reap/update remains unconfirmed")
+        if ledger._resident_pool is not None:
+            ledger._resident_pool.require_resource_retirement(self,ledger)
         self._sealed = True
         try:
             path = self._lock.root / "jobs" / self.ticket

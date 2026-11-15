@@ -7,10 +7,14 @@ pub(super) fn original_facts_equal(
     actual: &Value,
     saved: &Value,
     packed: bool,
+    retirement: Option<&Value>,
     b: &Arc<Budget>,
     c: &Control,
 ) -> Result<bool> {
-    saved.require("schema_version")?.integer(3, 3)?;
+    saved.require("schema_version")?.integer(if retirement.is_some() {4} else {3}, if retirement.is_some() {4} else {3})?;
+    if let Some(retirement) = retirement {
+        require(saved.require("logical_retirement")? == retirement,"Proof4 original retirement differs from Collection7")?;
+    }
     require(
         field(saved, "kind")?
             == if packed {
@@ -24,6 +28,7 @@ pub(super) fn original_facts_equal(
     // custody comparator. This is no old-format loader or Source permission.
     let mut facts = json::copy(saved, c)?;
     facts.as_object_mut().unwrap().remove("selection");
+    facts.as_object_mut().unwrap().remove("logical_retirement");
     facts
         .as_object_mut()
         .unwrap()
@@ -237,6 +242,10 @@ pub(super) fn pending(inputs: &mut OriginalInputs) -> Result<Controls> {
             ("control", control),
             ("numeric", numeric),
         ]));
+        if inputs.format.resident() {
+            collections.last_mut().unwrap().as_object_mut().unwrap().insert("logical_retirement".into(),
+                json::copy(manifest.require("logical_retirement")?, c)?);
+        }
         declarations.push(Some(doc(&declaration, b, c)?));
     }
     let authorization = doc(
@@ -423,7 +432,10 @@ pub(super) fn authorize(
             "HPO final original/selection correspondence differs from independently checked Python expectation",
         )?;
         let mut proof = json::copy(&source.proof.root, c)?;
-        proof["schema_version"] = json::integer(3);
+        proof["schema_version"] = json::integer(if inputs.format.resident() {4} else {3});
+        if inputs.format.resident() {
+            proof.as_object_mut().unwrap().insert("logical_retirement".into(),json::copy(expected.require("logical_retirement")?,c)?);
+        }
         proof["kind"] = json::text(if inputs.format.packed() {
             "card-instance-hpo-packed-original-source-proof"
         } else {
@@ -443,6 +455,7 @@ pub(super) fn authorize(
             "episode_counts",
             "episode_digests",
             "control",
+            "logical_retirement",
         ] {
             item.as_object_mut().unwrap().remove(key);
         }

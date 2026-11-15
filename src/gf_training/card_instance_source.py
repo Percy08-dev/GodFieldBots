@@ -400,14 +400,14 @@ def _game_header(header: Json, manifest: Json, episode: Json, spec: Json,
     else:
         raw = manifest['neural_inputs']['policies'][header['policy']]
         safe, label = validate_neural_metadata(raw, actions=actions, rules=card_instance_rules())
-        if manifest['schema_version'] == 6:
+        if manifest['schema_version'] in (6, 7):
             # Inference5 is written by atomic_json's canonical UTF-8+newline
             # codec. Retained Journal6 metadata keeps that complete document
             # even after Registry4 deliberately deletes the physical manifest.
             encoded = (canonical(raw['inference_manifest']) + '\n').encode()
             if hashlib.sha256(encoded).hexdigest() != safe['expected_manifest_digest']:
                 raise ContractError('HPO original neural manifest bytes/hash differ from generation identity')
-        if header['model_version'] != ('4' if manifest['schema_version'] == 6 else '3') or label != header['policy'] or canonical(safe) != canonical(binding['policy_options']) or canonical(header.get('neural')) != canonical(raw):
+        if header['model_version'] != ('4' if manifest['schema_version'] in (6, 7) else '3') or label != header['policy'] or canonical(safe) != canonical(binding['policy_options']) or canonical(header.get('neural')) != canonical(raw):
             raise ContractError('original neural metadata differs from frozen registry')
 
 
@@ -907,7 +907,11 @@ class _GameBatchSource:
             from gf_common.hpo import PROOF_KINDS, optimizer_delta
             from gf_training.hpo_lineage import hpo_spec
             recipe = hpo_spec(self.state)['training_recipe']
-            proof.update(schema_version=3, kind=PROOF_KINDS[int(_packed(self.state))], selection=self.selection,
+            from gf_common.hpo_resident import is_resident
+            resident = is_resident(self.state)
+            if resident:
+                proof['logical_retirement'] = self.snapshot.collection.manifest['logical_retirement']
+            proof.update(schema_version=4 if resident else 3, kind=PROOF_KINDS[int(_packed(self.state))], selection=self.selection,
                 expected_optimizer_step_delta=optimizer_delta(self.selection['used_decisions'],
                     epochs=recipe['epochs'], minibatch_size=recipe['minibatch_size']))
         return proof
@@ -1101,7 +1105,7 @@ def _open_batch(plan: CollectionPlan, state: Json, records: list[Json], controls
                 require_native_refresh_baseline()
             if hpo:
                 from gf_training.native_backend import hpo_reader_settings
-                hpo_reader_settings(settings, packed=_packed(state))
+                hpo_reader_settings(settings, packed=_packed(state), resident=state.get('run_variant') == 'hpo-ppo-resident-v1')
             from gf_training.native_card_instance import _NativeGameInputs
             provider = None
             if _packed(state):
@@ -1125,7 +1129,7 @@ def _open_batch(plan: CollectionPlan, state: Json, records: list[Json], controls
                 native_plan.update(schema_version=4, storage_binding=state['storage_binding'],
                     artifact_registry_sha256=provider.registry_sha256)
             if hpo:
-                native_plan['schema_version'] = 5
+                native_plan['schema_version'] = 6 if state.get('run_variant') == 'hpo-ppo-resident-v1' else 5
             from gf_training.ppo_run import owned_bytes
             external = ()
             if provider is not None:

@@ -93,6 +93,7 @@ class _ChainScan(SealedScan):
         self._game_source_extra_bytes = 0
         self._game_source_max_owned_bytes = max_owned_bytes
         self._hpo_reference_snapshot: Any = None
+        self._hpo_cache_reference_snapshot: Any = None
 
     def admit_pool_controls(self) -> None:
         if self._packed_pool is not None and self.retained > self._pool_control_charge:
@@ -271,9 +272,12 @@ class _ChainScan(SealedScan):
 
 
     def finalize(self) -> None:
-        if self._hpo_reference_snapshot is not None:
-            identity, names = self._hpo_reference_snapshot
-            root = self.root/'evaluation-reference-receipts'
+        for namespace, snapshot in (('evaluation-reference-receipts', self._hpo_reference_snapshot),
+                ('cache-reference-receipts', self._hpo_cache_reference_snapshot)):
+            if snapshot is None:
+                continue
+            identity, names = snapshot
+            root = self.root/namespace
             if identity is None:
                 if root.exists() or root.is_symlink():
                     raise ContractError('HPO reference namespace appeared after snapshot')

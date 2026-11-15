@@ -839,14 +839,18 @@ fn inspect_collection_inner(
     let m = &manifest.root;
     let corrected = format.corrected();
     let schema = m.require("schema_version")?.integer(
-        if format.hpo() {
+        if format.resident() {
+            7
+        } else if format.hpo() {
             6
         } else if corrected {
             5
         } else {
             3
         },
-        if format.hpo() {
+        if format.resident() {
+            7
+        } else if format.hpo() {
             6
         } else if corrected {
             5
@@ -2154,6 +2158,7 @@ impl OriginalInputs {
         scratch_bytes: usize,
         chunk_bytes: usize,
     ) -> Result<Self> {
+        let resident = json::parse(encoded, &budget, &control)?.root.require("schema_version")?.integer(5,6)? == 6;
         if let Some(provider) = provider {
             Self::open_artifacts_context(
                 encoded,
@@ -2164,7 +2169,7 @@ impl OriginalInputs {
                 record_bytes,
                 scratch_bytes,
                 chunk_bytes,
-                SourceFormat::PackedHpo,
+                if resident { SourceFormat::PackedResidentHpo } else { SourceFormat::PackedHpo },
             )
         } else {
             Self::open_context(
@@ -2175,7 +2180,7 @@ impl OriginalInputs {
                 record_bytes,
                 scratch_bytes,
                 chunk_bytes,
-                SourceFormat::Hpo,
+                if resident { SourceFormat::ResidentHpo } else { SourceFormat::Hpo },
                 None,
             )
         }
@@ -2194,7 +2199,7 @@ impl OriginalInputs {
         require(encoded.len() <= 65536, "plan4 bounded wire required")?;
         let plan = crate::logical_artifacts::parse(encoded, &budget, &control)?;
         let p = &plan.root;
-        let version = if format.hpo() { 5 } else { 4 };
+        let version = if format.resident() {6} else if format.hpo() { 5 } else { 4 };
         p.require("schema_version")?.integer(version, version)?;
         let live = field(p, "mode")? == "live_cohort";
         p.closed(
@@ -2284,7 +2289,9 @@ impl OriginalInputs {
             "structured Source plan cannot be entirely empty",
         )?;
         p.require("schema_version")?.integer(
-            if format.hpo() {
+            if format.resident() {
+                6
+            } else if format.hpo() {
                 5
             } else if format.packed() {
                 4
@@ -2293,7 +2300,9 @@ impl OriginalInputs {
             } else {
                 2
             },
-            if format.hpo() {
+            if format.resident() {
+                6
+            } else if format.hpo() {
                 5
             } else if format.packed() {
                 4
@@ -2393,6 +2402,10 @@ impl OriginalInputs {
             };
             let directory = sources.root.clone();
             let state = sources.json(&directory.join("run.json"))?;
+            if format.hpo() {
+                require(crate::structured_controls::resident::is_resident(&state.root) == format.resident(),
+                    "HPO plan5/6 cannot reinterpret fresh/resident original parent")?;
+            }
             if format.corrected() {
                 let settings = state
                     .root
@@ -2609,7 +2622,9 @@ impl OriginalInputs {
             )?;
             let first = peek.json(&peek.root.join("manifest.json"))?;
             if first.root.get("schema_version").and_then(Value::as_i64)
-                == Some(if format.hpo() {
+                == Some(if format.resident() {
+                    7
+                } else if format.hpo() {
                     6
                 } else if format.corrected() {
                     5
@@ -2745,6 +2760,7 @@ impl OriginalInputs {
                             &scan.proof.root,
                             entry.update.root.require("source_proof")?,
                             format.packed(),
+                            if format.resident() { Some(scan.manifest.root.require("logical_retirement")?) } else {None},
                             &budget,
                             &control,
                         )?

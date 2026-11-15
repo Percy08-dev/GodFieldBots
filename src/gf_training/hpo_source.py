@@ -52,7 +52,7 @@ def original_inference(scan: _ChainScan, state: Json, record: Json, generation: 
 
 def is_hpo(state: Json) -> bool:
     return (type(state.get('schema_version')) is int and state['schema_version'] == 5
-        and state.get('run_variant') == 'hpo-ppo-v1' and state.get('model_version') == '4')
+        and state.get('run_variant') in ('hpo-ppo-v1', 'hpo-ppo-resident-v1') and state.get('model_version') == '4')
 
 
 def hpo_binding(directory: Path, state: Json, record: Json, generation: int) -> tuple[str, RuntimePolicyBinding]:
@@ -181,7 +181,7 @@ def validate_hpo_parent(directory: Path, *, require_complete: bool = True, max_o
             require_native_refresh_opponents()
         if settings.backend == 'rust':
             from gf_training.native_backend import hpo_reader_settings
-            hpo_reader_settings(settings, packed='storage_binding' in state)
+            hpo_reader_settings(settings, packed='storage_binding' in state, resident=state.get('run_variant') == 'hpo-ppo-resident-v1')
         inventories = []
         for generation in range(state['updates']):
             plan, _, after = recorded_hpo_plan(directory, state, records, generation, deadline)

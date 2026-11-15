@@ -26,6 +26,7 @@ from gf_common.card_instance import (
     corrected_card_instance_contract,
 )
 from gf_common.domain import ContractError, Json, canonical, clone, closed, digest, integer
+from gf_common.hpo_resident import resident_runtime
 from gf_common.structured_layout import CORRECTED_CARD_INSTANCE_LAYOUT, StructuredLayout
 from gf_common.training_opponents import parse_training_opponents
 from gf_models.hpo_config import model_config_v4, model_defaults_v4
@@ -122,6 +123,26 @@ class RefreshOpponentsHPOCampaignConfig(HPOCampaignConfig):
             'training_opponents': parse_training_opponents(self.training_opponents)})
 
 
+@dataclass(frozen=True, kw_only=True)
+class ResidentHPOCampaignConfig(HPOCampaignConfig):
+    runtime: Json
+
+    @property
+    def study_identity(self) -> str:
+        return digest({'recipe': 'hpo-resident-study-v1', 'base': super().study_identity,
+            'runtime': resident_runtime(self.runtime)})
+
+
+@dataclass(frozen=True, kw_only=True)
+class ResidentRefreshHPOCampaignConfig(ResidentHPOCampaignConfig):
+    training_opponents: Json
+
+    @property
+    def study_identity(self) -> str:
+        return digest({'recipe': 'hpo-mixed-refresh-study-v1', 'base': super().study_identity,
+            'training_opponents': parse_training_opponents(self.training_opponents)})
+
+
 @dataclass(frozen=True)
 class LoadedHPOConfig:
     config: HPOCampaignConfig
@@ -202,9 +223,11 @@ def materialize_hpo_run(loaded_campaign: LoadedHPOConfig, settings: Any, *, lear
         'deadline_inputs':{'run_wall_seconds':wall,'base_wall_seconds':base.run.wall_seconds,
             'base_admission_seconds':base.run.admission_seconds,'base_execution_seconds':base.run.execution_seconds,
             'base_finalization_seconds':final}}
-    if isinstance(campaign, RefreshOpponentsHPOCampaignConfig):
+    if isinstance(campaign, (RefreshOpponentsHPOCampaignConfig, ResidentRefreshHPOCampaignConfig)):
         _mixed_collection_games(campaign)
         spec.update(schema_version=2, training_opponents=parse_training_opponents(campaign.training_opponents))
+    if isinstance(campaign, ResidentHPOCampaignConfig):
+        spec.update(schema_version=3, runtime=resident_runtime(campaign.runtime))
     config=HPOExperimentConfig(run=run,server=base.server,actions=base.actions,model=model,opponent=base.opponent,
         evaluation=base.evaluation,training=training,preprocessing=preprocessing,storage=pack,hpo_spec=spec)
     raw=clone(asdict(config))
@@ -280,9 +303,12 @@ def campaign_config(value: Json, *, origin: Path) -> LoadedHPOConfig:
     required = {"schema_version", "kind", "base_experiment", "model_id", "stage", "trial_count",
                 "decision_budget", "learning_seeds", "evaluation_game_seeds", "sampler_seed",
                 "startup_trials", "session_seconds", "run_wall_seconds", "space"}
-    mixed = value.get("schema_version") == 2 and type(value.get("schema_version")) is int
-    closed(value, required | ({"training_opponents"} if mixed else set()), {"model", "training", "inference", "operating", "storage"})
-    integer(value["schema_version"], 1, 2)
+    resident = value.get("schema_version") == 3 and type(value.get("schema_version")) is int
+    mixed = value.get("schema_version") == 2 or resident and "training_opponents" in value
+    closed(value, required | ({"training_opponents"} if mixed else set()) | ({"runtime"} if resident else set()),
+        {"model", "training", "inference", "operating", "storage"})
+    integer(value["schema_version"], 1, 3)
+    runtime = resident_runtime(value["runtime"]) if resident else None
     descriptor = parse_training_opponents(value["training_opponents"]) if mixed else None
     if type(value["kind"]) is not str or value["kind"] != "ppo-hpo":
         raise ContractError("explicit ppo-hpo campaign kind required")
@@ -321,13 +347,13 @@ def campaign_config(value: Json, *, origin: Path) -> LoadedHPOConfig:
     if (base.config.actions.max_sequence_length > model.max_positions
             or base.config.actions.max_candidates > inference.max_candidates):
         raise ContractError("HPO model/actions capacity mismatch")
-    cls: Any = RefreshOpponentsHPOCampaignConfig if mixed else HPOCampaignConfig
+    cls: Any = (ResidentRefreshHPOCampaignConfig if mixed else ResidentHPOCampaignConfig) if resident else (RefreshOpponentsHPOCampaignConfig if mixed else HPOCampaignConfig)
     config: HPOCampaignConfig = cls(**{name: value[name] for name in (
         "schema_version", "kind", "model_id", "stage", "trial_count", "decision_budget", "sampler_seed", "startup_trials")},
         base_experiment=base_path, base_config_sha256=base.sha256, learning_seeds=learning, evaluation_game_seeds=games,
         session_seconds=session, run_wall_seconds=wall, space=space, model=model, training=recipe,
         inference=inference, operating=operating, storage=storage,
-        **({'training_opponents': descriptor} if mixed else {}))
+        **({'training_opponents': descriptor} if mixed else {}), **({'runtime': runtime} if resident else {}))
     if mixed:
         _mixed_collection_games(config)
     if hasattr(base.config, 'training_opponents'):
@@ -343,17 +369,20 @@ def joint_resource_admission(config: HPOCampaignConfig, *, layout: StructuredLay
     conservative reservation, not measured RSS or proof of physical availability.
     Later runtime owners must retain the SAME reservation until actual reap.
     """
-    if type(config) not in (HPOCampaignConfig, RefreshOpponentsHPOCampaignConfig):
+    if type(config) not in (HPOCampaignConfig, RefreshOpponentsHPOCampaignConfig, ResidentHPOCampaignConfig, ResidentRefreshHPOCampaignConfig):
         raise ContractError("closed HPO campaign required")
-    expected_schema = 2 if isinstance(config, RefreshOpponentsHPOCampaignConfig) else 1
+    expected_schema = 3 if isinstance(config, ResidentHPOCampaignConfig) else 2 if isinstance(config, RefreshOpponentsHPOCampaignConfig) else 1
     integer(config.schema_version, expected_schema, expected_schema)
-    if isinstance(config, RefreshOpponentsHPOCampaignConfig):
+    if isinstance(config, (RefreshOpponentsHPOCampaignConfig, ResidentRefreshHPOCampaignConfig)):
         parse_training_opponents(config.training_opponents)
         _mixed_collection_games(config)
     limits = _operating(asdict(config.operating))
     recipe = normalize_training_for_model(config.model_id, config.training)
     model = model_config_v4(asdict(config.model), layout=layout)
-    from gf_models.structured_runtime import hpo_training_admission
+    from gf_models.structured_runtime import hpo_resident_training_admission, hpo_training_admission
+    if isinstance(config, ResidentHPOCampaignConfig):
+        return hpo_resident_training_admission(model,config.inference,recipe.tbptt_length,asdict(limits),
+            resident_runtime(config.runtime),layout=layout)
     return hpo_training_admission(model,config.inference,recipe.tbptt_length,asdict(limits),layout=layout)
 
 
@@ -383,3 +412,9 @@ def _mixed_collection_games(config: HPOCampaignConfig) -> None:
             index = coupled.paths.index('training.collection_games')
             if any(type(row[index]) is not int or row[index] != 16 for row in coupled.choices):
                 raise ContractError('mixed-refresh-16-v1 requires every coupled collection_games=16')
+
+
+def require_hpo_runtime_execution(config: HPOCampaignConfig | HPOExperimentConfig) -> None:
+    """Task1 foundation guard; Task2 removes it only with actual pool activation."""
+    from gf_common.hpo_resident import require_hpo_runtime_execution as require_execution
+    require_execution(asdict(config) if isinstance(config, HPOCampaignConfig) else config.hpo_spec)

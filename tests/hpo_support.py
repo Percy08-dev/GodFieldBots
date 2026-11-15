@@ -22,7 +22,7 @@ from tests.test_card_instance_baseline_runtime import receipt
 from tests.test_card_instance_learning import ACTIONS, LAYOUT, RULES
 
 
-def original_hpo_collection(plan, state, learner, *, decisions=True):
+def original_hpo_collection(plan, state, learner, *, decisions=True, logical_retirement=None):
     directory = plan.output
     directory.mkdir()
     owner = RetainedGameArtifacts.for_hpo_registry(plan.bindings, ACTIONS, pool_size=state['effective_config']['hpo_spec']['operating']['opponent_pool_size'], rules=RULES, max_owned_bytes=1024**3,
@@ -96,7 +96,7 @@ def original_hpo_collection(plan, state, learner, *, decisions=True):
         manifest = hpo_collection_metadata(actions=ACTIONS, config=state['effective_config'],
             runtime_evidence=[receipt() for _ in plan.groups], schedule=serialize_schedule(plan.groups, 4), inventory=inventory,
             policies=list(plan.bindings), bots_revision='fixture', policy_bindings=plan.bindings,
-            neural_inputs=owner.finalize(deadline=time.monotonic() + 60), linkage=plan.linkage)
+            neural_inputs=owner.finalize(deadline=time.monotonic() + 60), linkage=plan.linkage, logical_retirement=logical_retirement)
         manifest.update(kind='card-instance-collection', run_id='fixture-collection', status='complete',
             groups=[{'runtime_evidence': receipt()} for _ in plan.groups], episodes=results,
             inputs=state['config_inputs'], code=state['identity']['code'], report_sha256=sha256(directory / 'report.json'))

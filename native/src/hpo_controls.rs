@@ -47,6 +47,7 @@ fn absolute(value: &Value) -> Result<()> {
 pub(crate) fn spec<'a>(state: &'a Value, b: &Arc<Budget>, c: &Control) -> Result<&'a Value> {
     let value = state.require("effective_config")?.require("hpo_spec")?;
     let mixed = refresh_training(state.require("effective_config")?, b, c)?.is_some();
+    let resident = resident::is_resident(state);
     value.closed(
         &[
             "schema_version",
@@ -63,9 +64,11 @@ pub(crate) fn spec<'a>(state: &'a Value, b: &Arc<Budget>, c: &Control) -> Result
             "deadline_version",
             "deadline_inputs",
         ],
-        if mixed { &["training_opponents"] } else { &[] },
+        if resident { &["training_opponents", "runtime"] } else if mixed { &["training_opponents"] } else { &[] },
     )?;
-    n(value, "schema_version", if mixed { 2 } else { 1 }, if mixed { 2 } else { 1 })?;
+    let version = if resident { 3 } else if mixed { 2 } else { 1 };
+    n(value, "schema_version", version, version)?;
+    if resident { resident::runtime(value.require("runtime")?)?; }
     is(value, "kind", "ppo-hpo-run")?;
     is(value, "selection_version", SELECTION_VERSION)?;
     is(value, "deadline_version", "hpo-deadline-v1")?;
@@ -169,7 +172,7 @@ pub(crate) fn run(state: &Value, b: &Arc<Budget>, c: &Control) -> Result<Value> 
     )?;
     n(state, "schema_version", 5, 5)?;
     is(state, "algorithm", "ppo")?;
-    is(state, "run_variant", "hpo-ppo-v1")?;
+    if !resident::is_resident(state) { is(state, "run_variant", "hpo-ppo-v1")?; }
     is(state, "model_version", "4")?;
     is(state, "input_recipe", "participant-structured-v2")?;
     validation_text(state.require("run_id")?)?;
@@ -1622,8 +1625,17 @@ fn update_metadata(
     if packed {
         proof_keys.extend(["storage", "custody"]);
     }
+    let resident = resident::is_resident(state);
+    if resident { proof_keys.push("logical_retirement"); }
     proof.closed(&proof_keys, &[])?;
-    n(proof, "schema_version", 3, 3)?;
+    n(proof, "schema_version", if resident {4} else {3}, if resident {4} else {3})?;
+    if resident {
+        resident::retirement(proof.require("logical_retirement")?, &b, &c)?;
+        let retirement = proof.require("logical_retirement")?;
+        eq(retirement.require("run_id")?, state.require("run_id")?, "Proof4 original run differs")?;
+        eq(retirement.require("generation")?, previous.require("generation")?, "Proof4 original generation differs")?;
+        is(retirement, "collection_id", value.require("batch_id")?.string()?)?;
+    }
     is(
         proof,
         "kind",
@@ -1960,9 +1972,10 @@ pub(crate) fn parent(s: &mut Sources, packed: bool) -> Result<Document> {
     let registry = s.json(&root.join("artifact-registry.json"))?;
     registry.root.closed(
         &["schema_version", "generations", "evaluation_references"],
-        &[],
+        if resident::is_resident(r) { &["cache_references"] } else { &[] },
     )?;
-    n(&registry.root, "schema_version", 4, 4)?;
+    let registry_version = if resident::is_resident(r) {5} else {4};
+    n(&registry.root, "schema_version", registry_version, registry_version)?;
     let entries = registry.root.require("generations")?.object()?;
     if entries.len() != count + 1 || (0..=count).any(|n| !entries.contains_key(&n.to_string())) {
         return Err(Error::contract(
@@ -2060,6 +2073,11 @@ pub(crate) fn parent(s: &mut Sources, packed: bool) -> Result<Document> {
             "HPO pinned evaluation inference differs",
         )?;
         required.insert(number);
+    }
+    if resident::is_resident(r) {
+        required.extend(resident::cache_references(s, r, &records, &model, &registry.root, &b, &c)?);
+    } else if root.join("cache-reference-receipts").exists() || root.join("cache-reference-receipts").is_symlink() {
+        return Err(Error::contract("fresh HPO forbids resident cache journal"));
     }
     let mut declaration = Value::Null;
     let mut collected = 0usize;
@@ -2929,6 +2947,31 @@ mod tests {
         }
     }
 
+    #[test]
+    fn resident_run5_spec3_is_explicit_and_preserves_old_native_contract() {
+        let b = Budget::new(128 << 20);
+        let c = Control::new(crate::budget::monotonic() + 30.).unwrap();
+        let all = json::parse(include_bytes!("../tests/fixtures/hpo_metadata5.json"), &b, &c).unwrap();
+        for case in all.root["cases"].array().unwrap() {
+            let old = case["state"].clone();
+            let mut state = old.clone();
+            state["run_variant"] = json::text("hpo-ppo-resident-v1");
+            state["effective_config"]["hpo_spec"]["schema_version"] = json::integer(3);
+            state["effective_config"]["hpo_spec"]["runtime"] = json::object([
+                ("mode", json::text("resident-worker-v1")),
+                ("cache_entries", json::integer(6)),
+                ("cache_weight_bytes", json::integer(134217728)),
+            ]);
+            reseal_run(&mut state, &b, &c);
+            assert!(run(&state, &b, &c).is_ok());
+            state["effective_config"]["hpo_spec"]["runtime"]["cache_entries"] = json::integer(7);
+            reseal_run(&mut state, &b, &c);
+            assert!(run(&state, &b, &c).is_err());
+            assert!(run(&old, &b, &c).is_ok());
+        }
+        assert_eq!(CAPABILITY, "model4;collection6;proof3;numeric5;selection1;provider1");
+    }
+
     fn reseal_run(state: &mut Value, b: &Arc<Budget>, c: &Control) {
         state["hpo_spec_sha256"] =
             json::text(&digest(&state["effective_config"]["hpo_spec"], b, c).unwrap());
@@ -2958,6 +3001,10 @@ mod tests {
 
     #[test]
     fn source5_formats_are_explicit_and_old_semantic_sets_stay_exact() {
+        assert!(SourceFormat::ResidentHpo.hpo() && SourceFormat::ResidentHpo.resident());
+        assert!(SourceFormat::PackedResidentHpo.hpo() && SourceFormat::PackedResidentHpo.packed());
+        assert!(!SourceFormat::Hpo.resident());
+        assert_eq!(resident::CAPABILITY,"collection7;proof4;registry5;pool1");
         assert!(SourceFormat::Hpo.hpo());
         assert!(SourceFormat::Hpo.corrected());
         assert!(!SourceFormat::Hpo.packed());

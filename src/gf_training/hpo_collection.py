@@ -76,13 +76,24 @@ def check_hpo_collection(manifest: Json) -> None:
     from gf_training.hpo_config import hpo_training_config
     config = manifest.get('config', {})
     spec = config.get('hpo_spec', {})
+    from gf_common.hpo_resident import checked_retirement, resident_runtime
+    resident = type(spec.get('schema_version')) is int and spec['schema_version'] == 3
+    if resident:
+        resident_runtime(spec.get('runtime'))
     recipe = hpo_training_config(spec.get('training_recipe'))
-    if (type(manifest.get('schema_version')) is not int or manifest['schema_version'] != 6
+    if (type(manifest.get('schema_version')) is not int or manifest['schema_version'] != (7 if resident else 6)
             or manifest.get('model_version') != '4' or manifest.get('collection_role') != 'hpo-ppo-batch'
             or manifest.get('config_hash') != digest(config)):
         raise ContractError('explicit HPO Collection6 required')
     link = checked_linkage(manifest.get('linkage'), role=hpo_batch_role(recipe.collection_games),
         schedule=manifest.get('schedule', []), registry=manifest.get('policy_bindings'))
+    if resident:
+        retirement = checked_retirement(manifest.get('logical_retirement'))
+        if (retirement['run_id'] != link['parent_run_id'] or retirement['collection_id'] != link['batch_id']
+                or retirement['generation'] != link['collection_generation']):
+            raise ContractError('Collection7 logical retirement differs from original collection/run/generation')
+    elif 'logical_retirement' in manifest:
+        raise ContractError('Collection6 forbids resident logical retirement')
     context = link['selection_context']
     if (context['decision_budget'] != spec.get('decision_budget')
             or context['selection_version'] != spec.get('selection_version')
@@ -90,10 +101,12 @@ def check_hpo_collection(manifest: Json) -> None:
         raise ContractError('Collection6 selection context differs from sole run spec')
 
 
-def hpo_collection_metadata(*, linkage: Json, **options: object) -> Json:
+def hpo_collection_metadata(*, linkage: Json, logical_retirement: Json | None = None, **options: object) -> Json:
     from gf_training.card_instance_collection import collection_metadata
     value = collection_metadata(**options, _hpo=True)  # type: ignore[arg-type]
     value.update(collection_role='hpo-ppo-batch', linkage=linkage)
+    if logical_retirement is not None:
+        value.update(schema_version=7, logical_retirement=logical_retirement)
     check_hpo_collection(value)
     return value
 

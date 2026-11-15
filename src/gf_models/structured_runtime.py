@@ -264,3 +264,36 @@ def admit_planned_game_training_v3(actions: ActionConfigV3, model: ModelConfigV3
         'workers': workers, 'worker_resident_bytes': workers * resident,
         'decision_temporary_bytes': game_concurrency * temporary, 'learner_cuda_bytes': learner_bytes,
         'peak_cuda_bytes': peak, 'global_cuda_bytes': global_cuda_bytes, 'max_workers': max_workers}
+
+
+def hpo_resident_training_admission(model: ModelConfigV4, inference: InferenceBindingV2,
+                                     tbptt_length: int, operating: Json, runtime: Json, *,
+                                     layout: StructuredLayout) -> Json:
+    """Retain physical residency through Source/update/save and stage full SYNC.
+
+    Cache weights, context/activation/allocator envelopes and old+new transfer
+    copies are charged independently. This remains soft managed admission.
+    """
+    from gf_common.hpo_resident import resident_runtime
+    limits = resident_runtime(runtime)
+    # Validate shape/config and base phase ownership with the same formulas.
+    # The expanded phases below then make the resident refusal independently.
+    base = hpo_training_admission(model, inference, tbptt_length, operating, layout=layout)
+    workers = base['workers']
+    cache = workers * limits['cache_weight_bytes']
+    resident = base['worker_bytes'] + cache
+    staging = workers * limits['cache_weight_bytes']
+    fixed = operating['parent_budget_bytes'] + base['learner_bytes']
+    phases = {
+        'collection': fixed + resident + operating['collector_budget_bytes'],
+        'update': fixed + resident + operating['source_budget_bytes'] + operating['numeric_budget_bytes'],
+        'save': fixed + resident + operating['source_budget_bytes'] + operating['numeric_budget_bytes'] + operating['save_budget_bytes'],
+        'sync': fixed + resident + staging,
+    }
+    cuda = base['learner_bytes'] + resident + staging
+    ram = max(phases.values())
+    if ram > operating['managed_ram_bytes'] or cuda > operating['managed_cuda_bytes']:
+        raise ContractError('joint resident HPO residency/transition exceeds managed budget')
+    return {**base, 'recipe': 'hpo-resident-process-envelope-v1', 'worker_bytes': resident,
+        'cache_weight_bytes': cache, 'staging_bytes': staging, 'ram_phases': phases,
+        'peak_ram_bytes': ram, 'peak_cuda_bytes': cuda}

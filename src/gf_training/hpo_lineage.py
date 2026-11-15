@@ -19,6 +19,13 @@ from gf_common.card_instance import CORRECTED_REVIEWED_SPEC_HASHES, ActionConfig
 from gf_common.card_instance_rules import card_instance_rules
 from gf_common.domain import ContractError, Json, canonical, closed, digest, integer
 from gf_common.group_pack_game import checked_storage_binding
+from gf_common.hpo_resident import (
+    CACHE_OWNER_KEYS,
+    RESIDENT_VARIANT,
+    cache_owner,
+    is_resident,
+    resident_runtime,
+)
 from gf_common.preprocessing import preparation_config
 from gf_common.structured_layout import CORRECTED_CARD_INSTANCE_LAYOUT as LAYOUT
 from gf_common.validation import result as validate_result
@@ -66,6 +73,7 @@ from gf_training.structured_lineage import (
 
 SELECTION_VERSION = "hpo-endpoint-selection-v1"
 HPO_NATIVE_CAPABILITY = "model4;collection6;proof3;numeric5;selection1;provider1"
+CACHE_REFERENCE_DIRECTORY = 'cache-reference-receipts'
 REFERENCE_DIRECTORY = 'evaluation-reference-receipts'
 REFERENCE_FILES = {'acquire.intent.json', 'acquire.receipt.json', 'release.intent.json', 'release.receipt.json'}
 HPO_RUN_FIELDS = RUN_REQUIRED | GAME_EXTRA | {
@@ -107,10 +115,14 @@ def hpo_spec(state: Json) -> Json:
         raise ContractError("HPO effective config required")
     from gf_common.training_opponents import training_opponents
     mixed = training_opponents(config)
+    resident = is_resident(state)
     spec = closed(config.get("hpo_spec"), {"schema_version", "kind", "decision_budget", "training_recipe",
         "effective_settings_sha256", "base_config_sha256", "campaign_config_sha256", "study_identity",
-        "operating", "storage", "selection_version", "deadline_version", "deadline_inputs"} | ({"training_opponents"} if mixed is not None else set()))
-    integer(spec["schema_version"], 2 if mixed is not None else 1, 2 if mixed is not None else 1)
+        "operating", "storage", "selection_version", "deadline_version", "deadline_inputs"} | ({"training_opponents"} if mixed is not None else set()) | ({"runtime"} if resident else set()))
+    expected_schema = 3 if resident else 2 if mixed is not None else 1
+    integer(spec["schema_version"], expected_schema, expected_schema)
+    if resident:
+        resident_runtime(spec["runtime"])
     if (spec["kind"] != "ppo-hpo-run" or spec["selection_version"] != SELECTION_VERSION
             or spec["deadline_version"] != "hpo-deadline-v1"):
         raise ContractError("unsupported explicit HPO spec version")
@@ -214,7 +226,7 @@ def hpo_state(state: Json) -> tuple[ActionConfigV3, ModelConfigV4, PPOTrainingCo
     packed = "storage_binding" in state
     closed(state, HPO_RUN_FIELDS | ({"storage_binding"} if packed else set()), RUN_OPTIONAL)
     integer(state["schema_version"], 5, 5)
-    if (state["algorithm"] != "ppo" or state["run_variant"] != "hpo-ppo-v1"
+    if (state["algorithm"] != "ppo" or state["run_variant"] not in ("hpo-ppo-v1", RESIDENT_VARIANT)
             or state["model_version"] != "4" or state["input_recipe"] != LAYOUT.input_recipe
             or state["status"] not in ("running", "paused", "incomplete", "complete")):
         raise ContractError("healthy exact HPO Run5 required")
@@ -455,8 +467,9 @@ def _receipt(value: Json, expected: str) -> str:
 
 def _registry(registry: Json, records: list[Json], state: Json, scan: _ChainScan,
               actions: ActionConfigV3, model: ModelConfigV4) -> None:
-    closed(registry, {"schema_version", "generations", "evaluation_references"})
-    integer(registry["schema_version"], 4, 4)
+    resident = is_resident(state)
+    closed(registry, {"schema_version", "generations", "evaluation_references"} | ({"cache_references"} if resident else set()))
+    integer(registry["schema_version"], 5 if resident else 4, 5 if resident else 4)
     generations = registry["generations"]
     if type(generations) is not dict or set(generations) != {str(index) for index in range(len(records))}:
         raise ContractError("HPO per-file registry generation inventory mismatch")
@@ -473,7 +486,20 @@ def _registry(registry: Json, records: list[Json], state: Json, scan: _ChainScan
         index = integer(value["generation"], 0, count - 1)
         if checksum(value["inference_sha256"]) != records[index]["inference_sha256"]:
             raise ContractError("HPO evaluation reference inference mismatch")
-    protected = protected_hpo_files(state, records, registry, reference_journal(scan, state, records, registry))
+    pending = reference_journal(scan, state, records, registry)
+    if resident:
+        refs = registry['cache_references']
+        if type(refs) is not dict:
+            raise ContractError('HPO cache reference map required')
+        scan.charge(2048 * len(refs), temporary=True)
+        for token, binding in refs.items():
+            checked_cache_reference_binding(binding, state, records, scan)
+            if binding['token'] != token:
+                raise ContractError('HPO cache reference token mismatch')
+        pending += cache_reference_journal(scan, state, records, registry)
+    elif (scan.root/CACHE_REFERENCE_DIRECTORY).exists() or (scan.root/CACHE_REFERENCE_DIRECTORY).is_symlink():
+        raise ContractError('fresh HPO forbids cache reference namespace')
+    protected = protected_hpo_files(state, records, registry, pending)
     recipe = hpo_training_config(spec["training_recipe"])
     optimizer = adam_recipe(recipe.adam_learning_rate, recipe.adam_beta1, recipe.adam_beta2, recipe.adam_epsilon)
     for index, record in enumerate(records):
@@ -530,6 +556,7 @@ def protected_hpo_files(state: Json, records: list[Json], registry: Json,
     inference.update(g for g in range(1, count)
         if records[g]['used_decisions']//interval > records[g-1]['used_decisions']//interval)
     inference.update(row['generation'] for row in registry['evaluation_references'].values())
+    inference.update(row['generation'] for row in registry.get('cache_references', {}).values())
     inference.update(row['generation'] for row in pending_bindings or ())
     return {g: set(record['artifact_files']) if g in resumes else
         {name for name in record['artifact_files'] if name == 'inference.json' or name.startswith('weights-')}
@@ -594,10 +621,46 @@ def checked_reference_binding(value: Json, state: Json, records: list[Json], sca
 
 
 def reference_journal(scan: _ChainScan, state: Json, records: list[Json], registry: Json) -> list[Json]:
+    return _reference_journal(scan, state, records, registry, cache=False)
+
+
+def cache_reference_journal(scan: _ChainScan, state: Json, records: list[Json], registry: Json) -> list[Json]:
+    if not is_resident(state):
+        raise ContractError('cache reference journal requires explicit resident parent')
+    return _reference_journal(scan, state, records, registry, cache=True)
+
+
+def checked_cache_reference_binding(value: Json, state: Json, records: list[Json], scan: _ChainScan) -> Json:
+    closed(value, {'run_id', 'token', 'generation', 'inference_sha256', 'generation_sha256',
+        'policy_sha256', 'weights_sha256', 'cache_identity'} | CACHE_OWNER_KEYS)
+    if not is_resident(state):
+        raise ContractError('cache reference requires explicit resident parent')
+    base = {key: value[key] for key in ('run_id', 'token', 'generation', 'inference_sha256', 'generation_sha256')}
+    checked_reference_binding(base, state, records, scan)
+    cache_owner({key:value[key] for key in CACHE_OWNER_KEYS})
+    from gf_training.hpo_source import hpo_binding
+    _, binding = hpo_binding(scan.root, state, records[value['generation']], value['generation'])
+    expected_policy = digest(asdict(binding))
+    weights = digest({key:sha for key,sha in records[value['generation']]['artifact_files'].items() if key.startswith('weights-')})
+    if (checksum(value['policy_sha256']) != expected_policy or checksum(value['weights_sha256']) != weights
+            or checksum(value['cache_identity']) != digest({'policy_sha256':expected_policy,
+                'inference_sha256':value['inference_sha256'], 'weights_sha256':weights})):
+        raise ContractError('resident cache identity differs from full immutable policy/weights binding')
+    return value
+
+
+def _reference_journal(scan: _ChainScan, state: Json, records: list[Json], registry: Json, *, cache: bool) -> list[Json]:
     """Validate only this bounded write-ahead journal; pending pins stay protected."""
-    root = scan.root/REFERENCE_DIRECTORY
+    namespace = CACHE_REFERENCE_DIRECTORY if cache else REFERENCE_DIRECTORY
+    snapshot = '_hpo_cache_reference_snapshot' if cache else '_hpo_reference_snapshot'
+    kind = 'hpo-cache-reference-' if cache else 'hpo-evaluation-reference-'
+    refs = registry['cache_references' if cache else 'evaluation_references']
+    checker = checked_cache_reference_binding if cache else checked_reference_binding
+    root = scan.root/namespace
     if not root.exists() and not root.is_symlink():
-        scan._hpo_reference_snapshot = (None, ())
+        if cache and refs:
+            raise ContractError('active cache reference lacks original journal namespace')
+        setattr(scan, snapshot, (None, ()))
         return []
     before = root.lstat()
     if not stat.S_ISDIR(before.st_mode):
@@ -631,16 +694,20 @@ def reference_journal(scan: _ChainScan, state: Json, records: list[Json], regist
                     raise ContractError('HPO reference completion lacks its intent')
                 continue
             intent = closed(scan.object(directory/name), {'schema_version','kind','operation_id','binding'}
-                | ({'acquire_receipt_sha256'} if phase=='release' else set()))
+                | ({'acquire_receipt_sha256'} if phase=='release' else set())
+                | ({'release_evidence'} if cache and phase=='release' else set()))
             integer(intent['schema_version'],1,1)
-            if intent['kind'] != 'hpo-evaluation-reference-'+phase+'-intent':
+            if intent['kind'] != kind+phase+'-intent':
                 raise ContractError('HPO reference intent kind mismatch')
             try:
                 if str(uuid.UUID(intent['operation_id'])) != intent['operation_id']:
                     raise ValueError('noncanonical UUID')
             except (ValueError, TypeError, AttributeError) as error:
                 raise ContractError('HPO reference operation UUID required') from error
-            checked_reference_binding(intent['binding'], state, records, scan)
+            checker(intent['binding'], state, records, scan)
+            if cache and phase=='release':
+                from gf_common.hpo_resident import checked_cache_release
+                checked_cache_release(intent['binding'],intent['release_evidence'])
             if intent['binding']['token'] != token:
                 raise ContractError('HPO reference path/token mismatch')
             if binding is None:
@@ -653,15 +720,15 @@ def reference_journal(scan: _ChainScan, state: Json, records: list[Json], regist
                 receipt = closed(scan.object(directory/receipt_name), {'schema_version','kind','binding',
                     'intent_sha256','registry_sha256','confirmed_unix'})
                 integer(receipt['schema_version'],1,1)
-                if (receipt['kind'] != 'hpo-evaluation-reference-'+phase+'-receipt'
+                if (receipt['kind'] != kind+phase+'-receipt'
                         or checksum(receipt['intent_sha256']) != scan.verified_digest(directory/name)):
                     raise ContractError('HPO reference completion/intent link mismatch')
                 _same(receipt['binding'],binding,'HPO reference completion binding mismatch')
                 checksum(receipt['registry_sha256'])  # Historical fact, not perpetual registry equality.
                 _number(receipt['confirmed_unix'],positive=True)
         assert binding is not None
-        expected = {'generation':binding['generation'],'inference_sha256':binding['inference_sha256']}
-        actual = registry['evaluation_references'].get(token)
+        expected = binding if cache else {'generation':binding['generation'],'inference_sha256':binding['inference_sha256']}
+        actual = refs.get(token)
         if actual is not None:
             _same(actual,expected,'HPO active reference differs from original intent')
         released = 'release.receipt.json' in files
@@ -671,9 +738,11 @@ def reference_journal(scan: _ChainScan, state: Json, records: list[Json], regist
             raise ContractError('acquired HPO reference vanished without release intent')
         if not released:
             pending.append(binding)
+    if cache and set(refs) - set(names):
+        raise ContractError('active cache reference lacks original acquire intent')
     if _stat_identity(root.lstat()) != _stat_identity(before):
         raise ContractError('HPO reference namespace changed during inspection')
-    scan._hpo_reference_snapshot = (_stat_identity(before), tuple(sorted(names)))
+    setattr(scan, snapshot, (_stat_identity(before), tuple(sorted(names))))
     return pending
 
 
@@ -719,8 +788,15 @@ def _proof(value: Json, state: Json, previous: Json, batch: int, delta: int) -> 
     fields = {"schema_version", "kind", "qualified", "parent_qualification", "manifest_sha256",
         "source_set_sha256", "files", "games", "accepted_decisions", "closure_counts", "missing_replays",
         "selection", "expected_optimizer_step_delta"} | _CLASSIFICATION
-    proof = closed(value, fields | ({"storage", "custody"} if packed else set()))
-    integer(proof["schema_version"], 3, 3)
+    resident = is_resident(state)
+    proof = closed(value, fields | ({"storage", "custody"} if packed else set()) | ({"logical_retirement"} if resident else set()))
+    integer(proof["schema_version"], 4 if resident else 3, 4 if resident else 3)
+    if resident:
+        from gf_common.hpo_resident import checked_retirement
+        retirement = checked_retirement(proof['logical_retirement'])
+        if (retirement['run_id'] != state['run_id'] or retirement['generation'] != batch
+                or retirement['collection_id'] != f'batch-{batch:06}'):
+            raise ContractError('Proof4 logical retirement differs from original parent/collection')
     if (proof["kind"] != ("card-instance-hpo-packed-original-source-proof" if packed else "card-instance-hpo-original-source-proof")
             or proof["qualified"] is not False or proof["parent_qualification"] != "not_performed"):
         raise ContractError("HPO proof must preserve explicit unqualified Source authority")
@@ -737,7 +813,7 @@ def _proof(value: Json, state: Json, previous: Json, batch: int, delta: int) -> 
         # Reuse the unchanged physical custody/member validator only. HPO's
         # version/kind/selection authority is validated above, never inferred.
         from gf_common.group_pack_game import PROOF_KIND, checked_packed_proof
-        physical = {key: item for key, item in proof.items() if key not in ("selection", "expected_optimizer_step_delta")}
+        physical = {key: item for key, item in proof.items() if key not in ("selection", "expected_optimizer_step_delta", "logical_retirement")}
         checked_packed_proof({**physical, "schema_version": 2, "kind": PROOF_KIND})
     else:
         for name, entry in proof["files"].items():
@@ -964,7 +1040,8 @@ def _commit_hpo_generation(directory: Path,state: Json,*,generation: int,update:
             if durable['config_sha256']!=state['config_sha256'] or durable['run_id']!=state['run_id']:
                 raise ContractError('HPO G0 differs from original parent declaration')
             registry=scan.object(directory/'artifact-registry.json')
-            _same(registry,{'schema_version':4,'generations':{},'evaluation_references':{}},'HPO G0 registry is not fresh')
+            _same(registry,{'schema_version':5 if is_resident(state) else 4,'generations':{},'evaluation_references':{}}
+                | ({'cache_references':{}} if is_resident(state) else {}),'HPO G0 registry is not fresh')
             parent=None
         files=_filemap(artifact_files,{'inference.json','resume.json'})
         if scan.artifact_snapshot is not None and scan.artifact_snapshot[:2] != _stat_identity((directory/'artifacts').lstat())[:2]:

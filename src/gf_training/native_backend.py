@@ -48,12 +48,16 @@ def require_native_refresh_opponents(native: Any = None) -> None:
         raise ContractError('native refresh training opponents capability unavailable; no fallback')
 
 
-def hpo_reader_settings(config: PreparationConfig, native: Any = None, *, packed: bool = False) -> Json:
+def hpo_reader_settings(config: PreparationConfig, native: Any = None, *, packed: bool = False, resident: bool = False) -> Json:
     """Additive HPO preflight before Source, arrays, collection or process work."""
     from gf_common.hpo import NATIVE_CAPABILITY
     module = load_native() if native is None else native
     if dict(module.build_info()).get('card_instance_hpo') != NATIVE_CAPABILITY:
         raise ContractError('native HPO original/model4/selection support unavailable; no fallback')
+    if resident:
+        from gf_common.hpo_resident import RESIDENT_CAPABILITY
+        if dict(module.build_info()).get('card_instance_hpo_resident') != RESIDENT_CAPABILITY:
+            raise ContractError('native resident HPO original/retirement/cache support unavailable; no fallback')
     result = card_instance_reader_settings(config, module)
     if packed:
         group_pack_reader_settings(config, module)
