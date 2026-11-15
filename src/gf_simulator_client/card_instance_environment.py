@@ -28,6 +28,7 @@ from gf_common.domain import (
     canonical,
     integer,
 )
+from gf_common.hpo_capture import HpoCapture
 from gf_common.refresh_heuristic import parse_refresh_options, refresh_policy_label
 from gf_common.structured import DecisionFrame, EventBank, EventDelta, Selection, event_delta
 from gf_common.structured_layout import CORRECTED_CARD_INSTANCE_LAYOUT
@@ -84,6 +85,7 @@ class CardInstanceSimulatorEnvironment(SimulatorEnvironment):
         artifact_sink: ArtifactSink | None = None,
         server_output_root: Path | None = None,
         resident_pool: Any = None,
+        capture: HpoCapture | None = None,
     ) -> None:
         if type(settings.actions) is not ActionConfigV3:
             raise ContractError("corrected environment requires exact actions3")
@@ -117,6 +119,7 @@ class CardInstanceSimulatorEnvironment(SimulatorEnvironment):
         self.ledger, self.runtime_evidence = ledger, runtime_evidence
         self.artifact_inputs = artifact_inputs
         self.resident_pool = resident_pool
+        self.capture = capture
         self.artifact_sink, self.server_output_root = artifact_sink, server_output_root
         self._managed_server: ManagedServer | None = None
         self._storage_group_owner: CardInstanceSimulatorEnvironment | None = None
@@ -147,10 +150,41 @@ class CardInstanceSimulatorEnvironment(SimulatorEnvironment):
             artifact_sink=self.artifact_sink,
             server_output_root=self.server_output_root,
             resident_pool=self.resident_pool,
+            capture=self.capture,
         )
         if self.artifact_sink is not None:
             self._storage_group_owner = own
-        return await own._run_group_body(group)
+        result = await own._run_group_body(group)
+        if self.capture is not None:
+            try:
+                self.capture.close_group(group, result)
+            except ContractError as exc:
+                result.health["capture_failure"] = str(exc)
+        return result
+
+    def _episode_opened(self, result: EpisodeResult) -> None:
+        if self.capture is not None:
+            assert result.game_id is not None
+            self.capture.open_episode(result.episode_id, result.game_id)
+
+    def _act_acknowledged(self, result: EpisodeResult, viewer: int, command: Json,
+                          acknowledgement: Json) -> None:
+        if self.capture is not None:
+            try:
+                self.capture.accept_decision(result.episode_id, viewer, command["command_id"], acknowledgement)
+            except ContractError as exc:
+                result.health["capture_failure"] = str(exc)
+
+    def _terminal_observed(self, result: EpisodeResult, viewer: int, observation: Json) -> None:
+        if self.capture is not None:
+            self.capture.terminal_observation(result.episode_id, viewer, observation)
+
+    def _episode_closed(self, result: EpisodeResult) -> None:
+        if self.capture is not None and result.game_id is not None:
+            try:
+                self.capture.close_episode(result.episode_id, result)
+            except ContractError as exc:
+                result.health["capture_failure"] = str(exc)
 
     def _new_server(self, *args: Any, **kwargs: Any) -> ManagedServer:
         server = super()._new_server(*args, **kwargs)
@@ -376,6 +410,9 @@ class CardInstanceSimulatorEnvironment(SimulatorEnvironment):
             }
             sink = cast(CardInstanceJournalSink, journal)
             index = sink.begin_frame(frame, delta, generated, selected, command, timings)
+            if self.capture is not None:
+                self.capture.begin_decision(result.episode_id, frame.actor, frame, delta,
+                    generated.table, selected, command)
             result.decision_timings.append(
                 {"actor": frame.actor, **timings, "storage_host_ms": sink.last_storage_ms}
             )

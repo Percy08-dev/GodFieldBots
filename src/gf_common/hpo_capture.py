@@ -1,0 +1,19 @@
+"""Injected live capture callbacks; no training or persistence dependency."""
+from __future__ import annotations
+
+from typing import Protocol
+
+from gf_common.domain import EpisodeGroup, EpisodeResult, GroupResult, Json
+from gf_common.structured import CandidateTable, DecisionFrame, EventDelta, Selection
+
+
+class HpoCapture(Protocol):
+    def open_episode(self, episode_id: str, game_id: str) -> None: ...
+    def begin_decision(self, episode_id: str, viewer: int, frame: DecisionFrame,
+                       delta: EventDelta, table: CandidateTable, selection: Selection,
+                       command: Json) -> None: ...
+    def accept_decision(self, episode_id: str, viewer: int, command_id: str,
+                        acknowledgement: Json) -> None: ...
+    def terminal_observation(self, episode_id: str, viewer: int, observation: Json) -> None: ...
+    def close_episode(self, episode_id: str, result: EpisodeResult) -> None: ...
+    def close_group(self, group: EpisodeGroup, result: GroupResult) -> None: ...

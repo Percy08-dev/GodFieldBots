@@ -5,7 +5,9 @@
 [ADR0043](adr/0043-hpo-producer-owned-data.md) records the user-approved
 [producer-owned resident HPO design](design/hpo-producer-owned-data.md).
 The concrete design has passed the independent preimplementation architecture
-gate, including inference/resume FD isolation; implementation is in progress.
+gate, including inference/resume FD isolation. Task1 capture/RAM/FD foundation
+passes independent correctness/conformance after prefix-lifetime and IPC-fence
+corrections; direct learner/save/actor integration remains in progress.
 The new route will use explicit producer-origin versions and inference-only
 actor snapshots, while retaining strict legacy/audit readers and existing learning
 math/budgets. Full acceptance and physical comparisons remain pending in

@@ -1,6 +1,7 @@
 # Producer-owned resident HPO data
 
-Status: user-approved plan; concrete design preimplementation review READY.
+Status: user-approved plan; concrete design preimplementation review READY;
+Task1 capture/RAM/FD foundation independently accepted, later integration pending.
 Reviewer: `/root/owned_architecture`, 2026-11-16. Snapshot-bank visibility finding
 resolved before dependent implementation; final implementation review is pending.
 Date: 2026-11-16. Root owns design and acceptance.
@@ -55,6 +56,9 @@ same-seed group clone shares the collection capture but owns its episode handles
 Episode states are OPEN -> COMPLETE or FAILED; collection states are BUILDING ->
 SEALED -> PERSISTED -> DISPATCHED -> UPDATED -> COMMITTED -> RETIRED, with FAILED
 terminal from any stage. A failure after optimizer mutation cannot retry the batch.
+Private history views preserve their shared admission through derived/nested
+prefixes. Completion-send attempts are single use; uncertain send/receive/validation
+poisons the channel while sender leases remain until actual child reap.
 
 At selection, retain the same participant-local frame, event delta/bank prefix,
 candidate table, selection/logprob/value, actual model identity and command UUID
@@ -84,13 +88,21 @@ The capture protocol's concrete operations are `open_episode(episode_id, game_id
 `begin_decision(episode_id, viewer, frame, delta, table, selection, command)`,
 `accept_decision(episode_id, viewer, command_id, acknowledgement)`,
 `terminal_observation(episode_id, viewer, observation)` and
-`close_episode(episode_id, result)`. These operations use an injected owner already
+`close_episode(episode_id, result)`, followed by
+`close_group(group, result)` from the actual group owner after server/client
+retirement. These operations use an injected owner already
 bound to the actual plan/run/snapshot; the caller cannot supply a new generation
 or learner seat. The base environment calls an overridable ACK hook after actual
 `client.act`, so verified retry follows the same single acceptance path. Final
 observations are captured before journal completion, including no-Act games.
 Episode completion and final batch admission also require successful group/server
 cleanup; an early terminal observation alone never publishes a healthy batch.
+`close_episode` runs after worker/Delete cleanup and before result persistence so
+capture errors can be persisted as health failures. `close_group` rechecks the
+actual episode health after result persistence, as well as server/client cleanup;
+late persistence errors therefore invalidate earlier completion. Closure callback
+failures poison capture and annotate health without replacing a known natural,
+truncated or aborted outcome with a fabricated missing episode.
 
 The private capture owner constructs the dedicated `OwnedHpoBatch`; a serializer
 may factor existing packing calculations but cannot manufacture that owner from

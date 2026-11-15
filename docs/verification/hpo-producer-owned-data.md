@@ -31,6 +31,27 @@ the reviewer confirms no remaining consequential blockers in the revised design.
 Final correctness/conformance, full project/package checks and physical execution
 remain pending; no performance or full-plan completion claim is made.
 
+Task1 foundation source is frozen for independent scoped reviews. Root's actual
+host invocation PASS52 in1.10s, exit0, including exec-inherited Unix FD transfer:
+
+```console
+.venv/bin/python -m pytest -q tests/test_ram_bank.py tests/test_hpo_owned_capture.py tests/test_hpo_capture_environment.py
+```
+
+The implementation's changed-file Ruff and mypy212 checks pass. Its earlier
+bounded related regression run PASS177 precedes the final narrow strict Boolean
+transaction guard; the final52above include that guard. This is foundation
+evidence only: production model/run binding, direct learner, persistence, cold
+resume and performance remain subsequent work.
+
+Task1 fix round1 resolves independently reproduced prefix-reservation escape and
+completion uncertainty reuse, plus local-rejection transaction numbering. Seven
+RED cases become seven GREEN; final foundation60PASS in1.19s includes actual host
+exec FD adoption. Changed Ruff and mypy212PASS. Correctness/spec/quality and
+architecture conformance both READY on the final staged delta. Reviewer independent
+checks pass50non-exec cases and8covering regressions respectively. Root accepts
+this foundation only; production ownership binding remains required downstream.
+
 ## Required matched comparison
 
 Preserve explicit ADR0042-enabled control alongside the new producer-origin path.

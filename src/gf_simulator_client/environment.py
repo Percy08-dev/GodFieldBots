@@ -191,6 +191,19 @@ class SimulatorEnvironment:
     def _server_stopped(self, server: ManagedServer, health: Json) -> None:
         """Version-specific final evidence fence, before group health returns."""
 
+    def _episode_opened(self, result: EpisodeResult) -> None:
+        """Optional capture hook at the actual Create boundary."""
+
+    def _act_acknowledged(self, result: EpisodeResult, viewer: int, command: Json,
+                          acknowledgement: Json) -> None:
+        """Optional hook only after actual Act/verified retry returned its ACK."""
+
+    def _terminal_observed(self, result: EpisodeResult, viewer: int, observation: Json) -> None:
+        """Optional hook for each actual matching terminal participant view."""
+
+    def _episode_closed(self, result: EpisodeResult) -> None:
+        """Optional hook after journals/workers/Delete, before result persistence."""
+
     def _finish_journal(self, journal: Journal, result: EpisodeResult, final: Json | None) -> None:
         journal.finish(result.end_kind, result.outcome, final, result.simulator_abort_reason)
 
@@ -232,6 +245,7 @@ class SimulatorEnvironment:
                 created = await client.create()
                 game = created["game_id"]
                 result.game_id = game
+                self._episode_opened(result)
                 for viewer in (1, 2):
                     joined = await client.join(game, str(uuid.uuid4()))
                     if joined["player_id"] != viewer:
@@ -283,6 +297,7 @@ class SimulatorEnvironment:
                         result.end_kind = "aborted"
                     accepted[actor].append(payload["action"])
                     result.decisions += 1
+                    self._act_acknowledged(result, actor, payload, acknowledgement)
                     try:
                         journals[actor].acknowledge(index, acknowledgement)
                     except OSError as exc:
@@ -314,6 +329,7 @@ class SimulatorEnvironment:
             result.elapsed_seconds = time.monotonic() - started
             if time.monotonic() >= min(self.settings.wall_deadline, self.settings.work_deadline):
                 result.health["finalization_deadline"] = "wall allowance exhausted"
+            self._episode_closed(result)
             try:
                 if time.monotonic() >= min(self.settings.wall_deadline, self.settings.work_deadline):
                     raise TimeoutError("result persistence deadline")
@@ -355,6 +371,7 @@ class SimulatorEnvironment:
                             final[viewer] = await client.observe(game, viewer)
                             if final[viewer]["result"] != result.outcome:
                                 raise ContractError("terminal observation mismatch")
+                            self._terminal_observed(result, viewer, final[viewer])
                     closures = []
                     for viewer in (1, 2):
                         replay = await client.replay(game, viewer)
