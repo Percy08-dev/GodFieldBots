@@ -256,6 +256,13 @@ def inspect_bundle(directory: Path, manifest: Json, *, max_decoded_bytes: int = 
 
 def write_bundle(directory: Path, prefix: str, arrays: dict[str, Any], *,
                  shard_bytes: int = MAX_ARRAY_BYTES, _check: Callable[[], None] | None = None) -> Json:
+    manifest = _write_producer_bundle(directory, prefix, arrays, shard_bytes=shard_bytes, _check=_check)
+    inspect_bundle(directory, manifest, _check=_check)
+    return manifest
+
+
+def _write_producer_bundle(directory: Path, prefix: str, arrays: dict[str, Any], *,
+                 shard_bytes: int = MAX_ARRAY_BYTES, _check: Callable[[], None] | None = None) -> Json:
     if _check is not None:
         _check()
     integer(shard_bytes, 1, MAX_ARRAY_BYTES)
@@ -295,7 +302,6 @@ def write_bundle(directory: Path, prefix: str, arrays: dict[str, Any], *,
                                      if _check is not None else sha256(path.with_suffix(".json")))
     manifest = {"schema_version": 1, "prefix": prefix, "shards": shards, "files": files,
                 "tensor_count": len(arrays), "decoded_bytes": sum(array.nbytes for array in arrays.values())}
-    inspect_bundle(directory, manifest, _check=_check)
     return manifest
 
 

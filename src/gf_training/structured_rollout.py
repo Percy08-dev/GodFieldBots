@@ -452,10 +452,25 @@ def _write_rollout(directory: Path, rollout: StructuredRollout, *, shard_bytes: 
         context.check(rollout.input_binding)
     create_output_directory(directory, "rollout.json")
     integer(shard_bytes, 1, MAX_ARRAY_BYTES)
+    episodes, planned, planning_bytes, planned_bytes = _plan_rollout_arrays(rollout,
+        shard_bytes=shard_bytes, admit=admit, poll=poll, hpo=_hpo is not None)
+    return _publish_payload(directory, model=rollout.model, classification=rollout.input_binding,
+        declaration=(_hpo_semantics(rollout.model, context) if _hpo is not None else semantics(rollout.model) if context is None else semantics_v3(rollout.model, layout=context.layout, action_contract=context.actions.action_contract, rules=context.rules)), action_config_hash=rollout.action_config_hash,
+        policy_version=rollout.policy_version, decision_count=len(rollout), episodes=episodes,
+        planned=planned, resident_bytes=rollout.resident_bytes, planning_bytes=planning_bytes,
+        planned_bytes=planned_bytes, shard_bytes=shard_bytes, admit=admit, poll=poll, check=check,
+        _context=context, _hpo=_hpo)
+
+
+def _plan_rollout_arrays(rollout: Any, *, shard_bytes: int, admit: Callable[[int], None],
+                         poll: Callable[[], None], hpo: bool) -> tuple[Any, Any, int, int]:
+    """Shared canonical packing; authority stays with the strict/owned caller."""
+    context = rollout._context
     planned: dict[str, tuple[Any, Any, bool]] = {}
     planned_bytes = 0
     planning_bytes = (65536 * (1 + sum(len(episode.frames) for episode in rollout.episodes))
-                      + 32 * sum(_owned_bytes(episode.records.bank) for episode in rollout.episodes))
+                      + 32 * sum(_owned_bytes((episode.records.bank.actor, episode.records.bank.episode,
+                          episode.records.bank._events, episode.records.bank._prefixes)) for episode in rollout.episodes))
     admit(rollout.resident_bytes + planning_bytes)
     def plan(key: str, value: Any, dtype: Any, *, blob: bool = False) -> None:
         poll()
@@ -504,7 +519,7 @@ def _write_rollout(directory: Path, rollout: StructuredRollout, *, shard_bytes: 
                              ("old_logprob", tuple(selection.logprob for selection in record.selections)),
                              ("old_value", tuple(selection.value for selection in record.selections))):
             plan(prefix + "." + name, values, np.int64 if name == "selected" else np.float32)
-        has_targets = episode.advantage is not None and (_hpo is None or bool(episode.frames))
+        has_targets = episode.advantage is not None and (not hpo or bool(episode.frames))
         if has_targets:
             plan(prefix + ".advantage", episode.advantage, np.float32)
             plan(prefix + ".target", episode.target, np.float32)
@@ -518,12 +533,7 @@ def _write_rollout(directory: Path, rollout: StructuredRollout, *, shard_bytes: 
     if not planned:
         # Zero-decision episode closure is preserved without synthetic transition.
         plan("empty", (), np.uint8)
-    return _publish_payload(directory, model=rollout.model, classification=rollout.input_binding,
-        declaration=(_hpo_semantics(rollout.model, context) if _hpo is not None else semantics(rollout.model) if context is None else semantics_v3(rollout.model, layout=context.layout, action_contract=context.actions.action_contract, rules=context.rules)), action_config_hash=rollout.action_config_hash,
-        policy_version=rollout.policy_version, decision_count=len(rollout), episodes=episodes,
-        planned=planned, resident_bytes=rollout.resident_bytes, planning_bytes=planning_bytes,
-        planned_bytes=planned_bytes, shard_bytes=shard_bytes, admit=admit, poll=poll, check=check,
-        _context=context, _hpo=_hpo)
+    return episodes, planned, planning_bytes, planned_bytes
 
 
 def _publish_payload(directory: Path, *, model: Any, classification: Json, declaration: Json,

@@ -80,7 +80,7 @@ class StructuredParticipantWorker(ParticipantWorker):
         self._spawn(ledger, residency, arguments, environment)
 
     def _spawn(self, ledger: ReservationLedger, residency: int, arguments: list[str],
-               environment: dict[str, str]) -> None:
+               environment: dict[str, str], *, pass_fds: tuple[int, ...] = ()) -> None:
         """Own the ordinary reservation/spawn boundary; test transports may borrow."""
         # A failed constructor remains a complete close owner, even before a
         # returned Popen has been registered with its reservation.
@@ -100,7 +100,8 @@ class StructuredParticipantWorker(ParticipantWorker):
             creation_error = observer_error = None
             try:
                 process = subprocess.Popen(arguments,
-                    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=environment, bufsize=0)
+                    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=environment, bufsize=0,
+                    **cast("dict[str, Any]", {"pass_fds": pass_fds} if pass_fds else {}))
                 self.process = process
             except BaseException as error:
                 creation_error = error

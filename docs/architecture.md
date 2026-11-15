@@ -7,7 +7,12 @@
 The concrete design has passed the independent preimplementation architecture
 gate, including inference/resume FD isolation. Task1 capture/RAM/FD foundation
 passes independent correctness/conformance after prefix-lifetime and IPC-fence
-corrections; direct learner/save/actor integration remains in progress.
+corrections.
+The direct numeric6/Wire7/snapshot/actor9 components now also pass scoped final
+correctness and conformance review, including actual CPU all-model lifecycles,
+same-input numerical/RNG comparisons and receive-failure custody regressions.
+Live registry/coordinator enablement, cold resume/campaign and physical acceptance
+remain pending; this component milestone grants no end-to-end or quality claim.
 The new route will use explicit producer-origin versions and inference-only
 actor snapshots, while retaining strict legacy/audit readers and existing learning
 math/budgets. Full acceptance and physical comparisons remain pending in

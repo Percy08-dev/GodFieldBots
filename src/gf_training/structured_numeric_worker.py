@@ -375,7 +375,8 @@ def serve(initial: Json, lines: Iterable[str]) -> None:
         learner.synchronize()
         if diagnostic is not None and not diagnostic.disabled:
             from gf_common.hpo_progress import allocator_facts
-            diagnostic.emit(projection['collection_generation']+1,{**allocator_facts(learner),'diagnostic_boundary':'update-synchronized'})
+            diagnostic.emit(projection['collection_generation']+1,{**allocator_facts(learner),'diagnostic_boundary':'update-synchronized',
+                'parity_seconds':learner._last_parity_seconds})
             diagnostic.emit(projection['collection_generation']+1,{'phase':'save'})
         update_seconds = time.monotonic() - started
         saving = time.monotonic()

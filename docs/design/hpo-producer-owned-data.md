@@ -2,6 +2,8 @@
 
 Status: user-approved plan; concrete design preimplementation review READY;
 Task1 capture/RAM/FD foundation independently accepted, later integration pending.
+Task2 direct numeric/snapshot/Wire7/actor9 components are independently accepted;
+Task3 concrete coordinator binding preimplementation clarification is READY.
 Reviewer: `/root/owned_architecture`, 2026-11-16. Snapshot-bank visibility finding
 resolved before dependent implementation; final implementation review is pending.
 Date: 2026-11-16. Root owns design and acceptance.
@@ -40,10 +42,23 @@ catalog, layout and specification hashes remain authoritative. No new rule use.
 * `gf_cli`: explicitly selects producer origin/Python encoder and composes
   collector/campaign/evaluation. It does not manufacture live capabilities.
 
+Resident pool binding must not import training snapshot types into the simulator
+client. Use one concrete private actor-snapshot capability in `gf_common`, minted
+only by the actual local learner export or successful Wire7 snapshot transaction.
+It exposes immutable inference metadata/backings and owner-preserving liveness/
+binding leases, with no resume bank, Adam/RNG/control or execution authority.
+The pool accepts that exact capability; original owner identity and lifecycle
+remain checked. It is not constructible from JSON/public dataclass flags, and
+unbind cannot retire in-flight transfers or the origin's permanent ownership.
+
 Use concrete private types with construction tokens/identity and consumed-state
 checks. Public `EpisodeRecords`/`HpoRollout` instances remain strict components;
 do not disable their validation or turn an arbitrary public object into an owner.
 Pure token/GAE/array-layout construction can be factored for both paths.
+Owned token handles also make their array/scalar/key/provenance bindings immutable;
+sealed backing alone cannot prevent a mutable Python handle from shadowing input.
+Legacy local update/restore cannot silently issue producer-owned generations;
+the dedicated cold adapter owns validated restoration into that origin.
 
 ## Capture and episode state
 
@@ -120,6 +135,11 @@ Existing bank layout and dtypes stay unchanged; no disk spool or fallback.
 
 Create a private Unix socket pair when spawning each owned child; inherit only
 the intended endpoint alongside existing JSON control. Transfer FD with SCM_RIGHTS.
+The existing participant `_spawn` may add private keyword-only
+`pass_fds: tuple[int, ...] = ()`, forwarding a nonempty tuple to its SAME existing
+Popen call. Ordinary calls retain their original keywords/lifecycle; do not copy
+creation/cleanup/custody machinery into the resident worker. Only explicit actor9
+supplies the owned endpoint, and bank FDs retain close-on-exec until transferred.
 The channel has a random invocation identity and monotonic single-use transaction
 IDs. Bind kind (batch/model/save), generation, model/snapshot identity, original
 `fstat` backing identity, byte size, layout descriptors, dtypes and ranges to the
@@ -141,6 +161,19 @@ ownership. Persist complete archive and numeric outputs before dispatching updat
 Generate their checksum/seal metadata once while writing, without semantic reread.
 I/O, bounded writer completion and failure remain gates. Strict historical Source
 qualification never follows from these producer records.
+Factor `gf_models.sharded_arrays.write_bundle` into a private
+`_write_producer_bundle` writer and its existing public inspect-after-write wrapper.
+Only explicit owned writers call the private helper. Preserve finite checks,
+planning, `save_arrays` and writer checksum generation; public signatures and
+strict inspection remain unchanged. Do not duplicate the codec or add a public
+skip/trusted flag.
+Keep current PlayerReplay HTTP fetching/persistence as diagnostic archive output,
+with its existing external response decoder, limits, deadlines and I/O failure
+gate. Use the already decoded `episode_end` once for interrupted abort/truncation
+diagnostics; do not traverse it again to reconcile captured accepted actions.
+Replay remains outside policy features and learning authority, and
+`replay_reconciled=false` remains truthful. Its retained fetch/write cost belongs
+in measurements. This clarification has independent architecture review READY.
 
 After successful optimizer work, export actual learner parameters/Adam/RNG/control
 once into an immutable `OwnedModelSnapshot`. It owns DISTINCT sealed inference-only
@@ -180,8 +213,49 @@ its existing owner; leases preserve charges until actual last use. No silent dis
 spill, smaller workload, automatic native fallback or enlarged budget.
 Keep finite input/output/loss/gradient/parameter guards and external decoders.
 Process death, IPC uncertainty and writer errors poison the invocation.
+Capture, local/remote snapshot parent ownership, numeric encoding and parent
+Wire7 dispatch share the SAME actual invocation Source account, rather than
+independent2GiB allowances. Numeric/save/parent phase limits still apply within
+that aggregate. Known outstanding-view `BufferError` defers retirement and keeps
+charges; it is distinct from an uncertain FD close and must retire after the
+actual last buffer export releases.
 
 ## Compatibility and cold resume
+
+### Concrete live coordinator binding
+
+Keep the common `_run_ppo` loop and explicitly add the exact owned operations
+class to its closed dispatch; do not copy the learning/experiment loop. Its owned
+branch calls `initialize_owned`/`update_owned` and passes the actual
+`RemoteModelSnapshot`/save ACK through commit. Legacy branches retain their
+existing Source-issued projection, scanners and child methods.
+
+`OwnedRunRegistry` is constructed under the actual `RunOwnership`, with the SAME
+Source account used by its process, snapshots and capture. It stores actual
+committed generation/control/file-map state, current/pool snapshots and real
+pin/release/retention transactions. Initial commit consumes the actual Wire7 G0
+save result; subsequent commit consumes one private `OwnedUpdateTransaction`.
+That transaction binds the exact original plan/capture, actual completed archive
+publication, persisted `OwnedNumericBatch`, actual dispatched process/current
+snapshot, actual next save ACK and counters. It is single use and cannot be
+reconstructed from an update JSON or an old Source projection.
+
+Reuse the existing `ParkedAuthority` minted by actual
+`ResidentPoolCustody.retire_collection(admission)` after END/PARK and physical
+owner checks. Pair it with the new data transaction at update/commit; capture or
+JSON never mints that physical authority. The same audited ledger's existing
+`begin_resident_update` remains the concurrency gate.
+
+The actual finalized producer collection carries its capture and the manifest/hash
+produced by the archive writer. The common loop's owned branch consumes these
+objects and the numeric writer's actual file map directly. Do not invent an empty
+scanner to satisfy legacy `read_control`/`verified_digest` calls. Factor explicit
+collection-result and update/commit branches/hooks where necessary; preserve old
+readers and signatures for old callers. Policy bindings derive from live committed
+snapshots. Owned resident SYNC consumes the same committed snapshot capability;
+cache pins/evictions/unbinding and retention use that live registry, not full disk
+chain validation. Storage usage, external runtime attestation and live owner/phase
+guards remain required.
 
 Exact new branch: HPO spec4, run variant `hpo-ppo-owned-v1`, Collection8, Proof5,
 Numeric6, learner Wire7, actor protocol9, Update6. Model4, Journal6, inference5,
@@ -228,6 +302,13 @@ remain independently validated.
    capture/tokenize/seal/candidates/inference/IPC/archive queue-write distributions.
    Inclusive concurrent spans are distinct from exclusive parent wall sections.
    Preserve failed trials; no performance claim until measured and reviewed.
+
+Legacy HPO's actual parity call may retain a private elapsed observation; the
+existing optional diagnostic stderr envelope adds optional finite nonnegative
+`parity_seconds` alongside `save_seconds`. Wire6 numerical metrics/meaning stay
+unchanged. New owned execution records parity `not_run` and omits this duration,
+never inventing zero or a successful check. Diagnostics supply measurement only,
+never learning, commit or cleanup authority. Keep existing emitter byte bounds.
 
 ## Decisions and debt
 

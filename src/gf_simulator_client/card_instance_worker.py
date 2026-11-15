@@ -188,7 +188,8 @@ class CardInstanceParticipantWorker(StructuredParticipantWorker):
             {"PATH": os.defpath, "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8", "PYTHONHASHSEED": "0",
                 "OPENBLAS_NUM_THREADS": "1", "OMP_NUM_THREADS": "1", "MKL_NUM_THREADS": "1"})
 
-    def _spawn(self, ledger: ReservationLedger, residency: int, arguments: list[str], environment: dict[str, str]) -> None:
+    def _spawn(self, ledger: ReservationLedger, residency: int, arguments: list[str], environment: dict[str, str],
+               *, pass_fds: tuple[int, ...] = ()) -> None:
         """Original audited creation boundary; resident logical validators borrow transport."""
         boundary = self._creation_boundary = threading.Event()
         self._creation_observer_failure: BaseException | None = None
@@ -206,7 +207,8 @@ class CardInstanceParticipantWorker(StructuredParticipantWorker):
             creation_error = observer_error = None
             try:
                 process = subprocess.Popen(arguments, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                    stderr=subprocess.DEVNULL, bufsize=0, env=environment)
+                    stderr=subprocess.DEVNULL, bufsize=0, env=environment,
+                    **cast("dict[str, Any]", {"pass_fds": pass_fds} if pass_fds else {}))
                 self.process = process
             except BaseException as error:
                 creation_error = error

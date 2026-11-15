@@ -137,9 +137,9 @@ class RamBankBuilder:
         self.descriptors = _layout(descriptors, size, max_bytes)
         self.size, self._fd = size, -1
         self._close_uncertain = False
-        self._reservation: ArtifactReservation | None = budget.reserve(
-            ((size + mmap.PAGESIZE - 1) // mmap.PAGESIZE * mmap.PAGESIZE)
+        self.admitted_bytes = (((size + mmap.PAGESIZE - 1) // mmap.PAGESIZE * mmap.PAGESIZE)
             + MAX_ENVELOPE_BYTES + 1024 * len(self.descriptors))
+        self._reservation: ArtifactReservation | None = budget.reserve(self.admitted_bytes)
         self._consumed = False
         try:
             self._fd = os.memfd_create("gf-owned-bank", os.MFD_CLOEXEC | os.MFD_ALLOW_SEALING)
@@ -163,7 +163,7 @@ class RamBankBuilder:
         try:
             fcntl.fcntl(self._fd, F_ADD_SEALS, _SEALS)
             assert self._reservation is not None
-            bank = ReadonlyRamBank(_TOKEN, self._fd, self.size, self.descriptors, self._reservation)
+            bank = ReadonlyRamBank(_TOKEN, self._fd, self.size, self.descriptors, self._reservation, self.admitted_bytes)
         except BaseException:
             self.close()
             raise
@@ -191,13 +191,14 @@ class RamBankBuilder:
 class ReadonlyRamBank:
     def __init__(self, token: object, fd: int, size: int,
                  descriptors: tuple[ArrayDescriptor, ...],
-                 reservation: ArtifactReservation | None) -> None:
+                 reservation: ArtifactReservation | None, admitted_bytes: int) -> None:
         if token is not _TOKEN:
             raise ContractError("RAM owner must originate at builder or FD receiver")
         if fcntl.fcntl(fd, F_GET_SEALS) & _SEALS != _SEALS:
             raise ContractError("RAM bank lacks immutable kernel seals")
         self._fd, self.size, self.descriptors = fd, size, descriptors
         self._reservation = reservation
+        self.admitted_bytes = admitted_bytes
         self._mapping = mmap.mmap(fd, size, access=mmap.ACCESS_READ)
         self._views: list[weakref.ReferenceType[Array]] = []
         self._pins = 0
@@ -279,9 +280,39 @@ class ReceivedBank:
     def __init__(self, channel: RamBankChannel, bank: ReadonlyRamBank, envelope: dict[str, Any]) -> None:
         self._channel, self.bank, self._envelope = channel, bank, envelope
         self._completed = False
+        self._abandoned = False
+
+    def discard(self) -> None:
+        """Retire only this receiver-local mapping/FD, without any completion ACK."""
+        self._abandoned = True
+        self.bank.close()
+        self._channel._incoming.pop(self._envelope["transaction"], None)
+
+    def retain(self, budget: ArtifactAdmission) -> ReadonlyRamBank:
+        """Admit a permanent SAME-backing owner before transfer-local completion.
+
+        The conservative custody overlap ends only when the actual sender ACK
+        permits its export owner to retire. No array content is read or copied.
+        """
+        if self._completed or self._abandoned or self._channel._poisoned:
+            raise ContractError('cannot retain completed/uncertain delivery')
+        admitted = ((self.bank.size + mmap.PAGESIZE - 1) // mmap.PAGESIZE * mmap.PAGESIZE
+            + MAX_ENVELOPE_BYTES + 1024 * len(self.bank.descriptors))
+        reservation = budget.reserve(admitted)
+        fd = -1
+        try:
+            fd = os.dup(self.bank.fileno())
+            return ReadonlyRamBank(_TOKEN, fd, self.bank.size, self.bank.descriptors, reservation, admitted)
+        except BaseException:
+            if fd >= 0:
+                cleanup = _ReceivedFdCleanup([fd], reservation)
+                cleanup.close()
+            else:
+                reservation.close()
+            raise
 
     def complete(self, synchronize: Callable[[], None]) -> None:
-        if self._completed or self._channel._poisoned:
+        if self._completed or self._abandoned or self._channel._poisoned:
             raise ContractError("bank completion is single use")
         synchronize()  # actual learner/actor owner supplies its device fence.
         self.bank.close()  # refusal retains custody; no ACK while views survive.
@@ -296,6 +327,7 @@ class ReceivedBank:
         except BaseException:
             self._channel._poisoned = True
             raise
+        self._channel._incoming.pop(self._envelope["transaction"], None)
 
 
 class RamBankChannel:
@@ -308,6 +340,7 @@ class RamBankChannel:
         self.socket, self.invocation, self._child = endpoint, invocation, child
         self._sent, self._received = 0, 0
         self._pending: dict[int, TransferLease] = {}
+        self._incoming: dict[int, ReceivedBank] = {}
         self._poisoned = False
         self._closed, self._close_uncertain = False, False
 
@@ -439,11 +472,14 @@ class RamBankChannel:
             stat = os.fstat(fds[0])
             if envelope["backing"] != [stat.st_dev, stat.st_ino] or stat.st_size != envelope["size"]:
                 raise ContractError("RAM original backing mismatch")
-            bank = ReadonlyRamBank(_TOKEN, fds[0], stat.st_size, descriptors, reservation)
+            bank = ReadonlyRamBank(_TOKEN, fds[0], stat.st_size, descriptors, reservation,
+                64 * MAX_ENVELOPE_BYTES + 1024 * MAX_ARRAYS)
             reservation = None
             fds.clear()
             self._received += 1
-            return ReceivedBank(self, bank, envelope)
+            delivery = ReceivedBank(self, bank, envelope)
+            self._incoming[envelope["transaction"]] = delivery
+            return delivery
         except RamBankCleanupError as error:
             if isinstance(error.cleanup_owner, _ReceivedFdCleanup):
                 error.cleanup_owner.reservation = reservation
@@ -481,6 +517,24 @@ class RamBankChannel:
             self._poisoned = True
             raise
 
+    @property
+    def received_pending(self) -> tuple[ReceivedBank, ...]:
+        return tuple(self._incoming.values())
+
+    def retire_received(self, synchronize: Callable[[], None]) -> None:
+        """Positive no-ACK retirement; surviving exports and uncertainty stay owned."""
+        if not self._incoming:
+            return
+        synchronize()
+        errors: list[BaseException] = []
+        for delivery in tuple(self._incoming.values()):
+            try:
+                delivery.discard()
+            except BaseException as error:  # noqa: BLE001 - retain each actual failed cleanup owner
+                errors.append(error)
+        if errors:
+            raise errors[0]
+
     def close(self) -> None:
         # Closing IPC never proves that a receiver released the backing.
         if self._close_uncertain:
@@ -493,3 +547,74 @@ class RamBankChannel:
         except OSError as error:
             self._close_uncertain = True
             raise RamBankCleanupError("RAM channel close is uncertain", self) from error
+
+
+class ReadonlyRamBankSet:
+    """Ordered disjoint sealed backings; transfer completion never closes them."""
+
+    def __init__(self, banks: tuple[ReadonlyRamBank, ...]) -> None:
+        if not banks or any(type(bank) is not ReadonlyRamBank for bank in banks):
+            raise ContractError('actual readonly bank owners required')
+        names = tuple(d.name for bank in banks for d in bank.descriptors)
+        if names != tuple(sorted(set(names))):
+            raise ContractError('bankset names must be globally sorted and unique')
+        self.banks, self.names = banks, names
+        self.size = sum(bank.size for bank in banks)
+        self.admitted_bytes = sum(bank.admitted_bytes for bank in banks)
+        self._index = {d.name: bank for bank in banks for d in bank.descriptors}
+
+    @classmethod
+    def build(cls, arrays: Mapping[str, Array], budget: ArtifactAdmission, *,
+              max_bytes: int = MAX_BANK_BYTES) -> ReadonlyRamBankSet:
+        integer(max_bytes, 1, MAX_BANK_BYTES)
+        if not arrays:
+            raise ContractError('nonempty bankset required')
+        names = sorted(arrays)
+        groups = [names[start:start + MAX_ARRAYS] for start in range(0, len(names), MAX_ARRAYS)]
+        # Check aggregate aligned backing and descriptor admission BEFORE any FD.
+        total = admission = 0
+        for group in groups:
+            end = 0
+            descriptors = []
+            for name in group:
+                value = arrays[name]
+                if type(value) is not np.ndarray or not value.flags.c_contiguous:
+                    raise ContractError('bankset source requires contiguous exact ndarray')
+                offset = (end + 63) // 64 * 64
+                descriptors.append({"name":name, "dtype":value.dtype.str, "shape":value.shape,
+                    "offset":offset, "nbytes":value.nbytes})
+                end = offset + value.nbytes
+            size = max(1, end)
+            _layout(descriptors, size, max_bytes)
+            total += size
+            admission += ((size + mmap.PAGESIZE - 1) // mmap.PAGESIZE * mmap.PAGESIZE
+                + MAX_ENVELOPE_BYTES + 1024 * len(group))
+        if total > max_bytes or admission > max_bytes:
+            raise ContractError('aggregate bankset reservation exceeds numeric bound')
+        # Preflight whole demand while raw arrays remain charged to their owner.
+        # Builders then acquire their own lasting reservations, one physical copy.
+        preflight = budget.reserve(admission)
+        preflight.close()
+        banks: list[ReadonlyRamBank] = []
+        try:
+            for group in groups:
+                banks.append(RamBankBuilder({name: arrays[name] for name in group}, budget,
+                    max_bytes=max_bytes).seal())
+            return cls(tuple(banks))
+        except BaseException:
+            for bank in banks:
+                bank.close()
+            raise
+
+    def array(self, name: str) -> Array:
+        if name not in self._index:
+            raise ContractError('unknown bankset array')
+        return self._index[name].array(name)
+
+    def close(self) -> None:
+        # Refuse atomically while any backing has exported views or leases.
+        for bank in self.banks:
+            if bank._pins or any(ref() is not None for ref in bank._views):
+                raise BufferError('bankset has surviving views or transfer leases')
+        for bank in self.banks:
+            bank.close()

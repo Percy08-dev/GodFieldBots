@@ -165,13 +165,15 @@ def pool_diagnostic(value: Any) -> Json | None:
 
 
 def learner_facts(value: Any) -> bool:
-    if type(value) is not dict or not value or set(value)-{'phase','cuda_allocator','diagnostic_boundary','save_seconds'}:
+    if type(value) is not dict or not value or set(value)-{'phase','cuda_allocator','diagnostic_boundary','save_seconds','parity_seconds'}:
         return False
     if 'phase' in value and value['phase']!='save':
         return False
     if 'diagnostic_boundary' in value and value['diagnostic_boundary'] not in ('update-synchronized','save-complete'):
         return False
     if 'save_seconds' in value and (not finite_number(value['save_seconds']) or value['save_seconds']<0):
+        return False
+    if 'parity_seconds' in value and (not finite_number(value['parity_seconds']) or value['parity_seconds']<0):
         return False
     if 'cuda_allocator' in value:
         # Reuse the same closed diagnostic-only allocator validation.

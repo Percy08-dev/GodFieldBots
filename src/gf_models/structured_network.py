@@ -16,6 +16,7 @@ from typing import Any
 
 from gf_common import structured_layout as legacy_layout_constants
 from gf_common.domain import ContractError, integer
+from gf_common.hpo_owned_tokens import _OwnedFrameTokens, _require_owned_endpoint
 from gf_common.structured_layout import LEGACY_LAYOUT, StructuredLayout
 from gf_common.structured_tokens import (
     CandidateTokens,
@@ -233,6 +234,15 @@ def make_network(model: ModelConfigV2 | ModelConfigV3 | ModelConfigV4, seed: int
                 raise ContractError("aggregate window recipe mismatch")
             if len(tokens.interval_numerics) > model.event.max_interval:
                 raise ContractError("configured interval event limit exceeded")
+            return self._encode_frame_calculate(tokens)
+
+        def _encode_owned_frame(self, tokens: Any) -> tuple[Any, Any]:
+            if type(tokens) is not _OwnedFrameTokens:
+                raise ContractError('private sealed frame required')
+            tokens._require_live()
+            return self._encode_frame_calculate(tokens)
+
+        def _encode_frame_calculate(self, tokens: Any) -> tuple[Any, Any]:
             state_input = torch.cat((self._float(tokens.state_numerics),
                                      self._tensor(tokens.state_present, dtype=torch.float32, device=self.device),
                                      self._onehot(tokens.state_categories, layout.state_categories),
@@ -249,7 +259,8 @@ def make_network(model: ModelConfigV2 | ModelConfigV3 | ModelConfigV4, seed: int
             numbers = torch.cat((self._float(tokens.card_numerics),
                                  self._tensor(tokens.card_present, dtype=torch.float32, device=self.device)), -1)
             card_input = torch.cat((self.definition_embedding(cats[:, 0]), self.ability_embedding(cats[:, 1]),
-                                    self._onehot(tuple(row[2:] for row in tokens.card_categories), layout.card_categories[2:]), numbers), -1)
+                                    self._onehot(tokens.card_categories[:, 2:] if type(tokens) is _OwnedFrameTokens else
+                                                 tuple(row[2:] for row in tokens.card_categories), layout.card_categories[2:]), numbers), -1)
             mask = self._tensor(tokens.card_mask, dtype=torch.bool, device=self.device)
             cards = activate(self.card_encoder(card_input), model.card.activation).masked_fill(~mask[:, None], 0)
             source = functional.one_hot(cats[:, layout.membership_index], len(layout.card_categories[layout.membership_index]) + 2).float().masked_fill(~mask[:, None], 0)
@@ -271,7 +282,7 @@ def make_network(model: ModelConfigV2 | ModelConfigV3 | ModelConfigV4, seed: int
                 else:
                     hand = latent.masked_fill(~mask[:, None], -torch.inf).max(0).values
                     hand = torch.where(mask.any(), hand, torch.zeros_like(hand))
-            if tokens.interval_numerics:
+            if len(tokens.interval_numerics):
                 event_input = torch.cat((self._float(tokens.interval_numerics),
                                          self._tensor(tokens.interval_present, dtype=torch.float32, device=self.device),
                                          self._onehot(tokens.interval_categories, layout.event_categories)), -1)
@@ -326,19 +337,22 @@ def make_network(model: ModelConfigV2 | ModelConfigV3 | ModelConfigV4, seed: int
             resource_estimate(model, runtime_binding, decisions=len(frames),
                               interval_events=max(len(frame.interval_numerics) for frame in frames),
                               candidates=1, suffix_decisions=suffix_length if torch.is_grad_enabled() else 1, **layout_options)
+            return self._encode_history_calculate(frames, suffix_length, self.encode_frame)
+
+        def _encode_history_calculate(self, frames: Any, suffix_length: int, encode_frame: Any) -> tuple[Any, Any]:
             if model.model_id == "mlp":
                 # Historical frames are validated above, but MLP consumes only
                 # the current detailed state/hand/interval/aggregate observation.
-                return self.encode_frame(frames[-1])
+                return encode_frame(frames[-1])
             prefix = len(frames) - suffix_length
             past = None
             if prefix and model.model_id != "mlp":
                 with torch.no_grad():
-                    prefix_frames = torch.stack([self.encode_frame(frame)[0] for frame in frames[:prefix]])
+                    prefix_frames = torch.stack([encode_frame(frame)[0] for frame in frames[:prefix]])
                     _, past = self.encode_temporal(prefix_frames)
             # Encode all suffix frames with gradients, including the endpoint's
             # shared cards used by the actor; no detached saved latent shortcut.
-            encoded = [self.encode_frame(frame) for frame in frames[prefix:]]
+            encoded = [encode_frame(frame) for frame in frames[prefix:]]
             output, _ = self.encode_temporal(torch.stack([value[0] for value in encoded]), past, prefix)
             return output[-1], encoded[-1][1]
 
@@ -473,6 +487,22 @@ def make_network(model: ModelConfigV2 | ModelConfigV3 | ModelConfigV4, seed: int
             validate_candidate_tokens(tokens, frames[-1], model.max_positions, layout=layout)
             if len(tokens.kinds) > runtime_binding.max_candidates:
                 raise ContractError("candidate admission limit exceeded")
+            return self._forward_calculate(frames, tokens, suffix_length=suffix_length,
+                dense=dense, chunk_size=chunk_size, mask=mask, encode_history=self.encode_history)
+
+        def _forward_owned(self, frames: Any, tokens: Any, *, suffix_length: int | None = None) -> tuple[Any, Any, Any]:
+            _require_owned_endpoint(frames, tokens)
+            integer(len(frames), 1, model.temporal.max_decisions)
+            suffix_length = len(frames) if suffix_length is None else suffix_length
+            integer(suffix_length, 1, len(frames))
+            if len(tokens.kinds) > runtime_binding.max_candidates:
+                raise ContractError('candidate admission limit exceeded')
+            return self._forward_calculate(frames, tokens, suffix_length=suffix_length,
+                dense=False, chunk_size=None, mask=None,
+                encode_history=lambda rows, suffix: self._encode_history_calculate(rows, suffix, self._encode_owned_frame))
+
+        def _forward_calculate(self, frames: Any, tokens: Any, *, suffix_length: Any,
+                               dense: bool, chunk_size: Any, mask: Any, encode_history: Any) -> tuple[Any, Any, Any]:
             # Admit the effective scoring allocation and the full endpoint as
             # one envelope before encoding. Separate history/chunk checks can
             # each fit while their combined retained allocations exceed budget.
@@ -484,7 +514,7 @@ def make_network(model: ModelConfigV2 | ModelConfigV3 | ModelConfigV4, seed: int
                               candidates=len(tokens.kinds),
                               suffix_decisions=(len(frames) if suffix_length is None else suffix_length)
                               if torch.is_grad_enabled() else 1, **layout_options)
-            context, cards = self.encode_history(frames, suffix_length)
+            context, cards = encode_history(frames, suffix_length)
             logprob, entropy = self.distribution(context, cards, tokens, mask, dense=dense, chunk_size=chunk_size)
             value = self.value(context)
             if not torch.isfinite(value):

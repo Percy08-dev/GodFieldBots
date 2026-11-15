@@ -10,7 +10,7 @@ import time
 from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Any
 
-from gf_common.domain import ContractError, Json, RuntimePolicyBinding, integer
+from gf_common.domain import ContractError, Json, RuntimePolicyBinding, digest, integer
 from gf_common.hpo_progress import ProgressCallback, observe, pool_diagnostic
 from gf_simulator_client.card_instance_worker import CardInstanceParticipantWorker
 from gf_simulator_client.framing import write_frame
@@ -21,6 +21,19 @@ class _ExchangeSetup:
     """Original gated executor submission, including its partial-construction owner."""
     def __init__(self,owner: ResidentPhysicalWorker,payload: Json,deadline: float) -> None:
         self.owner,self.executor,self.payload,self.deadline = owner,owner.executor,payload,deadline
+        self.snapshot: Any = None
+        self.owned_cache_identity: str | None = None
+        request = payload['request']
+        policy_options = payload.get('payload', {}).get('policy_options')
+        if owner.pool.owned_snapshots and request['command'] in ('BEGIN', 'SYNC') and policy_options is not None:
+            checkpoint = policy_options.get('expected_manifest_digest')
+            if checkpoint is not None:
+                self.snapshot = owner.pool.owned_snapshot(checkpoint)
+                self.payload = {**payload, 'owned': {'metadata': self.snapshot.actor_metadata,
+                    'bank_count': len(self.snapshot.inference.banks)}}
+                self.owned_cache_identity=digest({'recipe':'owned-inference-cache-v1',
+                    'policy_sha256':digest({'model_id':payload['payload']['model_id'],'policy_options':policy_options}),
+                    'inference_sha256':checkpoint,'snapshot_identity':self.snapshot.identity})
         self.gate,self.completed,self.submission_finished = threading.Event(),threading.Event(),threading.Event()
         self.future: Future[Any] | None = None
         self.task: asyncio.Task[Any] | None = None
@@ -39,7 +52,20 @@ class _ExchangeSetup:
                 return self._abort_result
             assert self.owner.process.stdin is not None and self.owner.process.stdout is not None
             write_frame(self.owner.process.stdin,self.payload)
-            return self.owner._read_reply(self.owner.process.stdout)
+            leases = []
+            if self.snapshot is not None:
+                assert self.owner.owned_channel is not None
+                for index, bank in enumerate(self.snapshot.inference.banks):
+                    leases.append(self.owner.owned_channel.send(bank, purpose='model',
+                        generation=self.snapshot.generation, identity=self.snapshot.identity+f':inference:{index}'))
+            response = self.owner._read_reply(self.owner.process.stdout)
+            for lease in leases:
+                assert self.owner.owned_channel is not None
+                self.owner.owned_channel.accept_completion(lease)
+            if self.snapshot is not None:
+                assert self.owned_cache_identity is not None
+                self.owner._owned_cache_identities[self.owned_cache_identity]=self.snapshot.checkpoint
+            return response
         finally:
             self.completed.set()
 
@@ -138,14 +164,35 @@ class ResidentPhysicalWorker(StructuredParticipantWorker):
         self._pending_diagnostic: Json | None = None
         self.diagnostic: Json | None = None
         self.protected_identity: str | None = None
+        self._owned_cache_identities: dict[str,str] = {}
         self.used_collection = None
         self._operations: dict[asyncio.Task[Any], Future[Any]] = {}
         self._setups: set[_ExchangeSetup] = set()
         self.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix='resident-framing')
-        self._spawn(pool.ledger, pool.resident_bytes,
-            [sys.executable, '-E', '-m', 'gf_simulator_client.resident_bootstrap', str(viewer)],
-            {'PATH': os.defpath, 'LANG': 'C.UTF-8', 'LC_ALL': 'C.UTF-8', 'PYTHONHASHSEED': '0',
-                'OPENBLAS_NUM_THREADS': '1', 'OMP_NUM_THREADS': '1', 'MKL_NUM_THREADS': '1'})
+        self.owned_channel = self._owned_inherited = None
+        arguments = [sys.executable, '-E', '-m', 'gf_simulator_client.resident_bootstrap', str(viewer)]
+        pass_fds: tuple[int, ...] = ()
+        if pool.owned_snapshots:
+            from gf_common.ram_bank import RamBankChannel
+            self.owned_channel, self._owned_inherited = RamBankChannel.pair()
+            fd, invocation = self._owned_inherited.inherited_endpoint()
+            pass_fds = (fd,)
+            arguments.extend((str(fd), invocation))
+        try:
+            self._spawn(pool.ledger, pool.resident_bytes, arguments,
+                {'PATH': os.defpath, 'LANG': 'C.UTF-8', 'LC_ALL': 'C.UTF-8', 'PYTHONHASHSEED': '0',
+                    'OPENBLAS_NUM_THREADS': '1', 'OMP_NUM_THREADS': '1', 'MKL_NUM_THREADS': '1'},
+                **({'pass_fds': pass_fds} if pass_fds else {}))
+            if self.owned_channel is not None:
+                self.owned_channel.bind_child(self.process)
+                assert self._owned_inherited is not None
+                self._owned_inherited.close()
+        except BaseException:
+            if self.owned_channel is not None and not self.owned_channel.outstanding:
+                self.owned_channel.close()
+                assert self._owned_inherited is not None
+                self._owned_inherited.close()
+            raise
         pool.custody.register(self.lease, self, viewer=viewer)
 
     async def exchange(self, payload: Json, *, timeout: float, closing: bool = False) -> Json:
@@ -233,6 +280,8 @@ class ResidentPhysicalWorker(StructuredParticipantWorker):
             cache_identity=cache_identity, generation=generation)
         response = await self.exchange({'request': request, **({} if payload is None else {'payload': payload})}, timeout=timeout)
         self.pool.custody.acknowledge(self.lease, response)
+        if command=='EVICT' and cache_identity is not None:
+            self._owned_cache_identities.pop(cache_identity,None)
         self.observe_diagnostic()
 
     async def _close_owned(self, timeout: float, started: float) -> None:
@@ -257,6 +306,12 @@ class ResidentPhysicalWorker(StructuredParticipantWorker):
         await super()._close_owned(max(0.,started+timeout-time.monotonic()),time.monotonic())
         # Actual process reap does not retire its original gated setup or I/O.
         await self.retire_setups(started+timeout)
+        if self.owned_channel is not None and self.process.poll() is not None:
+            for transfer in self.owned_channel.outstanding:
+                transfer.release_after_reap(self.process)
+            self.owned_channel.close()
+            assert self._owned_inherited is not None
+            self._owned_inherited.close()
         self.executor.shutdown(wait=False, cancel_futures=False)
         if close_error is not None:
             raise close_error
@@ -264,10 +319,16 @@ class ResidentPhysicalWorker(StructuredParticipantWorker):
 
 class ResidentParticipantPool:
     def __init__(self, custody: Any, *, resident_bytes: int, deadline: float,
-                 acquire_cache: Any = None, release_cache: Any = None, progress: ProgressCallback | None = None) -> None:
+                 acquire_cache: Any = None, release_cache: Any = None, progress: ProgressCallback | None = None,
+                 owned_snapshots: bool = False) -> None:
         integer(resident_bytes, 0, custody.ledger.global_cuda_bytes)
         self.custody, self.ledger = custody, custody.ledger
         self.progress = progress
+        if type(owned_snapshots) is not bool:
+            raise ContractError('explicit owned snapshot dispatch required')
+        self.owned_snapshots = owned_snapshots
+        self._owned_snapshots: dict[str, Any] = {}
+        self._owned_snapshot_bindings: dict[str,Any] = {}
         self.starts = self.reuses = 0
         self.resident_bytes, self.deadline = resident_bytes, deadline
         self.execution_deadline = deadline
@@ -277,6 +338,42 @@ class ResidentParticipantPool:
         self.authority: Any = None
         self.closed = False
         self._close_task: asyncio.Task[None] | None = None
+
+    def bind_owned_snapshot(self, snapshot: Any) -> None:
+        from gf_common.hpo_actor_snapshot import OwnedActorSnapshot
+        if not self.owned_snapshots or type(snapshot) is not OwnedActorSnapshot:
+            raise ContractError('actual common actor snapshot capability required for actor9')
+        snapshot.require()
+        checkpoint=snapshot.checkpoint
+        existing=self._owned_snapshots.get(checkpoint)
+        if existing is not None:
+            if existing is not snapshot:
+                raise ContractError('actor snapshot checkpoint owner changed')
+            self._owned_snapshot_bindings[checkpoint].require(self,snapshot)
+            return
+        binding=snapshot.bind(self)
+        self._owned_snapshots[checkpoint]=snapshot
+        self._owned_snapshot_bindings[checkpoint]=binding
+
+    def owned_snapshot(self, checkpoint: str) -> Any:
+        snapshot=self._owned_snapshots.get(checkpoint)
+        if snapshot is None:
+            raise ContractError('actor9 checkpoint lacks actual bound snapshot')
+        self._owned_snapshot_bindings[checkpoint].require(self,snapshot)
+        return snapshot
+
+    def unbind_owned_snapshot(self, snapshot: Any) -> None:
+        checkpoint=snapshot.checkpoint
+        if self._owned_snapshots.get(checkpoint) is not snapshot:
+            raise ContractError('actor9 snapshot unbind differs from bound owner')
+        if any(owner._operations or owner._setups or owner.owned_channel is not None
+                and owner.owned_channel.outstanding for owner in self.owners):
+            raise ContractError('actor9 transfer custody remains live')
+        if any(owner.process.poll() is None and checkpoint in owner._owned_cache_identities.values() for owner in self.owners):
+            raise ContractError('actor9 snapshot still has a live cached actor use')
+        self._owned_snapshot_bindings[checkpoint].close(self)
+        del self._owned_snapshot_bindings[checkpoint]
+        del self._owned_snapshots[checkpoint]
 
     def observe_diagnostic(self) -> None:
         # Original custody retains every historical owner for actual retirement;
@@ -400,7 +497,8 @@ class ResidentParticipantWorker(CardInstanceParticipantWorker):
         self.binding_value = RuntimePolicyBinding(self.model_id, self.initial.get('policy_options'))
 
 
-    def _spawn(self, ledger: Any, residency: int, arguments: list[str], environment: dict[str, str]) -> None:
+    def _spawn(self, ledger: Any, residency: int, arguments: list[str], environment: dict[str, str],
+               *, pass_fds: tuple[int, ...] = ()) -> None:
         self.owner = self.pool.acquire(self, self.viewer)
         self.process, self.lease = self.owner.process, self.owner.lease
 

@@ -74,6 +74,11 @@ class HpoLearner(Learner):
         self.optimizer = self._optimizer(self.network)
         self.shuffle = np.random.Generator(np.random.PCG64(seed))
         self.steps = 0
+        self._owned_snapshot: Any = None
+        self._owned_generation = 0
+        self._owned_failed = False
+        self._owned_legacy = False
+        self._owned_source_budget: Any = None
 
     def _optimizer(self, network: Any) -> Any:
         return self.torch.optim.Adam(network.parameters(), lr=self.training.adam_learning_rate,
@@ -105,9 +110,56 @@ class HpoLearner(Learner):
                     raise ContractError("complete rollout plus endpoint exceeds learner reservation")
 
     def update(self, rollout: StructuredRollout) -> Json:
+        self._owned_legacy=True
+        self._owned_snapshot=None
         started = time.perf_counter()
+        parity_started = time.perf_counter()
         parity = self.parity(rollout)
+        self._last_parity_seconds = time.perf_counter() - parity_started
         assert type(rollout) is HpoRollout
+        return self._update_numeric(rollout, parity, started, self.network)
+
+    def update_owned(self, rollout: Any) -> Json:
+        from gf_training.hpo_owned_rollout import OwnedNumericBatch
+        if self._owned_legacy:
+            raise ContractError('legacy update/restore cannot enter producer-owned numerical route')
+        if type(rollout) is not OwnedNumericBatch or getattr(self, '_owned_failed', False):
+            raise ContractError('owned learner is terminal or batch owner invalid')
+        if rollout._budget is not self._owned_source_budget:
+            raise ContractError('owned learner and batch require SAME invocation Source account')
+        self._context.bind(self.network)
+        self._context.check(rollout.input_binding)
+        if rollout._state != 'PERSISTED':
+            raise ContractError('owned update requires persisted batch, single use')
+        if rollout.generation != getattr(self, '_owned_generation', 0):
+            raise ContractError('owned batch generation differs from actual learner')
+        if (canonical(asdict(rollout.model)) != canonical(asdict(self.model))
+                or canonical(asdict(rollout.training)) != canonical(asdict(self.training))
+                or rollout.action_config_hash != self.action_config_hash):
+            raise ContractError('owned rollout model/actions/training mismatch')
+        for index in range(len(rollout)):
+            frames, candidates = rollout.endpoint(index)
+            size = resource_estimate(self.model, self.binding, decisions=len(frames),
+                interval_events=max(len(f.interval_numerics) for f in frames),
+                candidates=len(candidates.kinds), suffix_decisions=self._suffix_length(len(frames)), **self._options)['total_bytes']
+            if rollout.resident_bytes + size > min(self.model.resources.max_owned_bytes, self.binding.managed_budget_bytes):
+                raise ContractError('owned rollout plus endpoint exceeds learner reservation')
+        snapshot_owner = rollout._snapshot_owner
+        if snapshot_owner is not None and getattr(snapshot_owner, '_learner', None) is not self:
+            raise ContractError('owned batch frozen snapshot differs from actual learner')
+        rollout._begin_update()
+        try:
+            result = self._update_numeric(rollout, {'status': 'not_run'}, time.perf_counter(), self.network._forward_owned)
+            rollout._state = 'UPDATED'
+            self._owned_generation = getattr(self, '_owned_generation', 0) + 1
+            self._owned_snapshot = None
+            return result
+        except BaseException:
+            rollout._state = 'FAILED'
+            self._owned_failed = True
+            raise
+
+    def _update_numeric(self, rollout: Any, parity: Json, started: float, forward: Any) -> Json:
         torch, recipe = self.torch, self.training
         totals: dict[str, float] = {}
         denominator = 0
@@ -122,7 +174,7 @@ class HpoLearner(Learner):
                 for index in logical:
                     frames, candidates = rollout.endpoint(index)
                     suffix = self._suffix_length(len(frames))
-                    logs, value, _ = self.network(frames, candidates, suffix_length=suffix)
+                    logs, value, _ = forward(frames, candidates, suffix_length=suffix)
                     selected, old, _, advantage, target = rollout.vector(index)
                     self.synchronize()
                     mask = torch.ones((1, len(candidates.kinds)), dtype=torch.bool, device=self.binding.device)
@@ -156,11 +208,19 @@ class HpoLearner(Learner):
             "endpoint_evaluations": denominator, "context_decisions": context_decisions,
             "suffix_decisions": suffix_decisions, "update_seconds": time.perf_counter() - started}
 
+    def snapshot_owned(self, *, budget: Any, save_budget_bytes: int = 512*1024**2,
+                       code_revision: str | None = None) -> Any:
+        from gf_training.hpo_owned_snapshot import export_learner_snapshot
+        return export_learner_snapshot(self, budget=budget, save_budget_bytes=save_budget_bytes,
+            code_revision=code_revision)
+
     def save(self, directory: Path, *, code_revision: str | None = None,
              shard_bytes: int = MAX_ARRAY_BYTES, save_budget_bytes: int = 512*1024**2) -> Json:
         from gf_training.hpo_artifacts import save_learner
         return save_learner(self, directory, code_revision=code_revision, shard_bytes=shard_bytes,save_budget_bytes=save_budget_bytes)
 
     def restore(self, directory: Path) -> None:
+        self._owned_legacy=True
+        self._owned_snapshot=None
         from gf_training.hpo_artifacts import restore_learner
         restore_learner(self, directory)

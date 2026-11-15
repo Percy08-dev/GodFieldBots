@@ -20,9 +20,41 @@ from gf_simulator_client.card_instance_episode import CardInstanceEpisode
 from gf_simulator_client.framing import read_frame, write_frame
 
 
+class _ActorBankReservation:
+    def __init__(self, budget: Any, size: int) -> None:
+        self.budget, self.size = budget, size
+
+    def close(self) -> None:
+        if self.size:
+            self.budget.used -= self.size
+            self.size = 0
+
+    def __enter__(self) -> Any:
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        self.close()
+
+
+class _ActorBankBudget:
+    """Single-threaded transfer metadata/copy admission in the actor process."""
+    def __init__(self) -> None:
+        self.used = 0
+
+    def reserve(self, size: int, *, wait: bool = False) -> _ActorBankReservation:
+        integer(size, 0, 512*1024**2)
+        if self.used + size > 512*1024**2:
+            raise ContractError('actor9 transfer envelope exceeds admission')
+        self.used += size
+        return _ActorBankReservation(self, size)
+
+
 class ResidentEpisodeTransport:
-    def __init__(self, viewer: int) -> None:
+    def __init__(self, viewer: int, *, owned_channel: Any = None) -> None:
         self.viewer = viewer
+        self.owned_channel = owned_channel
+        self._owned_request: Json | None = None
+        self._owned_budget = _ActorBankBudget()
         self.cache = ResidentPolicyCache()
         self.episode: CardInstanceEpisode | None = None
         self.owner: Json | None = None
@@ -44,6 +76,10 @@ class ResidentEpisodeTransport:
             if self._execution_environment is not None and any(os.environ.get(key)!=value for key,value in self._execution_environment.items()):
                 raise ContractError('resident process execution environment changed')
             self._execution_profile=profile
+        if model_id in ('mlp', 'gru', 'transformer') and self.owned_channel is not None:
+            if self._owned_request is None:
+                raise ContractError('actor9 neural load requires SYNC_OWNED inference FD')
+            return self._load_owned(model_id, options, actions, rules)
         policy_sha = digest({'model_id': model_id, 'policy_options': options})
         weight_bytes = 0
         if options is None or model_id == 'heuristic_refresh':
@@ -78,6 +114,66 @@ class ResidentEpisodeTransport:
         self._checkpoints[identity] = self.checkpoint
         return policy
 
+    def _load_owned(self, model_id: str, options: Json | None, actions: Any, rules: Any) -> Any:
+        from gf_common.ram_bank import MAX_BANK_BYTES, ReadonlyRamBankSet
+        from gf_common.structured_layout import layout_for_contract
+        from gf_models.hpo_config import model_config_v4
+        from gf_models.hpo_owned_inference import _validate_owned_inference, load_owned_inference
+        from gf_models.structured_config import InferenceBindingV2
+        from gf_models.structured_policy import GameStructuredPolicyV4
+        if options is None or options.get('version') != '4' or self.owned_channel is None:
+            raise ContractError('actor9 requires model4 and inherited owned channel')
+        wrapper = closed(self._owned_request, {'metadata', 'bank_count'})
+        metadata = wrapper['metadata']
+        if self.checkpoint != metadata.get('inference_digest') or self.checkpoint != options['expected_manifest_digest']:
+            raise ContractError('actor9 snapshot differs from selected checkpoint')
+        assert self.generation is not None
+        generation = integer(metadata.get('generation'), 0, self.generation)
+        model = model_config_v4(options['model'], layout=layout_for_contract(actions.action_contract))
+        binding = InferenceBindingV2(**options['inference'])
+        visibility = options['cuda_visible_devices']
+        if visibility is None:
+            os.environ.pop('CUDA_VISIBLE_DEVICES', None)
+        else:
+            os.environ['CUDA_VISIBLE_DEVICES'] = visibility
+        os.environ['CUBLAS_WORKSPACE_CONFIG'] = ':4096:8'
+        try:
+            deliveries = []
+            total = 0
+            for index in range(integer(wrapper['bank_count'], 1, 65536)):
+                delivery = self.owned_channel.receive(purpose='model', generation=generation,
+                    identity=metadata['snapshot_identity']+f':inference:{index}', budget=self._owned_budget,
+                    max_bytes=MAX_BANK_BYTES-total)
+                total += delivery.bank.size
+                deliveries.append(delivery)
+            banks = ReadonlyRamBankSet(tuple(delivery.bank for delivery in deliveries))
+            identity = digest({'recipe':'owned-inference-cache-v1', 'policy_sha256':digest({'model_id':model_id,'policy_options':options}),
+                'inference_sha256':self.checkpoint,'snapshot_identity':metadata['snapshot_identity']})
+            def validate() -> None:
+                _validate_owned_inference(banks, metadata, model=model, binding=binding, actions=actions, rules=rules)
+            def load() -> Any:
+                network = load_owned_inference(banks, metadata, model=model, binding=binding, actions=actions, rules=rules)
+                return GameStructuredPolicyV4(network, model, binding, metadata['inference_digest'],
+                    action_contract=actions.action_contract, rules=rules, action_config_hash=options['action_config_hash'])
+            policy = self.cache.acquire(identity, weight_bytes=sum(d.nbytes for bank in banks.banks for d in bank.descriptors),
+                load=load, validate=validate)
+            self.cache.synchronize()
+            for delivery in deliveries:
+                delivery.complete(self.cache.synchronize)
+            self._owned_request = None
+            assert self.checkpoint is not None
+            self._checkpoints[identity] = self.checkpoint
+            if self._execution_environment is None:
+                self._execution_environment = {key:os.environ.get(key) for key in ('CUDA_VISIBLE_DEVICES','CUBLAS_WORKSPACE_CONFIG',
+                    'OPENBLAS_NUM_THREADS','OMP_NUM_THREADS','MKL_NUM_THREADS','TORCHINDUCTOR_DETERMINISTIC')}
+            return policy
+        except BaseException as error:
+            try:
+                self.owned_channel.retire_received(self.cache.synchronize)
+            except BaseException as cleanup:  # noqa: BLE001 - preserve actor failure and original receiver custody
+                error.add_note('actor9 receive cleanup retained: '+type(cleanup).__name__)
+            raise
+
     def _reset(self) -> None:
         if self.episode is not None:
             self.episode.reset()
@@ -89,7 +185,11 @@ class ResidentEpisodeTransport:
         self.cache.synchronize()
 
     def exchange(self, envelope: Json) -> Json:
-        closed(envelope, {'request'}, {'payload'})
+        closed(envelope, {'request'}, {'payload', 'owned'})
+        if 'owned' in envelope:
+            if self.owned_channel is None or envelope['request'].get('command') not in ('BEGIN','SYNC') or self._owned_request is not None:
+                raise ContractError('actor9 SYNC_OWNED requires original idle BEGIN/SYNC boundary')
+            self._owned_request = envelope['owned']
         request = envelope['request']
         if type(request) is not dict or request.get('protocol') != RESIDENT_MODE or request.get('schema_version') != 1:
             raise ContractError('resident original envelope required')
@@ -181,9 +281,13 @@ class ResidentEpisodeTransport:
 def main() -> None:
     output, source = sys.stdout.buffer, sys.stdin.buffer
     try:
-        if len(_VIEWER) != 1 or _VIEWER[0] not in ('1', '2'):
+        if len(_VIEWER) not in (1, 3) or _VIEWER[0] not in ('1', '2'):
             raise ContractError('resident viewer must be sanitized1or2')
-        transport = ResidentEpisodeTransport(int(_VIEWER[0]))
+        channel = None
+        if len(_VIEWER) == 3:
+            from gf_common.ram_bank import RamBankChannel
+            channel = RamBankChannel._from_inherited(int(_VIEWER[1]), _VIEWER[2])
+        transport = ResidentEpisodeTransport(int(_VIEWER[0]), owned_channel=channel)
         while True:
             envelope = read_frame(source)
             response = transport.exchange(envelope)

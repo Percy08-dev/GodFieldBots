@@ -52,6 +52,23 @@ architecture conformance both READY on the final staged delta. Reviewer independ
 checks pass50non-exec cases and8covering regressions respectively. Root accepts
 this foundation only; production ownership binding remains required downstream.
 
+Task2 direct components now pass both final scoped independent reviews. The
+core corrections make token bindings immutable, distinguish deferred live exports
+from uncertain closure, share the Source account and refuse legacy-origin mixing.
+The wrapper correction inventories received originals before fallible decoding/
+retention and retires local failures without ACK, keeping sender leases until
+completion/reap. Common inference-only actor capabilities preserve dependency
+direction and cache/binding last-use ownership.
+
+Final covering HOST167PASS/51.53s and Ruff/mypy219PASS follow the receive fixes.
+Independent final correctness17PASS/18.90s includes11custodyfaults and actual
+Wire7/actor9 success for each model; architecture7PASS/4deselected rechecks the
+failure delta. Earlier all3-model strict-reader feature/target/gradient/Adam/
+shuffle/Torch-RNG tests and mixedzero/seat2/loss/draw cases pass. Prior broad420PASS
+and affected257PASS runs are historical pre-final-delta evidence, not a new whole
+suite claim. Production coordinator/registry, cold resume, campaigns and GPU/
+timing trials remain subsequent work.
+
 ## Required matched comparison
 
 Preserve explicit ADR0042-enabled control alongside the new producer-origin path.
@@ -59,6 +76,26 @@ Preserve explicit ADR0042-enabled control alongside the new producer-origin path
 decision/update/time/memory budgets. Three alternating pairs per model,18trials.
 New directories only. Keep encoder/protocol/origin/config differences explicit.
 No audit/test workloads during measurement. Retain failures and measured limits.
+Preserve the historical probe's D1,000,000/max_updates2,600s wall,epoch1 and
+parent/save1GiB settings, including base480s admission/540s execution/60s
+finalization. Expected physical comparison result is healthy
+`incomplete/update_cap`; it never supplies a completed HPO objective.
+
+Before candidate measurements, root declares this18trial paired order. B is the
+current-code ADR0042-enabled strict resident control; C is producer-owned.
+Actual new-directory/run/config/source identities must be frozen before launch.
+
+| Round | Model | Pair order |
+| --- | --- | --- |
+| 1 | MLP | B1,C1 |
+| 1 | GRU | C1,B1 |
+| 1 | Transformer | B1,C1 |
+| 2 | MLP | C2,B2 |
+| 2 | GRU | B2,C2 |
+| 2 | Transformer | C2,B2 |
+| 3 | MLP | B3,C3 |
+| 3 | GRU | C3,B3 |
+| 3 | Transformer | B3,C3 |
 
 The following values are historical ADR0042 evidence from
 [the investigation](../design/hpo-producer-owned-data-investigation.md),
