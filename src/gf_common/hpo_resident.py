@@ -8,6 +8,7 @@ from gf_common.domain import ContractError, Json, closed, integer
 
 RESIDENT_MODE = 'resident-worker-v1'
 RESIDENT_VARIANT = 'hpo-ppo-resident-v1'
+OWNED_VARIANT = 'hpo-ppo-owned-v1'
 RESIDENT_CAPABILITY = 'collection7;proof4;registry5;pool1'
 CACHE_ENTRIES = 6
 CACHE_WEIGHT_BYTES = 128 * 1024**2
@@ -23,7 +24,7 @@ def resident_runtime(value: Json) -> Json:
 
 
 def is_resident(state: Json) -> bool:
-    return state.get('run_variant') == RESIDENT_VARIANT
+    return state.get('run_variant') in (RESIDENT_VARIANT, OWNED_VARIANT)
 
 
 CACHE_OWNER_KEYS = {'job_ticket', 'pool_id', 'pool_epoch', 'worker_key', 'pid', 'viewer', 'lease_epoch'}
@@ -142,10 +143,12 @@ def checked_cache_release(binding: Json, value: Any) -> Json:
 
 def require_hpo_runtime_execution(spec: Json) -> None:
     """Validate explicit execution dispatch; legacy specifications remain fresh."""
-    if type(spec.get('schema_version')) is int and spec['schema_version'] == 3:
+    if type(spec.get('schema_version')) is int and spec['schema_version'] in (3,4):
         if 'runtime' not in spec:
             raise ContractError('resident execution requires explicit runtime')
         resident_runtime(spec['runtime'])
+        if spec['schema_version']==4 and (spec.get('origin')!='producer-owned-v1' or spec.get('encoder')!='canonical-python'):
+            raise ContractError('explicit owned origin and canonical Python encoder required')
 
 
 def checked_evaluation_runtime(value: Json, linkage: Json, registry: Json) -> Json:

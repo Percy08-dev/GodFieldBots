@@ -34,6 +34,7 @@ from gf_common.structured import DecisionFrame, EventBank, EventDelta, Selection
 from gf_common.structured_layout import CORRECTED_CARD_INSTANCE_LAYOUT
 from gf_models.card_instance_artifacts import RetainedGameArtifacts
 from gf_models.card_instance_game_tree_runtime import RetainedGamePolicyArtifacts
+from gf_models.hpo_owned_artifacts import OwnedGameArtifacts
 from gf_models.structured_runtime import own_game_worker_settings_v3
 from gf_simulator_client.card_instance_runtime import CardInstanceRuntimeEvidence
 from gf_simulator_client.card_instance_worker import CardInstanceParticipantWorker
@@ -81,7 +82,7 @@ class CardInstanceSimulatorEnvironment(SimulatorEnvironment):
         *,
         ledger: ReservationLedger,
         runtime_evidence: CardInstanceRuntimeEvidence,
-        artifact_inputs: RetainedGameArtifacts | RetainedGamePolicyArtifacts | None = None,
+        artifact_inputs: RetainedGameArtifacts | RetainedGamePolicyArtifacts | OwnedGameArtifacts | None = None,
         artifact_sink: ArtifactSink | None = None,
         server_output_root: Path | None = None,
         resident_pool: Any = None,
@@ -108,7 +109,7 @@ class CardInstanceSimulatorEnvironment(SimulatorEnvironment):
                 if label != binding.model_id + "-card-instance-v2":
                     raise ContractError("baseline label differs from fixed execution")
             else:
-                if type(artifact_inputs) not in (RetainedGameArtifacts, RetainedGamePolicyArtifacts):
+                if type(artifact_inputs) not in (RetainedGameArtifacts, RetainedGamePolicyArtifacts, OwnedGameArtifacts):
                     raise ContractError("neural environment requires retained external inputs")
                 assert artifact_inputs is not None
                 artifact_inputs.require_options(binding.model_id, binding.policy_options)
@@ -267,13 +268,17 @@ class CardInstanceSimulatorEnvironment(SimulatorEnvironment):
     def _reconcile_replay(
         self, replay: Json, viewer: int, accepted: list[Json], outcome: Any
     ) -> None:
-        reconcile_replay(replay, viewer, accepted, outcome)
+        if self.capture is None:
+            reconcile_replay(replay, viewer, accepted, outcome)
 
     def _replay_closure(self, replay: Json, game: str, viewer: int) -> Json | None:
-        return replay_closure(replay, game, viewer)
+        return replay["episode_end"] if self.capture is not None else replay_closure(replay, game, viewer)
+
+    def _replay_was_reconciled(self) -> bool:
+        return self.capture is None
 
     def _finish_journal(self, journal: Journal, result: EpisodeResult, final: Json | None) -> None:
-        if result.end_kind == "natural" and not result.replay_reconciled:
+        if result.end_kind == "natural" and self.capture is None and not result.replay_reconciled:
             raise ContractError("journal6 natural reward requires both reconciled player closures")
         super()._finish_journal(journal, result, final)
 
@@ -349,7 +354,7 @@ class CardInstanceSimulatorEnvironment(SimulatorEnvironment):
 
     def _before_worker_close(self, workers: dict[int, ParticipantWorker], result: EpisodeResult) -> None:
         if self.resident_pool is not None and (result.end_kind == 'natural' and result.failure is None
-                and result.replay_reconciled and not any(result.health.values())):
+                and (self.capture is not None or result.replay_reconciled) and not any(result.health.values())):
             from gf_simulator_client.resident_pool import ResidentParticipantWorker
             for worker in workers.values():
                 if type(worker) is not ResidentParticipantWorker:

@@ -272,7 +272,7 @@ async def _run_corrected(loaded: LoadedConfig, command: str,
                          _final_validation_context: Any = None,
                          _hpo_evaluation_job: Any = None,
                          _hpo_evaluation_cleanup: Any = None,
-                         resident_pool: Any = None, progress: Any = None) -> tuple[Path, Any] | PackedRunResult:
+                         resident_pool: Any = None, progress: Any = None, _owned_collection: Any = None) -> tuple[Path, Any] | PackedRunResult:
     config = loaded.config
     from gf_cli.hpo_config import HPOExperimentConfig
     from gf_cli.hpo_evaluation import HpoEvaluationPlan, ResidentHpoEvaluationPlan
@@ -336,6 +336,12 @@ async def _run_corrected(loaded: LoadedConfig, command: str,
     extra: dict[str, Any] = {} if artifact_inputs is None else {"artifact_inputs": artifact_inputs}
     if resident_pool is not None:
         extra["resident_pool"] = resident_pool
+    if _owned_collection is not None:
+        from gf_training.hpo_owned_collection import _OwnedCollection
+        if type(_owned_collection) is not _OwnedCollection:
+            raise ContractError("actual owned collection attachment required")
+        _owned_collection.require(_owned_collection.registry,collection)
+        extra["capture"]=_owned_collection.capture
     semaphore = asyncio.Semaphore(config.run.concurrency)
     tasks: list[asyncio.Task[GroupResult]] = []
     admission_closed = False
@@ -375,6 +381,7 @@ async def _run_corrected(loaded: LoadedConfig, command: str,
         else:
             packed = GroupPackCollection(config.storage.settings(), run_id, deadline=work_deadline,
                                          owned_directory=owned_directory)
+        if _owned_collection is not None: _owned_collection.bind_collection(packed)
         if observation is not None:
             observation._pack, observation._pack_phase = packed, 'owned'
 
@@ -431,7 +438,7 @@ async def _run_corrected(loaded: LoadedConfig, command: str,
                         run_id, work_deadline, expected, neural_metadata=neural_metadata,
                         artifacts=snapshot)
                 await packed.archive(memory_group, group.episodes[0].episode_id, result,
-                                     validate=validate)
+                                     validate=validate if _owned_collection is None else None)
                 diagnostic_progress.completed(games=len(result.episodes),
                     total_game_actions=sum(episode.decisions for episode in result.episodes))
                 return result
@@ -611,6 +618,8 @@ async def _run_corrected(loaded: LoadedConfig, command: str,
         else:
             published_result = publication.commit(summary, manifest)
         if packed is not None:
+            if _owned_collection is not None:
+                return _owned_collection.complete(packed_publication,published_result)
             return cast(PackedRunResult, published_result)
         return directory, summary  # no reportable checks after publication owner releases.
     except BaseException as error:
@@ -776,10 +785,11 @@ async def collect_hpo_ppo(loaded: LoadedConfig,plan: CollectionPlan,ledger: Rese
     # The retained registry shares the parent phase envelope with its already
     # admitted immutable config/plan graphs; collection bytes use Pack's account.
     parent_limit=hpo_artifact_budget(loaded,plan.bindings)
-    owner=RetainedGameArtifacts.for_hpo_registry(plan.bindings,config.actions,
+    owner=(online.owned_registry.artifacts(plan.bindings) if online.owned_registry is not None else
+        RetainedGameArtifacts.for_hpo_registry(plan.bindings,config.actions,
         pool_size=operating['opponent_pool_size'],rules=card_instance_rules(),
         max_owned_bytes=min(parent_limit,config.model.resources.max_owned_bytes),
-        preflight_deadline=preflight_deadline,finalization_deadline=work_deadline)
+        preflight_deadline=preflight_deadline,finalization_deadline=work_deadline))
     try:
         admissions=[admit_hpo_game_workers(config.actions,(plan.bindings[spec.policies[0]],plan.bindings[spec.policies[1]]),
             rules=card_instance_rules(),game_concurrency=config.run.concurrency,global_cuda_bytes=config.run.global_cuda_budget_bytes,
@@ -788,7 +798,14 @@ async def collect_hpo_ppo(loaded: LoadedConfig,plan: CollectionPlan,ledger: Rese
         if not admissions: raise ContractError('HPO collection cannot have an empty schedule')
         result=await _run_corrected(loaded,'collect',plan.bindings,tuple(plan.bindings),started=started,
             artifact_inputs=owner,runtime_evidence=evidence,
-            resource_admission=max(admissions,key=lambda row:row['peak_cuda_bytes']),collection=plan,owned_ledger=ledger,progress=progress,**({} if pool is None else {'resident_pool':pool}))
+            resource_admission=max(admissions,key=lambda row:row['peak_cuda_bytes']),collection=plan,owned_ledger=ledger,progress=progress,
+            **({} if online.owned_registry is None else {'_owned_collection':online.owned_registry.capture}),
+            **({} if pool is None else {'resident_pool':pool}))
+        if online.owned_registry is not None:
+            from gf_training.hpo_owned_collection import OwnedFinalizedCollection
+            if type(result) is not OwnedFinalizedCollection: raise ContractError('owned collector lacks actual capture completion')
+            result.require(online.owned_registry,plan)
+            return result
         if type(result) is not PackedRunResult: raise ContractError('HPO collector did not return its actual packed publication')
         return PackedFinalizedCollection(result.directory,result.report,result.locator,cast(str,result.envelope_sha256),result.storage_metrics)
     finally:

@@ -79,8 +79,8 @@ class _HpoOperations(_GameOperations):
             raise ContractError('HPO requires exact fresh Model4/actions3')
         raw=asdict(config)
         initial={'effective_config':raw,'hpo_spec_sha256':digest(config.hpo_spec)}
-        if config.hpo_spec.get('schema_version')==3:
-            initial['run_variant']=RESIDENT_VARIANT
+        if config.hpo_spec.get('schema_version') in (3,4):
+            initial['run_variant']='hpo-ppo-owned-v1' if config.hpo_spec['schema_version']==4 else RESIDENT_VARIANT
         spec=hpo_spec(initial)
         recipe=hpo_training_config(spec['training_recipe'])
         training=_runtime_training(raw['training'],spec)
@@ -88,7 +88,7 @@ class _HpoOperations(_GameOperations):
         if canonical(asdict(normalize_training_for_model(config.model.model_id,recipe)))!=canonical(spec['training_recipe']):
             raise ContractError('HPO production recipe must already be canonical')
         from gf_common.training_opponents import training_opponents
-        if training_opponents(raw) is not None:
+        if training_opponents(raw) is not None and spec['schema_version']!=4:
             from gf_training.native_backend import require_native_refresh_opponents
             require_native_refresh_opponents()
         op=spec['operating']
@@ -114,7 +114,7 @@ class _HpoOperations(_GameOperations):
             raise ContractError('HPO requires locally managed verified runtime')
         self.runtime=CardInstanceRuntimeEvidence(Path(config.server.binary),Path(config.server.source_dir),deadline=deadline)
         self.runtime.preflight()
-        if config.hpo_spec['schema_version']==3:
+        if config.hpo_spec['schema_version'] in (3,4):
             from gf_models.structured_runtime import hpo_resident_training_admission
             hpo_resident_training_admission(config.model.architecture(layout=LAYOUT),config.model.inference,
                 config.hpo_spec['training_recipe']['tbptt_length'],config.hpo_spec['operating'],config.hpo_spec['runtime'],layout=LAYOUT)
@@ -372,7 +372,13 @@ async def train_hpo_ppo(loaded_run: Any,collector: Any,directory: Path,*,gpu_job
                          mode: str='fresh',pause_after_update: int | None=None,
                          progress: ProgressCallback | None = None, diagnostics: bool | None = None,
                          _reuse_precollection: bool = False) -> HpoRunResult:
-    operations=_HpoOperations(gpu_job,progress,diagnostics,_reuse_precollection=_reuse_precollection)
+    operations: _HpoOperations
+    if loaded_run.config.hpo_spec.get('schema_version')==4:
+        if mode!='fresh': raise ContractError('owned cold resume requires the separately validated cold adapter')
+        from gf_training.hpo_owned_run import _OwnedHpoOperations
+        operations=_OwnedHpoOperations(gpu_job,progress,diagnostics)
+    else:
+        operations=_HpoOperations(gpu_job,progress,diagnostics,_reuse_precollection=_reuse_precollection)
     if canonical(asdict(loaded_run.config))!=canonical(loaded_run.effective) or digest(loaded_run.effective)!=loaded_run.sha256:
         raise ContractError('HPO loaded runtime config is not its exact original effective projection')
     directory=directory.resolve()

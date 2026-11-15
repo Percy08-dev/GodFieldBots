@@ -456,12 +456,15 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
     ops: Any = None
     game = _game_ops is not None
     hpo = False
+    owned = False
     if game:
         from gf_training import structured_ppo
         from gf_training.card_instance_ppo import _GameOperations
+        from gf_training.hpo_owned_run import _OwnedHpoOperations
         from gf_training.hpo_ppo import _HpoOperations
-        hpo=type(_game_ops) is _HpoOperations
-        if type(_game_ops) not in (_GameOperations,_HpoOperations) or _structured_component or _structured_ops is not None:
+        owned=type(_game_ops) is _OwnedHpoOperations
+        hpo=type(_game_ops) in (_HpoOperations,_OwnedHpoOperations)
+        if type(_game_ops) not in (_GameOperations,_HpoOperations,_OwnedHpoOperations) or _structured_component or _structured_ops is not None:
             raise ContractError("closed corrected game operations required")
         ops = _game_ops
     if _structured_ops is not None and not _structured_component:
@@ -545,7 +548,7 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
                 ops.initialize_state(state, config)
             if ops:
                 ops.persist_control(directory / 'artifact-registry.json', ({'schema_version':ops.registry_schema,'generations':{},'evaluation_references':{}}
-                    | ({'cache_references':{}} if ops.registry_schema == 5 else {}) if hpo else
+                    | ({'cache_references':{}} if ops.registry_schema in (5,6) else {}) if hpo else
                     {'schema_version': 3 if game else 2, 'generations': {}}), config, deadline=identity_deadline)
                 ops.persist_control(directory / 'run.json', state, config, deadline=identity_deadline)
             else:
@@ -591,7 +594,13 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
         if game:
             ops.bind_run(ownership, state)
         if ops:
-            if hpo and config.hpo_spec['schema_version']==3:
+            if owned:
+                try:
+                    child, ledger = ops.make_child(directory,config,state,deadline=execution,cleanup_deadline=wall)
+                except BaseException as startup_error:
+                    await ops.abort_startup(startup_error,state,config,deadline=min(wall,time.monotonic()+training.cleanup_seconds))
+                    raise
+            elif hpo and config.hpo_spec['schema_version'] in (3,4):
                 child, ledger = ops.make_child(directory, config, state, deadline=execution,cleanup_deadline=wall)
             else:
                 child, ledger = ops.make_child(directory, config, state, deadline=execution)
@@ -605,14 +614,16 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
             return state['last_unix']
         try:
             _validate_clock_anchor(*clock_anchor)
-            await child.start()
+            if owned: await ops.start_owned(child)
+            else: await child.start()
             request = {'command': 'initialize', 'model': asdict(model), 'seed': training.seeds[0], 'device': training.device,
                        'output': str(checkpoint_path(directory, 0)), 'action_hash': digest(asdict(config.actions))}
             if isinstance(training, SequencePPOTrainingConfig):
                 request['sequence_length'] = training.sequence_length
             if mode == 'resume':
                 request['restore'] = str(checkpoint_path(directory, state['updates']))
-            initial = (await child.initialize(training.seeds[0], checkpoint_path(directory, 0),
+            initial = (await ops.initialize_owned(child,training.seeds[0],checkpoint_path(directory,0),deadline=execution) if owned else
+                await child.initialize(training.seeds[0], checkpoint_path(directory, 0),
                 restore=checkpoint_path(directory, state['updates']) if mode == 'resume' else None, deadline=execution)
                 if ops else await child.request(request, execution))
             if mode == 'fresh':
@@ -698,7 +709,9 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
                     check_clock()
                     from gf_common.schedule import serialize_schedule
                     collection_scan = None
-                    if ops:
+                    if owned:
+                        collection_manifest=collection.manifest
+                    elif ops:
                         collection_manifest, collection_scan = ops.read_control(collection.directory / 'manifest.json', config, deadline=execution)
                         if game:
                             generation_scope.enter_context(collection_scan)
@@ -714,7 +727,14 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
                     numeric = directory / 'numeric' / batch_id
                     numeric_files = None
                     with ExitStack() as source_scope:
-                        if ops:
+                        if owned:
+                            decision_count,proof,numeric_files,issued_projection=generation_scope.enter_context(
+                                ops.project_owned(collection,plan,numeric,config,execution))
+                            if decision_count==0:
+                                ops.stop_reason='empty_collection'
+                                final_status='incomplete'
+                                break
+                        elif ops:
                             assert collection_scan is not None
                             projection_options: dict[str, Any] = {
                                 'expected_manifest_sha256': collection_scan.verified_digest(collection.directory / 'manifest.json'),
@@ -755,7 +775,8 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
                                     write_rollout(numeric, decisions, deadline=execution)
                                 decision_count = len(decisions)
                                 del decisions
-                        numeric_hash = sha256(numeric / 'rollout.json', execution)
+                        if owned: assert numeric_files is not None
+                        numeric_hash = numeric_files['rollout.json'] if owned and numeric_files is not None else sha256(numeric / 'rollout.json', execution)
                         if measure_owned(execution) > training.max_owned_bytes or time.monotonic() >= execution:
                             raise RuntimeError('PPO collection/encoding exceeded execution/storage limits')
                         next_generation = generation + 1
@@ -763,7 +784,8 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
                         if hpo: ops.phase('update', transient_learner_decisions=decision_count)
                         update_started = time.monotonic()
                         if ops:
-                            acknowledgement = (await child.update(issued_projection, checkpoint_path(directory, next_generation), deadline=execution) if game else
+                            acknowledgement = (await ops.update_owned(issued_projection,checkpoint_path(directory,next_generation),deadline=execution) if owned else
+                                await child.update(issued_projection, checkpoint_path(directory, next_generation), deadline=execution) if game else
                                 await child.update(numeric, numeric_hash, learner_label,
                                 checkpoint_path(directory, next_generation), deadline=execution))
                             metrics = {**acknowledgement['metrics'], **acknowledgement['timings']}
@@ -835,7 +857,8 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
                 error = error or failure
                 state['cleanup_failure'] = str(failure)
             try:
-                await child.close(min(wall, time.monotonic() + training.cleanup_seconds))
+                if owned: await ops.close_owned_child(child,min(wall,time.monotonic()+training.cleanup_seconds))
+                else: await child.close(min(wall, time.monotonic() + training.cleanup_seconds))
             except BaseException as failure:  # noqa: BLE001 - persist failure after owned cleanup
                 error = error or failure
                 state['cleanup_failure'] = str(failure)

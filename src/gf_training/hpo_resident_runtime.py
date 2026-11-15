@@ -18,13 +18,14 @@ from gf_training.hpo_retention import pin_hpo_cache, release_hpo_cache
 
 class ResidentTrainingRuntime:
     """Never outlives the SAME actual job, original parent lock or invocation."""
-    def __init__(self, job: Any, ownership: Any, config: Any, state: Json, *, deadline: float, cleanup_deadline: float | None = None) -> None:
+    def __init__(self, job: Any, ownership: Any, config: Any, state: Json, *, deadline: float, cleanup_deadline: float | None = None, owned_registry: Any = None) -> None:
         from gf_common.structured_layout import CORRECTED_CARD_INSTANCE_LAYOUT as layout
         from gf_models.structured_runtime import hpo_resident_training_admission
         from gf_training.hpo_lineage import require_hpo_run_owner
         require_hpo_run_owner(ownership.directory, ownership)
         if state['run_id'] != job._admission['context']['run_id']:
             raise ContractError('resident runtime differs from actual training invocation')
+        self.owned_registry=owned_registry
         self.job, self.ownership, self.config = job, ownership, config
         self.directory, self.state = ownership.directory, state
         self.deadline = deadline if cleanup_deadline is None else cleanup_deadline
@@ -34,7 +35,8 @@ class ResidentTrainingRuntime:
             config.hpo_spec['runtime'], layout=layout)
         self.custody = ResidentPoolCustody(job, run_id=state['run_id'], pool_id=uuid.uuid4().hex)
         self.pool = ResidentParticipantPool(self.custody, resident_bytes=envelope['worker_bytes']//envelope['workers'],
-            deadline=self.deadline, acquire_cache=self.acquire_cache, release_cache=self.release_cache)
+            deadline=self.deadline, acquire_cache=self.acquire_cache, release_cache=self.release_cache,
+            owned_snapshots=owned_registry is not None)
         self.pool.execution_deadline = deadline
         self.entries: dict[int, OrderedDict[str, tuple[int, Any]]] = {}
         self.pins: dict[str,tuple[Any,Any]] = {}
@@ -49,8 +51,9 @@ class ResidentTrainingRuntime:
         attempt=self.custody.begin_cache_acquisition(owner.lease,uuid.uuid4().hex,generation,inference_sha256)
         self.acquisitions[attempt.token]=owner,attempt  # Before fallible transaction/intent publication.
         try:
-            receipt=pin_hpo_cache(self.directory,attempt.token,generation,inference_sha256,
-                owner=attempt.owner_identity,max_owned_bytes=self.limit,deadline=self.pool.execution_deadline,ownership=self.ownership)
+            receipt=(self.owned_registry.pin_cache(attempt,deadline=self.pool.execution_deadline) if self.owned_registry is not None else
+                pin_hpo_cache(self.directory,attempt.token,generation,inference_sha256,
+                owner=attempt.owner_identity,max_owned_bytes=self.limit,deadline=self.pool.execution_deadline,ownership=self.ownership))
             attempt.receipt=receipt  # Retain before any fallible custody observation/map insertion.
             self.pins[attempt.token]=owner,receipt
             self.custody.observe_cache_pin(receipt)
@@ -66,8 +69,9 @@ class ResidentTrainingRuntime:
         if attempt.receipt is None:
             # Retry only this original idempotent acquire under the original
             # held parent owner, after actual process/I/O/setup retirement.
-            attempt.receipt=pin_hpo_cache(self.directory,attempt.token,attempt.generation,attempt.inference_sha256,
-                owner=attempt.owner_identity,max_owned_bytes=self.limit,deadline=self.deadline,ownership=self.ownership)
+            attempt.receipt=(self.owned_registry.pin_cache(attempt,deadline=self.deadline) if self.owned_registry is not None else
+                pin_hpo_cache(self.directory,attempt.token,attempt.generation,attempt.inference_sha256,
+                owner=attempt.owner_identity,max_owned_bytes=self.limit,deadline=self.deadline,ownership=self.ownership))
         self.pins[attempt.token]=owner,attempt.receipt
         return attempt.receipt
 
@@ -96,7 +100,9 @@ class ResidentTrainingRuntime:
         else:
             identity = receipt.binding['cache_identity']
             # Durable pin acquisition precedes this first direct checkpoint read.
-            manifest = read_json(Path(options['checkpoint'])/'inference.json', expected_digest=options['expected_manifest_digest'])
+            manifest = (self.owned_registry.snapshots[receipt.binding['generation']].inference_manifest
+                if self.owned_registry is not None else
+                read_json(Path(options['checkpoint'])/'inference.json', expected_digest=options['expected_manifest_digest']))
             size = manifest['weights']['decoded_bytes']
             if digest(manifest['weights']['files']) != receipt.binding['weights_sha256']:
                 raise ContractError('resident actual checkpoint differs from acquired cache reference')
@@ -126,8 +132,11 @@ class ResidentTrainingRuntime:
             receipt=self._reconcile_after_reap(owner,attempt) if identity is None else attempt.receipt
             authority=(self.custody.cache_release_acquisition_after_reap(attempt,receipt) if identity is None
                 else self.custody.cache_release(receipt.binding))
-            release_hpo_cache(self.directory,receipt.binding,authority=authority,
-                max_owned_bytes=self.limit,deadline=self.deadline,ownership=self.ownership)
+            if self.owned_registry is not None:
+                self.owned_registry.release_cache(receipt.binding,authority=authority,deadline=self.deadline)
+            else:
+                release_hpo_cache(self.directory,receipt.binding,authority=authority,
+                    max_owned_bytes=self.limit,deadline=self.deadline,ownership=self.ownership)
             self.pins.pop(attempt.token,None)
             self.acquisitions.pop(attempt.token)
         if identity is None:
@@ -152,9 +161,11 @@ class ResidentTrainingRuntime:
         for owner in affected:
             receipt=self._acquire(owner,generation,record['inference_sha256'])
             pins.append((owner, receipt))
-        _, binding = hpo_binding(self.directory, self.state, record, generation)
-        size = read_json(checkpoint_path(self.directory, generation)/'inference.json',
-            expected_digest=record['inference_sha256'])['weights']['decoded_bytes']
+        _, binding = (self.owned_registry.binding(generation) if self.owned_registry is not None else
+            hpo_binding(self.directory, self.state, record, generation))
+        manifest=(self.owned_registry.snapshots[generation].inference_manifest if self.owned_registry is not None else
+            read_json(checkpoint_path(self.directory,generation)/'inference.json',expected_digest=record['inference_sha256']))
+        size=manifest['weights']['decoded_bytes']
         self.transition = self.job.ledger.reserve_resident_transition(self.envelope['staging_bytes'], authority=authority,
             target_generation=generation, target_checkpoint_sha256=record['inference_sha256'],
             affected_workers=tuple(owner.lease for owner in affected))
@@ -195,6 +206,9 @@ class ResidentTrainingRuntime:
                 self.transition.retire_failed_transition()
                 self.transition = None
             self.require_closed()
+            if self.owned_registry is not None:
+                for snapshot in tuple(self.pool._owned_snapshots.values()):
+                    self.pool.unbind_owned_snapshot(snapshot)
         except BaseException as error:  # noqa: BLE001 - retain the concrete original cleanup owner
             failed = primary or error
             vars(failed)['cleanup_owner'] = self

@@ -85,6 +85,7 @@ class GroupPackCollection:
             settings.db_root / 'catalog.sqlite3-wal', settings.db_root / 'catalog.sqlite3-shm', settings.db_root / 'catalog.sqlite3-journal')
         self.writer: GroupPackWriter | None = None
         self.pending: PendingDescriptorOwner | None = None
+        self._producer: Any = None
         self._executor = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="group-pack")
         self._futures: set[concurrent.futures.Future[Any]] = set()
         self._future_lock = threading.Lock()
@@ -216,6 +217,7 @@ class GroupPackCollection:
             self.ram_root.mkdir(mode=0o700, exist_ok=False)
             self.writer = GroupPackWriter(self.directory, self.run_id, settings=self.settings,
                 deadline=self.deadline, budget=self.budget)
+            if self._producer is not None: self._producer.bind_writer(self.writer)
             self.measure_ram()
         try:
             await self.run_sync(initialize)
@@ -470,7 +472,10 @@ class GroupPackCollection:
             # seal duration is exposed by this owner after the child has retired.
             self.writer.store_control("storage-metrics.json", metrics_bytes)
             seal_started = time.monotonic()
-            self.writer.seal(publication="pending", retain_pending=True, collect_metrics=True)
+            if self._producer is None:
+                self.writer.seal(publication="pending", retain_pending=True, collect_metrics=True)
+            else:
+                self.writer._seal_producer(self._producer)
             assert self.writer.checkpoint_metrics is not None
             with self._metrics_lock:
                 self._metrics.update(self.writer.checkpoint_metrics)

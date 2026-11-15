@@ -77,11 +77,16 @@ def check_hpo_collection(manifest: Json) -> None:
     config = manifest.get('config', {})
     spec = config.get('hpo_spec', {})
     from gf_common.hpo_resident import checked_retirement, resident_runtime
-    resident = type(spec.get('schema_version')) is int and spec['schema_version'] == 3
+    owned=type(spec.get('schema_version')) is int and spec['schema_version']==4
+    resident = type(spec.get('schema_version')) is int and spec['schema_version'] in (3,4)
     if resident:
         resident_runtime(spec.get('runtime'))
+    if owned and (spec.get('origin')!='producer-owned-v1' or spec.get('encoder')!='canonical-python'
+            or manifest.get('origin')!='producer-owned-v1' or manifest.get('encoder')!='canonical-python'
+            or manifest.get('actor_protocol_version')!=9 or manifest.get('replay_reconciled') is not False):
+        raise ContractError('Collection8 requires explicit truthful producer/encoder/actor provenance')
     recipe = hpo_training_config(spec.get('training_recipe'))
-    if (type(manifest.get('schema_version')) is not int or manifest['schema_version'] != (7 if resident else 6)
+    if (type(manifest.get('schema_version')) is not int or manifest['schema_version'] != (8 if owned else 7 if resident else 6)
             or manifest.get('model_version') != '4' or manifest.get('collection_role') != 'hpo-ppo-batch'
             or manifest.get('config_hash') != digest(config)):
         raise ContractError('explicit HPO Collection6 required')
@@ -107,6 +112,9 @@ def hpo_collection_metadata(*, linkage: Json, logical_retirement: Json | None = 
     value.update(collection_role='hpo-ppo-batch', linkage=linkage)
     if logical_retirement is not None:
         value.update(schema_version=7, logical_retirement=logical_retirement)
+    if value['config']['hpo_spec']['schema_version']==4:
+        value.update(schema_version=8,origin='producer-owned-v1',encoder='canonical-python',
+            actor_protocol_version=9,replay_reconciled=False)
     check_hpo_collection(value)
     return value
 

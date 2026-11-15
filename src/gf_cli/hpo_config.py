@@ -143,6 +143,27 @@ class ResidentRefreshHPOCampaignConfig(ResidentHPOCampaignConfig):
             'training_opponents': parse_training_opponents(self.training_opponents)})
 
 
+@dataclass(frozen=True, kw_only=True)
+class OwnedHPOCampaignConfig(ResidentHPOCampaignConfig):
+    origin: str
+    encoder: str
+
+    @property
+    def study_identity(self) -> str:
+        return digest({'recipe':'hpo-owned-study-v1','base':super().study_identity,
+            'origin':self.origin,'encoder':self.encoder})
+
+
+@dataclass(frozen=True, kw_only=True)
+class OwnedRefreshHPOCampaignConfig(OwnedHPOCampaignConfig):
+    training_opponents: Json
+
+    @property
+    def study_identity(self) -> str:
+        return digest({'recipe':'hpo-mixed-refresh-study-v1','base':super().study_identity,
+            'training_opponents':parse_training_opponents(self.training_opponents)})
+
+
 @dataclass(frozen=True)
 class LoadedHPOConfig:
     config: HPOCampaignConfig
@@ -223,11 +244,14 @@ def materialize_hpo_run(loaded_campaign: LoadedHPOConfig, settings: Any, *, lear
         'deadline_inputs':{'run_wall_seconds':wall,'base_wall_seconds':base.run.wall_seconds,
             'base_admission_seconds':base.run.admission_seconds,'base_execution_seconds':base.run.execution_seconds,
             'base_finalization_seconds':final}}
-    if isinstance(campaign, (RefreshOpponentsHPOCampaignConfig, ResidentRefreshHPOCampaignConfig)):
+    if isinstance(campaign, (RefreshOpponentsHPOCampaignConfig, ResidentRefreshHPOCampaignConfig, OwnedRefreshHPOCampaignConfig)):
         _mixed_collection_games(campaign)
         spec.update(schema_version=2, training_opponents=parse_training_opponents(campaign.training_opponents))
     if isinstance(campaign, ResidentHPOCampaignConfig):
         spec.update(schema_version=3, runtime=resident_runtime(campaign.runtime))
+    if isinstance(campaign, OwnedHPOCampaignConfig):
+        spec.update(schema_version=4, origin=campaign.origin, encoder=campaign.encoder)
+        preprocessing=preparation_config(asdict(replace(preprocessing,backend='python')))
     config=HPOExperimentConfig(run=run,server=base.server,actions=base.actions,model=model,opponent=base.opponent,
         evaluation=base.evaluation,training=training,preprocessing=preprocessing,storage=pack,hpo_spec=spec)
     raw=clone(asdict(config))
@@ -303,11 +327,14 @@ def campaign_config(value: Json, *, origin: Path) -> LoadedHPOConfig:
     required = {"schema_version", "kind", "base_experiment", "model_id", "stage", "trial_count",
                 "decision_budget", "learning_seeds", "evaluation_game_seeds", "sampler_seed",
                 "startup_trials", "session_seconds", "run_wall_seconds", "space"}
-    resident = value.get("schema_version") == 3 and type(value.get("schema_version")) is int
+    owned = type(value.get("schema_version")) is int and value["schema_version"] == 4
+    resident = type(value.get("schema_version")) is int and value["schema_version"] in (3,4)
     mixed = value.get("schema_version") == 2 or resident and "training_opponents" in value
-    closed(value, required | ({"training_opponents"} if mixed else set()) | ({"runtime"} if resident else set()),
+    closed(value, required | ({"training_opponents"} if mixed else set()) | ({"runtime"} if resident else set()) | ({"origin","encoder"} if owned else set()),
         {"model", "training", "inference", "operating", "storage"})
-    integer(value["schema_version"], 1, 3)
+    integer(value["schema_version"], 1, 4)
+    if owned and (value["origin"] != "producer-owned-v1" or value["encoder"] != "canonical-python"):
+        raise ContractError("owned HPO requires explicit producer origin and canonical Python encoder")
     runtime = resident_runtime(value["runtime"]) if resident else None
     descriptor = parse_training_opponents(value["training_opponents"]) if mixed else None
     if type(value["kind"]) is not str or value["kind"] != "ppo-hpo":
@@ -347,13 +374,16 @@ def campaign_config(value: Json, *, origin: Path) -> LoadedHPOConfig:
     if (base.config.actions.max_sequence_length > model.max_positions
             or base.config.actions.max_candidates > inference.max_candidates):
         raise ContractError("HPO model/actions capacity mismatch")
-    cls: Any = (ResidentRefreshHPOCampaignConfig if mixed else ResidentHPOCampaignConfig) if resident else (RefreshOpponentsHPOCampaignConfig if mixed else HPOCampaignConfig)
+    cls: Any = ((OwnedRefreshHPOCampaignConfig if mixed else OwnedHPOCampaignConfig) if owned else
+        (ResidentRefreshHPOCampaignConfig if mixed else ResidentHPOCampaignConfig) if resident else
+        (RefreshOpponentsHPOCampaignConfig if mixed else HPOCampaignConfig))
     config: HPOCampaignConfig = cls(**{name: value[name] for name in (
         "schema_version", "kind", "model_id", "stage", "trial_count", "decision_budget", "sampler_seed", "startup_trials")},
         base_experiment=base_path, base_config_sha256=base.sha256, learning_seeds=learning, evaluation_game_seeds=games,
         session_seconds=session, run_wall_seconds=wall, space=space, model=model, training=recipe,
         inference=inference, operating=operating, storage=storage,
-        **({'training_opponents': descriptor} if mixed else {}), **({'runtime': runtime} if resident else {}))
+        **({'training_opponents': descriptor} if mixed else {}), **({'runtime': runtime} if resident else {}),
+        **({'origin':value['origin'],'encoder':value['encoder']} if owned else {}))
     if mixed:
         _mixed_collection_games(config)
     if hasattr(base.config, 'training_opponents'):
@@ -369,11 +399,11 @@ def joint_resource_admission(config: HPOCampaignConfig, *, layout: StructuredLay
     conservative reservation, not measured RSS or proof of physical availability.
     Later runtime owners must retain the SAME reservation until actual reap.
     """
-    if type(config) not in (HPOCampaignConfig, RefreshOpponentsHPOCampaignConfig, ResidentHPOCampaignConfig, ResidentRefreshHPOCampaignConfig):
+    if type(config) not in (HPOCampaignConfig, RefreshOpponentsHPOCampaignConfig, ResidentHPOCampaignConfig, ResidentRefreshHPOCampaignConfig, OwnedHPOCampaignConfig, OwnedRefreshHPOCampaignConfig):
         raise ContractError("closed HPO campaign required")
-    expected_schema = 3 if isinstance(config, ResidentHPOCampaignConfig) else 2 if isinstance(config, RefreshOpponentsHPOCampaignConfig) else 1
+    expected_schema = 4 if isinstance(config, OwnedHPOCampaignConfig) else 3 if isinstance(config, ResidentHPOCampaignConfig) else 2 if isinstance(config, RefreshOpponentsHPOCampaignConfig) else 1
     integer(config.schema_version, expected_schema, expected_schema)
-    if isinstance(config, (RefreshOpponentsHPOCampaignConfig, ResidentRefreshHPOCampaignConfig)):
+    if isinstance(config, (RefreshOpponentsHPOCampaignConfig, ResidentRefreshHPOCampaignConfig, OwnedRefreshHPOCampaignConfig)):
         parse_training_opponents(config.training_opponents)
         _mixed_collection_games(config)
     limits = _operating(asdict(config.operating))

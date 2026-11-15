@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import inspect
 import json
 import math
 import re
@@ -10,6 +12,7 @@ import time
 import uuid
 from dataclasses import asdict
 from pathlib import Path
+from types import MethodType
 from typing import Any
 
 from gf_common.domain import ContractError, Json, canonical, closed, digest, integer
@@ -19,6 +22,18 @@ from gf_training.hpo_owned_worker import _control_bank, _receive_control
 from gf_training.ppo_run import LearningProcess
 
 _TOKEN = object()
+
+
+class _OwnedCreationRequest:
+    """One original factory result; execution permission is not cleanup proof."""
+    def __init__(self, token: object, owner: Any, lease: Any, coroutine: Any) -> None:
+        if token is not _TOKEN: raise ContractError('original owned creator request required')
+        self.owner,self.lease,self.coroutine=owner,lease,coroutine
+        self.permission=object()
+        self.execution: Any=self.permission
+        self.task: Any=None
+        self.task_error: BaseException | None=None
+        self.stdlib_error: Exception | None=None
 
 
 async def _ready(channel: RamBankChannel, *, write: bool = False, deadline: float) -> None:
@@ -111,6 +126,10 @@ class RemoteSaveAck:
     def files(self) -> Json:
         return self._snapshot.files
 
+    @property
+    def inference_manifest(self) -> Json:
+        return self._snapshot.inference_manifest
+
     def require(self, snapshot: RemoteModelSnapshot) -> None:
         if (snapshot is not self._snapshot or snapshot.save_ack is not self
                 or snapshot._transaction is not self._transaction or snapshot._closed
@@ -136,6 +155,11 @@ class RemoteModelSnapshot:
         self._transport_timings: dict[str,float] = {}
         self.save_ack: RemoteSaveAck | None = None
         self._actor_capability: Any = None
+
+    @property
+    def inference_manifest(self) -> Json:
+        self._require_saved()
+        return json.loads(canonical(self._control.value['inference_manifest']))
 
     @property
     def actor_metadata(self) -> Json:
@@ -206,6 +230,10 @@ class HpoOwnedLearningProcess(HpoLearningProcess):
         for value in limits.values(): integer(value,1,MAX_BANK_BYTES)
         if save_estimate(self.model)['additional_bytes']>limits['save_budget_bytes']:
             raise ContractError('Wire7 additional save envelope insufficient before process/network allocation')
+        self._owned_never_requested=object()
+        self._owned_factory_request=self._owned_never_requested
+        self._owned_original_factory=self._create_process
+        self._owned_original_async_creator=self._create_owned_process
         self.channel, self._inherited = RamBankChannel.pair()
         self._owned_failed = False
         self.generation = 0
@@ -215,17 +243,123 @@ class HpoOwnedLearningProcess(HpoLearningProcess):
         self._control_exports: list[Any] = []
         self._inflight_batch: Any = None
 
-    async def _create_process(self) -> Any:
+    def _require_original_creator_bindings(self) -> None:
+        originals=((self._owned_original_factory,self._create_process,_ORIGINAL_OWNED_FACTORY),
+            (self._owned_original_async_creator,self._create_owned_process,_ORIGINAL_OWNED_ASYNC_CREATOR))
+        if type(self) is not HpoOwnedLearningProcess or any(
+                type(original) is not MethodType or type(current) is not MethodType
+                or original.__self__ is not self or current.__self__ is not self
+                or original.__func__ is not function or current.__func__ is not function
+                for original,current,function in originals):
+            raise ContractError('owned creation requires exact original bound creator factory')
+
+    def _require_active_creation_lease(self, lease: Any) -> None:
+        from gf_simulator_client.structured_resources import LearnerReservation
+        if (not isinstance(lease,LearnerReservation) or lease is not self.lease or lease.ledger is not self.ledger
+                or self.ledger.learner is not lease or lease._cleanup_owner is not self
+                or lease.released or lease.creation_pending is not True or lease.pid is not None
+                or self.process is not None):
+            raise ContractError('owned creator requires SAME active admitted learner reservation')
+
+    def _create_process(self) -> Any:
+        self._require_original_creator_bindings()
+        if self._owned_factory_request is not self._owned_never_requested:
+            raise ContractError('owned original creator request is single use')
+        self._require_active_creation_lease(self.lease)
+        if self.creation_task is not None or self._startup_boundary.is_set():
+            raise ContractError('owned creator request differs from original pending startup')
+        coroutine=self._create_owned_process()
+        self._owned_factory_request=_OwnedCreationRequest(_TOKEN,self,self.lease,coroutine)
+        return coroutine
+
+    def _require_original_unrequested_creator(self) -> None:
+        if (type(self._owned_never_requested) is not object
+                or self._owned_factory_request is not self._owned_never_requested):
+            raise ContractError('owned original creator request marker is not untouched')
+        self._require_original_creator_bindings()
+        if self.creation_task is not None or self.process is not None or self.lease is not None:
+            raise ContractError('owned unrequested creator has inconsistent original creation custody')
+
+    def _creation_task_created(self, creation: Any) -> None:
+        request=self._owned_factory_request
+        if (type(request) is not _OwnedCreationRequest or request.owner is not self
+                or creation is not self.creation_task or not isinstance(creation,asyncio.Task)
+                or creation.get_coro() is not request.coroutine or request.task is not None):
+            raise ContractError('owned creator requires original managed creation task/coroutine')
+        request.task=creation  # The SAME task already registered by original LearningProcess.start.
+        super()._creation_task_created(creation)
+
+    def _creation_task_failed(self, error: BaseException) -> None:
+        request=self._owned_factory_request
+        if (type(request) is not _OwnedCreationRequest or request.owner is not self
+                or request.task is not None or self.creation_task is not None
+                or request.execution is not request.permission
+                or inspect.getcoroutinestate(request.coroutine)!=inspect.CORO_CLOSED
+                or not self._creation_no_child):
+            raise ContractError('owned no-child observation requires original closed unstarted coroutine')
+        super()._creation_task_failed(error)
+        request.task_error=error  # Original callback/error, never a rejection/cancellation shortcut.
+
+    async def _create_owned_process(self) -> Any:
+        request=self._owned_factory_request
+        if (type(request) is not _OwnedCreationRequest or request.owner is not self
+                or request.execution is not request.permission):
+            raise ContractError('owned async creator lacks its unconsumed original request')
+        self._require_original_creator_bindings()
+        self._require_active_creation_lease(request.lease)
+        current=asyncio.current_task()
+        if current is None or current.get_coro() is not request.coroutine:
+            raise ContractError('owned async creator is outside original requested coroutine')
+        if self.creation_task is None:
+            await asyncio.sleep(0)  # One pre-effect handoff for stdlib eager task registration.
+        if (current is not self.creation_task or request.task is not current
+                or current.get_coro() is not request.coroutine or self._creation_observer_failure is not None
+                or request.execution is not request.permission):
+            raise ContractError('owned async creator is outside original managed creation task')
+        self._require_active_creation_lease(request.lease)
+        request.execution=None  # Consume before endpoint export, environment work or OS creation.
         fd, invocation = self._inherited.inherited_endpoint()
+        environment=self._environment()
         try:
             return await asyncio.create_subprocess_exec(sys.executable, '-E', '-m', 'gf_training.hpo_owned_worker',
                 str(fd), invocation, pass_fds=(fd,), stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-                env=self._environment(), limit=1024*1024)
+                env=environment, limit=1024*1024)
         except Exception as error:
+            request.stdlib_error=error
             self._creation_no_child = True
             self._creation_failed(error)
             raise
+
+    def _require_original_creation_settlement(self) -> None:
+        if self._owned_factory_request is self._owned_never_requested:
+            self._require_original_unrequested_creator()
+            return
+        request=self._owned_factory_request
+        if (type(request) is not _OwnedCreationRequest or request.owner is not self
+                or request.lease is not self.lease):
+            raise ContractError('owned requested creation has missing original settlement custody')
+        creation=self.creation_task
+        if creation is None:
+            if (request.task is not None or request.task_error is None or not self._creation_no_child
+                    or request.execution is not request.permission or not self._startup_boundary.is_set()
+                    or inspect.getcoroutinestate(request.coroutine)!=inspect.CORO_CLOSED):
+                raise ContractError('owned requested creation is unsettled; original owners retained')
+            return
+        if (request.task is not creation or not isinstance(creation,asyncio.Task)
+                or creation.get_coro() is not request.coroutine or request.task_error is not None):
+            raise ContractError('owned settlement differs from original managed creation task')
+        if creation.done():
+            if creation.cancelled():
+                raise ContractError('owned cancelled creation has no original no-child/reap settlement')
+            error=creation.exception()
+            if error is not None:
+                if (error is not request.stdlib_error or not self._creation_no_child
+                        or request.execution is not None):
+                    raise ContractError('owned failed creation lacks original stdlib no-child observation')
+            elif (request.execution is not None
+                    or self.process is not None and creation.result() is not self.process):
+                raise ContractError('owned creation result differs from original adopted process')
 
     def _process_created(self) -> None:
         super()._process_created()
@@ -338,7 +472,7 @@ class HpoOwnedLearningProcess(HpoLearningProcess):
             control = _receive_control(self.channel, purpose='save', generation=generation,
                 identity=snapshot_identity+':metadata', budget=self.budget)
             self._partial_controls.append(control)
-            facts = closed(control.value, {'actor_metadata','files','optimizer_steps','generation','snapshot_identity',
+            facts = closed(control.value, {'actor_metadata','inference_manifest','files','optimizer_steps','generation','snapshot_identity',
                 'metrics','inference_banks','resume_banks','hardware','timings'})
             integer(facts['generation'],0,2**63-1)
             integer(facts['optimizer_steps'],0,2**31-1)
@@ -347,7 +481,9 @@ class HpoOwnedLearningProcess(HpoLearningProcess):
             if facts['snapshot_identity'] != snapshot_identity or facts['generation'] != generation:
                 raise ContractError('Wire7 snapshot control identity mismatch')
             banksets = []
-            total = 0
+            total = control.admitted_bytes
+            if total>=self.identity['phase_limits']['save_budget_bytes']:
+                raise ContractError('Wire7 save metadata exceeds aggregate save phase envelope')
             for kind in ('inference','resume'):
                 banks = []
                 for index in range(integer(facts[kind+'_banks'],1,65536)):
@@ -369,6 +505,18 @@ class HpoOwnedLearningProcess(HpoLearningProcess):
                     or facts['actor_metadata']['generation'] != generation
                     or facts['actor_metadata']['inference_digest'] != facts['files']['inference.json']):
                 raise ContractError('Wire7 inference metadata differs from actual snapshot save')
+            manifest=facts['inference_manifest']
+            from gf_common.structured_layout import CORRECTED_CARD_INSTANCE_LAYOUT
+            from gf_models.sharded_arrays import validate_bundle_metadata
+            from gf_models.structured_config import parameter_shapes
+            weights=validate_bundle_metadata(manifest['weights'],max_decoded_bytes=self.identity['phase_limits']['save_budget_bytes'])
+            expected_files={'inference.json':facts['files']['inference.json'],
+                **{name:sha for name,sha in facts['files'].items() if name.startswith('weights-')}}
+            if (canonical({key:value for key,value in manifest.items() if key!='weights'})!=canonical(facts['actor_metadata']['inference'])
+                    or hashlib.sha256((canonical(manifest)+'\n').encode()).hexdigest()!=facts['files']['inference.json']
+                    or {'inference.json':facts['files']['inference.json'],**manifest['weights']['files']}!=expected_files
+                    or {name:tuple(row['shape']) for name,row in weights.items()}!=parameter_shapes(self.model,layout=CORRECTED_CARD_INSTANCE_LAYOUT)):
+                raise ContractError('Wire7 actual saved inference manifest differs from writer ACK/backing/model')
             snapshot = RemoteModelSnapshot(_TOKEN,self,transaction,banksets[0],banksets[1],control)
             final = await self._read_reply(deadline)
             closed(final, {'protocol_version','kind','transaction','identity','generation','optimizer_steps','snapshot_identity','files_sha256'})
@@ -421,6 +569,7 @@ class HpoOwnedLearningProcess(HpoLearningProcess):
         await super().close(deadline)
 
     async def _close(self, deadline: float) -> None:
+        self._require_original_creation_settlement()  # BEFORE inherited missing-task pending-state changes.
         try:
             await super()._close(deadline)
         finally:
@@ -448,11 +597,22 @@ class HpoOwnedLearningProcess(HpoLearningProcess):
                     self._inflight_batch=None
                 attempt(self.channel.close)
                 attempt(self._inherited.close)
-            elif self.process is None and self._creation_no_child:
-                attempt(self.channel.close)
-                attempt(self._inherited.close)
+            elif self.process is None:
+                if self._owned_factory_request is self._owned_never_requested:
+                    if attempt(self._require_original_unrequested_creator):
+                        attempt(self.channel.close)
+                        attempt(self._inherited.close)
+                elif self._creation_no_child:
+                    attempt(self.channel.close)
+                    attempt(self._inherited.close)
             if failures:
                 if active_error is None:
                     raise failures[0]
                 for cleanup in failures:
                     active_error.add_note('Wire7 actual cleanup retained: '+type(cleanup).__name__)
+
+
+# Capture code identities once at module definition, before any instance can
+# observe an alternate creator. Bound receiver identity is checked separately.
+_ORIGINAL_OWNED_FACTORY=HpoOwnedLearningProcess._create_process
+_ORIGINAL_OWNED_ASYNC_CREATOR=HpoOwnedLearningProcess._create_owned_process

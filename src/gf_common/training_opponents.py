@@ -29,9 +29,9 @@ def training_opponents(config: Json) -> Json | None:
             if 'training_opponents' in spec:
                 raise ContractError('HPO spec1 forbids training_opponents')
             return None
-        if spec['schema_version'] == 3 and 'training_opponents' not in spec:
+        if spec['schema_version'] in (3,4) and 'training_opponents' not in spec:
             return None
-        if spec['schema_version'] not in (2, 3) or 'training_opponents' not in spec:
+        if spec['schema_version'] not in (2, 3, 4) or 'training_opponents' not in spec:
             raise ContractError('HPO spec2 requires training_opponents')
         result = parse_training_opponents(spec['training_opponents'])
         if spec.get('training_recipe', {}).get('collection_games') != 16:

@@ -78,7 +78,7 @@ def _conditions(loaded: LoadedHPOConfig) -> Json:
     config = loaded.base.config
     if type(config.actions) is not ActionConfigV3 or type(config.model) is not ConfiguredNeuralModelV3:
         raise ContractError('HPO conditions require the exact corrected model3 base')
-    if hasattr(loaded.config, 'training_opponents'):
+    if hasattr(loaded.config, 'training_opponents') and loaded.config.schema_version!=4:
         from gf_training.native_backend import require_native_refresh_opponents
         require_native_refresh_opponents()
     deadline = time.monotonic() + loaded.config.run_wall_seconds
@@ -100,7 +100,9 @@ def _conditions(loaded: LoadedHPOConfig) -> Json:
     if hasattr(loaded.config,'runtime'):
         from gf_common.hpo_resident import resident_runtime
         value['evaluation_runtime'] = resident_runtime(loaded.config.runtime)
-    if config.preprocessing.backend == 'rust':
+    if loaded.config.schema_version==4:
+        value.update(origin=loaded.effective['origin'],encoder=loaded.effective['encoder'])
+    elif config.preprocessing.backend == 'rust':
         from gf_training.native_backend import binary_identity, hpo_reader_settings, load_native
         native = load_native()
         hpo_reader_settings(config.preprocessing, native, packed=True,resident=hasattr(loaded.config,'runtime'))
@@ -157,7 +159,7 @@ async def _train_seed(store: CampaignStore, loaded: LoadedHPOConfig, campaign: J
         'proposal_sha256': proposal.sha256, 'training_seed': seed, 'run_id': run_id, 'run_path': str(directory),
         'config_sha256': materialized.sha256})
     from gf_common.training_opponents import training_opponents
-    if training_opponents(materialized.effective) is not None:
+    if training_opponents(materialized.effective) is not None and materialized.config.hpo_spec['schema_version']!=4:
         from gf_training.native_backend import require_native_refresh_opponents
         require_native_refresh_opponents()
     with admit_gpu_job(JobContext(campaign['campaign_id'], run_id, 'training', run_id, None),
@@ -182,6 +184,8 @@ async def run_campaign(loaded: LoadedHPOConfig, directory: Path, *, mode: str,
                         seed_paths: tuple[Path, ...] = (), progress: str = 'auto') -> Json:
     """Concrete sequential operations; session time never interrupts an operation."""
     require_hpo_runtime_execution(loaded.config)
+    if loaded.config.schema_version==4:
+        raise ContractError('owned campaign execution requires the separately validated campaign adapter; fresh training API is available')
     if mode not in ('fresh', 'resume') or mode == 'resume' and seed_paths:
         raise ContractError('explicit fresh/resume required; stage settings are fresh-only')
     started, started_unix = time.monotonic(), time.time()

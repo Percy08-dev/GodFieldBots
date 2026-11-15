@@ -1,6 +1,7 @@
 """One actual learner-state export, distinct inference/resume memfd owners."""
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import time
@@ -39,17 +40,24 @@ def _backings(banks: ReadonlyRamBankSet) -> tuple[tuple[int, int, int], ...]:
 
 class OwnedSaveAck:
     """Issued only after this snapshot's actual writer completes all files."""
-    def __init__(self, token: object, snapshot: OwnedModelSnapshot, writer: object, files: Json) -> None:
+    def __init__(self, token: object, snapshot: OwnedModelSnapshot, writer: object, files: Json, inference_manifest: Json) -> None:
         if token is not _TOKEN or snapshot._writer is not writer:
             raise ContractError('actual snapshot writer completion required')
         self._snapshot, self._writer = snapshot, writer
         self._files = canonical(files).encode()
+        self._inference_manifest=(canonical(inference_manifest)+'\n').encode()
+        if hashlib.sha256(self._inference_manifest).hexdigest()!=files['inference.json']:
+            raise ContractError('actual inference writer manifest/hash differs')
         self.generation, self.optimizer_steps = snapshot.generation, snapshot.optimizer_steps
         self._inference, self._resume = _backings(snapshot.inference), _backings(snapshot.resume)
 
     @property
     def files(self) -> Json:
         return json.loads(self._files)
+
+    @property
+    def inference_manifest(self) -> Json:
+        return json.loads(self._inference_manifest)
 
     def require(self, snapshot: OwnedModelSnapshot) -> None:
         if (snapshot is not self._snapshot or snapshot.save_ack is not self or snapshot._writer is not self._writer
@@ -72,6 +80,7 @@ class OwnedModelSnapshot:
         self.timings: dict[str,float] = {}
         self._save_budget_limit = 512*1024**2
         self.resident_bytes = inference.admitted_bytes+resume.admitted_bytes+16*json_bound((inference_metadata,resume_metadata))+65536
+        self._manifest_reservation: Any = None
         self._writer: object | None = None
         self.save_ack: OwnedSaveAck | None = None
         self._actor_capability: Any = None
@@ -79,6 +88,12 @@ class OwnedModelSnapshot:
         self.identity = digest({'generation': generation, 'steps': self.optimizer_steps,
             'inference': _backings(inference), 'resume': _backings(resume),
             'inference_metadata': inference_metadata, 'resume_metadata': resume_metadata})
+
+    @property
+    def inference_manifest(self) -> Json:
+        if self.save_ack is None: raise ContractError('actual inference writer completion required')
+        self.save_ack.require(self)
+        return self.save_ack.inference_manifest
 
     @property
     def actor_metadata(self) -> Json:
@@ -125,7 +140,12 @@ class OwnedModelSnapshot:
                 write_owned_json(directory/'resume.json', resume)
                 files = {**inference['weights']['files'], **resume['state']['files'],
                     'inference.json': inference_digest, 'resume.json': sha256(directory/'resume.json')}
-                ack = OwnedSaveAck(_TOKEN, self, self._writer, files)
+                manifest_charge=32*json_bound(inference)+65536
+                if self.resident_bytes+scratch+manifest_charge>self._save_budget_limit:
+                    raise ContractError('owned saved inference metadata exceeds aggregate save envelope')
+                self._manifest_reservation=self._budget.reserve(manifest_charge)
+                self.resident_bytes+=manifest_charge
+                ack = OwnedSaveAck(_TOKEN, self, self._writer, files, inference)
             self.save_ack, self._state = ack, 'SAVED'
             self.timings['save_seconds'] = time.perf_counter()-started
             return ack
@@ -137,6 +157,7 @@ class OwnedModelSnapshot:
         self.inference.close()
         self.resume.close()
         self._reservation.close()
+        if self._manifest_reservation is not None: self._manifest_reservation.close()
         if self._actor_capability is not None:
             self._actor_capability._retire_origin(self)
         self._state = 'RETIRED'

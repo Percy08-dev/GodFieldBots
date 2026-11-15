@@ -123,15 +123,31 @@ def _receive_numeric(channel: RamBankChannel, request: Json, learner: Any,
 
 def _send_snapshot(channel: RamBankChannel, snapshot: Any, *, request: Json,
                    budget: ArtifactAdmission, metrics: Json, identity: Json, learner: Any) -> None:
+    ack=snapshot.save_ack
+    ack.require(snapshot)
+    # The additional actual writer-manifest copy coexists with snapshot banks
+    # and the admitted control encoder/transfer bank. Reserve before decoding it.
+    extra=33*len(ack._inference_manifest)+65536
+    if snapshot.resident_bytes+extra>snapshot._save_budget_limit:
+        raise ContractError('owned save transfer metadata envelope exceeded')
+    with budget.reserve(extra):
+        _send_snapshot_admitted(channel,snapshot,request=request,budget=budget,metrics=metrics,
+            identity=identity,learner=learner,extra_bytes=extra)
+
+
+def _send_snapshot_admitted(channel: RamBankChannel, snapshot: Any, *, request: Json,
+                   budget: ArtifactAdmission, metrics: Json, identity: Json, learner: Any, extra_bytes: int) -> None:
     ack = snapshot.save_ack
     ack.require(snapshot)
     transaction = request['transaction']
     from gf_models.torch_runtime import hardware
-    control = {'actor_metadata': snapshot.actor_metadata, 'files': ack.files,
+    control = {'actor_metadata': snapshot.actor_metadata, 'inference_manifest':ack.inference_manifest, 'files': ack.files,
         'hardware':hardware(learner.binding.device),'timings':dict(snapshot.timings),
         'optimizer_steps': snapshot.optimizer_steps, 'generation': snapshot.generation,
         'snapshot_identity': snapshot.identity, 'metrics': metrics,
         'inference_banks': len(snapshot.inference.banks), 'resume_banks': len(snapshot.resume.banks)}
+    if snapshot.resident_bytes+extra_bytes+35*json_bound(control)+65536>snapshot._save_budget_limit:
+        raise ContractError('owned save control transfer envelope exceeded')
     bank = _control_bank(control, budget)
     print(canonical({'protocol_version': 7, 'kind': 'SNAPSHOT_READY', 'transaction': transaction,
         'identity': identity, 'generation': snapshot.generation, 'snapshot_identity': snapshot.identity}), flush=True)

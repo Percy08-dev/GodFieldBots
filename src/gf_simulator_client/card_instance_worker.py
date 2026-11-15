@@ -34,6 +34,7 @@ from gf_models.card_instance_game_tree_runtime import (
     policy_label_tree_game_v3,
     safe_tree_options_game_v3,
 )
+from gf_models.hpo_owned_artifacts import OwnedGameArtifacts
 from gf_models.structured_binding import (
     policy_label_game_v3,
     policy_label_game_v4,
@@ -67,7 +68,7 @@ class CardInstanceParticipantWorker(StructuredParticipantWorker):
         *,
         ledger: ReservationLedger,
         policy_options: Json | None = None,
-        artifact_inputs: RetainedGameArtifacts | RetainedGamePolicyArtifacts | None = None,
+        artifact_inputs: RetainedGameArtifacts | RetainedGamePolicyArtifacts | OwnedGameArtifacts | None = None,
         deadline: float | None = None,
     ) -> None:
         self.rules = card_instance_rules()
@@ -114,7 +115,7 @@ class CardInstanceParticipantWorker(StructuredParticipantWorker):
             self.expected_policy = policy_label_tree_game_v3(options, actions=actions, rules=self.rules)
             self.tree_metadata = artifact_inputs.journal_metadata(self.expected_policy)
         else:
-            if type(artifact_inputs) not in (RetainedGameArtifacts, RetainedGamePolicyArtifacts):
+            if type(artifact_inputs) not in (RetainedGameArtifacts, RetainedGamePolicyArtifacts, OwnedGameArtifacts):
                 raise ContractError("neural worker requires its retained original artifact owner")
             assert artifact_inputs is not None
             artifact_inputs.require_options(model_id, options)

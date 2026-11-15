@@ -11,8 +11,10 @@ corrections.
 The direct numeric6/Wire7/snapshot/actor9 components now also pass scoped final
 correctness and conformance review, including actual CPU all-model lifecycles,
 same-input numerical/RNG comparisons and receive-failure custody regressions.
-Live registry/coordinator enablement, cold resume/campaign and physical acceptance
-remain pending; this component milestone grants no end-to-end or quality claim.
+Fresh live-registry/coordinator integration now passes both independent reviews
+after shared parent admission, original retention/namespace and advisor-guided
+startup-task ownership fixes. Cold resume/campaign and physical/project acceptance
+remain pending; scoped CPU fixture evidence grants no training-quality claim.
 The new route will use explicit producer-origin versions and inference-only
 actor snapshots, while retaining strict legacy/audit readers and existing learning
 math/budgets. Full acceptance and physical comparisons remain pending in

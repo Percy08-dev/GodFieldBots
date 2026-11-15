@@ -116,13 +116,16 @@ def hpo_spec(state: Json) -> Json:
     from gf_common.training_opponents import training_opponents
     mixed = training_opponents(config)
     resident = is_resident(state)
+    owned = state.get("run_variant") == "hpo-ppo-owned-v1"
     spec = closed(config.get("hpo_spec"), {"schema_version", "kind", "decision_budget", "training_recipe",
         "effective_settings_sha256", "base_config_sha256", "campaign_config_sha256", "study_identity",
-        "operating", "storage", "selection_version", "deadline_version", "deadline_inputs"} | ({"training_opponents"} if mixed is not None else set()) | ({"runtime"} if resident else set()))
-    expected_schema = 3 if resident else 2 if mixed is not None else 1
+        "operating", "storage", "selection_version", "deadline_version", "deadline_inputs"} | ({"training_opponents"} if mixed is not None else set()) | ({"runtime"} if resident else set()) | ({"origin","encoder"} if owned else set()))
+    expected_schema = 4 if owned else 3 if resident else 2 if mixed is not None else 1
     integer(spec["schema_version"], expected_schema, expected_schema)
     if resident:
         resident_runtime(spec["runtime"])
+    if owned and (spec["origin"]!="producer-owned-v1" or spec["encoder"]!="canonical-python"):
+        raise ContractError("owned origin/encoder mismatch")
     if (spec["kind"] != "ppo-hpo-run" or spec["selection_version"] != SELECTION_VERSION
             or spec["deadline_version"] != "hpo-deadline-v1"):
         raise ContractError("unsupported explicit HPO spec version")
@@ -226,7 +229,7 @@ def hpo_state(state: Json) -> tuple[ActionConfigV3, ModelConfigV4, PPOTrainingCo
     packed = "storage_binding" in state
     closed(state, HPO_RUN_FIELDS | ({"storage_binding"} if packed else set()), RUN_OPTIONAL)
     integer(state["schema_version"], 5, 5)
-    if (state["algorithm"] != "ppo" or state["run_variant"] not in ("hpo-ppo-v1", RESIDENT_VARIANT)
+    if (state["algorithm"] != "ppo" or state["run_variant"] not in ("hpo-ppo-v1", RESIDENT_VARIANT, "hpo-ppo-owned-v1")
             or state["model_version"] != "4" or state["input_recipe"] != LAYOUT.input_recipe
             or state["status"] not in ("running", "paused", "incomplete", "complete")):
         raise ContractError("healthy exact HPO Run5 required")
@@ -547,7 +550,12 @@ def _registry(registry: Json, records: list[Json], state: Json, scan: _ChainScan
 def protected_hpo_files(state: Json, records: list[Json], registry: Json,
                         pending_bindings: list[Json] | None = None) -> dict[int, set[str]]:
     """One pure protection calculation shared by the reader and owned retirement."""
-    op = hpo_spec(state)['operating']
+    return protected_hpo_files_for_operating(hpo_spec(state)['operating'],records,registry,pending_bindings)
+
+
+def protected_hpo_files_for_operating(op: Json, records: list[Json], registry: Json,
+                                      pending_bindings: list[Json] | None = None) -> dict[int,set[str]]:
+    """Original pure retention policy, given already validated operating values."""
     count = len(records)
     resumes = {0, *range(max(0, count-op['resume_latest']), count)}
     inference = {0, *resumes, *range(max(0, count-op['inference_latest']), count),

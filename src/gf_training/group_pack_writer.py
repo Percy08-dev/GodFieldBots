@@ -11,6 +11,7 @@ import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
 from gf_common.group_pack import (
@@ -64,6 +65,7 @@ class GroupPackWriter:
         self._budget = (ByteBudget(settings.budget_bytes, base=WRITER_BASE) if budget is None
                         else BorrowedBudget(budget, base=WRITER_BASE))
         self._queue = ByteBudget(settings.queue_bytes)
+        self._producer: Any = None
         self._request_id = 0
         self._pending = threading.Condition()
         self._pending_count = 0
@@ -237,7 +239,7 @@ class GroupPackWriter:
                     raise RuntimeError("invalid Writer failure acknowledgement")
                 raise RuntimeError("Writer rejected storage operation")
             if response["error"] is not None or (
-                command not in ("seal", "seal-metrics") and response["result"] is not None
+                command not in ("seal", "seal-metrics", "seal-producer") and response["result"] is not None
             ):
                 raise RuntimeError("invalid Writer response fields")
             if self._database_original is not None:
@@ -405,16 +407,17 @@ class GroupPackWriter:
                 self._publication_fd, len(data) + 1, 0
             ) != data:
                 raise RuntimeError("published descriptor identity changed")
-            validated = inspect_packed(
-                target,
-                deadline=self.deadline,
-                max_owned_bytes=self.settings.budget_bytes - self.owned_bytes,
-                allow_pending=True,
-                database_original=self._database_original,
-                budget=self._joint_budget,
-            )
-            if validated["descriptor"] != descriptor:
-                raise RuntimeError("published descriptor changed")
+            if getattr(self,'_producer_sealing',None) is None:
+                validated = inspect_packed(
+                    target,
+                    deadline=self.deadline,
+                    max_owned_bytes=self.settings.budget_bytes - self.owned_bytes,
+                    allow_pending=True,
+                    database_original=self._database_original,
+                    budget=self._joint_budget,
+                )
+                if validated["descriptor"] != descriptor:
+                    raise RuntimeError("published descriptor changed")
             # Verify the SAME opened inode after the complete DB/hash sweep.
             current = target.lstat()
             if (current.st_dev, current.st_ino) != identity or os.pread(
@@ -462,7 +465,26 @@ class GroupPackWriter:
                 exc.add_note(f"descriptor cleanup remains owned ({type(cleanup).__name__})")
             raise
 
-    def seal(self, *, publication: str = "published", retain_pending: bool = False,
+    def _seal_producer(self, producer: Any) -> CollectionLocator:
+        from gf_common.domain import ContractError
+        from gf_training.hpo_owned_collection import _OwnedCollection
+        if type(producer) is not _OwnedCollection:
+            raise ContractError('actual capture/writer transaction required for producer seal')
+        assert producer is not None
+        if getattr(self,'_producer',None) is not producer:
+            raise ContractError('actual capture/writer transaction required for producer seal')
+        assert producer is not None
+        if producer.writer is not self or producer.collection.writer is not self:
+            raise ContractError('actual capture/writer transaction required for producer seal')
+        self._producer_sealing=producer
+        return self._seal(publication='pending',retain_pending=True,collect_metrics=True)
+
+    def seal(self, *, publication: str = 'published', retain_pending: bool = False,
+             collect_metrics: bool = False) -> CollectionLocator:
+        self._producer_sealing=None
+        return self._seal(publication=publication,retain_pending=retain_pending,collect_metrics=collect_metrics)
+
+    def _seal(self, *, publication: str = "published", retain_pending: bool = False,
              collect_metrics: bool = False) -> CollectionLocator:
         descriptor_name(publication)
         if retain_pending and publication != "pending":
@@ -481,7 +503,7 @@ class GroupPackWriter:
 
         with self._operation():
             try:
-                result = self._rpc("seal-metrics" if collect_metrics else "seal",
+                result = self._rpc("seal-producer" if getattr(self,"_producer_sealing",None) is not None else "seal-metrics" if collect_metrics else "seal",
                                    {"publication": publication})
                 if collect_metrics:
                     if (not isinstance(result, dict) or set(result) != {"descriptor", "checkpoint_metrics"}

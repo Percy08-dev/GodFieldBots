@@ -4,6 +4,9 @@ Status: user-approved plan; concrete design preimplementation review READY;
 Task1 capture/RAM/FD foundation independently accepted, later integration pending.
 Task2 direct numeric/snapshot/Wire7/actor9 components are independently accepted;
 Task3 concrete coordinator binding preimplementation clarification is READY.
+Task3 fresh integration is independently accepted after resource, retention and
+startup ownership corrections. Task4 cold/completion design gates are READY;
+their implementation and full physical/project acceptance remain pending.
 Reviewer: `/root/owned_architecture`, 2026-11-16. Snapshot-bank visibility finding
 resolved before dependent implementation; final implementation review is pending.
 Date: 2026-11-16. Root owns design and acceptance.
@@ -44,7 +47,8 @@ catalog, layout and specification hashes remain authoritative. No new rule use.
 
 Resident pool binding must not import training snapshot types into the simulator
 client. Use one concrete private actor-snapshot capability in `gf_common`, minted
-only by the actual local learner export or successful Wire7 snapshot transaction.
+only by the actual local learner export, successful Wire7 snapshot transaction,
+or the dedicated validated cold-import transaction specified below.
 It exposes immutable inference metadata/backings and owner-preserving liveness/
 binding leases, with no resume bank, Adam/RNG/control or execution authority.
 The pool accepts that exact capability; original owner identity and lifecycle
@@ -167,6 +171,15 @@ Only explicit owned writers call the private helper. Preserve finite checks,
 planning, `save_arrays` and writer checksum generation; public signatures and
 strict inspection remain unchanged. Do not duplicate the codec or add a public
 skip/trusted flag.
+For GroupPack publication, add a separate private producer seal command composed
+only by the actual owned collection attachment. The owned writer derives the
+descriptor from its original seal/control metadata and computes the physical DB
+hash once after mutable writing retires. Parent publication/terminal handoff keeps
+actual descriptor, inode, namespace, size and I/O/process-completion checks, but
+does not semantically inspect or rehash its own generated DB again. Bind the
+returned completion to the original writer/collection transaction; serialized
+descriptor fields alone cannot issue producer authority. Existing public seal,
+publication and external import/audit commands retain their strict inspections.
 Keep current PlayerReplay HTTP fetching/persistence as diagnostic archive output,
 with its existing external response decoder, limits, deadlines and I/O failure
 gate. Use the already decoded `episode_end` once for interrupted abort/truncation
@@ -185,6 +198,14 @@ that same snapshot; preserve current tensor layouts and numerical state. A save
 transaction links the actual writer, generation, optimizer step, snapshot FD and
 file map. Only its actual successful completion ACK authorizes commit. Partial
 save, cancellation or post-Adam failure leaves the run failed; never rerun update.
+The same writer retains the ACTUAL completed inference5 manifest/bundle descriptor
+from its write result and includes it in the save ACK/Wire7 snapshot metadata.
+Expose an immutable/copying `inference_manifest` view bound to the saved
+`inference.json` hash and inference subset of the actual file map. Journal6
+metadata and resident decoded-byte admission consume this actual writer output;
+do not reopen the file or reconstruct its descriptor independently. Actor metadata
+may include this inference-only manifest, never resume state/control. Admit its
+retention/transfer before allocation; persisted inference5/resume5 formats stay exact.
 
 `OwnedRunRegistry` is invocation-local and requires the actual parent lock owner.
 It keeps current generations, controls, pins and retention transactions as they
@@ -213,12 +234,34 @@ its existing owner; leases preserve charges until actual last use. No silent dis
 spill, smaller workload, automatic native fallback or enlarged budget.
 Keep finite input/output/loss/gradient/parameter guards and external decoders.
 Process death, IPC uncertainty and writer errors poison the invocation.
+Owned learner startup observes the original process-factory REQUEST before its
+async creator can execute, with the observer initialized before socket allocation.
+A never-requested original factory permits explicit unstarted endpoint cleanup;
+PID absence alone never does. Guard actual creation-task/process/lease state and
+do not use this shortcut for an unobserved alternate creator. Once creation is
+requested, keep the existing exact creation/no-child/reap evidence and deadlines.
+Advisor disposition after repeated startup refinements: both factory and actual
+async body require the SAME active admitted learner reservation. The factory
+records its exact one-shot coroutine; before endpoint export/environment work or
+OS creation, the body requires execution by the original managed `creation_task`
+running that exact coroutine and consumes its execution permission. Direct,
+foreign-task and repeated body calls cannot spawn. An eager task may yield once
+for original task registration before this exact check; never weaken identity.
+Requested-but-unsettled close raises and retains ownership before inherited
+settlement can infer anything from missing task/process fields. Use only original
+task/failure/no-child/reap observations for release. This protects ordinary
+private-method misuse, not arbitrary Python-internal mutation or unrelated OS spawn.
 Capture, local/remote snapshot parent ownership, numeric encoding and parent
 Wire7 dispatch share the SAME actual invocation Source account, rather than
 independent2GiB allowances. Numeric/save/parent phase limits still apply within
 that aggregate. Known outstanding-view `BufferError` defers retirement and keeps
 charges; it is distinct from an uncertain FD close and must retire after the
 actual last buffer export releases.
+Parent metadata/provider/collection-manifest/control-writer reservations share
+one phase admission backed by that same Source account. Check simultaneous
+retained and temporary copies against the configured parent limit before any
+serialization/copy. This is an implementation of the existing common admission/
+lease interface, not another independent Source allowance.
 
 ## Compatibility and cold resume
 
@@ -265,6 +308,17 @@ native-reader rejection fallback. Old formats keep exact original validation.
 Runtime parity is recorded as `not_run`, with no invented zero error or checked
 endpoint counts. Strict readers/audits select the actual format explicitly.
 
+Owned management records additionally use generation5, artifact-registry6 and
+cache acquire/release transaction2. These explicit producer-origin forms keep old
+generation4/registry5/cache transaction1 meanings unchanged. Generation5 binds
+the actual snapshot identity, file map, counters, parent hash and schedule/pool
+controls; registry6 owns per-file retention and reference states. New cache pins
+use actor9's existing canonical `owned-inference-cache-v1` identity (policy SHA,
+inference SHA and actual snapshot identity), while weights SHA remains diagnostic.
+Record the actual source snapshot identity in the owned binding so cold metadata
+validation does not depend on a transient live lookup. Cold readers dispatch on
+these exact forms and never relabel old records.
+
 Actor9 is an explicit new owned-snapshot dispatch, additive to the existing
 participant protocol3/resident outer1. Legacy envelopes and Journal6's recorded
 participant protocol3 retain exact meanings; new collection provenance separately
@@ -277,11 +331,63 @@ pins and retention without replaying samples not used by the next update.
 The adapter issues new live owners only from this actual restore transaction and
 lock, never from a persisted producer flag. Legacy resume uses its legacy route.
 
+Cold import may read ALL generation/update/control JSON once to check ancestry,
+counters, schedule/pool sequencing and reference/retention transactions. This is
+control metadata, not sample replay. Read checkpoint arrays only for the current
+resume pair and required pool inference snapshots; never open old journals,
+collection samples or numeric batches to recreate learning authority. Preserve
+required output descriptor/namespace/presence checks and reserve control decoding
+before allocation. Full historical storage/sample audits remain separate.
+
+Introduce private `OwnedColdImport` under the actual new lock and Source account.
+Its one external load validates exact spec4/origin/code/runtime/device/deadlines,
+current generation/file maps, inference5/resume5 keys/dtypes/shapes/finite values,
+Adam steps and CPU/CUDA/PCG64 state. Factor existing private resume validators and
+state application from their file I/O; public legacy readers/restorers stay strict.
+
+Wire7 gets an explicit restore transaction, not a legacy `restore()` call followed
+by clearing an origin flag. The parent accepts only its actual `OwnedColdImport`,
+sends admitted immutable model/resume banks through its original FD channel, and
+binds request nonce/generation/steps/checkpoint identity to that live import.
+The child stages network/Adam/shuffle state using the original application math,
+publishes global Torch RNG only after validation/allocation succeed, synchronizes,
+and issues a distinct `OwnedRestoreAck`. Failure poisons the invocation.
+
+That ACK certifies actual restored learner state; it is NEVER a fabricated new
+`RemoteSaveAck`. A restored current snapshot may carry this distinct origin ACK
+and original validated file map. The registry imports its already-committed
+generation without rewriting or recommitting it; the next real update emits the
+normal new save ACK. Owned generation is issued by this private transaction, not
+by a caller-supplied counter or JSON authority.
+
+Required historical pool models use private inference-only cold snapshot owners,
+loaded once under `OwnedColdImport`. The common actor capability may also be
+minted by this actual validated import (in addition to local export/Wire7 save or
+restore), with immutable data/lifetime checks and no execution authority. No
+historical Adam/RNG bank is loaded for a pool-only model. Existing source versions
+are not silently promoted into this producer origin.
+
 Campaign -> evaluation uses a private completion object issued after actual final
 commit and successful original job cleanup, linking final snapshot and completed
 state. It authorizes a separate evaluation job and cannot reopen the closed
 training job or derive execution authority from JSON. External evaluation imports
 remain independently validated.
+Prepare only an inference-data lease before registry closure; it preserves the
+actual final inference backing/manifest and origin witness while resume banks,
+optimizer/RNG/control payloads and ordinary registry ownership retire. Preparation
+alone grants no completion. Mint the private completion only after actual physical
+cleanup/termination evidence, final complete-state persistence and final original
+limit checks all succeed. Failure closes the prepared lease and issues no success.
+The final data scope must survive the old execution scope without treating that
+scope/job as active; its last-use release remains positively checked.
+
+Preserve the existing campaign session boundary between training and evaluation.
+If evaluation is deferred to a later invocation, close any transient data lease;
+the later call uses a dedicated validated external final-policy/receipt import
+and a NEW actual evaluation admission. Persisted completion/termination records
+are evidence to validate, never the private live completion or execution authority.
+Version-aware external audit/receipt/reference dispatch supports owned management
+forms without relabeling old records or claiming historical replay occurred.
 
 ## Implementation and verification sequence
 

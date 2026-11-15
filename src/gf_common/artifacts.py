@@ -59,3 +59,49 @@ def json_bound(value: Any, *, depth: int = 0) -> int:
             for k, v in value.items()
         )
     raise ValueError("invalid JSON value")
+
+
+class ArtifactPhaseAdmission:
+    """One overlapping phase counter backed by the SAME artifact account."""
+    def __init__(self, source: ArtifactAdmission, limit: int) -> None:
+        import threading
+        if type(limit) is not int or limit<1:
+            raise ValueError('positive artifact phase capacity required')
+        self.source,self.limit=source,limit
+        self.used=self.peak=0
+        self._lock=threading.RLock()
+
+    def reserve(self, size: int, *, wait: bool = False) -> _PhaseReservation:
+        if wait:
+            raise ValueError('artifact phase admission does not wait')
+        with self._lock:
+            if type(size) is not int or size<0 or self.used+size>self.limit:
+                raise ValueError('shared artifact phase budget exhausted')
+            actual=self.source.reserve(size)
+            try: reservation=_PhaseReservation(self,actual,size)
+            except BaseException:
+                actual.close()
+                raise
+            self.used+=size
+            self.peak=max(self.peak,self.used)
+            return reservation
+
+
+class _PhaseReservation:
+    def __init__(self, phase: ArtifactPhaseAdmission, actual: ArtifactReservation, size: int) -> None:
+        self.phase,self.actual,self.size=phase,actual,size
+        self.closed=False
+
+    def close(self) -> None:
+        with self.phase._lock:
+            if self.closed: return
+            self.actual.close()
+            self.phase.used-=self.size
+            self.closed=True
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(self, exc_type: type[BaseException] | None, exc: BaseException | None,
+                 tb: TracebackType | None) -> None:
+        self.close()

@@ -7,6 +7,7 @@ import sqlite3
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 from gf_common.group_pack import FORMAT, MIB, Json, StorageSettings
 from gf_training.group_pack_db import (
@@ -37,6 +38,7 @@ COMMANDS = {
     "control": {"name"},
     "seal": {"publication"},
     "seal-metrics": {"publication"},
+    "seal-producer": {"publication"},
     "close": set(),
 }
 
@@ -148,30 +150,46 @@ def main() -> int:
                     payload = read_bytes(input_fd, payload_size, deadline)
                     store_control(db, request["name"], payload)
                     result = None
-                elif command in ("seal", "seal-metrics"):
+                elif command in ("seal", "seal-metrics", "seal-producer"):
                     publication = request["publication"]
                     if publication not in ("published", "pending"):
                         raise ValueError("invalid publication")
                     original_seal = seal_transaction(
                         db, run_id, max_owned_bytes=settings.budget_bytes - WRITER_BASE
                     )
+                    controls=[{'name':name,'bytes':size,'sha256':sha} for name,size,sha in
+                        db.execute("SELECT name,bytes,sha256 FROM controls ORDER BY name")]
                     checkpoint_metrics = finish_wal(db)
                     db.close()
                     db = None
                     database_original.check_identity()
                     os.fsync(database_original.fd)
                     fsync_directory(directory)
-                    database_original.freeze_database()
-                    validated = inspect_packed(
-                        directory / DATABASE,
-                        deadline=deadline,
-                        max_owned_bytes=settings.budget_bytes - WRITER_BASE,
-                        allow_pending=True,
-                        without_descriptor=True,
-                        database_original=database_original,
-                    )
-                    if validated["validated"]["seal"] != original_seal:
-                        raise ValueError("original Writer seal identity changed")
+                    if command!='seal-producer': database_original.freeze_database()
+                    if command=='seal-producer':
+                        # Mutable SQLite/WAL handles and the creation O_RDWR FD
+                        # retire before the single final physical DB hash.
+                        original=database_original
+                        readonly=OriginalFile(directory/DATABASE,deadline,mutable=True)
+                        if (readonly.identity.st_dev,readonly.identity.st_ino)!=(original.identity.st_dev,original.identity.st_ino):
+                            readonly.close()
+                            raise ValueError('producer database original changed')
+                        original.close()
+                        database_original=readonly
+                        database_original.freeze_database()
+                        validated: Any={'validated':{'seal':original_seal,'index':{'controls':controls}},
+                            'database_bytes':database_original.identity.st_size,'database_sha256':database_original.sha256}
+                    else:
+                        validated = inspect_packed(
+                            directory / DATABASE,
+                            deadline=deadline,
+                            max_owned_bytes=settings.budget_bytes - WRITER_BASE,
+                            allow_pending=True,
+                            without_descriptor=True,
+                            database_original=database_original,
+                        )
+                        if validated["validated"]["seal"] != original_seal:
+                            raise ValueError("original Writer seal identity changed")
                     database_original.recheck()
                     result = {
                         "format": FORMAT,
@@ -188,7 +206,7 @@ def main() -> int:
                         settings, directory / DATABASE, run_id, "sealed", deadline, result
                     )
                     database_original.recheck()
-                    if command == "seal-metrics":
+                    if command in ("seal-metrics","seal-producer"):
                         result = {"descriptor": result, "checkpoint_metrics": checkpoint_metrics}
                     sealed = True
                 elif command == "close":
@@ -199,7 +217,7 @@ def main() -> int:
                     raise ValueError("invalid Writer command")
             assert database_original is not None
             database_original.recheck()
-            if command in ("seal", "seal-metrics", "close"):
+            if command in ("seal", "seal-metrics", "seal-producer", "close"):
                 database_original.close()
             if command in ("submit", "control"):
                 del payload
@@ -218,7 +236,7 @@ def main() -> int:
                 deadline,
             )
             request_id += 1
-            if command in ("seal", "seal-metrics", "close"):
+            if command in ("seal", "seal-metrics", "seal-producer", "close"):
                 return 0
     except BaseException as exc:  # noqa: BLE001 -- child reports generic failure and exits
         cleanup_errors: list[str] = []

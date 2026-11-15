@@ -40,7 +40,7 @@ def _publication_schema(manifest: Json) -> bool:
         return False
     if manifest['schema_version'] == 5:
         return True
-    if manifest['schema_version'] not in (6, 7):
+    if manifest['schema_version'] not in (6, 7, 8):
         return False
     if manifest.get('collection_role') == 'hpo-evaluation':
         from gf_common.card_instance_collection import checked_hpo_evaluation_manifest

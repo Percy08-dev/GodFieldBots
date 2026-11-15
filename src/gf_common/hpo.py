@@ -70,3 +70,14 @@ def optimizer_delta(used: int, *, epochs: int, minibatch_size: int) -> int:
     integer(epochs, 1, 1000)
     integer(minibatch_size, 1, 2**20)
     return epochs * ((used + minibatch_size - 1) // minibatch_size)
+
+
+def require_owned_record_version(value: Json, kind: str) -> None:
+    """Select producer record versions explicitly; values never grant execution."""
+    versions={'collection':8,'proof':5,'numeric':6,'update':6,'generation':5,'registry':6,'cache':2}
+    if kind not in versions:
+        raise ContractError('unknown owned record kind')
+    if (type(value) is not dict or type(value.get('schema_version')) is not int
+            or value['schema_version']!=versions[kind] or value.get('origin')!='producer-owned-v1'
+            or value.get('encoder')!='canonical-python'):
+        raise ContractError('mixed legacy/producer-owned record versions or origin/encoder')

@@ -211,6 +211,38 @@ gf-bots hpo compare --config left-campaign.toml --left /left/proposals/000000 --
 初期実装ではLEFT側の運用・公開入力・推論条件に合うconfigが必要です。
 結果は探索用であり、確認用・最終test・formal/final64/Datasetの資格を与えません。
 
+## メモリ保持の生成元経路（schema4）
+
+新しいresident HPOは、生成したbatchをRAM上で保持し、そのまま学習へ渡す
+`schema_version = 4`の明示的な経路です。設定は次を含みます。
+
+```toml
+schema_version = 4
+origin = "producer-owned-v1"
+encoder = "canonical-python"
+```
+
+`runtime`のresident設定も必要です。MLP・GRU・Transformerの設定例は
+`configs/hpo/owned-mlp-smoke.toml`、`owned-gru-smoke.toml`、
+`owned-transformer-smoke.toml`です。元のbaseがRust前処理でも、実行設定は
+Python正規encoderを明示して記録します。
+
+ジャーナル・アーカイブ・numeric・チェックポイントの保存を完了させ、
+実際に受理されたcommandと両参加者の終端観測から学習batchを構成します。
+通常更新では過去sampleの再生や生成物の意味的な再読込照合を行いません。
+実行していないparityは`not_run`、Replay照合は`false`と記録します。
+Replayの取得・保存は診断用に継続します。
+
+Source2GiB・numeric512MiB・collector2GiBなど既存上限を維持します。
+RAM不足時のディスクspoolや暗黙のreader切替はありません。
+Model4・Journal6・inference5・resume5と配列layoutは維持し、旧schema3の
+strict経路・データ・監査の意味も変更しません。
+
+実装・受入状況と再開・campaign対応範囲は
+[ADR0043](adr/0043-hpo-producer-owned-data.md)と
+[検証記録](verification/hpo-producer-owned-data.md)を参照してください。
+fresh統合は独立レビュー済みです。cold再開・campaign連携・実測は後続です。
+
 ## 停止と障害からの回復
 
 セッション予算は実行中の試合やrunを中断しません。閉じた正常終了receiptがある

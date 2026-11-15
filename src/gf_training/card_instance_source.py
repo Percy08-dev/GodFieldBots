@@ -468,6 +468,7 @@ class _OnlineGameOwner:
     hpo_job: Any = None
     resident_runtime: Any = None
     precollection_validation: Any = None
+    owned_registry: Any = None
 
     def _require_hpo_job(self) -> None:
         from gf_training.lineage import require_hpo_run_owner
@@ -497,6 +498,21 @@ class _OnlineGameOwner:
 def validate_owned_collection(plan: CollectionPlan, ledger: Any, *, max_owned_bytes: int,
                               deadline: float, resident_phase: Any = None,
                               _finish_precollection: bool = False) -> _OnlineGameOwner:
+    candidate=getattr(getattr(ledger,'learner',None),'_cleanup_owner',None)
+    attachment=getattr(getattr(candidate,'online_owner',None),'owned_registry',None)
+    owned_state=getattr(getattr(candidate,'online_owner',None),'state',{}).get('run_variant')=='hpo-ppo-owned-v1'
+    if attachment is not None or owned_state:
+        from gf_training.hpo_owned_lineage import OwnedRunRegistry
+        if type(attachment) is not OwnedRunRegistry or candidate is not attachment.process:
+            raise ContractError('invalid owned registry attachment cannot enter historical Source')
+        owner=candidate.online_owner
+        if owner.owned_registry is not attachment or owner.ownership is not attachment.ownership or owner.state is not attachment.state:
+            raise ContractError('owned collection owner differs from actual registry')
+        from gf_training.hpo_owned_run import _OwnedHpoOperations
+        operations=getattr(attachment,'operations',None)
+        if type(operations) is not _OwnedHpoOperations:
+            raise ContractError('owned collection requires actual fresh coordinator')
+        return operations.guard_collection(plan,ledger,resident_phase=resident_phase,deadline=deadline)
     from gf_simulator_client.structured_resources import ReservationLedger
     from gf_training.hpo_gpu_lease import _AuditedLedger
     from gf_training.hpo_learning_process import HpoLearningProcess

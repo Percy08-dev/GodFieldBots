@@ -69,6 +69,32 @@ and affected257PASS runs are historical pre-final-delta evidence, not a new whol
 suite claim. Production coordinator/registry, cold resume, campaigns and GPU/
 timing trials remain subsequent work.
 
+Task3 fresh integration is independently READY. Production collector composition
+with actual CPU actor9/Wire7/GroupPack callbacks completes16games per batch and
+two updates; all3models retain historicalG0 as opponent afterG1 and pass actual
+EVICT/pin/unbind/rebind. Final initial integration100PASS/75.39s and prior
+257coveringPASS precede the accepted safety corrections.
+
+The consolidated correction restores original G0/resume-pair retention, staged
+directory/source-FD deletion with ctime fences, preallocation and shared parent
+admission, plus failed-start cleanup. Foreign replacement/symlink injections
+preserve both foreign and original backup files with no false deletion receipt.
+The covering correction run passes192tests/223.26s. A subsequent direct-creator
+startup bypass required the repository's advisor escalation: actual creator
+execution now requires its admitted one-shot original task/coroutine; unsettled
+close retains ownership. Final independent startup/Wire7/custody/kernel checks
+PASS36/29.54s and11/1.84s; architecture8targetedPASS. Both final reviews are READY,
+Ruff/mypy223PASS, frozen8 unchanged. These are controlled, unqualified CPU fixtures.
+
+Milestone packaging builds wheel/sdist with223Python modules matching source
+exactly, then installs the wheel with only8mandatory dependencies. Isolated CLI
+help and normal random-worker startup/SIGTERM/reap/empty-health/lease retirement
+PASS on Python3.14.10 with GIL and no Torch/Optuna/Arrow/LightGBM/native. This build
+precedes the final startup refinement; final-source package checks remain required.
+Root's first smoke incorrectly required exit0; investigation confirms intentional
+normal SIGTERM(-15), and the corrected contract-based check passes. No production
+change was made for that check.
+
 ## Required matched comparison
 
 Preserve explicit ADR0042-enabled control alongside the new producer-origin path.

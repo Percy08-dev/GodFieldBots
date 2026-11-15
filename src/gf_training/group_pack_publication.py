@@ -174,6 +174,8 @@ class GroupPackCollectionPublication:
                           "manifest.json": (canonical(manifest) + "\n").encode()}
         try:
             self.pending = await self.collection.prepare(self._controls)
+            if self.collection._producer is not None:
+                self.collection._producer.prepare_publication(self,manifest)
         except BaseException as error:
             error.__dict__["_group_pack_publication_cleanup_owner"] = self
             try:
@@ -445,15 +447,16 @@ class GroupPackCollectionPublication:
             self._link(self._physical)
             self._link(self._pointer)
             pending.recheck()
-            inspected = inspect_packed(target, deadline=self.collection.deadline,
-                max_owned_bytes=self.collection.budget.limit - self.collection.budget.used,
-                database_original=pending.database, budget=self.collection.budget)
-            if final_context is not None:
-                facts = json.loads(self._pending_facts)
-                if inspected['validated']['seal']['logical_sha256'] != facts['storage']['logical_sha256']:
-                    raise ContractError('public final original logical DB seal differs from accepted pending Source')
-                del facts
-            del inspected
+            if self.collection._producer is None:
+                inspected = inspect_packed(target, deadline=self.collection.deadline,
+                    max_owned_bytes=self.collection.budget.limit - self.collection.budget.used,
+                    database_original=pending.database, budget=self.collection.budget)
+                if final_context is not None:
+                    facts = json.loads(self._pending_facts)
+                    if inspected['validated']['seal']['logical_sha256'] != facts['storage']['logical_sha256']:
+                        raise ContractError('public final original logical DB seal differs from accepted pending Source')
+                    del facts
+                del inspected
             pending.recheck()
             expected = [(owner.directory / owner.outputs[0].name,
                 os.fstat(owner.outputs[0].handle.descriptor), digest(owner.outputs[0].raw), True)

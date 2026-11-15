@@ -355,6 +355,9 @@ class SimulatorEnvironment:
                         health["cleanup_failure"] = "cleanup task cancelled"
                     return
 
+    def _replay_was_reconciled(self) -> bool:
+        return True
+
     async def _finalize_episode(self, client: AttestedClient, game: str | None, directory: Path,
                                 result: EpisodeResult, journals: dict[int, Journal],
                                 workers: dict[int, ParticipantWorker], accepted: dict[int, list[Json]],
@@ -392,7 +395,7 @@ class SimulatorEnvironment:
                         raise ContractError("simulator abort lacks reconciled closure evidence")
                     elif result.outcome is None and closure is not None:
                         raise ContractError("terminal replay cannot fabricate an unknown natural outcome")
-                result.replay_reconciled = True
+                result.replay_reconciled = self._replay_was_reconciled()
             elif game is not None:
                 result.health["replay_or_finalization_failure"] = "connection poisoned or finalization deadline"
         except (OSError, ValueError, RuntimeError, TimeoutError, asyncio.CancelledError) as exc:
