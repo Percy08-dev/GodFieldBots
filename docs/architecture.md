@@ -2,6 +2,13 @@
 
 ## Status and scope
 
+[ADR0041](adr/0041-hpo-resident-workers-and-progress.md) accepts the reviewed
+[resident HPO workers/progress plan](design/hpo-resident-workers.md).
+Preimplementation review is READY; implementation/runtime acceptance are pending.
+The explicit HPO-only path adds viewer-partitioned physical pooling, parked
+update authority, immutable cache references and lock-free diagnostic progress;
+existing fresh and ordinary paths retain their meanings.
+
 [ADR0037](adr/0037-ppo-hpo-foundation.md) accepts the explicit configurable PPO
 and outer HPO campaign design. Implementation and the predeclared physical
 functional protocol pass under [the supplied plan](design/ppo-hpo.md). Both final
@@ -780,6 +787,13 @@ return index, version and optional logprob/value. Each participant uses a fresh
 interpreter process with only its own input/history. Generate candidates inside
 that process. Do not inherit parent private data or send URLs, replay, diagnostics,
 GameSeed or other-player view. Worker termination is bounded by the owner.
+
+ADR0041 adds an explicitly versioned HPO-only exception (implementation pending):
+physical owners remain permanently viewer-partitioned while exclusive episode
+leases fully clear private history/RNG/cache/request state at verified handoff.
+No physical process receives both seats' views. Parked owners retain real GPU
+residency and require live authority through update/Source/commit; only actual
+reap releases physical ownership. Ordinary and historical paths remain fresh.
 
 Clean-bootstrap amendment reviewed READY on 2026-10-27: launch a fixed
 `python -m gf_simulator_client.worker_bootstrap` with a minimal platform environment,

@@ -14,6 +14,10 @@
 
 ## 一覧
 
+追加: [0041](0041-hpo-resident-workers-and-progress.md) — Accepted design:
+HPO限定の常駐CUDA参加者、更新境界の重み同期、明示的な待機証明・キャッシュ参照、
+学習権威から分離した進捗表示と監視CLI。実装・最終受入は未完了。
+
 追加: [0039](0039-refresh-heuristic-and-mixed-opponents.md) — Accepted design:
 独立した手札更新型ヒューリスティックと、通常PPO/HPOの明示的な混合16試合相手構成。
 実装・最終受入は進行記録と検証証跡で区別する。
