@@ -168,3 +168,74 @@ evaluation integration, progress and final hardware acceptance remain pending.
 Append exact commands/results, failed attempts and independent correctness/
 conformance reviews. Root accepts after blocking findings resolve and required
 checks pass. Formal HPO sizing/model quality/final-test evaluation remain later.
+
+## Task4 current-source legacy audit
+
+Independent verifier reports all5PASS on frozen2eae4c8/nativec7a357/ELF0d5d.
+Corpus history12.613s/observation12.022s match the full expected projection and
+all numeric arrays. Later nested finalization reports cleanup complete,
+active0/admitted-completed-committed6784/failed0/four pool threads exited; the
+explicitly pre-finalization data-stage snapshot remains historical pending.
+Index19.051s matches83783rows and exact Parquet/dataset/content hashes. HOST
+PPO readers1/4 complete in1.377s/1.268s, match3reader array proofs,16episodes/
+224decisions/G0/zero optimizer updates; all72original source stat/hash identities
+remain unchanged. Only declared diagnostic-clone manifest paths are rewritten.
+Source320/320hashes match. Exact commands and full expected/result audits:
+`runs/hpo-resident-workers/assessments/legacy-proof-a01/result-summary.json` and
+`runs/assessments/hpo-resident-legacy-ppo-host-a03/*.result-check.json`.
+
+Preserved nonpasses: obsolete explicitELF corpus argv NOTRUN, first PPO output
+root guard rejection, unsupported default-sandbox asyncio interruption130, and
+HOST retry collision with that partial directory. Corrected uniqueHOSTa03 is the
+accepted PPO evidence. No old output overwritten, optimizer/GPU work or games.
+
+## Initial hardware attempts (not matched performance acceptance)
+
+First direct-helper a01 stopped before admission: diagnostic evidence directory
+was incorrectly passed as the campaign storage namespace. The ignored helper
+now passes the genuine configured parent/run namespace to the unchanged guard,
+records both paths separately, and retains originalhelper/request/result. Real
+storage RED→PASS and scoped independent review READY; corrected helper SHA
+4012dc3dbc9f4ca14533572b819c6090c9b05f5349fad8c6b068423f10816ae7.
+
+MLPfresha02 actual CUDA/Simulator run satisfies the declared diagnostic stop:
+incomplete/update_cap,2updates,309used/collected,144.906s internal. The actual
+original termination receipt verifies64worker reaps and1learner reap; last learner
+process-lifetime allocator maxima allocated103799808/reserved121634816bytes.
+Fresh actors expose no load/cache/allocator facts. This is functional evidence,
+not a matched new-source timing or learning-quality result.
+
+First residentMLPa02 fails after admission but before parent/model/learner/worker
+creation. Bootstrap validation constructs a transient hpo_spec state without
+run_variant; the strict reader consequently rejects schema3/runtime. Narrow
+production-entry correction now passes scoped review; persisted formats stay strict.
+Admission39dfd3df76ed4af980ca28d6573e0259 has no normal termination receipt.
+Original invocation exited and actual Popen.wait was observed; this does not
+manufacture termination. Explicit user approval for existing admission-only
+operator release is pending. All failed evidence remains; no further GPU jobs
+or recovery mutations occur before approval. Matched measurements will restart
+with fresh identities after the fixed source is accepted/frozen.
+
+Real-preset regression preparation also found the default512MiB additional-save
+allowance too small for192/depth2GRU(638891136bytes) andTransformer(686931840),
+whileMLP requires520242624. Root explicitly sets1GiB in all3functional presets
+and all6new matched probe profiles (`probe-configs-v2`); model, decision/update/
+wall/session budgets and other learning/action settings stay unchanged. Old
+profiles remain intact. Genuine materialization of control+proposal for9profiles
+PASS18cases, maximum686931840bytes; resident maximum managed phases RAM
+13007871232bytes(12.11GiB), CUDA9518210304bytes(8.86GiB) within24/12GiB limits.
+This is conservative admission evidence, not actual device peak.
+
+
+The bootstrap correction supplies the existing explicit resident variant only
+in schema3 transient validation context. Exact old method vs genuine corrected
+presets reproduces6failures; new15cases pass for all3models/old1/2/hybrids and
+strict persisted discriminator refusal. Covering reader/config suite PASS167,
+no skips20.12s; mypy208/scopedRuff/diffPASS. Independent correctness review READY.
+No cleanup/recovery or numerical/native change. Source whole6490CPU passes
+precede this correction;167covering checks are its subsequent verification.
+Post-fix Python wheel+sdist match all208modules byte-for-byte, proof
+`final-checks/python-package-proof-v2.json`. Protected24historicalfiles retain
+all content/size/device/inode/mtime/ctime identities after initial probes,
+`assessments/protected-after-bootstrap.json` (2.063s). Remaining hardware and
+final full implementation acceptance are pending, not implied by these passes.

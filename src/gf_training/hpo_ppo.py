@@ -71,12 +71,15 @@ class _HpoOperations(_GameOperations):
         observe(self.progress,value)
 
     def validate_config(self,config: Any) -> Any:
-        from gf_common.hpo_resident import require_hpo_runtime_execution
+        from gf_common.hpo_resident import RESIDENT_VARIANT, require_hpo_runtime_execution
         require_hpo_runtime_execution(config.hpo_spec)
         if type(config.actions) is not ActionConfigV3 or type(config.model) is not ConfiguredNeuralModelV4 or config.model.checkpoint is not None:
             raise ContractError('HPO requires exact fresh Model4/actions3')
         raw=asdict(config)
-        spec=hpo_spec({'effective_config':raw,'hpo_spec_sha256':digest(config.hpo_spec)})
+        initial={'effective_config':raw,'hpo_spec_sha256':digest(config.hpo_spec)}
+        if config.hpo_spec.get('schema_version')==3:
+            initial['run_variant']=RESIDENT_VARIANT
+        spec=hpo_spec(initial)
         recipe=hpo_training_config(spec['training_recipe'])
         training=_runtime_training(raw['training'],spec)
         _run_projection(raw,spec,training)
