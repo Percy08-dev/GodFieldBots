@@ -310,3 +310,39 @@ proof, numerical math and cleanup/recovery contracts remain exact. Whole6490CPU
 checks precede this correction; new covering evidence is stated separately.
 Root next executes declared D64 complete CLI campaigns/evaluation/watch before
 fresh matched all-model measurements; no formal search/quality result follows.
+
+## Functional CLI parent-scan budget failure
+
+At08d9a05 MLPfunctional-a01 exits2/43.82s: canonical control commits G1/D64
+(collected181/optimizer_steps4), then fails acquiring G1 cache pins before any
+worker SYNC command. Earlier progress wording that synchronization completed is
+corrected here: `phase=sync` indicates callback entry only. Parent8052784c-
+5619-45fa-87d6-a5d2a9b673d3 remainsFAILED, no training receipt/objective; the fixed
+proposal is blocked by the unresolved ticket. User-approved admission-only3d16
+release exits0; receipt retained. Four oldG0 cache refs remain protected; no G1
+pin receipt or reconstructed cleanup authority exists.
+
+Independent read-only diagnosis: G1 resume archive9227054bytes/decoded9172912
+requests322850000temporarybytes under the unchanged sealed formula. Retained
+42787547 yields365637547needed vs256MiBdeclared parent budget. Disposable scan
+with only in-memory failed-state projection reproduces at256MiB/0.261s and
+passes512MiB/0.284s. Actual failed state/refs/files remain untouched and ineligible;
+this diagnostic structural pass confers no Source or learning rights.
+
+Root sets explicit1GiBparent budget in all3presets and freshmatched6profiles,
+retaining strict validators and every learning/game/deadline budget. It adds
+768MiBmanagedRAM, not GPU demand. Production canonical_control plus fixedpoint
+for12profiles passes24materializations; maxRAM12.86GiB/CUDA8.86GiB within24/12.
+Newfunctional-v2 parent/original/DB paths and newtiming identities are prepared;
+all failedattempts retained. Actual retries and broaderacceptance remain pending.
+Readonly watch during live owner returned in0.195s with fresh0.236saged snapshot,
+committed0 until durable append,16games/poolstarts4/reuses28. No lock or GPU was
+acquired by the observer. Original mainstdout remained one final JSON object;
+plain progress went tostderr. The owned external sampler was stopped/reaped.
+
+Configuration-only review READY: independent reviewer confirms exact reservation
+formula, matching fresh/resident caps and24productioncanonical/fixed preflights.
+No validator/default/math change, no diagnostic failed-state projection grants
+eligibility, and1GiB is bounded headroom for this verification rather than a
+universal future-data guarantee. Code correctness/conformance reviews otherwise
+remain valid because application source is unchanged. Actual newcap retry pending.

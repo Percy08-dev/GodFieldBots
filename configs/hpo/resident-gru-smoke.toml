@@ -49,6 +49,7 @@ collection_games = 16
 [operating]
 max_updates = 2
 save_budget_bytes = 1073741824
+parent_budget_bytes = 1073741824
 
 [storage]
 parent_root = "../../runs/hpo-resident-workers/functional/parents"
