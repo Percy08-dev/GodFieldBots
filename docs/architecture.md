@@ -4,9 +4,9 @@
 
 [ADR0041](adr/0041-hpo-resident-workers-and-progress.md) accepts the reviewed
 [resident HPO workers/progress plan](design/hpo-resident-workers.md).
-Preimplementation review and scoped foundation/resident-runtime reviews are READY.
-CPU component/failure checks pass; progress and actual CUDA/Simulator/performance
-and final acceptance remain pending under the verification record.
+Preimplementation review and scoped foundation/resident-runtime/progress reviews
+are READY. CPU component/failure checks pass; actual CUDA/Simulator/performance
+and final project acceptance remain pending under the verification record.
 The explicit HPO-only path adds viewer-partitioned physical pooling, parked
 update authority, immutable cache references and lock-free diagnostic progress;
 existing fresh and ordinary paths retain their meanings.

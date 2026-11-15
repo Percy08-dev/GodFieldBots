@@ -536,3 +536,151 @@ def test_uncertain_setup_executor_shutdown_retains_original_custody_until_positi
             with pytest.raises(OSError,match='shutdown'): await pool.close()
             job.confirm_termination()
     asyncio.run(run())
+
+
+def test_actual_diagnostics_follow_validated_ack_and_do_not_enter_authority(global_root,tmp_path):
+    from gf_common.domain import RuntimePolicyBinding
+    from gf_simulator_client.resident_pool import ResidentParticipantPool
+    from gf_training.collection import CollectionPlan
+    from gf_training.hpo_resident import ResidentPoolCustody
+    values=[]
+    async def run():
+        with admit() as job:
+            custody=ResidentPoolCustody(job,run_id='run-a',pool_id='b'*32)
+            pool=ResidentParticipantPool(custody,resident_bytes=16,deadline=1e12,progress=values.append)
+            pool.admit(CollectionPlan((),{'random':RuntimePolicyBinding('random')},tmp_path,
+                {'parent_run_id':'run-a','collection_generation':0,'batch_id':'batch-000000'},1e12,1e12))
+            try:
+                for seed in (17,29):
+                    logical=pool.worker(1,'random',seed,ACTIONS,ledger=job.ledger)
+                    await logical.initialize()
+                    logical.mark_completed(); await logical.close()
+                assert pool.starts==1 and pool.reuses==1
+                facts=[value for value in values if 'pool_workers' in value]
+                assert facts[-1]['pool_workers'][0]['loads']==1
+                assert facts[-1]['pool_workers'][0]['cache_reuses']==1
+                assert facts[-1]['pool_workers'][0]['cuda_allocator'] is None
+                assert facts[-1]['managed_cuda_reservation_bytes']==job.ledger.cuda_bytes
+                authority=pool.retire_collection()
+                authority.require(job.ledger)
+            finally: await pool.close()
+            job.confirm_termination()
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize('corruption',['malformed-diagnostic','oversized-diagnostic','foreign-ready'])
+def test_outer_diagnostics_never_weaken_management_ack_or_publish_foreign_facts(global_root,tmp_path,monkeypatch,corruption):
+    from gf_common.domain import ContractError, RuntimePolicyBinding
+    from gf_simulator_client.resident_pool import ResidentParticipantPool, ResidentPhysicalWorker
+    from gf_training.collection import CollectionPlan
+    from gf_training.hpo_resident import ResidentPoolCustody
+    original=ResidentPhysicalWorker._read_reply
+    values=[]
+    def read(owner,source):
+        response=original(owner,source)
+        if response.get('kind')=='READY':
+            if corruption=='foreign-ready': response['pid']+=1
+            else: response['_diagnostic']={'loads':'malformed'} if corruption=='malformed-diagnostic' else {'extra':'x'*4097}
+        return response
+    monkeypatch.setattr(ResidentPhysicalWorker,'_read_reply',read)
+    async def run():
+        with admit() as job:
+            custody=ResidentPoolCustody(job,run_id='run-a',pool_id='b'*32)
+            pool=ResidentParticipantPool(custody,resident_bytes=16,deadline=1e12,progress=values.append)
+            pool.admit(CollectionPlan((),{'random':RuntimePolicyBinding('random')},tmp_path,
+                {'parent_run_id':'run-a','collection_generation':0,'batch_id':'batch-000000'},1e12,1e12))
+            try:
+                logical=pool.worker(1,'random',17,ACTIONS,ledger=job.ledger)
+                if corruption=='foreign-ready':
+                    with pytest.raises(ContractError): await logical.initialize()
+                    assert values==[]
+                else:
+                    await logical.initialize()
+                    logical.mark_completed(); await logical.close()
+                    assert values and all(value['pool_workers'][0]['loads']==1 for value in values)
+            finally: await pool.close()
+            job.confirm_termination()
+    asyncio.run(run())
+
+
+def test_replacement_diagnostics_show_current_live_pool_without_erasing_audit_history(global_root,tmp_path):
+    from gf_common.domain import RuntimePolicyBinding
+    from gf_simulator_client.resident_pool import ResidentParticipantPool
+    from gf_training.collection import CollectionPlan
+    from gf_training.hpo_gpu_lease import JobContext, admit_gpu_job
+    from gf_training.hpo_resident import ResidentPoolCustody
+    values=[]
+    async def run():
+        with admit_gpu_job(JobContext('campaign-a','operation','training','run-a',None),global_cuda_bytes=1024,max_workers=4) as job:
+            custody=ResidentPoolCustody(job,run_id='run-a',pool_id='b'*32)
+            pool=ResidentParticipantPool(custody,resident_bytes=16,deadline=1e12,progress=values.append)
+            try:
+                for generation,per_viewer in ((0,2),(1,1),(2,2)):
+                    pool.admit(CollectionPlan((),{'random':RuntimePolicyBinding('random')},tmp_path,
+                        {'parent_run_id':'run-a','collection_generation':generation,'batch_id':f'batch-{generation:06}'},1e12,1e12))
+                    workers=[pool.worker(viewer,'random',17,ACTIONS,ledger=job.ledger)
+                        for viewer in (1,2) for _ in range(per_viewer)]
+                    for logical in workers:
+                        await logical.initialize()
+                        logical.mark_completed()
+                    for logical in workers: await logical.close()
+                    await pool.retire_unused()
+                    pool.retire_collection().require(job.ledger)
+                    pool.observe_diagnostic()
+                    live=[owner for owner in pool.owners if not owner.lease.released]
+                    assert len(values[-1]['pool_workers'])==len(live)==2*per_viewer
+                assert len(pool.owners)==len(custody._owners)==6
+                assert len(job.ledger.workers)==4
+                assert values[-1]['pool_starts']==6 and values[-1]['pool_live_workers']==4
+                assert all(len(value['pool_workers'])<=4 for value in values)
+            finally: await pool.close()
+            assert len(custody._owners)==6  # original audited retirement history survives
+            job.confirm_termination()
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize('command',['BEGIN','SELECT'])
+def test_foreign_inner_policy_cannot_publish_matching_outer_diagnostic(global_root,tmp_path,monkeypatch,command):
+    from gf_common.domain import ContractError, RuntimePolicyBinding
+    from gf_common.structured import event_delta
+    from gf_simulator_client.resident_pool import ResidentParticipantPool, ResidentPhysicalWorker
+    from gf_training.collection import CollectionPlan
+    from gf_training.hpo_resident import ResidentPoolCustody
+    from tests.model3_support import raw_inputs
+    original=ResidentPhysicalWorker._read_reply
+    values=[]
+    def read(owner,source):
+        reply=original(owner,source)
+        if reply.get('request',{}).get('command')==command:
+            payload=reply['payload']
+            if command=='BEGIN': payload['policy_version']='foreign-policy'
+            else: payload['selection']['policy_version']='foreign-policy'
+            reply['_diagnostic']={'schema_version':1,'loads':999,'cache_reuses':0,
+                'cpu_weight_restore_bytes':0,'cuda_weight_restore_bytes':0,'cuda_allocator':None}
+        return reply
+    monkeypatch.setattr(ResidentPhysicalWorker,'_read_reply',read)
+    async def run():
+        with admit() as job:
+            custody=ResidentPoolCustody(job,run_id='run-a',pool_id='b'*32)
+            pool=ResidentParticipantPool(custody,resident_bytes=16,deadline=1e12,progress=values.append)
+            pool.admit(CollectionPlan((),{'random':RuntimePolicyBinding('random')},tmp_path,
+                {'parent_run_id':'run-a','collection_generation':0,'batch_id':'batch-000000'},1e12,1e12))
+            try:
+                logical=pool.worker(1,'random',17,ACTIONS,ledger=job.ledger)
+                await logical.owner.bootstrap(timeout=10.)
+                values.clear()
+                if command=='BEGIN':
+                    with pytest.raises(ContractError,match='policy identity'): await logical.initialize()
+                else:
+                    await logical.initialize()
+                    assert values[-1]['pool_workers'][0]['loads']==1
+                    values.clear()
+                    _,_,frames,bank,_=raw_inputs(count=1)
+                    frame=frames[0]
+                    delta=event_delta(frame.actor,frame.episode,frame.interval_start,bank.view()._prefixes[frame.interval_start],
+                        bank.view().events(frame.interval_start,frame.boundary.end),layout=frame.layout)
+                    with pytest.raises(ContractError,match='binding mismatch'): await logical.select_frame(frame,delta)
+                assert values==[]
+            finally: await pool.close()
+            job.confirm_termination()
+    asyncio.run(run())

@@ -118,7 +118,7 @@ class CampaignStore:
         if type(name) is not str or name == 'lock' or '\x00' in name or any(part in ('', '.', '..') for part in name.split('/')):
             raise ContractError('safe relative campaign record path required')
         path = Path(name)
-        if path.is_absolute():
+        if path.is_absolute() or path.parts[0] == 'telemetry':
             raise ContractError('foreign campaign record path')
         result = self.directory / path
         _safe(result)
@@ -204,15 +204,21 @@ class CampaignStore:
     def records(self) -> tuple[str, ...]:
         self._require()
         names = []
-        for path in self.directory.rglob('*'):
-            if path == self.directory / 'lock':
-                continue
-            info = path.lstat()
-            if stat.S_ISDIR(info.st_mode):
-                continue
-            if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_nlink != 1:
-                raise ContractError('unowned campaign namespace entry')
-            names.append(path.relative_to(self.directory).as_posix())
+        # Exclude this sole mutable diagnostic subtree BEFORE traversal. All
+        # other entries retain the original immutable inventory guards.
+        pending = [self.directory]
+        while pending:
+            directory = pending.pop()
+            for path in directory.iterdir():
+                if path == self.directory / 'telemetry' or path == self.directory / 'lock':
+                    continue
+                info = path.lstat()
+                if stat.S_ISDIR(info.st_mode):
+                    pending.append(path)
+                    continue
+                if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_nlink != 1:
+                    raise ContractError('unowned campaign namespace entry')
+                names.append(path.relative_to(self.directory).as_posix())
         return tuple(sorted(names))
 
     def close(self) -> None:

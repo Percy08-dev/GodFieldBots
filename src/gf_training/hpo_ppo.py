@@ -10,6 +10,7 @@ from typing import Any
 from gf_common.card_instance import ActionConfigV3
 from gf_common.card_instance_rules import card_instance_rules
 from gf_common.domain import ContractError, Json, canonical, digest
+from gf_common.hpo_progress import ActiveRate, ProgressCallback, observe
 from gf_common.structured_layout import CORRECTED_CARD_INSTANCE_LAYOUT as LAYOUT
 from gf_models.structured_binding import ConfiguredNeuralModelV4, input_binding_game_v3
 from gf_models.structured_config import InferenceBindingV2
@@ -46,13 +47,28 @@ class HpoRunResult:
 class _HpoOperations(_GameOperations):
     registry_schema=4
 
-    def __init__(self,job: GpuJob):
+    def __init__(self,job: GpuJob, progress: ProgressCallback | None = None, diagnostics: bool | None = None):
         if type(job) is not GpuJob: raise ContractError('actual caller GpuJob required')
         super().__init__()
+        self.progress, self.diagnostics = progress, diagnostics
+        self.rate = ActiveRate()
+        self.coordinator_phase = 'startup'
         self.job=job
         self.receipt: TerminationReceipt | None=None
         self.stop_reason: str | None=None
         self.resident_runtime: Any = None
+
+    def phase(self, phase: str, **facts: Any) -> None:
+        self.coordinator_phase = phase
+        observe(self.progress, {'phase':phase, **facts})
+
+    def learner_progress(self, facts: Json) -> None:
+        # stderr and stdout are independently drained. An earlier save line may
+        # arrive after the validated ACK and cannot rewind actual sync/cleanup.
+        value = dict(facts)
+        if value.get('phase')=='save' and self.coordinator_phase not in ('startup','update'):
+            value.pop('phase')
+        observe(self.progress,value)
 
     def validate_config(self,config: Any) -> Any:
         from gf_common.hpo_resident import require_hpo_runtime_execution
@@ -142,6 +158,9 @@ class _HpoOperations(_GameOperations):
             raise
 
     def make_child(self,directory: Path,config: Any,state: Json,*,deadline: float,cleanup_deadline: float | None = None) -> Any:
+        self.phase('startup', model=config.model.model_id, decision_budget=config.hpo_spec['decision_budget'])
+        if state['updates']:
+            self.committed(state, config, None)
         op=config.hpo_spec['operating']
         ledger=self.job.ledger
         require_training_job(self.job,ledger=ledger,run_id=state['run_id'],global_cuda_bytes=op['managed_cuda_bytes'],max_workers=op['max_participant_workers'])
@@ -149,6 +168,7 @@ class _HpoOperations(_GameOperations):
             hpo_training_config(config.hpo_spec['training_recipe']),InferenceBindingV2(**state['execution']['learner']['binding']),
             digest(asdict(config.actions)),state['resume_identity'],actions=config.actions,ledger=ledger,
             cuda_visible_devices=state['execution']['learner']['cuda_visible_devices'],cleanup_deadline=deadline,
+            progress=self.learner_progress,diagnostics=(config.hpo_spec['schema_version']==3 if self.diagnostics is None else self.diagnostics),
             storage_binding=state.get('storage_binding'),phase_limits=checked_phase_limits({key:op[key] for key in ('numeric_budget_bytes','save_budget_bytes')}))
         self.online=_OnlineGameOwner(self.ownership,state,child,ledger,hpo_job=self.job)
         self.ledger=ledger
@@ -156,6 +176,7 @@ class _HpoOperations(_GameOperations):
         if config.hpo_spec['schema_version'] == 3:
             from gf_training.hpo_resident_runtime import ResidentTrainingRuntime
             self.resident_runtime = ResidentTrainingRuntime(self.job,self.ownership,config,state,deadline=deadline,cleanup_deadline=cleanup_deadline)
+            self.resident_runtime.pool.progress = self.progress
             self.online.resident_runtime = self.resident_runtime
         return child,ledger
 
@@ -252,9 +273,20 @@ class _HpoOperations(_GameOperations):
 
     def commit(self,directory: Path,state: Json,config: Any,*,generation: int,update: Json | None,
                controls: Json,acknowledgement: Json,deadline: float) -> Json:
-        return commit_hpo_generation(directory,state,generation=generation,update=update,controls=controls,
+        result = commit_hpo_generation(directory,state,generation=generation,update=update,controls=controls,
             artifact_files=acknowledgement['artifact']['files'],max_owned_bytes=self.cap(config),deadline=deadline,
             projection=self.projection if generation else None,ownership=self.ownership)
+        self.committed(state, config, None if update is None else update['metrics'])
+        return result
+
+    def committed(self, state: Json, config: Any, metrics: Json | None) -> None:
+        import time
+        facts = {'committed_used':state['used_decisions'], 'committed_updates':state['updates'],
+            'decision_budget':config.hpo_spec['decision_budget'],
+            'latest_metrics':({key:metrics.get(key) for key in ('total_loss','policy_loss','value_mse','entropy','approx_kl')}
+                if metrics is not None else None),
+            **self.rate.commit(state['used_decisions'],now=time.monotonic(),budget=config.hpo_spec['decision_budget'])}
+        observe(self.progress, facts)
 
     def retain(self,directory: Path,generation: int,config: Any,deadline: float) -> None:
         retain_hpo_generations(directory,generation,max_owned_bytes=self.cap(config),deadline=deadline,ownership=self.ownership)
@@ -283,8 +315,9 @@ class _HpoOperations(_GameOperations):
 
 
 async def train_hpo_ppo(loaded_run: Any,collector: Any,directory: Path,*,gpu_job: GpuJob,
-                         mode: str='fresh',pause_after_update: int | None=None) -> HpoRunResult:
-    operations=_HpoOperations(gpu_job)
+                         mode: str='fresh',pause_after_update: int | None=None,
+                         progress: ProgressCallback | None = None, diagnostics: bool | None = None) -> HpoRunResult:
+    operations=_HpoOperations(gpu_job,progress,diagnostics)
     if canonical(asdict(loaded_run.config))!=canonical(loaded_run.effective) or digest(loaded_run.effective)!=loaded_run.sha256:
         raise ContractError('HPO loaded runtime config is not its exact original effective projection')
     directory=directory.resolve()
@@ -297,7 +330,9 @@ async def train_hpo_ppo(loaded_run: Any,collector: Any,directory: Path,*,gpu_job
     try:
         report=await _run_ppo(loaded_run,collector,directory,mode=mode,pause_after_update=pause_after_update,_game_ops=operations)
     except BaseException as error:
+        observe(progress, {'status':'failed'})
         if operations.receipt is not None: error.__dict__['hpo_gpu_termination']=operations.receipt
         raise
     if operations.receipt is None: raise ContractError('HPO run has no actual GPU termination receipt')
+    observe(progress, {'phase':'cleanup','status':report['status']})
     return HpoRunResult(report,operations.receipt)

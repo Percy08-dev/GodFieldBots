@@ -272,7 +272,7 @@ async def _run_corrected(loaded: LoadedConfig, command: str,
                          _final_validation_context: Any = None,
                          _hpo_evaluation_job: Any = None,
                          _hpo_evaluation_cleanup: Any = None,
-                         resident_pool: Any = None) -> tuple[Path, Any] | PackedRunResult:
+                         resident_pool: Any = None, progress: Any = None) -> tuple[Path, Any] | PackedRunResult:
     config = loaded.config
     from gf_cli.hpo_config import HPOExperimentConfig
     from gf_cli.hpo_evaluation import HpoEvaluationPlan, ResidentHpoEvaluationPlan
@@ -378,6 +378,8 @@ async def _run_corrected(loaded: LoadedConfig, command: str,
         if observation is not None:
             observation._pack, observation._pack_phase = packed, 'owned'
 
+    from gf_common.hpo_progress import CollectionProgress
+    diagnostic_progress = CollectionProgress(progress)
     async def group_run(group: Any) -> GroupResult:
         nonlocal admission_closed
         async with semaphore:
@@ -430,6 +432,8 @@ async def _run_corrected(loaded: LoadedConfig, command: str,
                         artifacts=snapshot)
                 await packed.archive(memory_group, group.episodes[0].episode_id, result,
                                      validate=validate)
+                diagnostic_progress.completed(games=len(result.episodes),
+                    total_game_actions=sum(episode.decisions for episode in result.episodes))
                 return result
             except BaseException:
                 admission_closed = True
@@ -730,7 +734,7 @@ async def collect_ppo(loaded: LoadedConfig, plan: CollectionPlan,
         owner.release()
 
 
-async def collect_hpo_ppo(loaded: LoadedConfig,plan: CollectionPlan,ledger: ReservationLedger) -> FinalizedCollection:
+async def collect_hpo_ppo(loaded: LoadedConfig,plan: CollectionPlan,ledger: ReservationLedger, *, progress: Any = None) -> FinalizedCollection:
     """Known HPO-only composition of the same corrected collection owner loop."""
     from gf_cli.hpo_config import HPOExperimentConfig
     from gf_common.card_instance_rules import card_instance_rules
@@ -774,7 +778,7 @@ async def collect_hpo_ppo(loaded: LoadedConfig,plan: CollectionPlan,ledger: Rese
         if not admissions: raise ContractError('HPO collection cannot have an empty schedule')
         result=await _run_corrected(loaded,'collect',plan.bindings,tuple(plan.bindings),started=started,
             artifact_inputs=owner,runtime_evidence=evidence,
-            resource_admission=max(admissions,key=lambda row:row['peak_cuda_bytes']),collection=plan,owned_ledger=ledger,**({} if pool is None else {'resident_pool':pool}))
+            resource_admission=max(admissions,key=lambda row:row['peak_cuda_bytes']),collection=plan,owned_ledger=ledger,progress=progress,**({} if pool is None else {'resident_pool':pool}))
         if type(result) is not PackedRunResult: raise ContractError('HPO collector did not return its actual packed publication')
         return PackedFinalizedCollection(result.directory,result.report,result.locator,cast(str,result.envelope_sha256),result.storage_metrics)
     finally:
@@ -817,15 +821,17 @@ def _require_hpo_evaluation_retirement(plan: HpoEvaluationPlan,gpu_job: GpuJob,
 
 async def collect_hpo_evaluation(loaded: LoadedConfig, plan: HpoEvaluationPlan, *, gpu_job: GpuJob,
                                artifact_inputs: RetainedGameArtifacts,
-                               _cleanup_observation: _HpoEvaluationCleanupObservation) -> PackedRunResult:
+                               _cleanup_observation: _HpoEvaluationCleanupObservation, progress: Any = None) -> PackedRunResult:
     from gf_cli.hpo_evaluation import _HpoEvaluationCleanupObservation
     if type(_cleanup_observation) is not _HpoEvaluationCleanupObservation:
         raise ContractError('actual invocation-bound evaluation cleanup observation required')
     observation = _cleanup_observation
     observation._enter(plan, gpu_job, artifact_inputs)
+    from gf_common.hpo_progress import observe
+    observe(progress, {'phase':'evaluate'})
     try:
         result = await _collect_hpo_evaluation(loaded, plan, gpu_job=gpu_job,
-            artifact_inputs=artifact_inputs, _cleanup_observation=observation)
+            artifact_inputs=artifact_inputs, _cleanup_observation=observation,**({} if progress is None else {'progress':progress}))
     except BaseException as error:
         observation._core_error, observation._core_phase = error, 'failed'
         raise
@@ -841,7 +847,7 @@ def _require_hpo_evaluation_policy(binding: RuntimePolicyBinding) -> None:
 
 async def _collect_hpo_evaluation(loaded: LoadedConfig,plan: HpoEvaluationPlan,*,gpu_job: GpuJob,
                                    artifact_inputs: RetainedGameArtifacts,
-                                   _cleanup_observation: _HpoEvaluationCleanupObservation) -> PackedRunResult:
+                                   _cleanup_observation: _HpoEvaluationCleanupObservation, progress: Any = None) -> PackedRunResult:
     """Borrow the outer evaluator's exact custody owner through the one collector."""
     from gf_cli.hpo_config import HPOExperimentConfig
     from gf_cli.hpo_evaluation import HpoEvaluationPlan, ResidentHpoEvaluationPlan
@@ -888,14 +894,17 @@ async def _collect_hpo_evaluation(loaded: LoadedConfig,plan: HpoEvaluationPlan,*
         from gf_training.hpo_resident_runtime import ResidentEvaluationRuntime
         resident_runtime = ResidentEvaluationRuntime(gpu_job,plan,artifact_inputs,config)
         _cleanup_observation._resident_runtime = resident_runtime
+        resident_runtime.pool.progress = progress
     try:
         _cleanup_observation._run_phase = 'requested'
         result=await _run_corrected(loaded,'evaluate',bindings,tuple(bindings),started=plan.started_monotonic,
             artifact_inputs=artifact_inputs,runtime_evidence=evidence,resource_admission=max(admissions,key=lambda row:row['peak_cuda_bytes']),
             collection=plan,owned_ledger=ledger,_hpo_evaluation_job=gpu_job,
-            _hpo_evaluation_cleanup=_cleanup_observation,
+            _hpo_evaluation_cleanup=_cleanup_observation,progress=progress,
             **({} if resident_runtime is None else {'resident_pool':resident_runtime.pool}))
     finally:
+        from gf_common.hpo_progress import observe
+        observe(progress, {'phase':'cleanup'})
         if resident_runtime is not None:
             await resident_runtime.close()
     _require_hpo_evaluation_retirement(plan,gpu_job,ledger)

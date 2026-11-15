@@ -29,6 +29,7 @@ from gf_common.domain import (
     canonical,
     digest,
 )
+from gf_common.hpo_progress import observe
 from gf_common.schedule import serialize_schedule
 from gf_training.hpo_gpu_lease import GpuJob
 
@@ -848,7 +849,7 @@ def _confirm_failed_evaluation(error: BaseException, store: Any, name: str,
 
 
 async def evaluate_seed(store: object, loaded: LoadedHPOConfig, campaign: Json, proposal: object,
-                        training: Json, *, output: Path) -> Json:
+                        training: Json, *, output: Path, progress: Any = None) -> Json:
     """One actual primary evaluation; no interrupted request is silently rerun."""
     require_hpo_runtime_execution(loaded.config)
     from gf_cli.hpo_campaign import Proposal
@@ -922,9 +923,10 @@ async def evaluate_seed(store: object, loaded: LoadedHPOConfig, campaign: Json, 
             observation = _HpoEvaluationCleanupObservation(plan, job, owner)
             try:
                 result = await core.collect_hpo_evaluation(projected, plan, gpu_job=job, artifact_inputs=owner,
-                    _cleanup_observation=observation)
+                    _cleanup_observation=observation,**({} if progress is None else {'progress':progress}))
                 if result.report.get('healthy') is not True:
                     raise ContractError('primary evaluation did not finish/save/clean up normally')
+                observe(progress, {'phase':'source'})
                 manifest, proof = verify_saved_evaluation(result.directory, loaded, link, deadline=work,
                     extra_owned_bytes=owner._scan.peak, _cleanup_observation=observation,
                     evaluation_runtime=getattr(loaded.config,'runtime',None))
@@ -947,6 +949,7 @@ async def evaluate_seed(store: object, loaded: LoadedHPOConfig, campaign: Json, 
             released = releases[id(reference)]
             if isinstance(released, BaseException):
                 raise released
+        observe(progress, {'phase':'cleanup'})
         termination = job.confirm_termination()
         gpu_sha = store.put(folder + '/evaluation-gpu-termination.json', clone(asdict(termination)))
         receipt = {'schema_version': 1, 'kind': 'hpo-seed-evaluation',
@@ -996,7 +999,7 @@ def comparison_execution_runtime(left: Any,right: Any,*,choice: Any = _RUNTIME_O
 async def evaluate_comparison(store: object, left: LoadedHPOConfig, right: LoadedHPOConfig,
                               left_proposal: object, right_proposal: object, left_training: Json,
                               right_training: Json, *, comparison_id: str, conditions_sha256: str,
-                              output: Path, evaluation_runtime: Any = _RUNTIME_OMITTED) -> ComparisonPanel:
+                              output: Path, evaluation_runtime: Any = _RUNTIME_OMITTED, progress: Any = None) -> ComparisonPanel:
     """One complete declared seed-pair matchup through the actual shared collector."""
     evaluation_runtime = comparison_execution_runtime(left.config,right.config,choice=evaluation_runtime)
     require_hpo_runtime_execution(left.config)
@@ -1083,9 +1086,10 @@ async def evaluate_comparison(store: object, left: LoadedHPOConfig, right: Loade
             observation = _HpoEvaluationCleanupObservation(plan, job, owner)
             try:
                 result = await core.collect_hpo_evaluation(projected, plan, gpu_job=job, artifact_inputs=owner,
-                    _cleanup_observation=observation)
+                    _cleanup_observation=observation,**({} if progress is None else {'progress':progress}))
                 if result.report.get('healthy') is not True:
                     raise ContractError('comparison did not finish/save/clean up normally')
+                observe(progress, {'phase':'source'})
                 manifest, proof = verify_saved_evaluation(result.directory, left, link, deadline=work, extra_owned_bytes=owner._scan.peak, _cleanup_observation=observation,evaluation_runtime=evaluation_runtime)
                 owner.finalize(deadline=work)
             except BaseException as error:
@@ -1104,6 +1108,7 @@ async def evaluate_comparison(store: object, left: LoadedHPOConfig, right: Loade
         else:
             _release_evaluation_pins(pins, releases, max_owned_bytes=left.config.operating.source_budget_bytes, deadline=work)
         released = [value for value in releases.values() if not isinstance(value, BaseException)]
+        observe(progress, {'phase':'cleanup'})
         termination = job.confirm_termination()
         gpu_sha = store.put(folder + '/gpu-termination.json', clone(asdict(termination)))
         projection = _projection(manifest, left_training, left_training['source_receipt_sha256'], conditions_sha256)

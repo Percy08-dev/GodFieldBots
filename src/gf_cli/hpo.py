@@ -42,6 +42,7 @@ from gf_cli.hpo_storage import CampaignStore, check_storage
 from gf_common.card_instance import ActionConfigV3
 from gf_common.card_instance_collection import HPO_EVALUATION_STREAM_VERSION
 from gf_common.domain import ContractError, Json, canonical, digest
+from gf_common.hpo_progress import ProgressCallback
 from gf_common.structured_layout import CORRECTED_CARD_INSTANCE_LAYOUT as LAYOUT
 from gf_models.structured_binding import ConfiguredNeuralModelV3
 
@@ -142,7 +143,8 @@ def _storage_boundary(store: CampaignStore, loaded: LoadedHPOConfig, *, operatio
     store.put('storage-observations/' + operation_id + '.json', facts)
 
 
-async def _train_seed(store: CampaignStore, loaded: LoadedHPOConfig, campaign: Json, proposal: Proposal, seed: int) -> None:
+async def _train_seed(store: CampaignStore, loaded: LoadedHPOConfig, campaign: Json, proposal: Proposal, seed: int,
+                      *, progress: ProgressCallback | None = None) -> None:
     from gf_training.hpo_gpu_lease import JobContext, admit_gpu_job
     composition = owned_runtime_module('gf_cli.hpo_config', ('materialize_hpo_run',))
     core = owned_runtime_module('gf_cli.card_instance', ('collect_hpo_ppo',))
@@ -166,8 +168,8 @@ async def _train_seed(store: CampaignStore, loaded: LoadedHPOConfig, campaign: J
         async def collector(plan: Any, ledger: Any) -> Any:
             if ledger is not job.ledger:
                 raise ContractError('HPO collector requires the exact caller job ledger')
-            return await core.collect_hpo_ppo(materialized, plan, ledger)
-        result = await runtime.train_hpo_ppo(materialized, collector, directory, gpu_job=job, mode='fresh')
+            return await core.collect_hpo_ppo(materialized, plan, ledger, **({} if progress is None else {'progress':progress}))
+        result = await runtime.train_hpo_ppo(materialized, collector, directory, gpu_job=job, mode='fresh', **({} if progress is None else {'progress':progress}))
         if type(result) is not runtime.HpoRunResult or result.report.get('status') != 'complete' or result.report.get('used_decisions') != loaded.config.decision_budget:
             raise ContractError('training stopped incomplete; no objective and no budget/deadline extension')
         persist_training_receipt(store, loaded, campaign, proposal, training_seed=seed, run_id=run_id,
@@ -175,7 +177,7 @@ async def _train_seed(store: CampaignStore, loaded: LoadedHPOConfig, campaign: J
 
 
 async def run_campaign(loaded: LoadedHPOConfig, directory: Path, *, mode: str,
-                        seed_paths: tuple[Path, ...] = ()) -> Json:
+                        seed_paths: tuple[Path, ...] = (), progress: str = 'auto') -> Json:
     """Concrete sequential operations; session time never interrupts an operation."""
     require_hpo_runtime_execution(loaded.config)
     if mode not in ('fresh', 'resume') or mode == 'resume' and seed_paths:
@@ -192,131 +194,150 @@ async def run_campaign(loaded: LoadedHPOConfig, directory: Path, *, mode: str,
     if mode == 'fresh':
         conditions['initial_settings'] = sources
     with CampaignStore(directory, mode=mode, max_owned_bytes=loaded.config.operating.parent_budget_bytes) as store:
-        if mode == 'fresh':
-            if 'producer_identity' in conditions:
-                # An explicitly chosen non-ignored output directory can make
-                # Git dirty without changing any source module bytes. Capture
-                # the actual post-namespace observation before binding study.
-                from gf_training.ppo_run import source_identity
-                conditions['producer_identity'] = source_identity(time.monotonic() + loaded.config.run_wall_seconds)
-            campaign = initialize_campaign(store, loaded, conditions)
-            if any(row['origin']['study_identity'] == campaign['study_identity'] for row in sources):
-                raise ContractError('settings imports require a different fresh study')
-        else:
-            campaign, _ = store.get('campaign.json')
-            _checked(campaign, 'hpo-campaign', _CAMPAIGN_KEYS)
-            preserved_imports = campaign['conditions'].get('initial_settings', [])
-            conditions['initial_settings'] = preserved_imports
-            if canonical(conditions) != canonical(campaign['conditions']):
-                raise ContractError('actual source/Simulator/inference conditions changed; use a new study')
-            from gf_models.hpo_config import model_config_v4
-            from gf_training.hpo_config import effective_settings, hpo_training_config
-            imports = tuple(effective_settings(model_config_v4(row['settings']['model'], layout=LAYOUT),
-                hpo_training_config(row['settings']['training']), {}, layout=LAYOUT) for row in preserved_imports)
-        study = CampaignStudy(store, loaded, campaign)
-        control = canonical_control(loaded.config)
-        in_space = encode_settings(loaded.config, control) is not None
-        requests: list[tuple[int | None, str, Any]] = []
-        if not in_space:
-            requests.append((None, 'outside-control', control))
-        for slot in range(loaded.config.trial_count):
-            if in_space and slot == 0:
-                requests.append((slot, 'control', control))
+        from gf_cli.hpo_progress import ProgressOwner
+        owner = ProgressOwner(store,mode=progress)
+        def run_progress(facts: Json) -> None:
+            value = dict(facts)
+            if 'status' in value:
+                value['run_status'] = value.pop('status')
+            owner.emit(value)
+        async with owner.live():
+            if mode == 'fresh':
+                if 'producer_identity' in conditions:
+                    # An explicitly chosen non-ignored output directory can make
+                    # Git dirty without changing any source module bytes. Capture
+                    # the actual post-namespace observation before binding study.
+                    from gf_training.ppo_run import source_identity
+                    conditions['producer_identity'] = source_identity(time.monotonic() + loaded.config.run_wall_seconds)
+                campaign = initialize_campaign(store, loaded, conditions)
+                if any(row['origin']['study_identity'] == campaign['study_identity'] for row in sources):
+                    raise ContractError('settings imports require a different fresh study')
             else:
-                imported_index = slot - (1 if in_space else 0)
-                requests.append((slot, 'seed', imports[imported_index]) if imported_index < len(imports) else (slot, 'sample', None))
-        if len(imports) > loaded.config.trial_count - (1 if in_space else 0):
-            raise ContractError('stage imports exceed declared attempted in-space slots')
-        stop = 'complete'
-        completed = failed = 0
-        boundary: Json = {'phase': 'before-proposal'}
-        try:
-            for number, (attempt_slot, kind, requested) in enumerate(requests):
-                if time.monotonic() - started >= loaded.config.session_seconds:
-                    stop = 'session-boundary'
-                    break
-                proposal = study.propose(number, slot=attempt_slot, kind=kind, requested=requested)
-                if proposal is None:
-                    failed += 1
-                    continue
-                root = f'proposals/{number:06}'
-                if store.exists(root + '/failure.json'):
-                    failure, _ = store.get(root + '/failure.json')
-                    study.fail(proposal, failure['reason'])
-                    failed += 1
-                    continue
-                if store.exists(root + '/tell.receipt.json'):
-                    tell, _ = store.get(root + '/tell.receipt.json')
-                    if tell.get('state') == 'COMPLETE':
+                campaign, _ = store.get('campaign.json')
+                _checked(campaign, 'hpo-campaign', _CAMPAIGN_KEYS)
+                preserved_imports = campaign['conditions'].get('initial_settings', [])
+                conditions['initial_settings'] = preserved_imports
+                if canonical(conditions) != canonical(campaign['conditions']):
+                    raise ContractError('actual source/Simulator/inference conditions changed; use a new study')
+                from gf_models.hpo_config import model_config_v4
+                from gf_training.hpo_config import effective_settings, hpo_training_config
+                imports = tuple(effective_settings(model_config_v4(row['settings']['model'], layout=LAYOUT),
+                    hpo_training_config(row['settings']['training']), {}, layout=LAYOUT) for row in preserved_imports)
+            study = CampaignStudy(store, loaded, campaign)
+            control = canonical_control(loaded.config)
+            in_space = encode_settings(loaded.config, control) is not None
+            requests: list[tuple[int | None, str, Any]] = []
+            if not in_space:
+                requests.append((None, 'outside-control', control))
+            for slot in range(loaded.config.trial_count):
+                if in_space and slot == 0:
+                    requests.append((slot, 'control', control))
+                else:
+                    imported_index = slot - (1 if in_space else 0)
+                    requests.append((slot, 'seed', imports[imported_index]) if imported_index < len(imports) else (slot, 'sample', None))
+            if len(imports) > loaded.config.trial_count - (1 if in_space else 0):
+                raise ContractError('stage imports exceed declared attempted in-space slots')
+            stop = 'complete'
+            completed = failed = 0
+            boundary: Json = {'phase': 'before-proposal'}
+            try:
+                for number, (attempt_slot, kind, requested) in enumerate(requests):
+                    if time.monotonic() - started >= loaded.config.session_seconds:
+                        stop = 'session-boundary'
+                        break
+                    owner.emit({'proposal_no':number,'proposal_kind':kind,'attempted_trial_count':sum(row[0] is not None for row in requests[:number+1]),
+                        'outside_control_count':sum(row[0] is None for row in requests[:number+1]),'declared_trial_count':loaded.config.trial_count})
+                    proposal = study.propose(number, slot=attempt_slot, kind=kind, requested=requested)
+                    if proposal is None:
+                        failed += 1
+                        continue
+                    root = f'proposals/{number:06}'
+                    if store.exists(root + '/failure.json'):
+                        failure, _ = store.get(root + '/failure.json')
+                        study.fail(proposal, failure['reason'])
+                        failed += 1
+                        continue
+                    if store.exists(root + '/tell.receipt.json'):
+                        tell, _ = store.get(root + '/tell.receipt.json')
+                        if tell.get('state') == 'COMPLETE':
+                            study.complete(proposal, deadline=time.monotonic() + loaded.config.run_wall_seconds)
+                            completed += 1
+                        elif tell.get('state') == 'FAIL':
+                            study.fail(proposal, tell['reason'])
+                            failed += 1
+                        else:
+                            raise ContractError('unknown terminal proposal receipt')
+                        continue
+                    try:
+                        validated_seeds: set[int] = set()
+                        while True:
+                            for reusable_seed in loaded.config.learning_seeds:
+                                if (reusable_seed not in validated_seeds
+                                        and store.exists(root + f'/seeds/{reusable_seed}/evaluation.json')):
+                                    verify_seed_evaluation(store, loaded, campaign, proposal, reusable_seed,
+                                        deadline=time.monotonic() + loaded.config.run_wall_seconds)
+                                    validated_seeds.add(reusable_seed)
+                            operation = next_seed_operation(store, proposal, loaded.config.learning_seeds)
+                            if operation is None:
+                                break
+                            phase, seed = operation
+                            boundary = {'proposal_no': number, 'phase': phase, 'training_seed': seed}
+                            if phase == 'incomplete':
+                                raise ContractError('interrupted operation has no closed receipt; original failure remains ineligible')
+                            _storage_boundary(store, loaded, operation_id=str(uuid.uuid4()))
+                            owner.emit({'phase':'startup' if phase=='train' else 'evaluate','model':proposal.settings.model.model_id,
+                                'seed':seed,'status':'running',
+                                **({'committed_used':None,'committed_updates':None,'latest_metrics':None} if phase=='train' else {}),
+                                'decision_budget':loaded.config.decision_budget,'eta_seconds':None,'decisions_per_second':None,
+                                'transient_games':None,'transient_learner_decisions':None,'transient_total_game_actions':None,'cuda_allocator':None})
+                            if phase == 'train':
+                                await _train_seed(store, loaded, campaign, proposal, seed, progress=run_progress)
+                            else:
+                                training = verify_training_receipt(store, loaded, campaign, proposal, seed,
+                                    deadline=time.monotonic() + loaded.config.run_wall_seconds)
+                                owner.emit({'committed_used':training.get('used_decisions'),'committed_updates':training.get('generation')})
+                                await evaluate_seed(store, loaded, campaign, proposal, training,
+                                    output=directory / 'evaluations' / str(uuid.uuid4()),progress=owner.emit)
+                            # Only receipt-complete whole operations are session boundaries.
+                            _storage_boundary(store, loaded, operation_id=str(uuid.uuid4()))
+                            if time.monotonic() - started >= loaded.config.session_seconds:
+                                stop = 'session-boundary'
+                                break
+                        if stop == 'session-boundary':
+                            break
+                        # Revalidate every reusable closed receipt, even across sessions.
+                        for seed in loaded.config.learning_seeds:
+                            verify_seed_evaluation(store, loaded, campaign, proposal, seed,
+                                deadline=time.monotonic() + loaded.config.run_wall_seconds)
+                        aggregate = aggregate_trial_evaluation(store, loaded, campaign, proposal,
+                            deadline=time.monotonic() + loaded.config.run_wall_seconds)
+                        store.put(root + '/evaluation.json', aggregate)
                         study.complete(proposal, deadline=time.monotonic() + loaded.config.run_wall_seconds)
                         completed += 1
-                    elif tell.get('state') == 'FAIL':
-                        study.fail(proposal, tell['reason'])
+                    except Exception as error:  # noqa: BLE001 - all operation failures produce no objective
+                        reason = type(error).__name__ + ':' + str(error)
+                        store.put(root + '/failure.json', {'schema_version': 1, 'kind': 'hpo-proposal-failure',
+                            'proposal_sha256': proposal.sha256, 'reason': reason, 'boundary': boundary})
+                        study.fail(proposal, reason)
                         failed += 1
-                    else:
-                        raise ContractError('unknown terminal proposal receipt')
-                    continue
-                try:
-                    validated_seeds: set[int] = set()
-                    while True:
-                        for reusable_seed in loaded.config.learning_seeds:
-                            if (reusable_seed not in validated_seeds
-                                    and store.exists(root + f'/seeds/{reusable_seed}/evaluation.json')):
-                                verify_seed_evaluation(store, loaded, campaign, proposal, reusable_seed,
-                                    deadline=time.monotonic() + loaded.config.run_wall_seconds)
-                                validated_seeds.add(reusable_seed)
-                        operation = next_seed_operation(store, proposal, loaded.config.learning_seeds)
-                        if operation is None:
+                        owner.emit({'run_status':'failed'})
+                        from gf_training.hpo_gpu_lease import AdmissionBusy, RecoveryRequired
+                        if isinstance(error, (AdmissionBusy, RecoveryRequired)):
+                            stop = 'resource-blocked'
                             break
-                        phase, seed = operation
-                        boundary = {'proposal_no': number, 'phase': phase, 'training_seed': seed}
-                        if phase == 'incomplete':
-                            raise ContractError('interrupted operation has no closed receipt; original failure remains ineligible')
-                        _storage_boundary(store, loaded, operation_id=str(uuid.uuid4()))
-                        if phase == 'train':
-                            await _train_seed(store, loaded, campaign, proposal, seed)
-                        else:
-                            training = verify_training_receipt(store, loaded, campaign, proposal, seed,
-                                deadline=time.monotonic() + loaded.config.run_wall_seconds)
-                            await evaluate_seed(store, loaded, campaign, proposal, training,
-                                output=directory / 'evaluations' / str(uuid.uuid4()))
-                        # Only receipt-complete whole operations are session boundaries.
-                        _storage_boundary(store, loaded, operation_id=str(uuid.uuid4()))
-                        if time.monotonic() - started >= loaded.config.session_seconds:
-                            stop = 'session-boundary'
-                            break
-                    if stop == 'session-boundary':
-                        break
-                    # Revalidate every reusable closed receipt, even across sessions.
-                    for seed in loaded.config.learning_seeds:
-                        verify_seed_evaluation(store, loaded, campaign, proposal, seed,
-                            deadline=time.monotonic() + loaded.config.run_wall_seconds)
-                    aggregate = aggregate_trial_evaluation(store, loaded, campaign, proposal,
-                        deadline=time.monotonic() + loaded.config.run_wall_seconds)
-                    store.put(root + '/evaluation.json', aggregate)
-                    study.complete(proposal, deadline=time.monotonic() + loaded.config.run_wall_seconds)
-                    completed += 1
-                except Exception as error:  # noqa: BLE001 - all operation failures produce no objective
-                    reason = type(error).__name__ + ':' + str(error)
-                    store.put(root + '/failure.json', {'schema_version': 1, 'kind': 'hpo-proposal-failure',
-                        'proposal_sha256': proposal.sha256, 'reason': reason, 'boundary': boundary})
-                    study.fail(proposal, reason)
-                    failed += 1
-                    from gf_training.hpo_gpu_lease import AdmissionBusy, RecoveryRequired
-                    if isinstance(error, (AdmissionBusy, RecoveryRequired)):
-                        stop = 'resource-blocked'
-                        break
-        except BaseException:
-            stop = 'error'
-            raise
-        finally:
-            store.put('sessions/' + str(uuid.uuid4()) + '.json', {'schema_version': 1, 'kind': 'hpo-session',
-                'started_unix': started_unix, 'elapsed_seconds': time.monotonic() - started,
-                'session_budget_seconds': loaded.config.session_seconds, 'stop_reason': stop, 'boundary': boundary})
-        return {'schema_version': 1, 'kind': 'hpo-campaign-result', 'campaign_dir': str(directory),
-            'campaign_id': campaign['campaign_id'], 'study_identity': campaign['study_identity'],
-            'status': 'paused' if stop == 'session-boundary' else 'blocked' if stop == 'resource-blocked' else 'complete',
-            'completed_in_session': completed, 'failed_in_session': failed, 'qualification': 'exploratory-only'}
+            except BaseException:
+                stop = 'error'
+                owner.emit({'status':'failed'})
+                raise
+            finally:
+                store.put('sessions/' + str(uuid.uuid4()) + '.json', {'schema_version': 1, 'kind': 'hpo-session',
+                    'started_unix': started_unix, 'elapsed_seconds': time.monotonic() - started,
+                    'session_budget_seconds': loaded.config.session_seconds, 'stop_reason': stop, 'boundary': boundary})
+            owner.emit({'status':'session-boundary' if stop=='session-boundary' else 'resource-blocked' if stop=='resource-blocked' else 'failed' if failed else 'complete', 'phase':'cleanup'})
+            return {'schema_version': 1, 'kind': 'hpo-campaign-result', 'campaign_dir': str(directory),
+                'campaign_id': campaign['campaign_id'], 'study_identity': campaign['study_identity'],
+                'status': 'paused' if stop == 'session-boundary' else 'blocked' if stop == 'resource-blocked' else 'complete',
+                'completed_in_session': completed, 'failed_in_session': failed, 'qualification': 'exploratory-only'}
 
 
 def inspect(directory: Path, *, max_owned_bytes: int) -> Json:
@@ -376,7 +397,7 @@ def _closed_trial(path: Path, stack: ExitStack, stores: dict[Path, CampaignStore
     return store, loaded, campaign, proposal
 
 
-async def compare_trials(common: LoadedHPOConfig, left_path: Path, right_path: Path, output: Path) -> Json:
+async def compare_trials(common: LoadedHPOConfig, left_path: Path, right_path: Path, output: Path, *, progress: str = 'auto') -> Json:
     require_hpo_runtime_execution(common.config)
     from gf_cli.hpo_evaluation import evaluate_comparison
     from gf_evaluation.hpo_compare import comparison_table
@@ -404,36 +425,46 @@ async def compare_trials(common: LoadedHPOConfig, left_path: Path, right_path: P
                     raise ContractError('comparison parent public/runtime/inference conditions are incompatible')
         comparison_id = str(uuid.uuid4())
         with CampaignStore(output, mode='fresh', max_owned_bytes=common.config.operating.parent_budget_bytes) as store:
-            header = {'schema_version': 1, 'kind': 'hpo-comparison-request', 'comparison_id': comparison_id,
-                'config_sha256': common.sha256, 'conditions_sha256': condition_sha, 'conditions': conditions,
-                'left_campaign_id': left_campaign['campaign_id'], 'right_campaign_id': right_campaign['campaign_id'],
-                'left_proposal_sha256': left_proposal.sha256, 'right_proposal_sha256': right_proposal.sha256,
-                'left_profile': left.effective, 'right_profile': right.effective,
-                'left_training_seeds': list(left.config.learning_seeds), 'right_training_seeds': list(right.config.learning_seeds)}
-            store.put('comparison.intent.json', header)
-            panels = []
-            matchup_receipts = {}
-            for left_seed in left.config.learning_seeds:
-                left_training = verify_training_receipt(left_store, left, left_campaign, left_proposal, left_seed,
-                    deadline=time.monotonic() + common.config.run_wall_seconds)
-                for right_seed in right.config.learning_seeds:
-                    right_training = verify_training_receipt(right_store, right, right_campaign, right_proposal, right_seed,
-                        deadline=time.monotonic() + common.config.run_wall_seconds)
-                    _storage_boundary(store, common, operation_id=str(uuid.uuid4()))
-                    panel = await evaluate_comparison(store, left, right, left_proposal, right_proposal,
-                        left_training, right_training, comparison_id=comparison_id, conditions_sha256=condition_sha,
-                        output=output / 'evaluations' / str(uuid.uuid4()),
-                        evaluation_runtime=getattr(common.config,'runtime',None))
-                    panels.append(panel)
+            from gf_cli.hpo_progress import ProgressOwner
+            owner = ProgressOwner(store,mode=progress)
+            async with owner.live():
+                try:
+                    header = {'schema_version': 1, 'kind': 'hpo-comparison-request', 'comparison_id': comparison_id,
+                        'config_sha256': common.sha256, 'conditions_sha256': condition_sha, 'conditions': conditions,
+                        'left_campaign_id': left_campaign['campaign_id'], 'right_campaign_id': right_campaign['campaign_id'],
+                        'left_proposal_sha256': left_proposal.sha256, 'right_proposal_sha256': right_proposal.sha256,
+                        'left_profile': left.effective, 'right_profile': right.effective,
+                        'left_training_seeds': list(left.config.learning_seeds), 'right_training_seeds': list(right.config.learning_seeds)}
+                    store.put('comparison.intent.json', header)
+                    panels = []
+                    matchup_receipts = {}
+                    for left_seed in left.config.learning_seeds:
+                        left_training = verify_training_receipt(left_store, left, left_campaign, left_proposal, left_seed,
+                            deadline=time.monotonic() + common.config.run_wall_seconds)
+                        for right_seed in right.config.learning_seeds:
+                            right_training = verify_training_receipt(right_store, right, right_campaign, right_proposal, right_seed,
+                                deadline=time.monotonic() + common.config.run_wall_seconds)
+                            owner.emit({'phase':'evaluate','left_seed':left_seed,'right_seed':right_seed,
+                                'left_model':left_proposal.settings.model.model_id,'right_model':right_proposal.settings.model.model_id})
+                            _storage_boundary(store, common, operation_id=str(uuid.uuid4()))
+                            panel = await evaluate_comparison(store, left, right, left_proposal, right_proposal,
+                                left_training, right_training, comparison_id=comparison_id, conditions_sha256=condition_sha,
+                                output=output / 'evaluations' / str(uuid.uuid4()),
+                                evaluation_runtime=getattr(common.config,'runtime',None),progress=owner.emit)
+                            panels.append(panel)
+                            if hasattr(common.config,'runtime'):
+                                matchup_receipts[f'{left_seed}-{right_seed}'] = store.get(f'matchups/{left_seed}-{right_seed}/receipt.json')[1]
+                    table = comparison_table(left.config.learning_seeds, right.config.learning_seeds,
+                        common.config.evaluation_game_seeds, common.config.decision_budget, condition_sha, tuple(panels))
                     if hasattr(common.config,'runtime'):
-                        matchup_receipts[f'{left_seed}-{right_seed}'] = store.get(f'matchups/{left_seed}-{right_seed}/receipt.json')[1]
-            table = comparison_table(left.config.learning_seeds, right.config.learning_seeds,
-                common.config.evaluation_game_seeds, common.config.decision_budget, condition_sha, tuple(panels))
-            if hasattr(common.config,'runtime'):
-                table.update(schema_version=2,matchup_receipts=matchup_receipts)
-            table.update(left_profile=left.effective, right_profile=right.effective, request_sha256=store.get('comparison.intent.json')[1])
-            store.put('comparison.json', table)
-            return table
+                        table.update(schema_version=2,matchup_receipts=matchup_receipts)
+                    table.update(left_profile=left.effective, right_profile=right.effective, request_sha256=store.get('comparison.intent.json')[1])
+                    store.put('comparison.json', table)
+                    owner.emit({'phase':'cleanup','status':'complete'})
+                    return table
+                except BaseException:
+                    owner.emit({'status':'failed'})
+                    raise
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -462,6 +493,13 @@ def main(argv: list[str] | None = None) -> int:
     resolution.add_argument('--release-unconfirmed', action='store_true',
         help='authorize new admission without confirming termination of the previous job')
     recovery.add_argument('--reason', help='mandatory reason for --release-unconfirmed; rejected for restart')
+    for command in (run, comparison):
+        command.add_argument('--progress', choices=('auto','plain','off'), default='auto')
+    watcher = commands.add_parser('watch', description='Read-only diagnostic observer; no execution locks')
+    watcher.add_argument('--path',type=Path,required=True)
+    watcher.add_argument('--interval',type=float,default=1.)
+    watcher.add_argument('--once',action='store_true')
+    watcher.add_argument('--json',action='store_true')
     args = parser.parse_args(argv)
     if args.command == 'recover':
         if args.release_unconfirmed and args.reason is None:
@@ -469,6 +507,12 @@ def main(argv: list[str] | None = None) -> int:
         if args.confirm_environment_restarted and args.reason is not None:
             recovery.error('--reason is only valid with --release-unconfirmed')
     try:
+        if args.command == 'watch':
+            from gf_cli.hpo_progress import watch
+            try:
+                return asyncio.run(watch(args.path,interval=args.interval,once=args.once,as_json=args.json))
+            except KeyboardInterrupt:
+                return 0
         if args.command == 'inspect':
             result = inspect(args.campaign_dir.resolve(), max_owned_bytes=HPOOperatingConfig().parent_budget_bytes)
         elif args.command == 'recover':
@@ -490,9 +534,9 @@ def main(argv: list[str] | None = None) -> int:
                 result = validate(loaded)
             elif args.command == 'run':
                 result = asyncio.run(run_campaign(loaded, args.campaign_dir.resolve(), mode=args.mode,
-                    seed_paths=tuple(path.resolve() for path in args.seed_settings)))
+                    seed_paths=tuple(path.resolve() for path in args.seed_settings),progress=args.progress))
             else:
-                result = asyncio.run(compare_trials(loaded, args.left.resolve(), args.right.resolve(), args.output.resolve()))
+                result = asyncio.run(compare_trials(loaded, args.left.resolve(), args.right.resolve(), args.output.resolve(),progress=args.progress))
         print(canonical(result))
         return 2 if result.get('status') == 'blocked' else 0
     except (OSError, ValueError, RuntimeError, TimeoutError) as error:

@@ -11,6 +11,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Any
 
 from gf_common.domain import ContractError, Json, RuntimePolicyBinding, integer
+from gf_common.hpo_progress import ProgressCallback, observe, pool_diagnostic
 from gf_simulator_client.card_instance_worker import CardInstanceParticipantWorker
 from gf_simulator_client.framing import write_frame
 from gf_simulator_client.structured_worker import StructuredParticipantWorker
@@ -134,6 +135,8 @@ class ResidentPhysicalWorker(StructuredParticipantWorker):
         self.io_thread = self._close_task = None
         self.loan: ResidentParticipantWorker | None = None
         self.ready = False
+        self._pending_diagnostic: Json | None = None
+        self.diagnostic: Json | None = None
         self.protected_identity: str | None = None
         self.used_collection = None
         self._operations: dict[asyncio.Task[Any], Future[Any]] = {}
@@ -169,6 +172,7 @@ class ResidentPhysicalWorker(StructuredParticipantWorker):
             self._retire_setup(setup)
             if type(response) is not dict or 'worker_error' in response:
                 raise ContractError(f'resident worker error: {response}')
+            self._pending_diagnostic = pool_diagnostic(response.pop('_diagnostic',None))
             return response
         except BaseException as error:
             setup.abort()  # Always before waiting on original Future/executor shutdown.
@@ -186,6 +190,13 @@ class ResidentPhysicalWorker(StructuredParticipantWorker):
             except BaseException as cleanup:  # noqa: BLE001 - preserve original after owned cleanup
                 error.add_note('resident original physical cleanup: '+str(cleanup))
             raise
+
+    def observe_diagnostic(self) -> None:
+        # Caller has just validated the original reply against current custody.
+        if self._pending_diagnostic is not None:
+            self.diagnostic = self._pending_diagnostic
+            self._pending_diagnostic = None
+            self.pool.observe_diagnostic()
 
     def _retire_setup(self,setup: _ExchangeSetup) -> None:
         self.pool.custody.retire_setup(self.lease,setup)
@@ -213,6 +224,7 @@ class ResidentPhysicalWorker(StructuredParticipantWorker):
         response = await self.exchange({'request': request}, timeout=timeout)
         self.pool.custody.observe_bootstrap_ready(self.lease, response)
         self.ready = True
+        self.observe_diagnostic()
 
     async def control(self, command: str, *, checkpoint: str, timeout: float,
                       cache_identity: str | None = None, generation: int | None = None,
@@ -221,6 +233,7 @@ class ResidentPhysicalWorker(StructuredParticipantWorker):
             cache_identity=cache_identity, generation=generation)
         response = await self.exchange({'request': request, **({} if payload is None else {'payload': payload})}, timeout=timeout)
         self.pool.custody.acknowledge(self.lease, response)
+        self.observe_diagnostic()
 
     async def _close_owned(self, timeout: float, started: float) -> None:
         if (self.lease.released and getattr(self.lease,'_proof',None) is not None and not self._operations and not self._setups
@@ -235,6 +248,7 @@ class ResidentPhysicalWorker(StructuredParticipantWorker):
                 request = self.pool.custody.close_request(self.lease)
                 response = await self.exchange({'request':request},timeout=max(0.,started+timeout-time.monotonic()),closing=True)
                 self.pool.custody.acknowledge_close(self.lease,response)
+                self.observe_diagnostic()
                 while self.process.poll() is None and time.monotonic()<started+timeout:
                     await asyncio.sleep(.001)
             except BaseException as error:  # noqa: BLE001 - reap remains authorized after bad CLOSE
@@ -250,9 +264,11 @@ class ResidentPhysicalWorker(StructuredParticipantWorker):
 
 class ResidentParticipantPool:
     def __init__(self, custody: Any, *, resident_bytes: int, deadline: float,
-                 acquire_cache: Any = None, release_cache: Any = None) -> None:
+                 acquire_cache: Any = None, release_cache: Any = None, progress: ProgressCallback | None = None) -> None:
         integer(resident_bytes, 0, custody.ledger.global_cuda_bytes)
         self.custody, self.ledger = custody, custody.ledger
+        self.progress = progress
+        self.starts = self.reuses = 0
         self.resident_bytes, self.deadline = resident_bytes, deadline
         self.execution_deadline = deadline
         self.acquire_cache, self.release_cache = acquire_cache, release_cache
@@ -261,6 +277,19 @@ class ResidentParticipantPool:
         self.authority: Any = None
         self.closed = False
         self._close_task: asyncio.Task[None] | None = None
+
+    def observe_diagnostic(self) -> None:
+        # Original custody retains every historical owner for actual retirement;
+        # this optional current-pool view never traverses that history as rows.
+        live = [owner for owner in self.owners if not owner.lease.released
+            and owner.process is not None and owner.process.poll() is None]
+        observe(self.progress, {'pool_starts':self.starts,'pool_reuses':self.reuses,
+            'pool_live_workers':len(live),
+            'pool_counter_scope':'invocation cumulative successful starts/reuses; rows are current live processes',
+            'managed_cuda_reservation_bytes':self.ledger.cuda_bytes,
+            'pool_workers':[{'owner_key':owner.lease.key,'pid':owner.process.pid,'viewer':owner.viewer,
+                **(owner.diagnostic or {})} for owner in live if getattr(owner,'diagnostic',None) is not None],
+            'pool_memory_scope':'last existing reset/sync sample; process lifetime maxima; not a simultaneous device peak'})
 
     def admit(self, plan: Any) -> None:
         self.admission = self.custody.admit_collection(plan, self.ledger)
@@ -289,6 +318,7 @@ class ResidentParticipantPool:
                 owner = ResidentPhysicalWorker.__new__(ResidentPhysicalWorker)
                 self.owners.append(owner)
                 ResidentPhysicalWorker.__init__(owner,self,viewer)
+                self.starts += 1
             except BaseException as error:
                 partial = getattr(error, '_structured_startup_owner', None)
                 if partial is not None and all(partial is not existing for existing in self.owners):
@@ -301,6 +331,8 @@ class ResidentParticipantPool:
         if owner.loan is not None or owner._operations or owner._setups or owner.process.poll() is not None:
             raise ContractError('resident physical owner is not positively retired')
         owner.loan = logical
+        if available:
+            self.reuses += 1
         return owner
 
     async def retire_unused(self) -> None:
@@ -397,6 +429,19 @@ class ResidentParticipantWorker(CardInstanceParticipantWorker):
         except BaseException as error:  # noqa: BLE001 - actual original lease owns failed cleanup
             self.pool.custody.fail()
             await self._abort(error)
+
+    async def _initialize_owned(self) -> None:
+        await super()._initialize_owned()
+        # The complete existing protocol3 ready/model/binding/timing validation
+        # has returned. A matching outer BEGIN alone cannot publish load facts.
+        self.owner.observe_diagnostic()
+
+    async def _select_frame_owned(self, frame: Any, delta: Any) -> Any:
+        result = await super()._select_frame_owned(frame,delta)
+        # Original candidate/selection/policy/timing validation and reservation
+        # reply retirement precede diagnostic publication as well.
+        self.owner.observe_diagnostic()
+        return result
 
     def mark_completed(self) -> None:
         self._require_loan()

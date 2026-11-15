@@ -6,6 +6,7 @@ from collections.abc import Callable
 from typing import Any
 
 from gf_common.domain import ContractError, integer
+from gf_common.hpo_progress import allocator_facts
 from gf_common.hpo_resident import CACHE_ENTRIES, CACHE_WEIGHT_BYTES, _sha
 
 
@@ -42,6 +43,8 @@ class ResidentPolicyCache:
         self.active: str | None = None
         self.selected: str | None = None
         self.loads = self.reuses = 0
+        self.cpu_weight_restore_bytes = self.cuda_weight_restore_bytes = 0
+        self.cuda_allocator: Any = None
 
     @property
     def identities(self) -> tuple[str, ...]:
@@ -72,6 +75,12 @@ class ResidentPolicyCache:
             policy = load()
             self._entries[identity] = weight_bytes, policy
             self.loads += 1
+            # Completed original restore_weights copies the validated float32
+            # manifest arrays to this device. Count payload bytes, not bus overhead.
+            if getattr(getattr(policy,'binding',None),'device','cpu')=='cpu':
+                self.cpu_weight_restore_bytes += weight_bytes
+            else:
+                self.cuda_weight_restore_bytes += weight_bytes
         temporal = getattr(policy,'cache',None)
         if temporal is not None and temporal.keys is temporal.values is temporal.past is None:
             policy.cache = policy.network.new_cache()
@@ -117,7 +126,13 @@ class ResidentPolicyCache:
         for _, policy in self._entries.values():
             if getattr(getattr(policy, 'binding', None), 'device', 'cpu') != 'cpu':
                 policy.torch.cuda.synchronize(policy.network.device)
+                self.cuda_allocator = allocator_facts(policy)['cuda_allocator']
                 break
+
+    def diagnostic(self) -> dict[str,Any]:
+        return {'schema_version':1,'loads':self.loads,'cache_reuses':self.reuses,
+            'cpu_weight_restore_bytes':self.cpu_weight_restore_bytes,
+            'cuda_weight_restore_bytes':self.cuda_weight_restore_bytes,'cuda_allocator':self.cuda_allocator}
 
     def private_state_empty(self) -> bool:
         return all(policy_private_state_empty(policy) for _, policy in self._entries.values())

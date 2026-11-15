@@ -85,8 +85,13 @@ def test_actual_eval_collector_crosses_producer_and_explicit_runtime_independent
         return await facts(self,group)
     monkeypatch.setattr(CardInstanceSimulatorEnvironment,'run_group',component_group)
     observation=_HpoEvaluationCleanupObservation(plan,job,owner)
+    progress=[]
     try:
-        result=asyncio.run(core.collect_hpo_evaluation(loaded,plan,gpu_job=job,artifact_inputs=owner,_cleanup_observation=observation))
+        result=asyncio.run(core.collect_hpo_evaluation(loaded,plan,gpu_job=job,artifact_inputs=owner,_cleanup_observation=observation,progress=progress.append))
+        phases=[value['phase'] for value in progress if 'phase' in value]
+        assert phases[0]=='evaluate' and phases[-1]=='cleanup'
+        assert any(value.get('transient_games',0)>0 for value in progress)
+        assert all(value.get('transient_learner_decisions') is None for value in progress)
         observation.require_core_retired(error=ValueError('component completed'))
         assert not job.ledger.workers
         if resident_execution:

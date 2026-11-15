@@ -407,3 +407,47 @@ def test_runtime_refuses_parent_outside_declared_colocated_root(tmp_path,monkeyp
         assert not (tmp_path/'outside').exists()
         job.confirm_termination()
     finally: job.close()
+
+
+@pytest.mark.parametrize('diagnostics',[None,True])
+def test_progress_observes_actual_commits_and_cleanup_without_authority(tmp_path,monkeypatch,diagnostics):
+    from gf_training.hpo_ppo import train_hpo_ppo
+    loaded,model,recipe,binding,run_id=controlled_run(tmp_path,monkeypatch,budget=1)
+    import io
+
+    from gf_cli.hpo_progress import ProgressOwner
+    from gf_cli.hpo_storage import CampaignStore
+    store=CampaignStore(tmp_path/'campaign',mode='fresh',max_owned_bytes=8*1024**2)
+    stderr=io.StringIO()
+    owner=ProgressOwner(store,mode='off',stream=stderr)
+    def failed_diagnostic_write(): raise OSError('diagnostic write failure')
+    monkeypatch.setattr(owner,'_write',failed_diagnostic_write)
+    observations=[]
+    durable_matches=[]
+    def progress(value):
+        observations.append(value)
+        owner.emit(value)
+        if 'committed_used' in value:
+            durable_matches.append(read_json(tmp_path/'parent'/'run.json')['used_decisions']==value['committed_used'])
+        if value.get('phase')=='source':
+            raise RuntimeError('display failure must not abort Source')
+    with admit_gpu_job(JobContext('fixture','progress','training',run_id,None),
+            global_cuda_bytes=loaded.config.run.global_cuda_budget_bytes,max_workers=4) as job:
+        result=asyncio.run(train_hpo_ppo(loaded,collector_for(loaded,model,recipe,binding),tmp_path/'parent',
+            gpu_job=job,progress=progress,**({} if diagnostics is None else {'diagnostics':True})))
+        assert result.report['status']=='complete'
+    phases=[value['phase'] for value in observations if 'phase' in value]
+    assert phases.index('collect')<phases.index('source')<phases.index('update')<phases.index('cleanup')
+    assert ('save' in phases)==bool(diagnostics)
+    commits=[value for value in observations if 'committed_used' in value]
+    assert [value['committed_used'] for value in commits]==[0,1]
+    assert durable_matches==[True,True]
+    assert commits[-1]['latest_metrics']['entropy'] is not None
+    assert observations[-1]['status']=='complete'
+    assert any(value.get('diagnostic_invocation') for value in observations)==bool(diagnostics)
+    assert any('cuda_allocator' in value for value in observations)==bool(diagnostics)
+    if diagnostics is None:
+        assert all('GFB_HPO_DIAGNOSTIC_V1' not in path.read_text() for path in (tmp_path/'parent').glob('learner-*.log'))
+    assert stderr.getvalue().count('persistence disabled')==1
+    store.put('survives-learning.json',{'ok':True})
+    store.close()

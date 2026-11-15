@@ -186,7 +186,11 @@ def main() -> None:
         transport = ResidentEpisodeTransport(int(_VIEWER[0]))
         while True:
             envelope = read_frame(source)
-            write_frame(output, transport.exchange(envelope))
+            response = transport.exchange(envelope)
+            if envelope['request']['command'] != 'SELECT':
+                # Separate outer diagnostic leaf; never part of a strict ACK.
+                response['_diagnostic'] = transport.cache.diagnostic()
+            write_frame(output, response)
             if envelope["request"]["command"] == "CLOSE":
                 return
     except EOFError:

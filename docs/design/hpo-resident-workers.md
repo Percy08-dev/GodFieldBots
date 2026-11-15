@@ -245,6 +245,14 @@ and recorded equally within timing pairs. Numeric5/Wire6/stdout remain exact.
 Per-worker memory in new pool ACKs is diagnostic only; summed process maxima are
 not simultaneous global device peaks. This interface's architecture review READY.
 
+Pool process diagnostics use one optional outer `_diagnostic` response field,
+outside the strict management ACK object. Strip only that recognized field and
+deliver its bounded callback only after the original response identity/epoch/
+operation validates; all other unknown keys still reject. Malformed diagnostic
+data is discarded without changing a valid ACK. Preserve total-frame limits;
+no private observations/tensors, no additional CUDA synchronization/import solely
+for measurement. CPU/CUDA confirmed transfer counts and static estimates differ.
+
 ## Review focus
 
 - SAME-owner parked proof cannot be replaced with flags/hashes or hide pending I/O.
@@ -295,11 +303,11 @@ reader/renderer, minimal coordinator/collector hooks and tests. Root: docs/prese
 **Interfaces:** committed state + bounded phase/pool facts -> diagnostic snapshot,
 stderr renderer/read-only watch, no new learning imports/threads.
 
-- [ ] First failing tests for held-lock live watch/read-only paths, malformed/
+- [x] First failing tests for held-lock live watch/read-only paths, malformed/
   missing/stale data, TTY/redirect stdout, bounded writes, observer cancellation,
   optional-free imports and diagnostic-write failure independence.
-- [ ] Implement specified API/fields/ETA/cadence/inventory exclusion.
-- [ ] Focused CLI/runtime/static checks, independent review, root acceptance/commit.
+- [x] Implement specified API/fields/ETA/cadence/inventory exclusion.
+- [x] Focused CLI/runtime/static checks, independent review, root acceptance/commit.
 
 ## Task 4: Integration, hardware verification and final acceptance
 

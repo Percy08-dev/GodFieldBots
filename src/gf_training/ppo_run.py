@@ -299,6 +299,12 @@ class LearningProcess:
             while chunk := await self.process.stderr.read(65536):
                 output.write(chunk[:max(0, self.limit - count)].decode('utf-8', errors='replace'))
                 count += len(chunk)
+                parser = getattr(self, 'diagnostic_parser', None)
+                if parser is not None:
+                    try:
+                        parser.feed(chunk)
+                    except Exception:  # noqa: BLE001, S110 - keep original raw drain/limits intact
+                        pass
                 if count > self.limit:
                     self.health['log_limit_exceeded'] = True
         self.health['stderr_bytes'] = count
@@ -671,6 +677,7 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
                                'learner_seats': {spec.episode_id: spec.learner_viewer for group in groups for spec in group.episodes}}
                     if game:
                         linkage = ops.linkage(state, directory, generation, groups, registry)
+                    if hpo: ops.phase('collect', transient_games=0, transient_learner_decisions=None, transient_total_game_actions=0)
                     collection_started = time.monotonic()
                     plan = CollectionPlan(groups, registry, directory / 'collections' / batch_id, linkage, execution, wall)
                     if ops:
@@ -702,6 +709,7 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
                     if collection_manifest.get('schedule') != serialize_schedule(groups, 4) or not bindings_match:
                         raise ContractError('collection callback changed frozen schedule/policies')
                     collection_seconds = time.monotonic() - collection_started
+                    if hpo: ops.phase('source')
                     numeric = directory / 'numeric' / batch_id
                     numeric_files = None
                     with ExitStack() as source_scope:
@@ -751,6 +759,7 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
                             raise RuntimeError('PPO collection/encoding exceeded execution/storage limits')
                         next_generation = generation + 1
                         await asyncio.sleep(0)  # Serve pending cancellation before optimizer side effects.
+                        if hpo: ops.phase('update', transient_learner_decisions=decision_count)
                         update_started = time.monotonic()
                         if ops:
                             acknowledgement = (await child.update(issued_projection, checkpoint_path(directory, next_generation), deadline=execution) if game else
@@ -800,6 +809,7 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
                             controls=ops.controls(rng,pool,next_generation) if hpo else _controls(rng, pool, next_generation), acknowledgement=acknowledgement, deadline=execution)
                         if hpo and getattr(ops, 'resident_runtime', None) is not None:
                             generation_scope.close()  # Retire original Source/control/registry snapshots BEFORE pins.
+                            ops.phase('sync')
                             await ops.resident_runtime.after_commit(next_generation, committed_record)
                         ops.retain(directory, next_generation, config, execution)
                     else:
@@ -814,6 +824,7 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
         except BaseException as failure:  # noqa: BLE001 - persist failure after owned cleanup
             error = failure
         finally:
+            if hpo: ops.phase('cleanup')
             try:
                 if hpo and getattr(ops, 'resident_runtime', None) is not None:
                     await ops.resident_runtime.close()

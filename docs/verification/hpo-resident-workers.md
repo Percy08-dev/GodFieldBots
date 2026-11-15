@@ -78,6 +78,29 @@ Source mypy206/scoped Ruff/diffPASS; both scoped independent fix1 re-reviews REA
 Root accepts this scoped implementation, not actual CUDA/Simulator/performance
 or final learning acceptance. Task3 and actual verification remain pending.
 
+## Task3 scoped progress acceptance
+
+Bounded latest snapshots, stderr auto/plain/off and lock-free optional-free watch,
+actual committed/phase/learner/pool callbacks and observed allocator channels are
+implemented. Product does not measure simultaneous whole-device peak; unavailable
+values remain unavailable. Raw restored float32 payload counts are not PCIe bus
+overhead; per-process last-sync samples/maxima are not summed as device peak.
+
+Covering run192PASS183.74s precedes final narrow refinements. Subsequent changed
+67/CLI50/late-save actuallearner19 checks overlap. Initial independent reviews
+found nested nonfinite JSONwatch crashes, unbounded historical worker rows and
+optional heartbeat setup escaping into execution. Root also adopted full inner
+protocol3 validation before publishing pool facts. All reproduced/fixed; final:
+
+```console
+UV_CACHE_DIR=/tmp/gfb-uv-cache uv run pytest tests/test_hpo_progress.py tests/test_resident_pool.py tests/test_hpo_cli.py tests/test_hpo_campaign.py tests/test_hpo_coordinator.py::test_progress_observes_actual_commits_and_cleanup_without_authority -q
+```
+
+PASS69/no skips27.44s, seven existing Optuna experimental warnings; scopedRuff5/
+mypy208/diffPASS. Both scoped independent fix1 re-reviews READY; root accepts
+progress implementation only. Actual Source/learning with writer OSError is
+healthy under explicit unqualified CPU fixtures; no GPU/game/quality inference.
+
 ## Acceptance
 
 Task1 foundation reported418PythonPASS/27explicitSKIP, final affected125PASS,

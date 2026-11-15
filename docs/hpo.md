@@ -106,6 +106,43 @@ Transformerでのみ有効で、他のモデルでは既定値に正規化され
 対照を置き換えません。探索範囲・D・試行数・seed群・運用予算は別途設定し、
 新しいcampaign・study・保存先を使います。ここでは学習や探索の実行を開始しません。
 
+## 常駐workerと進捗監視
+
+schema3の機能確認用設定は`configs/hpo/resident-{mlp,gru,transformer}-smoke.toml`
+です。幅192・主幹2層、mixed16、D64、学習seed17、固定提案1件と既定対照を
+使います。探索量の推奨値・強さの評価ではありません。新規実験では保存先とDBを
+新しくしてください。通常PPOと旧schema1/2はfresh方式を維持します。
+
+常駐方式は最大4物理workerをviewerごとに分離し、試合終了時に履歴・乱数・
+GRU/KVなどをリセットします。更新中も実プロセスとVRAM予約を保持し、commit済み
+checkpointを保護してから新しい重みを同期します。pauseでは実際に回収し、resume
+で再構築します。対応するsource-matched native capabilityが必要です。
+
+```console
+gf-bots hpo validate --config configs/hpo/resident-mlp-smoke.toml
+gf-bots hpo run --config configs/hpo/resident-mlp-smoke.toml --mode fresh --campaign-dir runs/hpo-resident-workers/functional/parents/campaign-mlp-01 --progress plain
+gf-bots hpo watch --path runs/hpo-resident-workers/functional/parents/campaign-mlp-01
+gf-bots hpo watch --path runs/hpo-resident-workers/functional/parents/campaign-mlp-01 --once --json
+```
+
+`--progress auto`が既定で、TTYのstderrに表示します。リダイレクト時のautoは
+表示しません。`plain`は行形式、`off`は表示を止めますが、進捗ファイルの保存は
+続きます。最終結果のstdout JSONは従来どおりです。compareも同じ表示設定を使えます。
+
+watchは実行lockを取らず、Torch/Optuna/GPUを読み込まない読み取り専用の監視です。
+campaignまたはcomparisonディレクトリを指定し、Ctrl-Cで監視だけを終了できます。
+`telemetry/progress.json`は最大64KiBの最新観測であり、再開・Source資格・目的値・
+終了確認の権威には使いません。欠落・不正・5秒超の更新遅延はそのまま表示します。
+
+commit済み使用件数/D・更新数・loss/entropy/KLと、暫定試合数・両者の操作数は
+区別します。ETAは現runの完了した2更新以降、直近最大3区間から計算し、pauseを
+含めません。全campaignの残り時間は推測しません。D到達後も評価・回収を確認する
+まで完了表示にしません。管理上の予約量、各プロセスの実測allocator値、未計測の
+device全体ピークは別に扱います。進捗保存・表示の失敗は学習条件を変えません。
+
+現在の実装受入範囲と実機検証の状態は
+[常駐worker検証記録](verification/hpo-resident-workers.md)を参照してください。
+
 ## 資源と保存先
 
 `[operating]`でRAM・CUDA・Source・数値配列・保存・収集の各予算、対戦並列数、

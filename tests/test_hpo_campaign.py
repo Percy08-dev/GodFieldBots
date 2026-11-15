@@ -27,13 +27,13 @@ def controller_fixture(tmp_path,monkeypatch):
     monkeypatch.setattr(cli,"check_storage",lambda *args,**kwargs: {"scope":"unqualified storage unit"})
     monkeypatch.setattr(cli,"_conditions",lambda loaded:{"scope":"unqualified controller unit"})
     calls = []
-    async def train(store,loaded,campaign,proposal,seed):
+    async def train(store,loaded,campaign,proposal,seed,**kwargs):
         calls.append(("train",seed))
         folder = f"proposals/{proposal.number:06}/seeds/{seed}"
         store.put(folder+"/training.intent.json",{"scope":"unqualified"})
-        store.put(folder+"/training.json",{"training_seed":seed,"scope":"unqualified"})
+        store.put(folder+"/training.json",{"training_seed":seed,"used_decisions":loaded.config.decision_budget,"generation":3,"scope":"unqualified"})
         clock[0] += 6
-    async def evaluate(store,loaded,campaign,proposal,training,*,output):
+    async def evaluate(store,loaded,campaign,proposal,training,*,output,**kwargs):
         seed=training["training_seed"]
         calls.append(("evaluate",seed))
         folder=f"proposals/{proposal.number:06}/seeds/{seed}"
@@ -100,10 +100,10 @@ def test_closed_prior_seed_is_revalidated_before_later_seed_executes(tmp_path,mo
     checked=[]
     monkeypatch.setattr(cli,"verify_seed_evaluation",lambda *args,**kwargs: checked.append(args[4]))
     original=cli._train_seed
-    async def later_seed(*args):
+    async def later_seed(*args,**kwargs):
         if args[4]==29:
             assert 17 in checked,"closed prior seed must be independently revalidated before reuse"
-        await original(*args)
+        await original(*args,**kwargs)
     monkeypatch.setattr(cli,"_train_seed",later_seed)
     result=asyncio.run(cli.run_campaign(loaded,directory,mode="resume"))
     assert result["status"]=="paused"
@@ -120,3 +120,55 @@ def test_recorded_failure_wins_over_success_looking_seed_receipts(tmp_path,monke
     result=asyncio.run(cli.run_campaign(loaded,directory,mode="resume"))
     assert result["failed_in_session"]==1
     assert calls==[("train",17)]
+
+
+def test_outside_control_progress_counts_are_separate_from_in_space_trials(tmp_path,monkeypatch):
+    from dataclasses import asdict, replace
+
+    from gf_cli.hpo_progress import read_progress
+    from gf_common.domain import digest
+    from gf_training.hpo_config import search_space
+    cli,loaded,_,calls=controller_fixture(tmp_path,monkeypatch)
+    # Canonical epochs=4 cannot be encoded in this one-slot epochs=2 study.
+    loaded=replace(loaded,config=replace(loaded.config,space=search_space({'parameters':[
+        {'path':'training.epochs','kind':'fixed','value':2}],'coupled':[]},model_id='mlp')))
+    raw=asdict(loaded.config)
+    loaded=replace(loaded,effective=raw,sha256=digest({'campaign':raw,'base':loaded.base.sha256}))
+    directory=tmp_path/'campaign'
+    result=asyncio.run(cli.run_campaign(loaded,directory,mode='fresh',progress='off'))
+    snapshot=read_progress(directory)['snapshot']
+    assert result['status']=='paused' and calls==[('train',17)]
+    assert snapshot['proposal_kind']=='outside-control'
+    assert snapshot['outside_control_count']==1 and snapshot['attempted_trial_count']==0
+    assert snapshot['declared_trial_count']==1 and snapshot['model']=='mlp' and snapshot['seed']==17
+    assert snapshot['status']=='session-boundary'
+
+
+def test_evaluation_progress_uses_verified_committed_training_counts(tmp_path,monkeypatch):
+    from gf_cli.hpo_progress import read_progress
+    cli,loaded,_,_=controller_fixture(tmp_path,monkeypatch)
+    directory=tmp_path/'campaign'
+    asyncio.run(cli.run_campaign(loaded,directory,mode='fresh',progress='off'))
+    asyncio.run(cli.run_campaign(loaded,directory,mode='resume',progress='off'))
+    snapshot=read_progress(directory)['snapshot']
+    assert snapshot['committed_used']==loaded.config.decision_budget
+    assert snapshot['committed_updates']==3
+    assert snapshot['seed']==17 and snapshot['status']=='session-boundary'
+
+
+def test_campaign_execution_survives_optional_heartbeat_factory_failure(tmp_path,monkeypatch):
+    cli,loaded,_,calls=controller_fixture(tmp_path,monkeypatch)
+    async def run():
+        loop=asyncio.get_running_loop()
+        original=loop.get_task_factory()
+        def factory(loop,coroutine,**options):
+            if coroutine.cr_code.co_name=='heartbeat':
+                raise RuntimeError('optional heartbeat creation failure')
+            return asyncio.Task(coroutine,loop=loop,**options)
+        loop.set_task_factory(factory)
+        try:
+            return await cli.run_campaign(loaded,tmp_path/'campaign',mode='fresh',progress='off')
+        finally:
+            loop.set_task_factory(original)
+    result=asyncio.run(run())
+    assert result['status']=='paused' and calls==[('train',17)]

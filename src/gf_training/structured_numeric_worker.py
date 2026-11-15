@@ -237,6 +237,11 @@ def serve(initial: Json, lines: Iterable[str]) -> None:
             raise ContractError('wire3 artifact path required')
     if initial['output'] is None:
         raise ContractError('wire3 output required')
+    diagnostic = None
+    if hpo and os.environ.get('GFB_HPO_DIAGNOSTIC_INVOCATION'):
+        from gf_common.hpo_progress import DiagnosticEmitter
+        diagnostic = DiagnosticEmitter(os.environ['GFB_HPO_DIAGNOSTIC_INVOCATION'],
+            int(os.environ['GFB_HPO_DIAGNOSTIC_LOG_BYTES']),sys.stderr)
     started = time.monotonic()
     from gf_models.sharded_arrays import read_json
     from gf_models.torch_runtime import hardware
@@ -269,9 +274,14 @@ def serve(initial: Json, lines: Iterable[str]) -> None:
                 'inference.json': sha256(directory / 'inference.json'), 'resume.json': sha256(directory / 'resume.json')}}
         save_seconds = 0.
     else:
+        if diagnostic is not None and not diagnostic.disabled:
+            diagnostic.emit(0, {'phase':'save'})
         saving = time.monotonic()
         saved = learner.save(Path(initial['output']),**({'save_budget_bytes':limits['save_budget_bytes']} if hpo else {}))
         save_seconds = time.monotonic() - saving
+    if diagnostic is not None and not diagnostic.disabled and initial['restore'] is None:
+        from gf_common.hpo_progress import allocator_facts
+        diagnostic.emit(0,{**allocator_facts(learner),'diagnostic_boundary':'save-complete','save_seconds':save_seconds})
     actual_hardware = hardware(binding.device)
 
     def acknowledge(command: str, began: float, artifact: Json | None = None, **extra: Any) -> None:
@@ -363,9 +373,16 @@ def serve(initial: Json, lines: Iterable[str]) -> None:
         finally:
             del rollout
         learner.synchronize()
+        if diagnostic is not None and not diagnostic.disabled:
+            from gf_common.hpo_progress import allocator_facts
+            diagnostic.emit(projection['collection_generation']+1,{**allocator_facts(learner),'diagnostic_boundary':'update-synchronized'})
+            diagnostic.emit(projection['collection_generation']+1,{'phase':'save'})
         update_seconds = time.monotonic() - started
         saving = time.monotonic()
         saved = learner.save(Path(request['output']),**({'save_budget_bytes':limits['save_budget_bytes']} if hpo else {}))
+        if diagnostic is not None and not diagnostic.disabled:
+            diagnostic.emit(projection['collection_generation']+1,{**allocator_facts(learner),
+                'diagnostic_boundary':'save-complete','save_seconds':time.monotonic()-saving})
         acknowledge('update', started, saved, **({'transaction_id': request['transaction_id'], 'collection_generation': projection['collection_generation'], 'expected_optimizer_steps': projection['expected_optimizer_steps']} if game else {}), metrics=metrics,
             timings={'update_seconds': update_seconds, 'save_seconds': time.monotonic() - saving})
     raise ContractError('wire3 EOF before explicit close')
