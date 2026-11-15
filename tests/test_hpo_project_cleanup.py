@@ -32,6 +32,7 @@ def test_project_preserves_primary_and_reachable_cleanup_owner(monkeypatch,tmp_p
     operations.ledger=object()
     operations.online=SimpleNamespace(packed_batch=owner)
     operations.projection=None
+    operations.resident_runtime=None  # Explicit fresh mode; this fixture bypasses __init__.
     operations.cap=lambda _:1024
     def close():
         closed.append(owner)

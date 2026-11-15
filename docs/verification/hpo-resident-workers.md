@@ -101,6 +101,37 @@ mypy208/diffPASS. Both scoped independent fix1 re-reviews READY; root accepts
 progress implementation only. Actual Source/learning with writer OSError is
 healthy under explicit unqualified CPU fixtures; no GPU/game/quality inference.
 
+## Whole-project and package checks before hardware probes
+
+Installed reviewed offline native release/MIMALLOC/emptyRUSTFLAGS ELF matches
+0d5d0b...54aeda and sourcec7a357...a54cc, with old/new capability markers checked.
+Original installed44a13f...bb9f77 package/dist-info rollback remains in
+`runs/hpo-resident-workers/assessments/native-before`.
+Python wheel/sdist match all208source modules byte-for-byte. Independent
+mandatory-only venv has only base dependencies: CLI/watch and all3config/storage/
+admission checks PASS without Torch/Optuna/native. Its actual baselinevsRandom
+pair completes2natural games/0failures in4.901s, functional only.
+
+Whole CPU Python attempt1 FAIL:3959PASS146SKIP before an object.__new__ cleanup
+fixture omitted new optional resident_runtime initialization. Verified production
+constructor setsNone; fix is1test-onlyline, preserving the uncertain-cleanup
+assertion. Affected73PASS55.43s and independent reviewREADY. The failed first
+run/log/XML remain, not promoted into a pass.
+
+```console
+CUDA_VISIBLE_DEVICES='' GF_RUN_CUDA=0 .venv/bin/python -m pytest -q --ff --maxfail=1 --tb=short -o faulthandler_timeout=60 --junitxml=runs/hpo-resident-workers/assessments/final-checks/whole-cpu-02.xml
+```
+
+HOST/localIPC retry PASS6490/SKIP408/32warnings1220.74s. Skips are explicit
+optional/CUDA/heavy engineering gates, not executed hardware proof. Tracked
+Python Ruff503filesPASS, source mypy208PASS. Native full library with test-only
+libpython linking flags PASS177/IGNORE8/0FAIL35.84s; installed release flags stay
+empty. Final checks logs and package proof are in assessment final-checks.
+
+Protected historical model24files match all old baseline hashes; before snapshot
+records byte/stat identity for final comparison. Actual GPU/Simulator learning,
+model comparison, allocator high-water and paired timing remain pending.
+
 ## Acceptance
 
 Task1 foundation reported418PythonPASS/27explicitSKIP, final affected125PASS,
