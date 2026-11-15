@@ -128,3 +128,65 @@ incomplete two-update stop. No termination is inferred from the sampling data.
 No production test rerun is required for this ignored, disposable observer;
 accepted application bytes remain unchanged and the prior full suite remains
 its separate evidence. No formal HPO, final test or strength claim is made.
+
+
+## Inside collection: five repeated parent validations
+
+Follow-up selective observations identify the repeated call path. Each collect
+invokes `card_instance_source.validate_owned_collection` at five sites:
+`ppo_run.py:685` before the collector, `card_instance.py:753` at collector entry,
+`:314` at corrected-run entry, `:357` for the owned GroupPack directory, and
+`:495` after game/group cleanup before publication. All reach
+`hpo_source.validate_hpo_parent`. That full validator reopens each previously
+committed batch and verifies original Source proof, numeric data and selected
+prefix context. G0 has no prior batch; G1 replays the previous16games.
+
+A thin timer on **only this function** measured one more unchanged MLP point.
+It calls the original exactly once with original arguments/results/exceptions,
+records wall/thread CPU/caller, then restores the exact module attribute.
+No global call tracing, new Task/Future, math/Source/checkpoint change, validation
+skip or ownership bypass occurs. The actual probe returns normal original
+termination, incomplete/update_cap2/used314 and empty reference maps.
+
+| Collection batch | Phase wall seconds | Five validation calls | All other work |
+| --- | ---: | ---: | ---: |
+| First, no history | 20.640 | 0.277 | 20.363 |
+| Second, one historical batch | 43.731 | **29.130** | 14.601 |
+| Both | 64.371 | **29.407 (45.7%)** | 34.964 |
+
+The second-batch five calls take5.896/5.824/5.846/5.786/5.779seconds. Four occur
+before games (23.352s), one afterward (5.779s). Their total current-thread CPU is
+20.117s; executor/native CPU on other threads is outside that thread clock.
+All five observed spans are disjoint, depth0 and completely inside collect,
+so their wall sum is valid. The four CLI calls share an immediate helper caller;
+the higher-site attribution follows the audited static call order, not a captured
+complete call stack. The remainder includes games, startup, RPC, attestation,
+archive and publication; it is not asserted to be pure gameplay.
+
+The earlier resource-only process samples independently align: first collect
+19.416s, beforefirstobservedserver0.460/server-presence18.250/after0.706; second
+collect42.732s, before23.298/presence13.250/after6.184. Server presence is a250ms
+sampled process interval, not an exact gameplay timer. Thus the extra second-batch
+collection time is substantially the repeated historical Source validation,
+not inferred simply from low overall CPU. This does not establish that all
+checks are interchangeable or safe to remove.
+
+The low-overhead thin run has helper wall130.942s (GNUtime131.17s), near the prior
+resource-only129.014s. No randomized observer-overhead control was performed, so
+their difference is not an exact instrumentation-cost estimate. Observer records:
+12total calls including2outside collect,0errors/drops. Original Source/data/math,
+workload, seed/model/limits and original clocks are unchanged. The separate older
+sys.setprofile experiment took410s; its large global dispatch overhead means
+its absolute times are **not** used as normal-runtime evidence. It remains
+retained diagnostic evidence only. Runtime-evidence preflight also repeats, but
+its normal-runtime total was not individually timed by the thin observer.
+
+Raw follow-up data: `collect-profiling-declaration-v2.json`,
+`profiling-v3/thin-a01/{launch-freeze.json,kernel-time.txt,helper.stdout,helper.stderr}`,
+`spans/{spans.jsonl,summary.json}`, `collection-breakdown.json`, `probe-report/`.
+The earlier intrusive experiment is under`profiling-v2/collect-a01/` and is never
+pooled with normal timings. The thin timer's stdlib delegation/exception/restore/
+logging-failure checks and independent prelaunch review passed. No production
+optimization was implemented. The next design question is which repeated
+verification can reuse still-owned immutable validation evidence; that requires
+preserving the existing Source, mutation and failure boundaries.
