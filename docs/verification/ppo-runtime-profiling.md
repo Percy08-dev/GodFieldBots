@@ -190,3 +190,8 @@ logging-failure checks and independent prelaunch review passed. No production
 optimization was implemented. The next design question is which repeated
 verification can reuse still-owned immutable validation evidence; that requires
 preserving the existing Source, mutation and failure boundaries.
+
+The subsequent [validation-reuse investigation](../design/hpo-validation-reuse-investigation.md)
+records actual scan coverage, intervening mutations and the smallest candidate
+reuse interval. It is research, not an implemented optimization or approved
+production design.
