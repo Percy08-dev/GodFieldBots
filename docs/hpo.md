@@ -112,6 +112,10 @@ schema3の機能確認用設定は`configs/hpo/resident-{mlp,gru,transformer}-sm
 です。幅192・主幹2層、mixed16、D64、学習seed17、固定提案1件と既定対照を
 使います。探索量の推奨値・強さの評価ではありません。新規実験では保存先とDBを
 新しくしてください。通常PPOと旧schema1/2はfresh方式を維持します。
+保存用と親データ検査用の予算は各1GiBです。親データ検査では保存済みoptimizerの
+archive検査にも一時メモリを予約するため、旧256MiB設定はこのモデルで不足します。
+192/主幹2層の実機検証と測定範囲は[検証記録](verification/hpo-resident-workers.md)を
+参照してください。短い機能確認の結果から、正式な探索量やモデルの強さは判断しません。
 
 常駐方式は最大4物理workerをviewerごとに分離し、試合終了時に履歴・乱数・
 GRU/KVなどをリセットします。更新中も実プロセスとVRAM予約を保持し、commit済み

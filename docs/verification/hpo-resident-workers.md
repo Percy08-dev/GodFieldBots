@@ -1,8 +1,151 @@
 # HPO resident workers and progress verification
 
 2026-11-15. [ADR0041](../adr/0041-hpo-resident-workers-and-progress.md),
-[accepted plan](../design/hpo-resident-workers.md). Implementation and final
-acceptance IN PROGRESS; no performance/strength result is preaccepted.
+[accepted plan](../design/hpo-resident-workers.md). Implementation, runtime and whole-project checks are complete on source4a3022a.
+Independent full-original Source/numeric reopening passes27/27. Both final
+correctness and architecture-conformance reviews are FINAL READY; root accepts
+the approved implementation and bounded operational verification scope. The measurements below are operational engineering evidence. Formal
+HPO sizing/search, learning strength and final-test evaluation remain later work.
+
+## Current measured result
+
+All3proposal models use width192/main temporal depth2. Timing compares the same
+seed17, fixed PPO recipe, mixed16 opponents/threshold12, corrected action profile,
+original600/480/540/60second clocks, source/native/Simulator and operating caps.
+Each invocation collects32whole games over2updates. D1,000,000/max_updates2 must
+end **incomplete/update_cap without an objective**. Three pairs/model runAB/BA/AB;
+A=fresh, B=resident. External wall includes imports/startup/collection/Source/
+learning/save/sync/retention/reap/parent-process exit. No other project tests,
+builds or source changes ran during timing; desktop GPU use was not exclusive.
+
+| Model | Fresh median seconds (range) | Resident median seconds (range) | Median reduction | Used decisions fresh/resident |
+| --- | --- | --- | --- | --- |
+| MLP | 141.15 (140.55–142.20) | 119.60 (119.13–119.79) | 15.3% | 309/314 |
+| GRU | 186.20 (182.37–186.61) | 169.71 (169.27–172.04) | 8.9% | 309/314 |
+| Transformer | 193.13 (191.66–196.03) | 166.36 (165.47–173.45) | 13.9% | 315/310 |
+
+These are bounded-search operational comparisons, not identical-input latency
+ratios. Recorded candidate cutoffs differ: fresh neural decisions have count_time
+45/45/33 across the3samples forMLP/GRU/Transformer; resident neural decisions
+have0, while other resident policies record12count_states and9max_expansions per
+family. Search uses50ms counting/1000ms search,16384countstates/262144expansions,
+32768candidates/sequence18. Thus trajectories and used counts differ even with
+fixed seeds; no seed-only determinism or model-quality conclusion is claimed.
+Separate all-model fixed-input A-B-A/selection/logprob/value/saved-array tests
+cover behavioral equivalence. Raw configured/actual cutoffs: cutoffs-a04.json.
+
+Each ordinary fresh two-update invocation has64actual worker reaps, versus4
+resident starts/reaps and60logical reuses. Fresh actor load/allocator counters
+remain unavailable; no zero or unmeasured transfer-saving claim is invented.
+Actual resident restore-payload counts and load/cache events are retained, not
+interpreted as PCIe bus traffic. All3pause1/resume2 cases return original receipts,
+rebuild workers, preserve all4original clocks, and preserve all6G1artifact files
+byte-for-byte. They end incomplete/update_cap at2, not formal completion.
+
+## Decision latency and memory
+
+The following pool all recorded **neural-family** decisions from the3samples/
+2batches, including learner/frozen neural opponents and initial warmups. They
+exclude other policy families. Parent selection includes frame preparation,
+candidate generation, IPC and policy; it excludes environment communication,
+journal storage and process startup. Policy timing is select_frame after
+candidate generation, not pure CUDA kernel time.
+
+| Resident model | Policy p50/p95 ms | Parent selection p50/p95 ms |
+| --- | --- | --- |
+| MLP | 10.87 / 50.32 | 21.24 / 116.54 |
+| GRU | 12.15 / 51.95 | 23.20 / 119.58 |
+| Transformer | 12.50 / 51.75 | 23.49 / 120.86 |
+
+Fresh parent-selection p95 values were503.03/481.53/816.82ms in these traces;
+repeated first-use warmups are included, and the input traces differ as above.
+Per-logical-neural-participant startup p50 is1519/1563/1521ms fresh versus
+43/47/48ms resident. These scopes stay distinct from whole-run wall time.
+
+The RTX5070Ti16303MiB/driver610.88 shared-device observation peaks at4671MiB
+(4.56GiB),14003valid250ms samples/0invalid. Desktop and idle usage are included;
+this sampled high-water is a lower bound, not an exclusive/exact physical peak.
+No OOM occurred. Per-process lifetime allocator maxima stay separate:
+
+| Model | Largest individual learner allocated/reserved MiB | Largest individual resident actor allocated/reserved MiB |
+| --- | --- | --- |
+| MLP | 98.99 / 116 | 54.19 / 60 |
+| GRU | 116.53 / 126 | 59.49 / 80 |
+| Transformer | 118.96 / 130 | 63.58 / 66 |
+
+These process maxima are never summed into simultaneous device use and exclude
+some driver/context memory. Managed phase estimates peakRAM12.86GiB/CUDA8.86GiB
+under24/12GiB limits, with explicit1GiBsave and1GiBparent-scan budgets. This
+hardware evidence supports the current192/main2 setting on16GB; future larger
+models, longer histories/data and HPO envelopes require their own admission.
+
+## Completion and independent evidence
+
+- 3fresh D64/seed17 functional campaigns each complete canonical control+one
+ fixed proposal, six full Source-validated training parents, six paired heuristic
+ panels and genuine TELL. Each SQLite DB inspected read-only contains one COMPLETE
+ sample. Canonical control remains the repository default recipe; timing
+ candidates above all use192/main2.
+- 3neural control-versus-proposal comparisons complete schema2 tables/receipts,
+ each two natural paired rows. Seed panels also contain two natural rows each,
+ zero failures and successful cleanup/save/transport. Runtime hashes, immutable
+ parent pins/acquire-release hashes and projections agree.
+- Independent functional audit verifies all15original GPU jobs and empty cache/
+ evaluation references. Independent structural timing audit validates21unique parent chains and
+ all24unique-ticket receipts:9fresh jobs reap64workers+1learner,15resident jobs
+ reap4workers+1learner. All current references are empty, no failed-state
+ projection or qualification bypass is used for this acceptance evidence.
+- Final whole CPU command below PASS6510/SKIP408/32warnings1316.90s, exit0;
+ trackedPython Ruff and source mypy208PASS. Native177PASS/8IGNORE, source-matched
+ release flags/capabilities, mandatory-only package/CLI/baseline checks, historical
+ five data proofs and all8numeric ASTs are recorded in the chronological evidence.
+- Post-run source373hashes, nativeELF0d5d0b...54aeda,208wheel/sdist modules and all
+ protected24historicalmodel content/size/device/inode/mtime/ctime match exactly.
+ No pre-existing user untracked file was changed. No push or formal HPO launch.
+
+```console
+CUDA_VISIBLE_DEVICES='' GF_RUN_CUDA=0 .venv/bin/python -m pytest -q --ff --maxfail=1 --tb=short -o faulthandler_timeout=60 --junitxml=runs/hpo-resident-workers/assessments/final-checks/whole-cpu-03.xml
+```
+
+Raw local evidence under runs/hpo-resident-workers/assessments: declarationv6,
+launch-freeze-a05/timing-launch-a04, batch-a04.jsonl, timing-summary-a04.json,
+paired-and-resume-checks-a04.json, allocator-samples-a04.json, decision-latency-
+a04.json, cutoffs-a04.json, device-samples-a04.csv and final-checks. Functional
+runs use functional-v2 fresh parents/originals/DBs. Code identity is4a3022a,
+native sourcec7a357/ELF0d5d0b, Simulator91d5926/public-ja-v3/catalog2. Final docs
+commits change no application bytes. Failed attempts remain failed/ineligible;
+operator admission-only releases confer neither termination nor data rights.
+Failed805retains4protectedG0refs; whole-invoker storage reclamation remains a
+separate reviewed task if needed. Earlier phase-specific pending statuses below
+are historical, not the current implementation status.
+
+## Root decisions and costs
+
+Ordered rulings from the implementation ledger, retained for user review:
+
+| Decision | Cost/condition if wrong or needs revisiting |
+| --- | --- |
+| Use existing non-main feature checkout; preserve user files. | Less isolation; original changes must remain separately owned. No merge/push requested. |
+| Use configured custom roles, one writer, root commits. | Serialized implementation; independent reviewers remain separate. |
+| Fixed runtime-v1 cache6/128MiB. | New capacity policy needs explicit review/versioning; no speculative tuning knobs. |
+| Cache release needs original custody and real EVICT/reap. | Failed invokers may retain storage rather than falsely permit pruning. |
+| Failed work and intact operational GPU ownership stay distinct. | Operational termination of failed data must never imply an objective. |
+| Uncertain SYNC retains staging charge until verified sync/reap. | Conservative admission can refuse capacity during uncertainty. |
+| Learner diagnostics use bounded existing stderr. | Lossy/stale stats are possible; numerical/wire contracts stay unchanged. |
+| Whole-invoker loss cannot reconstruct release custody. | Orphan failed-parent refs remain protected; admin reclamation is separate. |
+| Eval caches use real Registry4/5 evaluation pins; runtime independent of producer. | Extra pin validation/I/O, but no fake Registry5 authority for old data. |
+| Publish diagnostic facts only after full inner reply validation. | Later display; rejected policy responses do not publish trusted-looking facts. |
+| Explicit1GiBadditional-save budget. | Adds512MiBmanagedRAM vs default; new model envelopes need rechecking. |
+| Explicit1GiBparent-scan budget. | Adds768MiBmanagedRAM vs default;512MiB only proved one control, not all future data. |
+
+The user additionally authorized admission-only release of failed/stopped jobs
+within this functional verification. Only matching owned failed tickets were
+released, with records; unrelated jobs and original Source/cache custody remain
+outside that authorization. Local verified milestones remain on the existing
+feature branch, as authorized; the worktree/evidence are preserved.
+
+## Chronological implementation and attempt evidence
+
 
 ## Starting evidence
 
@@ -346,3 +489,55 @@ No validator/default/math change, no diagnostic failed-state projection grants
 eligibility, and1GiB is bounded headroom for this verification rather than a
 universal future-data guarantee. Code correctness/conformance reviews otherwise
 remain valid because application source is unchanged. Actual newcap retry pending.
+
+
+## Final audit scope refinement
+
+Final reviewers distinguish validate_hpo_chain (stored lineage/artifact/numeric/
+Source-proof structure) from validate_hpo_parent (complete original observations/
+events, regenerated Source proof and stored numeric correspondence). The earlier
+independent6+21parent audits used the former plus receipt/manifest hashes. Actual
+production runs used full Source validation, but this alone does not fulfill
+independent full-original reopening. No structural audit is reclassified as full
+original Source qualification.
+
+Root supplied the bounded read-only script
+`assessments/full-original-source-audit.py`:6completefunctional+21incomplete
+operational parents, validate_hpo_parent with each real2GiBsource budget, True/
+False require_complete as appropriate, no flags projected, no production bypass,
+no GPU job or learning. It compares rebuilt full Source proofs, read_numeric/
+require_learning and selected-prefix counts through the existing full validator,
+checks run.json unchanged, and closes/finalizes actual original snapshots. The
+independent verifier completed it on HOST/localIPC, exit0:27/27PASS,6functional
+G1/complete and21operationalG2/incomplete. The declared2GiB source budget was
+used for every call. The script asserts before/after run.json value equality;
+the validator itself finalizes/rechecks the retained original snapshots. No
+failed-state projection or qualification bypass occurred. Exact command/log/result:
+
+```console
+.venv/bin/python -u runs/hpo-resident-workers/assessments/full-original-source-audit.py > runs/hpo-resident-workers/assessments/full-original-source-audit.log 2>&1
+```
+
+`full-original-source-audit-result.json` has27PASS rows; the log has27starts,
+27finishes andall-complete. This additional independent original Source/numeric
+audit fills Task4point5; earlier structural audits keep their narrower meaning.
+
+
+## Final acceptance
+
+Root accepts after both final independent reviews are FINAL READY, with no
+blocking findings or unresolved requirements within the approved scope. Final
+review explicitly inspected the retained27-parent full-original Source/numeric
+script/log/result and kept earlier structural-only audit meanings distinct.
+The whole-code reviews and subsequent scoped corrections remain accepted.
+
+All Task4 checks are complete. This accepts HPO resident workers, immutable
+post-commit synchronization, reset/cleanup/pin ownership, fixed192/main2 profiles,
+progress/watch and the declared operational verification. Formal HPO sizing/
+search, model strength, final-test evaluation and failed-parent orphan-storage
+reclamation remain separate work. Exact/exclusive GPU peak and identical-input
+end-to-end timing are not claimed. Historical failures remain ineligible.
+
+All code/config measurements are revision4a3022a. This final documentation
+milestone changes no application source bytes. Keep feat/heuristic-refresh and
+its shared workspace/evidence as authorized; no merge, push or publication.

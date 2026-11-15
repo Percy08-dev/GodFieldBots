@@ -318,16 +318,16 @@ read-only checks; implementer: fixes; independent reviewers: stable whole diff.
   Python/native parity, full Python/Rust suites, Ruff/mypy, optional-free CLI.
 - [x] Build/package/activate reviewed source-matched native with rollback evidence
   before new-mode hardware work. Record code/native/Simulator/hardware/config hashes.
-- [ ] Fresh directories; all3width192/depth2 models; seed17/same recipe/opponents/
+- [x] Fresh directories; all3width192/depth2 models; seed17/same recipe/opponents/
   action settings within each fresh/resident pair. Two updates and separate
   unchanged pause/resume. Operational probe D1,000,000/max_updates2 is EXPECTED
   incomplete/update_cap/no objective, not fake completion; original deadlines.
-- [ ] Run3paired timing samples/model including startup/reset/checks/save/sync/
+- [x] Run3paired timing samples/model including startup/reset/checks/save/sync/
   retention/cleanup. Separately complete bounded D64/seed17 CLI/Optuna campaigns,
   paired evaluation/direct comparisons; explicitly functional, never strength.
-- [ ] Measure total time and allocated/reserved VRAM. Verify amortized startup/
+- [x] Measure total time and allocated/reserved VRAM. Verify amortized startup/
   loads and admitted resources; investigate regressions before adoption.
-- [ ] Both final independent reviews READY, blockers resolved; current docs/ADR/
+- [x] Both final independent reviews READY, blockers resolved; current docs/ADR/
   HPO instructions and verification record reflect actual evidence/limits. Root
   commits locally; no push or formal HPO launch.
 

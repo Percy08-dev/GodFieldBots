@@ -1,15 +1,13 @@
 # 0041: HPO resident participant workers and diagnostic progress
 
-- Status: Implemented; whole correctness/conformance reviews READY; final hardware acceptance pending.
-- Progress: Task3 scoped implementation accepted after fix1/69coveringPASS,
-  both independent re-reviews READY. Actual CUDA/Simulator/performance and final
-  project acceptance remain pending; diagnostics never qualify data.
-- Runtime: Task2 scoped implementation accepted after fix1/173coveringPASS and
-  both independent re-reviews READY. Actual CUDA/Simulator/performance and
-  final project acceptance remain pending.
-- Foundation: Task1 contracts/readers/resources/references accepted after fix1,
-  covering165PASS and both independent scoped re-reviews READY. Execution was
-  guarded at that milestone; Task2 subsequently activated the explicit runtime.
+- Status: Implemented and accepted; both final independent reviews FINAL READY.
+- Evidence: actual all-model two-update/resume/campaign/comparison checks pass;
+  median timing reduction9–15%, shared-device sampled peak4.56GiB on16GB.
+  Whole CPU6510PASS/408SKIP; Source/numeric/reference/GPU receipts independently
+  audited. Formal HPO sizing/strength/final-test remain separate work.
+- Scoped foundation/runtime/progress and subsequent bootstrap/native adapter/
+  explicit resource-budget corrections pass their independent reviews. Historical
+  failures remain ineligible; admission release never grants Source/data rights.
 - Date: 2026-11-15. Owner: root.
 - Authority: user-approved plan and explicit implementation request.
 - Architecture review: `/root/resident_inference_design_check`, READY after
@@ -64,5 +62,5 @@ All3model equivalence, isolation/fault/reference/admission tests; old format/
 kernel/native proofs; optional-free live watch; whole project checks; predeclared
 actual CUDA/Simulator update/resume/evaluation/comparison and paired timing;
 both final independent reviews. Scoped and whole-project code evidence is in
-[the verification record](../verification/hpo-resident-workers.md); remaining
-actual resident hardware checks and final acceptance stay explicit pending work.
+[the verification record](../verification/hpo-resident-workers.md); independent full-original Source/numeric audit passes27/27; root accepts the
+implemented and bounded operational verification scope.
