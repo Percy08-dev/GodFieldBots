@@ -329,7 +329,7 @@ def test_failed_termination_local_copy_error_keeps_real_global_receipt(tmp_path,
 
 
 @pytest.fixture
-def outer_workflow(tmp_path, monkeypatch):
+def outer_workflow(tmp_path, monkeypatch, request):
     """Real saved parents/pins/CPU processes; mocked Source inspection is UNQUALIFIED."""
     import gf_cli.hpo_evaluation as evaluation
     from gf_cli.config import LoadedConfig
@@ -357,7 +357,10 @@ def outer_workflow(tmp_path, monkeypatch):
     parents = [tmp_path / 'left', tmp_path / 'right']
     chains = [advanced_hpo_chain(parent, updates=1, budget=3) for parent in parents]
     learner = chains[0][2]
+    resident_cpu=getattr(request,'param',False)
     raw = campaign_raw()
+    if resident_cpu:
+        raw.update(schema_version=3,runtime={'mode':'resident-worker-v1','cache_entries':6,'cache_weight_bytes':134217728})
     raw.update(decision_budget=3, learning_seeds=[17], model=asdict(learner.model), training=asdict(learner.training),
         space={'parameters': [], 'coupled': []}, storage={'parent_root': str(tmp_path / 'parents'),
             'numeric_root': str(tmp_path / 'parents'), 'originals_root': str(tmp_path / 'db'),
@@ -376,13 +379,13 @@ def outer_workflow(tmp_path, monkeypatch):
     training = []
     for parent, (state, records, _) in zip(parents, chains, strict=True):
         source = {'run_id': state['run_id'], 'run_path': str(parent), 'training_seed': 17,
-            'generation': 1, 'generation_sha256': 'b'*64, 'inference_sha256': records[1]['inference_sha256'],
+            'generation': 1, 'generation_sha256': state['generation_sha256'] if resident_cpu else 'b'*64, 'inference_sha256': records[1]['inference_sha256'],
             'used_decisions': 3}
         inspections[str(parent)] = evaluation.ParentInspection(state, tuple(records), source)
         label, runtime = hpo_binding(parent, state, records[1], 1)
         options = clone(runtime.policy_options)
-        options['inference']['device'] = 'cuda:0'
-        inference = replace(learner.binding, device='cuda:0')
+        if not resident_cpu: options['inference']['device'] = 'cuda:0'
+        inference = learner.binding if resident_cpu else replace(learner.binding, device='cuda:0')
         label = policy_label_game_v4(learner.model, inference, records[1]['inference_sha256'],
             action_contract=ACTIONS.action_contract, rules=RULES, action_config_hash=digest(asdict(ACTIONS)),
             cuda_visible_devices=options['cuda_visible_devices'])
@@ -393,7 +396,10 @@ def outer_workflow(tmp_path, monkeypatch):
         training.append({**source, 'source_receipt_sha256': 'c'*64})
     monkeypatch.setattr(evaluation, 'inspect_training_parent', lambda directory, *args, **kwargs: inspections[str(directory)])
     monkeypatch.setattr(evaluation, '_final_policy_reference', lambda inspected, source_sha: bindings[inspected.state['run_id']])
-    install_component_execution(monkeypatch)
+    if resident_cpu:
+        install_unqualified_cpu_resident_originals(monkeypatch)
+    else:
+        install_component_execution(monkeypatch)
     with CampaignStore(tmp_path / 'campaign', mode='fresh', max_owned_bytes=8*1024**2) as store:
         store.put('proposals/000000/seeds/17/training.json', training[0])
         yield evaluation, store, loaded, proposal, training, parents
@@ -658,3 +664,103 @@ def test_partial_group_environment_retained_before_initializer_returns(tmp_path,
     finally:
         owner.release()
         job.close()
+
+
+def install_unqualified_cpu_resident_originals(monkeypatch):
+    """Hand-authored terminal DTOs; real workers/journals/Replay/Source/Pack gates.
+
+    Existing parent Source-inspection and Simulator/runtime facts remain the
+    explicitly UNQUALIFIED fixture boundaries. The one additional production
+    bypass is the approved CUDA-only guard. Evaluation journals/Replay/Source
+    parsing and ownership remain real; no Simulator/GPU or eligible study ran.
+    """
+    import copy
+    import uuid
+    from itertools import count
+
+    import gf_cli.card_instance as core
+    from gf_common.domain import GroupResult
+    from tests.card_instance_action_support import inputs
+    from tests.test_card_instance_baseline_runtime import receipt
+    from tests.test_card_instance_learning import ACTIONS
+    validate=core._validate_recorded_episodes
+    install_component_execution(monkeypatch,cpu_processes=False)
+    monkeypatch.setattr(core,'_validate_recorded_episodes',validate)
+    def require_cpu_fixture(binding):
+        assert binding.policy_options['version']=='4' and binding.policy_options['inference']['device']=='cpu'
+    monkeypatch.setattr(core,'_require_hpo_evaluation_policy',require_cpu_fixture)
+    monkeypatch.setattr(core.CardInstanceRuntimeEvidence,'receipt',lambda self,**kwargs:self._component_receipt,raising=False)
+    executions=count()
+    async def originals(self,group):
+        self._storage_group_owner=self
+        self._managed_server=None
+        runtime=receipt()
+        index=next(executions)
+        runtime['executed'].update(pid=123+index,start_time=1+index)
+        self.runtime_evidence._component_receipt=runtime
+        episodes=[]
+        for spec in group.episodes:
+            game=uuid.uuid4().hex
+            result=CardInstanceEpisodeResult(spec.episode_id,spec.pair_id,group.seed,spec.policies,
+                game_id=game,outcome='draw',end_kind='natural',replay_reconciled=True,action_contract=ACTIONS.action_contract)
+            folder=self.settings.output_dir/spec.episode_id
+            journals,workers,contexts={},{},{}
+            try:
+                for viewer in (1,2):
+                    self._create_actor(folder,spec,viewer,game,journals,workers,contexts,result)
+                await self._ready_actors(workers,result)
+                for viewer in (1,2):
+                    value=inputs([],can_pray=True)
+                    observation=copy.deepcopy(value.observation)
+                    if viewer==2:
+                        observation.update(viewer_player_id=2,current_player=2,active_player=2)
+                        observation['own']['player_id'],observation['opponent']['player_id']=2,1
+                    observation.update(state_revision=1,actionable=False,typed_action_schema=[],required_choice=None,
+                        current_player=None,phase='terminal',result='draw')
+                    journals[viewer].finish('natural','draw',observation)
+                    replay={'game_id':game,'viewer_player_id':viewer,'requested_turn':None,
+                        'rule_set_version':ACTIONS.action_contract.rule_set_version,'observation_schema_version':'2',
+                        'public_event_schema_version':'2','card_ref_scheme':ACTIONS.action_contract.card_ref_scheme,
+                        'episode_end':{'type':'terminal','result':'draw'},'turns':[]}
+                    self._save_artifact(folder/f'replay-player-{viewer}.json',replay)
+                self._before_worker_close(workers,result)
+            finally:
+                await asyncio.gather(*(worker.close() for worker in workers.values()))
+            self._save_artifact(folder/'result.json',asdict(result))
+            episodes.append(result)
+        return GroupResult(episodes,{'runtime_evidence':runtime,'process':{'exit_code':0,'shutdown':'stdin_eof','log_error':None}})
+    monkeypatch.setattr(CardInstanceSimulatorEnvironment,'run_group',originals)
+
+
+@pytest.mark.parametrize('outer_workflow',[True],indirect=True)
+@pytest.mark.parametrize('comparison',[False,True])
+@pytest.mark.parametrize('publication',['termination','evaluation'])
+def test_resident_local_publication_failure_keeps_exact_confirmed_global_receipt(tmp_path,monkeypatch,outer_workflow,comparison,publication):
+    evaluation,store,loaded,proposal,training,_parents=outer_workflow
+    primary=OSError('local publication failed after actual global confirmation')
+    original=store.put
+    captured=[]
+    def fail(name,value,*args,**kwargs):
+        target=(name.endswith('/gpu-termination.json') if comparison else name.endswith('/evaluation-gpu-termination.json')) if publication=='termination' else (name.endswith('/receipt.json') if comparison else name.endswith('/evaluation.json'))
+        if target:
+            from gf_training import hpo_gpu_lease as gpu
+            current=gpu._read(gpu._GLOBAL_ROOT/'current.json')
+            assert (gpu._GLOBAL_ROOT/'jobs'/current['ticket']/'termination.json').is_file()
+            captured.append(current['ticket'])
+            raise primary
+        return original(name,value,*args,**kwargs)
+    monkeypatch.setattr(store,'put',fail)
+    with pytest.raises(OSError) as caught:
+        if comparison:
+            asyncio.run(evaluation.evaluate_comparison(store,loaded,loaded,proposal,proposal,*training,
+                comparison_id='component',conditions_sha256='c'*64,output=tmp_path/'evaluation',evaluation_runtime=loaded.config.runtime))
+        else:
+            asyncio.run(evaluation.evaluate_seed(store,loaded,{'campaign_id':'component','conditions_sha256':'c'*64},
+                proposal,training[0],output=tmp_path/'evaluation'))
+    assert caught.value is primary and captured
+    assert primary.hpo_gpu_termination_receipt.ticket==captured[0]
+    assert not hasattr(primary,'hpo_termination_cleanup_error')
+    folder='matchups/17-17' if comparison else 'proposals/000000/seeds/17'
+    assert not store.exists(folder+('/receipt.json' if comparison else '/evaluation.json'))
+    failed=store.get(folder+('/failed-gpu-termination.json' if comparison else '/evaluation-failed-gpu-termination.json'))[0]
+    assert failed['evaluation_eligible'] is False and failed['gpu_termination']['ticket']==captured[0]

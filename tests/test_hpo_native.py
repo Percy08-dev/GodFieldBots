@@ -452,7 +452,8 @@ def test_actual_candidate_boundary_mutation_or_cancel_never_authorizes(candidate
 
 
 @pytest.mark.parametrize('packed',[False,True])
-def test_actual_candidate_g0_has_no_synthetic_collection_or_numeric(candidate,tmp_path,packed):
+@pytest.mark.parametrize('resident',[False,True])
+def test_actual_candidate_g0_has_no_synthetic_collection_or_numeric(candidate,tmp_path,packed,resident):
     from gf_training.hpo_lineage import validate_hpo_chain
     from gf_training.native_card_instance import _NativeGameInputs
     from gf_training.native_group_pack import OriginalArtifactProvider
@@ -460,14 +461,14 @@ def test_actual_candidate_g0_has_no_synthetic_collection_or_numeric(candidate,tm
     from tests.hpo_support import variable_initial_hpo_chain
     from tests.test_card_instance_learning import ACTIONS
     directory=tmp_path/'parent'
-    state,_,_=variable_initial_hpo_chain(directory,games=8,packed=packed)
+    state,_,_=variable_initial_hpo_chain(directory,games=8,packed=packed,resident=resident)
     deadline=time.monotonic()+90
     with _ChainScan(directory=directory,max_owned_bytes=1024**3,deadline=deadline) as scan:
         validate_hpo_chain(directory,max_owned_bytes=1024**3,deadline=deadline,scan=scan)
         scan.configure_packed(state)
         provider=OriginalArtifactProvider((),pool=scan.ensure_packed_pool(),shared_controls=scan) if packed else None
         try:
-            plan={'schema_version':5,'mode':'historical_parent','parents':[{'directory':str(directory),'require_complete':False}],
+            plan={'schema_version':6 if resident else 5,'mode':'historical_parent','parents':[{'directory':str(directory),'require_complete':False}],
                 'collections':[]}
             if packed: plan.update(storage_binding=state['storage_binding'],artifact_registry_sha256=provider.registry_sha256)
             with _NativeGameInputs(plan,PreparationConfig(backend='rust',reader='participant-structured-v2',memory_budget_mib=1024),

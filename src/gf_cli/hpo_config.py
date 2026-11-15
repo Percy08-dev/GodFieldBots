@@ -415,6 +415,6 @@ def _mixed_collection_games(config: HPOCampaignConfig) -> None:
 
 
 def require_hpo_runtime_execution(config: HPOCampaignConfig | HPOExperimentConfig) -> None:
-    """Task1 foundation guard; Task2 removes it only with actual pool activation."""
+    """Validate the explicit HPO execution runtime before any external work."""
     from gf_common.hpo_resident import require_hpo_runtime_execution as require_execution
     require_execution(asdict(config) if isinstance(config, HPOCampaignConfig) else config.hpo_spec)

@@ -155,8 +155,9 @@ def inspect_game_manifest(owner: _SourceOwner, manifest: Json, actions: ActionCo
             raise ContractError('actual final-only pending collection owner required')
         control_name = _pending.manifest_name()
     expected = input_binding_game_v3(actions.action_contract, card_instance_rules())
-    resident = hpo and not evaluation and manifest.get('config', {}).get('hpo_spec', {}).get('schema_version') == 3
-    if resident:
+    resident = (evaluation and 'execution_runtime' in manifest or
+        hpo and not evaluation and manifest.get('config', {}).get('hpo_spec', {}).get('schema_version') == 3)
+    if resident and not evaluation:
         from gf_training.hpo_collection import check_hpo_collection
         check_hpo_collection(manifest)
     if (manifest.get('schema_version') != (7 if resident else 6 if hpo else 5) or type(manifest['schema_version']) is not int

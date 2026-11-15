@@ -52,6 +52,7 @@ class _HpoOperations(_GameOperations):
         self.job=job
         self.receipt: TerminationReceipt | None=None
         self.stop_reason: str | None=None
+        self.resident_runtime: Any = None
 
     def validate_config(self,config: Any) -> Any:
         from gf_common.hpo_resident import require_hpo_runtime_execution
@@ -80,7 +81,7 @@ class _HpoOperations(_GameOperations):
         if config.preprocessing.backend=='rust':
             from gf_training.native_backend import hpo_reader_settings, load_native
             self.native=load_native()
-            hpo_reader_settings(config.preprocessing,self.native,packed=hasattr(config,'storage'))
+            hpo_reader_settings(config.preprocessing,self.native,packed=hasattr(config,'storage'),resident=config.hpo_spec['schema_version']==3)
         return model
 
     def preflight(self,config: Any,*,deadline: float) -> None:
@@ -92,6 +93,10 @@ class _HpoOperations(_GameOperations):
             raise ContractError('HPO requires locally managed verified runtime')
         self.runtime=CardInstanceRuntimeEvidence(Path(config.server.binary),Path(config.server.source_dir),deadline=deadline)
         self.runtime.preflight()
+        if config.hpo_spec['schema_version']==3:
+            from gf_models.structured_runtime import hpo_resident_training_admission
+            hpo_resident_training_admission(config.model.architecture(layout=LAYOUT),config.model.inference,
+                config.hpo_spec['training_recipe']['tbptt_length'],config.hpo_spec['operating'],config.hpo_spec['runtime'],layout=LAYOUT)
         from gf_models.structured_runtime import admit_hpo_training
         admit_hpo_training(config.actions,config.model.architecture(layout=LAYOUT),config.model.inference,
             config.hpo_spec['training_recipe']['tbptt_length'],config.hpo_spec['operating'],rules=card_instance_rules())
@@ -99,7 +104,8 @@ class _HpoOperations(_GameOperations):
     def initialize_state(self,state: Json,config: Any) -> None:
         from gf_training.structured_ppo import execution
         classification=input_binding_game_v3(config.actions.action_contract,card_instance_rules())
-        state.update(schema_version=5,run_variant='hpo-ppo-v1',model_id=config.model.model_id,model_version='4',
+        self.registry_schema = 5 if config.hpo_spec['schema_version'] == 3 else 4
+        state.update(schema_version=5,run_variant='hpo-ppo-resident-v1' if config.hpo_spec['schema_version'] == 3 else 'hpo-ppo-v1',model_id=config.model.model_id,model_version='4',
             input_recipe=LAYOUT.input_recipe,execution=execution(config),hpo_spec_sha256=digest(config.hpo_spec),
             used_decisions=0,collected_decisions=0,stop_reason=None,**classification)
         if hasattr(config,'storage'):
@@ -135,7 +141,7 @@ class _HpoOperations(_GameOperations):
             scan.close(recheck=False)
             raise
 
-    def make_child(self,directory: Path,config: Any,state: Json,*,deadline: float) -> Any:
+    def make_child(self,directory: Path,config: Any,state: Json,*,deadline: float,cleanup_deadline: float | None = None) -> Any:
         op=config.hpo_spec['operating']
         ledger=self.job.ledger
         require_training_job(self.job,ledger=ledger,run_id=state['run_id'],global_cuda_bytes=op['managed_cuda_bytes'],max_workers=op['max_participant_workers'])
@@ -147,7 +153,21 @@ class _HpoOperations(_GameOperations):
         self.online=_OnlineGameOwner(self.ownership,state,child,ledger,hpo_job=self.job)
         self.ledger=ledger
         child.online_owner=self.online
+        if config.hpo_spec['schema_version'] == 3:
+            from gf_training.hpo_resident_runtime import ResidentTrainingRuntime
+            self.resident_runtime = ResidentTrainingRuntime(self.job,self.ownership,config,state,deadline=deadline,cleanup_deadline=cleanup_deadline)
+            self.online.resident_runtime = self.resident_runtime
         return child,ledger
+
+    def validate_owned_collection(self,plan: Any,ledger: Any,*,config: Any,deadline: float) -> None:
+        from gf_training.card_instance_source import validate_owned_collection
+        phase = None
+        if self.resident_runtime is not None:
+            pool = self.resident_runtime.pool
+            if pool.admission is None or pool.admission.plan is not plan:
+                pool.admit(plan)
+            phase = pool.admission
+        validate_owned_collection(plan,ledger,max_owned_bytes=self.cap(config),deadline=deadline,**({} if phase is None else {"resident_phase":phase}))
 
     def validate_parent(self,directory: Path,config: Any,deadline: float,*,extra_owned_bytes: int=0) -> Any:
         return validate_hpo_parent(directory,require_complete=False,max_owned_bytes=self.cap(config),deadline=deadline,extra_owned_bytes=extra_owned_bytes)
@@ -249,6 +269,8 @@ class _HpoOperations(_GameOperations):
         return self.stop_reason is not None
 
     def finish_cleanup(self,error: BaseException | None) -> None:
+        if self.resident_runtime is not None:
+            self.resident_runtime.require_closed()
         if error is not None and any(getattr(error,name,None) is not None for name in
                 ('cleanup_owner','_game_artifact_cleanup_owner','_lineage_publication_owner','_hpo_retention_pending','_hpo_storage_uncertain')):
             raise ContractError('HPO resource/storage cleanup remains uncertain')

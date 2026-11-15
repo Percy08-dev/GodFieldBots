@@ -262,7 +262,8 @@ def checked_hpo_evaluation_linkage(value: Any, *, role: HpoEvaluationRole, sched
 
 
 def _checked_evaluation_metadata(value: Json) -> Json:
-    integer(value['schema_version'], 6, 6)
+    resident = value.get('schema_version') == 7
+    integer(value['schema_version'], 7 if resident else 6, 7 if resident else 6)
     if (value['collection_role'] != 'hpo-evaluation' or value['model_version'] != '4'
             or value['source_eligibility'] != 'not-authorized-by-collection-metadata'
             or value['config_hash'] != digest(value['config']) or value['config'].get('run', {}).get('split') != 'validation'
@@ -272,16 +273,27 @@ def _checked_evaluation_metadata(value: Json) -> Json:
     raw = _evaluation_context(value['linkage'])
     checked_linkage(raw, role=hpo_evaluation_role(2 * len(raw['game_seeds'])),
         schedule=value['schedule'], registry=value['policy_bindings'])
+    if resident:
+        from gf_common.hpo_resident import checked_evaluation_runtime, checked_retirement
+        checked_evaluation_runtime(value['execution_runtime'],raw,value['policy_bindings'])
+        retirement = checked_retirement(value['logical_retirement'])
+        if (retirement['run_id'] != raw['evaluation_id'] or retirement['collection_id'] != raw['evaluation_id']
+                or retirement['job_ticket'] != raw['gpu_ticket'] or retirement['generation'] != 0):
+            raise ContractError('resident evaluation retirement differs from actual panel')
     return value
 
 
+def _evaluation_fields(value: Json) -> set[str]:
+    return {'execution_runtime','logical_retirement'} if value.get('schema_version') == 7 else set()
+
+
 def checked_hpo_evaluation_metadata(value: Json) -> Json:
-    return _checked_evaluation_metadata(closed(value, set(HPO_EVALUATION_CORE_FIELDS)))
+    return _checked_evaluation_metadata(closed(value, set(HPO_EVALUATION_CORE_FIELDS) | _evaluation_fields(value)))
 
 
 def checked_hpo_evaluation_manifest(value: Json) -> Json:
     from gf_common.validation import result
-    value = _checked_evaluation_metadata(closed(value, set(HPO_EVALUATION_CORE_FIELDS | HPO_EVALUATION_PUBLISHED_FIELDS)))
+    value = _checked_evaluation_metadata(closed(value, set(HPO_EVALUATION_CORE_FIELDS | HPO_EVALUATION_PUBLISHED_FIELDS) | _evaluation_fields(value)))
     _sha(value['report_sha256'])
     if (value['kind'] != 'card-instance-collection' or value['command'] != 'evaluate' or value['status'] != 'complete'
             or value['run_id'] != value['linkage']['evaluation_id'] or value['schedule_schema_version'] != 4):

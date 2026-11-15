@@ -1,6 +1,9 @@
 # 0041: HPO resident participant workers and diagnostic progress
 
 - Status: Accepted design; implementation and final acceptance pending.
+- Runtime: Task2 scoped implementation accepted after fix1/173coveringPASS and
+  both independent re-reviews READY. Actual CUDA/Simulator/performance and
+  diagnostic progress/final acceptance remain pending.
 - Foundation: Task1 contracts/readers/resources/references accepted after fix1,
   covering165PASS and both independent scoped re-reviews READY. Execution remains
   explicitly guarded until actual Task2 pool/readiness integration is verified.

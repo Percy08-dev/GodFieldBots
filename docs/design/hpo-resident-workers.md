@@ -90,6 +90,36 @@ payloads; SELECT retains own legitimate episode state and never claims reset.
 This activation design's architecture review is READY; actual Task2 conformance
 and fault/equivalence checks remain required.
 
+Collection7 retirement still requires exact END/PARK control generation equal to
+the current collection. Frozen checkpoint generation is independent: actual BEGIN
+advances lease/control generation without rewriting that checkpoint. Prefer
+available per-viewer owners not yet used in this collection; explicitly track
+usage. Any genuinely unused owner must actually reap and retire pins before
+publication, retaining audited history; v1 has no stale-END/idle-carry shortcut.
+
+Resident evaluation has a dedicated immutable plan variant. Collection7
+evaluation requires logical_retirement plus execution_runtime: closed schema1,
+kind hpo-resident-evaluation-runtime, fields runtime/evaluation_id/job_ticket/
+linkage_sha256/policy_registry_sha256. Recompute digests from the actual validated
+full linkage and registry, matching SAME admission before allocation and during
+original validation. This is hashed management/evidence, not best-effort telemetry.
+Common evaluation conditions include only stable runtime recipe, not invocation
+IDs/digests; the complete leaf binds through immutable plan/manifest/receipt.
+Parent producer config/runtime/Registry4-or5 semantics remain unchanged; dispatch
+evaluation Collection7 by role+explicit execution_runtime. Genuine evaluation
+pins/artifact custody cover every declared checkpoint through actual pool reap.
+These concrete leaf contracts/readiness APIs are architecture-reviewed READY.
+
+Actual transport setup registers original gated ownership BEFORE executor submit.
+No framing starts until the returned original Future and Task are captured/tracked
+and work authority is rechecked; eager Tasks remain gated. Setup failure aborts
+the gate before waiting. A returned Future must complete its original no-framing
+abort path; submit failure with no returned Future requires exact owned executor
+shutdown/thread join and cancellation of never-authorized queued work. Setup,
+Task and Future retire separately; uncertain retirement blocks reuse/PARK/update/
+termination. Authorized cancellation retains tracked framing until actual finish.
+No replacement Future or existence/time inference. Architecture review READY.
+
 ### Cache, update and retirement
 
 Per physical worker: at most6immutable checkpoint identities/128MiB of weights,
@@ -160,6 +190,20 @@ never misuse evaluation references. Preserve existing transaction mechanisms.
 Native marker `card_instance_hpo_resident=collection7;proof4;registry5;pool1`
 is additive; old marker/plan5 stay exact. Refuse unsupported native before GPU.
 Model4/inference5/resume5/numeric5/wire6/Journal6/candidate codec/math remain exact.
+
+Normal failure ownership includes the original acquisition attempt token/owner/
+checkpoint BEFORE its durable transaction and its returned receipt BEFORE any
+fallible observation. Surviving cleanup may reconcile only that exact idempotent
+attempt under original parent ownership after actual audited reap; otherwise
+retain explicit uncertainty, never certify no refs from an incomplete runtime map.
+Evaluation scope requires exact distinct/full parent-pin coverage, rejecting
+duplicate pins or conflicting immutable declarations for one parent path before
+deduplication. A physical owner freezes execution device/CUDA visibility at its
+first neural load and rejects incompatible bindings before allocation/env mutation;
+fresh-process behavior remains unchanged. A sealed normally confirmed SAME job
+may read-only revalidate its exact durable termination receipt after local
+publication failure, without restoring work. Poisoned/unconfirmed/foreign states
+remain rejected. These clarify existing ownership/execution requirements.
 
 ### Progress
 
@@ -234,14 +278,14 @@ No root-owned docs/config edits.
 **Interfaces:** Task1 contracts -> real per-job viewer-partitioned pool,
 immutable cache, live PARK, post-commit weight sync and actual cleanup/evidence.
 
-- [ ] First failing tests for multi-episode/viewer/epoch/checkpoint isolation,
+- [x] First failing tests for multi-episode/viewer/epoch/checkpoint isolation,
   A-B-A reuse, frozen alias, lost/partial sync ACK and constructor/reset/cancel/
   timeout/teardown failures.
-- [ ] Implement accepted transport and full reset, then exact update/Source/
+- [x] Implement accepted transport and full reset, then exact update/Source/
   commit/pin/retention order with idle memory charged. Reuse common coordinator.
-- [ ] Integrate HPO training/evaluation/comparison with exact panel scope; real
+- [x] Integrate HPO training/evaluation/comparison with exact panel scope; real
   final reap precedes termination receipts. Test-only code is not a dependency.
-- [ ] Verify fixed-input fresh/resident selections/logprob/value and saved arrays
+- [x] Verify fixed-input fresh/resident selections/logprob/value and saved arrays
   for all3models plus old/native regressions; independent scoped reviews/commit.
 
 ## Task 3: Bounded telemetry and terminal/watch

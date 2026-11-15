@@ -225,7 +225,7 @@ def _unqualified_numeric_components_for_native(source, directory):
     return manifest, decoded
 
 
-def variable_initial_hpo_chain(directory, *, games=24, model_id=None, decision_budget=3, numeric_budget_bytes=None, packed=False, training_opponents=None, native=None):
+def variable_initial_hpo_chain(directory, *, games=24, model_id=None, decision_budget=3, numeric_budget_bytes=None, packed=False, training_opponents=None, native=None, resident=False):
     """Override only the controlled fixture constructor BEFORE its real save."""
     from unittest.mock import patch
 
@@ -264,7 +264,7 @@ def variable_initial_hpo_chain(directory, *, games=24, model_id=None, decision_b
             'storage_binding': state.get('storage_binding')})
         return state, model, recipe, binding
     with patch('tests.hpo_lineage_support.hpo_state_fixture', fixture):
-        state, records, learner = initial_hpo_chain(directory, decision_budget=decision_budget, packed=packed)
+        state, records, learner = initial_hpo_chain(directory, decision_budget=decision_budget, packed=packed,resident=resident)
     if model_id is not None:
         records[0]['model_id'] = model_id
         atomic_json(generation_path(directory,0),records[0])

@@ -83,6 +83,7 @@ class CardInstanceSimulatorEnvironment(SimulatorEnvironment):
         artifact_inputs: RetainedGameArtifacts | RetainedGamePolicyArtifacts | None = None,
         artifact_sink: ArtifactSink | None = None,
         server_output_root: Path | None = None,
+        resident_pool: Any = None,
     ) -> None:
         if type(settings.actions) is not ActionConfigV3:
             raise ContractError("corrected environment requires exact actions3")
@@ -115,6 +116,7 @@ class CardInstanceSimulatorEnvironment(SimulatorEnvironment):
         self._include_input_time = True
         self.ledger, self.runtime_evidence = ledger, runtime_evidence
         self.artifact_inputs = artifact_inputs
+        self.resident_pool = resident_pool
         self.artifact_sink, self.server_output_root = artifact_sink, server_output_root
         self._managed_server: ManagedServer | None = None
         self._storage_group_owner: CardInstanceSimulatorEnvironment | None = None
@@ -144,6 +146,7 @@ class CardInstanceSimulatorEnvironment(SimulatorEnvironment):
             artifact_inputs=self.artifact_inputs,
             artifact_sink=self.artifact_sink,
             server_output_root=self.server_output_root,
+            resident_pool=self.resident_pool,
         )
         if self.artifact_sink is not None:
             self._storage_group_owner = own
@@ -265,7 +268,8 @@ class CardInstanceSimulatorEnvironment(SimulatorEnvironment):
         label = spec.policies[viewer - 1]
         binding = self.settings.policy_bindings.get(label, RuntimePolicyBinding(label))
         try:
-            worker = CardInstanceParticipantWorker(
+            factory = CardInstanceParticipantWorker if self.resident_pool is None else lambda *args, **kwargs: self.resident_pool.worker(viewer, *args, **kwargs)
+            worker = factory(
                 binding.model_id,
                 spec.sampling_seeds[viewer - 1],
                 self.settings.actions,
@@ -308,6 +312,15 @@ class CardInstanceSimulatorEnvironment(SimulatorEnvironment):
             **({"neural": worker.neural_metadata} if worker.neural_metadata is not None else {}),
             **({"tree": worker.tree_metadata} if worker.tree_metadata is not None else {}),
         )
+
+    def _before_worker_close(self, workers: dict[int, ParticipantWorker], result: EpisodeResult) -> None:
+        if self.resident_pool is not None and (result.end_kind == 'natural' and result.failure is None
+                and result.replay_reconciled and not any(result.health.values())):
+            from gf_simulator_client.resident_pool import ResidentParticipantWorker
+            for worker in workers.values():
+                if type(worker) is not ResidentParticipantWorker:
+                    raise ContractError('resident natural completion changed original logical owner')
+                worker.mark_completed()
 
     async def _ready_actors(
         self, workers: dict[int, ParticipantWorker], result: EpisodeResult

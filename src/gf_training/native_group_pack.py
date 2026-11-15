@@ -134,7 +134,7 @@ class OriginalArtifactProvider:
                 raise ContractError('zero originals require the actual admitted generation0 scan/pool')
             state = shared_controls._packed_state
             hpo = (state is not None and type(state.get('schema_version')) is int and state['schema_version'] == 5
-                and state.get('run_variant') == 'hpo-ppo-v1' and state.get('model_version') == '4')
+                and state.get('run_variant') in ('hpo-ppo-v1','hpo-ppo-resident-v1') and state.get('model_version') == '4')
             if (state is None or type(state.get('schema_version')) is not int or state['schema_version'] != 4 and not hpo
                     or type(state.get('updates')) is not int or state['updates'] != 0
                     or shared_controls.root/'run.json' not in shared_controls.files

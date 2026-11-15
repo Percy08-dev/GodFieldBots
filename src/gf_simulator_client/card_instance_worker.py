@@ -182,12 +182,20 @@ class CardInstanceParticipantWorker(StructuredParticipantWorker):
             resource_estimate(self._tree_model, model_bytes=options["tree_descriptor"]["model_bytes"],
                 extra_bytes=self._tree_retained+frame_decode_bytes(encoded_size)+frame_decode_bytes(self._tree_reply_limit))
             artifact_inputs.guard(deadline=self._construction_deadline)
+        self._spawn(ledger, residency,
+            [sys.executable, "-E", "-m", "gf_simulator_client.card_instance_bootstrap"]
+            + ([str(options["resources"]["max_owned_bytes"])] if self._tree and options is not None else []),
+            {"PATH": os.defpath, "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8", "PYTHONHASHSEED": "0",
+                "OPENBLAS_NUM_THREADS": "1", "OMP_NUM_THREADS": "1", "MKL_NUM_THREADS": "1"})
+
+    def _spawn(self, ledger: ReservationLedger, residency: int, arguments: list[str], environment: dict[str, str]) -> None:
+        """Original audited creation boundary; resident logical validators borrow transport."""
         boundary = self._creation_boundary = threading.Event()
         self._creation_observer_failure: BaseException | None = None
         self.lease = ledger.reserve_worker(residency)  # must precede Popen.
         self.lease._cleanup_owner = self
-        if type(artifact_inputs) is RetainedGamePolicyArtifacts:
-            artifact_inputs.retain_worker(self)
+        if type(self.artifact_inputs) is RetainedGamePolicyArtifacts:
+            self.artifact_inputs.retain_worker(self)
         process = None
         try:
             try:
@@ -197,23 +205,8 @@ class CardInstanceParticipantWorker(StructuredParticipantWorker):
                 raise
             creation_error = observer_error = None
             try:
-                process = subprocess.Popen(
-                    [sys.executable, "-E", "-m", "gf_simulator_client.card_instance_bootstrap"]
-                    + ([str(options["resources"]["max_owned_bytes"])] if self._tree and options is not None else []),
-                    stdin=subprocess.PIPE,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.DEVNULL,
-                    bufsize=0,
-                    env={
-                        "PATH": os.defpath,
-                        "LANG": "C.UTF-8",
-                        "LC_ALL": "C.UTF-8",
-                        "PYTHONHASHSEED": "0",
-                        "OPENBLAS_NUM_THREADS": "1",
-                        "OMP_NUM_THREADS": "1",
-                        "MKL_NUM_THREADS": "1",
-                    },
-                )
+                process = subprocess.Popen(arguments, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                    stderr=subprocess.DEVNULL, bufsize=0, env=environment)
                 self.process = process
             except BaseException as error:
                 creation_error = error

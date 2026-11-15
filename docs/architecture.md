@@ -4,7 +4,9 @@
 
 [ADR0041](adr/0041-hpo-resident-workers-and-progress.md) accepts the reviewed
 [resident HPO workers/progress plan](design/hpo-resident-workers.md).
-Preimplementation review is READY; implementation/runtime acceptance are pending.
+Preimplementation review and scoped foundation/resident-runtime reviews are READY.
+CPU component/failure checks pass; progress and actual CUDA/Simulator/performance
+and final acceptance remain pending under the verification record.
 The explicit HPO-only path adds viewer-partitioned physical pooling, parked
 update authority, immutable cache references and lock-free diagnostic progress;
 existing fresh and ordinary paths retain their meanings.
@@ -788,7 +790,8 @@ interpreter process with only its own input/history. Generate candidates inside
 that process. Do not inherit parent private data or send URLs, replay, diagnostics,
 GameSeed or other-player view. Worker termination is bounded by the owner.
 
-ADR0041 adds an explicitly versioned HPO-only exception (implementation pending):
+ADR0041 adds an explicitly versioned HPO-only exception (scoped implementation
+accepted; actual CUDA/Simulator and final acceptance pending):
 physical owners remain permanently viewer-partitioned while exclusive episode
 leases fully clear private history/RNG/cache/request state at verified handoff.
 No physical process receives both seats' views. Parked owners retain real GPU

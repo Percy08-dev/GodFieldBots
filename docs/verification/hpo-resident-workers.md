@@ -51,6 +51,33 @@ equal seeds. Record cutoffs; fixed-input policy parity is separate. Never silent
 change actions to force equality or pool failed attempts into accepted timings.
 No actual execution rows or final implementation reviews are complete yet.
 
+## Task2 scoped runtime acceptance
+
+Real CPU component fixtures exercise all3model fresh/resident equivalence,
+read-only artifacts/A-B-A/partial load, actual subprocess setup/I/O ownership,
+packed/plain Source→Wire6 update/commit→pin/SYNC through G2 with frozenG0, and
+actual evaluation collector producer/runtime cross-products. Their one explicit
+CUDA/data qualification bypass remains UNQUALIFIED engineering evidence.
+
+Broad affected run812PASS39SKIP96.28s precedes final narrow refinements. Gated
+setup9PASS, lifecycle44PASS, actual two-update/eval5PASS cover later transport
+changes; native candidate50PASS1SKIP plus focused4G0 cases overlap existing cases.
+No Rust source changes or new release build in this task.
+
+Independent initial reviews found4blockers: incomplete parent-pin coverage,
+mutable physical execution visibility, acquired refs untracked on observation
+failure, and sealed normal-termination replay rejected after local publication
+failure. Each was reproduced and fixed. Final specifically affected command:
+
+```console
+GF_RUN_CUDA=0 UV_CACHE_DIR=/tmp/gfb-uv-cache uv run pytest tests/test_resident_episode.py tests/test_resident_pool.py tests/test_resident_training.py tests/test_resident_evaluation.py tests/test_hpo_resident_custody.py tests/test_hpo_eval_failure_cleanup.py tests/test_hpo_gpu_lease.py tests/test_hpo_retention.py -q
+```
+
+PASS173/no skips78.92s, one existing fork-from-multithread deprecation warning.
+Source mypy206/scoped Ruff/diffPASS; both scoped independent fix1 re-reviews READY.
+Root accepts this scoped implementation, not actual CUDA/Simulator/performance
+or final learning acceptance. Task3 and actual verification remain pending.
+
 ## Acceptance
 
 Task1 foundation reported418PythonPASS/27explicitSKIP, final affected125PASS,

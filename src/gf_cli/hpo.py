@@ -96,10 +96,13 @@ def _conditions(loaded: LoadedHPOConfig) -> Json:
         'decision_budget': loaded.config.decision_budget, 'learning_seeds': list(loaded.config.learning_seeds),
         'game_seeds': list(loaded.config.evaluation_game_seeds), 'inference_binding': asdict(loaded.config.inference),
         'cuda_visible_devices': child_cuda_visibility(loaded.config.inference.device, config.model.cuda_visible_devices)}
+    if hasattr(loaded.config,'runtime'):
+        from gf_common.hpo_resident import resident_runtime
+        value['evaluation_runtime'] = resident_runtime(loaded.config.runtime)
     if config.preprocessing.backend == 'rust':
         from gf_training.native_backend import binary_identity, hpo_reader_settings, load_native
         native = load_native()
-        hpo_reader_settings(config.preprocessing, native, packed=True)
+        hpo_reader_settings(config.preprocessing, native, packed=True,resident=hasattr(loaded.config,'runtime'))
         value['native_identity'] = binary_identity(native)
     return value
 
@@ -409,6 +412,7 @@ async def compare_trials(common: LoadedHPOConfig, left_path: Path, right_path: P
                 'left_training_seeds': list(left.config.learning_seeds), 'right_training_seeds': list(right.config.learning_seeds)}
             store.put('comparison.intent.json', header)
             panels = []
+            matchup_receipts = {}
             for left_seed in left.config.learning_seeds:
                 left_training = verify_training_receipt(left_store, left, left_campaign, left_proposal, left_seed,
                     deadline=time.monotonic() + common.config.run_wall_seconds)
@@ -418,10 +422,15 @@ async def compare_trials(common: LoadedHPOConfig, left_path: Path, right_path: P
                     _storage_boundary(store, common, operation_id=str(uuid.uuid4()))
                     panel = await evaluate_comparison(store, left, right, left_proposal, right_proposal,
                         left_training, right_training, comparison_id=comparison_id, conditions_sha256=condition_sha,
-                        output=output / 'evaluations' / str(uuid.uuid4()))
+                        output=output / 'evaluations' / str(uuid.uuid4()),
+                        evaluation_runtime=getattr(common.config,'runtime',None))
                     panels.append(panel)
+                    if hasattr(common.config,'runtime'):
+                        matchup_receipts[f'{left_seed}-{right_seed}'] = store.get(f'matchups/{left_seed}-{right_seed}/receipt.json')[1]
             table = comparison_table(left.config.learning_seeds, right.config.learning_seeds,
                 common.config.evaluation_game_seeds, common.config.decision_budget, condition_sha, tuple(panels))
+            if hasattr(common.config,'runtime'):
+                table.update(schema_version=2,matchup_receipts=matchup_receipts)
             table.update(left_profile=left.effective, right_profile=right.effective, request_sha256=store.get('comparison.intent.json')[1])
             store.put('comparison.json', table)
             return table

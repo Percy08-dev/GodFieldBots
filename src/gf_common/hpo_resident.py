@@ -141,6 +141,22 @@ def checked_cache_release(binding: Json, value: Any) -> Json:
 
 
 def require_hpo_runtime_execution(spec: Json) -> None:
-    """Temporary foundation guard until the actual resident pool is connected."""
+    """Validate explicit execution dispatch; legacy specifications remain fresh."""
     if type(spec.get('schema_version')) is int and spec['schema_version'] == 3:
-        raise ContractError('resident HPO execution is not activated; versioned foundation/readers only')
+        if 'runtime' not in spec:
+            raise ContractError('resident execution requires explicit runtime')
+        resident_runtime(spec['runtime'])
+
+
+def checked_evaluation_runtime(value: Json, linkage: Json, registry: Json) -> Json:
+    """Bind management execution evidence to already-validated panel originals."""
+    from gf_common.domain import clone, digest
+    raw = closed(value, {'schema_version','kind','runtime','evaluation_id','job_ticket',
+        'linkage_sha256','policy_registry_sha256'})
+    integer(raw['schema_version'],1,1)
+    resident_runtime(raw['runtime'])
+    if (raw['kind'] != 'hpo-resident-evaluation-runtime' or raw['evaluation_id'] != linkage['evaluation_id']
+            or raw['job_ticket'] != linkage['gpu_ticket'] or raw['linkage_sha256'] != digest(linkage)
+            or raw['policy_registry_sha256'] != digest(registry)):
+        raise ContractError('resident evaluation runtime differs from actual panel linkage/registry')
+    return clone(raw)

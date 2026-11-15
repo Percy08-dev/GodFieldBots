@@ -169,6 +169,9 @@ class SimulatorEnvironment:
                                            self.settings.actions, self.settings.worker_seconds, **worker_options)
         contexts[viewer] = None
 
+    def _before_worker_close(self, workers: dict[int, ParticipantWorker], result: EpisodeResult) -> None:
+        """Hook after original terminal reconciliation/journal persistence."""
+
     async def _ready_actors(self, workers: dict[int, ParticipantWorker], result: EpisodeResult) -> None:
         return
 
@@ -393,6 +396,7 @@ class SimulatorEnvironment:
                         journal.close_incomplete()
                     except (OSError, ValueError, RuntimeError) as close_error:
                         result.health["journal_close_failure"] = str(close_error)
+            self._before_worker_close(workers, result)
             closed = await asyncio.gather(*(worker.close(timeout=remaining()) for worker in workers.values()),
                                           return_exceptions=True)
             for worker in workers.values():

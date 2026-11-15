@@ -1,0 +1,64 @@
+# One fixed functional proposal plus canonical control; no strength/HPO sizing claim.
+# Use new campaign/storage paths for a new experiment; do not reuse old evidence.
+schema_version = 3
+kind = "ppo-hpo"
+base_experiment = "../experiments/hpo-resident-gru-base.toml"
+model_id = "gru"
+stage = "resident-gru-functional"
+trial_count = 1
+decision_budget = 64
+learning_seeds = [17]
+evaluation_game_seeds = ["00000000-0000-0000-0000-000000000001"]
+sampler_seed = 17
+startup_trials = 1
+session_seconds = 900
+run_wall_seconds = 600
+
+[runtime]
+mode = "resident-worker-v1"
+cache_entries = 6
+cache_weight_bytes = 134217728
+
+[model.state]
+hidden_sizes = [192]
+
+[model.hand]
+hidden_sizes = [192]
+latent_size = 192
+
+[model.temporal]
+hidden_size = 192
+num_layers = 2
+feedforward_size = 384
+
+[model.heads]
+actor_hidden_sizes = [192]
+critic_hidden_sizes = [192]
+
+[space]
+coupled = []
+
+[[space.parameters]]
+path = "training.epochs"
+kind = "fixed"
+value = 1
+
+[training]
+collection_games = 16
+
+[operating]
+max_updates = 2
+
+[storage]
+parent_root = "../../runs/hpo-resident-workers/functional/parents"
+numeric_root = "../../runs/hpo-resident-workers/functional/parents"
+optuna_path = "../../runs/hpo-resident-workers/functional/gru.sqlite3"
+originals_root = "../../runs/hpo-resident-workers/functional/originals"
+
+[training_opponents]
+version = "1"
+preset = "mixed-refresh-16-v1"
+
+[training_opponents.refresh]
+version = "1"
+attack_threshold = 12

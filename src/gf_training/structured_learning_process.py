@@ -227,7 +227,14 @@ class StructuredLearningProcess(LearningProcess):
                 raise ContractError('wire3 batch path/policy required')
             if self.steps is None:
                 raise ContractError('wire3 update before initialization')
-            self.ledger.begin_update(0)
+            resident_authority = getattr(getattr(self, '_issued_handle', None), 'resident_authority', None)
+            if resident_authority is None:
+                self.ledger.begin_update(0)
+            else:
+                from gf_training.hpo_gpu_lease import _AuditedLedger
+                if type(self.ledger) is not _AuditedLedger:
+                    raise ContractError("resident update requires SAME audited ledger")
+                self.ledger.begin_resident_update(0, authority=resident_authority)
         reply = await super().request(request, deadline)
         validate_reply(reply, command, self.identity)
         if command == 'close':

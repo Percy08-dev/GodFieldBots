@@ -10,7 +10,7 @@ import importlib
 import json
 import math
 import time
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass, field, fields, replace
 from pathlib import Path
 from types import ModuleType
 from typing import TYPE_CHECKING, Any
@@ -114,7 +114,7 @@ class HpoEvaluationPlan:
         return {label: RuntimePolicyBinding(**value) for label, value in json.loads(self._bindings_json).items()}
 
     def require_job(self, gpu_job: GpuJob) -> None:
-        if type(self) is not HpoEvaluationPlan or type(gpu_job) is not GpuJob:
+        if type(self) not in (HpoEvaluationPlan, ResidentHpoEvaluationPlan) or type(gpu_job) is not GpuJob:
             raise ContractError('exact HPO evaluation plan and live GPU job required')
         gpu_job._require_open()
         link = self.linkage
@@ -142,6 +142,40 @@ class HpoEvaluationPlan:
             raise ContractError('evaluation request extends declared operation deadlines')
 
 
+@dataclass(frozen=True)
+class ResidentHpoEvaluationPlan(HpoEvaluationPlan):
+    _execution_runtime_json: str
+    _pins: tuple[Any, ...] = field(repr=False,compare=False)
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        from gf_common.hpo_resident import checked_evaluation_runtime
+        raw = checked_evaluation_runtime(self.execution_runtime,self.linkage,json.loads(self._bindings_json))
+        if canonical(raw) != self._execution_runtime_json or type(self._pins) is not tuple:
+            raise ContractError('canonical resident evaluation runtime and original pin set required')
+
+    @property
+    def execution_runtime(self) -> Json:
+        return json.loads(self._execution_runtime_json)
+
+    @classmethod
+    def create_resident(cls, *args: Any, runtime: Json, pins: tuple[Any,...], **options: Any) -> ResidentHpoEvaluationPlan:
+        from gf_common.hpo_resident import resident_runtime
+        base = HpoEvaluationPlan.create(*args,**options)
+        link = base.linkage
+        binding = {'schema_version':1,'kind':'hpo-resident-evaluation-runtime','runtime':resident_runtime(runtime),
+            'evaluation_id':link['evaluation_id'],'job_ticket':link['gpu_ticket'],
+            'linkage_sha256':digest(link),'policy_registry_sha256':digest(json.loads(base._bindings_json))}
+        return cls(**{item.name:getattr(base,item.name) for item in fields(HpoEvaluationPlan)},
+            _execution_runtime_json=canonical(binding),_pins=pins)
+
+
+def execution_plan(*args: Any,runtime: Json | None,pins: tuple[Any,...],**options: Any) -> HpoEvaluationPlan:
+    if runtime is None:
+        return HpoEvaluationPlan.create(*args,**options)
+    return ResidentHpoEvaluationPlan.create_resident(*args,runtime=runtime,pins=pins,**options)
+
+
 class _HpoEvaluationCleanupObservation:
     """One invocation's existing owners; never a cleanup or data capability itself.
 
@@ -152,11 +186,12 @@ class _HpoEvaluationCleanupObservation:
 
     def __init__(self, plan: HpoEvaluationPlan, job: GpuJob, artifacts: Any) -> None:
         from gf_models.card_instance_artifacts import RetainedGameArtifacts
-        if type(plan) is not HpoEvaluationPlan or type(artifacts) is not RetainedGameArtifacts:
+        if type(plan) not in (HpoEvaluationPlan, ResidentHpoEvaluationPlan) or type(artifacts) is not RetainedGameArtifacts:
             raise ContractError('exact evaluation cleanup inputs required')
         plan.require_job(job)
         self._identity = (plan, job, job.ledger, artifacts)
         self._core_phase = 'unentered'
+        self._resident_runtime: Any = None
         self._run_phase = 'unentered'
         self._core_error: BaseException | None = None
         self._result: Any = None
@@ -227,6 +262,16 @@ class _HpoEvaluationCleanupObservation:
         self._runtime_originals[task] = (runtime, server, None if server is None else server.process,
             () if server is None else tuple(server.drainers))
 
+    def require_resident_resources_retired(self) -> None:
+        if self._resident_runtime is None:
+            return
+        _,job,ledger,_=self._identity
+        custody=self._resident_runtime.custody
+        if job._receipt is None:
+            custody.require_resource_retirement(job,ledger)
+        else:
+            custody.require_confirmed_resource_retirement(job,ledger,job._receipt)
+
     def require_core_retired(self, *, error: BaseException) -> None:
         from gf_simulator_client.card_instance_environment import CardInstanceSimulatorEnvironment
         from gf_training.card_instance_collection import CollectionPublication
@@ -263,6 +308,7 @@ class _HpoEvaluationCleanupObservation:
                 if (runtime._managed_server is not server or environment._storage_group_owner is not runtime
                         or (server is not None and (server.process is not process or tuple(server.drainers) != drainers))):
                     raise ContractError('evaluation runtime owners changed after actual group settlement')
+        self.require_resident_resources_retired()
         if self._pack_phase != 'unentered':
             pack = self._pack
             environments = [value[2] for value in self._groups.values() if value[2] is not None]
@@ -291,6 +337,7 @@ class _HpoEvaluationCleanupObservation:
     def release_artifacts(self) -> None:
         if self._artifact_phase != 'unentered':
             return  # A failed release is uncertainty, not permission to retry it.
+        self.require_resident_resources_retired()
         self._artifact_phase = 'releasing'
         self._identity[3].release()
         self._artifact_phase = 'retired'
@@ -316,8 +363,9 @@ class _HpoEvaluationCleanupObservation:
 
 def _receipt(value: Json, kind: str, fields: set[str]) -> Json:
     from gf_common.domain import closed, integer
-    closed(value, {'schema_version', 'kind'} | fields)
-    integer(value['schema_version'], 1, 1)
+    resident = kind == 'hpo-seed-evaluation' and value.get('schema_version') == 2
+    closed(value, {'schema_version', 'kind'} | fields | ({'execution_runtime_sha256'} if resident else set()))
+    integer(value['schema_version'], 2 if resident else 1, 2 if resident else 1)
     if value['kind'] != kind:
         raise ContractError('unexpected closed HPO evaluation receipt')
     return value
@@ -427,7 +475,8 @@ def verify_gpu_termination(value: Json, *, campaign_id: str, operation_id: str,
 
 def verify_saved_evaluation(directory: Path, loaded: LoadedHPOConfig, linkage: Json, *,
                             deadline: float, extra_owned_bytes: int = 0,
-                            _cleanup_observation: _HpoEvaluationCleanupObservation | None = None) -> tuple[Json, Json]:
+                            _cleanup_observation: _HpoEvaluationCleanupObservation | None = None,
+                            evaluation_runtime: Json | None = None) -> tuple[Json, Json]:
     """Reopen actual packed members and reconcile BOTH original participant views."""
     from gf_common.group_pack_game import storage_binding
     from gf_common.preprocessing import preparation_config
@@ -464,6 +513,7 @@ def verify_saved_evaluation(directory: Path, loaded: LoadedHPOConfig, linkage: J
         collection = _inspect_component_collection(owner, loaded.base.config.actions, 'validation', _game=True,
             _game_role=hpo_evaluation_role(2 * len(linkage['game_seeds'])))
         manifest = collection.manifest
+        check_evaluation_execution(manifest,evaluation_runtime)
         if canonical(manifest['linkage']) != canonical(linkage):
             raise ContractError('actual saved evaluation differs from exact original request')
         proof = collection.proof
@@ -492,6 +542,38 @@ def verify_saved_evaluation(directory: Path, loaded: LoadedHPOConfig, linkage: J
     if observation is not None:
         observation._verifier_phase = 'retired'
     return manifest, proof
+
+
+def check_evaluation_execution(manifest: Json, runtime: Json | None) -> None:
+    from gf_common.hpo_resident import checked_evaluation_runtime, resident_runtime
+    actual = manifest.get('execution_runtime')
+    if runtime is None:
+        if actual is not None or manifest['schema_version'] != 6:
+            raise ContractError('saved evaluation differs from explicitly fresh runtime')
+    else:
+        if manifest['schema_version'] != 7 or type(actual) is not dict:
+            raise ContractError('resident evaluation lacks explicit original execution runtime')
+        checked_evaluation_runtime(actual,manifest['linkage'],manifest['policy_bindings'])
+        if canonical(actual['runtime']) != canonical(resident_runtime(runtime)):
+            raise ContractError('saved evaluation runtime differs from requested recipe')
+
+
+def evaluation_receipt_runtime_fields(manifest: Json) -> Json:
+    if 'execution_runtime' not in manifest:
+        return {'schema_version':1}
+    from gf_common.hpo_resident import checked_evaluation_runtime
+    actual=checked_evaluation_runtime(manifest['execution_runtime'],manifest['linkage'],manifest['policy_bindings'])
+    return {'schema_version':2,'execution_runtime_sha256':digest(actual)}
+
+
+def check_evaluation_receipt_runtime(receipt: Json, manifest: Json) -> None:
+    if 'execution_runtime' in manifest:
+        from gf_common.hpo_resident import checked_evaluation_runtime
+        actual = checked_evaluation_runtime(manifest['execution_runtime'],manifest['linkage'],manifest['policy_bindings'])
+        if receipt.get('schema_version') != 2 or receipt.get('execution_runtime_sha256') != digest(actual):
+            raise ContractError('resident evaluation receipt differs from independently reopened runtime')
+    elif receipt.get('schema_version') != 1 or 'execution_runtime_sha256' in receipt:
+        raise ContractError('fresh evaluation receipt cannot assert resident runtime')
 
 
 def _projection(manifest: Json, parent: Json, source_sha: str, conditions_sha: str) -> Json:
@@ -563,7 +645,9 @@ def verify_seed_evaluation(store: object, loaded: LoadedHPOConfig, campaign: Jso
             or link['conditions_sha256'] != campaign['conditions_sha256']
             or canonical(link['left_parent']) != canonical(final_reference)):
         raise ContractError('seed evaluation differs from exact training/conditions identity')
-    manifest, proof = verify_saved_evaluation(Path(evaluation['directory']), loaded, link, deadline=deadline)
+    manifest, proof = verify_saved_evaluation(Path(evaluation['directory']), loaded, link, deadline=deadline,
+        evaluation_runtime=getattr(loaded.config,'runtime',None))
+    check_evaluation_receipt_runtime(evaluation,manifest)
     if canonical(manifest['policy_bindings'].get(final_reference['policy_label'])) != canonical(asdict(final_binding)):
         raise ContractError('original evaluated policy differs from the inspected final-D binding')
     expected_request, _ = store.get(folder + '/evaluation.intent.json')
@@ -695,8 +779,18 @@ def verify_training_receipt(store: object, loaded: LoadedHPOConfig, campaign: Js
 
 def _release_evaluation_pins(pins: list[tuple[Path, HpoReferenceReceipt]],
                              attempts: dict[int, HpoReferenceReceipt | BaseException], *,
-                             max_owned_bytes: int, deadline: float, primary: BaseException | None = None) -> None:
+                             max_owned_bytes: int, deadline: float, primary: BaseException | None = None,
+                             observation: _HpoEvaluationCleanupObservation | None = None) -> None:
     """Attempt every original pin once, preserving uncertain transaction owners."""
+    if observation is not None and observation._resident_runtime is not None:
+        try:
+            observation.require_resident_resources_retired()
+        except BaseException as cleanup:
+            if primary is not None:
+                vars(primary)['hpo_reference_cleanup'] = (pins,attempts)
+                primary.add_note('resident evaluation pins retained: '+str(cleanup))
+                return
+            raise
     retention = owned_runtime_module('gf_training.hpo_retention', ('release_hpo_evaluation',))
     first = primary
     for directory, acquired in reversed(pins):
@@ -736,7 +830,8 @@ def _confirm_failed_evaluation(error: BaseException, store: Any, name: str,
                     or acquired.binding['token'] != job.ticket or type(released) is not HpoReferenceReceipt
                     or released.phase != 'release' or canonical(released.binding) != canonical(acquired.binding)):
                 raise ContractError('evaluation pin retirement lacks exact typed release evidence')
-        receipt = job.confirm_termination()
+        receipt = (job.confirm_termination() if job._receipt is None else
+            job.require_confirmed_termination(job._receipt))
     except BaseException as cleanup:  # noqa: BLE001 -- global fsync/actual owner failure never masks data failure.
         vars(error)['hpo_termination_cleanup_error'] = cleanup
         error.add_note('evaluation resource termination unconfirmed: ' + str(cleanup))
@@ -817,7 +912,8 @@ async def evaluate_seed(store: object, loaded: LoadedHPOConfig, campaign: Json, 
             schedule = clone(serialize_schedule(groups, 4))
             link['learner_seats'] = {spec['episode_id']: spec['learner_viewer'] for group in schedule for spec in group['episodes']}
             link['schedule_digest'] = digest(schedule)
-            plan = HpoEvaluationPlan.create(groups, bindings, output, link, started_monotonic=started,
+            resident_runtime = getattr(loaded.config,'runtime',None)
+            plan = execution_plan(groups, bindings, output, link,runtime=resident_runtime,pins=tuple(pins), started_monotonic=started,
                 admission_deadline=started + run.admission_seconds, execution_deadline=execution,
                 work_deadline=work, wall_deadline=wall)
             owner = RetainedGameArtifacts.for_hpo_registry(bindings, config.actions, rules=card_instance_rules(),
@@ -830,7 +926,8 @@ async def evaluate_seed(store: object, loaded: LoadedHPOConfig, campaign: Json, 
                 if result.report.get('healthy') is not True:
                     raise ContractError('primary evaluation did not finish/save/clean up normally')
                 manifest, proof = verify_saved_evaluation(result.directory, loaded, link, deadline=work,
-                    extra_owned_bytes=owner._scan.peak, _cleanup_observation=observation)
+                    extra_owned_bytes=owner._scan.peak, _cleanup_observation=observation,
+                    evaluation_runtime=getattr(loaded.config,'runtime',None))
                 owner.finalize(deadline=work)
             except BaseException as error:
                 try:
@@ -843,7 +940,7 @@ async def evaluate_seed(store: object, loaded: LoadedHPOConfig, campaign: Json, 
                 observation.release_artifacts()
         except BaseException as error:
             _release_evaluation_pins(pins, releases, max_owned_bytes=loaded.config.operating.source_budget_bytes,
-                deadline=work, primary=error)
+                deadline=work, primary=error, observation=observation)
             raise
         else:
             _release_evaluation_pins(pins, releases, max_owned_bytes=loaded.config.operating.source_budget_bytes, deadline=work)
@@ -859,6 +956,8 @@ async def evaluate_seed(store: object, loaded: LoadedHPOConfig, campaign: Json, 
             'conditions_sha256': campaign['conditions_sha256'], 'pin_acquire_sha256': reference.receipt_sha256,
             'pin_release_sha256': released.receipt_sha256, 'gpu_termination_sha256': gpu_sha, 'directory': str(result.directory),
             'linkage': link, 'config_sha256': projected.sha256}
+        receipt.update(evaluation_receipt_runtime_fields(manifest))
+        check_evaluation_receipt_runtime(receipt,manifest)
         store.put(folder + '/evaluation.json', receipt)
         return receipt
     except BaseException as error:
@@ -872,7 +971,7 @@ async def evaluate_seed(store: object, loaded: LoadedHPOConfig, campaign: Json, 
                 vars(error)['hpo_artifact_cleanup_owner'] = owner
                 error.add_note('evaluation artifact cleanup: ' + str(cleanup))
         _release_evaluation_pins(pins, releases, max_owned_bytes=loaded.config.operating.source_budget_bytes,
-            deadline=started + run.wall_seconds - run.report_reserve_seconds, primary=error)
+            deadline=started + run.wall_seconds - run.report_reserve_seconds, primary=error, observation=observation)
         _confirm_failed_evaluation(error, store, folder + '/evaluation-failed-gpu-termination.json',
             observation, job, pins, releases)
         raise
@@ -880,11 +979,26 @@ async def evaluate_seed(store: object, loaded: LoadedHPOConfig, campaign: Json, 
         job.close()
 
 
+_RUNTIME_OMITTED = object()
+
+
+def comparison_execution_runtime(left: Any,right: Any,*,choice: Any = _RUNTIME_OMITTED) -> Json | None:
+    if choice is _RUNTIME_OMITTED:
+        if hasattr(left,'runtime') or hasattr(right,'runtime'):
+            raise ContractError('resident producer requires an explicit evaluation runtime table or explicit None for fresh')
+        return None
+    if choice is None:
+        return None
+    from gf_common.hpo_resident import resident_runtime
+    return resident_runtime(choice)
+
+
 async def evaluate_comparison(store: object, left: LoadedHPOConfig, right: LoadedHPOConfig,
                               left_proposal: object, right_proposal: object, left_training: Json,
                               right_training: Json, *, comparison_id: str, conditions_sha256: str,
-                              output: Path) -> ComparisonPanel:
+                              output: Path, evaluation_runtime: Any = _RUNTIME_OMITTED) -> ComparisonPanel:
     """One complete declared seed-pair matchup through the actual shared collector."""
+    evaluation_runtime = comparison_execution_runtime(left.config,right.config,choice=evaluation_runtime)
     require_hpo_runtime_execution(left.config)
     require_hpo_runtime_execution(right.config)
     from gf_cli.hpo_campaign import Proposal
@@ -938,7 +1052,7 @@ async def evaluate_comparison(store: object, left: LoadedHPOConfig, right: Loade
             parent_refs = []
             bindings = {}
             for loaded, proposal, training in ((left, left_proposal, left_training), (right, right_proposal, right_training)):
-                directory = Path(training['run_path'])
+                directory = Path(training['run_path']).resolve(strict=True)
                 if not any(existing[0] == directory for existing in pins):
                     acquired = retention.pin_hpo_evaluation(directory, job.ticket, training['generation'], training['inference_sha256'],
                         max_owned_bytes=left.config.operating.source_budget_bytes, deadline=execution)
@@ -961,7 +1075,7 @@ async def evaluate_comparison(store: object, left: LoadedHPOConfig, right: Loade
             schedule = clone(serialize_schedule(groups, 4))
             link.update(learner_seats={spec['episode_id']: spec['learner_viewer'] for group in schedule for spec in group['episodes']},
                 schedule_digest=digest(schedule))
-            plan = HpoEvaluationPlan.create(groups, bindings, output, link, started_monotonic=started,
+            plan = execution_plan(groups, bindings, output, link,runtime=evaluation_runtime,pins=tuple(pins), started_monotonic=started,
                 admission_deadline=started + run.admission_seconds, execution_deadline=execution, work_deadline=work, wall_deadline=wall)
             owner = RetainedGameArtifacts.for_hpo_registry(bindings, config.actions, rules=card_instance_rules(),
                 pool_size=config.hpo_spec['operating']['opponent_pool_size'], max_owned_bytes=core.hpo_artifact_budget(projected, bindings),
@@ -972,7 +1086,7 @@ async def evaluate_comparison(store: object, left: LoadedHPOConfig, right: Loade
                     _cleanup_observation=observation)
                 if result.report.get('healthy') is not True:
                     raise ContractError('comparison did not finish/save/clean up normally')
-                manifest, proof = verify_saved_evaluation(result.directory, left, link, deadline=work, extra_owned_bytes=owner._scan.peak, _cleanup_observation=observation)
+                manifest, proof = verify_saved_evaluation(result.directory, left, link, deadline=work, extra_owned_bytes=owner._scan.peak, _cleanup_observation=observation,evaluation_runtime=evaluation_runtime)
                 owner.finalize(deadline=work)
             except BaseException as error:
                 try:
@@ -985,7 +1099,7 @@ async def evaluate_comparison(store: object, left: LoadedHPOConfig, right: Loade
                 observation.release_artifacts()
         except BaseException as error:
             _release_evaluation_pins(pins, releases, max_owned_bytes=left.config.operating.source_budget_bytes,
-                deadline=work, primary=error)
+                deadline=work, primary=error, observation=observation)
             raise
         else:
             _release_evaluation_pins(pins, releases, max_owned_bytes=left.config.operating.source_budget_bytes, deadline=work)
@@ -999,7 +1113,7 @@ async def evaluate_comparison(store: object, left: LoadedHPOConfig, right: Loade
         seed_projection = SeedEvaluationProjection(run_identity, left_training['used_decisions'], conditions_sha256, games)
         panel = ComparisonPanel(left_training['training_seed'], right_training['training_seed'], right_training['run_id'],
             right_training['inference_sha256'], right_training['source_receipt_sha256'], right_training['used_decisions'], seed_projection)
-        store.put(folder + '/receipt.json', {'schema_version': 1, 'kind': 'hpo-comparison-matchup',
+        store.put(folder + '/receipt.json', {**evaluation_receipt_runtime_fields(manifest), 'kind': 'hpo-comparison-matchup',
             'linkage': link, 'manifest_sha256': proof['manifest_sha256'], 'originals_digest': proof['source_set_sha256'],
             'pin_acquire_receipts': [value.receipt_sha256 for _, value in pins],
             'pin_release_receipts': [value.receipt_sha256 for value in released], 'gpu_termination_sha256': gpu_sha,
@@ -1016,7 +1130,7 @@ async def evaluate_comparison(store: object, left: LoadedHPOConfig, right: Loade
                 vars(error)['hpo_artifact_cleanup_owner'] = owner
                 error.add_note('comparison artifact cleanup: ' + str(cleanup))
         _release_evaluation_pins(pins, releases, max_owned_bytes=left.config.operating.source_budget_bytes,
-            deadline=work, primary=error)
+            deadline=work, primary=error, observation=observation)
         _confirm_failed_evaluation(error, store, folder + '/failed-gpu-termination.json',
             observation, job, pins, releases)
         raise

@@ -688,6 +688,23 @@ class GpuJob:
         if self._sealed or self._poisoned:
             raise ContractError("GPU job is sealed or poisoned")
 
+    def require_confirmed_termination(self,receipt: TerminationReceipt) -> TerminationReceipt:
+        """Read-only validation of this still-owned job's exact confirmed proof."""
+        self._require_owner()
+        if self._poisoned or not self._sealed or self._receipt is None or receipt is not self._receipt:
+            raise ContractError('SAME unpoisoned already-confirmed termination receipt required')
+        ledger=self._ledger
+        proofs=tuple(token._proof for token in ledger._history)
+        if (ledger.workers or ledger.learner is not None or ledger.updating or ledger._resident_temporary
+                or ledger._resident_transition or len(proofs)!=len(receipt.resources)
+                or any(not token.released or token.creation_pending or token._proof is None for token in ledger._history)
+                or any(proof is not recorded for proof,recorded in zip(proofs,receipt.resources,strict=True))):
+            raise ContractError('confirmed termination original resource history changed')
+        path=self._lock.root/'jobs'/self.ticket/'termination.json'
+        if _termination(_read(path),self._admission)!=receipt:
+            raise ContractError('original confirmed durable termination receipt changed')
+        return receipt
+
     def confirm_termination(self) -> TerminationReceipt:
         self._require_owner()
         if self._receipt is not None:

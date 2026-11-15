@@ -271,11 +271,12 @@ async def _run_corrected(loaded: LoadedConfig, command: str,
                          owned_ledger: ReservationLedger | None = None,
                          _final_validation_context: Any = None,
                          _hpo_evaluation_job: Any = None,
-                         _hpo_evaluation_cleanup: Any = None) -> tuple[Path, Any] | PackedRunResult:
+                         _hpo_evaluation_cleanup: Any = None,
+                         resident_pool: Any = None) -> tuple[Path, Any] | PackedRunResult:
     config = loaded.config
     from gf_cli.hpo_config import HPOExperimentConfig
-    from gf_cli.hpo_evaluation import HpoEvaluationPlan
-    eval_plan=cast(HpoEvaluationPlan,collection) if type(collection) is HpoEvaluationPlan else None
+    from gf_cli.hpo_evaluation import HpoEvaluationPlan, ResidentHpoEvaluationPlan
+    eval_plan=cast(HpoEvaluationPlan,collection) if type(collection) in (HpoEvaluationPlan, ResidentHpoEvaluationPlan) else None
     observation = _hpo_evaluation_cleanup
     hpo_training=type(config) is HPOExperimentConfig and type(collection) is CollectionPlan
     if eval_plan is not None:
@@ -310,7 +311,7 @@ async def _run_corrected(loaded: LoadedConfig, command: str,
         if eval_plan is not None:
             eval_plan.require(loaded,gpu_job=_hpo_evaluation_job)
         elif _final_validation_context is None:
-            _validate_online_collection(loaded, cast(CollectionPlan, collection), owned_ledger, preflight_deadline)
+            _validate_online_collection(loaded, cast(CollectionPlan, collection), owned_ledger, preflight_deadline, resident_phase=None if resident_pool is None else resident_pool.admission)
         else:
             _validate_final_collection(loaded, collection, owned_ledger, _final_validation_context, preflight_deadline)
     run_id = eval_plan.linkage['evaluation_id'] if eval_plan is not None else str(uuid.uuid4())
@@ -333,6 +334,8 @@ async def _run_corrected(loaded: LoadedConfig, command: str,
     ledger = (ReservationLedger(config.run.global_cuda_budget_bytes, config.run.max_participant_workers)
               if owned_ledger is None else owned_ledger)
     extra: dict[str, Any] = {} if artifact_inputs is None else {"artifact_inputs": artifact_inputs}
+    if resident_pool is not None:
+        extra["resident_pool"] = resident_pool
     semaphore = asyncio.Semaphore(config.run.concurrency)
     tasks: list[asyncio.Task[GroupResult]] = []
     admission_closed = False
@@ -351,7 +354,7 @@ async def _run_corrected(loaded: LoadedConfig, command: str,
                 eval_plan.require(loaded,gpu_job=_hpo_evaluation_job)
                 owned_directory=Path(config.storage.db_root)/run_id
             elif _final_validation_context is None:
-                online = _validate_online_collection(loaded, cast(CollectionPlan, collection), owned_ledger, preflight_deadline)
+                online = _validate_online_collection(loaded, cast(CollectionPlan, collection), owned_ledger, preflight_deadline, resident_phase=None if resident_pool is None else resident_pool.admission)
                 owned_directory = Path(config.storage.db_root) / online.state['run_id'] / 'collections' / collection.linkage['batch_id']
             else:
                 _validate_final_collection(loaded, collection, owned_ledger, _final_validation_context, preflight_deadline)
@@ -461,6 +464,9 @@ async def _run_corrected(loaded: LoadedConfig, command: str,
             observation._task_phase = 'settled'
         groups = await asyncio.gather(*tasks)
         episodes = [episode for group in groups for episode in group.episodes]
+        if resident_pool is not None:
+            await resident_pool.retire_unused()
+            resident_pool.retire_collection().require(ledger)
         if packed is not None:
             from gf_training.group_pack_resources import json_bound
             packed.reserve_metadata(32 * json_bound(loaded.effective) + 65536)
@@ -480,12 +486,15 @@ async def _run_corrected(loaded: LoadedConfig, command: str,
                 raise ContractError("corrected collection has unreaped resource ownership before publication")
         else:
             if eval_plan is not None:
-                _require_hpo_evaluation_retirement(eval_plan,_hpo_evaluation_job,ledger)
+                _require_hpo_evaluation_retirement(eval_plan,_hpo_evaluation_job,ledger,resident_pool=resident_pool)
             elif _final_validation_context is None:
-                _validate_online_collection(loaded, cast(CollectionPlan, collection), ledger, work_deadline)
+                _validate_online_collection(loaded, cast(CollectionPlan, collection), ledger, work_deadline,
+                    resident_phase=None if resident_pool is None else resident_pool.authority)
             else:
                 _validate_final_collection(loaded, collection, ledger, _final_validation_context, work_deadline)
-            if ledger.workers or ledger.updating:
+            if resident_pool is not None:
+                resident_pool.authority.require(ledger)
+            elif ledger.workers or ledger.updating:
                 raise ContractError("PPO collection has unreaped participant/update ownership")
         expected = {spec.episode_id: (spec, group.health["runtime_evidence"])
                     for plan, group in zip(planned, groups, strict=True) for spec in plan.episodes}
@@ -511,9 +520,14 @@ async def _run_corrected(loaded: LoadedConfig, command: str,
             {"policy_bindings": bindings} if neural_inputs is None and configured_baseline else
             {} if neural_inputs is None else {"policy_bindings": bindings, "neural_inputs": neural_inputs})
         metadata_producer: Any = collection_metadata if collection is None else ppo_collection_metadata
+        if hpo_training and resident_pool is not None:
+            metadata_options["logical_retirement"] = resident_pool.authority.evidence
         if hpo_training:
             from gf_training.hpo_collection import hpo_collection_metadata
             metadata_producer=hpo_collection_metadata
+        if type(eval_plan) is ResidentHpoEvaluationPlan:
+            metadata_options.update(execution_runtime=eval_plan.execution_runtime,
+                logical_retirement=resident_pool.authority.evidence)
         if eval_plan is not None:
             from gf_training.card_instance_collection import hpo_evaluation_collection_metadata
             metadata_producer=hpo_evaluation_collection_metadata
@@ -643,14 +657,14 @@ def _write_diagnostic(directory: Path, name: str, value: Json) -> None:
 
 
 def _validate_online_collection(loaded: LoadedConfig, plan: CollectionPlan,
-                                 ledger: ReservationLedger, deadline: float) -> Any:
+                                 ledger: ReservationLedger, deadline: float, *, resident_phase: Any = None) -> Any:
     from gf_training.card_instance_source import validate_owned_collection
     if not isinstance(loaded.config.training, PPOTrainingConfig):
         raise ContractError("online card-instance collection requires PPO training")
     online = validate_owned_collection(plan, ledger,
         max_owned_bytes=min(loaded.config.training.max_owned_bytes,
                             loaded.config.preprocessing.memory_budget_mib * 1024**2),
-        deadline=deadline)
+        deadline=deadline, **({} if resident_phase is None else {'resident_phase':resident_phase}))
     effective = asdict(loaded.config)
     if (loaded.sha256 != online.state["config_sha256"] or digest(effective) != loaded.sha256
             or canonical(loaded.effective) != canonical(effective)
@@ -730,7 +744,11 @@ async def collect_hpo_ppo(loaded: LoadedConfig,plan: CollectionPlan,ledger: Rese
         raise ContractError('HPO collector requires owned corrected runtime/actions/run settings')
     require_storage_command(config,'collect',standalone=False)
     _require_actions(loaded)
-    online=_validate_online_collection(loaded,plan,ledger,plan.execution_deadline)
+    custody = getattr(ledger, '_resident_pool', None)
+    resident_phase = None if custody is None else custody._admission
+    online=_validate_online_collection(loaded,plan,ledger,plan.execution_deadline,resident_phase=resident_phase)
+    resident = online.resident_runtime
+    pool = None if resident is None else resident.pool
     from gf_training.hpo_source import require_hpo_production
     require_hpo_production(online.state)
     operating=config.hpo_spec['operating']
@@ -751,12 +769,12 @@ async def collect_hpo_ppo(loaded: LoadedConfig,plan: CollectionPlan,ledger: Rese
     try:
         admissions=[admit_hpo_game_workers(config.actions,(plan.bindings[spec.policies[0]],plan.bindings[spec.policies[1]]),
             rules=card_instance_rules(),game_concurrency=config.run.concurrency,global_cuda_bytes=config.run.global_cuda_budget_bytes,
-            max_workers=config.run.max_participant_workers,learner_cuda_bytes=ledger.cuda_bytes)
+            max_workers=config.run.max_participant_workers,learner_cuda_bytes=ledger.learner.resident_bytes if pool is not None and ledger.learner is not None else ledger.cuda_bytes)
             for group in plan.groups for spec in group.episodes]
         if not admissions: raise ContractError('HPO collection cannot have an empty schedule')
         result=await _run_corrected(loaded,'collect',plan.bindings,tuple(plan.bindings),started=started,
             artifact_inputs=owner,runtime_evidence=evidence,
-            resource_admission=max(admissions,key=lambda row:row['peak_cuda_bytes']),collection=plan,owned_ledger=ledger)
+            resource_admission=max(admissions,key=lambda row:row['peak_cuda_bytes']),collection=plan,owned_ledger=ledger,**({} if pool is None else {'resident_pool':pool}))
         if type(result) is not PackedRunResult: raise ContractError('HPO collector did not return its actual packed publication')
         return PackedFinalizedCollection(result.directory,result.report,result.locator,cast(str,result.envelope_sha256),result.storage_metrics)
     finally:
@@ -776,11 +794,11 @@ def hpo_artifact_budget(loaded: LoadedConfig,bindings: dict[str,RuntimePolicyBin
 
 
 def _require_hpo_evaluation_retirement(plan: HpoEvaluationPlan,gpu_job: GpuJob,
-                                        ledger: ReservationLedger) -> None:
+                                        ledger: ReservationLedger, *, resident_pool: Any = None) -> None:
     """Post-admission cleanup checks never reopen or extend the admission window."""
-    from gf_cli.hpo_evaluation import HpoEvaluationPlan
+    from gf_cli.hpo_evaluation import HpoEvaluationPlan, ResidentHpoEvaluationPlan
     from gf_training.hpo_gpu_lease import GpuJob
-    if type(plan) is not HpoEvaluationPlan or type(gpu_job) is not GpuJob:
+    if type(plan) not in (HpoEvaluationPlan, ResidentHpoEvaluationPlan) or type(gpu_job) is not GpuJob:
         raise ContractError('exact held evaluation plan/job required')
     gpu_job._require_open()
     link=plan.linkage
@@ -788,7 +806,10 @@ def _require_hpo_evaluation_retirement(plan: HpoEvaluationPlan,gpu_job: GpuJob,
         'run_id':link['left_parent']['run_id'],'evaluation_id':link['evaluation_id']}
     if gpu_job.ticket!=link['gpu_ticket'] or gpu_job._admission['context']!=expected or ledger is not gpu_job.ledger:
         raise ContractError('evaluation cleanup differs from SAME job/context/ledger')
-    if ledger.workers or ledger.learner is not None or ledger.updating or ledger.cuda_bytes:
+    if resident_pool is not None:
+        resident_pool.authority.require(ledger)
+        resident_pool.custody.evaluation_scope.require(gpu_job,plan)
+    elif ledger.workers or ledger.learner is not None or ledger.updating or ledger.cuda_bytes:
         raise ContractError('evaluation still has live participant/learner ownership')
     plan.__post_init__()
     _check(min(plan.execution_deadline,plan.work_deadline,plan.wall_deadline))
@@ -812,16 +833,22 @@ async def collect_hpo_evaluation(loaded: LoadedConfig, plan: HpoEvaluationPlan, 
     return result
 
 
+def _require_hpo_evaluation_policy(binding: RuntimePolicyBinding) -> None:
+    options=binding.policy_options
+    if options is None or options['version']!='4' or options['inference']['device']!='cuda:0':
+        raise ContractError('HPO evaluation requires planned model4 CUDA neural inference')
+
+
 async def _collect_hpo_evaluation(loaded: LoadedConfig,plan: HpoEvaluationPlan,*,gpu_job: GpuJob,
                                    artifact_inputs: RetainedGameArtifacts,
                                    _cleanup_observation: _HpoEvaluationCleanupObservation) -> PackedRunResult:
     """Borrow the outer evaluator's exact custody owner through the one collector."""
     from gf_cli.hpo_config import HPOExperimentConfig
-    from gf_cli.hpo_evaluation import HpoEvaluationPlan
+    from gf_cli.hpo_evaluation import HpoEvaluationPlan, ResidentHpoEvaluationPlan
     from gf_common.card_instance_rules import card_instance_rules
     from gf_models.card_instance_artifacts import RetainedGameArtifacts
     from gf_models.structured_runtime import admit_hpo_game_workers
-    if type(plan) is not HpoEvaluationPlan or type(artifact_inputs) is not RetainedGameArtifacts:
+    if type(plan) not in (HpoEvaluationPlan, ResidentHpoEvaluationPlan) or type(artifact_inputs) is not RetainedGameArtifacts:
         raise ContractError('evaluation requires its exact plan and actual retained artifact owner')
     plan.require(loaded,gpu_job=gpu_job)
     config=loaded.config
@@ -843,8 +870,7 @@ async def _collect_hpo_evaluation(loaded: LoadedConfig,plan: HpoEvaluationPlan,*
     for value in bindings.values():
         if value.policy_options is not None:
             artifact_inputs.require_options(value.model_id,value.policy_options)
-            if value.policy_options['version']!='4' or value.policy_options['inference']['device']!='cuda:0':
-                raise ContractError('HPO evaluation requires planned model4 CUDA neural inference')
+            _require_hpo_evaluation_policy(value)
     owned=artifact_inputs.finalize(deadline=min(plan.execution_deadline,plan.work_deadline))
     if set(owned['policies'])!=neural:
         raise ContractError('evaluation borrowed owner differs from exact frozen role bindings')
@@ -857,11 +883,21 @@ async def _collect_hpo_evaluation(loaded: LoadedConfig,plan: HpoEvaluationPlan,*
         rules=card_instance_rules(),game_concurrency=config.run.concurrency,global_cuda_bytes=ledger.global_cuda_bytes,
         max_workers=ledger.max_workers,learner_cuda_bytes=0) for group in plan.groups for spec in group.episodes]
     if not admissions: raise ContractError('empty HPO evaluation panel')
-    _cleanup_observation._run_phase = 'requested'
-    result=await _run_corrected(loaded,'evaluate',bindings,tuple(bindings),started=plan.started_monotonic,
-        artifact_inputs=artifact_inputs,runtime_evidence=evidence,resource_admission=max(admissions,key=lambda row:row['peak_cuda_bytes']),
-        collection=plan,owned_ledger=ledger,_hpo_evaluation_job=gpu_job,
-        _hpo_evaluation_cleanup=_cleanup_observation)
+    resident_runtime = None
+    if type(plan) is ResidentHpoEvaluationPlan:
+        from gf_training.hpo_resident_runtime import ResidentEvaluationRuntime
+        resident_runtime = ResidentEvaluationRuntime(gpu_job,plan,artifact_inputs,config)
+        _cleanup_observation._resident_runtime = resident_runtime
+    try:
+        _cleanup_observation._run_phase = 'requested'
+        result=await _run_corrected(loaded,'evaluate',bindings,tuple(bindings),started=plan.started_monotonic,
+            artifact_inputs=artifact_inputs,runtime_evidence=evidence,resource_admission=max(admissions,key=lambda row:row['peak_cuda_bytes']),
+            collection=plan,owned_ledger=ledger,_hpo_evaluation_job=gpu_job,
+            _hpo_evaluation_cleanup=_cleanup_observation,
+            **({} if resident_runtime is None else {'resident_pool':resident_runtime.pool}))
+    finally:
+        if resident_runtime is not None:
+            await resident_runtime.close()
     _require_hpo_evaluation_retirement(plan,gpu_job,ledger)
     if (type(result) is not PackedRunResult or result.directory!=plan.output or result.report.get('healthy') is not True
             or result.report.get('comparison_valid') is not True or result.storage_metrics.get('publication_scope')!='published'):

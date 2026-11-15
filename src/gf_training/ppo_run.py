@@ -538,7 +538,8 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
             if ops:
                 ops.initialize_state(state, config)
             if ops:
-                ops.persist_control(directory / 'artifact-registry.json', ({'schema_version':4,'generations':{},'evaluation_references':{}} if hpo else
+                ops.persist_control(directory / 'artifact-registry.json', ({'schema_version':ops.registry_schema,'generations':{},'evaluation_references':{}}
+                    | ({'cache_references':{}} if ops.registry_schema == 5 else {}) if hpo else
                     {'schema_version': 3 if game else 2, 'generations': {}}), config, deadline=identity_deadline)
                 ops.persist_control(directory / 'run.json', state, config, deadline=identity_deadline)
             else:
@@ -584,7 +585,10 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
         if game:
             ops.bind_run(ownership, state)
         if ops:
-            child, ledger = ops.make_child(directory, config, state, deadline=execution)
+            if hpo and config.hpo_spec['schema_version']==3:
+                child, ledger = ops.make_child(directory, config, state, deadline=execution,cleanup_deadline=wall)
+            else:
+                child, ledger = ops.make_child(directory, config, state, deadline=execution)
         else:
             child = LearningProcess(directory, training.max_log_bytes)
         error: BaseException | None = None
@@ -673,7 +677,9 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
                         assert ledger is not None
                         ops.validate_owned_collection(plan, ledger, config=config, deadline=execution)
                         collection = await collector(plan, ledger)
-                        if ledger.workers or ledger.updating:
+                        if hpo and getattr(ops, 'resident_runtime', None) is not None:
+                            ops.resident_runtime.pool.authority.require(ledger)
+                        elif ledger.workers or ledger.updating:
                             raise ContractError('structured collection returned unreaped participants or active update')
                     else:
                         collection = await collector(plan)
@@ -790,8 +796,11 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
                             update.update(schema_version=2, model_id=state['model_id'], model_version='2', input_recipe=state['input_recipe'],
                                           action_contract=state['action_contract'], purpose='component', synthetic_capacity=False,
                                           numeric_files=numeric_files)
-                        ops.commit(directory, state, config, generation=next_generation, update=update,
+                        committed_record = ops.commit(directory, state, config, generation=next_generation, update=update,
                             controls=ops.controls(rng,pool,next_generation) if hpo else _controls(rng, pool, next_generation), acknowledgement=acknowledgement, deadline=execution)
+                        if hpo and getattr(ops, 'resident_runtime', None) is not None:
+                            generation_scope.close()  # Retire original Source/control/registry snapshots BEFORE pins.
+                            await ops.resident_runtime.after_commit(next_generation, committed_record)
                         ops.retain(directory, next_generation, config, execution)
                     else:
                         commit_generation(directory, state, generation=next_generation, update=update, controls=_controls(rng, pool, next_generation), deadline=execution)
@@ -805,6 +814,12 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
         except BaseException as failure:  # noqa: BLE001 - persist failure after owned cleanup
             error = failure
         finally:
+            try:
+                if hpo and getattr(ops, 'resident_runtime', None) is not None:
+                    await ops.resident_runtime.close()
+            except BaseException as failure:  # noqa: BLE001 - actual pool cleanup precedes learner termination
+                error = error or failure
+                state['cleanup_failure'] = str(failure)
             try:
                 await child.close(min(wall, time.monotonic() + training.cleanup_seconds))
             except BaseException as failure:  # noqa: BLE001 - persist failure after owned cleanup

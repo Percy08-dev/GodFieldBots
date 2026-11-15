@@ -466,6 +466,7 @@ class _OnlineGameOwner:
     formal_control: Any = None
     packed_batch: Any = None
     hpo_job: Any = None
+    resident_runtime: Any = None
 
     def _require_hpo_job(self) -> None:
         from gf_training.lineage import require_hpo_run_owner
@@ -493,12 +494,12 @@ class _OnlineGameOwner:
 
 
 def validate_owned_collection(plan: CollectionPlan, ledger: Any, *, max_owned_bytes: int,
-                              deadline: float) -> _OnlineGameOwner:
+                              deadline: float, resident_phase: Any = None) -> _OnlineGameOwner:
     from gf_simulator_client.structured_resources import ReservationLedger
     from gf_training.hpo_gpu_lease import _AuditedLedger
     from gf_training.hpo_learning_process import HpoLearningProcess
     from gf_training.structured_learning_process import GameLearningProcess
-    if type(ledger) not in (ReservationLedger,_AuditedLedger) or ledger.learner is None or ledger.workers or ledger.updating:
+    if type(ledger) not in (ReservationLedger,_AuditedLedger) or ledger.learner is None or ledger.updating:
         raise ContractError('online collection requires idle SAME learner ledger')
     child = ledger.learner._cleanup_owner
     if type(child) not in (GameLearningProcess, HpoLearningProcess) or type(getattr(child, 'online_owner', None)) is not _OnlineGameOwner:
@@ -507,6 +508,23 @@ def validate_owned_collection(plan: CollectionPlan, ledger: Any, *, max_owned_by
     if type(ledger) is _AuditedLedger and (type(child) is not HpoLearningProcess or not _hpo(owner.state)):
         raise ContractError('audited HPO ledger cannot enter an ordinary Source')
     owner.check()
+    from gf_common.hpo_resident import is_resident
+    if is_resident(owner.state):
+        from gf_training.hpo_resident import CollectionAdmission, ParkedAuthority
+        runtime = owner.resident_runtime
+        if runtime is None or ledger._resident_pool is not runtime.custody:
+            raise ContractError('resident collection lacks SAME actual invocation pool')
+        if type(resident_phase) is CollectionAdmission:
+            resident_phase.require(plan, ledger)
+        elif type(resident_phase) is ParkedAuthority:
+            resident_phase.require(ledger)
+            if (resident_phase.evidence['generation'] != plan.linkage['collection_generation']
+                    or resident_phase.evidence['collection_id'] != plan.linkage['batch_id']):
+                raise ContractError('resident completed collection differs from original plan')
+        else:
+            raise ContractError('resident collection requires explicit live admission or completed PARK phase')
+    elif ledger.workers or resident_phase is not None:
+        raise ContractError('ordinary online collection requires reaped participants')
     generation = plan.linkage.get('collection_generation')
     if owner.collection_controls is None:
         guard = SealedScan(max_owned_bytes=max_owned_bytes, deadline=deadline)
@@ -602,9 +620,16 @@ class IssuedGameProjection:
     _hpo_ack_source_floor: int = field(default=0, init=False, repr=False)
     _hpo_save_phase: str = field(default='empty', init=False, repr=False)
     _hpo_save_error: BaseException | None = field(default=None, init=False, repr=False)
+    resident_authority: Any = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
         hpo = _hpo(self.source.state)
+        from gf_common.hpo_resident import is_resident
+        if is_resident(self.source.state):
+            self.resident_authority = self.source.online.resident_runtime.pool.authority
+            self.resident_authority.require(self.source.online.ledger)
+            if canonical(self.source.proof['logical_retirement']) != canonical(self.resident_authority.evidence):
+                raise ContractError('resident issued Source differs from actual original logical retirement')
         self._verified_decisions = integer(self.source.selection['used_decisions'] if hpo else self.source.decision_count, 1)
         self._verified_collected = integer(self.source.decision_count, self._verified_decisions)
         self._verified_delta = integer(self.expectation['expected_optimizer_step_delta'] if hpo else
@@ -625,6 +650,8 @@ class IssuedGameProjection:
         return json.loads(self._expectation)
 
     def require(self, process: Any, *, after: bool = False) -> None:
+        if self.resident_authority is not None:
+            self.resident_authority.require(self.source.online.ledger)
         if self._hpo_save_error is not None:
             raise self._hpo_save_error
         if self._decoded_retirement_error is not None:
@@ -739,6 +766,8 @@ class IssuedGameProjection:
 
     def retire_packed_decoded(self) -> None:
         """One guarded consumed-graph boundary; physical originals remain live."""
+        if self.resident_authority is not None:
+            self.resident_authority.require(self.source.online.ledger)
         from gf_training.group_pack_game_source import PackedBatchCustody, PackedSourceOwner
         source = self.source
         if type(source) is not _GameBatchSource:
@@ -760,7 +789,7 @@ class IssuedGameProjection:
         owner = custody.owner
         self.require(self.process, after=True)
         if (self.process._issued_handle is not None or source.online.ledger.updating
-                or source.online.ledger.workers or any(s._loans for s in owner.pool.sources)):
+                or (source.online.ledger.workers and self.resident_authority is None) or any(s._loans for s in owner.pool.sources)):
             raise ContractError('learner request, numeric update or group borrow remains active')
         source.recheck_originals()
         try:
@@ -1211,7 +1240,12 @@ def _open_batch(plan: CollectionPlan, state: Json, records: list[Json], controls
 @contextmanager
 def game_batch_source(plan: CollectionPlan, ledger: Any, *, max_owned_bytes: int, deadline: float,
                       extra_owned_bytes: int = 0) -> Iterator[_GameBatchSource]:
-    online = validate_owned_collection(plan, ledger, max_owned_bytes=max_owned_bytes, deadline=deadline)
+    from gf_training.hpo_resident import ParkedAuthority
+    pool = getattr(ledger, '_resident_pool', None)
+    phase = None if pool is None else pool._authority
+    if pool is not None and type(phase) is not ParkedAuthority:
+        raise ContractError('resident Source requires completed collection PARK, never admission')
+    online = validate_owned_collection(plan, ledger, max_owned_bytes=max_owned_bytes, deadline=deadline, **({} if phase is None else {"resident_phase":phase}))
     controls = _ChainScan(directory=online.ownership.directory, max_owned_bytes=max_owned_bytes, deadline=deadline)
     with controls:
         controls.configure_packed(online.state)
@@ -1227,6 +1261,10 @@ def game_batch_source(plan: CollectionPlan, ledger: Any, *, max_owned_bytes: int
         settings = preparation_config(state['effective_config']['preprocessing'])
         with _open_batch(plan, state, records, controls, settings, online=online,
             max_owned_bytes=max_owned_bytes, deadline=deadline, extra_owned_bytes=extra_owned_bytes) as source:
+            if phase is not None:
+                phase.require(ledger)
+                if canonical(source.proof['logical_retirement']) != canonical(phase.evidence):
+                    raise ContractError('resident Source retirement differs from SAME original collection/pool')
             yield source
 
 

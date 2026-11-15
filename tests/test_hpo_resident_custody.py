@@ -456,3 +456,57 @@ def test_cache_transactions_borrow_original_coordinator_lock_and_retry(global_ro
             if process.poll() is None:
                 cleanup(worker,process)
         job.confirm_termination()
+
+
+def test_live_collection_admission_is_distinct_original_plan_and_owner_readiness(global_root, tmp_path):
+    from gf_common.domain import RuntimePolicyBinding
+    from gf_training.collection import CollectionPlan
+    from gf_training.hpo_resident import ResidentPoolCustody
+    with admit() as job:
+        owner, worker, process = spawn_worker(job, script='import time;time.sleep(30)')
+        pool = ResidentPoolCustody(job, run_id='run-a', pool_id='b'*32)
+        pool.register(worker, owner, viewer=1)
+        plan = CollectionPlan((), {'random': RuntimePolicyBinding('random')}, tmp_path,
+            {'parent_run_id': 'run-a', 'collection_generation': 0, 'batch_id': 'batch-000000'}, 1e12, 1e12)
+        try:
+            admission = pool.admit_collection(plan, job.ledger)
+            with pytest.raises(ContractError, match='ready'):
+                pool.begin_admitted_lease(admission, worker, binding=plan.bindings['random'])
+            with pytest.raises(ContractError):
+                pool.parked_authority(generation=0, collection_id='batch-000000')
+            request = pool.bootstrap_request(worker)
+            pool.observe_bootstrap_ready(worker, {**request, 'kind': 'READY', 'clean_reset': True,
+                'private_state_empty': True, 'pending_io_empty': True, 'cuda_synchronized': True,
+                'reset_version': 'resident-reset-v1'})
+            identity = pool.begin_admitted_lease(admission, worker, binding=plan.bindings['random'])
+            assert identity['lease_epoch'] == 1 and admission.phase == 'collecting'
+            plan.bindings['random'] = RuntimePolicyBinding('heuristic')
+            with pytest.raises(ContractError, match='original'):
+                admission.require(plan, job.ledger)
+        finally:
+            cleanup(worker, process)
+        job.confirm_termination()
+
+
+def test_confirmed_retirement_is_read_only_same_unpoisoned_original_receipt(global_root):
+    from dataclasses import replace
+    with admit() as job:
+        pool,_,worker,process=setup_pool(job)
+        with pytest.raises(ContractError): pool.require_confirmed_resource_retirement(job,job.ledger,None)
+        cleanup(worker,process)
+        pool.require_resource_retirement(job,job.ledger)
+        receipt=job.confirm_termination()
+        pool.require_confirmed_resource_retirement(job,job.ledger,receipt)
+        with pytest.raises(ContractError): pool.require_confirmed_resource_retirement(job,job.ledger,replace(receipt))
+        with pytest.raises(ContractError): pool.require_resource_retirement(job,job.ledger)
+        with pytest.raises(ContractError): job.ledger.reserve_worker(1)
+        job._poisoned=True
+        with pytest.raises(ContractError): pool.require_confirmed_resource_retirement(job,job.ledger,receipt)
+        job._poisoned=False
+        path=job._lock.root/'jobs'/job.ticket/'termination.json'
+        original=path.read_bytes()
+        from gf_models.arrays import atomic_json
+        atomic_json(path,{**__import__('json').loads(original),'resources':[]})
+        with pytest.raises(ContractError): pool.require_confirmed_resource_retirement(job,job.ledger,receipt)
+        path.write_bytes(original)
+        pool.require_confirmed_resource_retirement(job,job.ledger,receipt)

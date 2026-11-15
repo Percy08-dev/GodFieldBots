@@ -170,18 +170,18 @@ def test_collection7_requires_original_retirement_and_proof4_preserves_it(tmp_pa
 
 
 @pytest.mark.parametrize('entry', ['campaign','compare'])
-def test_unactivated_resident_campaign_refuses_before_storage_or_job(tmp_path, monkeypatch, entry):
+def test_activated_resident_campaign_reaches_existing_production_validation(tmp_path, monkeypatch, entry):
     import asyncio
 
     import gf_cli.hpo as cli
     from gf_cli.hpo_config import campaign_config
     loaded = campaign_config({**campaign_raw(),'schema_version':3,'runtime':RUNTIME},origin=tmp_path)
     def forbidden(*args, **kwargs):
-        raise AssertionError('unactivated execution crossed validation/storage boundary')
+        raise RuntimeError('resident activation reached existing production validation')
     monkeypatch.setattr(cli,'validate',forbidden)
     operation = (cli.run_campaign(loaded,tmp_path/'must-not-exist',mode='fresh') if entry == 'campaign'
         else cli.compare_trials(loaded,tmp_path/'legacy-left',tmp_path/'legacy-right',tmp_path/'must-not-exist'))
-    with pytest.raises(ContractError,match='not activated'):
+    with pytest.raises(RuntimeError,match='resident activation reached'):
         asyncio.run(operation)
     assert not (tmp_path/'must-not-exist').exists()
 
@@ -271,7 +271,7 @@ def test_cache_and_pending_release_protect_otherwise_unretained_inference(tmp_pa
 
 
 @pytest.mark.parametrize('entry', ['seed','comparison'])
-def test_unactivated_resident_evaluation_refuses_before_store_or_gpu(tmp_path, entry):
+def test_activated_resident_evaluation_keeps_actual_store_and_gpu_gates(tmp_path, entry):
     import asyncio
 
     from gf_cli.hpo_config import campaign_config
@@ -281,7 +281,7 @@ def test_unactivated_resident_evaluation_refuses_before_store_or_gpu(tmp_path, e
         operation = evaluate_seed(None,loaded,{},None,{},output=tmp_path/'must-not-exist')
     else:
         operation = evaluate_comparison(None,loaded,loaded,None,None,{}, {},comparison_id='comparison',
-            conditions_sha256='c'*64,output=tmp_path/'must-not-exist')
-    with pytest.raises(ContractError,match='not activated'):
+            conditions_sha256='c'*64,output=tmp_path/'must-not-exist',evaluation_runtime=None)
+    with pytest.raises(ContractError,match='actual campaign/proposal|actual comparison store'):
         asyncio.run(operation)
     assert not (tmp_path/'must-not-exist').exists()
