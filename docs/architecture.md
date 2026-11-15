@@ -2,6 +2,14 @@
 
 ## Status and scope
 
+[ADR0042](adr/0042-hpo-precollection-validation-reuse.md) accepts the bounded
+[resident precollection validation design](design/hpo-precollection-validation.md).
+Its preimplementation architecture review is READY; implementation and measured
+acceptance are pending. The explicit resident CLI path will retain original
+historical validation across the first three precollection checks, with fresh
+live guards and actual closure before mkdir. Checks after mkdir/games stay full;
+no persisted authority, math or Simulator contract change is proposed.
+
 [ADR0041](adr/0041-hpo-resident-workers-and-progress.md) accepts the reviewed
 [resident HPO workers/progress plan](design/hpo-resident-workers.md).
 Preimplementation, scoped and whole implementation code reviews are READY.
