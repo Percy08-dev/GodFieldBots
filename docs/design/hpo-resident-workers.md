@@ -314,9 +314,9 @@ stderr renderer/read-only watch, no new learning imports/threads.
 **Ownership:** root: declarations/config/docs/acceptance; verifier: specified
 read-only checks; implementer: fixes; independent reviewers: stable whole diff.
 
-- [ ] Preserve originals; all8AST pins, historical Source/format proofs,
+- [x] Preserve originals; all8AST pins, historical Source/format proofs,
   Python/native parity, full Python/Rust suites, Ruff/mypy, optional-free CLI.
-- [ ] Build/package/activate reviewed source-matched native with rollback evidence
+- [x] Build/package/activate reviewed source-matched native with rollback evidence
   before new-mode hardware work. Record code/native/Simulator/hardware/config hashes.
 - [ ] Fresh directories; all3width192/depth2 models; seed17/same recipe/opponents/
   action settings within each fresh/resident pair. Two updates and separate

@@ -132,12 +132,13 @@ Protected historical model24files match all old baseline hashes; before snapshot
 records byte/stat identity for final comparison. Actual GPU/Simulator learning,
 model comparison, allocator high-water and paired timing remain pending.
 
-## Acceptance
+## Task1 chronological foundation evidence
 
 Task1 foundation reported418PythonPASS/27explicitSKIP, final affected125PASS,
 source mypy201/Ruff/old-contract hash comparison/8AST checks PASS. Rust HPO subset
 11PASS/3IGNORE plus explicit resident-original reader1PASS. These are scoped
-foundation checks; pool/progress execution is still guarded off.
+foundation checks. At that milestone pool/progress execution remained guarded
+off; Task2 subsequently activated the explicit resident runtime.
 
 Root built the frozen private source-matched release/MIMALLOC/emptyRUSTFLAGS
 wheel offline with Maturin1.15.0 in19.49s. Wheel SHA
@@ -145,7 +146,8 @@ wheel offline with Maturin1.15.0 in19.49s. Wheel SHA
 ELF SHA0d5d0b242b1a08aafa22039f6c7c5921f2555cfcbf7c801c899e14573054aeda,
 native sourcec7a357060c26661a23f54cf9de4bfa1bc914694400601b70cc8a573eee5a54cc.
 Both old/new HPO capability markers, release profile, mimalloc and empty rustflags
-were checked on the actual ELF. It remains a private candidate, not installed.
+were checked on the actual ELF. At that milestone it remained a private
+candidate; the later Task4 activation above installed the same reviewed ELF.
 
 Root freshly ran:
 
@@ -154,16 +156,17 @@ GFB_HPO_NATIVE_CANDIDATE=/tmp/gfb-resident-task1-site/gf_native/gf_native.cpytho
 ```
 
 PASS71/46.91s. No GPU model allocation/gameplay or performance claim follows.
-Both independent Task1 reviews are NOT READY pending fixes for tracked-I/O reuse/
-termination and original-parent-lock cache API ownership. Code is not accepted;
+Initial independent Task1 reviews were NOT READY pending fixes for tracked-I/O reuse/
+termination and original-parent-lock cache API ownership. Code was not accepted then;
 the passing suites did not cover those independently reproduced failures.
 
 Task1 fix1 adds10meaningful RED→GREEN regressions; final affected165PASS/no skips
 in15.52s, scoped Ruff and source mypy201PASS. Both independent scoped re-reviews
-are READY: tracked I/O blocks reuse/termination until explicit original retirement,
+were READY: tracked I/O blocks reuse/termination until explicit original retirement,
 and cache transactions reuse the original coordinator lock. Old fresh branches
-remain. Root accepts this guarded foundation only; actual pool/reset/readiness/
-evaluation integration, progress and final hardware acceptance remain pending.
+remain. Root accepted that guarded foundation only. Pool/reset/readiness/
+evaluation integration and progress were later implemented in Tasks2/3; final
+hardware acceptance remains pending.
 
 Append exact commands/results, failed attempts and independent correctness/
 conformance reviews. Root accepts after blocking findings resolve and required
@@ -239,3 +242,26 @@ Post-fix Python wheel+sdist match all208modules byte-for-byte, proof
 all content/size/device/inode/mtime/ctime identities after initial probes,
 `assessments/protected-after-bootstrap.json` (2.063s). Remaining hardware and
 final full implementation acceptance are pending, not implied by these passes.
+
+
+## Current implementation review and remaining acceptance
+
+Whole implementation71fbe49..01e5b7e independently READY for code correctness
+and architecture conformance, with no blocking code findings/unresolved design
+decisions. Correctness independently ran range `git diff --check` PASS; neither
+review ran additional suites/hardware or granted recovery/data rights. Historical
+Task1 guarded/private-candidate wording above and inADR0041 is now explicitly
+past tense. Plan Task4 pre-hardware checks/package activation are complete;
+actual resident all-model updates/resume/campaigns/comparisons, matched timings
+and device-memory acceptance remain unchecked.
+
+The sole pending operator decision is admission-only release of exact ticket
+39dfd3df76ed4af980ca28d6573e0259 via the existing `hpo recover` guard. No original
+normal termination receipt exists; user approval has been requested and not yet
+received. No actual release/restart or further GPU invocation has occurred.
+The failed parent was never created; prior requests/results and admission remain
+protected. Prepared exact release command is in ignored assessment
+`operator-release-39df-plan.json`; unused fresh21-row/24-invocation declaration
+is `probe-declaration-v4.json`, pending post-doc launch freeze revalidation.
+Read-only watch/product CLI usage is in [the HPO manual](../hpo.md). Formal HPO
+search/model quality/final-test evaluation have not been launched or accepted.

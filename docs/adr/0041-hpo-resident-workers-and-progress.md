@@ -1,15 +1,15 @@
 # 0041: HPO resident participant workers and diagnostic progress
 
-- Status: Accepted design; implementation and final acceptance pending.
+- Status: Implemented; whole correctness/conformance reviews READY; final hardware acceptance pending.
 - Progress: Task3 scoped implementation accepted after fix1/69coveringPASS,
   both independent re-reviews READY. Actual CUDA/Simulator/performance and final
   project acceptance remain pending; diagnostics never qualify data.
 - Runtime: Task2 scoped implementation accepted after fix1/173coveringPASS and
   both independent re-reviews READY. Actual CUDA/Simulator/performance and
-  diagnostic progress/final acceptance remain pending.
+  final project acceptance remain pending.
 - Foundation: Task1 contracts/readers/resources/references accepted after fix1,
-  covering165PASS and both independent scoped re-reviews READY. Execution remains
-  explicitly guarded until actual Task2 pool/readiness integration is verified.
+  covering165PASS and both independent scoped re-reviews READY. Execution was
+  guarded at that milestone; Task2 subsequently activated the explicit runtime.
 - Date: 2026-11-15. Owner: root.
 - Authority: user-approved plan and explicit implementation request.
 - Architecture review: `/root/resident_inference_design_check`, READY after
@@ -63,4 +63,6 @@ references after actual eviction/reap.
 All3model equivalence, isolation/fault/reference/admission tests; old format/
 kernel/native proofs; optional-free live watch; whole project checks; predeclared
 actual CUDA/Simulator update/resume/evaluation/comparison and paired timing;
-both final independent reviews. Implementation evidence remains pending.
+both final independent reviews. Scoped and whole-project code evidence is in
+[the verification record](../verification/hpo-resident-workers.md); remaining
+actual resident hardware checks and final acceptance stay explicit pending work.
