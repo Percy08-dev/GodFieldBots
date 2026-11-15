@@ -14,6 +14,10 @@ from tests.test_hpo_resident_custody import global_root as global_root  # noqa: 
 @pytest.mark.parametrize('packed',[False,True])
 @pytest.mark.parametrize('failed_post_commit_observation',[False,True])
 def test_actual_source_update_save_commit_pin_sync_order_with_parked_workers(global_root,tmp_path,monkeypatch,packed,failed_post_commit_observation):
+    run_actual_source_case(global_root,tmp_path,monkeypatch,packed=packed,failed_post_commit_observation=failed_post_commit_observation)
+
+
+def run_actual_source_case(global_root,tmp_path,monkeypatch,*,packed,failed_post_commit_observation=False,kind='mlp',native_backend=None,games=8):
     from gf_models.arrays import sha256
     from gf_models.card_instance_artifacts import RetainedGameArtifacts
     from gf_models.structured_binding import configured_model_v4
@@ -37,7 +41,7 @@ def test_actual_source_update_save_commit_pin_sync_order_with_parked_workers(glo
         assert state['device']=='cpu' and state['run_id']=='2de8b1c1-6db1-5cc9-a2e7-933ce3d10001'
     monkeypatch.setattr('gf_training.hpo_source.require_hpo_production',require_cpu_fixture)
     root=tmp_path/'parent'
-    state,records,learner=variable_initial_hpo_chain(root,games=8,decision_budget=12,resident=True,packed=packed)
+    state,records,learner=variable_initial_hpo_chain(root,games=games,decision_budget=games*3//2,resident=True,packed=packed,model_id=kind,native=native_backend)
     from gf_models.arrays import atomic_json
     state['run_id']=records[0]['run_id']='2de8b1c1-6db1-5cc9-a2e7-933ce3d10001'
     atomic_json(root/'generations/000000.json',records[0])
@@ -118,6 +122,7 @@ def test_actual_source_update_save_commit_pin_sync_order_with_parked_workers(glo
                         numeric=root/'numeric'/plan.linkage['batch_id']
                         manifest=source.write_numeric(numeric)
                         files={'rollout.json':sha256(numeric/'rollout.json'),**manifest['data']['files']}
+                        assert source.proof['logical_retirement']==authority.evidence
                         handle=source.issue(numeric,files)
                         assert handle.resident_authority is authority
                         assert len(job.ledger.workers)==2
@@ -131,7 +136,7 @@ def test_actual_source_update_save_commit_pin_sync_order_with_parked_workers(glo
                             'collection':'collections/'+plan.linkage['batch_id'],'collection_manifest_sha256':source.proof['manifest_sha256'],
                             'numeric':'numeric/'+plan.linkage['batch_id'],'numeric_sha256':files['rollout.json'],
                             'accepted_decisions':selection['used_decisions'],'source_proof':source.proof,
-                            'metrics':acknowledgement['metrics'],'planned_games':8,'actual_games':8,'health':{},
+                            'metrics':acknowledgement['metrics'],'planned_games':games,'actual_games':games,'health':{},
                             'policy_bindings':{key:asdict(value) for key,value in plan.bindings.items()},
                             'learner_seats':plan.linkage['learner_seats'],'collection_seconds':0.,'update_seconds':0.,
                             'model_id':state['model_id'],'model_version':'4','input_recipe':state['input_recipe'],
@@ -146,6 +151,8 @@ def test_actual_source_update_save_commit_pin_sync_order_with_parked_workers(glo
                             artifact_files=acknowledgement['artifact']['files'],max_owned_bytes=1024**3,
                             deadline=deadline,projection=handle,ownership=ownership)
                         assert handle.prepared
+                    if native_backend is not None:
+                        assert source.native_inputs.cleanup_complete
                     if online.packed_batch is not None:
                         online.packed_batch.close()
                         online.packed_batch=None
@@ -177,6 +184,7 @@ def test_actual_source_update_save_commit_pin_sync_order_with_parked_workers(glo
             job.confirm_termination()
     with run_lock(root) as ownership:
         asyncio.run(run(ownership))
+    return root
 
 
 @pytest.mark.parametrize('fault',['observe','acquire_intent','acquire_registry'])

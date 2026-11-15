@@ -559,8 +559,20 @@ def _payload_views(payload: Any, *, game: bool = False, recorded: bool = False,
         physical = metadata['source_proof']
         if hpo:
             from gf_common.hpo import checked_selection
-            checked_selection(physical['selection'])
-            physical = {key: value for key, value in physical.items() if key not in ('selection', 'expected_optimizer_step_delta')}
+            selection=checked_selection(physical['selection'])
+            version=integer(physical.get('schema_version'),3,4)
+            if version==4:
+                from gf_common.hpo_resident import checked_retirement
+                retirement=checked_retirement(physical.get('logical_retirement'))
+                batch=selection['context']['batch']
+                if retirement['generation']!=batch or retirement['collection_id']!=f'batch-{batch:06}':
+                    raise ContractError('cohort Proof4 retirement differs from bound selection batch')
+            elif 'logical_retirement' in physical:
+                raise ContractError('legacy cohort Proof3 forbids resident retirement')
+            # Only the physical validator receives this projection. The full
+            # proof (including checked Proof4 retirement) remains in metadata
+            # and must still equal the already-authorized original Source.
+            physical = {key: value for key, value in physical.items() if key not in ('selection', 'expected_optimizer_step_delta', 'logical_retirement')}
             physical = {**physical, 'schema_version': 2, 'kind': 'card-instance-packed-original-source-proof'}
         checked_packed_proof(physical)
         if metadata['correspondence'].get('recipe') != ('card-instance-hpo-packed-source-correspondence-v1' if hpo else 'card-instance-packed-source-correspondence-v1'):

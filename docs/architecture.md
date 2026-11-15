@@ -8,8 +8,10 @@ Preimplementation, scoped foundation/resident-runtime/progress and whole
 implementation correctness/conformance reviews are READY. CPU component/failure
 checks pass. Initial fresh MLP hardware checks pass; the resident bootstrap
 correction passes covering regressions. Remaining resident CUDA/Simulator/timing/
-resume/evaluation checks and final acceptance are pending an explicit admission
-release decision, as detailed in the verification record.
+resume/evaluation checks and final acceptance remain pending. A subsequent real
+resident collection exposed a native payload projection defect. Its correction
+passes installed-native all-model component checks and both scoped reviews;
+new hardware evidence remains in progress under the verification record.
 The explicit HPO-only path adds viewer-partitioned physical pooling, parked
 update authority, immutable cache references and lock-free diagnostic progress;
 existing fresh and ordinary paths retain their meanings.

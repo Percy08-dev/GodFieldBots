@@ -255,13 +255,58 @@ past tense. Plan Task4 pre-hardware checks/package activation are complete;
 actual resident all-model updates/resume/campaigns/comparisons, matched timings
 and device-memory acceptance remain unchecked.
 
-The sole pending operator decision is admission-only release of exact ticket
-39dfd3df76ed4af980ca28d6573e0259 via the existing `hpo recover` guard. No original
-normal termination receipt exists; user approval has been requested and not yet
-received. No actual release/restart or further GPU invocation has occurred.
+At that milestone the pending operator decision was admission-only release of
+39dfd3df76ed4af980ca28d6573e0259. The user subsequently approved it and the
+existing `hpo recover` command recorded release successfully. No original normal
+termination receipt or data qualification was created; the new execution below
+retains that distinction.
 The failed parent was never created; prior requests/results and admission remain
 protected. Prepared exact release command is in ignored assessment
 `operator-release-39df-plan.json`; unused fresh21-row/24-invocation declaration
 is `probe-declaration-v4.json`, pending post-doc launch freeze revalidation.
 Read-only watch/product CLI usage is in [the HPO manual](../hpo.md). Formal HPO
 search/model quality/final-test evaluation have not been launched or accepted.
+
+
+## Actual a03 continuation and native payload correction
+
+User approval for39df admission-only release received; command exit0 and receipt
+`operator-release-39df-result.json` retained. All373source/profile6/helper/launcher
+hashes and conditions match frozen5a364d0. Hardware RTX5070Ti16303MiB/driver610.88,
+idle1976MiB/4% observed. No competing project checks/builds ran during timing.
+Actual MLPfresha03 completes declared2update/incomplete/update_cap with verified
+original cleanup in144.274sexternal. The nextresident run fails23.641s after
+4actor starts/28physical reuses/16games, before the first committed update.
+Native HPO packed payload projection omitted removal of Proof4.logical_retirement
+from its temporary physical Proof2 view, causing the unchanged strict validator
+to reject an extra field. Its original full Proof4 must remain intact.
+
+Failedparent6e1f54be-cc30-4a0b-93e9-493c99c54ee7 remainsfailed/updates0/ineligible.
+Actual invocation Popen.wait observed; cleanup records native cancellation and
+uncertain executor/provider-original holds, so no normal termination receipt is
+invented. User then explicitly approved admission-only releases for failed/stopped
+jobs within this functional verification. Existing recover command1fd1ae48e26b4682b48c6dd1a84b25ad exits0, receipt
+`operator-release-1fd1-result.json`; neither termination nor data rights follow.
+The scope does not include unrelated jobs or reconstructing cache-release custody.
+
+Original implementer reproduced the exact failure with installed-native packed
+Collection7/plan6/provider/cohort conversion (FAIL1/7.44s, identical cleanup notes),
+without conversion mocks. Approved narrow correction adds explicit Proof3/4
+handling and validates new retirement/context while projecting only known HPO
+fields for physical validation. Unknown/old hybrids stay strict and original
+metadata/proof authority stays unchanged. Native all3modelG0→G1→G2 tests and both scoped independent reviews now pass;
+all remaining hardware checks stay pending.
+Failure measurements are not accepted timings. Batcha03 exited1 and owned NVML
+sampler20377 was stopped/reaped. All attempts remain, no budgets shortened.
+
+
+Native payload correction accepted after meaningful installed-native RED1 and
+current-source all3packed16 G0→G1→G2 PASS3/48.84s, real recorded Proof3/4 mutation/
+exact-array/retired-provider-hold PASS2/22.21s, neighboring compatibility checks
+PASS64/2integrationdeselected39.99s. Source mypy208/scopedRuff/diffPASS. Both
+independent correctness and architecture-conformance reviews READY, no blockers.
+Only private Python physical projection changed; native ELF/Rust, full original
+proof, numerical math and cleanup/recovery contracts remain exact. Whole6490CPU
+checks precede this correction; new covering evidence is stated separately.
+Root next executes declared D64 complete CLI campaigns/evaluation/watch before
+fresh matched all-model measurements; no formal search/quality result follows.
