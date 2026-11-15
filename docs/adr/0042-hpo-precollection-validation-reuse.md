@@ -1,10 +1,12 @@
 # 0042: Reuse still-owned historical validation before resident collection
 
-- Status: Accepted design; implementation/acceptance pending
+- Status: Accepted design and scoped Python implementation; physical acceptance pending
 - Date: 2026-11-15
 - Decision owner: root
 - Review: `bot_architecture_reviewer` preimplementation READY, including terminal
   expiry, partial-construction ownership, metadata accounting and cleanup allowance
+- Implementation: independent correctness/spec/quality and conformance READY;
+  whole CPU6557PASS/408SKIP on2026-11-16. Matched physical timing remains pending.
 
 ## Context
 
@@ -40,4 +42,8 @@ measured acceptance and a separately reviewed exact mutation/reconciliation desi
 Lifecycle, mutation, original native coverage, resource/failure/cancellation and
 compatibility tests; full CPU/static checks; independent correctness/conformance;
 matched unchanged-budget2update timings with original Source/receipt audits.
-Results will be recorded separately; design review alone is not runtime evidence.
+The [verification record](../verification/hpo-precollection-validation.md) records
+scoped47case lifecycle/mutation/native coverage, whole CPU6557PASS/408SKIP,
+Ruff/mypy,8fixed-kernel ASTs and209wheel/sdist/source correspondence. All24protected
+historical files remain byte/stat identical. Physical comparison is not run while
+the user is using the GPU; no performance, formal-HPO or strength claim is made.

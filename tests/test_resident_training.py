@@ -17,7 +17,7 @@ def test_actual_source_update_save_commit_pin_sync_order_with_parked_workers(glo
     run_actual_source_case(global_root,tmp_path,monkeypatch,packed=packed,failed_post_commit_observation=failed_post_commit_observation)
 
 
-def run_actual_source_case(global_root,tmp_path,monkeypatch,*,packed,failed_post_commit_observation=False,kind='mlp',native_backend=None,games=8):
+def run_actual_source_case(global_root,tmp_path,monkeypatch,*,packed,failed_post_commit_observation=False,kind='mlp',native_backend=None,games=8,precollection_probe=None):
     from gf_models.arrays import sha256
     from gf_models.card_instance_artifacts import RetainedGameArtifacts
     from gf_models.structured_binding import configured_model_v4
@@ -75,9 +75,27 @@ def run_actual_source_case(global_root,tmp_path,monkeypatch,*,packed,failed_post
                             for row in runtime.custody._owners.values())
                         assert previous_authority is not None
                         with pytest.raises(ContractError): previous_authority.require(job.ledger)
-                    runtime.pool.admit(plan)
-                    validate_owned_collection(plan,job.ledger,max_owned_bytes=1024**3,deadline=deadline,
-                        resident_phase=runtime.pool.admission)
+                    if precollection_probe is None:
+                        runtime.pool.admit(plan)
+                        validate_owned_collection(plan,job.ledger,max_owned_bytes=1024**3,deadline=deadline,
+                            resident_phase=runtime.pool.admission)
+                    else:
+                        from gf_training.hpo_precollection import _PrecollectionValidation
+                        carrier=_PrecollectionValidation.attach(online,plan,job.ledger,
+                            max_owned_bytes=1024**3,deadline=deadline,cleanup_deadline=runtime.deadline)
+                        try:
+                            runtime.pool.admit(plan)
+                            for check in range(3):
+                                validate_owned_collection(plan,job.ledger,max_owned_bytes=1024**3,deadline=deadline,
+                                    resident_phase=runtime.pool.admission,_finish_precollection=check==2)
+                                precollection_probe(online,plan,carrier,generation,check)
+                            # A fourth call is full again, even before the fixture
+                            # publishes its collection; terminal scopes cannot restart.
+                            validate_owned_collection(plan,job.ledger,max_owned_bytes=1024**3,deadline=deadline,
+                                resident_phase=runtime.pool.admission)
+                            precollection_probe(online,plan,carrier,generation,3)
+                        finally:
+                            carrier.close()
                     with (pytest.raises(ContractError),
                             game_batch_source(plan,job.ledger,max_owned_bytes=1024**3,deadline=deadline)):
                         pass

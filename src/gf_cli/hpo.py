@@ -169,7 +169,9 @@ async def _train_seed(store: CampaignStore, loaded: LoadedHPOConfig, campaign: J
             if ledger is not job.ledger:
                 raise ContractError('HPO collector requires the exact caller job ledger')
             return await core.collect_hpo_ppo(materialized, plan, ledger, **({} if progress is None else {'progress':progress}))
-        result = await runtime.train_hpo_ppo(materialized, collector, directory, gpu_job=job, mode='fresh', **({} if progress is None else {'progress':progress}))
+        result = await runtime.train_hpo_ppo(materialized, collector, directory, gpu_job=job, mode='fresh',
+            **({'_reuse_precollection':True} if materialized.config.hpo_spec['schema_version']==3 else {}),
+            **({} if progress is None else {'progress':progress}))
         if type(result) is not runtime.HpoRunResult or result.report.get('status') != 'complete' or result.report.get('used_decisions') != loaded.config.decision_budget:
             raise ContractError('training stopped incomplete; no objective and no budget/deadline extension')
         persist_training_receipt(store, loaded, campaign, proposal, training_seed=seed, run_id=run_id,

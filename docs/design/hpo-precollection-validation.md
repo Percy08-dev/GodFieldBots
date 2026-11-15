@@ -2,7 +2,9 @@
 
 Status: accepted preimplementation design, 2026-11-15. Root design was reviewed
 by `bot_architecture_reviewer`: READY, including admission-binding and cleanup
-clarifications. Implementation and final acceptance remain pending. Baseline
+clarifications. Implementation passes independent correctness/conformance and
+whole CPU verification on2026-11-16; matched physical acceptance remains pending.
+Baseline
 `050713d`; see the [investigation](hpo-validation-reuse-investigation.md) and
 [measurement](../verification/ppo-runtime-profiling.md).
 
@@ -66,6 +68,10 @@ deadlines only; never extend them. Preserve the original native reader/model/
 mixed-opponent capability checks and the loaded binary identity, with the ELF
 sealed in retained evidence and initial/final identity bracketing full build.
 Use existing native helpers; do not add repeated source-tree global hashing.
+Mixed-opponent capability checks remain unconditional for an explicit mixed
+preset, including Python preprocessing; only Rust reader/model/ELF handling is
+backend-specific. Plain Python without that preset does not acquire a new native
+dependency through this optimization.
 `SealedScan.finalize` rehashes physical files and checks inventories/stat identity;
 it is not a stat-only shortcut. Altered checked state/records must reject.
 
@@ -87,6 +93,13 @@ admitted update envelope (which additionally includes numeric). Prove this with
 actual accounted reservations. Source custody closes before a new collector Pack
 is allocated; no two Source/collector pools overlap. No budget is raised and no
 parent envelope is silently reduced to hide accounting.
+
+Carrier encoding scratch uses one conservatively admitted high-water reservation
+through actual close, avoiding repeated temporary refunds for carrier metadata.
+Successful detachment additionally requires the original pool closed with exactly
+zero remaining accounted bytes. Existing shared scan temporary-refund behavior is
+not rewritten; uncertainty there still retains the actual carrier/account and
+blocks successful termination.
 
 Do not retain decoded rollouts/arrays, native sessions/providers/executors or
 active loans after the historical read. Keep the actual original FDs/metadata

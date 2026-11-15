@@ -15,7 +15,7 @@ import sys
 import time
 import uuid
 from collections.abc import Awaitable, Callable
-from contextlib import ExitStack
+from contextlib import ExitStack, nullcontext
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -682,8 +682,9 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
                     plan = CollectionPlan(groups, registry, directory / 'collections' / batch_id, linkage, execution, wall)
                     if ops:
                         assert ledger is not None
-                        ops.validate_owned_collection(plan, ledger, config=config, deadline=execution)
-                        collection = await collector(plan, ledger)
+                        with ops.precollection_scope(plan, ledger, config=config, deadline=execution) if hpo else nullcontext():
+                            ops.validate_owned_collection(plan, ledger, config=config, deadline=execution)
+                            collection = await collector(plan, ledger)
                         if hpo and getattr(ops, 'resident_runtime', None) is not None:
                             ops.resident_runtime.pool.authority.require(ledger)
                         elif ledger.workers or ledger.updating:
@@ -826,6 +827,8 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
         finally:
             if hpo: ops.phase('cleanup')
             try:
+                if hpo:
+                    ops.close_precollection()
                 if hpo and getattr(ops, 'resident_runtime', None) is not None:
                     await ops.resident_runtime.close()
             except BaseException as failure:  # noqa: BLE001 - actual pool cleanup precedes learner termination

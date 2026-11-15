@@ -47,7 +47,7 @@ class HpoRunResult:
 class _HpoOperations(_GameOperations):
     registry_schema=4
 
-    def __init__(self,job: GpuJob, progress: ProgressCallback | None = None, diagnostics: bool | None = None):
+    def __init__(self,job: GpuJob, progress: ProgressCallback | None = None, diagnostics: bool | None = None, *, _reuse_precollection: bool = False):
         if type(job) is not GpuJob: raise ContractError('actual caller GpuJob required')
         super().__init__()
         self.progress, self.diagnostics = progress, diagnostics
@@ -57,6 +57,8 @@ class _HpoOperations(_GameOperations):
         self.receipt: TerminationReceipt | None=None
         self.stop_reason: str | None=None
         self.resident_runtime: Any = None
+        self._reuse_precollection = _reuse_precollection
+        self._precollection_active = False
 
     def phase(self, phase: str, **facts: Any) -> None:
         self.coordinator_phase = phase
@@ -183,6 +185,53 @@ class _HpoOperations(_GameOperations):
             self.online.resident_runtime = self.resident_runtime
         return child,ledger
 
+    @contextmanager
+    def precollection_scope(self, plan: Any, ledger: Any, *, config: Any, deadline: float) -> Iterator[None]:
+        from gf_training.hpo_resident_runtime import ResidentTrainingRuntime
+        if not self._reuse_precollection or self.resident_runtime is None:
+            yield
+            return
+        if type(self.resident_runtime) is not ResidentTrainingRuntime or config.hpo_spec['schema_version'] != 3:
+            raise ContractError('precollection opt-in requires actual resident runtime')
+        from gf_training.hpo_precollection import _PrecollectionValidation
+        assert self.online is not None
+        if self._precollection_active or self.online.precollection_validation is not None:
+            raise ContractError('precollection scope already active for this original owner')
+        self._precollection_active = True
+        carrier = None
+        primary: BaseException | None = None
+        try:
+            carrier = _PrecollectionValidation.attach(self.online, plan, ledger,
+                max_owned_bytes=self.cap(config), deadline=deadline,
+                cleanup_deadline=self.resident_runtime.deadline)
+            yield
+            if carrier.phase != 'closed' or self.online.precollection_validation is not None:
+                raise ContractError('resident collector did not expire original precollection custody before allocation')
+        except BaseException as error:
+            primary = error
+            raise
+        finally:
+            # Attach may fail part way through constructing the original scan.
+            actual = self.online.precollection_validation if carrier is None else carrier
+            self._precollection_active = False
+            if actual is not None:
+                try:
+                    actual.close()
+                except BaseException as cleanup:
+                    if primary is None:
+                        raise
+                    primary.__dict__['cleanup_owner'] = actual
+                    primary.__dict__['_hpo_precollection_cleanup_owner'] = actual
+                    primary.add_note('precollection cleanup: ' + str(cleanup))
+
+    def close_precollection(self) -> None:
+        if self.online is not None and self.online.precollection_validation is not None:
+            from gf_training.hpo_precollection import _PrecollectionValidation
+            value = self.online.precollection_validation
+            if type(value) is not _PrecollectionValidation:
+                raise ContractError('unresolved foreign precollection attachment')
+            value.close()
+
     def validate_owned_collection(self,plan: Any,ledger: Any,*,config: Any,deadline: float) -> None:
         from gf_training.card_instance_source import validate_owned_collection
         phase = None
@@ -304,10 +353,12 @@ class _HpoOperations(_GameOperations):
         return self.stop_reason is not None
 
     def finish_cleanup(self,error: BaseException | None) -> None:
+        if self._precollection_active or self.online is not None and self.online.precollection_validation is not None:
+            raise ContractError('HPO precollection original custody remains unresolved')
         if self.resident_runtime is not None:
             self.resident_runtime.require_closed()
         if error is not None and any(getattr(error,name,None) is not None for name in
-                ('cleanup_owner','_game_artifact_cleanup_owner','_lineage_publication_owner','_hpo_retention_pending','_hpo_storage_uncertain')):
+                ('cleanup_owner','_game_artifact_cleanup_owner','_lineage_publication_owner','_hpo_retention_pending','_hpo_storage_uncertain','_hpo_precollection_cleanup_owner')):
             raise ContractError('HPO resource/storage cleanup remains uncertain')
         if self.online is not None:
             if self.online.issued is not None or self.online.packed_batch is not None:
@@ -319,8 +370,9 @@ class _HpoOperations(_GameOperations):
 
 async def train_hpo_ppo(loaded_run: Any,collector: Any,directory: Path,*,gpu_job: GpuJob,
                          mode: str='fresh',pause_after_update: int | None=None,
-                         progress: ProgressCallback | None = None, diagnostics: bool | None = None) -> HpoRunResult:
-    operations=_HpoOperations(gpu_job,progress,diagnostics)
+                         progress: ProgressCallback | None = None, diagnostics: bool | None = None,
+                         _reuse_precollection: bool = False) -> HpoRunResult:
+    operations=_HpoOperations(gpu_job,progress,diagnostics,_reuse_precollection=_reuse_precollection)
     if canonical(asdict(loaded_run.config))!=canonical(loaded_run.effective) or digest(loaded_run.effective)!=loaded_run.sha256:
         raise ContractError('HPO loaded runtime config is not its exact original effective projection')
     directory=directory.resolve()

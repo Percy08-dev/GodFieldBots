@@ -16,7 +16,8 @@
 
 追加: [0042](0042-hpo-precollection-validation-reuse.md) — Accepted design:
 resident HPOの収集前3回で実際の検証scanを保持し、元データ・native・所有権を再確認する。
-mkdir前に終了し、その後の完全検証は維持。実装・測定による受入は未完了。
+mkdir前に終了し、その後の完全検証は維持。実装レビューと全CPU6557PASS/408SKIP、
+静的・配布・保護対象確認は完了。GPU比較測定による受入はデバイス空き待ち。
 
 追加: [0041](0041-hpo-resident-workers-and-progress.md) — Accepted design:
 HPO限定の常駐CUDA参加者、更新境界の重み同期、明示的な待機証明・キャッシュ参照、

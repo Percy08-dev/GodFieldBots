@@ -467,6 +467,7 @@ class _OnlineGameOwner:
     packed_batch: Any = None
     hpo_job: Any = None
     resident_runtime: Any = None
+    precollection_validation: Any = None
 
     def _require_hpo_job(self) -> None:
         from gf_training.lineage import require_hpo_run_owner
@@ -494,7 +495,8 @@ class _OnlineGameOwner:
 
 
 def validate_owned_collection(plan: CollectionPlan, ledger: Any, *, max_owned_bytes: int,
-                              deadline: float, resident_phase: Any = None) -> _OnlineGameOwner:
+                              deadline: float, resident_phase: Any = None,
+                              _finish_precollection: bool = False) -> _OnlineGameOwner:
     from gf_simulator_client.structured_resources import ReservationLedger
     from gf_training.hpo_gpu_lease import _AuditedLedger
     from gf_training.hpo_learning_process import HpoLearningProcess
@@ -539,8 +541,16 @@ def validate_owned_collection(plan: CollectionPlan, ledger: Any, *, max_owned_by
     if _hpo(owner.state):
         from gf_training.hpo_source import validate_hpo_parent
         validator = validate_hpo_parent
-    state, records = validator(owner.ownership.directory, require_complete=False,
-        max_owned_bytes=max_owned_bytes, deadline=deadline)
+    retained = owner.precollection_validation
+    if retained is not None:
+        from gf_training.hpo_precollection import _PrecollectionValidation
+        if type(retained) is not _PrecollectionValidation:
+            raise ContractError('actual precollection validation carrier required')
+        state, records = retained.history(owner, plan, ledger, resident_phase=resident_phase,
+            max_owned_bytes=max_owned_bytes, deadline=deadline)
+    else:
+        state, records = validator(owner.ownership.directory, require_complete=False,
+            max_owned_bytes=max_owned_bytes, deadline=deadline)
     if _hpo(state):
         from gf_training.hpo_lineage import hpo_spec, hpo_state
         actions, model, _ = hpo_state(state)
@@ -580,6 +590,8 @@ def validate_owned_collection(plan: CollectionPlan, ledger: Any, *, max_owned_by
             or plan.kind != 'ppo_batch' or ledger.global_cuda_bytes != state['effective_config']['run']['global_cuda_budget_bytes']
             or ledger.max_workers != state['effective_config']['run']['max_participant_workers']):
         raise ContractError('online collection differs from frozen original parent/control/schedule/registry')
+    if _finish_precollection and retained is not None:
+        retained.finish(owner, plan, ledger)
     return owner
 
 

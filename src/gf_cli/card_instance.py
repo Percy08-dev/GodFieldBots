@@ -311,7 +311,7 @@ async def _run_corrected(loaded: LoadedConfig, command: str,
         if eval_plan is not None:
             eval_plan.require(loaded,gpu_job=_hpo_evaluation_job)
         elif _final_validation_context is None:
-            _validate_online_collection(loaded, cast(CollectionPlan, collection), owned_ledger, preflight_deadline, resident_phase=None if resident_pool is None else resident_pool.admission)
+            _validate_online_collection(loaded, cast(CollectionPlan, collection), owned_ledger, preflight_deadline, resident_phase=None if resident_pool is None else resident_pool.admission, _finish_precollection=True)
         else:
             _validate_final_collection(loaded, collection, owned_ledger, _final_validation_context, preflight_deadline)
     run_id = eval_plan.linkage['evaluation_id'] if eval_plan is not None else str(uuid.uuid4())
@@ -661,20 +661,30 @@ def _write_diagnostic(directory: Path, name: str, value: Json) -> None:
 
 
 def _validate_online_collection(loaded: LoadedConfig, plan: CollectionPlan,
-                                 ledger: ReservationLedger, deadline: float, *, resident_phase: Any = None) -> Any:
-    from gf_training.card_instance_source import validate_owned_collection
+                                 ledger: ReservationLedger, deadline: float, *, resident_phase: Any = None,
+                                 _finish_precollection: bool = False) -> Any:
+    from gf_training.card_instance_source import _OnlineGameOwner, validate_owned_collection
     if not isinstance(loaded.config.training, PPOTrainingConfig):
         raise ContractError("online card-instance collection requires PPO training")
+    effective = asdict(loaded.config)
+    def check_caller(online: Any) -> None:
+        if (loaded.sha256 != online.state["config_sha256"] or digest(effective) != loaded.sha256
+                or canonical(loaded.effective) != canonical(effective)
+                or canonical(effective) != canonical(online.state["effective_config"])
+                or canonical(list(loaded.inputs)) != canonical(online.state["config_inputs"])):
+            raise ContractError("online collection caller differs from SAME parent Config/input origins")
+    # Expiry closes the actual scan. Caller Config/input guards must also pass
+    # before requesting that close; Source still independently verifies this owner.
+    if _finish_precollection:
+        candidate = getattr(getattr(getattr(ledger, 'learner', None), '_cleanup_owner', None), 'online_owner', None)
+        if type(candidate) is _OnlineGameOwner:
+            check_caller(candidate)
     online = validate_owned_collection(plan, ledger,
         max_owned_bytes=min(loaded.config.training.max_owned_bytes,
                             loaded.config.preprocessing.memory_budget_mib * 1024**2),
-        deadline=deadline, **({} if resident_phase is None else {'resident_phase':resident_phase}))
-    effective = asdict(loaded.config)
-    if (loaded.sha256 != online.state["config_sha256"] or digest(effective) != loaded.sha256
-            or canonical(loaded.effective) != canonical(effective)
-            or canonical(effective) != canonical(online.state["effective_config"])
-            or canonical(list(loaded.inputs)) != canonical(online.state["config_inputs"])):
-        raise ContractError("online collection caller differs from SAME parent Config/input origins")
+        deadline=deadline, **({} if resident_phase is None else {'resident_phase':resident_phase}),
+        **({} if not _finish_precollection else {'_finish_precollection':True}))
+    check_caller(online)
     return online
 
 

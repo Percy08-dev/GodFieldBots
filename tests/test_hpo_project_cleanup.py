@@ -30,8 +30,10 @@ def test_project_preserves_primary_and_reachable_cleanup_owner(monkeypatch,tmp_p
     monkeypatch.setattr('gf_models.arrays.sha256',lambda *_:'a'*64)
     operations=object.__new__(module._HpoOperations)
     operations.ledger=object()
-    operations.online=SimpleNamespace(packed_batch=owner)
+    operations.online=SimpleNamespace(packed_batch=owner,precollection_validation=None)
     operations.projection=None
+    operations._reuse_precollection=False
+    operations._precollection_active=False
     operations.resident_runtime=None  # Explicit fresh mode; this fixture bypasses __init__.
     operations.cap=lambda _:1024
     def close():
@@ -68,8 +70,11 @@ def test_existing_primary_cleanup_owner_is_not_lost_on_batch_close_failure(monke
     monkeypatch.setattr(module,'hpo_batch_source',batch)
     operations=object.__new__(module._HpoOperations)
     operations.ledger=object()
-    operations.online=SimpleNamespace(packed_batch=batch_owner)
+    operations.online=SimpleNamespace(packed_batch=batch_owner,precollection_validation=None)
+    operations.resident_runtime=None  # Explicit fresh mode; this fixture bypasses __init__.
     operations.projection=None
+    operations._reuse_precollection=False
+    operations._precollection_active=False
     operations.cap=lambda _:1024
     def close(): raise OSError('close')
     operations.close_batch=close

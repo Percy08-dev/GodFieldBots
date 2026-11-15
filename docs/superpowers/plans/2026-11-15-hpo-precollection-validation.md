@@ -32,12 +32,12 @@
 
 **Interfaces:** private `train_hpo_ppo(...,_reuse_precollection=False)`; `_HpoOperations.precollection_scope(plan,ledger,*,config,deadline)` synchronous contextmanager; actual `_OnlineGameOwner.precollection_validation`; `validate_owned_collection(...,_finish_precollection=False)` and CLI forwarding. Exact responsibilities/lifecycle are in the spec.
 
-- [ ] Write and run failing lifecycle/mutation/compatibility tests before production edits; record RED evidence.
-- [ ] Implement scoped registration, complete first historical read, sealed reuse with all fresh guards and terminal close before mkdir. Opt in only standard resident CLI; defaultFalse remains old behavior.
-- [ ] Implement charged metadata/native coverage, retained-original cleanup, outer exceptional cleanup and final termination guard under original cleanup allowance.
-- [ ] Add original native G1 and failure/cancellation/accounting regressions from Review Focus; test unconfirmed cleanup and no fallback/restart.
-- [ ] Run new tests and affected HPO/Source/resident/native/coordinator/CLI regressions, scoped Ruff and source mypy. Report exact PASS/FAIL/SKIP/NOT RUN and any boundary assumptions to root.
-- [ ] Independent correctness and architecture-conformance reviews, fixes and scoped re-reviews; root commits verified milestone.
+- [x] Write and run failing lifecycle/mutation/compatibility tests before production edits; record RED evidence.
+- [x] Implement scoped registration, complete first historical read, sealed reuse with all fresh guards and terminal close before mkdir. Opt in only standard resident CLI; defaultFalse remains old behavior.
+- [x] Implement charged metadata/native coverage, retained-original cleanup, outer exceptional cleanup and final termination guard under original cleanup allowance.
+- [x] Add original native G1 and failure/cancellation/accounting regressions from Review Focus; test unconfirmed cleanup and no fallback/restart.
+- [x] Run new tests and affected HPO/Source/resident/native/coordinator/CLI regressions, scoped Ruff and source mypy. Report exact PASS/FAIL/SKIP/NOT RUN and any boundary assumptions to root.
+- [x] Independent correctness and architecture-conformance reviews, fixes and scoped re-reviews; root commits verified milestone.
 
 ### Task 2: Acceptance, measurements and record
 
@@ -46,7 +46,7 @@
 **Interfaces:** Task1 private toggle provides same-code baselineFalse/candidateTrue. Existing thin timing hook, actual termination receipt and original Source/numeric verification remain required.
 
 - [ ] Freeze new run paths/config/seeds, code/native/Simulator/schema identities, private toggle and paired order; validate instrumentation delegation/error/restore behavior without GPU.
-- [ ] Run the stable whole CPU suite, project static checks and fixed-math/compatibility checks once. Preserve unrelated historical artifacts.
+- [x] Run the stable whole CPU suite, project static checks and fixed-math/compatibility checks once. Preserve unrelated historical artifacts.
 - [ ] Execute3matchedMLP pairs and1pair eachGRU/Transformer,192/main2,4workers,16games/collection,2updates, original timers/budgets. Attribute full/recheck/close/collect times; do not mix failures or shorten conditions to claim acceptance.
 - [ ] Audit actual Source/numeric correspondence, references, owners and original termination receipts. Require3->1 precollection replay and improved MLP median second-collect time; report cutoff and reproducibility limits.
 - [ ] Independent final reviews of stable code and acceptance evidence; root updates architecture/ADR/verification, commits and reports scope/results without formal-HPO or strength claims.
