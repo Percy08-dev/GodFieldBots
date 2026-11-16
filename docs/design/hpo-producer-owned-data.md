@@ -5,10 +5,13 @@ Task1 capture/RAM/FD foundation independently accepted, later integration pendin
 Task2 direct numeric/snapshot/Wire7/actor9 components are independently accepted;
 Task3 concrete coordinator binding preimplementation clarification is READY.
 Task3 fresh integration is independently accepted after resource, retention and
-startup ownership corrections. Task4 cold/completion design gates are READY;
-their implementation and full physical/project acceptance remain pending.
+startup ownership corrections. Task4 cold/completion implementation and the
+subsequent audit-accounting and zero-Act identity corrections pass independent
+correctness/conformance reviews. Whole CPU6868PASS/408SKIP and package checks
+pass; fresh v2 physical acceptance remains pending.
 Reviewer: `/root/owned_architecture`, 2026-11-16. Snapshot-bank visibility finding
-resolved before dependent implementation; final implementation review is pending.
+resolved before dependent implementation; scoped final implementation reviews
+are READY. Overall physical/evidence acceptance remains pending.
 Date: 2026-11-16. Root owns design and acceptance.
 Authority: `/home/percy/.codex/attachments/be1ed73b-89b8-419e-825e-8834eed8fa52/approved-plan.md`.
 This supersedes the proposal choices, not historical evidence, in
@@ -72,6 +75,26 @@ learner seat per episode. Policy-name comparison never chooses the learner.
 The environment gets only the lightweight injected capture interface. Each
 same-seed group clone shares the collection capture but owns its episode handles.
 
+After successful actual journal-header construction, the environment calls
+`participant_created(episode_id, game_id, viewer, bank: EventBankView)` with that
+participant's real readonly empty bank. Capture verifies the registered game,
+actor, layout and genuine initial prefix, and reserves before cloning it. Both
+participants register once. Later frames/deltas must match; seal cannot invent a
+missing identity. This also preserves the real header identity when there is no
+Act. Existing valid non-UUID bank identifiers remain supported. Direct nonempty
+fixtures may derive identity from their actual original frame; zero-Act fixtures
+must register their actual original view.
+
+The explicit offline sample audit retains one decoded cohort at a time. Its
+numeric callback admits positive growth in an absolute high-water request, not
+the same peak repeatedly. After actual records/arrays and loop aliases retire,
+the existing packed owner refunds decoded charges while retaining exported
+control metadata and physical originals for final checks. A real pool close hold
+keeps failure arrays/tracebacks charged through enclosing scan cleanup until last
+use; the original error and exact cleanup owner survive. This audit returns data
+and evidence only and does not issue a Source or live update grant. Its failure
+does not authorize rewriting old files or relaxing raw correspondence.
+
 Episode states are OPEN -> COMPLETE or FAILED; collection states are BUILDING ->
 SEALED -> PERSISTED -> DISPATCHED -> UPDATED -> COMMITTED -> RETIRED, with FAILED
 terminal from any stage. A failure after optimizer mutation cannot retry the batch.
@@ -104,6 +127,7 @@ copies only when neither encoding nor required persistence can access them.
 ## RAM banks and transfer
 
 The capture protocol's concrete operations are `open_episode(episode_id, game_id)`,
+`participant_created(episode_id, game_id, viewer, bank)`,
 `begin_decision(episode_id, viewer, frame, delta, table, selection, command)`,
 `accept_decision(episode_id, viewer, command_id, acknowledgement)`,
 `terminal_observation(episode_id, viewer, observation)` and

@@ -4,11 +4,13 @@ from __future__ import annotations
 from typing import Protocol
 
 from gf_common.domain import EpisodeGroup, EpisodeResult, GroupResult, Json
-from gf_common.structured import CandidateTable, DecisionFrame, EventDelta, Selection
+from gf_common.structured import CandidateTable, DecisionFrame, EventBankView, EventDelta, Selection
 
 
 class HpoCapture(Protocol):
     def open_episode(self, episode_id: str, game_id: str) -> None: ...
+    def participant_created(self, episode_id: str, game_id: str, viewer: int,
+                            bank: EventBankView) -> None: ...
     def begin_decision(self, episode_id: str, viewer: int, frame: DecisionFrame,
                        delta: EventDelta, table: CandidateTable, selection: Selection,
                        command: Json) -> None: ...

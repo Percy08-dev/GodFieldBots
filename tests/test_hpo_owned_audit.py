@@ -2,6 +2,7 @@
 import asyncio
 import copy
 import time
+import weakref
 
 
 def test_owned_full_external_collection8_numeric6_audit_remains_unqualified(tmp_path,monkeypatch):
@@ -33,6 +34,27 @@ def test_owned_full_external_collection8_numeric6_audit_remains_unqualified(tmp_
     monkeypatch.setattr('gf_training.hpo_source.require_hpo_production',component_gate)
     def forbidden(*args,**kwargs): raise AssertionError('owned audit entered legacy Source factory')
     monkeypatch.setattr('gf_training.card_instance_source._open_batch',forbidden)
+    # Observe the actual two-cohort public audit, including all graph aliases
+    # registered by the offline owner and the existing physical metadata floor.
+    from gf_training.group_pack_game_source import PackedSourceOwner
+    from gf_training.hpo_owned_restore import _AuditCohortAnchor
+    bound=[]; retired=[]
+    bind=_AuditCohortAnchor.bind; retire=PackedSourceOwner.retire_decoded
+    def observed_bind(self,value):
+        bind(self,value)
+        if value is not None: bound.append(weakref.ref(value))
+    def observed_retire(self,**kwargs):
+        assert bound and all(reference() is None for reference in bound)
+        before=self._charge_bytes
+        retire(self,**kwargs)
+        assert self._charge_bytes<before
+        assert self._charge_bytes>=self._control_object_charge>0
+        assert not self._closed and self.locator.fd>=0
+        self.finalize()
+        retired.append((self.root.name,before,self._charge_bytes))
+        bound.clear()
+    monkeypatch.setattr(_AuditCohortAnchor,'bind',observed_bind)
+    monkeypatch.setattr(PackedSourceOwner,'retire_decoded',observed_retire)
     async def run():
         with gpu.admit_gpu_job(gpu.JobContext('fixture',run_id,'training',run_id,None),
                 global_cuda_bytes=runtime.config.run.global_cuda_budget_bytes,max_workers=4) as job:
@@ -45,6 +67,7 @@ def test_owned_full_external_collection8_numeric6_audit_remains_unqualified(tmp_
         state,records=validate_hpo_parent(directory,require_complete=True,max_owned_bytes=2*1024**3,deadline=time.monotonic()+60)
         assert state['run_variant']=='hpo-ppo-owned-v1' and len(records)==3
         assert records[-1]['generation']==2
+        assert [row[0] for row in retired]==['batch-000000','batch-000001']
         assert not hasattr(records,'dispatch')
         # Original flags remain truthful after an explicit strict external audit.
         import json

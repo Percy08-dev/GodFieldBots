@@ -348,6 +348,9 @@ async def owned_fixture_collection(ops,config,plan,ledger,*,empty=False):
             for spec in group.episodes:
                 game=str(uuid.uuid4())
                 attachment.capture.open_episode(spec.episode_id,game)
+                banks={viewer:EventBank(viewer,spec.episode_id+f'-{viewer}',layout=LAYOUT) for viewer in (1,2)}
+                for viewer,bank in banks.items():
+                    attachment.capture.participant_created(spec.episode_id,game,viewer,bank.view())
                 for viewer in (1,2):
                     label=spec.policies[viewer-1]
                     binding=plan.bindings[label]
@@ -361,7 +364,7 @@ async def owned_fixture_collection(ops,config,plan,ledger,*,empty=False):
                         obs['own']['player_id'],obs['opponent']['player_id']=viewer,3-viewer
                         hints['viewer_player_id'],hints['action_options']['actor']=viewer,viewer
                         hints['state_revision']=hints['action_options']['state_revision']=viewer-1
-                        bank=EventBank(viewer,spec.episode_id+f'-{viewer}',layout=LAYOUT)
+                        bank=banks[viewer]
                         delta=event_delta(viewer,bank.episode,0,bank.boundary.prefix_hash,
                             [{'type':'resource_changed','player':viewer,'hp_delta':0,'mp_delta':0,'money_delta':0}],layout=LAYOUT)
                         bank.append(delta)

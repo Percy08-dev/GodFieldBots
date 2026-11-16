@@ -716,16 +716,129 @@ def audit_owned_artifacts(scan: Any, state: Json, records: list[Json], registry:
             raise ContractError('owned external retained artifact map mismatch')
 
 
-def audit_owned_samples(scan: Any, state: Json, records: list[Json], *, deadline: float) -> Json:
-    """Full external journals/Replay/numeric audit, NEVER a Source/live producer."""
+class _AuditNumericPeak:
+    """Offline reader callback is an absolute live peak, not additive demand."""
+    def __init__(self, original: Any) -> None:
+        self.original=original
+        self.peak=0
+
+    def __call__(self, size: int) -> None:
+        integer(size,0)
+        delta=max(0,size-self.peak)
+        if delta:
+            self.original.charge(delta)
+            self.peak=size  # Only actual successful admission advances the peak.
+        else: self.original.check()
+
+
+class _AuditCohortRetirement:
+    """Actual existing pool close hold, independent of decoded result objects."""
+    def __init__(self, original: Any) -> None:
+        self.original=original
+        self.retired=False
+        self.error: BaseException | None=None
+        self.hold: Any=None
+        try: self.hold=original.pool.hold_close(self)
+        except BaseException as error:
+            for hold in tuple(original.pool._close_holds):
+                if hold.owner is self:
+                    self.hold=hold
+                    try: hold.retire(self)
+                    except BaseException as cleanup:  # noqa: BLE001 - exact actual close-hold remains reachable
+                        self.error=cleanup
+                        vars(error)['hpo_owned_audit_retirement']=self
+                        error.add_note('audit close hold remains owned: '+str(cleanup))
+                    else: self.hold=None; self.retired=True
+            raise
+
+    def last_use(self) -> None:
+        try: self.hold.retire(self)
+        except BaseException as error:  # noqa: BLE001 - actual finalizer cannot invent successful retirement
+            self.error=error
+        else: self.hold=None; self.retired=True
+
+    def require_retired(self) -> None:
+        if self.error is not None: raise self.error
+        if not self.retired: raise BufferError('offline audit decoded aliases/traceback still retain originals')
+
+
+def _audit_last_use(retirement: _AuditCohortRetirement) -> None:
+    retirement.last_use()
+
+
+def _audit_keep_anchor(anchor: Any) -> None:
+    pass
+
+
+class _AuditCohortAnchor:
+    """Only this cohort's decoded records/tokens/arrays and stack retain the hold."""
+    def __init__(self, retirement: _AuditCohortRetirement) -> None:
+        self._ids: set[int]=set()
+        weakref.finalize(self,_audit_last_use,retirement)
+
+    def bind(self, value: Any) -> None:
+        if value is None or id(value) in self._ids: return
+        self._ids.add(id(value))
+        weakref.finalize(value,_audit_keep_anchor,self)
+
+    def record(self, record: Any) -> None:
+        # Bind decoded objects, never shared contract/model/config singletons.
+        self.bind(record); self.bind(record.bank)
+        for group in (record.frames,record.tables,record.selections):
+            for value in group: self.bind(value)
+
+    def collection(self, collection: Any) -> None:
+        self.bind(collection)
+        for episode in collection.episodes:
+            self.bind(episode); self.record(episode.records)
+
+    def rollout(self, rollout: Any) -> None:
+        self.bind(rollout)
+        for episode in rollout.episodes:
+            self.bind(episode); self.record(episode.records)
+            for group in (episode.frames,episode.tables):
+                for value in group: self.bind(value)
+            self.bind(episode.advantage); self.bind(episode.target)
+
+
+def _audit_owned_cohort(scan: Any, state: Json, records: list[Json], number: int, original: Any,
+                        plan: Any, label: str, model: Any, recipe: Any, actions: Any,
+                        anchor: _AuditCohortAnchor) -> tuple[int,int]:
+    """No decoded cohort/loop alias is exported: only scalar audit counts return."""
     from gf_common.card_instance_collection import hpo_batch_role
     from gf_common.card_instance_rules import card_instance_rules
     from gf_training.card_instance_source import _check_collection_parent
+    from gf_training.hpo_rollout import read_hpo_rollout
+    from gf_training.structured_source import _inspect_component_collection
+    collection=_inspect_component_collection(original,actions,'train',_game=True,_game_role=hpo_batch_role(recipe.collection_games))
+    anchor.collection(collection)
+    manifest=collection.manifest
+    _check_collection_parent(manifest,state,plan)
+    update=scan.object(scan.root/'updates'/f'{number+1:06}.json',records[number+1]['update_sha256'])
+    if original.files['manifest.json']['sha256']!=update['collection_manifest_sha256']:
+        raise ContractError('owned archive manifest differs from saved update')
+    selected=tuple(row.records for row in collection.episodes if plan.linkage['learner_seats'][row.episode_id]==row.viewer)
+    counts=[len(record.frames) for record in selected]
+    if len(selected)!=recipe.collection_games or counts!=update['source_proof']['selection']['episode_counts']:
+        raise ContractError('owned complete original learner population differs')
+    rollout=read_hpo_rollout(scan.root/update['numeric'],update['numeric_sha256'],model,recipe,
+        actions=actions,rules=card_instance_rules(),expected_selection=update['source_proof']['selection'],
+        expected_records=selected,expected_snapshot_identity=records[number]['snapshot_identity'],
+        numeric_budget_bytes=state['effective_config']['hpo_spec']['operating']['numeric_budget_bytes'],
+        max_owned_bytes=scan.limit,extra_owned_bytes=scan.retained+original.used,check=original.check,
+        reserve=_AuditNumericPeak(original))
+    anchor.rollout(rollout)
+    rollout.require_learning()
+    if rollout.policy_version!=label: raise ContractError('owned numeric original learner identity differs')
+    original.finalize()
+    return len(selected),len(rollout)
+
+
+def audit_owned_samples(scan: Any, state: Json, records: list[Json], *, deadline: float) -> Json:
+    """Full external journals/Replay/numeric audit, NEVER a Source/live producer."""
     from gf_training.hpo_config import hpo_training_config
     from gf_training.hpo_lineage import hpo_state
-    from gf_training.hpo_rollout import read_hpo_rollout
     from gf_training.hpo_source import recorded_hpo_plan
-    from gf_training.structured_source import _inspect_component_collection
     actions,model,_=hpo_state(state)
     recipe=hpo_training_config(state['effective_config']['hpo_spec']['training_recipe'])
     scan.configure_packed(state)
@@ -734,27 +847,19 @@ def audit_owned_samples(scan: Any, state: Json, records: list[Json], *, deadline
         plan,label,_=recorded_hpo_plan(scan.root,state,records,number,deadline)
         original=scan.packed_owner(plan.output)
         original.charge(scan.retained)
-        collection=_inspect_component_collection(original,actions,'train',_game=True,_game_role=hpo_batch_role(recipe.collection_games))
-        manifest=collection.manifest
-        _check_collection_parent(manifest,state,plan)
-        update=scan.object(scan.root/'updates'/f'{number+1:06}.json',records[number+1]['update_sha256'])
-        if original.files['manifest.json']['sha256']!=update['collection_manifest_sha256']:
-            raise ContractError('owned archive manifest differs from saved update')
-        selected=tuple(row.records for row in collection.episodes if plan.linkage['learner_seats'][row.episode_id]==row.viewer)
-        counts=[len(record.frames) for record in selected]
-        if len(selected)!=recipe.collection_games or counts!=update['source_proof']['selection']['episode_counts']:
-            raise ContractError('owned complete original learner population differs')
-        rollout=read_hpo_rollout(scan.root/update['numeric'],update['numeric_sha256'],model,recipe,
-            actions=actions,rules=card_instance_rules(),expected_selection=update['source_proof']['selection'],
-            expected_records=selected,expected_snapshot_identity=records[number]['snapshot_identity'],
-            numeric_budget_bytes=state['effective_config']['hpo_spec']['operating']['numeric_budget_bytes'],
-            max_owned_bytes=scan.limit,extra_owned_bytes=scan.retained+original.used,check=original.check,
-            reserve=lambda amount,owner=original:owner.charge(amount))
-        rollout.require_learning()
-        if rollout.policy_version!=label: raise ContractError('owned numeric original learner identity differs')
-        games+=len(selected); decisions+=len(rollout)
-        del rollout,selected,collection
-        original.finalize()
+        retirement=_AuditCohortRetirement(original)
+        anchor=_AuditCohortAnchor(retirement)
+        try:
+            cohort_games,cohort_decisions=_audit_owned_cohort(scan,state,records,number,original,
+                plan,label,model,recipe,actions,anchor)
+            del anchor  # Helper frames and every decoded record/token/array must be gone FIRST.
+            retirement.require_retired()
+            original.retire_decoded()  # Preserve exported-control/physical custody floors.
+        except BaseException as error:
+            vars(error)['cleanup_owner']=scan
+            vars(error)['hpo_owned_audit_retirement']=retirement
+            raise
+        games+=cohort_games; decisions+=cohort_decisions
     scan.finalize()
     return {'schema_version':1,'kind':'hpo-owned-external-sample-audit','origin':'producer-owned-v1',
         'encoder':'canonical-python','qualified':False,'parent_qualification':'not_performed',

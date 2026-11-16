@@ -1,7 +1,7 @@
 # Producer-owned HPO verification
 
-Status: implementation independently reviewed; whole-project acceptance pending,
-physical protocol and candidate timings NOT RUN.
+Status: repaired implementation independently reviewed; whole CPU6868PASS/408SKIP.
+First physical comparison is ineligible; fresh v2 physical acceptance pending.
 Specification: [design](../design/hpo-producer-owned-data.md),
 [ADR0043](../adr/0043-hpo-producer-owned-data.md), approved user attachment.
 Base revision: `1dd51e8d1ee734b32b051556589e41d46d565ed0`.
@@ -153,6 +153,54 @@ Correspondence and installed-baseline observations are in
 `runs/hpo-producer-owned/assessment/v1/checks/task4-package-correspondence.json`
 and `task4-installed-mandatory.json`. These checks establish packaging and optional
 import isolation; they are not learning-quality or performance evidence.
+
+## First physical set and corrective verification
+
+At measured revision `64673696aa697fffb105c3d4db0b9f6b93e0bae6`, all3 real CLI
+campaigns complete proposal/control training and evaluation. All6 exactD64 parents
+pass independent full-original strict audits; a later-session MLP-versus-GRU
+comparison passes strict saved-evaluation and actual termination validation with
+2natural games. The separate9fresh/pause/resume invocations and18timing trials
+also finish with their expected operational status and actual cleanup receipts.
+This does not by itself qualify the generated data or accept performance claims.
+
+The subsequent strict2GiB sample audit exposes two defects. First, the offline
+audit charges an absolute numeric high-water request twice and retains decoded
+cohort charges across batches. Its narrow repair charges positive peak growth,
+retires actual graphs before refund, preserves metadata/physical custody and
+holds the real pool close through failure arrays/tracebacks. Existing19non-audit
+definitions remain AST-identical. Both independent reviews are READY; targeted
+real-owner RED3->GREEN3, HOST45covering and4strengthened lifetime checks pass.
+
+After that repair clears the original budget boundary, strict correspondence
+correctly rejects a zero-Act participant in batch1: its real journal bank UUID
+differs from capture's fabricated empty-bank UUID. The environment now registers
+the actual readonly empty bank after successful header construction. Capture
+requires both real identities and cannot mint a fallback at seal. Actual-header
+RED->GREEN, HOST113covering, final52lifetime/guard checks, frozen-kernel/legacy/
+strict-audit3checks and both independent reviews pass. No reader is weakened and
+no saved parent is rewritten. The entire affected v1 C parents and comparison
+remain historical/ineligible; operational receipts keep their original meaning.
+
+Evidence is preserved in `runs/hpo-producer-owned/assessment/v1/`, including
+`final-disposition.json`. Fresh v2 roots and UUIDs are declared under
+`assessment/v2/`. Every completed two-update functional parent must receive a
+full public strict2GiB original-sample audit before new timing trials begin.
+The new thin telemetry includes actual participant creation and both-viewer
+coverage. Its independent review is READY:28restored targets,55negative cases
+rejected, populated18/zero-Act controls and all6fixed configs pass.
+
+The repaired whole CPU03 invocation passes6868/SKIP408/33warnings in1731.36s,
+exit0. Root independently checks JUnit7276cases/zero failures/errors. Source/tests
+remain frozen throughout the run; the earlier6846PASS run is separate historical
+evidence. Final Ruff `src tests`, mypy225 and diff checks pass. Rebuilt wheel and
+sdist match all225source modules byte-for-byte. Reinstalled mandatory-only wheel
+passes isolated CLI help and actual baseline startup/SIGTERM/reap/lease/empty
+health/thread retirement with no optional ML imports.
+
+```console
+CUDA_VISIBLE_DEVICES='' GF_RUN_CUDA=0 .venv/bin/python -m pytest -q --ff --maxfail=1 --tb=short -o faulthandler_timeout=60 --junitxml=runs/hpo-producer-owned/assessment/v2/whole-cpu-03.xml
+```
 
 ## Required matched comparison
 

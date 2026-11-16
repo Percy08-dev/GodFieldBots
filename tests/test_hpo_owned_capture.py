@@ -49,6 +49,15 @@ def decision(*, revision=0, events=()):
     return frame, delta, table, selection, command, ack
 
 
+def open_capture(capture, name="first", *, bank_episode="corrected-adoption-fixed"):
+    capture.open_episode(name, "game-" + name)
+    banks = {viewer: EventBank(viewer, bank_episode if viewer == 1 else "actual-opponent-bank",
+        layout=CORRECTED_CARD_INSTANCE_LAYOUT) for viewer in (1, 2)}
+    for viewer, bank in banks.items():
+        capture.participant_created(name, "game-" + name, viewer, bank.view())
+    return banks
+
+
 def terminal(viewer, revision=1):
     obs = inputs([], can_pray=True).observation
     obs.update(viewer_player_id=viewer, state_revision=revision, current_player=None,
@@ -68,7 +77,7 @@ def finish(capture, name, *, decisions=1, health=None, outcome="draw", end_kind=
 
 def test_capture_uses_original_selection_and_ack_once_preserving_immutable_aliases():
     capture, owner, snapshot, plan, group, account = setup_capture()
-    capture.open_episode("first", "game-first")
+    open_capture(capture)
     frame, delta, table, selection, command, ack = decision()
     capture.begin_decision("first", 1, frame, delta, table, selection, command)
     capture.accept_decision("first", 1, command["command_id"], ack)
@@ -100,7 +109,7 @@ def test_zero_act_population_keeps_plan_order_and_explicit_learner_seat():
     capture, owner, snapshot, plan, group, _ = setup_capture(names=("first", "second"), seats={"first": 2, "second": 1})
     results = {}
     for name in ("second", "first"):
-        capture.open_episode(name, "game-" + name)
+        open_capture(capture, name)
         results[name] = finish(capture, name, decisions=0)
     with pytest.raises(ContractError):
         capture.seal(owner, plan=plan, snapshot_owner=snapshot)
@@ -112,10 +121,111 @@ def test_zero_act_population_keeps_plan_order_and_explicit_learner_seat():
     batch.close()
 
 
+@pytest.mark.parametrize("fault", ["wrong_game", "wrong_episode", "wrong_actor", "bool_viewer",
+    "wrong_layout", "nonempty", "wrong_prefix", "mutable_bank", "duplicate"])
+def test_participant_creation_requires_original_empty_actor_identity(fault):
+    capture, *_ = setup_capture()
+    capture.open_episode("first", "game-first")
+    bank = EventBank(1, "original-fixed-bank", layout=CORRECTED_CARD_INSTANCE_LAYOUT)
+    if fault == "wrong_actor": bank = EventBank(2, bank.episode, layout=bank.layout)
+    if fault == "wrong_layout": bank = EventBank(1, bank.episode)
+    if fault == "nonempty":
+        bank.append(event_delta(1, bank.episode, 0, bank.boundary.prefix_hash,
+            [{"type": "artifact_used", "player": 1, "definition_id": "bronze-club"}], layout=bank.layout))
+    view = bank.view()
+    if fault == "wrong_prefix": object.__setattr__(view, "_prefixes", ("0" * 64,))
+    if fault == "duplicate": capture.participant_created("first", "game-first", 1, view)
+    with pytest.raises(ContractError):
+        capture.participant_created("missing" if fault == "wrong_episode" else "first",
+            "foreign-game" if fault == "wrong_game" else "game-first",
+            True if fault == "bool_viewer" else 1, bank if fault == "mutable_bank" else view)
+    assert capture._state == "FAILED"
+    capture.close()
+
+
+@pytest.mark.parametrize("present", [(), (1,), (2,)])
+def test_missing_zero_act_participant_identity_cannot_seal(present):
+    capture, owner, snapshot, plan, group, _ = setup_capture()
+    capture.open_episode("first", "game-first")
+    for viewer in present:
+        bank = EventBank(viewer, "actual-empty-bank", layout=CORRECTED_CARD_INSTANCE_LAYOUT)
+        capture.participant_created("first", "game-first", viewer, bank.view())
+    result = finish(capture, "first", decisions=0)
+    capture.close_group(group, GroupResult([result]))
+    with pytest.raises(ContractError, match="both original participant"):
+        capture.seal(owner, plan=plan, snapshot_owner=snapshot)
+    capture.close()
+
+
+def test_registered_bank_rejects_foreign_first_decision_identity():
+    capture, *_ = setup_capture()
+    open_capture(capture, bank_episode="actual-registered-bank")
+    frame, delta, table, selection, command, _ = decision()
+    with pytest.raises(ContractError):
+        capture.begin_decision("first", 1, frame, delta, table, selection, command)
+    assert capture._state == "FAILED"
+    capture.close()
+
+
+def test_participant_creation_failure_precedes_clone_and_preserves_admission_error(monkeypatch):
+    import gf_training.hpo_owned_capture as module
+    capture, *_rest, account = setup_capture()
+    capture.open_episode("first", "game-first")
+    bank = EventBank(1, "actual-original-bank", layout=CORRECTED_CARD_INSTANCE_LAYOUT).view()
+    primary = RuntimeError("original Source admission refused")
+    def denied(*args, **kwargs): raise primary
+    def forbidden(*args, **kwargs): raise AssertionError("cloned before admission")
+    monkeypatch.setattr(account, "reserve", denied)
+    monkeypatch.setattr(module, "EventBank", forbidden)
+    with pytest.raises(RuntimeError) as failed:
+        capture.participant_created("first", "game-first", 1, bank)
+    assert failed.value is primary and capture._state == "FAILED"
+    assert not capture._episodes["first"].banks
+    capture.close()
+
+
+def test_invalid_initial_prefix_keeps_copy_admission_through_failure_traceback():
+    capture, *_rest, account = setup_capture()
+    capture.open_episode("first", "game-first")
+    bank = EventBank(1, "actual-original-bank", layout=CORRECTED_CARD_INSTANCE_LAYOUT).view()
+    object.__setattr__(bank, "_prefixes", ("0" * 64,))
+    with pytest.raises(ContractError, match="initial prefix") as failed:
+        capture.participant_created("first", "game-first", 1, bank)
+    charged = account.used
+    capture.close()
+    assert charged > 0 and account.used == charged
+    # Only the test drops its captured traceback after inspecting actual charge.
+    failed.value.__traceback__ = None
+    del failed
+    gc.collect()
+    assert account.used == 0
+
+
+def test_nonempty_original_frame_fallback_remains_explicit_and_late_creation_refuses():
+    capture, owner, snapshot, plan, group, _ = setup_capture()
+    capture.open_episode("first", "game-first")
+    opponent = EventBank(2, "original-opponent-bank", layout=CORRECTED_CARD_INSTANCE_LAYOUT)
+    capture.participant_created("first", "game-first", 2, opponent.view())
+    frame, delta, table, selection, command, ack = decision()
+    capture.begin_decision("first", 1, frame, delta, table, selection, command)
+    capture.accept_decision("first", 1, command["command_id"], ack)
+    result = finish(capture, "first")
+    capture.close_group(group, GroupResult([result]))
+    batch = capture.seal(owner, plan=plan, snapshot_owner=snapshot)
+    assert batch.episodes[0].learner.history.episode == frame.episode
+    batch.close()
+    other, *_ = setup_capture()
+    other.open_episode("first", "game-first")
+    other.begin_decision("first", 1, frame, delta, table, selection, command)
+    with pytest.raises(ContractError):
+        other.participant_created("first", "game-first", 2, opponent.view())
+    other.close()
+
+
 @pytest.mark.parametrize("fault", ["pending", "rejected", "wrong_command", "stale_revision", "bool_revision", "conflicting_duplicate", "wrong_viewer", "wrong_model"])
 def test_bad_or_unresolved_command_never_seals(fault):
     capture, owner, snapshot, plan, group, _ = setup_capture()
-    capture.open_episode("first", "game-first")
+    open_capture(capture)
     frame, delta, table, selection, command, ack = decision()
     if fault == "wrong_model":
         selection = replace(selection, policy_version="opponent-snapshot")
@@ -152,7 +262,7 @@ def test_bad_or_unresolved_command_never_seals(fault):
 @pytest.mark.parametrize("fault", ["missing_terminal", "terminal_mismatch", "worker_cleanup", "group_cleanup", "truncated", "wrong_generation_owner", "wrong_snapshot", "wrong_plan"])
 def test_terminal_and_actual_cleanup_gate_seal(fault):
     capture, owner, snapshot, plan, group, _ = setup_capture()
-    capture.open_episode("first", "game-first")
+    open_capture(capture)
     capture.terminal_observation("first", 1, terminal(1, 0))
     if fault != "missing_terminal":
         capture.terminal_observation("first", 2, terminal(2, 4 if fault == "terminal_mismatch" else 0))
@@ -174,7 +284,7 @@ def test_terminal_and_actual_cleanup_gate_seal(fault):
 
 def test_full_own_event_prefixes_remain_complete_without_future_events():
     capture, owner, snapshot, plan, group, _ = setup_capture()
-    capture.open_episode("first", "game-first")
+    open_capture(capture, bank_episode="actual-bank")
     bank = EventBank(1, "actual-bank", layout=CORRECTED_CARD_INSTANCE_LAYOUT)
     accepted = []
     for revision in (0, 1):
@@ -210,7 +320,7 @@ def test_full_own_event_prefixes_remain_complete_without_future_events():
 
 def test_unexplained_revision_gap_cannot_enter_capture():
     capture, *_ = setup_capture()
-    capture.open_episode("first", "game-first")
+    open_capture(capture)
     frame, delta, table, selection, command, ack = decision()
     ack.update(status="active", result=None)
     capture.begin_decision("first", 1, frame, delta, table, selection, command)
@@ -223,7 +333,7 @@ def test_unexplained_revision_gap_cannot_enter_capture():
 
 def test_win_control_preserves_original_natural_outcome_and_learner_perspective():
     capture, owner, snapshot, plan, group, _ = setup_capture()
-    capture.open_episode("first", "game-first")
+    open_capture(capture)
     outcome = {"win": {"winner": 2}}
     for viewer in (1, 2):
         obs = terminal(viewer, 0)
@@ -242,7 +352,7 @@ def test_win_control_preserves_original_natural_outcome_and_learner_perspective(
 
 def test_late_group_failure_after_callback_still_prevents_final_admission():
     capture, owner, snapshot, plan, group, _ = setup_capture()
-    capture.open_episode("first", "game-first")
+    open_capture(capture)
     result = finish(capture, "first", decisions=0)
     group_result = GroupResult([result])
     capture.close_group(group, group_result)
@@ -257,7 +367,7 @@ def test_derived_prefix_alone_retains_capture_charge_until_last_use(depth):
     event = {"type": "artifact_used", "player": 1, "definition_id": "bronze-club"}
     def prefix_only():
         capture, owner, snapshot, plan, group, account = setup_capture()
-        capture.open_episode("first", "game-first")
+        open_capture(capture)
         frame, delta, table, selection, command, ack = decision(events=(event,))
         capture.begin_decision("first", 1, frame, delta, table, selection, command)
         capture.accept_decision("first", 1, command["command_id"], ack)

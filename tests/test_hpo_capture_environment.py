@@ -98,7 +98,8 @@ def test_corrected_group_clone_retains_injected_capture_and_closes_after_actual_
     assert events == [("body", group), ("closed", group, result)]
 
 
-@pytest.mark.parametrize("mode", ["natural", "rejection", "aborted", "late_save_failure"])
+@pytest.mark.parametrize("mode", ["natural", "zero_act", "rejection", "aborted", "late_save_failure",
+    "creation_failure", "header_failure"])
 def test_actual_corrected_worker_selection_journal_ack_and_group_feed_same_capture(tmp_path, monkeypatch, mode):
     import gf_simulator_client.card_instance_environment as module
     from gf_common.card_instance import ActionConfigV3, corrected_card_instance_contract
@@ -120,7 +121,19 @@ def test_actual_corrected_worker_selection_journal_ack_and_group_feed_same_captu
     capture = _new_capture(lock, run_id="run", plan=plan, generation=0,
         snapshot_owner=snapshot, learner_seats={spec.episode_id: 2},
         learner_policy_version=label, budget=StorageBudget(StorageSettings(), time.monotonic() + 20))
+    created=[]
+    participant_created=capture.participant_created
+    def observed_created(episode_id,game_id,viewer,bank):
+        import json
+        header=json.loads((tmp_path/episode_id/f'player-{viewer}.partial.jsonl').read_text().splitlines()[0])
+        assert header['bank_episode']==bank.episode and not bank._events
+        created.append(viewer)
+        participant_created(episode_id,'foreign-game' if mode=='creation_failure' and viewer==2 else game_id,viewer,bank)
+    monkeypatch.setattr(capture,'participant_created',observed_created)
     class Client(PublicClient):
+        async def observe(self,game,viewer):
+            if mode=='zero_act': self.terminal=True
+            return await super().observe(game,viewer)
         async def act(self, game, actor, payload):
             if mode == "rejection":
                 from gf_simulator_client.http import ApiError
@@ -152,7 +165,10 @@ def test_actual_corrected_worker_selection_journal_ack_and_group_feed_same_captu
         binary=str(Path("unused").absolute()),
         actions=ActionConfigV3(action_contract=corrected_card_instance_contract(),
             max_candidates=30, max_sequence_length=1), policy_bindings=plan.bindings)
-    env = module.CardInstanceSimulatorEnvironment(settings, CardInstanceJournal,
+    def journal_factory(*args,**kwargs):
+        if mode=='header_failure' and args[2]==2: raise OSError('actual second header failed')
+        return CardInstanceJournal(*args,**kwargs)
+    env = module.CardInstanceSimulatorEnvironment(settings, journal_factory,
         ledger=ReservationLedger(), runtime_evidence=Evidence("unused", tmp_path), capture=capture)
     if mode == "late_save_failure":
         original_save = module.CardInstanceSimulatorEnvironment._save_artifact
@@ -162,9 +178,12 @@ def test_actual_corrected_worker_selection_journal_ack_and_group_feed_same_captu
             return original_save(self, path, value)
         monkeypatch.setattr(module.CardInstanceSimulatorEnvironment, "_save_artifact", save)
     result = asyncio.run(env.run_group(group))
-    if mode != "natural":
+    assert not env.ledger.workers and env.ledger.learner is None
+    assert created==([1] if mode=='header_failure' else [1,2])
+    if mode not in ("natural","zero_act"):
         from gf_common.domain import ContractError
-        assert result.episodes[0].end_kind == {"rejection": "incomplete", "aborted": "aborted", "late_save_failure": "natural"}[mode]
+        assert result.episodes[0].end_kind == {"rejection": "incomplete", "aborted": "aborted", "late_save_failure": "natural",
+            "creation_failure":"incomplete","header_failure":"incomplete"}[mode]
         if mode == "rejection":
             assert result.episodes[0].failure == "rejection" and result.episodes[0].decisions == 0
         if mode == "aborted":
@@ -177,10 +196,23 @@ def test_actual_corrected_worker_selection_journal_ack_and_group_feed_same_captu
         return
     assert result.episodes[0].end_kind == "natural" and not result.episodes[0].health
     batch = capture.seal(lock, plan=plan, snapshot_owner=snapshot)
-    assert len(batch.episodes[0].participants[0].decisions) == 1
+    assert len(batch.episodes[0].participants[0].decisions) == (0 if mode=='zero_act' else 1)
     assert batch.episodes[0].learner.viewer == 2 and not batch.episodes[0].learner.decisions
-    recorded = batch.episodes[0].participants[0].decisions[0]
-    assert recorded.command["command_id"] == recorded.acknowledgement["command_id"]
-    assert recorded.command["action"] == recorded.selection.validate(recorded.table, recorded.frame)
+    if mode=='natural':
+        recorded = batch.episodes[0].participants[0].decisions[0]
+        assert recorded.command["command_id"] == recorded.acknowledgement["command_id"]
+        assert recorded.command["action"] == recorded.selection.validate(recorded.table, recorded.frame)
     assert batch.episodes[0].replay_reconciled is False
+    # The zero-Act learner still owns the SAME bank originally journaled when
+    # its actual participant was created; raw identity is not fabricated later.
+    import json
+
+    from gf_common.structured import EventBank
+    from gf_common.structured_layout import CORRECTED_CARD_INSTANCE_LAYOUT
+    for participant in batch.episodes[0].participants:
+        header=json.loads((plan.output/spec.episode_id/f'player-{participant.viewer}.jsonl').read_text().splitlines()[0])
+        initial=EventBank(participant.viewer,header['bank_episode'],layout=CORRECTED_CARD_INSTANCE_LAYOUT).view()
+        assert participant.history.episode==header['bank_episode']
+        prefix=participant.history.prefix(initial.boundary)
+        assert prefix.boundary==initial.boundary and prefix.events()==initial.events()
     batch.close()

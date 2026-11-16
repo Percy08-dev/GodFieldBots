@@ -40,7 +40,7 @@ def captured_record(learner, *, count=3):
     from pathlib import Path
 
     from gf_common.domain import EpisodeGroup, EpisodeResult, EpisodeSpec, GroupResult
-    from gf_common.structured import event_delta
+    from gf_common.structured import EventBank, event_delta
     from gf_training.collection import CollectionPlan
     from gf_training.hpo_owned_capture import _new_capture
     from tests.test_card_instance_learning import records_for
@@ -55,6 +55,9 @@ def captured_record(learner, *, count=3):
         snapshot_owner=snapshot, learner_seats={'first': 1},
         learner_policy_version=record.selections[0].policy_version, budget=account)
     capture.open_episode('first', 'game')
+    for viewer in (1,2):
+        bank=EventBank(viewer,record.bank.episode if viewer==1 else 'actual-opponent-bank',layout=record.bank.layout)
+        capture.participant_created('first','game',viewer,bank.view())
     for index, (frame, table, selection) in enumerate(zip(record.frames, record.tables, record.selections, strict=True)):
         delta = event_delta(1, frame.episode, frame.interval_start, frame.interval_start_hash,
             record.bank.events(frame.interval_start, frame.boundary.end), layout=frame.layout)
@@ -433,6 +436,9 @@ def test_mixed_zero_population_seat2_loss_draw_win_matches_strict_reader(tmp_pat
     for name,seat,count,outcome in cases:
         capture.open_episode(name,'game-'+name)
         bank=EventBank(seat,name,layout=layout)
+        for viewer in (1,2):
+            original=bank if viewer==seat else EventBank(viewer,name+'-opponent',layout=layout)
+            capture.participant_created(name,'game-'+name,viewer,original.view())
         frames,tables,selections=[],[],[]
         for position in range(count):
             value=inputs([],can_pray=True)
@@ -486,6 +492,10 @@ def test_mixed_zero_population_seat2_loss_draw_win_matches_strict_reader(tmp_pat
     numeric=encode_owned_batch(batch,owner=owner,plan=plan,snapshot_owner=snapshot,model=learner.model,
         training=recipe,actions=ACTIONS,rules=RULES,selected_locations=locations,selection=selection,budget=account)
     numeric.persist(tmp_path/'owned')
+    audited=read_hpo_rollout(tmp_path/'owned',sha256(tmp_path/'owned'/'rollout.json'),learner.model,recipe,
+        actions=ACTIONS,rules=RULES,expected_selection=selection,expected_records=tuple(records),
+        expected_snapshot_identity=numeric.metadata['snapshot_identity'])
+    assert [episode.records.bank.episode for episode in audited.episodes]==[record.bank.episode for record in records]
     assert [len(row['frames']) for row in numeric.metadata['episodes']]==[0,2,1,2]
     assert [row['actor'] for row in numeric.metadata['episodes']]==[1,2,1,2]
     for index in range(len(strict)): assert numeric.vector(index)==strict.vector(index)

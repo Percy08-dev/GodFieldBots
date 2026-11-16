@@ -16,8 +16,12 @@ after shared parent admission, original retention/namespace and advisor-guided
 startup-task ownership fixes. Cold resume/import, final-policy handoff and
 campaign/evaluation integration also pass final independent correctness and
 conformance review, including pruned-parent resume and explicit full audit.
-Whole-project and physical acceptance remain pending; controlled CPU fixture
-evidence grants no training-quality claim.
+Real two-update auditing subsequently exposes offline charge-lifetime and
+zero-Act bank-identity defects. Both repairs pass independent reviews; capture
+now registers the actual journal/context bank before any Act. Whole CPU6868PASS/
+408SKIP and exact225module package checks pass. The first C timing population
+remains ineligible; fresh v2 strict-audited physical acceptance is pending.
+Controlled fixture evidence grants no training-quality claim.
 The new route will use explicit producer-origin versions and inference-only
 actor snapshots, while retaining strict legacy/audit readers and existing learning
 math/budgets. Full acceptance and physical comparisons remain pending in

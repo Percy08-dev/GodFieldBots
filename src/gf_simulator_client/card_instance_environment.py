@@ -356,6 +356,8 @@ class CardInstanceSimulatorEnvironment(SimulatorEnvironment):
             **({"neural": worker.neural_metadata} if worker.neural_metadata is not None else {}),
             **({"tree": worker.tree_metadata} if worker.tree_metadata is not None else {}),
         )
+        if self.capture is not None:
+            self.capture.participant_created(spec.episode_id, game, viewer, bank.view())
 
     def _before_worker_close(self, workers: dict[int, ParticipantWorker], result: EpisodeResult) -> None:
         if self.resident_pool is not None and (result.end_kind == 'natural' and result.failure is None

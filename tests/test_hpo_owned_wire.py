@@ -89,7 +89,7 @@ def recapture(record, snapshot, account):
     from pathlib import Path
 
     from gf_common.domain import EpisodeGroup, EpisodeResult, EpisodeSpec, GroupResult
-    from gf_common.structured import event_delta
+    from gf_common.structured import EventBank, event_delta
     from gf_training.collection import CollectionPlan
     from gf_training.hpo_owned_capture import _new_capture
     from tests.test_hpo_owned_capture import terminal
@@ -99,6 +99,9 @@ def recapture(record, snapshot, account):
     capture = _new_capture(owner,run_id='run',plan=plan,generation=snapshot.generation,
         snapshot_owner=snapshot,learner_seats={'first':1},learner_policy_version=record.selections[0].policy_version,budget=account)
     capture.open_episode('first','game')
+    for viewer in (1,2):
+        bank=EventBank(viewer,record.bank.episode if viewer==1 else 'actual-opponent-bank',layout=record.bank.layout)
+        capture.participant_created('first','game',viewer,bank.view())
     for index,(frame,table,selection) in enumerate(zip(record.frames,record.tables,record.selections,strict=True)):
         delta = event_delta(1,frame.episode,frame.interval_start,frame.interval_start_hash,
             record.bank.events(frame.interval_start,frame.boundary.end),layout=frame.layout)

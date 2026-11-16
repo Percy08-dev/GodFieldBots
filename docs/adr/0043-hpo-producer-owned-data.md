@@ -40,5 +40,10 @@ fresh/resume and campaign/evaluation checks, full project/static/package checks,
 independent correctness/conformance reviews and18matched physical timing trials.
 The four implementation milestones pass both independent review roles. The final
 cold-import milestone includes actual pruned-parent pause/resume/full-audit and
-ownership-failure regressions. Whole-project verification and the prescribed
-physical protocol/measurements remain pending; no performance claim is accepted.
+ownership-failure regressions. Real two-update validation exposes audit-accounting
+and zero-Act identity defects; their scoped repairs also pass both reviews.
+Capture registers the actual journal bank before any decision; the offline audit
+uses absolute high-water growth and actual last-use retirement with pool holds.
+No reader/format/budget is relaxed. Whole CPU6868PASS/408SKIP and exact225module
+packaging pass. First-set C data remains historical/ineligible; fresh strict-audited
+v2 physical verification is pending. No performance claim is accepted yet.

@@ -243,6 +243,31 @@ class _CaptureContext:
             self._fail("capture episode/game differs from original plan")
         self._episodes[episode_id] = _Episode(game_id, {})
 
+    def participant_created(self, episode_id: str, game_id: str, viewer: int,
+                            bank: EventBankView) -> None:
+        """Retain the actual journal/context's initial participant identity."""
+        episode = self._episode(episode_id)
+        retention = self._check()
+        try:
+            integer(viewer, 1, 2)
+            if (game_id != episode.game_id or not isinstance(bank, EventBankView)
+                    or bank.actor != viewer or bank.layout is not CORRECTED_CARD_INSTANCE_LAYOUT
+                    or viewer in episode.banks or episode.commands or episode.terminals
+                    or bank._events or len(bank._prefixes) != 1):
+                raise ContractError("capture participant creation identity/order mismatch")
+            # Preserve the original EventBank identity contract, including
+            # fixed non-UUID fixture identities. Production passes its UUID.
+            if type(bank.episode) is not str or not bank.episode:
+                raise ContractError("capture original bank identity required")
+            retention.reserve(65536 + 8 * len(bank.episode))
+            original = EventBank(viewer, bank.episode, layout=bank.layout)
+            if original.boundary != bank.boundary:
+                raise ContractError("capture participant initial prefix differs")
+            episode.banks[viewer] = original
+        except BaseException:
+            self._state = "FAILED"
+            raise
+
     def begin_decision(self, episode_id: str, viewer: int, frame: DecisionFrame,
                        delta: EventDelta, table: CandidateTable, selection: Selection,
                        command: Json) -> None:
@@ -374,11 +399,11 @@ class _CaptureContext:
             episode = self._episode(spec.episode_id, open_only=False)
             if episode.result is None or any(episode.result.health.values()) or episode.result.failure is not None:
                 self._fail("capture contains incomplete/unhealthy episode")
+            if set(episode.banks) != {1, 2}:
+                self._fail("capture requires both original participant bank identities")
             participants = []
             for viewer in (1, 2):
-                bank = episode.banks.get(viewer)
-                if bank is None:
-                    bank = EventBank(viewer, str(uuid.uuid4()), layout=CORRECTED_CARD_INSTANCE_LAYOUT)
+                bank = episode.banks[viewer]
                 view = bank.view()
                 history = _OwnedHistoryView(view.actor, view.episode, view._events,
                     view._prefixes, retention)
