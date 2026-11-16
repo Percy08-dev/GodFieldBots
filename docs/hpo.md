@@ -243,8 +243,10 @@ strict経路・データ・監査の意味も変更しません。
 [検証記録](verification/hpo-producer-owned-data.md)を参照してください。
 fresh統合・同一コードでのcold再開・campaign/evaluation連携は独立レビュー済みです。
 再開時は必要なcontrol・checkpoint・RNG・opponent poolだけを一度読み込み、
-次の更新で使わない過去sampleは再生しません。全プロジェクト検証とGPU実測の
-最終受入は検証記録に従います。
+次の更新で使わない過去sampleは再生しません。全プロジェクト検証・実GPUでの
+新規/再開・campaign/evaluation・18試行の比較と全保存物のstrict監査を実施済みです。
+両独立レビューを経て受入済みです。条件・測定範囲は検証記録に従います。短い比較から学習品質や最終testの
+成績は判断しません。
 
 ## 停止と障害からの回復
 

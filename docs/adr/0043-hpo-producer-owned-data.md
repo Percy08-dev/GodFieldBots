@@ -1,6 +1,6 @@
 # 0043: Producer-owned resident HPO data
 
-- Status: Accepted design; implementation reviews READY, final verification pending
+- Status: Accepted, implemented and verified; root acceptance after both FINAL READY reviews
 - Date: 2026-11-16
 - Decision owner: root
 - Preimplementation architecture review: `/root/owned_architecture` READY, with
@@ -46,4 +46,10 @@ Capture registers the actual journal bank before any decision; the offline audit
 uses absolute high-water growth and actual last-use retirement with pool holds.
 No reader/format/budget is relaxed. Whole CPU6868PASS/408SKIP and exact225module
 packaging pass. First-set C data remains historical/ineligible; fresh strict-audited
-v2 physical verification is pending. No performance claim is accepted yet.
+v2 physical verification now passes: all-model fresh/resume and CLI/evaluation,
+18paired trials,30full-original parent audits and40actual cleanup receipts.
+Whole-helper median reductions are64.61%/63.44%/63.22% under the prescribed short
+MLP/GRU/Transformer conditions. Both final whole-branch/evidence reviews are
+FINAL READY; root accepts this approved functional/performance scope. Limits and
+the ineligible first-set history stay explicit in the verification record.
+No memory-reduction, training-quality or final-test claim follows.

@@ -8,10 +8,11 @@ Task3 fresh integration is independently accepted after resource, retention and
 startup ownership corrections. Task4 cold/completion implementation and the
 subsequent audit-accounting and zero-Act identity corrections pass independent
 correctness/conformance reviews. Whole CPU6868PASS/408SKIP and package checks
-pass; fresh v2 physical acceptance remains pending.
+pass; fresh v2 physical protocol,18paired timings and strict original audits pass.
 Reviewer: `/root/owned_architecture`, 2026-11-16. Snapshot-bank visibility finding
 resolved before dependent implementation; scoped final implementation reviews
-are READY. Overall physical/evidence acceptance remains pending.
+are READY. Both final whole-branch/evidence reviews are FINAL READY and root
+accepts the approved functional and short-protocol performance scope.
 Date: 2026-11-16. Root owns design and acceptance.
 Authority: `/home/percy/.codex/attachments/be1ed73b-89b8-419e-825e-8834eed8fa52/approved-plan.md`.
 This supersedes the proposal choices, not historical evidence, in

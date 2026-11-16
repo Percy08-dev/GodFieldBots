@@ -20,11 +20,14 @@ Real two-update auditing subsequently exposes offline charge-lifetime and
 zero-Act bank-identity defects. Both repairs pass independent reviews; capture
 now registers the actual journal/context bank before any Act. Whole CPU6868PASS/
 408SKIP and exact225module package checks pass. The first C timing population
-remains ineligible; fresh v2 strict-audited physical acceptance is pending.
-Controlled fixture evidence grants no training-quality claim.
-The new route will use explicit producer-origin versions and inference-only
+remains ineligible. Fresh v2 all-model training/resume, CLI/evaluation and18paired
+trials pass;30parents pass strict original audits and40actual job receipts pass.
+Median helper wall drops64.61%/63.44%/63.22% for MLP/GRU/Transformer under the fixed
+short protocol. Both final whole-branch/evidence reviews are FINAL READY and root
+accepts the approved scope; no training-quality or final-test claim follows.
+The new route uses explicit producer-origin versions and inference-only
 actor snapshots, while retaining strict legacy/audit readers and existing learning
-math/budgets. Full acceptance and physical comparisons remain pending in
+math/budgets. Final conditions, limits and review disposition are recorded in
 [its verification record](verification/hpo-producer-owned-data.md).
 
 [ADR0042](adr/0042-hpo-precollection-validation-reuse.md) accepts the bounded
