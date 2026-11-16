@@ -8,7 +8,12 @@ device metrics, immutable packing, tensor microbatches and short-history sharing
 through the common trainer/network, with unchanged defaults, FP32/TBPTT and
 Source/worker ownership. Independent preimplementation review is READY after
 explicit aggregate batched-prefix/event memory accounting. Implementation and
-performance acceptance remain pending.
+experimental harness now pass both independent correctness and conformance
+reviews after tensor-admission, fixture, observer-contract, path-origin,
+profiling-window and summary-completeness fixes. Original350host regressions,
+final67focused checks/1inapplicable skip and scoped static/import checks pass.
+Physical CUDA comparison and final performance acceptance remain pending in
+[the verification record](verification/learning-update-optimization.md).
 
 [ADR0044](adr/0044-inference-performance-comparison.md) accepts the bounded
 [inference comparison design](design/inference-performance-comparison.md) after

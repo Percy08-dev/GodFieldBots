@@ -250,7 +250,11 @@ def _check_actor_origin(owner: RemoteModelSnapshot) -> None:
 
 class HpoOwnedLearningProcess(HpoLearningProcess):
     """Separate initialize_owned/update_owned entry; raw requests cannot update."""
-    def __init__(self, *args: Any, budget: Any, **kwargs: Any) -> None:
+    def __init__(self, *args: Any, budget: Any, _training_execution: tuple[str, str] | None = None, **kwargs: Any) -> None:
+        self._training_execution = _training_execution
+        if _training_execution is not None:
+            from gf_training.hpo_training_execution import read_execution_spec
+            read_execution_spec(Path(_training_execution[0]), _training_execution[1])
         super().__init__(*args, **kwargs)
         self.protocol, self.budget = 7, budget
         from gf_training.hpo_artifacts import checked_phase_limits, save_estimate
@@ -348,9 +352,13 @@ class HpoOwnedLearningProcess(HpoLearningProcess):
         request.execution=None  # Consume before endpoint export, environment work or OS creation.
         fd, invocation = self._inherited.inherited_endpoint()
         environment=self._environment()
+        arguments: tuple[str, ...] = ()
+        if self._training_execution is not None:
+            path, sha = self._training_execution
+            arguments = (path, sha, str(self.lease.resident_bytes))
         try:
             return await asyncio.create_subprocess_exec(sys.executable, '-E', '-m', 'gf_training.hpo_owned_worker',
-                str(fd), invocation, pass_fds=(fd,), stdin=asyncio.subprocess.PIPE,
+                str(fd), invocation, *arguments, pass_fds=(fd,), stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
                 env=environment, limit=1024*1024)
         except Exception as error:

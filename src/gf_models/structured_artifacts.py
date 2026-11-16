@@ -504,6 +504,26 @@ def _validate_resume_header(manifest: Json, model: Any, resume_identity: str, *,
 def _validate_resume_manifest(manifest: Json, model: Any, binding: Any, resume_identity: str, *,
                               context: Any, expected_inference_digest: str,
                               _optimizer_recipe: Json | None=None, _resume_metadata: Json | None=None) -> int:
+    """Ordinary restore ALWAYS requires the current producer source."""
+    return _validate_resume_invariants(manifest,model,binding,resume_identity,context=context,
+        expected_inference_digest=expected_inference_digest,_optimizer_recipe=_optimizer_recipe,
+        _resume_metadata=_resume_metadata,recorded_source_digest=producer_identity()["source_digest"])
+
+
+def _validate_diagnostic_resume_manifest(manifest: Json, model: Any, binding: Any, resume_identity: str, *,
+                              recorded_source_digest: str, context: Any, expected_inference_digest: str,
+                              _optimizer_recipe: Json | None=None, _resume_metadata: Json | None=None) -> int:
+    """Read-only experiment import, never called by normal restore or Source."""
+    _hash(recorded_source_digest)
+    return _validate_resume_invariants(manifest,model,binding,resume_identity,context=context,
+        expected_inference_digest=expected_inference_digest,_optimizer_recipe=_optimizer_recipe,
+        _resume_metadata=_resume_metadata,recorded_source_digest=recorded_source_digest)
+
+
+def _validate_resume_invariants(manifest: Json, model: Any, binding: Any, resume_identity: str, *,
+                              context: Any, expected_inference_digest: str,
+                              _optimizer_recipe: Json | None=None, _resume_metadata: Json | None=None,
+                                recorded_source_digest: str) -> int:
     """Original closed metadata/code/runtime guards, independent of artifact I/O."""
     metadata,optimizer_recipe=_validate_resume_header(manifest,model,resume_identity,context=context,
         _optimizer_recipe=_optimizer_recipe,_resume_metadata=_resume_metadata)
@@ -514,7 +534,7 @@ def _validate_resume_manifest(manifest: Json, model: Any, binding: Any, resume_i
             or canonical(manifest["model"]) != canonical(asdict(model))
             or canonical(manifest["binding"]) != canonical(asdict(binding))
             or manifest["resume_identity"] != resume_identity
-            or manifest["producer"]["source_digest"] != producer_identity()["source_digest"]
+            or manifest["producer"]["source_digest"] != recorded_source_digest
             or any(canonical(manifest[key]) != canonical(value) for key, value in context.semantics(model).items())
             or canonical(manifest["optimizer_recipe"]) != canonical(optimizer_recipe)
             or any(canonical(manifest[key]) != canonical(value) for key, value in metadata.items())):

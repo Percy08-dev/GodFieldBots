@@ -16,7 +16,8 @@
 
 追加: [0045](0045-learning-update-optimization.md) — Accepted design:
 PPO更新の指標集約・入力一括化・microbatch・履歴共有を既存予算内で比較する。
-通常既定値は維持。独立事前設計レビューはREADY。実装・実測は未完了。
+通常既定値は維持。事前設計・実装の両独立レビューと対象チェックはREADY。
+CUDA比較・最終受入は未完了。
 
 追加: [0044](0044-inference-performance-comparison.md) — Accepted,implemented and verified:
 推論packing・再利用・chunk・padding・compile・TF32を既存予算内で比較する。

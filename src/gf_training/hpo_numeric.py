@@ -30,15 +30,19 @@ from gf_training.structured_rollout import StructuredRollout
 
 
 def hpo_losses(logprobs: Any, values: Any, mask: Any, selected: Any, old: Any,
-               advantage: Any, target: Any, *, training: HPOTrainingConfig) -> tuple[Any, Json]:
+               advantage: Any, target: Any, *, training: HPOTrainingConfig,
+               _endpoint_terms: bool = False) -> tuple[Any, Any]:
     import torch
+    reduce = (lambda value: value) if _endpoint_terms else (lambda value: value.mean())
     chosen = logprobs.gather(1, selected[:, None]).squeeze(1)
     ratio = (chosen - old).exp()
-    policy = -torch.minimum(ratio * advantage,
-        ratio.clamp(1 - training.clip_range, 1 + training.clip_range) * advantage).mean()
-    mse = ((values - target) ** 2).mean()
-    entropy = -(logprobs.exp() * logprobs.masked_fill(~mask, 0)).sum(-1).mean()
+    policy = -reduce(torch.minimum(ratio * advantage,
+        ratio.clamp(1 - training.clip_range, 1 + training.clip_range) * advantage))
+    mse = reduce((values - target) ** 2)
+    entropy = -reduce((logprobs.exp() * logprobs.masked_fill(~mask, 0)).sum(-1))
     loss = policy + training.value_coefficient * mse - training.entropy_coefficient * entropy
+    if _endpoint_terms:
+        return loss, torch.stack((policy, mse, entropy, old - chosen, loss), -1).detach()
     return loss, {"policy_loss": float(policy.detach()), "value_mse": float(mse.detach()),
         "entropy": float(entropy.detach()), "approx_kl": float((old - chosen).mean().detach()),
         "total_loss": float(loss.detach())}
@@ -74,6 +78,8 @@ class HpoLearner(Learner):
         self.optimizer = self._optimizer(self.network)
         self.shuffle = np.random.Generator(np.random.PCG64(seed))
         self.steps = 0
+        self._training_execution: Any = None
+        self._training_reservation_bytes: int = 0
         self._owned_snapshot: Any = None
         self._owned_generation = 0
         self._owned_failed = False
@@ -160,6 +166,15 @@ class HpoLearner(Learner):
             raise
 
     def _update_numeric(self, rollout: Any, parity: Json, started: float, forward: Any) -> Json:
+        from gf_training.hpo_training_execution import TrainingExecutionSpec
+        spec = getattr(self, '_training_execution', None)
+        if spec is not None:
+            if type(spec) is not TrainingExecutionSpec:
+                raise ContractError('exact experimental execution settings required')
+            if spec.variant == 'shared-prefix' and self.model.model_id == 'mlp':
+                raise ContractError('shared-prefix is sequence-only')
+            if spec.variant != 'baseline':
+                return self._update_experimental(rollout, parity, started, forward, spec)
         torch, recipe = self.torch, self.training
         totals: dict[str, float] = {}
         denominator = 0
@@ -207,6 +222,56 @@ class HpoLearner(Learner):
             "parity": parity, "tbptt_length": recipe.tbptt_length, "epochs": recipe.epochs,
             "endpoint_evaluations": denominator, "context_decisions": context_decisions,
             "suffix_decisions": suffix_decisions, "update_seconds": time.perf_counter() - started}
+
+    def _update_experimental(self, rollout: Any, parity: Json, started: float, forward: Any, spec: Any) -> Json:
+        from gf_training.hpo_update_execution import METRICS, execution_groups, group_forward
+        torch, recipe = self.torch, self.training
+        totals = torch.zeros(5,dtype=torch.float64,device=self.binding.device)
+        denominator = context_decisions = suffix_decisions = 0
+        encoded_frames = groups_count = transfers = 0
+        previous_steps = self.steps
+        self.network.train()
+        for _ in range(recipe.epochs):
+            order = self.shuffle.permutation(len(rollout)).tolist()
+            for start in range(0,len(order),recipe.minibatch_size):
+                logical = order[start:start+recipe.minibatch_size]
+                groups = execution_groups(self,rollout,logical,spec)
+                self.optimizer.zero_grad(set_to_none=True)
+                for group in groups:
+                    loss,measured,window,extra,encoded,copies = group_forward(self,rollout,group,spec,forward)
+                    # Finite real endpoint losses were checked before reduction.
+                    (loss.mean()*(len(group.indices)/len(logical))).backward()
+                    totals += measured.to(torch.float64).sum(0)
+                    denominator += len(group.indices)
+                    for index in group.indices:
+                        frames,_ = rollout.endpoint(index)
+                        context_decisions += len(frames)
+                        suffix_decisions += self._suffix_length(len(frames))
+                    encoded_frames += encoded
+                    transfers += copies
+                    groups_count += 1
+                    # Last backward (including checkpoint recomputation) precedes
+                    # destruction; next packing cannot alias a retained graph.
+                    del loss,measured,window,extra
+                norm = torch.nn.utils.clip_grad_norm_(self.network.parameters(),recipe.max_grad_norm,error_if_nonfinite=True)
+                if not torch.isfinite(norm):
+                    raise ContractError('nonfinite HPO PPO gradients')
+                self.optimizer.step()
+                self.steps += 1
+        self.synchronize()
+        numbers = (totals/denominator).cpu().tolist()
+        metrics = dict(zip(METRICS,numbers,strict=True))
+        expected = recipe.epochs*math.ceil(rollout.used_decisions/recipe.minibatch_size)
+        if (self.steps-previous_steps != expected or not all(math.isfinite(value) for value in metrics.values())
+                or any(not torch.isfinite(parameter).all() for parameter in self.network.parameters())):
+            raise ContractError('invalid HPO optimizer step count/nonfinite output')
+        self._training_update_diagnostics = {'variant':spec.variant,'frame_encodes':encoded_frames,
+            'microbatches':groups_count,'transfers':transfers}
+        return {**metrics,'optimizer_steps':self.steps,'optimizer_step_delta':expected,
+            'collected_decisions':rollout.collected_decisions,'used_decisions':rollout.used_decisions,
+            'parity':parity,'tbptt_length':recipe.tbptt_length,'epochs':recipe.epochs,
+            'endpoint_evaluations':denominator,'context_decisions':context_decisions,
+            'suffix_decisions':suffix_decisions,'update_seconds':time.perf_counter()-started}
 
     def snapshot_owned(self, *, budget: Any, save_budget_bytes: int = 512*1024**2,
                        code_revision: str | None = None) -> Any:

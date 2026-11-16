@@ -46,6 +46,11 @@ coordinator, original operations/child constructor and original fixed
 the SHA and parses the closed schema before constructing the learner; scrub
 argv before model imports. No environment patch, creator replacement, alternate
 worker module, Wire7 field, normal config key or checkpoint key is introduced.
+Alongside path/SHA, the original creator passes the numeric byte cap from its
+SAME active `LearnerReservation.resident_bytes`. Validate it against the
+model/binding ceiling before worker allocation and bind group planning to that
+cap. This is transport of the existing reservation, not a new allowance;
+ordinary worker argv remains unchanged when the private spec is absent.
 
 The private actual-training parameter is fresh-only and producer-owned-only.
 Reject resume, pause, campaign and evaluation use before GPU/process creation.
@@ -203,6 +208,14 @@ wall600 and unchanged limits. Run timing sequentially with no tests, audits or
 agent reviews in parallel. Require healthy `incomplete/update_cap`, then perform
 strict complete-original Source/numeric/receipt audits after timing. Preserve
 failed attempts and do not reduce budgets to obtain acceptance.
+
+Before actual launch root independently validates the generated plan's exact
+18-row model/pair/route membership, alternating order and unique run/context/
+output identities, then includes that plan's bytes in the source freeze. The
+bounded population/audit utilities do not provide a general validator for
+arbitrary external plans. This is accepted tooling debt: such reuse could run
+a different schedule. Revisit before accepting non-root plans or removing the
+mandatory root topology check and plan freeze.
 
 Focused tests cover weighting/tails/exact endpoint membership, candidate mask,
 empty events/hands and grad=None/Adam state, TBPTT>32 detach, future-frame

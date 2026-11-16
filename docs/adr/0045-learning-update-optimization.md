@@ -1,11 +1,13 @@
 # 0045: Experimental PPO update execution comparison
 
-- Status: Accepted design; implementation and verification pending
+- Status: Accepted, implemented; physical comparison and final acceptance pending
 - Date: 2026-11-17
 - Decision owner: root
 - Baseline: `1364748`
 - Preimplementation review: `bot_architecture_reviewer` READY after explicit
   aggregate concurrent-prefix/event activation accounting amendment
+- Implementation: independent correctness/spec/quality and conformance READY
+  after bounded core and harness fixes; physical evidence remains pending
 
 ## Context
 
@@ -44,3 +46,10 @@ fixed-state CUDA updates and 18 alternating actual runs with post-timing strict
 original/numeric/termination audits. Both final independent reviews are required.
 Results, missing evidence and the defaults recommendation belong in
 [the verification record](../verification/learning-update-optimization.md).
+
+The code milestone passes350original host regressions,67final focused checks
+with1inapplicable skip, scoped Ruff/mypy and optional-free current-source CLI
+help. Both independent implementation reviews are READY. Source/result
+population validation, actual observer compatibility and profiler scope are
+tested independently of GPU admission. This does not establish physical
+performance, learning quality or completion of the approved comparison.

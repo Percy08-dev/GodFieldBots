@@ -55,6 +55,7 @@ class _OwnedHpoOperations(_HpoOperations):
     registry_schema=6
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
+        self._training_execution = kwargs.pop('_training_execution', None)
         super().__init__(*args,**kwargs)
         self.owned_registry: OwnedRunRegistry | None=None
         self.writer: OwnedControlWriter | None=None
@@ -187,7 +188,8 @@ class _OwnedHpoOperations(_HpoOperations):
             digest(asdict(config.actions)),state['resume_identity'],actions=config.actions,ledger=self.job.ledger,
             cuda_visible_devices=state['execution']['learner']['cuda_visible_devices'],cleanup_deadline=deadline,
             storage_binding=state.get('storage_binding'),phase_limits={key:operating[key] for key in ('numeric_budget_bytes','save_budget_bytes')},
-            budget=self.budget,progress=self.learner_progress,diagnostics=self.diagnostics is not False)
+            budget=self.budget,progress=self.learner_progress,diagnostics=self.diagnostics is not False,
+            _training_execution=self._training_execution)
         registry.operations=self
         registry.attach_process(child)
         registry.external_controls=external
@@ -412,6 +414,8 @@ class _OwnedHpoOperations(_HpoOperations):
         self.transaction=None
 
     def prepare_completion(self, state: Json) -> None:
+        if self._training_execution is not None:
+            return  # Experimental parents carry no ordinary completion objective.
         if (state['used_decisions']==state['effective_config']['hpo_spec']['decision_budget']
                 and self.owned_registry is not None and not self.owned_registry.failed):
             from gf_training.hpo_owned_completion import _prepare_completion

@@ -242,7 +242,19 @@ def _restore_initial(channel: RamBankChannel, request: Json, learner: Any, budge
 
 def main() -> None:
     # Explicit inherited endpoint only; no inherited resume/model/numeric FD.
+    if len(sys.argv) not in (3,6):
+        raise ContractError('closed owned learner argv required')
     fd, invocation = int(sys.argv[1]), sys.argv[2]
+    execution = None
+    reservation = None
+    if len(sys.argv) == 6:
+        from gf_training.hpo_training_execution import read_execution_spec
+        execution = read_execution_spec(Path(sys.argv[3]),sys.argv[4])
+        try:
+            reservation = int(sys.argv[5])
+        except ValueError as error:
+            raise ContractError('actual learner reservation required') from error
+        integer(reservation,1,2**63-1)
     sys.argv[:] = ['gf-owned-hpo-learner']
     channel = RamBankChannel._from_inherited(fd, invocation)
     initial = json.loads(sys.stdin.readline())
@@ -277,9 +289,17 @@ def main() -> None:
     integer(limits['numeric_budget_bytes'],1,MAX_BANK_BYTES)
     if save_estimate(model)['additional_bytes']>limits['save_budget_bytes']:
         raise ContractError('Wire7 additional save envelope insufficient before learner allocation')
+    if execution is not None and (restoring or reservation is None
+            or reservation > min(model.resources.max_owned_bytes,binding.managed_budget_bytes)
+            or execution.variant == 'shared-prefix' and model.model_id == 'mlp'):
+        raise ContractError('experimental fresh learner reservation/model mismatch')
     from gf_training.hpo_numeric import HpoLearner
     learner = HpoLearner(model, training, integer(initial['seed'],0,2**63-1), binding,
         identity['resume_identity'], actions=actions, rules=card_instance_rules())
+    if execution is not None:
+        learner._training_execution = execution
+        assert reservation is not None
+        learner._training_reservation_bytes = reservation
     # Invocation-local Source admission; phase-specific limits are also enforced.
     budget = StorageBudget(StorageSettings(), float('inf'))
     if restoring:
@@ -311,7 +331,35 @@ def main() -> None:
             raise ContractError('Wire7 original update generation/transaction mismatch')
         last_transaction = request['transaction']
         numeric, deliveries, control = _receive_numeric(channel, request, learner, budget, current_snapshot, actions, identity['phase_limits']['numeric_budget_bytes'])
-        metrics = learner.update_owned(numeric)
+        if execution is not None and execution.profile_start is not None:
+            import resource
+
+            from gf_training.hpo_update_diagnostics import MAX_OUTPUT, ProfileWindow
+            assert execution.diagnostic_directory is not None
+            destination = Path(execution.diagnostic_directory) / f'profile-{generation:06d}'
+            destination.mkdir(parents=True,exist_ok=False)
+            resource.setrlimit(resource.RLIMIT_FSIZE,(MAX_OUTPUT,MAX_OUTPUT))
+            profile = ProfileWindow(learner,destination,execution.profile_start,
+                execution.profile_groups,execution.profile_shapes)
+            try:
+                with profile.patches():
+                    metrics = learner.update_owned(numeric)
+                    profile.finish()
+                if not profile.finished:
+                    raise ContractError('predeclared profiling group window not reached')
+                with (destination/'result.json').open('x') as stream:
+                    stream.write(canonical(profile.summary))
+            finally:
+                profile.finish()
+        else:
+            metrics = learner.update_owned(numeric)
+        if execution is not None and execution.diagnostic_directory is not None:
+            destination = Path(execution.diagnostic_directory)
+            destination.mkdir(parents=True,exist_ok=True)
+            diagnostic = getattr(learner,'_training_update_diagnostics',{'variant':execution.variant})
+            with (destination/f'update-{generation:06d}.json').open('x') as stream:
+                stream.write(canonical({'schema_version':1,'generation':generation,
+                    'reservation_bytes':reservation,**diagnostic}))
         del numeric
         learner.synchronize()
         for delivery in deliveries:

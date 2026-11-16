@@ -372,11 +372,21 @@ class _HpoOperations(_GameOperations):
 async def train_hpo_ppo(loaded_run: Any,collector: Any,directory: Path,*,gpu_job: GpuJob,
                          mode: str='fresh',pause_after_update: int | None=None,
                          progress: ProgressCallback | None = None, diagnostics: bool | None = None,
-                         _reuse_precollection: bool = False) -> HpoRunResult:
+                         _reuse_precollection: bool = False,
+                         _training_execution: tuple[str, str] | None = None) -> HpoRunResult:
+    if _training_execution is not None:
+        from gf_training.hpo_training_execution import read_execution_spec
+        if (type(_training_execution) is not tuple or len(_training_execution) != 2
+                or mode != 'fresh' or pause_after_update is not None
+                or loaded_run.config.hpo_spec.get('schema_version') != 4):
+            raise ContractError('update experiment requires fresh producer-owned-only invocation')
+        spec = read_execution_spec(Path(_training_execution[0]), _training_execution[1])
+        if spec.variant == 'shared-prefix' and loaded_run.config.model.model_id == 'mlp':
+            raise ContractError('shared-prefix is sequence-only')
     operations: _HpoOperations
     if loaded_run.config.hpo_spec.get('schema_version')==4:
         from gf_training.hpo_owned_run import _OwnedHpoOperations
-        operations=_OwnedHpoOperations(gpu_job,progress,diagnostics)
+        operations=_OwnedHpoOperations(gpu_job,progress,diagnostics,_training_execution=_training_execution)
     else:
         operations=_HpoOperations(gpu_job,progress,diagnostics,_reuse_precollection=_reuse_precollection)
     if canonical(asdict(loaded_run.config))!=canonical(loaded_run.effective) or digest(loaded_run.effective)!=loaded_run.sha256:
