@@ -141,3 +141,15 @@ samplers; zero/unknown cannot replace missing. Report192additional diagnostic
 natural games separately from576comparison games; no diagnostic enters timing
 medians, objective or quality counts. Final evidence reviews then reconsider
 whole-plan acceptance.
+
+## Accepted implementation and evidence
+
+Observational source `f067d03` passes both code reviews, affected/final targeted
+checks and a genuine CUDA worker/receipt test. Six fresh diagnostics complete
+under the original caps/600s deadline, yielding12worker/6coordinator records,
+192natural games and six strict Source/numeric/receipt audits with540unchanged
+file instances. All samplers stop, all required observations are finite/bound,
+no publication residue remains, and diagnostics stay excluded from original
+performance medians. Both final evidence reviews are FINAL READY and root
+accepts this measurement completion; original a0f243f timing evidence stays
+separately source-pinned and valid. Scope and sampled-peak limits are retained.

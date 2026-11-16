@@ -238,3 +238,15 @@ performance and physical memory remain measurements. Sandbox CUDA unavailability
 does not establish host unavailability; use the existing host execution approval
 route when needed. Report real limitations without substituting CPU timings for
 the planned CUDA comparison.
+
+## Completed actual telemetry extension
+
+The [accepted supplement](learning-update-telemetry-supplement.md) adds explicit
+closed spec2 observation while preserving exact legacy spec1/off behavior.
+One held16MiB process-local suballocation, bounded sampling/publication and
+original failure/reap ownership provide actual learner/coordinator CPU/memory and
+worker release spans in six separate diagnostic runs. The original18timing rows
+are immutable and unpooled. All required comparison/diagnostic evidence and
+strict audits pass both final independent reviews; defaults remain unchanged.
+See the [verification record](../verification/learning-update-optimization.md)
+for measured source cohorts, proposals and physical/generalization limits.

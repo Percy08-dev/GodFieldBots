@@ -13,13 +13,17 @@ reviews after tensor-admission, fixture, observer-contract, path-origin,
 profiling-window and summary-completeness fixes. Original350host regressions,
 final67focused checks/1inapplicable skip and scoped static/import checks pass.
 The84fixed updates,25profiles and18actual comparisons/strict audits pass, with
-all9paired collection-inclusive improvements. Whole-plan acceptance is held for
-missing actual CPU/memory/retirement telemetry. The separately reviewed
+all9paired collection-inclusive improvements. The separately reviewed
 [six-run diagnostic supplement](design/learning-update-telemetry-supplement.md)
-keeps the original timing population immutable. Its bounded observational code
-passes both independent reviews,119affected host checks, final targeted checks
-and a genuine CUDA worker/receipt smoke. Six-run supplemental evidence remains pending in
-[the verification record](verification/learning-update-optimization.md).
+closes actual CPU/memory/retirement measurement coverage while preserving the
+original timing population. Its bounded observational code passes119affected
+host checks, final targeted checks and a genuine CUDA worker/receipt smoke.
+All24experiment parents/768natural games pass strict Source/numeric/receipt
+audits, preserving2160original file instances. Both final independent reviews
+are FINAL READY; root accepts this bounded comparison. The proposal is MLP
+microbatch and GRU/Transformer shared-prefix for later adoption, with unchanged
+defaults and no quality/HPO/final-test conclusion. Source cohorts, scope and
+limits are in [the verification record](verification/learning-update-optimization.md).
 
 [ADR0044](adr/0044-inference-performance-comparison.md) accepts the bounded
 [inference comparison design](design/inference-performance-comparison.md) after

@@ -7,7 +7,8 @@ The measured adoption proposal is `microbatch` for MLP and `shared-prefix` for
 GRU/Transformer. Every actual pair improves collection-inclusive time. Normal
 defaults remain unchanged; production adoption is a separate change. These are
 short-protocol performance results, without a learning-quality, formal-HPO or
-final-test conclusion. Final independent evidence review is pending.
+final-test conclusion. Both final independent reviews are FINAL READY; root
+accepts the approved comparison including the separate telemetry supplement.
 
 ## Identity and evidence
 
@@ -133,10 +134,10 @@ managed estimates, not measured physical peaks. Groups fit the actual reservatio
 and individual64MiB tensor limits without OOM fallback, dropped endpoints or
 increased caps.
 
-Actual learner CUDA allocator, simultaneous whole-device peaks and actual-run
-process CPU/PSS/RSS are unavailable in the retained observer. Core samples and
-per-actor allocator observations are separate; do not sum per-actor maxima into
-a simultaneous peak. Physical whole-path memory conclusions are limited.
+The original18 timing observer did not retain learner allocator or actual-run
+CPU/PSS/RSS. The separate supplement below supplies those process-scoped
+observations. Simultaneous whole-device/process-tree peaks remain unmeasured;
+core samples and per-actor maxima must not be summed into a simultaneous peak.
 
 ## Actual path and strict audits
 
@@ -182,8 +183,9 @@ component medians need not sum to the median total.
 
 Nested two-update snapshot/save medians:0.143→0.142/0.101→0.099s MLP,
 0.153→0.160/0.116→0.116s GRU,0.183→0.181/0.135→0.136s Transformer. Input
-retirement is included in completion/request intervals and positively audited,
-without an isolated duration. Batch completion includes numerical work/ACK waits,
+retirement in this timing population is included in completion/request intervals
+and positively audited, without an isolated duration. The supplement separately
+measures the worker release span. Batch completion includes numerical work/ACK waits,
 not pure IPC. Nested archive, snapshot and request spans are not added to the
 exclusive phase ledger.
 
@@ -263,8 +265,8 @@ adoptions. Preserve baseline for comparison/diagnosis.
 
 Histories reach29 with TBPTT32. Long detached-prefix behavior is synthetic-test
 evidence, not maximum1024-history performance. One shared GPU, one seed and3pairs
-do not establish broad hardware/load/quality generalization. Whole-path physical
-memory and isolated retirement telemetry have the limits above. No quality,
+do not establish broad hardware/load/quality generalization. Simultaneous physical
+memory and parent-side retirement timing have the limits above/below. No quality,
 formal-HPO or final-test pass follows.
 
 Accepted tooling debt: arbitrary external18-row plans lack a generic full
@@ -273,7 +275,7 @@ Revisit before accepting non-root plans or dropping those checks. Revisit the
 experimental maintenance burden on production adoption/protocol retirement.
 Final evidence reviewers must assess these explicit limitations.
 
-## Required telemetry follow-up
+## Separate actual telemetry supplement
 
 Both evidence reviewers verified the existing arithmetic, identities, receipts
 and Source evidence but held whole-plan acceptance on the missing actual-path
@@ -285,5 +287,85 @@ pooling them into the original18 timing medians. The original source is preserve
 as source-a0f243f.tar with243file hashes checked against its freeze. Implementation
 passes both implementation reviews,119affected host checks, final26targeted
 checks/1CUDA skip plus3original CPU lifecycle rechecks, scoped Ruff/mypy4files,
-and the gated original CUDA worker test (1PASS,5.60s). Six-run supplemental
-evidence remains pending. The missing data is not waived by limitation text.
+and the gated original CUDA worker test (1PASS,5.60s).
+
+PASS six fresh diagnostic runs at
+`f067d030de4c7131aaf4e103ecd5d0fa2d37ef99`, each with the same original conditions,
+full600s deadline and caps. All requests/results are `timing_eligible=false`.
+No diagnostic duration is pooled with or retroactively attached to the original
+18 performance medians. Eight numerical/group/admission/artifact source files
+are byte-identical to a0f243f; both code reviewers confirm an observational delta.
+
+The287-file diagnostic freeze SHA is
+`8df8a1ed8b0f9f0f53b0c8113d61fe2a19ea037a0803ed3b354857ae567b4b8d`.
+[Plan](../../runs/learning-update-optimization-v1/telemetry-v1/diagnostic-plan.json),
+[freeze](../../runs/learning-update-optimization-v1/telemetry-v1/source-freeze.json),
+[summary](../../runs/learning-update-optimization-v1/telemetry-v1/telemetry-summary.json)
+and [strict audits](../../runs/learning-update-optimization-v1/telemetry-v1/strict-audits.json)
+bind six fresh run/context identities,12worker records and6coordinator records.
+Every sampler stops; every record has zero read/sampling failures and retains
+aggregate statistics rather than sample lists. Requested cadence50ms; largest
+observed gap127.6ms is reported rather than hidden. No pending publication residue
+or close uncertainty remains. One held16MiB process lease is a named subset of
+existing workspace/management, not additional budget or a physical-free-memory
+claim.
+
+One diagnostic run/route, two-update totals; these include observation overhead
+and provide measurement coverage, not a repeated speed estimate:
+
+| Model/route | Worker update wall/CPU, s | CUDA-event interval, ms | Peak allocated/reserved, MiB | Worker sampled PSS/RSS, GiB |
+| --- | ---: | ---: | ---: | ---: |
+| MLP baseline |5.800/6.879|5799.8|98.99/116|1.917/2.261|
+| MLP microbatch |2.686/3.110|2686.0|143.12/158|1.939/2.282|
+| GRU baseline |22.013/26.839|22013.1|116.06/126|1.930/2.274|
+| GRU shared-prefix |4.002/4.663|4001.5|119.62/138|1.947/2.291|
+| Transformer baseline |21.534/26.279|21533.2|118.96/130|1.962/2.307|
+| Transformer shared-prefix |4.390/5.140|4390.1|117.82/142|1.977/2.321|
+
+| Model/route | Coordinator CPU, s | Coordinator sampled PSS/RSS, MiB | Worker input retirement wall/CPU, ms |
+| --- | ---: | ---: | ---: |
+| MLP baseline |19.771|156.83/164.58|12.328/15.673|
+| MLP microbatch |19.683|150.70/162.07|12.327/14.380|
+| GRU baseline |20.009|161.61/172.87|16.218/19.247|
+| GRU shared-prefix |19.881|158.89/169.67|25.909/28.909|
+| Transformer baseline |20.097|163.94/175.24|5.661/5.660|
+| Transformer shared-prefix |19.658|164.41/175.72|20.567/23.180|
+
+Worker request starts after valid command checks, before numeric receive; update
+CUDA markers surround the original update_owned call and are read after its
+existing synchronization. Allocator counters reset for each request and are read
+after retirement. Worker retirement spans del-numeric, existing sync, delivery
+completion sends and control close. It is distinct from the parent's earlier
+completion wait, which overlaps numerical work. Parent batch retirement after
+snapshot ACK/commit remains under its original owner; its isolated duration is
+not inferred. Snapshot export/save/send retain their original order and have
+separate wall/CPU entries. The full raw phase records and boundary sample counts
+are retained; process CPU includes that process's threads and sampling overhead,
+excluding children. Event intervals include host gaps, not pure kernel time.
+
+After all diagnostic observation, six strict Source/numeric/context-bound receipt
+audits pass with540unchanged original file instances and192additional natural
+games. They remain separate from576comparison games (768natural overall), with
+no objectives or new training-quality authority. Worker telemetry binds spec,
+source,resume,model/variant,generation/transaction and actual reaped learner pid;
+coordinator records also bind run/context. All433 original freeze hashes are
+revalidated using the preserved old source archive for changed code and unchanged
+paths for other inputs. Thus no historical source is silently reinterpreted.
+
+Supplemental execution uses the original actual helper six times with
+`--diagnostic-telemetry --execute`; source freeze and one admission-only check per
+run precede it. After all six runs, the controller calls the existing official
+`audit_trial(row)` for each and seals a separate audit/telemetry summary. The
+current18-row performance population CLI/medians are not reused for these data.
+Both final independent evidence reviews are FINAL READY. They independently
+verify27supplemental index links,287frozen bytes,18observation records, identity/
+receipt/audit linkage, all summarized measurements and the preserved433original
+freeze identities. Root accepts the scope; no blocking findings remain.
+
+Final acceptance is recorded in
+[acceptance.json](../../runs/learning-update-optimization-v1/acceptance.json).
+All24experiment parents remain healthy incomplete/update_cap, not completed
+training sources or objectives. All768natural games and2160original file instances
+are covered by the separately preserved24strict audits. No Source/numeric/receipt
+audit was concurrent with its timing/observation population. Source code and
+experimental records are locally committed/retained; nothing is pushed.

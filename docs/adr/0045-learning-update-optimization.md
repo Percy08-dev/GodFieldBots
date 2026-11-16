@@ -1,13 +1,13 @@
 # 0045: Experimental PPO update execution comparison
 
-- Status: Accepted, implemented; physical comparison and final acceptance pending
+- Status: Accepted, implemented and verified; root acceptance after both FINAL READY reviews
 - Date: 2026-11-17
 - Decision owner: root
 - Baseline: `1364748`
 - Preimplementation review: `bot_architecture_reviewer` READY after explicit
   aggregate concurrent-prefix/event activation accounting amendment
-- Implementation: independent correctness/spec/quality and conformance READY
-  after bounded core and harness fixes; physical evidence remains pending
+- Implementation: independent correctness/spec/quality and conformance FINAL READY
+  after core, harness and actual-telemetry completion; physical evidence accepted
 
 ## Context
 
@@ -57,7 +57,7 @@ performance, learning quality or completion of the approved comparison.
 ## Actual telemetry follow-up
 
 The84core/25profile/18actual population and strict audits complete successfully.
-Both final reviewers hold whole-plan acceptance because actual learner allocator,
+Both final reviewers initially held whole-plan acceptance because actual learner allocator,
 processCPU/PSS/RSS and isolated retirement duration were not retained. No earlier
 core-only waiver exists. Root accepts the advisor's minimum remedy: a separately
 frozen six-run diagnostic supplement under the original conditions, with bounded
@@ -67,5 +67,20 @@ prescribed count. The [bounded amendment](../design/learning-update-telemetry-su
 passes preimplementation architecture review after an explicit held16MiB
 observation-lease amendment. Observational implementation passes independent
 correctness/conformance,119affected host checks, final targeted checks and one
-gated actual-CUDA worker/receipt smoke. Six-run evidence is pending. No numerical, default,
+gated actual-CUDA worker/receipt smoke. No numerical, default,
 Wire7 or Source-authority change is authorized by this remedy.
+
+The supplement completes six separately frozen diagnostics at `f067d03`, with
+12worker/6coordinator measured records,192additional natural games and six strict
+audits/540unchanged file instances. Original84core/25profiles/18performance runs
+at `a0f243f` remain immutable and separate. All433original freeze identities are
+verified through243archived source files and190unchanged paths. All24parents/
+768natural games and2160file instances pass their strict Source/numeric/receipt
+checks. Both final independent evidence reviews are FINAL READY; root accepts
+the approved comparison scope.
+
+The later-adoption proposal is MLP `microbatch`, GRU/Transformer `shared-prefix`:
+all9original pairs improve collection-inclusive coordinator time, with median
+paired savings9.54%,31.85%,31.60%. Defaults remain unchanged. Sampled memory,
+one diagnostic pair/model, short histories, one shared GPU and one learning seed
+limit generalization; no quality/HPO/final-test gate is passed by these results.
