@@ -2,6 +2,14 @@
 
 ## Status and scope
 
+[ADR0045](adr/0045-learning-update-optimization.md) accepts the bounded
+[PPO update comparison](design/learning-update-optimization.md): cumulative
+device metrics, immutable packing, tensor microbatches and short-history sharing
+through the common trainer/network, with unchanged defaults, FP32/TBPTT and
+Source/worker ownership. Independent preimplementation review is READY after
+explicit aggregate batched-prefix/event memory accounting. Implementation and
+performance acceptance remain pending.
+
 [ADR0044](adr/0044-inference-performance-comparison.md) accepts the bounded
 [inference comparison design](design/inference-performance-comparison.md) after
 independent preimplementation review. The opt-in experiment compares packing,
