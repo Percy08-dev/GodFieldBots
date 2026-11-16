@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import mmap
 import sys
+from contextlib import nullcontext
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -246,10 +247,13 @@ def main() -> None:
         raise ContractError('closed owned learner argv required')
     fd, invocation = int(sys.argv[1]), sys.argv[2]
     execution = None
+    execution_sha = None
+    observation_source = None
     reservation = None
     if len(sys.argv) == 6:
         from gf_training.hpo_training_execution import read_execution_spec
         execution = read_execution_spec(Path(sys.argv[3]),sys.argv[4])
+        execution_sha = sys.argv[4]
         try:
             reservation = int(sys.argv[5])
         except ValueError as error:
@@ -311,6 +315,12 @@ def main() -> None:
         current_snapshot = snapshot.identity
         _send_snapshot(channel, snapshot, request=initial, budget=budget, metrics={}, identity=identity, learner=learner)
         generation = 0
+    if execution is not None and execution.observe_actual:
+        from gf_models.structured_artifacts import producer_identity
+        try:
+            observation_source = producer_identity()['source_digest']
+        except BaseException:  # noqa: BLE001, S110 - missing source binding makes diagnostics incomplete, not learning
+            pass
     last_transaction = initial['transaction']
     for line in sys.stdin:
         request = json.loads(line)
@@ -330,46 +340,113 @@ def main() -> None:
                 or request['transaction'] == last_transaction):
             raise ContractError('Wire7 original update generation/transaction mismatch')
         last_transaction = request['transaction']
-        numeric, deliveries, control = _receive_numeric(channel, request, learner, budget, current_snapshot, actions, identity['phase_limits']['numeric_budget_bytes'])
-        if execution is not None and execution.profile_start is not None:
-            import resource
-
-            from gf_training.hpo_update_diagnostics import MAX_OUTPUT, ProfileWindow
-            assert execution.diagnostic_directory is not None
-            destination = Path(execution.diagnostic_directory) / f'profile-{generation:06d}'
-            destination.mkdir(parents=True,exist_ok=False)
-            resource.setrlimit(resource.RLIMIT_FSIZE,(MAX_OUTPUT,MAX_OUTPUT))
-            profile = ProfileWindow(learner,destination,execution.profile_start,
-                execution.profile_groups,execution.profile_shapes)
+        observation = None
+        cuda_begin = cuda_end = None
+        original_completed = False
+        if execution is not None and execution.observe_actual:
             try:
-                with profile.patches():
+                import os
+
+                from gf_training.hpo_execution_observation import ProcessObservation
+                assert execution.diagnostic_directory is not None
+                Path(execution.diagnostic_directory).mkdir(parents=True,exist_ok=True)
+                observation = ProcessObservation({'role':'worker','generation':request['generation'],
+                    'transaction':request['transaction'],'resume_identity':learner.resume_identity,
+                    'model_id':model.model_id,'variant':execution.variant,'spec_sha256':execution_sha,
+                    'source_digest':observation_source,'pid':os.getpid(),'run_id':None,'context_id':None},
+                    allowance_bytes=model.resources.workspace_bytes)
+                observation.start()
+                if binding.device!='cpu':
+                    observation.cuda={'status':'unavailable'}
+                    learner.torch.cuda.reset_peak_memory_stats(binding.device)
+                    cuda_begin=learner.torch.cuda.Event(enable_timing=True)
+                    cuda_end=learner.torch.cuda.Event(enable_timing=True)
+            except BaseException as error:  # noqa: BLE001 - observation never changes original update ownership
+                if observation is not None:
+                    observation.failure('observation/CUDA start',error)
+        try:
+            with observation.phase('receive_validation') if observation is not None else nullcontext():
+                numeric, deliveries, control = _receive_numeric(channel, request, learner, budget, current_snapshot, actions, identity['phase_limits']['numeric_budget_bytes'])
+            with observation.phase('update_call') if observation is not None else nullcontext():
+                if cuda_begin is not None:
+                    try:
+                        cuda_begin.record()
+                    except BaseException as error:  # noqa: BLE001 - no change to authoritative call
+                        if observation is not None:
+                            observation.failure('CUDA begin',error)
+                if execution is not None and execution.profile_start is not None:
+                    import resource
+
+                    from gf_training.hpo_update_diagnostics import MAX_OUTPUT, ProfileWindow
+                    assert execution.diagnostic_directory is not None
+                    destination = Path(execution.diagnostic_directory) / f'profile-{generation:06d}'
+                    destination.mkdir(parents=True,exist_ok=False)
+                    resource.setrlimit(resource.RLIMIT_FSIZE,(MAX_OUTPUT,MAX_OUTPUT))
+                    profile = ProfileWindow(learner,destination,execution.profile_start,
+                        execution.profile_groups,execution.profile_shapes)
+                    try:
+                        with profile.patches():
+                            metrics = learner.update_owned(numeric)
+                            profile.finish()
+                        if not profile.finished:
+                            raise ContractError('predeclared profiling group window not reached')
+                        with (destination/'result.json').open('x') as stream:
+                            stream.write(canonical(profile.summary))
+                    finally:
+                        profile.finish()
+                else:
                     metrics = learner.update_owned(numeric)
-                    profile.finish()
-                if not profile.finished:
-                    raise ContractError('predeclared profiling group window not reached')
-                with (destination/'result.json').open('x') as stream:
-                    stream.write(canonical(profile.summary))
-            finally:
-                profile.finish()
-        else:
-            metrics = learner.update_owned(numeric)
-        if execution is not None and execution.diagnostic_directory is not None:
-            destination = Path(execution.diagnostic_directory)
-            destination.mkdir(parents=True,exist_ok=True)
-            diagnostic = getattr(learner,'_training_update_diagnostics',{'variant':execution.variant})
-            with (destination/f'update-{generation:06d}.json').open('x') as stream:
-                stream.write(canonical({'schema_version':1,'generation':generation,
-                    'reservation_bytes':reservation,**diagnostic}))
-        del numeric
-        learner.synchronize()
-        for delivery in deliveries:
-            delivery.complete(learner.synchronize)
-        control.close()
-        generation = learner._owned_generation
-        snapshot = learner.snapshot_owned(budget=budget, save_budget_bytes=identity['phase_limits']['save_budget_bytes'])
-        snapshot.save(Path(request['output']))
-        current_snapshot = snapshot.identity
-        _send_snapshot(channel, snapshot, request=request, budget=budget, metrics=metrics, identity=identity, learner=learner)
+                if cuda_end is not None:
+                    try:
+                        cuda_end.record()
+                    except BaseException as error:  # noqa: BLE001 - no change to authoritative call
+                        if observation is not None:
+                            observation.failure('CUDA end',error)
+            if execution is not None and execution.diagnostic_directory is not None and not execution.observe_actual:
+                destination = Path(execution.diagnostic_directory)
+                destination.mkdir(parents=True,exist_ok=True)
+                diagnostic = getattr(learner,'_training_update_diagnostics',{'variant':execution.variant})
+                with (destination/f'update-{generation:06d}.json').open('x') as stream:
+                    stream.write(canonical({'schema_version':1,'generation':generation,
+                        'reservation_bytes':reservation,**diagnostic}))
+            with observation.phase('input_retirement') if observation is not None else nullcontext():
+                del numeric
+                learner.synchronize()
+                for delivery in deliveries:
+                    delivery.complete(learner.synchronize)
+                control.close()
+            if observation is not None:
+                try:
+                    observation.numeric_loop_update_seconds=float(metrics['update_seconds'])
+                    if cuda_begin is not None and cuda_end is not None:
+                        observation.cuda={'status':'observed','update_call_event_ms':cuda_begin.elapsed_time(cuda_end),
+                            'allocator_after_retirement':{
+                                'allocated_bytes':learner.torch.cuda.memory_allocated(binding.device),
+                                'reserved_bytes':learner.torch.cuda.memory_reserved(binding.device),
+                                'peak_allocated_bytes':learner.torch.cuda.max_memory_allocated(binding.device),
+                                'peak_reserved_bytes':learner.torch.cuda.max_memory_reserved(binding.device)}}
+                except BaseException as error:  # noqa: BLE001 - read after EXISTING sync; never add synchronization
+                    observation.failure('CUDA/metric retirement read',error)
+            generation = learner._owned_generation
+            with observation.phase('snapshot_export') if observation is not None else nullcontext():
+                snapshot = learner.snapshot_owned(budget=budget, save_budget_bytes=identity['phase_limits']['save_budget_bytes'])
+            with observation.phase('snapshot_save') if observation is not None else nullcontext():
+                snapshot.save(Path(request['output']))
+            current_snapshot = snapshot.identity
+            with observation.phase('snapshot_transfer') if observation is not None else nullcontext():
+                _send_snapshot(channel, snapshot, request=request, budget=budget, metrics=metrics, identity=identity, learner=learner)
+            original_completed = True
+        finally:
+            cuda_begin = cuda_end = None
+            if observation is not None:
+                # Publication is AFTER original send returns, before next read/
+                # close. It cannot replace an original numerical/FD/save error.
+                try:
+                    assert execution is not None and execution.diagnostic_directory is not None
+                    observation.finish_publish(Path(execution.diagnostic_directory)/f"update-{request['generation']:06d}.json",
+                        original_completed=original_completed)
+                except BaseException:  # noqa: BLE001, S110 - helper validates missing/incomplete sidecar after real reap
+                    pass
     raise ContractError('Wire7 EOF before owned close')
 
 

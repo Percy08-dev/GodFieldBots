@@ -53,3 +53,19 @@ help. Both independent implementation reviews are READY. Source/result
 population validation, actual observer compatibility and profiler scope are
 tested independently of GPU admission. This does not establish physical
 performance, learning quality or completion of the approved comparison.
+
+## Actual telemetry follow-up
+
+The84core/25profile/18actual population and strict audits complete successfully.
+Both final reviewers hold whole-plan acceptance because actual learner allocator,
+processCPU/PSS/RSS and isolated retirement duration were not retained. No earlier
+core-only waiver exists. Root accepts the advisor's minimum remedy: a separately
+frozen six-run diagnostic supplement under the original conditions, with bounded
+observers and strict audits; original18 timing rows remain immutable and are not
+pooled with diagnostics. Six is an evidence-coverage decision, not an originally
+prescribed count. The [bounded amendment](../design/learning-update-telemetry-supplement.md)
+passes preimplementation architecture review after an explicit held16MiB
+observation-lease amendment. Observational implementation passes independent
+correctness/conformance,119affected host checks, final targeted checks and one
+gated actual-CUDA worker/receipt smoke. Six-run evidence is pending. No numerical, default,
+Wire7 or Source-authority change is authorized by this remedy.

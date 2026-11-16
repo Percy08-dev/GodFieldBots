@@ -101,3 +101,60 @@ Production defaults stay unchanged. Every output is fresh and immutable.
    I/O wait. Required healthy actual outcome is incomplete/update_cap with2updates,
    3generations and genuine termination. Mixed whole-run improvement supports
    retaining defaults. No learning-quality/HPO/final-test claim follows.
+
+## Separate actual telemetry diagnostics
+
+Root may add `--diagnostic-telemetry` to a fresh reviewed `actual --execute`
+invocation under the new `telemetry-v1` diagnostic subroot. Root owns the six-run
+baseline/chosen-model plan and freeze; this flag creates no new campaign or
+population framework. Keep all original conditions/caps and preserve the original
+84core/25profiles/18actual evidence and archived source. Diagnostic observations
+must never enter those timing medians or quality/objective counts.
+
+The flag writes closed SHA-bound spec2 with `observe_actual=true` and labels both
+request and result `timing_eligible=false`. Legacy spec1 files keep their exact
+closed schema and bytes with observation off; normal invocations create no
+samplers or CUDA telemetry markers. Observation cannot combine with profiling,
+resume or pause. Spec2 requires a nonempty absolute diagnostic destination.
+
+One exclusive process-local16MiB lease is held within the existing model256MiB
+workspace / coordinator1GiB management envelope. It adds no budget or headroom,
+and changes no group admission. A50ms requested daemon sampler plus boundary
+samples retains counts/gaps/first/last/maxPSS/maxRSS only. Proc reads are fixed to
+`/proc/self/smaps_rollup` and8KiB; join requests at most250ms. OS/proc/file blocking
+limitations remain. Stalled samplers or uncertain publication retain their owner
+and exclusive lease until process exit. Every sidecar is exclusive-create and
+at most64KiB. Publication first writes/closes one exclusive pending file, links
+the final name exclusively, then removes pending. Close/unlink uncertainty holds
+the lease/FD owner; any pending residue fails helper diagnostic completeness.
+No rollout/token/NumPy/Tensor/Source/snapshot aliases are retained.
+
+The coordinator observation covers the original call through return or original
+cancellation cleanup and measures only that process's threads. The learner has
+separate receive/validation, update-call, input-retirement, snapshot-export, save
+and transfer wall/CPU intervals. Retirement means the original del/sync/delivery
+completion/control-close sequence. CUDA events bracket `update_owned`, including
+host gaps; elapsed time and allocator current/peaks are read after the existing
+retirement sync, without an endpoint or new device sync. CPU test records label
+CUDA `not_requested`; actual diagnostic completeness requires real CUDA fields.
+
+Full worker records publish after original snapshot transfer returns, before the
+next request/close; helper verification waits for original close/reap. Records
+bind generation, transaction, resume/model/variant, spec/source hashes and pid.
+The separate coordinator record also binds run/context. Its post-cleanup parent
+resume-binding JSON read is bounded64KiB; an oversized parent binding is an
+explicit diagnostic failure and never changes the original training outcome. A healthy original run
+and genuine receipt remain healthy if observation fails; the result instead sets
+`diagnostic_complete=false` and helper exits2. Missing/invalid records, failed or
+unstopped samplers, or absent CUDA fields cannot pass diagnostic completeness.
+Require one coordinator and two worker records per run. Audit original
+Source/numeric/receipts afterward using the existing `audit_trial`; root must
+also separately require `diagnostic_complete=true` for all six diagnostic runs.
+Independent sampled maxima are never a simultaneous process-tree/device peak.
+
+After independent review, root may run the bounded original-worker CUDA check
+separately with `GFB_RUN_TELEMETRY_CUDA=1 UV_CACHE_DIR=/tmp/gfb-update-uv-cache uv run --no-sync pytest -q tests/test_learning_update_telemetry.py::test_original_cuda_worker_telemetry_and_genuine_receipt`.
+It also requires host CUDA availability. It uses a tiny synthetic owned batch,
+original creator/FD/save/retirement/close and audited job receipt, with real CUDA
+markers/allocator checks. It runs no Simulator or performance population and
+sets no numerical equality/quality gate. Default CPU verification skips it.

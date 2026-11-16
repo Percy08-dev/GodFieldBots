@@ -21,9 +21,10 @@ class TrainingExecutionSpec:
     profile_start: int | None = None
     profile_groups: int = 1
     profile_shapes: bool = False
+    observe_actual: bool = False
 
     def __post_init__(self) -> None:
-        if type(self.schema_version) is not int or self.schema_version != 1 or self.variant not in VARIANTS:
+        if type(self.schema_version) is not int or self.schema_version not in (1,2) or self.variant not in VARIANTS:
             raise ContractError('unknown training execution schema/variant')
         if self.diagnostic_directory is not None and (type(self.diagnostic_directory) is not str
                 or not Path(self.diagnostic_directory).is_absolute()):
@@ -33,14 +34,23 @@ class TrainingExecutionSpec:
             if self.diagnostic_directory is None:
                 raise ContractError('profiling requires diagnostic destination')
         integer(self.profile_groups, 1, 16)
-        if type(self.profile_shapes) is not bool:
-            raise ContractError('closed profiling flag required')
+        if type(self.profile_shapes) is not bool or type(self.observe_actual) is not bool:
+            raise ContractError('closed profiling/observation flag required')
+        if self.observe_actual and (self.schema_version!=2 or self.diagnostic_directory is None
+                or self.profile_start is not None or self.profile_shapes or self.profile_groups!=1):
+            raise ContractError('observation requires spec2, destination and no profiler window')
+
+    def payload(self) -> dict[str, object]:
+        value=asdict(self)
+        if self.schema_version==1:
+            del value['observe_actual']
+        return value
 
 
 def write_execution_spec(path: Path, spec: TrainingExecutionSpec) -> str:
     if type(spec) is not TrainingExecutionSpec or not path.is_absolute():
         raise ContractError('exact settings and absolute fresh path required')
-    raw = canonical(asdict(spec)).encode()
+    raw = canonical(spec.payload()).encode()
     if len(raw) > 4096:
         raise ContractError('execution settings exceed 4096 bytes')
     try:
@@ -74,9 +84,12 @@ def read_execution_spec(path: Path, expected_sha256: str) -> TrainingExecutionSp
         return value
     try:
         value = json.loads(raw, object_pairs_hook=pairs)
-        closed(value, set(TrainingExecutionSpec.__dataclass_fields__))
+        keys=set(TrainingExecutionSpec.__dataclass_fields__)
+        if type(value) is dict and value.get('schema_version')==1:
+            keys.remove('observe_actual')
+        closed(value,keys)
         result = TrainingExecutionSpec(**value)
-        if canonical(asdict(result)).encode() != raw:
+        if canonical(result.payload()).encode() != raw:
             raise ContractError('canonical execution settings required')
         return result
     except (ValueError, TypeError) as error:

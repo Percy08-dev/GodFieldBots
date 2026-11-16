@@ -82,8 +82,55 @@ async def monitored(runner: Any,args: Any,result: Any,diagnostic: Any) -> None:
                 pass
 
 
+def verify_telemetry(result: dict[str,Any],directory: Path,*,parent: Path,
+                     spec_sha: str,source_digest: str,variant: str,model_id: str,
+                     run_id: str,context_id: str) -> dict[str,Any]:
+    """Read only AFTER the original call has closed/reaped its real owners."""
+    import os
+
+    from gf_training.hpo_execution_observation import read_observation, validate_observation
+    try:
+        if (not result.get('probe_expectation_met') or result.get('failure')
+                or result.get('gpu_termination_context_verified') is not True
+                or result.get('production_original_cleanup_receipt_revalidated') is not True):
+            raise ValueError('original actual invocation did not complete healthy cleanup')
+        if any(next(root.glob('.observation-*.pending'),None) is not None
+                for root in (directory,directory/'learner')):
+            raise ValueError('uncertain observation publication pending residue')
+        state=read_observation(parent/'run.json')
+        resume=state['resume_identity']
+        receipt=result['gpu_termination']
+        pids=[row['pid'] for row in receipt['resources'] if row['kind']=='learner' and row['outcome']=='reaped']
+        if len(pids)!=1:
+            raise ValueError('one actually reaped learner required for telemetry binding')
+        common={'model_id':model_id,'variant':variant,'spec_sha256':spec_sha,
+            'source_digest':source_digest,'resume_identity':resume}
+        coordinator=directory/'coordinator-observation.json'
+        validate_observation(read_observation(coordinator),expected={**common,'role':'coordinator',
+            'pid':os.getpid(),'generation':None,'transaction':None,'run_id':run_id,'context_id':context_id},require_cuda=False)
+        files={str(coordinator):sha256(coordinator)}
+        transactions=set()
+        expected_files={directory/'learner'/f'update-{generation:06d}.json' for generation in (0,1)}
+        if set((directory/'learner').glob('update-*.json'))!=expected_files:
+            raise ValueError('exactly two observed worker update records required')
+        for generation in (0,1):
+            path=directory/'learner'/f'update-{generation:06d}.json'
+            value=read_observation(path)
+            validate_observation(value,expected={**common,'role':'worker','generation':generation,
+                'pid':pids[0],'run_id':None,'context_id':None},require_cuda=True)
+            transaction=value['bindings']['transaction']
+            if type(transaction) is not str or not transaction or transaction in transactions:
+                raise ValueError('distinct actual worker update transactions required')
+            transactions.add(transaction)
+            files[str(path)]=sha256(path)
+        return {'diagnostic_complete':True,'files':files,'record_count':3,
+            'scope':'diagnostic-only; original training/receipt health remains separate'}
+    except BaseException as error:  # noqa: BLE001 - diagnostic failure must not rewrite original outcome
+        return {'diagnostic_complete':False,'failure':(type(error).__name__+':'+str(error))[:512]}
+
+
 def main() -> int:
-    from dataclasses import asdict, replace
+    from dataclasses import replace
 
     from gf_cli.hpo_config import joint_resource_admission
     from gf_common.structured_layout import CORRECTED_CARD_INSTANCE_LAYOUT
@@ -96,6 +143,8 @@ def main() -> int:
     parser.add_argument('--variant',choices=('baseline','metrics','packed','microbatch','shared-prefix'),required=True)
     parser.add_argument('--freeze',type=Path)
     parser.add_argument('--execute',action='store_true')
+    parser.add_argument('--diagnostic-telemetry',action='store_true',
+        help='fresh diagnostic-only process telemetry; excluded from timing populations')
     args=parser.parse_args()
     if Path.cwd().resolve()!=REPO:
         raise ValueError('invoke from repository root')
@@ -123,12 +172,15 @@ def main() -> int:
         raise ValueError('actual execution requires root-reviewed source freeze')
     identity=verify_freeze(args.freeze,loaded,runtime)
     args.report_dir.mkdir(parents=True,exist_ok=False)
-    spec=TrainingExecutionSpec(variant=args.variant,diagnostic_directory=str(args.report_dir/'learner'))
+    spec=TrainingExecutionSpec(schema_version=2 if args.diagnostic_telemetry else 1,
+        variant=args.variant,diagnostic_directory=str(args.report_dir/'learner'),
+        observe_actual=args.diagnostic_telemetry)
     spec_path=args.report_dir/'worker-execution.json'
     spec_sha=write_execution_spec(spec_path,spec)
     request={'schema_version':1,'kind':'experimental-update-actual','mode':'fresh',
         'quality_eligible':False,'completion_objective':None,'run_id':args.run_id,
-        'context_id':args.context_id,'parent':str(parent),'execution':asdict(spec),
+        'context_id':args.context_id,'parent':str(parent),'execution':spec.payload(),
+        'timing_eligible':not args.diagnostic_telemetry,'diagnostic_telemetry':args.diagnostic_telemetry,
         'execution_path':str(spec_path),'execution_sha256':spec_sha,'freeze':identity,
         'config_file_sha256':sha256(args.config),'materialized_sha256':runtime.sha256,
         'base_identity_scope':'ordinary model/runtime only; experiment sidecar separate',
@@ -136,7 +188,8 @@ def main() -> int:
     immutable_json(args.report_dir/'request.json',request)
     result: dict[str,Any]={'schema_version':1,'request':request,'train_calls':0,
         'probe_expectation_met':False,'gpu_termination':None,
-        'gpu_termination_context_verified':False,'raw_training_report':None}
+        'gpu_termination_context_verified':False,'raw_training_report':None,
+        'timing_eligible':not args.diagnostic_telemetry,'diagnostic_complete':None}
     measure=runner.Measurement()
     diagnostic=runner.BoundedDiagnostics(args.report_dir/'diagnostics.jsonl')
     started=time.monotonic()
@@ -148,7 +201,42 @@ def main() -> int:
             result['train_calls']+=1
             if result['train_calls']!=1 or kw.get('mode')!='fresh' or kw.get('pause_after_update') is not None:
                 raise ValueError('exactly one fresh original coordinator call required')
-            return await original(*pos,**kw,_training_execution=(str(spec_path),spec_sha))
+            observation=None
+            original_completed=False
+            if args.diagnostic_telemetry:
+                try:
+                    import os
+
+                    from gf_models.structured_artifacts import producer_identity
+                    from gf_training.hpo_execution_observation import ProcessObservation
+                    observation=ProcessObservation({'role':'coordinator','generation':None,'transaction':None,
+                        'resume_identity':None,'model_id':settings.model.model_id,'variant':args.variant,
+                        'spec_sha256':spec_sha,'source_digest':producer_identity()['source_digest'],
+                        'pid':os.getpid(),'run_id':args.run_id,'context_id':args.context_id},
+                        allowance_bytes=runtime.config.hpo_spec['operating']['parent_budget_bytes'])
+                    observation.start()
+                except BaseException as error:  # noqa: BLE001 - observer creation cannot prevent original call
+                    result['coordinator_observation_failure']=(type(error).__name__+':'+str(error))[:512]
+            try:
+                if observation is not None:
+                    with observation.phase('coordinator_call'):
+                        trained=await original(*pos,**kw,_training_execution=(str(spec_path),spec_sha))
+                else:
+                    trained=await original(*pos,**kw,_training_execution=(str(spec_path),spec_sha))
+                original_completed=True
+                return trained
+            finally:
+                if observation is not None:
+                    try:
+                        from gf_training.hpo_execution_observation import read_observation
+                        observation.bind_resume(read_observation(parent/'run.json')['resume_identity'])
+                    except BaseException as error:  # noqa: BLE001 - missing original parent means incomplete telemetry
+                        observation.failure('resume binding',error)
+                    try:
+                        result['coordinator_observation']=observation.finish_publish(
+                            args.report_dir/'coordinator-observation.json',original_completed=original_completed)
+                    except BaseException as error:  # noqa: BLE001 - preserve original authoritative exception/outcome
+                        result['coordinator_observation_failure']=(type(error).__name__+':'+str(error))[:512]
         # These historical patches only observe actual boundaries and ownership;
         # no inference bootstrap, worker replacement, or96MiB charge is used.
         patches=runner.production_patches(measure,'C')+[(hpo_ppo,'train_hpo_ppo',once)]
@@ -169,9 +257,18 @@ def main() -> int:
             import json
             for row in rows:
                 stream.write(json.dumps(row,allow_nan=False)+'\n')
+        if args.diagnostic_telemetry:
+            try:
+                from gf_models.structured_artifacts import producer_identity
+                result['telemetry']=verify_telemetry(result,args.report_dir,parent=parent,spec_sha=spec_sha,
+                    source_digest=producer_identity()['source_digest'],variant=args.variant,model_id=settings.model.model_id,
+                    run_id=args.run_id,context_id=args.context_id)
+            except BaseException as error:  # noqa: BLE001 - observational source/read failure preserves original outcome
+                result['telemetry']={'diagnostic_complete':False,'failure':(type(error).__name__+':'+str(error))[:512]}
+            result['diagnostic_complete']=result['telemetry']['diagnostic_complete']
         immutable_json(args.report_dir/'result.json',result)
     check_files(identity['files'])
-    if not result.get('probe_expectation_met'):
+    if not result.get('probe_expectation_met') or args.diagnostic_telemetry and not result.get('diagnostic_complete'):
         return 2
     return code
 
