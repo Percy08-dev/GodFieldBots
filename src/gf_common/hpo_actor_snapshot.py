@@ -122,3 +122,36 @@ def _issue_actor_snapshot(owner: Any, *, inference: ReadonlyRamBankSet, metadata
     except BaseException:
         reservation.close()
         raise
+
+
+def checked_evaluation_use(value: Json, metadata: Json, request: Json, options: Json) -> str:
+    """Pure actor9 use binding; JSON supplies no execution or producer authority."""
+    from pathlib import Path
+
+    from gf_common.card_instance_collection import checked_hpo_evaluation_parent
+    from gf_common.domain import closed, integer
+    raw=closed(value,{'schema_version','kind','evaluation_id','finals','selected','outer_request'})
+    integer(raw['schema_version'],1,1)
+    if (raw['kind']!='owned-evaluation-final-policy-use-v1' or raw['evaluation_id']!=request['run_id']
+            or request['command']!='BEGIN' or type(request['generation']) is not int or request['generation']!=0
+            or canonical(raw['outer_request'])!=canonical(request)):
+        raise ContractError('evaluation actor use differs from original outer request/control0')
+    finals=raw['finals']
+    if type(finals) is not list or not 1<=len(finals)<=2:
+        raise ContractError('evaluation requires its fixed one/two final policies')
+    for entry in finals:
+        closed(entry,{'parent','snapshot_identity'})
+        checked_hpo_evaluation_parent(entry['parent'])
+        sha=entry['snapshot_identity']
+        if type(sha) is not str or len(sha)!=64 or set(sha)-set('0123456789abcdef'):
+            raise ContractError('evaluation source snapshot identity required')
+    selected=raw['selected']
+    if selected not in finals: raise ContractError('selected evaluation policy is outside original final set')
+    parent=selected['parent']
+    if (metadata['generation']!=parent['generation'] or type(metadata['generation']) is not int
+            or metadata['snapshot_identity']!=selected['snapshot_identity']
+            or metadata['inference_digest']!=parent['inference_sha256']
+            or options['expected_manifest_digest']!=parent['inference_sha256']
+            or Path(options['checkpoint'])!=Path(parent['run_path'])/'artifacts'/f"{parent['generation']:06}"):
+        raise ContractError('evaluation selected source/metadata/checkpoint mismatch')
+    return canonical(finals)

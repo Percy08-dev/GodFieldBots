@@ -18,7 +18,13 @@ from typing import Any
 from gf_common.domain import ContractError, Json, canonical, closed, digest, integer
 from gf_common.ram_bank import MAX_BANK_BYTES, RamBankChannel, ReadonlyRamBankSet
 from gf_training.hpo_learning_process import HpoLearningProcess
-from gf_training.hpo_owned_worker import _control_bank, _receive_control
+from gf_training.hpo_owned_worker import (
+    _RETAIN_BOOK_BYTES,
+    _RX_TRANSFER_BYTES,
+    _control_bank,
+    _receive_control,
+    _remaining_snapshot_bytes,
+)
 from gf_training.ppo_run import LearningProcess
 
 _TOKEN = object()
@@ -141,6 +147,25 @@ class RemoteSaveAck:
             raise ContractError('remote save ACK original backings changed')
 
 
+class OwnedRestoreAck:
+    """Actual restored state; distinct from a new durable save."""
+    def __init__(self, token: object, snapshot: Any, transaction: object, imported: Any, reply: Json) -> None:
+        if token is not _TOKEN: raise ContractError('actual Wire7 restore ACK required')
+        self._snapshot,self._transaction,self._imported=snapshot,transaction,imported
+        self._reply=canonical(reply).encode()
+        self.generation,self.optimizer_steps,self.identity=snapshot.generation,snapshot.optimizer_steps,snapshot.identity
+        from gf_training.hpo_owned_snapshot import _backings
+        self._backings=(_backings(snapshot.inference),_backings(snapshot.resume))
+
+    def require(self, snapshot: Any) -> None:
+        from gf_training.hpo_owned_snapshot import _backings
+        if (snapshot is not self._snapshot or snapshot.restore_ack is not self or snapshot._closed
+                or snapshot._transaction is not self._transaction or snapshot.generation!=self.generation
+                or snapshot.optimizer_steps!=self.optimizer_steps or snapshot.identity!=self.identity
+                or self._backings!=(_backings(snapshot.inference),_backings(snapshot.resume))):
+            raise ContractError('owned restore ACK differs from original transaction/backings')
+
+
 class RemoteModelSnapshot:
     """Permanent SAME-backing ownership minted by one actual Wire7 transaction."""
     def __init__(self, token: object, process: HpoOwnedLearningProcess, transaction: object,
@@ -154,6 +179,7 @@ class RemoteModelSnapshot:
         self._closed = False
         self._transport_timings: dict[str,float] = {}
         self.save_ack: RemoteSaveAck | None = None
+        self.restore_ack: OwnedRestoreAck | None = None
         self._actor_capability: Any = None
 
     @property
@@ -182,13 +208,14 @@ class RemoteModelSnapshot:
         return json.loads(canonical(self._control.value['metrics']))
 
     def _require_saved(self) -> None:
-        if self._closed or self.save_ack is None:
-            raise ContractError('remote snapshot lacks complete actual save ACK')
+        if self._closed or self.save_ack is None and self.restore_ack is None:
+            raise ContractError('remote snapshot lacks actual save or restore ACK')
 
     def require_process(self, process: HpoOwnedLearningProcess) -> None:
         self._require_saved()
-        assert self.save_ack is not None
-        self.save_ack.require(self)
+        ack=self.save_ack if self.save_ack is not None else self.restore_ack
+        assert ack is not None
+        ack.require(self)
         if process is not self._process:
             raise ContractError('remote snapshot differs from actual learner process')
 
@@ -216,8 +243,9 @@ def _check_actor_origin(owner: RemoteModelSnapshot) -> None:
     if type(owner) is not RemoteModelSnapshot:
         raise ContractError('actor capability requires actual Wire7 snapshot completion')
     owner._require_saved()
-    assert owner.save_ack is not None
-    owner.save_ack.require(owner)
+    ack=owner.save_ack if owner.save_ack is not None else owner.restore_ack
+    assert ack is not None
+    ack.require(owner)
 
 
 class HpoOwnedLearningProcess(HpoLearningProcess):
@@ -225,9 +253,9 @@ class HpoOwnedLearningProcess(HpoLearningProcess):
     def __init__(self, *args: Any, budget: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self.protocol, self.budget = 7, budget
-        from gf_training.hpo_artifacts import save_estimate
-        limits=self.identity['phase_limits']
-        for value in limits.values(): integer(value,1,MAX_BANK_BYTES)
+        from gf_training.hpo_artifacts import checked_phase_limits, save_estimate
+        limits=checked_phase_limits(self.identity['phase_limits'])
+        integer(limits['numeric_budget_bytes'],1,MAX_BANK_BYTES)
         if save_estimate(self.model)['additional_bytes']>limits['save_budget_bytes']:
             raise ContractError('Wire7 additional save envelope insufficient before process/network allocation')
         self._owned_never_requested=object()
@@ -394,6 +422,63 @@ class HpoOwnedLearningProcess(HpoLearningProcess):
             'model':asdict(self.model),'seed':integer(seed,0,2**63-1),'output':str(output),'transaction':uuid.uuid4().hex}
         return await self._exchange_owned(request, deadline=deadline)
 
+    async def restore_owned(self, imported: Any, *, seed: int, deadline: float) -> RemoteModelSnapshot:
+        from gf_training.hpo_owned_restore import OwnedColdImport
+        self._require_live()
+        if type(imported) is not OwnedColdImport or self.steps is not None or imported.budget is not self.budget:
+            raise ContractError('restore requires actual untouched process and SAME cold import Source')
+        imported.require()
+        if imported._process is not self or not imported.snapshots or not imported._for_resume:
+            raise ContractError('cold import is not bound to this actual process')
+        cold=imported.snapshots[imported.state['updates']]
+        generation=cold.generation
+        facts=cold._control.value
+        request={'protocol_version':7,'command':'restore_owned','identity':self.identity,'model':asdict(self.model),
+            'seed':integer(seed,0,2**63-1),'transaction':uuid.uuid4().hex,'generation':generation,
+            'optimizer_steps':cold.optimizer_steps,'snapshot_identity':cold.identity,
+            'inference_banks':len(cold.inference.banks),'resume_banks':len(cold.resume.banks)}
+        prefix='restore:'+request['transaction']+':'+cold.identity
+        transaction=object()
+        imported._consumed=True
+        try:
+            async with asyncio.timeout_at(deadline):
+                self.process.stdin.write((canonical(request)+'\n').encode())
+                await self.process.stdin.drain()
+            from gf_common.artifacts import json_bound
+            fixed=cold.inference.admitted_bytes+cold.resume.admitted_bytes+cold._control.admitted_bytes
+            if fixed+4*json_bound(facts)+2*65536+_RETAIN_BOOK_BYTES>self.identity['phase_limits']['save_budget_bytes']:
+                raise ContractError('owned restore control/model aggregate save phase exceeded before export')
+            control=_control_bank(facts,self.budget)
+            self._control_exports.append(control)
+            leases=[]
+            for suffix,bank in [('metadata',control)]+[(f'{kind}:{index}',bank) for kind,bankset in
+                    (('inference',cold.inference),('resume',cold.resume)) for index,bank in enumerate(bankset.banks)]:
+                await _ready(self.channel,write=True,deadline=deadline)
+                leases.append(self.channel.send(bank,purpose='model',generation=generation,identity=prefix+':'+suffix))
+            for lease in leases:
+                await _ready(self.channel,deadline=deadline)
+                self.channel.accept_completion(lease)
+            control.close(); self._control_exports.remove(control)
+            reply=await self._read_reply(deadline)
+            closed(reply,{'protocol_version','kind','identity','transaction','generation','optimizer_steps',
+                'snapshot_identity','files_sha256','hardware'})
+            integer(reply['generation'],generation,generation); integer(reply['optimizer_steps'],cold.optimizer_steps,cold.optimizer_steps)
+            if (type(reply['protocol_version']) is not int or reply['protocol_version']!=7 or reply['kind']!='RESTORED'
+                    or reply['transaction']!=request['transaction'] or reply['snapshot_identity']!=cold.identity
+                    or canonical(reply['identity'])!=canonical(self.identity) or reply['files_sha256']!=digest(cold.files)):
+                raise ContractError('Wire7 restore transaction ACK mismatch')
+            _snapshot_facts({'hardware':reply['hardware'],'timings':{'snapshot_seconds':0.,'save_seconds':0.}},self.binding.device)
+            snapshot=RemoteModelSnapshot(_TOKEN,self,transaction,cold.inference,cold.resume,cold._control)
+            snapshot.restore_ack=OwnedRestoreAck(_TOKEN,snapshot,transaction,imported,reply)
+            del imported.snapshots[generation]  # Actual ownership moves; no array copy/export/save.
+            cold._closed=True
+            self.steps,self.generation,self.current_snapshot=cold.optimizer_steps,generation,snapshot
+            self.hardware=dict(reply['hardware'])
+            return snapshot
+        except BaseException:
+            self._owned_failed=True
+            raise
+
     async def update_owned(self, batch: Any, output: Path, *, deadline: float, resident_authority: Any = None) -> RemoteModelSnapshot:
         from gf_training.hpo_owned_rollout import OwnedNumericBatch
         self._require_live()
@@ -470,7 +555,8 @@ class HpoOwnedLearningProcess(HpoLearningProcess):
             snapshot_started=time.perf_counter()
             await _ready(self.channel, deadline=deadline)
             control = _receive_control(self.channel, purpose='save', generation=generation,
-                identity=snapshot_identity+':metadata', budget=self.budget)
+                identity=snapshot_identity+':metadata', budget=self.budget,
+                max_admitted_bytes=self.identity['phase_limits']['save_budget_bytes'])
             self._partial_controls.append(control)
             facts = closed(control.value, {'actor_metadata','inference_manifest','files','optimizer_steps','generation','snapshot_identity',
                 'metrics','inference_banks','resume_banks','hardware','timings'})
@@ -490,9 +576,10 @@ class HpoOwnedLearningProcess(HpoLearningProcess):
                     await _ready(self.channel, deadline=deadline)
                     delivery = self.channel.receive(purpose='save', generation=generation,
                         identity=snapshot_identity+f':{kind}:{index}', budget=self.budget,
-                        max_bytes=min(MAX_BANK_BYTES, self.identity['phase_limits']['save_budget_bytes'])-total)
-                    total += delivery.bank.size
+                        max_bytes=_remaining_snapshot_bytes(self.identity['phase_limits']['save_budget_bytes'],total,
+                            bookkeeping=_RX_TRANSFER_BYTES+_RETAIN_BOOK_BYTES))
                     retained = delivery.retain(self.budget)
+                    total += retained.admitted_bytes
                     self._partial_banks.append(retained)
                     banks.append(retained)
                     delivery.complete(lambda: None)

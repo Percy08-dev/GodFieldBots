@@ -146,7 +146,7 @@ def _storage_boundary(store: CampaignStore, loaded: LoadedHPOConfig, *, operatio
 
 
 async def _train_seed(store: CampaignStore, loaded: LoadedHPOConfig, campaign: Json, proposal: Proposal, seed: int,
-                      *, progress: ProgressCallback | None = None) -> None:
+                      *, progress: ProgressCallback | None = None) -> Any:
     from gf_training.hpo_gpu_lease import JobContext, admit_gpu_job
     composition = owned_runtime_module('gf_cli.hpo_config', ('materialize_hpo_run',))
     core = owned_runtime_module('gf_cli.card_instance', ('collect_hpo_ppo',))
@@ -176,16 +176,21 @@ async def _train_seed(store: CampaignStore, loaded: LoadedHPOConfig, campaign: J
             **({} if progress is None else {'progress':progress}))
         if type(result) is not runtime.HpoRunResult or result.report.get('status') != 'complete' or result.report.get('used_decisions') != loaded.config.decision_budget:
             raise ContractError('training stopped incomplete; no objective and no budget/deadline extension')
-        persist_training_receipt(store, loaded, campaign, proposal, training_seed=seed, run_id=run_id,
-            directory=directory, termination=result.gpu_termination, deadline=time.monotonic() + loaded.config.run_wall_seconds)
+        completion=getattr(result,'completion',None)
+        try:
+            persist_training_receipt(store, loaded, campaign, proposal, training_seed=seed, run_id=run_id,
+                directory=directory, termination=result.gpu_termination, deadline=time.monotonic() + loaded.config.run_wall_seconds,
+                **({'completion':completion} if materialized.config.hpo_spec['schema_version']==4 else {}))
+            return completion
+        except BaseException:
+            if completion is not None: completion.close()
+            raise
 
 
 async def run_campaign(loaded: LoadedHPOConfig, directory: Path, *, mode: str,
                         seed_paths: tuple[Path, ...] = (), progress: str = 'auto') -> Json:
     """Concrete sequential operations; session time never interrupts an operation."""
     require_hpo_runtime_execution(loaded.config)
-    if loaded.config.schema_version==4:
-        raise ContractError('owned campaign execution requires the separately validated campaign adapter; fresh training API is available')
     if mode not in ('fresh', 'resume') or mode == 'resume' and seed_paths:
         raise ContractError('explicit fresh/resume required; stage settings are fresh-only')
     started, started_unix = time.monotonic(), time.time()
@@ -199,7 +204,8 @@ async def run_campaign(loaded: LoadedHPOConfig, directory: Path, *, mode: str,
     imports, sources = _settings_inputs(seed_paths, loaded) if mode == 'fresh' else ((), [])
     if mode == 'fresh':
         conditions['initial_settings'] = sources
-    with CampaignStore(directory, mode=mode, max_owned_bytes=loaded.config.operating.parent_budget_bytes) as store:
+    with CampaignStore(directory, mode=mode, max_owned_bytes=loaded.config.operating.parent_budget_bytes) as store, ExitStack() as completion_scope:
+        live_completions: dict[int,Any]={}
         from gf_cli.hpo_progress import ProgressOwner
         owner = ProgressOwner(store,mode=progress)
         def run_progress(facts: Json) -> None:
@@ -297,13 +303,19 @@ async def run_campaign(loaded: LoadedHPOConfig, directory: Path, *, mode: str,
                                 'decision_budget':loaded.config.decision_budget,'eta_seconds':None,'decisions_per_second':None,
                                 'transient_games':None,'transient_learner_decisions':None,'transient_total_game_actions':None,'cuda_allocator':None})
                             if phase == 'train':
-                                await _train_seed(store, loaded, campaign, proposal, seed, progress=run_progress)
+                                completion=await _train_seed(store, loaded, campaign, proposal, seed, progress=run_progress)
+                                if completion is not None:
+                                    live_completions[seed]=completion
+                                    completion_scope.callback(completion.close)
                             else:
                                 training = verify_training_receipt(store, loaded, campaign, proposal, seed,
                                     deadline=time.monotonic() + loaded.config.run_wall_seconds)
                                 owner.emit({'committed_used':training.get('used_decisions'),'committed_updates':training.get('generation')})
                                 await evaluate_seed(store, loaded, campaign, proposal, training,
-                                    output=directory / 'evaluations' / str(uuid.uuid4()),progress=owner.emit)
+                                    output=directory / 'evaluations' / str(uuid.uuid4()),progress=owner.emit,
+                                    **({'completion':live_completions[seed]} if seed in live_completions else {}))
+                                if seed in live_completions:
+                                    live_completions.pop(seed).close()
                             # Only receipt-complete whole operations are session boundaries.
                             _storage_boundary(store, loaded, operation_id=str(uuid.uuid4()))
                             if time.monotonic() - started >= loaded.config.session_seconds:

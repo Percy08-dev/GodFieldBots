@@ -236,9 +236,13 @@ class ResidentEvaluationRuntime:
             raise ContractError('resident evaluation cache/context/activation exceeds managed CUDA budget')
         self.plan,self.artifacts,self.deadline = plan,artifacts,plan.work_deadline
         self.custody = ResidentPoolCustody(job,run_id=plan.linkage['evaluation_id'],pool_id=uuid.uuid4().hex,evaluation_scope=scope)
+        from gf_models.hpo_owned_artifacts import OwnedGameArtifacts
+        self._owned_artifacts=type(artifacts) is OwnedGameArtifacts
         self.entries: dict[int, OrderedDict[str,tuple[int,str]]] = {}
         self.pool = ResidentParticipantPool(self.custody,resident_bytes=residency,deadline=plan.work_deadline,
-            acquire_cache=self.acquire_cache)
+            acquire_cache=self.acquire_cache,owned_snapshots=self._owned_artifacts)
+        if self._owned_artifacts:
+            for cap in artifacts.owned_snapshots: self.pool.bind_owned_snapshot(cap)
         self.pool.admit(plan)
 
     async def acquire_cache(self, owner: Any, binding: Any) -> str:
@@ -254,10 +258,18 @@ class ResidentEvaluationRuntime:
         else:
             self.artifacts.require_options(binding.model_id,options)
             self.artifacts.finalize(deadline=self.deadline)
-            manifest = read_json(Path(options['checkpoint'])/'inference.json',expected_digest=options['expected_manifest_digest'])
-            size,checkpoint = manifest['weights']['decoded_bytes'],options['expected_manifest_digest']
-            identity = digest({'policy_sha256':policy_sha,'inference_sha256':checkpoint,
-                'weights_sha256':digest(manifest['weights']['files'])})
+            if self._owned_artifacts:
+                cap=self.pool.owned_snapshot(options['expected_manifest_digest'])
+                metadata=self.artifacts.journal_metadata(next(label for label,value in self.plan.bindings.items() if value==binding))
+                manifest=metadata['inference_manifest']
+                size,checkpoint=manifest['weights']['decoded_bytes'],options['expected_manifest_digest']
+                identity=digest({'recipe':'owned-inference-cache-v1','policy_sha256':policy_sha,
+                    'inference_sha256':checkpoint,'snapshot_identity':cap.identity})
+            else:
+                manifest = read_json(Path(options['checkpoint'])/'inference.json',expected_digest=options['expected_manifest_digest'])
+                size,checkpoint = manifest['weights']['decoded_bytes'],options['expected_manifest_digest']
+                identity = digest({'policy_sha256':policy_sha,'inference_sha256':checkpoint,
+                    'weights_sha256':digest(manifest['weights']['files'])})
         if identity in entries:
             entries.move_to_end(identity)
             return identity
@@ -279,3 +291,7 @@ class ResidentEvaluationRuntime:
     async def close(self) -> None:
         await self.pool.close()
         self.custody.require_resource_retirement(self.custody.job,self.custody.ledger)
+        if self._owned_artifacts:
+            for cap in tuple(self.pool._owned_snapshots.values()): self.pool.unbind_owned_snapshot(cap)
+            assert self.custody.evaluation_scope is not None
+            self.custody.evaluation_scope.release_owned_metadata()

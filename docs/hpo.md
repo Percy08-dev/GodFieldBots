@@ -241,7 +241,10 @@ strict経路・データ・監査の意味も変更しません。
 実装・受入状況と再開・campaign対応範囲は
 [ADR0043](adr/0043-hpo-producer-owned-data.md)と
 [検証記録](verification/hpo-producer-owned-data.md)を参照してください。
-fresh統合は独立レビュー済みです。cold再開・campaign連携・実測は後続です。
+fresh統合・同一コードでのcold再開・campaign/evaluation連携は独立レビュー済みです。
+再開時は必要なcontrol・checkpoint・RNG・opponent poolだけを一度読み込み、
+次の更新で使わない過去sampleは再生しません。全プロジェクト検証とGPU実測の
+最終受入は検証記録に従います。
 
 ## 停止と障害からの回復
 

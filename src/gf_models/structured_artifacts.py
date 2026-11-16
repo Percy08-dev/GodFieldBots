@@ -481,16 +481,11 @@ def _save_resume(directory: Path, network: Any, optimizer: Any, shuffle: Any, st
     return manifest
 
 
-def _read_resume(directory: Path, model: Any, binding: InferenceBindingV2,
-                resume_identity: str, *, action_contract: Any,
-                purpose: str, synthetic_capacity: bool, _context: _ArtifactContext | None = None,
-                _optimizer_recipe: Json | None = None, _resume_metadata: Json | None = None) -> tuple[Json, dict[str, Any]]:
-    context = _context or _ArtifactContext(action_contract, purpose, synthetic_capacity)
-    classification = context.classification()
-    metadata = _resume_fields(context, _resume_metadata)
-    optimizer_recipe = _optimizer_descriptor(model, _optimizer_recipe)
-    manifest = read_json(directory / "resume.json",
-                         max_owned_bytes=min(model.resources.max_owned_bytes, binding.managed_budget_bytes))
+def _validate_resume_header(manifest: Json, model: Any, resume_identity: str, *, context: Any,
+                            _optimizer_recipe: Json | None=None, _resume_metadata: Json | None=None) -> tuple[Json,Json]:
+    classification=context.classification()
+    metadata=_resume_fields(context,_resume_metadata)
+    optimizer_recipe=_optimizer_descriptor(model,_optimizer_recipe)
     closed(manifest.get("producer"), {"code_revision", "source_digest"})
     _hash(resume_identity)
     _hash(manifest["producer"]["source_digest"])
@@ -503,12 +498,19 @@ def _read_resume(directory: Path, model: Any, binding: InferenceBindingV2,
     if context.schema >= 4 and manifest["action_config_hash"] != context.action_config_hash:
         raise ContractError("resume4 action-config binding mismatch")
     context.check({key: manifest[key] for key in classification})
-    _inspect_inference(directory, expected_digest=manifest["inference_digest"], model=model, binding=binding,
-                      action_contract=action_contract, purpose=purpose, synthetic_capacity=synthetic_capacity, _context=context)
+    return metadata,optimizer_recipe
+
+
+def _validate_resume_manifest(manifest: Json, model: Any, binding: Any, resume_identity: str, *,
+                              context: Any, expected_inference_digest: str,
+                              _optimizer_recipe: Json | None=None, _resume_metadata: Json | None=None) -> int:
+    """Original closed metadata/code/runtime guards, independent of artifact I/O."""
+    metadata,optimizer_recipe=_validate_resume_header(manifest,model,resume_identity,context=context,
+        _optimizer_recipe=_optimizer_recipe,_resume_metadata=_resume_metadata)
     import torch
     if (type(manifest["schema_version"]) is not int or manifest["schema_version"] != context.schema
             or manifest["kind"] != "structured-resume"
-            or manifest["inference_digest"] != sha256(directory / "inference.json")
+            or manifest["inference_digest"] != expected_inference_digest
             or canonical(manifest["model"]) != canonical(asdict(model))
             or canonical(manifest["binding"]) != canonical(asdict(binding))
             or manifest["resume_identity"] != resume_identity
@@ -523,6 +525,23 @@ def _read_resume(directory: Path, model: Any, binding: InferenceBindingV2,
     if manifest["cuda_rng_count"] != count:
         raise ContractError("resume CUDA RNG ownership mismatch")
     resource_estimate(model, binding, **context.options)
+    return count
+
+
+def _read_resume(directory: Path, model: Any, binding: InferenceBindingV2,
+                resume_identity: str, *, action_contract: Any,
+                purpose: str, synthetic_capacity: bool, _context: _ArtifactContext | None = None,
+                _optimizer_recipe: Json | None = None, _resume_metadata: Json | None = None) -> tuple[Json, dict[str, Any]]:
+    context = _context or _ArtifactContext(action_contract, purpose, synthetic_capacity)
+    manifest = read_json(directory / "resume.json",
+                         max_owned_bytes=min(model.resources.max_owned_bytes, binding.managed_budget_bytes))
+    _validate_resume_header(manifest,model,resume_identity,context=context,
+        _optimizer_recipe=_optimizer_recipe,_resume_metadata=_resume_metadata)
+    _inspect_inference(directory, expected_digest=manifest["inference_digest"], model=model, binding=binding,
+                      action_contract=action_contract, purpose=purpose, synthetic_capacity=synthetic_capacity, _context=context)
+    count=_validate_resume_manifest(manifest,model,binding,resume_identity,context=context,
+        expected_inference_digest=sha256(directory/'inference.json'),
+        _optimizer_recipe=_optimizer_recipe,_resume_metadata=_resume_metadata)
     descriptors = inspect_bundle(directory, manifest["state"], max_decoded_bytes=model.resources.max_owned_bytes)
     expected: Json = {"rng.torch_cpu": ("uint8", None)}
     expected.update({f"rng.torch_cuda.{index}": ("uint8", None) for index in range(count)})
@@ -543,6 +562,39 @@ def _read_resume(directory: Path, model: Any, binding: InferenceBindingV2,
         if descriptors[key]["dtype"] != dtype or (shape is not None and descriptors[key]["shape"] != shape):
             raise ContractError("resume tensor dtype/shape mismatch")
     arrays = read_bundle(directory, manifest["state"], max_decoded_bytes=model.resources.max_owned_bytes)
+    _validate_resume_arrays(manifest, arrays, model, binding, context=context)
+    return manifest, arrays
+
+
+def _validate_resume_arrays(manifest: Json, arrays: Any, model: Any, binding: Any, *, context: Any) -> None:
+    """Validate decoded state without I/O or publishing global RNG."""
+    import torch
+
+    from gf_models.sharded_arrays import validate_bundle_metadata
+    integer(manifest['optimizer_steps'], 0, 2**31-1)
+    count = integer(manifest['cuda_rng_count'], 0, 1024)
+    if count != (torch.cuda.device_count() if binding.device != 'cpu' else 0):
+        raise ContractError('resume CUDA RNG ownership mismatch')
+    parameters = parameter_shapes(model, **context.options)
+    descriptors = validate_bundle_metadata(manifest['state'], max_decoded_bytes=model.resources.max_owned_bytes)
+    expected: Json = {'rng.torch_cpu': ('uint8', None)}
+    expected.update({f'rng.torch_cuda.{index}': ('uint8', None) for index in range(count)})
+    if type(manifest['parameter_states']) is not dict or set(manifest['parameter_states']) != set(parameters):
+        raise ContractError('resume stable parameter ownership mismatch')
+    for name, parameter_shape in parameters.items():
+        state = closed(manifest['parameter_states'][name], {'present'})
+        if type(state['present']) is not bool: raise ContractError('optimizer presence must be boolean')
+        if state['present']:
+            expected[f'adam.{name}.step'] = ('int64', [])
+            expected.update({f'adam.{name}.{key}': ('float32', list(parameter_shape)) for key in ('exp_avg','exp_avg_sq')})
+    if set(arrays) != set(expected) or set(descriptors) != set(expected):
+        raise ContractError('resume tensor presence mismatch')
+    for name, (dtype, shape) in expected.items():
+        array=arrays[name]
+        if (str(array.dtype) != dtype or shape is not None and list(array.shape) != shape
+                or descriptors[name]['dtype'] != dtype or list(array.shape) != descriptors[name]['shape']
+                or not np.isfinite(array).all()):
+            raise ContractError('resume tensor dtype/shape/finite mismatch')
     # Every second moment is a variance, not merely a finite-shaped tensor.
     # Reject rehashed negative values before model staging/RNG publication.
     for name in parameters:
@@ -574,7 +626,6 @@ def _read_resume(directory: Path, model: Any, binding: InferenceBindingV2,
     for name in parameters:
         if manifest["parameter_states"][name]["present"]:
             integer(int(arrays[f"adam.{name}.step"]), 1, manifest["optimizer_steps"])
-    return manifest, arrays
 
 
 def _restore_resume(directory: Path, network: Any, optimizer: Any, shuffle: Any,
@@ -585,13 +636,19 @@ def _restore_resume(directory: Path, network: Any, optimizer: Any, shuffle: Any,
     context.classification()
     if context.schema >= 4:
         _validate_shuffle_owner(shuffle)
-    import torch
     if any(hasattr(network, name) for name in ("_structured_input_binding", "_structured_input_binding_v3", "_structured_input_binding_v4")):
         context.bind(network)
     validate_save_context(network, model, binding, optimizer, _optimizer_recipe=_optimizer_recipe, **context.options)
     manifest, arrays = _read_resume(directory, model, binding, resume_identity, action_contract=action_contract,
                                    purpose=purpose, synthetic_capacity=synthetic_capacity, _context=context,
                                    _optimizer_recipe=_optimizer_recipe, _resume_metadata=_resume_metadata)
+    return _apply_resume_state(network, optimizer, shuffle, model, binding, manifest, arrays, context=context)
+
+
+def _apply_resume_state(network: Any, optimizer: Any, shuffle: Any, model: Any, binding: Any,
+                        manifest: Json, arrays: Any, *, context: Any) -> int:
+    """Original named Adam math; all temporary allocations precede RNG publication."""
+    import torch
     context.bind(network, fresh=True)
     parameters = dict(network.named_parameters())
     count = manifest["cuda_rng_count"]
@@ -605,10 +662,12 @@ def _restore_resume(directory: Path, network: Any, optimizer: Any, shuffle: Any,
                                     for key in ("exp_avg", "exp_avg_sq")}}
     optimizer.state.clear()
     optimizer.state.update(states)
-    torch.set_rng_state(torch.from_numpy(arrays["rng.torch_cpu"].copy()))
+    cpu_rng = torch.from_numpy(arrays['rng.torch_cpu'].copy())
+    cuda_rng = [torch.from_numpy(arrays[f'rng.torch_cuda.{index}'].copy()) for index in range(count)]
+    shuffle.bit_generator.state = manifest['shuffle_rng']
+    torch.set_rng_state(cpu_rng)
     if count:
-        torch.cuda.set_rng_state_all([torch.from_numpy(arrays[f"rng.torch_cuda.{index}"].copy()) for index in range(count)])
-    shuffle.bit_generator.state = manifest["shuffle_rng"]
+        torch.cuda.set_rng_state_all(cuda_rng)
     return int(manifest["optimizer_steps"])
 
 

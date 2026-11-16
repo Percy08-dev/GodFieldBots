@@ -64,6 +64,15 @@ def _mkdir(path: Path, *, ownership: RunOwnership) -> None:
     sync_hpo_ancestry(path,ownership=ownership)
 
 
+def _reference_parent(scan: Any, *, max_owned_bytes: int, deadline: float) -> tuple[Json,list[Json]]:
+    state=scan.object(scan.root/'run.json')
+    if state.get('run_variant')=='hpo-ppo-owned-v1':
+        from gf_training.hpo_owned_restore import _read_owned_metadata
+        state,records,_registry=_read_owned_metadata(scan)
+        return state,records
+    return validate_hpo_chain(scan.root,max_owned_bytes=max_owned_bytes,deadline=deadline,scan=scan)
+
+
 def _transition(directory: Path, binding: Json, phase: str, *, max_owned_bytes: int,
                 deadline: float, ownership: RunOwnership | None = None, cache: bool = False, release_evidence: Json | None = None) -> HpoReferenceReceipt:
     with ExitStack() as scope:
@@ -71,7 +80,7 @@ def _transition(directory: Path, binding: Json, phase: str, *, max_owned_bytes: 
             ownership=scope.enter_context(run_lock(directory))
         ownership=require_hpo_run_owner(directory,ownership)
         scan=scope.enter_context(_ChainScan(directory=directory,max_owned_bytes=max_owned_bytes,deadline=deadline))
-        state, records = validate_hpo_chain(directory,max_owned_bytes=max_owned_bytes,deadline=deadline,scan=scan)
+        state, records = _reference_parent(scan,max_owned_bytes=max_owned_bytes,deadline=deadline)
         checker = checked_cache_reference_binding if cache else checked_reference_binding
         journal = cache_reference_journal if cache else reference_journal
         checker(binding,state,records,scan)
@@ -148,7 +157,7 @@ def pin_hpo_evaluation(directory: Path, token: str, generation: int, inference_s
     directory=directory.resolve()
     with (run_lock(directory) as ownership,
             _ChainScan(directory=directory,max_owned_bytes=max_owned_bytes,deadline=deadline) as scan):
-        state,records=validate_hpo_chain(directory,max_owned_bytes=max_owned_bytes,deadline=deadline,scan=scan)
+        state,records=_reference_parent(scan,max_owned_bytes=max_owned_bytes,deadline=deadline)
         integer(generation,0,len(records)-1)
         binding={'run_id':state['run_id'],'token':token,'generation':generation,
             'inference_sha256':inference_sha256,'generation_sha256':scan.verified_digest(generation_path(directory,generation))}

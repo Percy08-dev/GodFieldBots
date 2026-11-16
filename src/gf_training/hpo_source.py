@@ -52,7 +52,7 @@ def original_inference(scan: _ChainScan, state: Json, record: Json, generation: 
 
 def is_hpo(state: Json) -> bool:
     return (type(state.get('schema_version')) is int and state['schema_version'] == 5
-        and state.get('run_variant') in ('hpo-ppo-v1', 'hpo-ppo-resident-v1') and state.get('model_version') == '4')
+        and state.get('run_variant') in ('hpo-ppo-v1', 'hpo-ppo-resident-v1','hpo-ppo-owned-v1') and state.get('model_version') == '4')
 
 
 def hpo_binding(directory: Path, state: Json, record: Json, generation: int) -> tuple[str, RuntimePolicyBinding]:
@@ -168,6 +168,11 @@ def validate_hpo_parent(directory: Path, *, require_complete: bool = True, max_o
             max_owned_bytes=max_owned_bytes - extra_owned_bytes, deadline=deadline))
         state, records = validate_hpo_chain(directory, require_complete=require_complete,
             max_owned_bytes=max_owned_bytes, deadline=deadline, extra_owned_bytes=extra_owned_bytes, scan=scan)
+        if state['run_variant']=='hpo-ppo-owned-v1':
+            from gf_training.hpo_owned_restore import audit_owned_samples
+            require_hpo_production(state)
+            audit_owned_samples(scan,state,records,deadline=deadline)
+            return state,records
         declared=Path(hpo_spec(state)['storage']['parent_root']).resolve()
         if directory==declared or not directory.is_relative_to(declared):
             raise ContractError('HPO source parent is outside its declared colocated root')

@@ -880,8 +880,9 @@ async def _collect_hpo_evaluation(loaded: LoadedConfig,plan: HpoEvaluationPlan,*
     from gf_cli.hpo_evaluation import HpoEvaluationPlan, ResidentHpoEvaluationPlan
     from gf_common.card_instance_rules import card_instance_rules
     from gf_models.card_instance_artifacts import RetainedGameArtifacts
+    from gf_models.hpo_owned_artifacts import OwnedGameArtifacts
     from gf_models.structured_runtime import admit_hpo_game_workers
-    if type(plan) not in (HpoEvaluationPlan, ResidentHpoEvaluationPlan) or type(artifact_inputs) is not RetainedGameArtifacts:
+    if type(plan) not in (HpoEvaluationPlan, ResidentHpoEvaluationPlan) or type(artifact_inputs) not in (RetainedGameArtifacts,OwnedGameArtifacts):
         raise ContractError('evaluation requires its exact plan and actual retained artifact owner')
     plan.require(loaded,gpu_job=gpu_job)
     config=loaded.config
@@ -907,7 +908,8 @@ async def _collect_hpo_evaluation(loaded: LoadedConfig,plan: HpoEvaluationPlan,*
     owned=artifact_inputs.finalize(deadline=min(plan.execution_deadline,plan.work_deadline))
     if set(owned['policies'])!=neural:
         raise ContractError('evaluation borrowed owner differs from exact frozen role bindings')
-    if artifact_inputs._scan.peak>hpo_artifact_budget(loaded,bindings):
+    retained=(artifact_inputs.retained_bytes if type(artifact_inputs) is OwnedGameArtifacts else artifact_inputs._scan.peak)
+    if retained>hpo_artifact_budget(loaded,bindings):
         raise ContractError('evaluation artifact custody exceeds additional parent envelope')
     evidence=CardInstanceRuntimeEvidence(Path(config.server.binary),Path(config.server.source_dir),
         deadline=min(plan.execution_deadline,plan.work_deadline-config.server.cleanup_reserve_seconds))

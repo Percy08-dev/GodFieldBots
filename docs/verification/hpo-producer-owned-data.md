@@ -1,6 +1,7 @@
 # Producer-owned HPO verification
 
-Status: implementation in progress; acceptance and candidate timings NOT RUN.
+Status: implementation independently reviewed; whole-project acceptance pending,
+physical protocol and candidate timings NOT RUN.
 Specification: [design](../design/hpo-producer-owned-data.md),
 [ADR0043](../adr/0043-hpo-producer-owned-data.md), approved user attachment.
 Base revision: `1dd51e8d1ee734b32b051556589e41d46d565ed0`.
@@ -28,8 +29,9 @@ Full preimplementation architecture review: READY, `/root/owned_architecture`.
 The snapshot review requires physically separate inference/resume banks because
 an FD exposes its complete backing. Root accepts and records that remedy;
 the reviewer confirms no remaining consequential blockers in the revised design.
-Final correctness/conformance, full project/package checks and physical execution
-remain pending; no performance or full-plan completion claim is made.
+Final implementation correctness/conformance reviews are READY. Full project/
+package checks and physical execution remain pending; no performance or full-plan
+completion claim is made.
 
 Task1 foundation source is frozen for independent scoped reviews. Root's actual
 host invocation PASS52 in1.10s, exit0, including exec-inherited Unix FD transfer:
@@ -94,6 +96,63 @@ precedes the final startup refinement; final-source package checks remain requir
 Root's first smoke incorrectly required exit0; investigation confirms intentional
 normal SIGTERM(-15), and the corrected contract-based check passes. No production
 change was made for that check.
+
+Task4 cold import, immutable final-policy completion handoff, version-aware strict
+audits and campaign/evaluation integration pass final whole-milestone correctness
+and architecture reviews. The importer reads required controls/checkpoint/RNG/pool
+once without replaying unused historical samples. Inference-only evaluation owns
+its separate budget/deadline; actual commit and cleanup issue completion evidence.
+Legacy inputs retain their strict readers and original meanings.
+
+Final review corrections cover partial-bank cleanup preserving primary errors,
+decoded-array lifetime accounting through aliases/tracebacks, explicit registry6
+retirement-journal pointers, bounded archive namespace/control guards, same-parent
+comparison deduplication and conservative absent capture hooks in legacy stubs.
+Independent HOST13PASS/47.59s includes actual pruned pause4/resume5/full audit;
+architecture4PASS/7deselected and diff check PASS. Earlier scoped evidence includes
+215owned tests, 73evaluation tests and342legacy tests; those are bounded runs,
+not whole-project evidence. Save phase honors the original configured1GiB while
+each bank and numeric retain512MiB limits, verified on actual CPU pause/resume.
+
+Whole CPU attempt01 stops at349PASS/1FAIL in8.52s on the absent legacy capture
+attribute. The implementation fixes that compatibility issue without changing the
+original fixture assertions. Attempt02 PASS6846/SKIP408/33warnings in1740.00s,
+exit0, against the frozen corrected source. Root independently checks its JUnit:
+7254cases, zero failures/errors. A60s faulthandler diagnostic at99% identifies the
+existing slow `original_tree_sources` fixture; execution continues and passes.
+A preceding whole-fix covering run had212PASS/13existing
+SKIP/1new-test-setup failure; the hook was moved after the actual pause fixture,
+and that corrected node passes separately. Neither failed invocation is counted
+as a green full run.
+
+```console
+CUDA_VISIBLE_DEVICES='' GF_RUN_CUDA=0 .venv/bin/python -m pytest -q --ff --maxfail=1 --tb=short -o faulthandler_timeout=60 --junitxml=runs/hpo-producer-owned/assessment/v1/checks/whole-cpu-02.xml
+```
+
+Frozen-source Ruff `src tests` PASS and mypy PASS225. Repository-wide Ruff also
+examines the user's pre-existing untracked `codex_analysis.py`, which retains four
+unrelated findings (FURB162, UP017 and two SIM102); that file is preserved outside
+this change. Both staged and unstaged diff whitespace checks PASS.
+
+Current frozen source builds wheel/sdist with225Python modules, each matching
+source byte-for-byte. Reinstalled wheel passes isolated CLI help and actual normal
+random-worker startup/close/reap with released lease, empty ledger/health and
+retired I/O thread. The temporary mandatory-only environment has no optional ML
+packages/imports. The first smoke assertion called the health dictionary; the
+corrected property assertion passes without a production change. No new project
+dependency was added: the already-declared build backend was provisioned in a
+separate temporary build environment.
+
+```console
+UV_CACHE_DIR=/tmp/gfb-uv-cache-owned uv build --package godfieldbots --wheel --sdist --offline --no-sources --no-build-isolation --python /tmp/gfb-owned-build-env/bin/python --out-dir /tmp/gfb-owned-task4-packages
+UV_CACHE_DIR=/tmp/gfb-uv-cache-owned uv pip install --python /tmp/gfb-owned-mandatory-env/bin/python --no-deps --offline --no-index --reinstall /tmp/gfb-owned-task4-packages/godfieldbots-0.1.0-py3-none-any.whl
+/tmp/gfb-owned-mandatory-env/bin/python -I -m gf_cli --help
+```
+
+Correspondence and installed-baseline observations are in
+`runs/hpo-producer-owned/assessment/v1/checks/task4-package-correspondence.json`
+and `task4-installed-mandatory.json`. These checks establish packaging and optional
+import isolation; they are not learning-quality or performance evidence.
 
 ## Required matched comparison
 

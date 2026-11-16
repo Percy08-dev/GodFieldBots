@@ -17,7 +17,9 @@ class OwnedGameArtifacts:
             raise ContractError('actual common actor snapshot capabilities required')
         if type(parent_budget) is not ArtifactPhaseAdmission or parent_budget.source is not budget:
             raise ContractError('owned inference metadata requires SAME shared parent phase')
-        self._reservation=parent_budget.reserve(65536+sum(32*json_bound(row[2])+32*json_bound(row[3])+65536 for row in entries.values()))
+        self.parent_budget=parent_budget
+        self._retained_bytes=65536+sum(32*json_bound(row[2])+32*json_bound(row[3])+65536 for row in entries.values())
+        self._reservation=parent_budget.reserve(self._retained_bytes)
         self._entries: Json={}
         self._caps: dict[str,OwnedActorSnapshot]={}
         self._leases: list[Any]=[]
@@ -61,6 +63,19 @@ class OwnedGameArtifacts:
         self._live()
         if time.monotonic()>=deadline: raise TimeoutError('owned inference metadata deadline')
         return {'input_contract':EXTERNAL_INPUT_CONTRACT,'policies':clone(self._entries)}
+
+    @property
+    def retained_bytes(self) -> int:
+        return 0 if self._released else self._retained_bytes
+
+    @property
+    def owned_snapshots(self) -> tuple[OwnedActorSnapshot,...]:
+        self._live()
+        return tuple(self._caps.values())
+
+    def require_retired(self) -> None:
+        if not self._released or self._entries or self._caps or self._leases:
+            raise ContractError('owned inference provider retains actual bindings/metadata')
 
     def release(self) -> None:
         if self._released: return

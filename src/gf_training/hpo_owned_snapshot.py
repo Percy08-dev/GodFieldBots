@@ -13,7 +13,7 @@ import numpy as np
 
 from gf_common.artifacts import ArtifactAdmission, json_bound
 from gf_common.domain import ContractError, Json, canonical, digest, integer
-from gf_common.ram_bank import ReadonlyRamBankSet
+from gf_common.ram_bank import MAX_BANK_BYTES, ReadonlyRamBankSet
 from gf_models.arrays import MAX_ARRAY_BYTES, sha256
 from gf_models.sharded_arrays import (
     _write_producer_bundle,
@@ -28,7 +28,7 @@ from gf_models.structured_artifacts import (
 )
 from gf_models.structured_binding import inference_model
 from gf_models.structured_config import architecture_identity
-from gf_training.hpo_artifacts import _recipe_options, save_estimate
+from gf_training.hpo_artifacts import _recipe_options, checked_phase_limits, save_estimate
 
 _TOKEN = object()
 
@@ -183,7 +183,7 @@ def export_learner_snapshot(learner: Any, *, budget: ArtifactAdmission,
     existing = getattr(learner, '_owned_snapshot', None)
     if existing is not None:
         return existing
-    integer(save_budget_bytes, 1, 512*1024**2)
+    checked_phase_limits({'numeric_budget_bytes':MAX_BANK_BYTES,'save_budget_bytes':save_budget_bytes})
     devices = 0 if learner.binding.device == 'cpu' else learner.torch.cuda.device_count()
     estimate = save_estimate(learner.model, cuda_devices=devices)
     if estimate['additional_bytes'] > save_budget_bytes:
@@ -230,8 +230,8 @@ def export_learner_snapshot(learner: Any, *, budget: ArtifactAdmission,
         reservation = budget.reserve(metadata_charge)
         inference = resume = None
         try:
-            inference = ReadonlyRamBankSet.build(weights, budget, max_bytes=save_budget_bytes)
-            resume = ReadonlyRamBankSet.build(state, budget, max_bytes=save_budget_bytes-inference.size)
+            inference = ReadonlyRamBankSet.build(weights, budget, max_bytes=min(MAX_BANK_BYTES,save_budget_bytes))
+            resume = ReadonlyRamBankSet.build(state, budget, max_bytes=min(MAX_BANK_BYTES,save_budget_bytes-inference.admitted_bytes))
             output = OwnedModelSnapshot(_TOKEN, learner, inference, resume, inference_metadata, resume_metadata,
                 generation=getattr(learner, '_owned_generation', 0), budget=budget, reservation=reservation)
             output._save_budget_limit = save_budget_bytes

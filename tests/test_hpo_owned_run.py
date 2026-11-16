@@ -290,6 +290,7 @@ def test_fresh_two_updates_actual_capture_writer_wire7_and_parked_pool(tmp_path,
             assert (tmp_path/'parents'/run_id/'artifacts/000000/resume.json').is_file()
             assert ops.writer.parent_budget.peak<=config.hpo_spec['operating']['parent_budget_bytes']
             assert ops.receipt is not None and job.ledger.learner is None and not job.ledger.workers
+            if ops.completion is not None: ops.completion.close()
             assert ops.budget.used==0
             assert all(row['source_proof']['replay_reconciled'] is False for row in [
                 __import__('json').loads((tmp_path/'parents'/run_id/'updates'/f'{i:06}.json').read_text()) for i in (1,2)])

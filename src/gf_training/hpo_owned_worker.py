@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import mmap
 import sys
 from dataclasses import asdict
 from pathlib import Path
@@ -11,8 +12,28 @@ import numpy as np
 
 from gf_common.artifacts import ArtifactAdmission, json_bound
 from gf_common.domain import ContractError, Json, canonical, closed, digest, integer
-from gf_common.ram_bank import MAX_BANK_BYTES, RamBankBuilder, RamBankChannel, ReadonlyRamBankSet
+from gf_common.ram_bank import (
+    MAX_ARRAYS,
+    MAX_BANK_BYTES,
+    MAX_ENVELOPE_BYTES,
+    RamBankBuilder,
+    RamBankChannel,
+    ReadonlyRamBankSet,
+)
 from gf_models.arrays import MAX_ARRAY_BYTES
+
+_RX_TRANSFER_BYTES=64*MAX_ENVELOPE_BYTES+1024*MAX_ARRAYS
+_RETAIN_BOOK_BYTES=MAX_ENVELOPE_BYTES+1024*MAX_ARRAYS+mmap.PAGESIZE
+
+
+def _remaining_snapshot_bytes(phase_limit: int, used: int, *, bookkeeping: int=_RX_TRANSFER_BYTES) -> int:
+    """Separate aggregate phase allowance from this one immutable bank's cap."""
+    integer(phase_limit,1,2**63-1)
+    integer(used,0,phase_limit)
+    integer(bookkeeping,0,2**63-1)
+    remaining=phase_limit-used-bookkeeping
+    if remaining<=0: raise ContractError('owned receive aggregate phase exhausted before allocation')
+    return min(MAX_BANK_BYTES,remaining)
 
 
 class _Control:
@@ -36,9 +57,14 @@ def _control_bank(value: Json, budget: ArtifactAdmission) -> Any:
 
 
 def _receive_control(channel: RamBankChannel, *, purpose: str, generation: int,
-                     identity: str, budget: ArtifactAdmission) -> _Control:
+                     identity: str, budget: ArtifactAdmission, max_admitted_bytes: int | None=None) -> _Control:
+    maximum=MAX_ARRAY_BYTES
+    if max_admitted_bytes is not None:
+        remaining=_remaining_snapshot_bytes(max_admitted_bytes,0)
+        maximum=min(maximum,(remaining-65536)//33)
+        if maximum<=0: raise ContractError('owned control phase exhausted before receive/decode')
     delivery = channel.receive(purpose=purpose, generation=generation, identity=identity,
-        budget=budget, max_bytes=MAX_ARRAY_BYTES)
+        budget=budget, max_bytes=maximum)
     reservation = None
     values = None
     try:
@@ -165,14 +191,65 @@ def _send_snapshot_admitted(channel: RamBankChannel, snapshot: Any, *, request: 
         'snapshot_identity': snapshot.identity, 'files_sha256': digest(ack.files)}), flush=True)
 
 
+def _restore_initial(channel: RamBankChannel, request: Json, learner: Any, budget: Any,
+                     actions: Any, identity: Json) -> str:
+    """Receive only actual model-state grants, stage, synchronize, then restore ACK."""
+    generation=integer(request['generation'],1,2**31-1)
+    integer(request['optimizer_steps'],1,2**31-1)
+    prefix='restore:'+request['transaction']+':'+request['snapshot_identity']
+    control=_receive_control(channel,purpose='model',generation=generation,identity=prefix+':metadata',budget=budget,
+        max_admitted_bytes=identity['phase_limits']['save_budget_bytes'])
+    deliveries=[]
+    try:
+        facts=closed(control.value,{'actor_metadata','inference_manifest','files','generation','snapshot_identity',
+            'optimizer_steps','resume_manifest'})
+        if (facts['generation']!=generation or facts['optimizer_steps']!=request['optimizer_steps']
+                or facts['snapshot_identity']!=request['snapshot_identity']
+                or facts['resume_manifest'].get('optimizer_steps')!=request['optimizer_steps']
+                or facts['actor_metadata'].get('inference_digest')!=facts['files'].get('inference.json')
+                or facts['resume_manifest'].get('inference_digest')!=facts['files'].get('inference.json')):
+            raise ContractError('restore model control differs from transaction')
+        from gf_training.hpo_owned_process import _saved_files
+        _saved_files(facts['files'])
+        banksets=[]; total=control.admitted_bytes
+        for kind in ('inference','resume'):
+            banks=[]
+            for index in range(integer(request[kind+'_banks'],1,65536)):
+                delivery=channel.receive(purpose='model',generation=generation,identity=prefix+f':{kind}:{index}',
+                    budget=budget,max_bytes=_remaining_snapshot_bytes(identity['phase_limits']['save_budget_bytes'],total))
+                deliveries.append(delivery); banks.append(delivery.bank); total+=delivery.bank.size+delivery.bank.admitted_bytes
+            banksets.append(ReadonlyRamBankSet(tuple(banks)))
+        from gf_training.hpo_artifacts import _restore_owned_learner
+        _restore_owned_learner(learner,inference=banksets[0],resume=banksets[1],actor_metadata=facts['actor_metadata'],
+            resume_manifest=facts['resume_manifest'],generation=generation,budget=budget,actions=actions)
+        if learner.steps!=request['optimizer_steps']: raise ContractError('restored optimizer steps mismatch')
+        learner.synchronize()
+        for delivery in deliveries: delivery.complete(learner.synchronize)
+        files_sha=digest(facts['files'])
+        snapshot_identity=facts['snapshot_identity']
+        control.close()
+        from gf_models.torch_runtime import hardware
+        print(canonical({'protocol_version':7,'kind':'RESTORED','identity':identity,'transaction':request['transaction'],
+            'generation':generation,'optimizer_steps':learner.steps,'snapshot_identity':snapshot_identity,
+            'files_sha256':files_sha,'hardware':hardware(learner.binding.device)}),flush=True)
+        return snapshot_identity
+    except BaseException:
+        learner._owned_failed=True
+        # No completion ACK on failed state. Original receiver inventory owns
+        # cleanup through actual process exit/reap, including live array aliases.
+        raise
+
+
 def main() -> None:
     # Explicit inherited endpoint only; no inherited resume/model/numeric FD.
     fd, invocation = int(sys.argv[1]), sys.argv[2]
     sys.argv[:] = ['gf-owned-hpo-learner']
     channel = RamBankChannel._from_inherited(fd, invocation)
     initial = json.loads(sys.stdin.readline())
-    closed(initial, {'protocol_version', 'command', 'identity', 'model', 'seed', 'output', 'transaction'})
-    if type(initial['protocol_version']) is not int or initial['protocol_version'] != 7 or initial['command'] != 'initialize_owned':
+    restoring=initial.get('command')=='restore_owned'
+    closed(initial, {'protocol_version','command','identity','model','seed','transaction'} |
+        ({'generation','optimizer_steps','snapshot_identity','inference_banks','resume_banks'} if restoring else {'output'}))
+    if type(initial['protocol_version']) is not int or initial['protocol_version'] != 7 or initial['command'] not in ('initialize_owned','restore_owned'):
         raise ContractError('Wire7 initialize required')
     from gf_common.card_instance import action_config_v3
     from gf_common.card_instance_rules import card_instance_rules
@@ -195,9 +272,9 @@ def main() -> None:
     if canonical(identity) != canonical(expected):
         raise ContractError('Wire7 initialization identity mismatch')
     _select_visibility(initial, binding, identity['execution']['cuda_visible_devices'])
-    from gf_training.hpo_artifacts import save_estimate
-    limits=identity['phase_limits']
-    for value in limits.values(): integer(value,1,MAX_BANK_BYTES)
+    from gf_training.hpo_artifacts import checked_phase_limits, save_estimate
+    limits=checked_phase_limits(identity['phase_limits'])
+    integer(limits['numeric_budget_bytes'],1,MAX_BANK_BYTES)
     if save_estimate(model)['additional_bytes']>limits['save_budget_bytes']:
         raise ContractError('Wire7 additional save envelope insufficient before learner allocation')
     from gf_training.hpo_numeric import HpoLearner
@@ -205,11 +282,15 @@ def main() -> None:
         identity['resume_identity'], actions=actions, rules=card_instance_rules())
     # Invocation-local Source admission; phase-specific limits are also enforced.
     budget = StorageBudget(StorageSettings(), float('inf'))
-    snapshot = learner.snapshot_owned(budget=budget, save_budget_bytes=identity['phase_limits']['save_budget_bytes'])
-    snapshot.save(Path(initial['output']))
-    current_snapshot = snapshot.identity
-    _send_snapshot(channel, snapshot, request=initial, budget=budget, metrics={}, identity=identity, learner=learner)
-    generation = 0
+    if restoring:
+        current_snapshot=_restore_initial(channel,initial,learner,budget,actions,identity)
+        generation=learner._owned_generation
+    else:
+        snapshot = learner.snapshot_owned(budget=budget, save_budget_bytes=identity['phase_limits']['save_budget_bytes'])
+        snapshot.save(Path(initial['output']))
+        current_snapshot = snapshot.identity
+        _send_snapshot(channel, snapshot, request=initial, budget=budget, metrics={}, identity=identity, learner=learner)
+        generation = 0
     last_transaction = initial['transaction']
     for line in sys.stdin:
         request = json.loads(line)

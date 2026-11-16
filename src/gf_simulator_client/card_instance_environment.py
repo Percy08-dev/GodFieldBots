@@ -151,39 +151,44 @@ class CardInstanceSimulatorEnvironment(SimulatorEnvironment):
             artifact_sink=self.artifact_sink,
             server_output_root=self.server_output_root,
             resident_pool=self.resident_pool,
-            capture=self.capture,
+            capture=getattr(self,'capture',None),
         )
         if self.artifact_sink is not None:
             self._storage_group_owner = own
         result = await own._run_group_body(group)
-        if self.capture is not None:
+        capture=getattr(self,'capture',None)
+        if capture is not None:
             try:
-                self.capture.close_group(group, result)
+                capture.close_group(group, result)
             except ContractError as exc:
                 result.health["capture_failure"] = str(exc)
         return result
 
     def _episode_opened(self, result: EpisodeResult) -> None:
-        if self.capture is not None:
+        capture=getattr(self,'capture',None)
+        if capture is not None:
             assert result.game_id is not None
-            self.capture.open_episode(result.episode_id, result.game_id)
+            capture.open_episode(result.episode_id, result.game_id)
 
     def _act_acknowledged(self, result: EpisodeResult, viewer: int, command: Json,
                           acknowledgement: Json) -> None:
-        if self.capture is not None:
+        capture=getattr(self,'capture',None)
+        if capture is not None:
             try:
-                self.capture.accept_decision(result.episode_id, viewer, command["command_id"], acknowledgement)
+                capture.accept_decision(result.episode_id, viewer, command["command_id"], acknowledgement)
             except ContractError as exc:
                 result.health["capture_failure"] = str(exc)
 
     def _terminal_observed(self, result: EpisodeResult, viewer: int, observation: Json) -> None:
-        if self.capture is not None:
-            self.capture.terminal_observation(result.episode_id, viewer, observation)
+        capture=getattr(self,'capture',None)
+        if capture is not None:
+            capture.terminal_observation(result.episode_id, viewer, observation)
 
     def _episode_closed(self, result: EpisodeResult) -> None:
-        if self.capture is not None and result.game_id is not None:
+        capture=getattr(self,'capture',None)
+        if capture is not None and result.game_id is not None:
             try:
-                self.capture.close_episode(result.episode_id, result)
+                capture.close_episode(result.episode_id, result)
             except ContractError as exc:
                 result.health["capture_failure"] = str(exc)
 
@@ -268,17 +273,17 @@ class CardInstanceSimulatorEnvironment(SimulatorEnvironment):
     def _reconcile_replay(
         self, replay: Json, viewer: int, accepted: list[Json], outcome: Any
     ) -> None:
-        if self.capture is None:
+        if getattr(self,'capture',None) is None:
             reconcile_replay(replay, viewer, accepted, outcome)
 
     def _replay_closure(self, replay: Json, game: str, viewer: int) -> Json | None:
-        return replay["episode_end"] if self.capture is not None else replay_closure(replay, game, viewer)
+        return replay["episode_end"] if getattr(self,'capture',None) is not None else replay_closure(replay, game, viewer)
 
     def _replay_was_reconciled(self) -> bool:
-        return self.capture is None
+        return getattr(self,'capture',None) is None
 
     def _finish_journal(self, journal: Journal, result: EpisodeResult, final: Json | None) -> None:
-        if result.end_kind == "natural" and self.capture is None and not result.replay_reconciled:
+        if result.end_kind == "natural" and getattr(self,'capture',None) is None and not result.replay_reconciled:
             raise ContractError("journal6 natural reward requires both reconciled player closures")
         super()._finish_journal(journal, result, final)
 
@@ -354,7 +359,7 @@ class CardInstanceSimulatorEnvironment(SimulatorEnvironment):
 
     def _before_worker_close(self, workers: dict[int, ParticipantWorker], result: EpisodeResult) -> None:
         if self.resident_pool is not None and (result.end_kind == 'natural' and result.failure is None
-                and (self.capture is not None or result.replay_reconciled) and not any(result.health.values())):
+                and (getattr(self,'capture',None) is not None or result.replay_reconciled) and not any(result.health.values())):
             from gf_simulator_client.resident_pool import ResidentParticipantWorker
             for worker in workers.values():
                 if type(worker) is not ResidentParticipantWorker:
@@ -415,8 +420,9 @@ class CardInstanceSimulatorEnvironment(SimulatorEnvironment):
             }
             sink = cast(CardInstanceJournalSink, journal)
             index = sink.begin_frame(frame, delta, generated, selected, command, timings)
-            if self.capture is not None:
-                self.capture.begin_decision(result.episode_id, frame.actor, frame, delta,
+            capture=getattr(self,'capture',None)
+            if capture is not None:
+                capture.begin_decision(result.episode_id, frame.actor, frame, delta,
                     generated.table, selected, command)
             result.decision_timings.append(
                 {"actor": frame.actor, **timings, "storage_host_ms": sink.last_storage_ms}

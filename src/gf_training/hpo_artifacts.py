@@ -139,3 +139,43 @@ def restore_learner(learner: HpoLearner, directory: Path) -> None:
         learner.resume_identity, action_contract=learner.action_contract, purpose="qualified_game", synthetic_capacity=False,
         _context=learner._context, **options)
     learner.network, learner.optimizer, learner.shuffle, learner.steps = network, optimizer, shuffle, steps
+
+
+def _restore_owned_learner(learner: HpoLearner, *, inference: Any, resume: Any,
+                          actor_metadata: Json, resume_manifest: Json, generation: int,
+                          budget: Any, actions: ActionConfigV3) -> None:
+    """Private Wire7 import receiver; validates/stages without legacy file I/O."""
+    from gf_models.hpo_owned_inference import load_owned_inference
+    from gf_models.sharded_arrays import validate_bundle_metadata
+    from gf_models.structured_artifacts import (
+        _apply_resume_state,
+        _validate_resume_arrays,
+        _validate_resume_manifest,
+    )
+    from gf_training.hpo_numeric import HpoLearner
+    if (type(learner) is not HpoLearner or learner._owned_legacy or learner._owned_failed
+            or learner._owned_snapshot is not None or learner.steps != 0):
+        raise ContractError('owned restore requires untouched actual owned learner')
+    integer(generation, 0, 2**31-1)
+    options=_recipe_options(learner.training)
+    context=learner._context
+    _validate_resume_manifest(resume_manifest,learner.model,learner.binding,learner.resume_identity,
+        context=context,expected_inference_digest=actor_metadata['inference_digest'],**options)
+    arrays={name:resume.array(name) for name in resume.names}
+    validate_bundle_metadata(resume_manifest['state'],max_decoded_bytes=learner.model.resources.max_owned_bytes)
+    _validate_resume_arrays(resume_manifest,arrays,learner.model,learner.binding,context=context)
+    tensors=[*learner.network.parameters(),*learner.network.buffers()]
+    existing=sum(value.numel()*value.element_size() for value in tensors)
+    staged=resource_estimate(learner.model,learner.binding,suffix_decisions=learner.training.tbptt_length,**learner._options)['total_bytes']
+    if existing+staged > min(learner.model.resources.max_owned_bytes,learner.binding.managed_budget_bytes):
+        raise ContractError('staged resume5 plus live learner exceeds managed reservation')
+    network=load_owned_inference(inference,actor_metadata,model=learner.model,binding=learner.binding,
+        actions=actions,rules=context.rules)
+    optimizer=learner._optimizer(network)
+    import numpy as np
+    shuffle=np.random.Generator(np.random.PCG64(0))
+    steps=_apply_resume_state(network,optimizer,shuffle,learner.model,learner.binding,resume_manifest,arrays,context=context)
+    learner.network,learner.optimizer,learner.shuffle,learner.steps=network,optimizer,shuffle,steps
+    learner._owned_generation=generation
+    learner._owned_source_budget=budget
+    learner.synchronize()

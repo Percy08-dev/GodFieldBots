@@ -13,8 +13,11 @@ correctness and conformance review, including actual CPU all-model lifecycles,
 same-input numerical/RNG comparisons and receive-failure custody regressions.
 Fresh live-registry/coordinator integration now passes both independent reviews
 after shared parent admission, original retention/namespace and advisor-guided
-startup-task ownership fixes. Cold resume/campaign and physical/project acceptance
-remain pending; scoped CPU fixture evidence grants no training-quality claim.
+startup-task ownership fixes. Cold resume/import, final-policy handoff and
+campaign/evaluation integration also pass final independent correctness and
+conformance review, including pruned-parent resume and explicit full audit.
+Whole-project and physical acceptance remain pending; controlled CPU fixture
+evidence grants no training-quality claim.
 The new route will use explicit producer-origin versions and inference-only
 actor snapshots, while retaining strict legacy/audit readers and existing learning
 math/budgets. Full acceptance and physical comparisons remain pending in

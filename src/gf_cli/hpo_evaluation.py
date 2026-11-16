@@ -10,6 +10,7 @@ import importlib
 import json
 import math
 import time
+from contextlib import ExitStack
 from dataclasses import asdict, dataclass, field, fields, replace
 from pathlib import Path
 from types import ModuleType
@@ -27,6 +28,7 @@ from gf_common.domain import (
     Json,
     RuntimePolicyBinding,
     canonical,
+    clone,
     digest,
 )
 from gf_common.hpo_progress import observe
@@ -187,7 +189,8 @@ class _HpoEvaluationCleanupObservation:
 
     def __init__(self, plan: HpoEvaluationPlan, job: GpuJob, artifacts: Any) -> None:
         from gf_models.card_instance_artifacts import RetainedGameArtifacts
-        if type(plan) not in (HpoEvaluationPlan, ResidentHpoEvaluationPlan) or type(artifacts) is not RetainedGameArtifacts:
+        from gf_models.hpo_owned_artifacts import OwnedGameArtifacts
+        if type(plan) not in (HpoEvaluationPlan, ResidentHpoEvaluationPlan) or type(artifacts) not in (RetainedGameArtifacts,OwnedGameArtifacts):
             raise ContractError('exact evaluation cleanup inputs required')
         plan.require_job(job)
         self._identity = (plan, job, job.ledger, artifacts)
@@ -346,8 +349,11 @@ class _HpoEvaluationCleanupObservation:
     def require_outer_retired(self, *, error: BaseException) -> None:
         self.require_core_retired(error=error)
         artifacts = self._identity[3]
-        if (self._artifact_phase != 'retired' or not artifacts._released or artifacts._entries or artifacts._models
-                or artifacts._scan.files or artifacts._scan.inventories):
+        from gf_models.hpo_owned_artifacts import OwnedGameArtifacts
+        if type(artifacts) is OwnedGameArtifacts:
+            artifacts.require_retired()
+        if (self._artifact_phase != 'retired' or not artifacts._released or artifacts._entries
+                or type(artifacts) is not OwnedGameArtifacts and (artifacts._models or artifacts._scan.files or artifacts._scan.inventories)):
             raise ContractError('actual retained evaluation artifacts remain unconfirmed')
         if self._verifier_phase != 'unentered':
             source = self._verifier
@@ -377,6 +383,51 @@ class ParentInspection:
     state: Json
     generations: tuple[Json, ...]
     source: Json
+
+
+def completion_inspection(completion: Any, directory: Path) -> ParentInspection:
+    """CLI projection of readonly final data; training imports no CLI types."""
+    import weakref
+
+    from gf_training.hpo_owned_completion import (
+        OwnedEvaluationPolicy,
+        OwnedExternalFinalPolicy,
+        OwnedRunCompletion,
+    )
+    if type(completion) not in (OwnedRunCompletion,OwnedExternalFinalPolicy,OwnedEvaluationPolicy):
+        raise ContractError('actual completed/imported/retained final data required')
+    completion.require()
+    reservation=completion.parent_budget.reserve(32*(len(completion._state)+len(completion._records)+len(completion._files))+65536)
+    try:
+        state,records=completion.state,completion.records
+        if directory!=Path(state['effective_config']['hpo_spec']['storage']['parent_root'])/state['run_id']:
+            raise ContractError('final inference parent namespace mismatch')
+        source={'schema_version':2,'kind':'hpo-owned-parent-metadata-validation','origin':'producer-owned-v1','encoder':'canonical-python',
+            'run_id':state['run_id'],'run_path':str(directory),'training_seed':state['seed'],'config_sha256':state['config_sha256'],
+            'state_sha256':completion._state_sha256,'generation':state['updates'],'generation_sha256':completion._generation_sha256,
+            'generations_sha256':completion._generations_sha256,'inference_sha256':completion.files['inference.json'],
+            'used_decisions':state['used_decisions'],'effective_settings_sha256':state['effective_config']['hpo_spec']['effective_settings_sha256']}
+        result=ParentInspection(state,tuple(records),source)
+        weakref.finalize(result,reservation.close)
+        return result
+    except BaseException:
+        reservation.close()
+        raise
+
+
+def _checked_owned_inspection(inspection: ParentInspection, loaded: LoadedHPOConfig, settings: Any, *,
+                              training_seed: int,run_id: str) -> ParentInspection:
+    from gf_training.hpo_lineage import hpo_spec, hpo_state
+    state=inspection.state
+    spec=hpo_spec(state)
+    _,model,_=hpo_state(state)
+    if (state['run_id']!=run_id or state['seed']!=training_seed or state['used_decisions']!=loaded.config.decision_budget
+            or spec['campaign_config_sha256']!=loaded.sha256 or spec['base_config_sha256']!=loaded.base.sha256
+            or spec['study_identity']!=loaded.config.study_identity or spec['effective_settings_sha256']!=settings.identity
+            or canonical(asdict(model))!=canonical(asdict(settings.model))
+            or canonical(spec['training_recipe'])!=canonical(asdict(settings.training))):
+        raise ContractError('owned parent metadata differs from exact campaign/proposal/final-D identity')
+    return inspection
 
 
 def _final_policy_reference(inspection: ParentInspection, source_sha: str) -> tuple[Json, RuntimePolicyBinding]:
@@ -414,7 +465,7 @@ def _parent_conditions(inspection: ParentInspection, campaign: Json) -> None:
 
 
 def inspect_training_parent(directory: Path, loaded: LoadedHPOConfig, settings: object, *,
-                            training_seed: int, run_id: str, deadline: float) -> ParentInspection:
+                            training_seed: int, run_id: str, deadline: float, completion: Any = None) -> ParentInspection:
     """Actually validate complete originals; Run5/JSON alone is never authority."""
     from gf_models.arrays import sha256
     from gf_training.hpo_config import EffectiveSettings
@@ -427,6 +478,38 @@ def inspect_training_parent(directory: Path, loaded: LoadedHPOConfig, settings: 
     directory = directory.resolve()
     if training_seed not in loaded.config.learning_seeds or not directory.is_relative_to(Path(loaded.config.storage.parent_root)):
         raise ContractError('parent is outside the declared campaign run/seed namespace')
+    if loaded.config.schema_version==4:
+        from gf_training.hpo_owned_completion import OwnedRunCompletion
+        if completion is not None:
+            if type(completion) is not OwnedRunCompletion: raise ContractError('actual owned completion required')
+            inspection=completion_inspection(completion,directory)
+        else:
+            from gf_common.artifacts import ArtifactPhaseAdmission
+            from gf_common.group_pack import StorageSettings
+            from gf_training.group_pack_resources import StorageBudget
+            from gf_training.hpo_owned_restore import OwnedColdImport
+            with run_lock(directory) as ownership:
+                budget=StorageBudget(StorageSettings(budget_bytes=loaded.config.operating.source_budget_bytes),deadline)
+                phase=ArtifactPhaseAdmission(budget,loaded.config.operating.parent_budget_bytes)
+                imported=OwnedColdImport(ownership,budget=budget,parent_budget=phase,deadline=deadline,require_complete=True)
+                try:
+                    state,records=imported.state,imported.records
+                    import weakref
+
+                    from gf_common.artifacts import json_bound
+                    from gf_training.hpo_owned_completion import management_records
+                    retained=phase.reserve(32*(json_bound(state)+json_bound(records))+65536)
+                    source={'schema_version':2,'kind':'hpo-owned-parent-metadata-validation','origin':'producer-owned-v1','encoder':'canonical-python',
+                        'run_id':state['run_id'],'run_path':str(directory),'training_seed':state['seed'],'config_sha256':state['config_sha256'],
+                        'state_sha256':imported.scan.verified_digest(directory/'run.json'),'generation':state['updates'],
+                        'generation_sha256':state['generation_sha256'],'generations_sha256':digest(records),
+                        'inference_sha256':records[-1]['inference_sha256'],'used_decisions':state['used_decisions'],
+                        'effective_settings_sha256':state['effective_config']['hpo_spec']['effective_settings_sha256']}
+                    inspection=ParentInspection(clone(state),tuple(management_records(records)),source)
+                    weakref.finalize(inspection,retained.close)
+                finally: imported.close()
+        return _checked_owned_inspection(inspection,loaded,settings,training_seed=training_seed,run_id=run_id)
+    if completion is not None: raise ContractError('legacy evaluation cannot adopt owned completion')
     with run_lock(directory):
         state, records = validate_hpo_parent(directory, require_complete=True,
             max_owned_bytes=loaded.config.operating.source_budget_bytes, deadline=deadline)
@@ -724,7 +807,7 @@ def verify_trial_evaluation(store: object, loaded: LoadedHPOConfig, campaign: Js
 
 def persist_training_receipt(store: object, loaded: LoadedHPOConfig, campaign: Json, proposal: object, *,
                              training_seed: int, run_id: str, directory: Path, termination: object,
-                             deadline: float) -> Json:
+                             deadline: float, completion: Any = None) -> Json:
     from gf_cli.hpo_campaign import Proposal
     from gf_cli.hpo_storage import CampaignStore
     from gf_common.domain import clone
@@ -732,8 +815,11 @@ def persist_training_receipt(store: object, loaded: LoadedHPOConfig, campaign: J
 
     if type(store) is not CampaignStore or type(proposal) is not Proposal or type(termination) is not TerminationReceipt:
         raise ContractError('actual campaign/proposal/termination outputs required')
+    if loaded.config.schema_version==4:
+        from gf_training.hpo_owned_completion import OwnedRunCompletion
+        if type(completion) is not OwnedRunCompletion: raise ContractError('owned training receipt requires actual private completion')
     inspection = inspect_training_parent(directory, loaded, proposal.settings,
-        training_seed=training_seed, run_id=run_id, deadline=deadline)
+        training_seed=training_seed, run_id=run_id, deadline=deadline,completion=completion)
     _parent_conditions(inspection, campaign)
     value = clone(asdict(termination))
     verify_gpu_termination(value, campaign_id=campaign['campaign_id'], operation_id=run_id, run_id=run_id, evaluation_id=None)
@@ -812,44 +898,56 @@ def _release_evaluation_pins(pins: list[tuple[Path, HpoReferenceReceipt]],
             raise first
 
 
+def _confirmed_evaluation_cleanup(error: BaseException, observation: Any, job: GpuJob,
+                                   pins: Any, releases: Any) -> Any:
+    """The SAME original proof, observed while its actual job is still held."""
+    from gf_training.hpo_retention import HpoReferenceReceipt
+    if type(observation) is not _HpoEvaluationCleanupObservation or observation._identity[1] is not job:
+        raise ContractError('positive original evaluation cleanup observation unavailable')
+    observation.require_outer_retired(error=error)
+    if not pins or len(releases) != len(pins):
+        raise ContractError('every original acquired evaluation pin needs its actual release receipt')
+    for _, acquired in pins:
+        released = releases.get(id(acquired))
+        if (type(acquired) is not HpoReferenceReceipt or acquired.phase != 'acquire'
+                or acquired.binding['token'] != job.ticket or type(released) is not HpoReferenceReceipt
+                or released.phase != 'release' or canonical(released.binding) != canonical(acquired.binding)):
+            raise ContractError('evaluation pin retirement lacks exact typed release evidence')
+    receipt = (job.confirm_termination() if job._receipt is None else
+        job.require_confirmed_termination(job._receipt))
+    return receipt
+
+
+def _copy_failed_evaluation_receipt(error: BaseException, store: Any, name: str,
+                                    evaluation_id: str, receipt: Any) -> None:
+    """Copy already-issued actual evidence; never reopen/confirm a closed job."""
+    vars(error)['hpo_gpu_termination_receipt']=receipt
+    try:
+        store.put(name,{'schema_version':1,'kind':'hpo-failed-evaluation-termination',
+            'evaluation_id':evaluation_id,'gpu_termination':asdict(receipt),'error_type':type(error).__name__,
+            'evaluation_eligible':False})
+    except BaseException as copy_error:  # noqa: BLE001 - the actual global receipt survives local failure
+        vars(error)['hpo_failed_termination_copy_error']=copy_error
+        error.add_note('global GPU termination confirmed; failed-operation local record failed: '+str(copy_error))
+
+
 def _confirm_failed_evaluation(error: BaseException, store: Any, name: str,
                                observation: _HpoEvaluationCleanupObservation | None, job: GpuJob,
                                pins: list[tuple[Path, HpoReferenceReceipt]],
                                releases: dict[int, HpoReferenceReceipt | BaseException]) -> None:
     """Operational termination only; the caller always rethrows its data failure."""
-    from gf_training.hpo_retention import HpoReferenceReceipt
-    vars(error)['hpo_evaluation_cleanup_observation'] = observation
-    try:
-        if type(observation) is not _HpoEvaluationCleanupObservation or observation._identity[1] is not job:
-            raise ContractError('positive original evaluation cleanup observation unavailable')
-        observation.require_outer_retired(error=error)
-        if not pins or len(releases) != len(pins):
-            raise ContractError('every original acquired evaluation pin needs its actual release receipt')
-        for _, acquired in pins:
-            released = releases.get(id(acquired))
-            if (type(acquired) is not HpoReferenceReceipt or acquired.phase != 'acquire'
-                    or acquired.binding['token'] != job.ticket or type(released) is not HpoReferenceReceipt
-                    or released.phase != 'release' or canonical(released.binding) != canonical(acquired.binding)):
-                raise ContractError('evaluation pin retirement lacks exact typed release evidence')
-        receipt = (job.confirm_termination() if job._receipt is None else
-            job.require_confirmed_termination(job._receipt))
-    except BaseException as cleanup:  # noqa: BLE001 -- global fsync/actual owner failure never masks data failure.
-        vars(error)['hpo_termination_cleanup_error'] = cleanup
-        error.add_note('evaluation resource termination unconfirmed: ' + str(cleanup))
+    vars(error)['hpo_evaluation_cleanup_observation']=observation
+    try: receipt=_confirmed_evaluation_cleanup(error,observation,job,pins,releases)
+    except BaseException as cleanup:  # noqa: BLE001 - never mask the data failure or invent proof
+        vars(error)['hpo_termination_cleanup_error']=cleanup
+        error.add_note('evaluation resource termination unconfirmed: '+str(cleanup))
         return
-    vars(error)['hpo_gpu_termination_receipt'] = receipt
-    try:
-        store.put(name, {'schema_version': 1, 'kind': 'hpo-failed-evaluation-termination',
-            'evaluation_id': observation._identity[0].linkage['evaluation_id'],
-            'gpu_termination': asdict(receipt), 'error_type': type(error).__name__,
-            'evaluation_eligible': False})
-    except BaseException as copy_error:  # noqa: BLE001 -- global receipt remains durable even when local copy fails.
-        vars(error)['hpo_failed_termination_copy_error'] = copy_error
-        error.add_note('global GPU termination confirmed; failed-operation local record failed: ' + str(copy_error))
+    assert observation is not None
+    _copy_failed_evaluation_receipt(error,store,name,observation._identity[0].linkage['evaluation_id'],receipt)
 
 
 async def evaluate_seed(store: object, loaded: LoadedHPOConfig, campaign: Json, proposal: object,
-                        training: Json, *, output: Path, progress: Any = None) -> Json:
+                        training: Json, *, output: Path, progress: Any = None, completion: Any = None) -> Json:
     """One actual primary evaluation; no interrupted request is silently rerun."""
     require_hpo_runtime_execution(loaded.config)
     from gf_cli.hpo_campaign import Proposal
@@ -888,6 +986,9 @@ async def evaluate_seed(store: object, loaded: LoadedHPOConfig, campaign: Json, 
     releases: dict[int, HpoReferenceReceipt | BaseException] = {}
     observation = None
     owner = None
+    final_data = None
+    drain_started=False
+    termination=None
     try:
         store.put(folder + '/evaluation.admission.json', {'schema_version': 1, 'kind': 'hpo-evaluation-admission',
             'gpu_ticket': job.ticket, 'evaluation_id': evaluation_id})
@@ -897,9 +998,26 @@ async def evaluate_seed(store: object, loaded: LoadedHPOConfig, campaign: Json, 
         reference = retention.pin_hpo_evaluation(Path(training['run_path']), job.ticket, training['generation'], training['inference_sha256'],
             max_owned_bytes=loaded.config.operating.source_budget_bytes, deadline=execution)
         pins.append((Path(training['run_path']), reference))
+        if loaded.config.schema_version==4:
+            from gf_common.artifacts import ArtifactPhaseAdmission
+            from gf_common.group_pack import StorageSettings
+            from gf_training.group_pack_resources import StorageBudget
+            from gf_training.hpo_owned_completion import OwnedRunCompletion, retain_for_evaluation
+            evaluation_budget=StorageBudget(StorageSettings(budget_bytes=loaded.config.operating.source_budget_bytes),work)
+            evaluation_phase=ArtifactPhaseAdmission(evaluation_budget,loaded.config.operating.parent_budget_bytes)
+            if completion is not None:
+                if type(completion) is not OwnedRunCompletion: raise ContractError('actual private completion required')
+                final_data=retain_for_evaluation(completion,budget=evaluation_budget,parent_budget=evaluation_phase)
+            else:
+                from gf_training.hpo_owned_restore import import_owned_final_policy
+                final_data=import_owned_final_policy(Path(training['run_path']),deadline=execution,
+                    max_owned_bytes=loaded.config.operating.source_budget_bytes,parent_budget_bytes=loaded.config.operating.parent_budget_bytes,
+                    budget=evaluation_budget,parent_budget=evaluation_phase)
+        elif completion is not None: raise ContractError('legacy evaluation cannot adopt owned completion')
         try:
-            inspected = inspect_training_parent(Path(training['run_path']), loaded, proposal.settings,
-                training_seed=seed, run_id=training['run_id'], deadline=execution)
+            inspected=(_checked_owned_inspection(completion_inspection(final_data,Path(training['run_path'])),loaded,proposal.settings,
+                training_seed=seed,run_id=training['run_id']) if final_data is not None else
+                inspect_training_parent(Path(training['run_path']),loaded,proposal.settings,training_seed=seed,run_id=training['run_id'],deadline=execution))
             parent_reference, binding = _final_policy_reference(inspected, training['source_receipt_sha256'])
             label = parent_reference['policy_label']
             bindings = {label: binding, 'heuristic-card-instance-v2': RuntimePolicyBinding('heuristic')}
@@ -917,9 +1035,15 @@ async def evaluate_seed(store: object, loaded: LoadedHPOConfig, campaign: Json, 
             plan = execution_plan(groups, bindings, output, link,runtime=resident_runtime,pins=tuple(pins), started_monotonic=started,
                 admission_deadline=started + run.admission_seconds, execution_deadline=execution,
                 work_deadline=work, wall_deadline=wall)
-            owner = RetainedGameArtifacts.for_hpo_registry(bindings, config.actions, rules=card_instance_rules(),
-                pool_size=config.hpo_spec['operating']['opponent_pool_size'], max_owned_bytes=core.hpo_artifact_budget(projected, bindings),
-                preflight_deadline=execution, finalization_deadline=work)
+            if final_data is not None:
+                from gf_training.hpo_owned_completion import completion_artifacts
+                if canonical(completion_inspection(final_data,Path(training['run_path'])).source)!=canonical(inspected.source):
+                    raise ContractError('owned final data differs from validated training receipt')
+                owner=completion_artifacts(final_data,binding,label)
+            else:
+                owner = RetainedGameArtifacts.for_hpo_registry(bindings, config.actions, rules=card_instance_rules(),
+                    pool_size=config.hpo_spec['operating']['opponent_pool_size'], max_owned_bytes=core.hpo_artifact_budget(projected, bindings),
+                    preflight_deadline=execution, finalization_deadline=work)
             observation = _HpoEvaluationCleanupObservation(plan, job, owner)
             try:
                 result = await core.collect_hpo_evaluation(projected, plan, gpu_job=job, artifact_inputs=owner,
@@ -928,7 +1052,7 @@ async def evaluate_seed(store: object, loaded: LoadedHPOConfig, campaign: Json, 
                     raise ContractError('primary evaluation did not finish/save/clean up normally')
                 observe(progress, {'phase':'source'})
                 manifest, proof = verify_saved_evaluation(result.directory, loaded, link, deadline=work,
-                    extra_owned_bytes=owner._scan.peak, _cleanup_observation=observation,
+                    extra_owned_bytes=owner.retained_bytes if final_data is not None else owner._scan.peak, _cleanup_observation=observation,
                     evaluation_runtime=getattr(loaded.config,'runtime',None))
                 owner.finalize(deadline=work)
             except BaseException as error:
@@ -950,7 +1074,7 @@ async def evaluate_seed(store: object, loaded: LoadedHPOConfig, campaign: Json, 
             if isinstance(released, BaseException):
                 raise released
         observe(progress, {'phase':'cleanup'})
-        termination = job.confirm_termination()
+        termination = _confirmed_evaluation_cleanup(ContractError('final evaluation cleanup proof'),observation,job,pins,releases)
         gpu_sha = store.put(folder + '/evaluation-gpu-termination.json', clone(asdict(termination)))
         receipt = {'schema_version': 1, 'kind': 'hpo-seed-evaluation',
             'training_receipt_sha256': store.get(folder + '/training.json')[1], 'linkage_sha256': digest(link),
@@ -961,25 +1085,34 @@ async def evaluate_seed(store: object, loaded: LoadedHPOConfig, campaign: Json, 
             'linkage': link, 'config_sha256': projected.sha256}
         receipt.update(evaluation_receipt_runtime_fields(manifest))
         check_evaluation_receipt_runtime(receipt,manifest)
+        drain_started=True
+        _drain_final_owners(job,() if final_data is None else (final_data,))
         store.put(folder + '/evaluation.json', receipt)
         return receipt
     except BaseException as error:
-        if owner is not None:
-            try:
-                if observation is not None:
-                    observation.release_artifacts()
-                else:
-                    owner.release()
-            except BaseException as cleanup:  # noqa: BLE001 -- actual artifact owner remains reachable.
-                vars(error)['hpo_artifact_cleanup_owner'] = owner
-                error.add_note('evaluation artifact cleanup: ' + str(cleanup))
-        _release_evaluation_pins(pins, releases, max_owned_bytes=loaded.config.operating.source_budget_bytes,
-            deadline=started + run.wall_seconds - run.report_reserve_seconds, primary=error, observation=observation)
-        _confirm_failed_evaluation(error, store, folder + '/evaluation-failed-gpu-termination.json',
-            observation, job, pins, releases)
+        if not drain_started:
+            if owner is not None:
+                try:
+                    if observation is not None:
+                        observation.release_artifacts()
+                    else:
+                        owner.release()
+                except BaseException as cleanup:  # noqa: BLE001 -- actual artifact owner remains reachable.
+                    vars(error)['hpo_artifact_cleanup_owner'] = owner
+                    error.add_note('evaluation artifact cleanup: ' + str(cleanup))
+            _release_evaluation_pins(pins, releases, max_owned_bytes=loaded.config.operating.source_budget_bytes,
+                deadline=started + run.wall_seconds - run.report_reserve_seconds, primary=error, observation=observation)
+            _confirm_failed_evaluation(error, store, folder + '/evaluation-failed-gpu-termination.json',
+                observation, job, pins, releases)
+        elif termination is not None and not getattr(error,'hpo_final_cleanup_owners',()):
+            vars(error)['hpo_evaluation_cleanup_observation']=observation
+            _copy_failed_evaluation_receipt(error,store,folder+'/evaluation-failed-gpu-termination.json',evaluation_id,termination)
         raise
     finally:
-        job.close()
+        if not drain_started:
+            import sys
+            drain_started=True
+            _drain_final_owners(job,() if final_data is None else (final_data,),primary=sys.exception())
 
 
 _RUNTIME_OMITTED = object()
@@ -996,6 +1129,76 @@ def comparison_execution_runtime(left: Any,right: Any,*,choice: Any = _RUNTIME_O
     return resident_runtime(choice)
 
 
+def _drain_final_owners(job: Any, policies: Any, *, primary: BaseException | None=None) -> None:
+    """Attempt every actual independent owner ONCE; never replace the primary."""
+    failures=[]
+    seen=set()
+    owners=([('evaluation job',job)] if job is not None else [])+[("final inference",data) for data in policies]
+    for role,owner in owners:
+        if id(owner) in seen: continue
+        seen.add(id(owner))
+        try: owner.close()
+        except BaseException as cleanup:  # noqa: BLE001 - every actual remaining owner must be attempted
+            failures.append((role,owner,cleanup))
+    if not failures: return
+    first=primary if primary is not None else failures[0][2]
+    previous=getattr(first,'hpo_final_cleanup_owners',())
+    unresolved=list(previous)
+    for role,owner,failure in failures:
+        if not any(item is owner for item in unresolved): unresolved.append(owner)
+        first.add_note(role+' cleanup remains owned: '+str(failure))
+    vars(first)['hpo_final_cleanup_owners']=tuple(unresolved)
+    vars(first)['hpo_final_cleanup_errors']=getattr(first,'hpo_final_cleanup_errors',())+tuple(failures)
+    if primary is None: raise first
+
+
+def _comparison_artifacts(left: Any, right: Any, sources: list[Any], bindings: Any, config: Any,
+                          *, deadline: float, work: float, max_owned_bytes: int) -> tuple[Any,list[Any]]:
+    """Profile dispatch, never rejection-triggered fallback or origin promotion."""
+    from gf_common.card_instance_rules import card_instance_rules
+    from gf_models.card_instance_artifacts import RetainedGameArtifacts
+    if left.config.schema_version!=4 or right.config.schema_version!=4:
+        owner=RetainedGameArtifacts.for_hpo_registry(bindings,config.actions,rules=card_instance_rules(),
+            pool_size=config.hpo_spec['operating']['opponent_pool_size'],max_owned_bytes=max_owned_bytes,
+            preflight_deadline=deadline,finalization_deadline=work)
+        return owner,[]
+    from gf_common.artifacts import ArtifactPhaseAdmission, json_bound
+    from gf_common.group_pack import StorageSettings
+    from gf_models.hpo_owned_artifacts import OwnedGameArtifacts
+    from gf_training.group_pack_resources import StorageBudget
+    from gf_training.hpo_owned_restore import import_owned_final_policy
+    from gf_training.structured_lineage import _stat_identity
+    budget=StorageBudget(StorageSettings(budget_bytes=left.config.operating.source_budget_bytes),work)
+    phase=ArtifactPhaseAdmission(budget,left.config.operating.parent_budget_bytes)
+    imported: dict[Path,Any]={}
+    entries={}
+    try:
+        with ExitStack() as preparation:
+            try:
+                for directory,label,binding in sources:
+                    if directory not in imported:
+                        imported[directory]=import_owned_final_policy(directory,deadline=deadline,
+                            max_owned_bytes=budget.limit,parent_budget_bytes=phase.limit,budget=budget,parent_budget=phase)
+                    data=imported[directory]
+                    if binding!=bindings[label]: continue
+                    # Immutable retained-byte bounds, before getters/cap issuance,
+                    # list/stat/path projections or simultaneous provider copies.
+                    allowance=32*(len(data._files)+len(data._manifest)+len(data._actor_metadata))
+                    allowance+=32*json_bound(binding.policy_options)+65536
+                    preparation.enter_context(phase.reserve(allowance))
+                    files=[{'path':name,'sha256':sha,'identity':list(_stat_identity((directory/'artifacts'/f'{data.generation:06}'/name).lstat()))}
+                        for name,sha in data.files.items()]
+                    entries[label]=(data.actor_capability,binding,files,data.inference_manifest)
+                return OwnedGameArtifacts(entries,budget=budget,parent_budget=phase),list(imported.values())
+            except BaseException:
+                entries.clear()  # Drop preparation aliases before their leases.
+                files=None
+                raise
+    except BaseException as error:
+        _drain_final_owners(None,imported.values(),primary=error)
+        raise
+
+
 async def evaluate_comparison(store: object, left: LoadedHPOConfig, right: LoadedHPOConfig,
                               left_proposal: object, right_proposal: object, left_training: Json,
                               right_training: Json, *, comparison_id: str, conditions_sha256: str,
@@ -1007,7 +1210,6 @@ async def evaluate_comparison(store: object, left: LoadedHPOConfig, right: Loade
     from gf_cli.hpo_campaign import Proposal
     from gf_cli.hpo_storage import CampaignStore
     from gf_common.card_instance_collection import hpo_evaluation_groups
-    from gf_common.card_instance_rules import card_instance_rules
     from gf_common.domain import clone
     from gf_evaluation.hpo import (
         GameIdentity,
@@ -1016,7 +1218,6 @@ async def evaluate_comparison(store: object, left: LoadedHPOConfig, right: Loade
         SeedEvaluationProjection,
     )
     from gf_evaluation.hpo_compare import ComparisonPanel
-    from gf_models.card_instance_artifacts import RetainedGameArtifacts
     from gf_training.hpo_gpu_lease import JobContext, admit_gpu_job
 
     if type(store) is not CampaignStore or type(left_proposal) is not Proposal or type(right_proposal) is not Proposal:
@@ -1047,6 +1248,9 @@ async def evaluate_comparison(store: object, left: LoadedHPOConfig, right: Loade
     releases: dict[int, HpoReferenceReceipt | BaseException] = {}
     observation = None
     owner = None
+    final_inputs: list[Any]=[]
+    drain_started=False
+    termination=None
     try:
         store.put(folder + '/admission.json', {'schema_version': 1, 'kind': 'hpo-comparison-matchup-admission',
             'gpu_ticket': job.ticket, 'evaluation_id': evaluation_id})
@@ -1054,6 +1258,7 @@ async def evaluate_comparison(store: object, left: LoadedHPOConfig, right: Loade
             inspected = []
             parent_refs = []
             bindings = {}
+            sources=[]
             for loaded, proposal, training in ((left, left_proposal, left_training), (right, right_proposal, right_training)):
                 directory = Path(training['run_path']).resolve(strict=True)
                 if not any(existing[0] == directory for existing in pins):
@@ -1066,6 +1271,7 @@ async def evaluate_comparison(store: object, left: LoadedHPOConfig, right: Loade
                 parent_reference, binding = _final_policy_reference(parent, training['source_receipt_sha256'])
                 label = parent_reference['policy_label']
                 bindings[label] = binding
+                sources.append((directory,label,binding))
                 parent_refs.append(parent_reference)
             if any(parent.source['used_decisions'] != left.config.decision_budget for parent in inspected):
                 raise ContractError('comparison requires both exact final-D parents')
@@ -1080,9 +1286,8 @@ async def evaluate_comparison(store: object, left: LoadedHPOConfig, right: Loade
                 schedule_digest=digest(schedule))
             plan = execution_plan(groups, bindings, output, link,runtime=evaluation_runtime,pins=tuple(pins), started_monotonic=started,
                 admission_deadline=started + run.admission_seconds, execution_deadline=execution, work_deadline=work, wall_deadline=wall)
-            owner = RetainedGameArtifacts.for_hpo_registry(bindings, config.actions, rules=card_instance_rules(),
-                pool_size=config.hpo_spec['operating']['opponent_pool_size'], max_owned_bytes=core.hpo_artifact_budget(projected, bindings),
-                preflight_deadline=execution, finalization_deadline=work)
+            owner,final_inputs=_comparison_artifacts(left,right,sources,bindings,config,deadline=execution,work=work,
+                max_owned_bytes=core.hpo_artifact_budget(projected,bindings))
             observation = _HpoEvaluationCleanupObservation(plan, job, owner)
             try:
                 result = await core.collect_hpo_evaluation(projected, plan, gpu_job=job, artifact_inputs=owner,
@@ -1090,7 +1295,7 @@ async def evaluate_comparison(store: object, left: LoadedHPOConfig, right: Loade
                 if result.report.get('healthy') is not True:
                     raise ContractError('comparison did not finish/save/clean up normally')
                 observe(progress, {'phase':'source'})
-                manifest, proof = verify_saved_evaluation(result.directory, left, link, deadline=work, extra_owned_bytes=owner._scan.peak, _cleanup_observation=observation,evaluation_runtime=evaluation_runtime)
+                manifest, proof = verify_saved_evaluation(result.directory, left, link, deadline=work, extra_owned_bytes=owner.retained_bytes if final_inputs else owner._scan.peak, _cleanup_observation=observation,evaluation_runtime=evaluation_runtime)
                 owner.finalize(deadline=work)
             except BaseException as error:
                 try:
@@ -1109,7 +1314,7 @@ async def evaluate_comparison(store: object, left: LoadedHPOConfig, right: Loade
             _release_evaluation_pins(pins, releases, max_owned_bytes=left.config.operating.source_budget_bytes, deadline=work)
         released = [value for value in releases.values() if not isinstance(value, BaseException)]
         observe(progress, {'phase':'cleanup'})
-        termination = job.confirm_termination()
+        termination = _confirmed_evaluation_cleanup(ContractError('final evaluation cleanup proof'),observation,job,pins,releases)
         gpu_sha = store.put(folder + '/gpu-termination.json', clone(asdict(termination)))
         projection = _projection(manifest, left_training, left_training['source_receipt_sha256'], conditions_sha256)
         run_value = projection['run']
@@ -1118,6 +1323,8 @@ async def evaluate_comparison(store: object, left: LoadedHPOConfig, right: Loade
         seed_projection = SeedEvaluationProjection(run_identity, left_training['used_decisions'], conditions_sha256, games)
         panel = ComparisonPanel(left_training['training_seed'], right_training['training_seed'], right_training['run_id'],
             right_training['inference_sha256'], right_training['source_receipt_sha256'], right_training['used_decisions'], seed_projection)
+        drain_started=True
+        _drain_final_owners(job,final_inputs)
         store.put(folder + '/receipt.json', {**evaluation_receipt_runtime_fields(manifest), 'kind': 'hpo-comparison-matchup',
             'linkage': link, 'manifest_sha256': proof['manifest_sha256'], 'originals_digest': proof['source_set_sha256'],
             'pin_acquire_receipts': [value.receipt_sha256 for _, value in pins],
@@ -1125,19 +1332,26 @@ async def evaluate_comparison(store: object, left: LoadedHPOConfig, right: Loade
             'panel': asdict(panel), 'left_profile': left.effective, 'right_profile': right.effective})
         return panel
     except BaseException as error:
-        if owner is not None:
-            try:
-                if observation is not None:
-                    observation.release_artifacts()
-                else:
-                    owner.release()
-            except BaseException as cleanup:  # noqa: BLE001 -- actual artifact owner remains reachable.
-                vars(error)['hpo_artifact_cleanup_owner'] = owner
-                error.add_note('comparison artifact cleanup: ' + str(cleanup))
-        _release_evaluation_pins(pins, releases, max_owned_bytes=left.config.operating.source_budget_bytes,
-            deadline=work, primary=error, observation=observation)
-        _confirm_failed_evaluation(error, store, folder + '/failed-gpu-termination.json',
-            observation, job, pins, releases)
+        if not drain_started:
+            if owner is not None:
+                try:
+                    if observation is not None:
+                        observation.release_artifacts()
+                    else:
+                        owner.release()
+                except BaseException as cleanup:  # noqa: BLE001 -- actual artifact owner remains reachable.
+                    vars(error)['hpo_artifact_cleanup_owner'] = owner
+                    error.add_note('comparison artifact cleanup: ' + str(cleanup))
+            _release_evaluation_pins(pins, releases, max_owned_bytes=left.config.operating.source_budget_bytes,
+                deadline=work, primary=error, observation=observation)
+            _confirm_failed_evaluation(error, store, folder + '/failed-gpu-termination.json',
+                observation, job, pins, releases)
+        elif termination is not None and not getattr(error,'hpo_final_cleanup_owners',()):
+            vars(error)['hpo_evaluation_cleanup_observation']=observation
+            _copy_failed_evaluation_receipt(error,store,folder+'/failed-gpu-termination.json',evaluation_id,termination)
         raise
     finally:
-        job.close()
+        if not drain_started:
+            import sys
+            drain_started=True
+            _drain_final_owners(job,final_inputs,primary=sys.exception())

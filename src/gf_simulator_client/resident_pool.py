@@ -21,6 +21,7 @@ class _ExchangeSetup:
     """Original gated executor submission, including its partial-construction owner."""
     def __init__(self,owner: ResidentPhysicalWorker,payload: Json,deadline: float) -> None:
         self.owner,self.executor,self.payload,self.deadline = owner,owner.executor,payload,deadline
+        self._evaluation_use_reservation: Any=None
         self.snapshot: Any = None
         self.owned_cache_identity: str | None = None
         request = payload['request']
@@ -29,8 +30,18 @@ class _ExchangeSetup:
             checkpoint = policy_options.get('expected_manifest_digest')
             if checkpoint is not None:
                 self.snapshot = owner.pool.owned_snapshot(checkpoint)
-                self.payload = {**payload, 'owned': {'metadata': self.snapshot.actor_metadata,
-                    'bank_count': len(self.snapshot.inference.banks)}}
+                wrapper={'metadata':self.snapshot.actor_metadata,'bank_count':len(self.snapshot.inference.banks)}
+                if owner.pool.custody.evaluation_scope is not None:
+                    binding=RuntimePolicyBinding(payload['payload']['model_id'],policy_options)
+                    use,reservation=owner.pool.custody.owned_evaluation_use(owner.lease,request,self.snapshot,binding)
+                    self._evaluation_use_reservation=reservation
+                    wrapper['evaluation_use']=use
+                elif self.snapshot.generation>request['generation']:
+                    raise ContractError('training source snapshot exceeds actual control generation')
+                try: self.payload={**payload,'owned':wrapper}
+                except BaseException:
+                    if self._evaluation_use_reservation is not None: self._evaluation_use_reservation.close()
+                    raise
                 self.owned_cache_identity=digest({'recipe':'owned-inference-cache-v1',
                     'policy_sha256':digest({'model_id':payload['payload']['model_id'],'policy_options':policy_options}),
                     'inference_sha256':checkpoint,'snapshot_identity':self.snapshot.identity})
@@ -150,6 +161,8 @@ class _ExchangeSetup:
                 raise ContractError('resident original gated executor Future has not retired')
             if not self.authorized and not self.future.cancelled() and self.future.result() is not self._abort_result:
                 raise ContractError('resident original setup lacks its actual no-framing completion')
+        if self._evaluation_use_reservation is not None:
+            self._evaluation_use_reservation.close()
 
 
 class ResidentPhysicalWorker(StructuredParticipantWorker):

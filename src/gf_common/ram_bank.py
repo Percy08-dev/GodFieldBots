@@ -209,6 +209,26 @@ class ReadonlyRamBank:
             raise ContractError("RAM bank is closed")
         return self._fd
 
+    def retain(self, budget: ArtifactAdmission) -> ReadonlyRamBank:
+        """Independently admitted SAME sealed backing; no content copy or lease release."""
+        self.fileno()
+        if self._close_uncertain:
+            raise ContractError('cannot retain quarantined RAM owner')
+        admitted = ((self.size + mmap.PAGESIZE - 1) // mmap.PAGESIZE * mmap.PAGESIZE
+            + MAX_ENVELOPE_BYTES + 1024 * len(self.descriptors))
+        reservation = budget.reserve(admitted)
+        fd = -1
+        try:
+            fd = os.dup(self.fileno())
+            return ReadonlyRamBank(_TOKEN, fd, self.size, self.descriptors, reservation, admitted)
+        except BaseException:
+            if fd >= 0:
+                cleanup = _ReceivedFdCleanup([fd], reservation)
+                cleanup.close()
+            else:
+                reservation.close()
+            raise
+
     def array(self, name: str) -> Array:
         self.fileno()
         descriptor = next((d for d in self.descriptors if d.name == name), None)
@@ -296,20 +316,7 @@ class ReceivedBank:
         """
         if self._completed or self._abandoned or self._channel._poisoned:
             raise ContractError('cannot retain completed/uncertain delivery')
-        admitted = ((self.bank.size + mmap.PAGESIZE - 1) // mmap.PAGESIZE * mmap.PAGESIZE
-            + MAX_ENVELOPE_BYTES + 1024 * len(self.bank.descriptors))
-        reservation = budget.reserve(admitted)
-        fd = -1
-        try:
-            fd = os.dup(self.bank.fileno())
-            return ReadonlyRamBank(_TOKEN, fd, self.bank.size, self.bank.descriptors, reservation, admitted)
-        except BaseException:
-            if fd >= 0:
-                cleanup = _ReceivedFdCleanup([fd], reservation)
-                cleanup.close()
-            else:
-                reservation.close()
-            raise
+        return self.bank.retain(budget)
 
     def complete(self, synchronize: Callable[[], None]) -> None:
         if self._completed or self._abandoned or self._channel._poisoned:

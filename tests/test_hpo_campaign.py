@@ -13,13 +13,15 @@ from gf_cli.hpo_storage import CampaignStore
 from tests.test_hpo_config import campaign_raw
 
 
-def controller_fixture(tmp_path,monkeypatch):
+def controller_fixture(tmp_path,monkeypatch,*,owned=False):
     import gf_cli.hpo as cli
     import gf_cli.hpo_evaluation as evaluation
     raw = campaign_raw()
     raw.update(trial_count=1,session_seconds=5)
     raw["space"] = {"parameters":[{"path":"training.epochs","kind":"categorical","choices":[2,4]}],"coupled":[]}
     raw["storage"] = {"parent_root":str(tmp_path),"numeric_root":str(tmp_path),"optuna_path":str(tmp_path / "study.sqlite3")}
+    if owned:
+        raw.update(schema_version=4,origin='producer-owned-v1',encoder='canonical-python',runtime={'mode':'resident-worker-v1','cache_entries':6,'cache_weight_bytes':134217728})
     loaded = campaign_config(raw,origin=tmp_path)
     clock = [0.]
     import time
@@ -172,3 +174,13 @@ def test_campaign_execution_survives_optional_heartbeat_factory_failure(tmp_path
             loop.set_task_factory(original)
     result=asyncio.run(run())
     assert result['status']=='paused' and calls==[('train',17)]
+
+
+def test_owned_campaign_preserves_session_boundary_and_external_receipt_reuse(tmp_path,monkeypatch):
+    cli,loaded,_,calls=controller_fixture(tmp_path,monkeypatch,owned=True)
+    directory=tmp_path/'campaign'
+    first=asyncio.run(cli.run_campaign(loaded,directory,mode='fresh'))
+    assert first['status']=='paused' and calls==[('train',17)]
+    for _ in range(4): result=asyncio.run(cli.run_campaign(loaded,directory,mode='resume'))
+    assert result['status']=='complete'
+    assert calls==[('train',17),('evaluate',17),('train',29),('evaluate',29)]

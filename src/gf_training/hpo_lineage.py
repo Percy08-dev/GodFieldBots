@@ -382,10 +382,16 @@ def _rng(value: Json) -> None:
 
 def _generation(record: Json, state: Json, number: int, parent: str | None,
                 previous: Json | None, pool: list[int]) -> list[int]:
-    closed(record, HPO_GENERATION_FIELDS)
-    integer(record["schema_version"], 4, 4)
+    owned=state['run_variant']=='hpo-ppo-owned-v1'
+    shared={'model_id','model_version','input_recipe','hpo_spec_sha256',*_CLASSIFICATION}
+    closed(record, (HPO_GENERATION_FIELDS-shared)|{'origin','encoder','snapshot_identity'} if owned else HPO_GENERATION_FIELDS)
+    integer(record['schema_version'], 5 if owned else 4, 5 if owned else 4)
+    if owned:
+        from gf_common.hpo import require_owned_record_version
+        require_owned_record_version(record,'generation')
+        checksum(record['snapshot_identity'])
     integer(record["generation"], number, number)
-    for key in ("run_id", "model_id", "model_version", "input_recipe", "hpo_spec_sha256", *_CLASSIFICATION):
+    for key in (("run_id",) if owned else ("run_id", "model_id", "model_version", "input_recipe", "hpo_spec_sha256", *_CLASSIFICATION)):
         _same(record[key], state[key], "HPO generation identity/classification mismatch")
     if record["parent_sha256"] != parent:
         raise ContractError("HPO generation parent hash mismatch")
@@ -1117,6 +1123,12 @@ def validate_hpo_chain(directory: Path, *, require_complete: bool = False, max_o
             raise ContractError("HPO chain requires SAME admitted open parent scan")
         scan.deadline = min(scan.deadline, deadline)
         state = scan.object(directory / "run.json")
+        if state.get('run_variant')=='hpo-ppo-owned-v1':
+            from gf_training.hpo_owned_restore import _read_owned_metadata, audit_owned_artifacts
+            owned_state,owned_records,owned_registry=_read_owned_metadata(scan,require_complete=require_complete)
+            audit_owned_artifacts(scan,owned_state,owned_records,owned_registry)
+            scan.finalize()
+            return owned_state,owned_records
         actions, model, _training = hpo_state(state)
         if require_complete and state["status"] != "complete":
             raise ContractError("complete exactly-D structural HPO chain required")

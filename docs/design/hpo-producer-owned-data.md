@@ -223,6 +223,19 @@ persists through its last use. Resident processes remain viewer-partitioned,
 private episode state resets at existing boundaries, and actual reap owns cleanup.
 Generation0 is also exported from the actual initialized learner, not reloaded
 from its just-written checkpoint.
+Actor9 explicitly distinguishes training use from evaluation-final-policy use.
+Training keeps source-generation <= collection/control-generation. Evaluation
+keeps its original custody/control generation0 and binds the selected committed
+final source reference (parent, source generation, inference hash and snapshot
+identity) through the actual `EvaluationPoolScope` and actor capability. The
+receiver checks this evaluation-only wrapper against that fixed source and outer
+owner/epoch; it does not rewrite model generation or enable future models in a
+training process. The usage binding is management metadata, never policy input
+or execution authority, and introduces no client-to-training import.
+Freeze the permitted final-reference set in the actual scope; paired comparisons
+may alternate two authorized entries across seat swaps. Every request/reuse binds
+one selected capability, parent/source generation/inference/snapshot identity and
+original viewer/epochs/control0; references outside that set are rejected.
 
 ## Limits and failure boundaries
 
@@ -251,12 +264,29 @@ Requested-but-unsettled close raises and retains ownership before inherited
 settlement can infer anything from missing task/process fields. Use only original
 task/failure/no-child/reap observations for release. This protects ordinary
 private-method misuse, not arbitrary Python-internal mutation or unrelated OS spawn.
+An owned pre-child validation failure has a separate operational cleanup edge.
+Before any child-construction/start dispatch, retain the actual invocation's
+untouched dispatch evidence, original audited job/ledger identity and empty
+resource history. Retire all actual cold-import/control/FD/thread owners first.
+Only while that original job remains held, with no pending creation or uncertain
+cleanup, may it confirm operational termination and attach the actual receipt to
+the original failure. This grants no training completion, does not reopen a job,
+and never infers no-child from missing PID/resource rows alone. Already-dispatched
+creation keeps the original lifecycle; uncertain cleanup remains unconfirmed.
 Capture, local/remote snapshot parent ownership, numeric encoding and parent
 Wire7 dispatch share the SAME actual invocation Source account, rather than
 independent2GiB allowances. Numeric/save/parent phase limits still apply within
 that aggregate. Known outstanding-view `BufferError` defers retirement and keeps
 charges; it is distinct from an uncertain FD close and must retire after the
 actual last buffer export releases.
+Configured save-phase admission is distinct from the512MiB individual RAM-bank
+capacity and numeric-phase bound. Preserve the original declared save allowance
+(including the prescribed1GiB comparison setting) through the existing checked
+phase-limit contract and actual Source/parent/model bounds. Never reject it merely
+by applying a per-bank constant. For each received bank, cap size at
+`min(individual_bank_limit, remaining_configured_phase_bytes)` while enforcing the
+aggregate phase including controls; do not subtract aggregate usage after taking
+the individual-bank minimum. No configured budget or physical-bank cap increases.
 Parent metadata/provider/collection-manifest/control-writer reservations share
 one phase admission backed by that same Source account. Check simultaneous
 retained and temporary copies against the configured parent limit before any
@@ -344,6 +374,13 @@ Its one external load validates exact spec4/origin/code/runtime/device/deadlines
 current generation/file maps, inference5/resume5 keys/dtypes/shapes/finite values,
 Adam steps and CPU/CUDA/PCG64 state. Factor existing private resume validators and
 state application from their file I/O; public legacy readers/restorers stay strict.
+The existing array decoder may add a private optional `_on_array` ownership
+callback immediately after successful array decode, before subsequent fallible
+validation. Cold import reserves its decode envelope BEFORE loading and uses this
+callback only to bind actual buffer lifetime, including failures/tracebacks.
+Validation is never skipped or weakened; default legacy calls behave identically.
+The owner keeps admission until actual buffers retire, tracks provisional banks
+before validation, and drains every owner while preserving the original error.
 
 Wire7 gets an explicit restore transaction, not a legacy `restore()` call followed
 by clearing an origin flag. The parent accepts only its actual `OwnedColdImport`,
@@ -380,6 +417,11 @@ cleanup/termination evidence, final complete-state persistence and final origina
 limit checks all succeed. Failure closes the prepared lease and issues no success.
 The final data scope must survive the old execution scope without treating that
 scope/job as active; its last-use release remains positively checked.
+Factor the existing received-bank retain implementation into
+`ReadonlyRamBank.retain(budget)` with `ReceivedBank.retain` delegating. The same
+admitted FD duplication/read-only mapping extends actual original backing
+ownership without copying contents or retaining the full training snapshot.
+Preserve all existing view, uncertainty, close and transfer-lease semantics.
 
 Preserve the existing campaign session boundary between training and evaluation.
 If evaluation is deferred to a later invocation, close any transient data lease;
@@ -388,6 +430,12 @@ and a NEW actual evaluation admission. Persisted completion/termination records
 are evidence to validate, never the private live completion or execution authority.
 Version-aware external audit/receipt/reference dispatch supports owned management
 forms without relabeling old records or claiming historical replay occurred.
+All-owned external comparisons use validated inference-only owned imports and
+actor9. Mixed legacy/owned comparisons retain the explicit strict external
+inference5/RetainedGameArtifacts route, without promoting legacy origin or minting
+producer capability for it. Existing incompatible-condition rejections remain;
+this is deliberate profile dispatch, never a reader-rejection fallback. Its disk
+validation is external comparison cost, outside the normal owned training loop.
 
 ## Implementation and verification sequence
 

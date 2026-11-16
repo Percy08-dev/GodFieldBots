@@ -485,453 +485,471 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
             ops._implementation = 'native-structured-v2'
         else:
             ops = _structured_ops if _structured_ops is not None else structured_ppo
-    def measure_owned(deadline: float) -> int:
-        if game and (state['schema_version'] == 4 or hpo and 'storage_binding' in state):
-            return owned_bytes(directory, deadline, external_roots=ops.external_roots(state))
-        return owned_bytes(directory, deadline)
+    with (ops.owned_invocation() if owned else nullcontext()):
+        def measure_owned(deadline: float) -> int:
+            if game and (state['schema_version'] == 4 or hpo and 'storage_binding' in state):
+                return owned_bytes(directory, deadline, external_roots=ops.external_roots(state))
+            return owned_bytes(directory, deadline)
 
-    formal = ops.formal if game else None
-    if formal is not None:
-        formal.preflight(loaded)
-    model, training = ops.validate_config(config) if ops else config.model, config.training
-    if not ops and (not isinstance(model, (MLPModelConfig, GRUModelConfig, TransformerModelConfig)) or not isinstance(training, PPOTrainingConfig) or model.checkpoint is not None or config.run.split != 'train'):
-        raise ContractError('PPO requires fresh supported model recipe and train split')
-    if not ops and isinstance(model, (GRUModelConfig, TransformerModelConfig)) != isinstance(training, SequencePPOTrainingConfig):
-        raise ContractError("PPO model/sequence training mismatch")
-    if config.server.external_url is not None:
-        raise ContractError('PPO requires owned distinct-seed Simulator groups')
-    if not hpo and not (config.run.wall_seconds <= 7200 and config.run.admission_seconds <= 5400 and config.run.execution_seconds <= 7140 and config.run.finalization_seconds >= 60):
-        raise ContractError('PPO original deadline caps exceeded')
-    if mode not in ('fresh', 'resume'):
-        raise ContractError('unsupported PPO mode')
-    if mode == 'fresh' and pause_after_update is not None and (type(pause_after_update) is not int or not 0 < pause_after_update <= training.max_updates):
-        raise ContractError('invalid absolute pause target')
-    preprocessing_options: Json = {'model_id': model.model_id} if isinstance(model, (GRUModelConfig, TransformerModelConfig)) else {}
-    preprocessing = ((ops.preprocessing_identity(config, deadline=operation_started + config.run.execution_seconds) if ops else preprocessing_identity(config.preprocessing, deadline=operation_started + config.run.execution_seconds, **preprocessing_options))
-                     if mode == 'fresh' else None)
-    directory = directory.resolve()
-    if game and mode == "fresh":
-        ops.preflight(config, deadline=operation_started + config.run.execution_seconds)
-    with run_lock(directory, create=mode == 'fresh') as ownership:
-        initial_scan = None
-        if ops and mode == 'resume':
-            initial_state, initial_scan = ops.read_control(directory / 'run.json', config,
-                deadline=operation_started + config.run.execution_seconds)
-            identity_deadline = operation_started + ops.saved_deadline(initial_state) - operation_unix
-            del initial_state
-        else:
-            identity_deadline = operation_started + config.run.execution_seconds if mode == 'fresh' else operation_started + read_json(directory / 'run.json')['execution_deadline_unix'] - operation_unix
-        if preprocessing is None:
-            preprocessing = (ops.preprocessing_identity(config, deadline=identity_deadline) if ops else preprocessing_identity(config.preprocessing, deadline=identity_deadline, **preprocessing_options))
-        identity = source_identity(identity_deadline)
-        identity["integration"] = ops.integration_identity(config, identity_deadline) if game else integration_identity(config, identity_deadline)
-        identity["configuration_inputs_sha256"] = digest(loaded.inputs)
-        identity["preprocessing"] = preprocessing
-        if ops:
-            ops.decorate_identity(identity)
+        formal = ops.formal if game else None
         if formal is not None:
-            formal.attach_identity(directory, identity, ops.execution(config), mode=mode, deadline=identity_deadline, ownership=ownership)
-        invocation_started = operation_started
-        now = operation_unix
-        if mode == 'fresh':
-            for name in ('generations', 'updates', 'artifacts', 'collections', 'numeric'):
-                (directory / name).mkdir()
-            state = {'schema_version': 1, 'algorithm': 'ppo', 'run_id': config.run.name if hpo else str(uuid.uuid4()), 'status': 'running',
-                     'config_sha256': loaded.sha256, 'effective_config': loaded.effective, 'config_inputs': list(loaded.inputs), 'identity': identity,
-                     'seed': training.seeds[0], 'device': training.device, 'created_unix': now, 'last_unix': now,
-                     'wall_deadline_unix': now + config.run.wall_seconds,
-                     'admission_deadline_unix': now + config.run.admission_seconds,
-                     'execution_deadline_unix': now + config.run.execution_seconds,
-                     'updates': 0, 'accepted_decisions': 0, 'optimizer_steps': 0, 'generation_sha256': None,
-                     'collection_seconds': 0., 'update_seconds': 0., 'invocations': [], 'completed_updates': None}
-            if ops:
-                ops.initialize_state(state, config)
-            if ops:
-                ops.persist_control(directory / 'artifact-registry.json', ({'schema_version':ops.registry_schema,'generations':{},'evaluation_references':{}}
-                    | ({'cache_references':{}} if ops.registry_schema in (5,6) else {}) if hpo else
-                    {'schema_version': 3 if game else 2, 'generations': {}}), config, deadline=identity_deadline)
-                ops.persist_control(directory / 'run.json', state, config, deadline=identity_deadline)
-            else:
-                atomic_json(directory / 'artifact-registry.json', {})
-                atomic_json(directory / 'run.json', state)
-            rng = np.random.Generator(np.random.PCG64(training.seeds[0]))
-            pool = [0]
-        else:
-            state, records = (ops.validate_parent(directory, config, identity_deadline,
-                extra_owned_bytes=initial_scan.retained if initial_scan is not None else 0)
-                if ops else validate_chain(directory, require_complete=False, deadline=identity_deadline))
-            if initial_scan is not None:
-                initial_scan.finalize()
-            if state['status'] != 'paused' or state['updates'] == 0:
-                raise ContractError('resume requires an explicitly paused committed PPO run')
-            if state['config_sha256'] != loaded.sha256 or state['identity'] != identity or state['device'] != training.device:
-                raise ContractError('resume code/runtime/config/device mismatch')
-            if ops and canonical(state['execution']) != canonical(ops.execution(config)):
-                raise ContractError('resume execution binding differs from current Config')
-            if now < state['last_unix'] or now >= state['wall_deadline_unix'] or now >= state['execution_deadline_unix']:
-                raise ContractError('resume clock rollback or original deadline expired')
-            controls = records[-1]['parent_controls']
-            rng = np.random.Generator(np.random.PCG64())
-            rng.bit_generator.state = controls['schedule_opponent_rng']
-            pool = controls['snapshot_pool']
-            if controls['collection_position'] != state['updates'] or not hpo and pool != [number for number in range(state['updates'] + 1) if number % 10 == 0][-5:]:
-                raise ContractError('resume collection position/pool mismatch')
-        if pause_after_update is not None and (type(pause_after_update) is not int or pause_after_update <= state['updates'] or pause_after_update > training.max_updates):
-            raise ContractError('pause target must exceed current absolute committed-update count')
-        remaining = state['wall_deadline_unix'] - now
-        wall = ((invocation_started + state['wall_deadline_unix']) - now) if formal is not None else invocation_started + remaining
-        execution = invocation_started + state['execution_deadline_unix'] - now
-        admission = invocation_started + state['admission_deadline_unix'] - now
-        # Even initialization and source-identity work consume the original clock.
-        state['status'] = 'running'
-        if hpo: state['stop_reason']=None
-        if ops:
-            ops.persist_control(directory / 'run.json', state, config, deadline=execution, original=initial_scan)
+            formal.preflight(loaded)
+        model, training = ops.validate_config(config) if ops else config.model, config.training
+        if not ops and (not isinstance(model, (MLPModelConfig, GRUModelConfig, TransformerModelConfig)) or not isinstance(training, PPOTrainingConfig) or model.checkpoint is not None or config.run.split != 'train'):
+            raise ContractError('PPO requires fresh supported model recipe and train split')
+        if not ops and isinstance(model, (GRUModelConfig, TransformerModelConfig)) != isinstance(training, SequencePPOTrainingConfig):
+            raise ContractError("PPO model/sequence training mismatch")
+        if config.server.external_url is not None:
+            raise ContractError('PPO requires owned distinct-seed Simulator groups')
+        if not hpo and not (config.run.wall_seconds <= 7200 and config.run.admission_seconds <= 5400 and config.run.execution_seconds <= 7140 and config.run.finalization_seconds >= 60):
+            raise ContractError('PPO original deadline caps exceeded')
+        if mode not in ('fresh', 'resume'):
+            raise ContractError('unsupported PPO mode')
+        if mode == 'fresh' and pause_after_update is not None and (type(pause_after_update) is not int or not 0 < pause_after_update <= training.max_updates):
+            raise ContractError('invalid absolute pause target')
+        preprocessing_options: Json = {'model_id': model.model_id} if isinstance(model, (GRUModelConfig, TransformerModelConfig)) else {}
+        preprocessing = ((ops.preprocessing_identity(config, deadline=operation_started + config.run.execution_seconds) if ops else preprocessing_identity(config.preprocessing, deadline=operation_started + config.run.execution_seconds, **preprocessing_options))
+                         if mode == 'fresh' else None)
+        directory = directory.resolve()
+        if game and mode == "fresh":
+            ops.preflight(config, deadline=operation_started + config.run.execution_seconds)
+        with run_lock(directory, create=mode == 'fresh') as ownership, ExitStack() as cold_scope:
             initial_scan = None
-        else:
-            atomic_json(directory / 'run.json', state)
-        ledger = None
-        if game:
-            ops.bind_run(ownership, state)
-        if ops:
-            if owned:
-                try:
-                    child, ledger = ops.make_child(directory,config,state,deadline=execution,cleanup_deadline=wall)
-                except BaseException as startup_error:
-                    await ops.abort_startup(startup_error,state,config,deadline=min(wall,time.monotonic()+training.cleanup_seconds))
-                    raise
-            elif hpo and config.hpo_spec['schema_version'] in (3,4):
-                child, ledger = ops.make_child(directory, config, state, deadline=execution,cleanup_deadline=wall)
+            if owned and mode == 'resume':
+                initial_state, cold_records=ops.read_cold(ownership,config,deadline=operation_started+config.run.execution_seconds)
+                cold_scope.push(ops.cold_import._scope_exit)
+                identity_deadline=operation_started+ops.saved_deadline(initial_state)-operation_unix
+            elif ops and mode == 'resume':
+                initial_state, initial_scan = ops.read_control(directory / 'run.json', config,
+                    deadline=operation_started + config.run.execution_seconds)
+                identity_deadline = operation_started + ops.saved_deadline(initial_state) - operation_unix
+                del initial_state
             else:
-                child, ledger = ops.make_child(directory, config, state, deadline=execution)
-        else:
-            child = LearningProcess(directory, training.max_log_bytes)
-        error: BaseException | None = None
-        final_status = 'complete'
-        def check_clock(*, scope: str = 'invocation') -> float:
-            checked = _checked_wall_clock(clock_anchor, scope=scope)
-            state['last_unix'] = max(state['last_unix'], checked)
-            return state['last_unix']
-        try:
-            _validate_clock_anchor(*clock_anchor)
-            if owned: await ops.start_owned(child)
-            else: await child.start()
-            request = {'command': 'initialize', 'model': asdict(model), 'seed': training.seeds[0], 'device': training.device,
-                       'output': str(checkpoint_path(directory, 0)), 'action_hash': digest(asdict(config.actions))}
-            if isinstance(training, SequencePPOTrainingConfig):
-                request['sequence_length'] = training.sequence_length
-            if mode == 'resume':
-                request['restore'] = str(checkpoint_path(directory, state['updates']))
-            initial = (await ops.initialize_owned(child,training.seeds[0],checkpoint_path(directory,0),deadline=execution) if owned else
-                await child.initialize(training.seeds[0], checkpoint_path(directory, 0),
-                restore=checkpoint_path(directory, state['updates']) if mode == 'resume' else None, deadline=execution)
-                if ops else await child.request(request, execution))
+                identity_deadline = operation_started + config.run.execution_seconds if mode == 'fresh' else operation_started + read_json(directory / 'run.json')['execution_deadline_unix'] - operation_unix
+            if preprocessing is None:
+                preprocessing = (ops.preprocessing_identity(config, deadline=identity_deadline) if ops else preprocessing_identity(config.preprocessing, deadline=identity_deadline, **preprocessing_options))
+            identity = source_identity(identity_deadline)
+            identity["integration"] = ops.integration_identity(config, identity_deadline) if game else integration_identity(config, identity_deadline)
+            identity["configuration_inputs_sha256"] = digest(loaded.inputs)
+            identity["preprocessing"] = preprocessing
+            if ops:
+                ops.decorate_identity(identity)
+            if formal is not None:
+                formal.attach_identity(directory, identity, ops.execution(config), mode=mode, deadline=identity_deadline, ownership=ownership)
+            invocation_started = operation_started
+            now = operation_unix
             if mode == 'fresh':
-                state['hardware'] = initial['hardware']
+                for name in ('generations', 'updates', 'artifacts', 'collections', 'numeric'):
+                    (directory / name).mkdir()
+                state = {'schema_version': 1, 'algorithm': 'ppo', 'run_id': config.run.name if hpo else str(uuid.uuid4()), 'status': 'running',
+                         'config_sha256': loaded.sha256, 'effective_config': loaded.effective, 'config_inputs': list(loaded.inputs), 'identity': identity,
+                         'seed': training.seeds[0], 'device': training.device, 'created_unix': now, 'last_unix': now,
+                         'wall_deadline_unix': now + config.run.wall_seconds,
+                         'admission_deadline_unix': now + config.run.admission_seconds,
+                         'execution_deadline_unix': now + config.run.execution_seconds,
+                         'updates': 0, 'accepted_decisions': 0, 'optimizer_steps': 0, 'generation_sha256': None,
+                         'collection_seconds': 0., 'update_seconds': 0., 'invocations': [], 'completed_updates': None}
                 if ops:
-                    ops.commit(directory, state, config, generation=0, update=None, controls=ops.controls(rng,pool,0) if hpo else _controls(rng, pool, 0), acknowledgement=initial, deadline=execution)
+                    ops.initialize_state(state, config)
+                if ops:
+                    ops.persist_control(directory / 'artifact-registry.json', ({'schema_version':ops.registry_schema,'generations':{},'evaluation_references':{}}
+                        | ({'cache_references':{}} if ops.registry_schema in (5,6) else {}) if hpo else
+                        {'schema_version': 3 if game else 2, 'generations': {}}), config, deadline=identity_deadline)
+                    ops.persist_control(directory / 'run.json', state, config, deadline=identity_deadline)
                 else:
-                    commit_generation(directory, state, generation=0, update=None, controls=_controls(rng, pool, 0), deadline=execution)
-            elif initial['hardware'] != state['hardware']:
-                raise ContractError('resume hardware identity mismatch')
-            while True:
-                check_clock()
-                usage = measure_owned(execution)
-                if hpo:
-                    if ops.stop(state,config,usage,time.monotonic(),execution,admission):
-                        final_status='complete' if state['used_decisions']==config.hpo_spec['decision_budget'] else 'incomplete'
-                        break
-                elif formal is not None:
-                    observed = time.monotonic()
-                    if formal.observe_stop(state, operation_unix, invocation_started, observed, usage):
-                        break
+                    atomic_json(directory / 'artifact-registry.json', {})
+                    atomic_json(directory / 'run.json', state)
+                rng = np.random.Generator(np.random.PCG64(training.seeds[0]))
+                pool = [0]
+            else:
+                state, records = ((initial_state,cold_records) if owned else ops.validate_parent(directory, config, identity_deadline,
+                    extra_owned_bytes=initial_scan.retained if initial_scan is not None else 0)
+                    if ops else validate_chain(directory, require_complete=False, deadline=identity_deadline))
+                if initial_scan is not None:
+                    initial_scan.finalize()
+                if state['status'] != 'paused' or state['updates'] == 0:
+                    raise ContractError('resume requires an explicitly paused committed PPO run')
+                if state['config_sha256'] != loaded.sha256 or state['identity'] != identity or state['device'] != training.device:
+                    raise ContractError('resume code/runtime/config/device mismatch')
+                if ops and canonical(state['execution']) != canonical(ops.execution(config)):
+                    raise ContractError('resume execution binding differs from current Config')
+                if now < state['last_unix'] or now >= state['wall_deadline_unix'] or now >= state['execution_deadline_unix']:
+                    raise ContractError('resume clock rollback or original deadline expired')
+                controls = records[-1]['parent_controls']
+                rng = np.random.Generator(np.random.PCG64())
+                rng.bit_generator.state = controls['schedule_opponent_rng']
+                pool = controls['snapshot_pool']
+                if controls['collection_position'] != state['updates'] or not hpo and pool != [number for number in range(state['updates'] + 1) if number % 10 == 0][-5:]:
+                    raise ContractError('resume collection position/pool mismatch')
+            if pause_after_update is not None and (type(pause_after_update) is not int or pause_after_update <= state['updates'] or pause_after_update > training.max_updates):
+                raise ContractError('pause target must exceed current absolute committed-update count')
+            remaining = state['wall_deadline_unix'] - now
+            wall = ((invocation_started + state['wall_deadline_unix']) - now) if formal is not None else invocation_started + remaining
+            execution = invocation_started + state['execution_deadline_unix'] - now
+            admission = invocation_started + state['admission_deadline_unix'] - now
+            # Even initialization and source-identity work consume the original clock.
+            state['status'] = 'running'
+            if hpo: state['stop_reason']=None
+            if ops:
+                ops.persist_control(directory / 'run.json', state, config, deadline=execution, original=initial_scan)
+                initial_scan = None
+            else:
+                atomic_json(directory / 'run.json', state)
+            ledger = None
+            if game:
+                ops.bind_run(ownership, state)
+            if ops:
+                if owned:
+                    try:
+                        ops.consume_prechild()
+                        child, ledger = ops.make_child(directory,config,state,deadline=execution,cleanup_deadline=wall)
+                    except BaseException as startup_error:
+                        await ops.abort_startup(startup_error,state,config,deadline=min(wall,time.monotonic()+training.cleanup_seconds))
+                        raise
+                elif hpo and config.hpo_spec['schema_version'] in (3,4):
+                    child, ledger = ops.make_child(directory, config, state, deadline=execution,cleanup_deadline=wall)
                 else:
-                    if usage > training.max_owned_bytes or time.monotonic() >= execution:
-                        raise RuntimeError('PPO actual execution/storage limit exceeded')
-                    if state['updates'] >= training.max_updates or time.monotonic() >= admission or usage + training.admission_reservation_bytes > training.max_owned_bytes:
-                        if not state['updates']:
-                            raise ContractError('zero-update PPO run ineligible')
-                        break
-                with ExitStack() as generation_scope:
-                    generation = state['updates']
-                    registry = ({'random-card-instance-v2': RuntimePolicyBinding('random'), 'heuristic-card-instance-v2': RuntimePolicyBinding('heuristic')} if game else
-                                {'random-structured-v1': RuntimePolicyBinding('random'), 'heuristic-structured-v1': RuntimePolicyBinding('heuristic')}
-                                if ops else {'random': RuntimePolicyBinding('random'), 'heuristic': RuntimePolicyBinding('heuristic')})
-                    learner_label, learner_binding = ops.binding(directory, generation, config, execution) if ops else owned_binding(directory, generation)
-                    registry[learner_label] = learner_binding
-                    mixed = None
-                    if game:
-                        from gf_common.training_opponents import (
-                            refresh_opponent,
-                            training_opponents,
-                        )
-                        mixed = training_opponents(loaded.effective)
-                        if mixed is not None:
-                            refresh_label, refresh_binding = refresh_opponent(config.actions, mixed)
-                            registry[refresh_label] = refresh_binding
-                    snapshots = []
-                    for snapshot in pool:
-                        label, binding = ops.binding(directory, snapshot, config, execution) if ops else owned_binding(directory, snapshot)
-                        registry[label] = binding
-                        snapshots.append(label)
-                    if game and not hpo and mixed is not None:
-                        from gf_training.collection import training_groups_refresh
-                        groups = training_groups_refresh(training.seeds[0], generation, learner_label,
-                            tuple(snapshots), rng, actions=config.actions, training_opponents=mixed)
-                    else:
-                        groups = (ops.groups(config,generation,learner_label,tuple(snapshots),rng) if hpo else
-                                  training_groups(training.seeds[0], generation, learner_label, tuple(snapshots), rng, actions_version=3 if game else 2)
-                                  if ops else training_groups(training.seeds[0], generation, learner_label, tuple(snapshots), rng))
-                    batch_id = f'batch-{generation:06}'
-                    linkage = {'parent_run_id': state['run_id'], 'parent_run_path': str(directory), 'batch_id': batch_id,
-                               'collection_generation': generation,
-                               'learner_seats': {spec.episode_id: spec.learner_viewer for group in groups for spec in group.episodes}}
-                    if game:
-                        linkage = ops.linkage(state, directory, generation, groups, registry)
-                    if hpo: ops.phase('collect', transient_games=0, transient_learner_decisions=None, transient_total_game_actions=0)
-                    collection_started = time.monotonic()
-                    plan = CollectionPlan(groups, registry, directory / 'collections' / batch_id, linkage, execution, wall)
+                    child, ledger = ops.make_child(directory, config, state, deadline=execution)
+            else:
+                child = LearningProcess(directory, training.max_log_bytes)
+            error: BaseException | None = None
+            final_status = 'complete'
+            def check_clock(*, scope: str = 'invocation') -> float:
+                checked = _checked_wall_clock(clock_anchor, scope=scope)
+                state['last_unix'] = max(state['last_unix'], checked)
+                return state['last_unix']
+            try:
+                _validate_clock_anchor(*clock_anchor)
+                if owned: await ops.start_owned(child)
+                else: await child.start()
+                request = {'command': 'initialize', 'model': asdict(model), 'seed': training.seeds[0], 'device': training.device,
+                           'output': str(checkpoint_path(directory, 0)), 'action_hash': digest(asdict(config.actions))}
+                if isinstance(training, SequencePPOTrainingConfig):
+                    request['sequence_length'] = training.sequence_length
+                if mode == 'resume':
+                    request['restore'] = str(checkpoint_path(directory, state['updates']))
+                initial = (await ops.initialize_owned(child,training.seeds[0],checkpoint_path(directory,0),deadline=execution) if owned else
+                    await child.initialize(training.seeds[0], checkpoint_path(directory, 0),
+                    restore=checkpoint_path(directory, state['updates']) if mode == 'resume' else None, deadline=execution)
+                    if ops else await child.request(request, execution))
+                if mode == 'fresh':
+                    state['hardware'] = initial['hardware']
                     if ops:
-                        assert ledger is not None
-                        with ops.precollection_scope(plan, ledger, config=config, deadline=execution) if hpo else nullcontext():
-                            ops.validate_owned_collection(plan, ledger, config=config, deadline=execution)
-                            collection = await collector(plan, ledger)
-                        if hpo and getattr(ops, 'resident_runtime', None) is not None:
-                            ops.resident_runtime.pool.authority.require(ledger)
-                        elif ledger.workers or ledger.updating:
-                            raise ContractError('structured collection returned unreaped participants or active update')
+                        ops.commit(directory, state, config, generation=0, update=None, controls=ops.controls(rng,pool,0) if hpo else _controls(rng, pool, 0), acknowledgement=initial, deadline=execution)
                     else:
-                        collection = await collector(plan)
-                    if collection.directory.resolve() != (directory / 'collections' / batch_id).resolve() or collection.report.get('comparison_valid') is not True:
-                        raise ContractError('collection callback did not finalize requested original batch')
-                    if game:
-                        ops.accept_collection(collection, config)
+                        commit_generation(directory, state, generation=0, update=None, controls=_controls(rng, pool, 0), deadline=execution)
+                elif initial['hardware'] != state['hardware']:
+                    raise ContractError('resume hardware identity mismatch')
+                while True:
                     check_clock()
-                    from gf_common.schedule import serialize_schedule
-                    collection_scan = None
-                    if owned:
-                        collection_manifest=collection.manifest
-                    elif ops:
-                        collection_manifest, collection_scan = ops.read_control(collection.directory / 'manifest.json', config, deadline=execution)
-                        if game:
-                            generation_scope.enter_context(collection_scan)
+                    usage = measure_owned(execution)
+                    if hpo:
+                        if ops.stop(state,config,usage,time.monotonic(),execution,admission):
+                            final_status='complete' if state['used_decisions']==config.hpo_spec['decision_budget'] else 'incomplete'
+                            break
+                    elif formal is not None:
+                        observed = time.monotonic()
+                        if formal.observe_stop(state, operation_unix, invocation_started, observed, usage):
+                            break
                     else:
-                        collection_manifest = read_json(collection.directory / 'manifest.json')
-                    expected_bindings = {key: asdict(value) for key, value in registry.items()}
-                    bindings_match = (canonical(collection_manifest.get('policy_bindings')) == canonical(expected_bindings)
-                                      if ops else collection_manifest.get('policy_bindings') == expected_bindings)
-                    if collection_manifest.get('schedule') != serialize_schedule(groups, 4) or not bindings_match:
-                        raise ContractError('collection callback changed frozen schedule/policies')
-                    collection_seconds = time.monotonic() - collection_started
-                    if hpo: ops.phase('source')
-                    numeric = directory / 'numeric' / batch_id
-                    numeric_files = None
-                    with ExitStack() as source_scope:
+                        if usage > training.max_owned_bytes or time.monotonic() >= execution:
+                            raise RuntimeError('PPO actual execution/storage limit exceeded')
+                        if state['updates'] >= training.max_updates or time.monotonic() >= admission or usage + training.admission_reservation_bytes > training.max_owned_bytes:
+                            if not state['updates']:
+                                raise ContractError('zero-update PPO run ineligible')
+                            break
+                    with ExitStack() as generation_scope:
+                        generation = state['updates']
+                        registry = ({'random-card-instance-v2': RuntimePolicyBinding('random'), 'heuristic-card-instance-v2': RuntimePolicyBinding('heuristic')} if game else
+                                    {'random-structured-v1': RuntimePolicyBinding('random'), 'heuristic-structured-v1': RuntimePolicyBinding('heuristic')}
+                                    if ops else {'random': RuntimePolicyBinding('random'), 'heuristic': RuntimePolicyBinding('heuristic')})
+                        learner_label, learner_binding = ops.binding(directory, generation, config, execution) if ops else owned_binding(directory, generation)
+                        registry[learner_label] = learner_binding
+                        mixed = None
+                        if game:
+                            from gf_common.training_opponents import (
+                                refresh_opponent,
+                                training_opponents,
+                            )
+                            mixed = training_opponents(loaded.effective)
+                            if mixed is not None:
+                                refresh_label, refresh_binding = refresh_opponent(config.actions, mixed)
+                                registry[refresh_label] = refresh_binding
+                        snapshots = []
+                        for snapshot in pool:
+                            label, binding = ops.binding(directory, snapshot, config, execution) if ops else owned_binding(directory, snapshot)
+                            registry[label] = binding
+                            snapshots.append(label)
+                        if game and not hpo and mixed is not None:
+                            from gf_training.collection import training_groups_refresh
+                            groups = training_groups_refresh(training.seeds[0], generation, learner_label,
+                                tuple(snapshots), rng, actions=config.actions, training_opponents=mixed)
+                        else:
+                            groups = (ops.groups(config,generation,learner_label,tuple(snapshots),rng) if hpo else
+                                      training_groups(training.seeds[0], generation, learner_label, tuple(snapshots), rng, actions_version=3 if game else 2)
+                                      if ops else training_groups(training.seeds[0], generation, learner_label, tuple(snapshots), rng))
+                        batch_id = f'batch-{generation:06}'
+                        linkage = {'parent_run_id': state['run_id'], 'parent_run_path': str(directory), 'batch_id': batch_id,
+                                   'collection_generation': generation,
+                                   'learner_seats': {spec.episode_id: spec.learner_viewer for group in groups for spec in group.episodes}}
+                        if game:
+                            linkage = ops.linkage(state, directory, generation, groups, registry)
+                        if hpo: ops.phase('collect', transient_games=0, transient_learner_decisions=None, transient_total_game_actions=0)
+                        collection_started = time.monotonic()
+                        plan = CollectionPlan(groups, registry, directory / 'collections' / batch_id, linkage, execution, wall)
+                        if ops:
+                            assert ledger is not None
+                            with ops.precollection_scope(plan, ledger, config=config, deadline=execution) if hpo else nullcontext():
+                                ops.validate_owned_collection(plan, ledger, config=config, deadline=execution)
+                                collection = await collector(plan, ledger)
+                            if hpo and getattr(ops, 'resident_runtime', None) is not None:
+                                ops.resident_runtime.pool.authority.require(ledger)
+                            elif ledger.workers or ledger.updating:
+                                raise ContractError('structured collection returned unreaped participants or active update')
+                        else:
+                            collection = await collector(plan)
+                        if collection.directory.resolve() != (directory / 'collections' / batch_id).resolve() or collection.report.get('comparison_valid') is not True:
+                            raise ContractError('collection callback did not finalize requested original batch')
+                        if game:
+                            ops.accept_collection(collection, config)
+                        check_clock()
+                        from gf_common.schedule import serialize_schedule
+                        collection_scan = None
                         if owned:
-                            decision_count,proof,numeric_files,issued_projection=generation_scope.enter_context(
-                                ops.project_owned(collection,plan,numeric,config,execution))
-                            if decision_count==0:
-                                ops.stop_reason='empty_collection'
-                                final_status='incomplete'
-                                break
+                            collection_manifest=collection.manifest
                         elif ops:
-                            assert collection_scan is not None
-                            projection_options: dict[str, Any] = {
-                                'expected_manifest_sha256': collection_scan.verified_digest(collection.directory / 'manifest.json'),
-                                'extra_owned_bytes': collection_scan.retained,
-                            }
-                            if type(ops) is structured_ppo._NativeComponentOps:
-                                # Actual remaining owned storage bounds the private
-                                # spool. The collection-admission reserve is separate.
-                                projection_options['scratch_allowance_bytes'] = max(
-                                    0, training.max_owned_bytes - measure_owned(execution))
-                            projected = (generation_scope if game else source_scope).enter_context(
-                                ops.project(plan, numeric, config, learner_label, generation, execution,
-                                    **projection_options))
+                            collection_manifest, collection_scan = ops.read_control(collection.directory / 'manifest.json', config, deadline=execution)
                             if game:
-                                decision_count, proof, numeric_files, issued_projection = projected
-                                if hpo and decision_count==0:
+                                generation_scope.enter_context(collection_scan)
+                        else:
+                            collection_manifest = read_json(collection.directory / 'manifest.json')
+                        expected_bindings = {key: asdict(value) for key, value in registry.items()}
+                        bindings_match = (canonical(collection_manifest.get('policy_bindings')) == canonical(expected_bindings)
+                                          if ops else collection_manifest.get('policy_bindings') == expected_bindings)
+                        if collection_manifest.get('schedule') != serialize_schedule(groups, 4) or not bindings_match:
+                            raise ContractError('collection callback changed frozen schedule/policies')
+                        collection_seconds = time.monotonic() - collection_started
+                        if hpo: ops.phase('source')
+                        numeric = directory / 'numeric' / batch_id
+                        numeric_files = None
+                        with ExitStack() as source_scope:
+                            if owned:
+                                decision_count,proof,numeric_files,issued_projection=generation_scope.enter_context(
+                                    ops.project_owned(collection,plan,numeric,config,execution))
+                                if decision_count==0:
                                     ops.stop_reason='empty_collection'
                                     final_status='incomplete'
                                     break
-                            else:
-                                decision_count, proof, numeric_files = projected
-                        else:
-                            online_context = OnlinePPOContext(directory, state["run_id"], batch_id, generation, ownership.token)
-                            if config.preprocessing.backend == 'rust':
-                                decision_count, proof = await stage_rollout(collection.directory, numeric, model, linkage,
-                                                                     config.preprocessing, deadline=execution,
-                                                                     online_context=online_context,
-                                                                     expected_identity=preprocessing, wall_deadline=wall)
-                            else:
-                                decisions, proof = ingest_collection(collection.directory, model, linkage, deadline=execution,
-                                                                     online_context=online_context)
-                                if isinstance(model, (GRUModelConfig, TransformerModelConfig)):
-                                    from gf_training.sequence_rollout import (
-                                        write_rollout as write_sequence,
-                                    )
-                                    write_sequence(numeric, decisions, model, deadline=execution)
+                            elif ops:
+                                assert collection_scan is not None
+                                projection_options: dict[str, Any] = {
+                                    'expected_manifest_sha256': collection_scan.verified_digest(collection.directory / 'manifest.json'),
+                                    'extra_owned_bytes': collection_scan.retained,
+                                }
+                                if type(ops) is structured_ppo._NativeComponentOps:
+                                    # Actual remaining owned storage bounds the private
+                                    # spool. The collection-admission reserve is separate.
+                                    projection_options['scratch_allowance_bytes'] = max(
+                                        0, training.max_owned_bytes - measure_owned(execution))
+                                projected = (generation_scope if game else source_scope).enter_context(
+                                    ops.project(plan, numeric, config, learner_label, generation, execution,
+                                        **projection_options))
+                                if game:
+                                    decision_count, proof, numeric_files, issued_projection = projected
+                                    if hpo and decision_count==0:
+                                        ops.stop_reason='empty_collection'
+                                        final_status='incomplete'
+                                        break
                                 else:
-                                    write_rollout(numeric, decisions, deadline=execution)
-                                decision_count = len(decisions)
-                                del decisions
-                        if owned: assert numeric_files is not None
-                        numeric_hash = numeric_files['rollout.json'] if owned and numeric_files is not None else sha256(numeric / 'rollout.json', execution)
-                        if measure_owned(execution) > training.max_owned_bytes or time.monotonic() >= execution:
-                            raise RuntimeError('PPO collection/encoding exceeded execution/storage limits')
-                        next_generation = generation + 1
-                        await asyncio.sleep(0)  # Serve pending cancellation before optimizer side effects.
-                        if hpo: ops.phase('update', transient_learner_decisions=decision_count)
-                        update_started = time.monotonic()
+                                    decision_count, proof, numeric_files = projected
+                            else:
+                                online_context = OnlinePPOContext(directory, state["run_id"], batch_id, generation, ownership.token)
+                                if config.preprocessing.backend == 'rust':
+                                    decision_count, proof = await stage_rollout(collection.directory, numeric, model, linkage,
+                                                                         config.preprocessing, deadline=execution,
+                                                                         online_context=online_context,
+                                                                         expected_identity=preprocessing, wall_deadline=wall)
+                                else:
+                                    decisions, proof = ingest_collection(collection.directory, model, linkage, deadline=execution,
+                                                                         online_context=online_context)
+                                    if isinstance(model, (GRUModelConfig, TransformerModelConfig)):
+                                        from gf_training.sequence_rollout import (
+                                            write_rollout as write_sequence,
+                                        )
+                                        write_sequence(numeric, decisions, model, deadline=execution)
+                                    else:
+                                        write_rollout(numeric, decisions, deadline=execution)
+                                    decision_count = len(decisions)
+                                    del decisions
+                            if owned: assert numeric_files is not None
+                            numeric_hash = numeric_files['rollout.json'] if owned and numeric_files is not None else sha256(numeric / 'rollout.json', execution)
+                            if measure_owned(execution) > training.max_owned_bytes or time.monotonic() >= execution:
+                                raise RuntimeError('PPO collection/encoding exceeded execution/storage limits')
+                            next_generation = generation + 1
+                            await asyncio.sleep(0)  # Serve pending cancellation before optimizer side effects.
+                            if hpo: ops.phase('update', transient_learner_decisions=decision_count)
+                            update_started = time.monotonic()
+                            if ops:
+                                acknowledgement = (await ops.update_owned(issued_projection,checkpoint_path(directory,next_generation),deadline=execution) if owned else
+                                    await child.update(issued_projection, checkpoint_path(directory, next_generation), deadline=execution) if game else
+                                    await child.update(numeric, numeric_hash, learner_label,
+                                    checkpoint_path(directory, next_generation), deadline=execution))
+                                metrics = {**acknowledgement['metrics'], **acknowledgement['timings']}
+                            else:
+                                metrics = await child.request({'command': 'update', 'batch': str(numeric), 'batch_hash': numeric_hash,
+                                                               'output': str(checkpoint_path(directory, next_generation)), 'action_hash': digest(asdict(config.actions))}, execution)
+                            check_clock()
+                            update_seconds = time.monotonic() - update_started
+                            if time.monotonic() >= execution or measure_owned(execution) > training.max_owned_bytes:
+                                raise RuntimeError('PPO update/save execution/storage overrun')
+                        if collection_scan is not None:
+                            collection_scan.finalize()
+                        state['accepted_decisions'] += decision_count
+                        if hpo:
+                            previous_used=state['used_decisions']
+                            state['used_decisions']+=decision_count
+                            state['collected_decisions']+=proof['selection']['collected_decisions']
+                        state['optimizer_steps'] = metrics['optimizer_steps']
+                        state['collection_seconds'] += collection_seconds
+                        state['update_seconds'] += update_seconds
+                        if hpo:
+                            operating=config.hpo_spec['operating']
+                            interval=operating['pool_every_decisions']
+                            if state['used_decisions']//interval>previous_used//interval:
+                                pool=(pool+[next_generation])[-operating['opponent_pool_size']:]
+                        elif next_generation % 10 == 0:
+                            pool = (pool + [next_generation])[-5:]
+                        update = {'schema_version': 1, 'status': 'complete', 'run_id': state['run_id'], 'generation': next_generation,
+                                  'parent_sha256': state['generation_sha256'], 'batch_id': batch_id,
+                                  'collection': str(collection.directory.relative_to(directory)), 'collection_manifest_sha256': proof['manifest_sha256'],
+                                  'numeric': str(numeric.relative_to(directory)), 'numeric_sha256': numeric_hash,
+                                  'accepted_decisions': decision_count, 'source_proof': proof, 'metrics': metrics,
+                                  'planned_games': config.hpo_spec['training_recipe']['collection_games'] if hpo else 16, 'actual_games': proof['games'], 'health': {},
+                                  'policy_bindings': {key: asdict(value) for key, value in registry.items()},
+                                  'learner_seats': linkage['learner_seats'], 'collection_seconds': collection_seconds, 'update_seconds': update_seconds}
                         if ops:
-                            acknowledgement = (await ops.update_owned(issued_projection,checkpoint_path(directory,next_generation),deadline=execution) if owned else
-                                await child.update(issued_projection, checkpoint_path(directory, next_generation), deadline=execution) if game else
-                                await child.update(numeric, numeric_hash, learner_label,
-                                checkpoint_path(directory, next_generation), deadline=execution))
-                            metrics = {**acknowledgement['metrics'], **acknowledgement['timings']}
+                            if game:
+                                ops.update_record(update, state, numeric_files)
+                            else:
+                                update.update(schema_version=2, model_id=state['model_id'], model_version='2', input_recipe=state['input_recipe'],
+                                              action_contract=state['action_contract'], purpose='component', synthetic_capacity=False,
+                                              numeric_files=numeric_files)
+                            committed_record = ops.commit(directory, state, config, generation=next_generation, update=update,
+                                controls=ops.controls(rng,pool,next_generation) if hpo else _controls(rng, pool, next_generation), acknowledgement=acknowledgement, deadline=execution)
+                            if hpo and getattr(ops, 'resident_runtime', None) is not None:
+                                generation_scope.close()  # Retire original Source/control/registry snapshots BEFORE pins.
+                                ops.phase('sync')
+                                await ops.resident_runtime.after_commit(next_generation, committed_record)
+                            ops.retain(directory, next_generation, config, execution)
                         else:
-                            metrics = await child.request({'command': 'update', 'batch': str(numeric), 'batch_hash': numeric_hash,
-                                                           'output': str(checkpoint_path(directory, next_generation)), 'action_hash': digest(asdict(config.actions))}, execution)
-                        check_clock()
-                        update_seconds = time.monotonic() - update_started
-                        if time.monotonic() >= execution or measure_owned(execution) > training.max_owned_bytes:
-                            raise RuntimeError('PPO update/save execution/storage overrun')
-                    if collection_scan is not None:
-                        collection_scan.finalize()
-                    state['accepted_decisions'] += decision_count
-                    if hpo:
-                        previous_used=state['used_decisions']
-                        state['used_decisions']+=decision_count
-                        state['collected_decisions']+=proof['selection']['collected_decisions']
-                    state['optimizer_steps'] = metrics['optimizer_steps']
-                    state['collection_seconds'] += collection_seconds
-                    state['update_seconds'] += update_seconds
-                    if hpo:
-                        operating=config.hpo_spec['operating']
-                        interval=operating['pool_every_decisions']
-                        if state['used_decisions']//interval>previous_used//interval:
-                            pool=(pool+[next_generation])[-operating['opponent_pool_size']:]
-                    elif next_generation % 10 == 0:
-                        pool = (pool + [next_generation])[-5:]
-                    update = {'schema_version': 1, 'status': 'complete', 'run_id': state['run_id'], 'generation': next_generation,
-                              'parent_sha256': state['generation_sha256'], 'batch_id': batch_id,
-                              'collection': str(collection.directory.relative_to(directory)), 'collection_manifest_sha256': proof['manifest_sha256'],
-                              'numeric': str(numeric.relative_to(directory)), 'numeric_sha256': numeric_hash,
-                              'accepted_decisions': decision_count, 'source_proof': proof, 'metrics': metrics,
-                              'planned_games': config.hpo_spec['training_recipe']['collection_games'] if hpo else 16, 'actual_games': proof['games'], 'health': {},
-                              'policy_bindings': {key: asdict(value) for key, value in registry.items()},
-                              'learner_seats': linkage['learner_seats'], 'collection_seconds': collection_seconds, 'update_seconds': update_seconds}
-                    if ops:
-                        if game:
-                            ops.update_record(update, state, numeric_files)
-                        else:
-                            update.update(schema_version=2, model_id=state['model_id'], model_version='2', input_recipe=state['input_recipe'],
-                                          action_contract=state['action_contract'], purpose='component', synthetic_capacity=False,
-                                          numeric_files=numeric_files)
-                        committed_record = ops.commit(directory, state, config, generation=next_generation, update=update,
-                            controls=ops.controls(rng,pool,next_generation) if hpo else _controls(rng, pool, next_generation), acknowledgement=acknowledgement, deadline=execution)
-                        if hpo and getattr(ops, 'resident_runtime', None) is not None:
-                            generation_scope.close()  # Retire original Source/control/registry snapshots BEFORE pins.
-                            ops.phase('sync')
-                            await ops.resident_runtime.after_commit(next_generation, committed_record)
-                        ops.retain(directory, next_generation, config, execution)
-                    else:
-                        commit_generation(directory, state, generation=next_generation, update=update, controls=_controls(rng, pool, next_generation), deadline=execution)
-                        retain(directory, next_generation, deadline=execution)
-                check_clock()
-                if time.monotonic() >= execution or measure_owned(execution) > training.max_owned_bytes:
-                    raise RuntimeError('PPO commit/retention execution/storage overrun')
-                if pause_after_update == next_generation:
-                    final_status = 'paused'
-                    break
-        except BaseException as failure:  # noqa: BLE001 - persist failure after owned cleanup
-            error = failure
-        finally:
-            if hpo: ops.phase('cleanup')
-            try:
-                if hpo:
-                    ops.close_precollection()
-                if hpo and getattr(ops, 'resident_runtime', None) is not None:
-                    await ops.resident_runtime.close()
-            except BaseException as failure:  # noqa: BLE001 - actual pool cleanup precedes learner termination
-                error = error or failure
-                state['cleanup_failure'] = str(failure)
-            try:
-                if owned: await ops.close_owned_child(child,min(wall,time.monotonic()+training.cleanup_seconds))
-                else: await child.close(min(wall, time.monotonic() + training.cleanup_seconds))
+                            commit_generation(directory, state, generation=next_generation, update=update, controls=_controls(rng, pool, next_generation), deadline=execution)
+                            retain(directory, next_generation, deadline=execution)
+                    check_clock()
+                    if time.monotonic() >= execution or measure_owned(execution) > training.max_owned_bytes:
+                        raise RuntimeError('PPO commit/retention execution/storage overrun')
+                    if pause_after_update == next_generation:
+                        final_status = 'paused'
+                        break
             except BaseException as failure:  # noqa: BLE001 - persist failure after owned cleanup
+                error = failure
+            finally:
+                if hpo: ops.phase('cleanup')
+                try:
+                    if hpo:
+                        ops.close_precollection()
+                    if hpo and getattr(ops, 'resident_runtime', None) is not None:
+                        await ops.resident_runtime.close()
+                except BaseException as failure:  # noqa: BLE001 - actual pool cleanup precedes learner termination
+                    error = error or failure
+                    state['cleanup_failure'] = str(failure)
+                try:
+                    if owned: await ops.close_owned_child(child,min(wall,time.monotonic()+training.cleanup_seconds))
+                    else: await child.close(min(wall, time.monotonic() + training.cleanup_seconds))
+                except BaseException as failure:  # noqa: BLE001 - persist failure after owned cleanup
+                    error = error or failure
+                    state['cleanup_failure'] = str(failure)
+            if game:
+                try:
+                    ops.close_batch()
+                except BaseException as cleanup_error:  # noqa: BLE001 -- persist cleanup failure before release.
+                    error = error or cleanup_error
+                    state['cleanup_failure'] = str(cleanup_error)
+            if set(child.health) - {'exit_code', 'stderr_bytes'} or child.health.get('exit_code') != 0:
+                error = error or RuntimeError('PPO learner cleanup health failed')
+            try:
+                check_clock(scope='cleanup')
+            except BaseException as clock_failure:  # noqa: BLE001 -- finish owned bookkeeping and preserve the initiating error.
+                if error is None:
+                    error = clock_failure
+                else:
+                    error.add_note('PPO cleanup clock observation: ' + str(clock_failure))
+            state['invocations'].append({'mode': mode, 'elapsed_seconds': time.monotonic() - invocation_started, 'child_health': child.health})
+            state['elapsed_seconds'] = state['last_unix'] - state['created_unix']
+            try:
+                storage_bytes = measure_owned(wall)
+            except TimeoutError as failure:
+                storage_bytes = None
                 error = error or failure
-                state['cleanup_failure'] = str(failure)
-        if game:
-            try:
-                ops.close_batch()
-            except BaseException as cleanup_error:  # noqa: BLE001 -- persist cleanup failure before release.
-                error = error or cleanup_error
-                state['cleanup_failure'] = str(cleanup_error)
-        if set(child.health) - {'exit_code', 'stderr_bytes'} or child.health.get('exit_code') != 0:
-            error = error or RuntimeError('PPO learner cleanup health failed')
-        try:
-            check_clock(scope='cleanup')
-        except BaseException as clock_failure:  # noqa: BLE001 -- finish owned bookkeeping and preserve the initiating error.
-            if error is None:
-                error = clock_failure
+            state['artifact_bytes'] = storage_bytes
+            state['peak_coordinator_memory_bytes'] = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024
+            state['coordinator_memory_scope'] = 'process lifetime peak RSS, distinct from learner child metrics'
+            state['timing_scope'] = 'pre-final-write snapshot; original wall includes paused time'
+            if owned and error is None and final_status=='complete':
+                try: ops.prepare_completion(state)
+                except BaseException as preparation:  # noqa: BLE001 - original preparation failure joins actual cleanup
+                    error=preparation
+            if hpo:
+                try:
+                    ops.finish_cleanup(error)
+                except BaseException as cleanup:  # noqa: BLE001 -- preserve original failure after actual cleanup.
+                    if error is not None: error.add_note('HPO final cleanup: '+str(cleanup))
+                    error=error or cleanup
+                    state['cleanup_failure']=str(cleanup)
+            if error is not None or time.monotonic() >= wall or storage_bytes is None or storage_bytes > training.max_owned_bytes:
+                state.update(status='failed', failure=type(error).__name__ if error else 'LimitOverrun', quarantine=True)
             else:
-                error.add_note('PPO cleanup clock observation: ' + str(clock_failure))
-        state['invocations'].append({'mode': mode, 'elapsed_seconds': time.monotonic() - invocation_started, 'child_health': child.health})
-        state['elapsed_seconds'] = state['last_unix'] - state['created_unix']
-        try:
-            storage_bytes = measure_owned(wall)
-        except TimeoutError as failure:
-            storage_bytes = None
-            error = error or failure
-        state['artifact_bytes'] = storage_bytes
-        state['peak_coordinator_memory_bytes'] = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024
-        state['coordinator_memory_scope'] = 'process lifetime peak RSS, distinct from learner child metrics'
-        state['timing_scope'] = 'pre-final-write snapshot; original wall includes paused time'
-        if hpo:
+                state['status'] = final_status
+                state['completed_updates'] = state['updates'] if final_status == 'complete' else None
+                if hpo: state['stop_reason']='pause' if final_status=='paused' else ops.stop_reason
             try:
-                ops.finish_cleanup(error)
-            except BaseException as cleanup:  # noqa: BLE001 -- preserve original failure after actual cleanup.
-                if error is not None: error.add_note('HPO final cleanup: '+str(cleanup))
-                error=error or cleanup
-                state['cleanup_failure']=str(cleanup)
-        if error is not None or time.monotonic() >= wall or storage_bytes is None or storage_bytes > training.max_owned_bytes:
-            state.update(status='failed', failure=type(error).__name__ if error else 'LimitOverrun', quarantine=True)
-        else:
-            state['status'] = final_status
-            state['completed_updates'] = state['updates'] if final_status == 'complete' else None
-            if hpo: state['stop_reason']='pause' if final_status=='paused' else ops.stop_reason
-        try:
-            if ops:
-                ops.persist_control(directory / 'run.json', state, config, deadline=wall)
-            else:
-                atomic_json(directory / 'run.json', state)
-            if time.monotonic() >= wall or measure_owned(wall) > training.max_owned_bytes:
-                if formal is not None:
-                    raise RuntimeError('formal post-persistence wall/storage overrun')
-                state.update(status='failed', failure='FinalPersistenceOverrun', quarantine=True)
                 if ops:
                     ops.persist_control(directory / 'run.json', state, config, deadline=wall)
                 else:
                     atomic_json(directory / 'run.json', state)
-        except BaseException as failure:  # noqa: BLE001 - persist failure after owned cleanup
-            state.update(status='failed', failure=type(failure).__name__, quarantine=True)
-            if ops:
-                try:
-                    ops.persist_control(directory / 'run.json', state, config, deadline=wall)
-                except BaseException as correction:  # noqa: BLE001 - initiating failure survives best-effort correction
-                    failure.add_note('structured state correction failed: ' + type(correction).__name__)
-            else:
-                try:
-                    atomic_json(directory / 'run.json', state)
-                except OSError:
-                    pass
-            error = error or failure
-        if error is not None:
-            raise error
-        if state['status'] == 'failed':
-            raise RuntimeError('PPO run failed original limits')
-        return {'run_dir': str(directory), 'status': state['status'], 'updates': state['updates'], 'accepted_decisions': state['accepted_decisions'],
-                'elapsed_seconds': time.time() - state['created_unix'], 'generation_sha256': state['generation_sha256'],
-                **({'used_decisions':state['used_decisions'],'collected_decisions':state['collected_decisions'],
-                    'decision_budget':config.hpo_spec['decision_budget'],'stop_reason':state['stop_reason']} if hpo else {})}
+                if time.monotonic() >= wall or measure_owned(wall) > training.max_owned_bytes:
+                    if formal is not None:
+                        raise RuntimeError('formal post-persistence wall/storage overrun')
+                    state.update(status='failed', failure='FinalPersistenceOverrun', quarantine=True)
+                    if ops:
+                        ops.persist_control(directory / 'run.json', state, config, deadline=wall)
+                    else:
+                        atomic_json(directory / 'run.json', state)
+            except BaseException as failure:  # noqa: BLE001 - persist failure after owned cleanup
+                state.update(status='failed', failure=type(failure).__name__, quarantine=True)
+                if ops:
+                    try:
+                        ops.persist_control(directory / 'run.json', state, config, deadline=wall)
+                    except BaseException as correction:  # noqa: BLE001 - initiating failure survives best-effort correction
+                        failure.add_note('structured state correction failed: ' + type(correction).__name__)
+                else:
+                    try:
+                        atomic_json(directory / 'run.json', state)
+                    except OSError:
+                        pass
+                error = error or failure
+            if owned:
+                try: ops.finalize_completion(state,error)
+                except BaseException as completion_error:  # noqa: BLE001 - preserve failure and revoke final eligibility
+                    state.update(status='failed',failure=type(completion_error).__name__,quarantine=True)
+                    try: ops.persist_control(directory/'run.json',state,config,deadline=wall)
+                    except BaseException as correction: completion_error.add_note('completion correction: '+str(correction))  # noqa: BLE001
+                    if error is None: error=completion_error
+                    else: error.add_note('completion retirement: '+str(completion_error))
+            if error is not None:
+                raise error
+            if state['status'] == 'failed':
+                raise RuntimeError('PPO run failed original limits')
+            return {'run_dir': str(directory), 'status': state['status'], 'updates': state['updates'], 'accepted_decisions': state['accepted_decisions'],
+                    'elapsed_seconds': time.time() - state['created_unix'], 'generation_sha256': state['generation_sha256'],
+                    **({'used_decisions':state['used_decisions'],'collected_decisions':state['collected_decisions'],
+                        'decision_budget':config.hpo_spec['decision_budget'],'stop_reason':state['stop_reason']} if hpo else {})}

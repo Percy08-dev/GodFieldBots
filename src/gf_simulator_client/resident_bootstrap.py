@@ -54,6 +54,10 @@ class ResidentEpisodeTransport:
         self.viewer = viewer
         self.owned_channel = owned_channel
         self._owned_request: Json | None = None
+        self._owned_outer_request: Json | None=None
+        self._owned_usage: str | None=None
+        self._owned_final_set: str | None=None
+        self._owned_final_reservation: Any=None
         self._owned_budget = _ActorBankBudget()
         self.cache = ResidentPolicyCache()
         self.episode: CardInstanceEpisode | None = None
@@ -123,12 +127,30 @@ class ResidentEpisodeTransport:
         from gf_models.structured_policy import GameStructuredPolicyV4
         if options is None or options.get('version') != '4' or self.owned_channel is None:
             raise ContractError('actor9 requires model4 and inherited owned channel')
-        wrapper = closed(self._owned_request, {'metadata', 'bank_count'})
+        wrapper = closed(self._owned_request, {'metadata', 'bank_count'}, {'evaluation_use'})
         metadata = wrapper['metadata']
         if self.checkpoint != metadata.get('inference_digest') or self.checkpoint != options['expected_manifest_digest']:
             raise ContractError('actor9 snapshot differs from selected checkpoint')
         assert self.generation is not None
-        generation = integer(metadata.get('generation'), 0, self.generation)
+        if 'evaluation_use' in wrapper:
+            if self._owned_usage not in (None,'evaluation') or self._owned_outer_request is None:
+                raise ContractError('evaluation final use cannot replace training scope')
+            from gf_common.artifacts import json_bound
+            from gf_common.hpo_actor_snapshot import checked_evaluation_use
+            with self._owned_budget.reserve(32*json_bound(wrapper['evaluation_use'])+65536):
+                finals=checked_evaluation_use(wrapper['evaluation_use'],metadata,self._owned_outer_request,options)
+            if self._owned_final_set is not None and self._owned_final_set!=finals:
+                raise ContractError('evaluation actor final-reference set changed')
+            if self._owned_final_set is None:
+                self._owned_final_reservation=self._owned_budget.reserve(32*len(finals)+65536)
+                self._owned_final_set=finals
+            self._owned_usage='evaluation'
+            generation=integer(metadata.get('generation'),0,2**63-1)
+        else:
+            if self._owned_usage not in (None,'training'):
+                raise ContractError('evaluation actor cannot adopt a training wrapper')
+            self._owned_usage='training'
+            generation = integer(metadata.get('generation'), 0, self.generation)
         model = model_config_v4(options['model'], layout=layout_for_contract(actions.action_contract))
         binding = InferenceBindingV2(**options['inference'])
         visibility = options['cuda_visible_devices']
@@ -161,6 +183,7 @@ class ResidentEpisodeTransport:
             for delivery in deliveries:
                 delivery.complete(self.cache.synchronize)
             self._owned_request = None
+            self._owned_outer_request = None
             assert self.checkpoint is not None
             self._checkpoints[identity] = self.checkpoint
             if self._execution_environment is None:
@@ -190,6 +213,7 @@ class ResidentEpisodeTransport:
             if self.owned_channel is None or envelope['request'].get('command') not in ('BEGIN','SYNC') or self._owned_request is not None:
                 raise ContractError('actor9 SYNC_OWNED requires original idle BEGIN/SYNC boundary')
             self._owned_request = envelope['owned']
+            self._owned_outer_request=envelope['request']
         request = envelope['request']
         if type(request) is not dict or request.get('protocol') != RESIDENT_MODE or request.get('schema_version') != 1:
             raise ContractError('resident original envelope required')

@@ -166,10 +166,11 @@ class EvaluationPoolScope:
         from gf_common.hpo_resident import checked_evaluation_runtime
         from gf_common.schedule import serialize_schedule
         from gf_models.card_instance_artifacts import RetainedGameArtifacts
+        from gf_models.hpo_owned_artifacts import OwnedGameArtifacts
         from gf_training.hpo_lineage import REFERENCE_DIRECTORY, validate_hpo_chain
         from gf_training.hpo_retention import HpoReferenceReceipt
         from gf_training.structured_lineage import _ChainScan
-        if type(job) is not GpuJob or type(artifacts) is not RetainedGameArtifacts or type(pins) is not tuple:
+        if type(job) is not GpuJob or type(artifacts) not in (RetainedGameArtifacts,OwnedGameArtifacts) or type(pins) is not tuple:
             raise ContractError('resident evaluation requires actual job/artifacts/evaluation references')
         plan.require_job(job)
         linkage = plan.linkage
@@ -192,11 +193,13 @@ class EvaluationPoolScope:
             if path in unique and canonical(unique[path]) != canonical(normalized):
                 raise ContractError('resident evaluation has conflicting same-path parent/checkpoint declarations')
             unique[path]=normalized
+        parents=list(unique.values())  # Identical immutable self-comparison refs share one final capability.
         supplied=[str(Path(directory).resolve(strict=True)) for directory,_ in pins]
         if len(supplied)!=len(set(supplied)) or set(supplied)!=set(unique):
             raise ContractError('resident evaluation requires exact distinct immutable parent-set pins')
         if len(pins) != len(unique):
             raise ContractError('resident evaluation lacks complete immutable parent-set pins')
+        saved_snapshot_ids: dict[str,str]={}
         for directory, receipt in pins:
             if type(receipt) is not HpoReferenceReceipt or receipt.phase != 'acquire':
                 raise ContractError('resident evaluation needs original acquisition receipts')
@@ -208,8 +211,23 @@ class EvaluationPoolScope:
             if expected is None or canonical(receipt.binding) != canonical(expected):
                 raise ContractError('resident evaluation reference differs from actual immutable parent')
             assert parent is not None
-            with _ChainScan(directory=Path(directory),max_owned_bytes=max_owned_bytes,deadline=deadline) as scan:
-                _, _records = validate_hpo_chain(Path(directory),max_owned_bytes=max_owned_bytes,deadline=deadline,scan=scan)
+            from contextlib import nullcontext
+
+            from gf_training.lineage import generation_path
+            paths=[directory/REFERENCE_DIRECTORY/job.ticket/'acquire.receipt.json',directory/'artifact-registry.json',generation_path(directory,parent['generation'])]
+            admission=(artifacts.parent_budget.reserve(32*sum(path.lstat().st_size for path in paths)+1024**2+65536)
+                if type(artifacts) is OwnedGameArtifacts else nullcontext())
+            with admission, _ChainScan(directory=Path(directory),max_owned_bytes=max_owned_bytes,deadline=deadline) as scan:
+                if type(artifacts) is OwnedGameArtifacts:
+                    from gf_common.hpo import require_owned_record_version
+                    from gf_models.structured_sealed import checksum
+                    record=scan.object(generation_path(directory,parent['generation']),parent['generation_sha256'])
+                    require_owned_record_version(record,'generation')
+                    if record['generation']!=parent['generation'] or record['inference_sha256']!=parent['inference_sha256']:
+                        raise ContractError('evaluation final source generation differs')
+                    saved_snapshot_ids[str(directory)]=checksum(record['snapshot_identity'])
+                else:
+                    _, _records = validate_hpo_chain(Path(directory),max_owned_bytes=max_owned_bytes,deadline=deadline,scan=scan)
                 acquired = scan.object(Path(directory)/REFERENCE_DIRECTORY/job.ticket/'acquire.receipt.json',receipt.receipt_sha256)
                 registry_value = scan.object(Path(directory)/'artifact-registry.json')
                 if (canonical(acquired.get('binding')) != canonical(expected)
@@ -217,6 +235,33 @@ class EvaluationPoolScope:
                             'generation':parent['generation'],'inference_sha256':parent['inference_sha256']}):
                     raise ContractError('resident evaluation reference is not durably active')
                 scan.finalize()
+        self._owned_use_reservation: Any=None
+        self._owned_final_set: bytes | None=None
+        self._owned_cap_entries: dict[int,Json]={}
+        self._owned_closed=False
+        if type(artifacts) is OwnedGameArtifacts:
+            import weakref
+
+            from gf_common.artifacts import json_bound
+            # Admission precedes copies/serialization of the immutable final set.
+            self._owned_use_reservation=artifacts.parent_budget.reserve(32*json_bound(parents)+65536)
+            weakref.finalize(self,self._owned_use_reservation.close)
+            finals=[]
+            for cap in artifacts.owned_snapshots:
+                cap.require()
+                metadata=cap.actor_metadata
+                matched=[]
+                for parent in parents:
+                    if parent['inference_sha256']==cap.checkpoint and parent['generation']==cap.generation:
+                        directory=Path(parent['run_path'])
+                        if saved_snapshot_ids[str(directory)]==cap.identity:
+                            matched.append(parent)
+                if len(matched)!=1:
+                    raise ContractError('owned evaluation capability lacks exact committed final reference')
+                entry={'parent':clone(matched[0]),'snapshot_identity':metadata['snapshot_identity']}
+                finals.append(entry); self._owned_cap_entries[id(cap)]=entry
+            if not 1<=len(finals)<=2: raise ContractError('owned evaluation requires one/two exact finals')
+            self._owned_final_set=canonical(finals).encode()
         for binding in plan.bindings.values():
             if binding.policy_options is not None:
                 artifacts.require_options(binding.model_id,binding.policy_options)
@@ -233,8 +278,39 @@ class EvaluationPoolScope:
                 or job._admission['context']['evaluation_id'] != self.runtime['evaluation_id']
                 or canonical(plan.execution_runtime) != canonical(self.runtime)
                 or canonical([(str(directory),asdict(receipt)) for directory,receipt in self.pins]) != self._pin_identity
-                or self.artifacts._released):
+                or self.artifacts._released or self._owned_closed):
             raise ContractError('resident evaluation actual admission/panel scope changed')
+
+    def owned_use(self, request: Json, cap: Any, binding: Any) -> tuple[Json,Any]:
+        self.require(self.job,self.plan)
+        if self._owned_final_set is None or id(cap) not in self._owned_cap_entries:
+            raise ContractError('selected actor capability is outside actual evaluation final set')
+        cap.require()
+        entry=self._owned_cap_entries[id(cap)]
+        if (entry['parent']['policy_label'] not in self.plan.bindings
+                or self.plan.bindings[entry['parent']['policy_label']]!=binding):
+            raise ContractError('evaluation capability differs from frozen selected policy')
+        import json
+
+        from gf_common.artifacts import json_bound
+        reservation=self.artifacts.parent_budget.reserve(32*json_bound(request)+32*len(self._owned_final_set)+65536)
+        try:
+            value={'schema_version':1,'kind':'owned-evaluation-final-policy-use-v1',
+                'evaluation_id':self.plan.linkage['evaluation_id'],'finals':json.loads(self._owned_final_set),
+                'selected':clone(entry),'outer_request':clone(request)}
+            from gf_common.hpo_actor_snapshot import checked_evaluation_use
+            checked_evaluation_use(value,cap.actor_metadata,request,binding.policy_options)
+            return value,reservation
+        except BaseException:
+            reservation.close()
+            raise
+
+    def release_owned_metadata(self) -> None:
+        if self._owned_closed: return
+        if self.job.ledger.workers or self.job.ledger.learner is not None or self.job.ledger.updating:
+            raise ContractError('evaluation final metadata still has physical work owners')
+        if self._owned_use_reservation is not None: self._owned_use_reservation.close()
+        self._owned_final_set=None; self._owned_cap_entries.clear(); self._owned_closed=True
 
     def __reduce__(self) -> Any:
         raise TypeError('resident evaluation actual scope cannot be persisted')
@@ -397,6 +473,16 @@ class ResidentPoolCustody:
         admission.phase = 'collecting'
         admission.used.add(worker.key)
         return result
+
+    def owned_evaluation_use(self, worker: Any, request: Json, cap: Any, binding: Any) -> tuple[Json,Any]:
+        self._require()
+        row=self._row(worker)
+        self._live(row)
+        if (self.evaluation_scope is None or row.pending is None or canonical(row.pending)!=canonical(request)
+                or row.binding_identity!=digest(asdict(binding)) or row.state!='active'
+                or row.collection is not self._admission or row.generation!=0):
+            raise ContractError('evaluation use lacks SAME actual outer owner/epoch/selected binding')
+        return self.evaluation_scope.owned_use(request,cap,binding)
 
     def episode_request(self, worker: Any, command: str) -> Json:
         row = self._row(worker)

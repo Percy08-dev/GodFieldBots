@@ -925,7 +925,7 @@ def _read_rollout(directory: Path, expected_digest: str, model: Any, *,
                       "decision_count", "episodes", "data"} | set(classification) | set(expected_semantics) | (set(_hpo) if _hpo is not None else set()))
     binding_check({key: manifest[key] for key in classification}, action_contract=action_contract,
                         purpose=purpose, synthetic_capacity=synthetic_capacity)
-    if (type(manifest["schema_version"]) is not int or manifest["schema_version"] != (5 if _hpo is not None else 3 if _context is None else 4)
+    if (type(manifest["schema_version"]) is not int or manifest["schema_version"] != (6 if _hpo is not None and _hpo.get('origin')=='producer-owned-v1' else 5 if _hpo is not None else 3 if _context is None else 4)
             or manifest["kind"] != "structured-rollout"
             or manifest["architecture_identity"] != recorded_architecture_identity(model, layout=layout)
             or any(canonical(manifest[key]) != canonical(value) for key, value in expected_semantics.items())):

@@ -6,7 +6,8 @@ import os
 import stat
 import time
 import uuid
-from dataclasses import asdict
+import weakref
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +27,29 @@ def _identity(path: Path) -> tuple[int, int, int, int, int]:
     return value.st_dev,value.st_ino,value.st_size,value.st_mtime_ns,value.st_ctime_ns
 
 
+@dataclass(frozen=True,slots=True,init=False)
+class OwnedControlWriteReceipt:
+    """Actual final write-return digest, bound to this writer/path/full stat."""
+    _writer: Any
+    path: Path
+    identity: tuple[int,int,int,int,int]
+    sha256: str
+
+    def __init__(self, token: object, writer: Any, path: Path, identity: Any, sha256: str) -> None:
+        if token is not _TOKEN: raise ContractError('actual completed control write required')
+        for name,value in (('_writer',weakref.ref(writer)),('path',path),('identity',identity),('sha256',sha256)):
+            object.__setattr__(self,name,value)
+
+    def require(self, writer: Any, path: Path, expected_digest: str) -> None:
+        require_hpo_run_owner(writer.owner.directory,writer.owner)
+        if (self._writer() is not writer or writer._completed.get(path) is not self or self.path!=path
+                or writer.failed or writer._uncertain_closes or writer.files.get(path)!=self.identity
+                or _identity(path)!=self.identity or self.sha256!=expected_digest):
+            raise ContractError('final state differs from actual completed writer/path/stat/digest')
+
+    def __reduce__(self) -> Any: raise TypeError('actual control write receipt cannot be copied/persisted')
+
+
 class OwnedControlWriter:
     """Durable writes tracked from their actual completion, without a chain scanner."""
     def __init__(self, owner: Any, *, budget: Any, limit: int) -> None:
@@ -33,6 +57,7 @@ class OwnedControlWriter:
         self.budget,self.limit = budget,limit
         self.parent_budget=ArtifactPhaseAdmission(budget,limit)
         self.files: dict[Path,tuple[int,int,int,int,int]] = {}
+        self._completed: dict[Path,OwnedControlWriteReceipt]={}
         self.failed = False
         self._uncertain_closes: list[Any]=[]
 
@@ -79,7 +104,9 @@ class OwnedControlWriter:
                 sync_hpo_ancestry(path.parent,ownership=self.owner)
                 if time.monotonic()>=deadline: raise TimeoutError('owned control durability deadline')
                 self.files[path]=original
-                return hashlib.sha256(raw).hexdigest()
+                sha=hashlib.sha256(raw).hexdigest()
+                self._completed[path]=OwnedControlWriteReceipt(_TOKEN,self,path,original,sha)
+                return sha
         except BaseException as error:
             self.failed=True
             vars(error)['_hpo_storage_uncertain']=str(path)
@@ -194,6 +221,31 @@ class OwnedRunRegistry:
             raise ContractError('registry requires SAME actual fresh Wire7 process/Source account')
         self.process=process
         vars(process)['_owned_registry']=self
+
+    def import_committed(self, imported: Any, snapshot: Any) -> None:
+        from gf_training.hpo_owned_process import OwnedRestoreAck
+        from gf_training.hpo_owned_restore import OwnedColdImport
+        self.require()
+        if (type(imported) is not OwnedColdImport or imported.ownership is not self.ownership
+                or imported.budget is not self.budget or imported._process is not self.process
+                or imported.state is not self.state or self.current is not None or self.records
+                or type(snapshot.restore_ack) is not OwnedRestoreAck):
+            raise ContractError('registry import requires SAME actual restored parent transaction')
+        snapshot.require_process(self.process)
+        if snapshot.generation!=self.state['updates'] or snapshot.optimizer_steps!=self.state['optimizer_steps']:
+            raise ContractError('registry import counters differ from committed generation')
+        self.records=imported.records
+        self.registry=imported.registry
+        self.snapshots=dict(imported.snapshots)
+        self.snapshots[snapshot.generation]=snapshot
+        self.current=snapshot
+        from gf_training.structured_lineage import _stat_identity
+        self.artifact_identity=_stat_identity((self.directory/'artifacts').lstat())
+        for number,record in enumerate(self.records):
+            directory=checkpoint_path(self.directory,number)
+            self.generation_directories[number]=_stat_identity(directory.lstat())
+            for name,row in self.registry['generations'][str(number)]['files'].items():
+                if row['status']=='retained': self.file_identities[number,name]=_identity(directory/name)
 
     def _require_snapshot(self, snapshot: Any) -> None:
         from gf_training.hpo_owned_process import RemoteModelSnapshot

@@ -42,6 +42,7 @@ from gf_training.structured_lineage import _ChainScan
 class HpoRunResult:
     report: Json
     gpu_termination: TerminationReceipt
+    completion: Any = None
 
 
 class _HpoOperations(_GameOperations):
@@ -374,7 +375,6 @@ async def train_hpo_ppo(loaded_run: Any,collector: Any,directory: Path,*,gpu_job
                          _reuse_precollection: bool = False) -> HpoRunResult:
     operations: _HpoOperations
     if loaded_run.config.hpo_spec.get('schema_version')==4:
-        if mode!='fresh': raise ContractError('owned cold resume requires the separately validated cold adapter')
         from gf_training.hpo_owned_run import _OwnedHpoOperations
         operations=_OwnedHpoOperations(gpu_job,progress,diagnostics)
     else:
@@ -396,4 +396,4 @@ async def train_hpo_ppo(loaded_run: Any,collector: Any,directory: Path,*,gpu_job
         raise
     if operations.receipt is None: raise ContractError('HPO run has no actual GPU termination receipt')
     observe(progress, {'phase':'cleanup','status':report['status']})
-    return HpoRunResult(report,operations.receipt)
+    return HpoRunResult(report,operations.receipt,getattr(operations,'completion',None))

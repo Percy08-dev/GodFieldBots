@@ -154,7 +154,7 @@ def write_hpo_rollout(directory: Path, rollout: HpoRollout, *, selection: Json, 
 def read_hpo_rollout(directory: Path, expected_digest: str, model: ModelConfigV4,
                      training: HPOTrainingConfig, *, actions: ActionConfigV3, rules: CardInstanceRules,
                      expected_selection: Json, expected_records: tuple[EpisodeRecords, ...] | None = None,
-                     expected_correspondence: Json | None = None, **options: Any) -> HpoRollout:
+                     expected_correspondence: Json | None = None, expected_snapshot_identity: str | None = None, **options: Any) -> HpoRollout:
     from gf_common.hpo import checked_selection
     from gf_training.structured_rollout import _hpo_semantics, _read_rollout
     validate_model_v4(model, layout=CORRECTED_CARD_INSTANCE_LAYOUT)
@@ -191,6 +191,15 @@ def read_hpo_rollout(directory: Path, expected_digest: str, model: ModelConfigV4
     hpo = {'training_recipe': asdict(training), 'selection': selection,
         'expected_optimizer_step_delta': optimizer_delta(selection['used_decisions'],
             epochs=training.epochs, minibatch_size=training.minibatch_size)}
+    if manifest.get('schema_version')==6:
+        from gf_common.hpo import require_owned_record_version
+        from gf_models.structured_sealed import checksum
+        require_owned_record_version(manifest,'numeric')
+        if expected_snapshot_identity is None or checksum(manifest['snapshot_identity'])!=checksum(expected_snapshot_identity):
+            raise ContractError('Numeric6 audit requires original snapshot identity')
+        hpo.update(origin='producer-owned-v1',encoder='canonical-python',snapshot_identity=expected_snapshot_identity)
+    elif expected_snapshot_identity is not None:
+        raise ContractError('owned audit cannot adopt legacy numeric origin')
     output = _read_rollout(directory, expected_digest, model, action_contract=actions.action_contract,
         purpose='qualified_game', synthetic_capacity=False, expected_semantics=_hpo_semantics(model, context),
         expected_records=expected_records, expected_correspondence=expected_correspondence,

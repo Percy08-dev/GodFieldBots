@@ -95,7 +95,7 @@ def save_arrays(path: Path, arrays: dict[str, Any], *, _check: Callable[[], None
 
 
 def _load_arrays(path: Path, expected: Json | None = None, *, _check: Callable[[], None] | None = None,
-                 _source: BinaryIO | None = None) -> dict[str, Any]:
+                 _source: BinaryIO | None = None, _on_array: Callable[[Any], None] | None = None) -> dict[str, Any]:
     if _check is not None:
         _check()
     manifest = json.loads(path.with_suffix('.json').read_text()) if expected is None else expected
@@ -152,6 +152,8 @@ def _load_arrays(path: Path, expected: Json | None = None, *, _check: Callable[[
             if _check is not None:
                 _check()
             value = np.load(io.BytesIO(encoded), allow_pickle=False)
+            if _on_array is not None:
+                _on_array(value)
             if _check is not None:
                 _check()
             if not np.isfinite(value).all():
@@ -163,7 +165,16 @@ def _load_arrays(path: Path, expected: Json | None = None, *, _check: Callable[[
 
 
 def load_arrays(path: Path, expected: Json | None = None, *, _check: Callable[[], None] | None = None,
-                _source: BinaryIO | None = None, _snapshot: tuple[int, ...] | None = None) -> dict[str, Any]:
+                _source: BinaryIO | None = None, _snapshot: tuple[int, ...] | None = None,
+                _on_array: Callable[[Any], None] | None = None) -> dict[str, Any]:
+    callback_error: BaseException | None=None
+    def observed(array: Any) -> None:
+        nonlocal callback_error
+        assert _on_array is not None
+        try: _on_array(array)
+        except BaseException as failure:
+            callback_error=failure
+            raise
     position = None
     if _source is not None:
         if _snapshot is None:
@@ -171,14 +182,19 @@ def load_arrays(path: Path, expected: Json | None = None, *, _check: Callable[[]
         _check = _source_guard(path, _source, _snapshot, _check)
         position = _source.tell()
     try:
-        return _load_arrays(path, expected, _check=_check, _source=_source)
+        return _load_arrays(path, expected, _check=_check, _source=_source,
+            **({} if _on_array is None else {'_on_array':observed}))
     except TimeoutError as error:
+        if error is callback_error:
+            raise
         if _check is not None:
             raise
         raise ContractError('invalid typed-array artifact') from error
     except ContractError:
         raise
     except (OSError, ValueError, TypeError, KeyError, EOFError, zipfile.BadZipFile) as error:
+        if error is callback_error:
+            raise
         raise ContractError('invalid typed-array artifact') from error
     finally:
         if position is not None and _source is not None:

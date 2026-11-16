@@ -1,10 +1,11 @@
 # 0043: Producer-owned resident HPO data
 
-- Status: Accepted implementation design; implementation/verification pending
+- Status: Accepted design; implementation reviews READY, final verification pending
 - Date: 2026-11-16
 - Decision owner: root
 - Preimplementation architecture review: `/root/owned_architecture` READY, with
-  inference/resume bank isolation resolved; final implementation reviews pending
+  inference/resume bank isolation resolved; final implementation correctness and
+  conformance reviews READY
 
 ## Context
 
@@ -37,4 +38,7 @@ No speed or memory improvement is presumed before the prescribed measurements.
 Ownership/failure tests, strict-reference all-model numerical comparisons,
 fresh/resume and campaign/evaluation checks, full project/static/package checks,
 independent correctness/conformance reviews and18matched physical timing trials.
-Implementation and measured acceptance are pending.
+The four implementation milestones pass both independent review roles. The final
+cold-import milestone includes actual pruned-parent pause/resume/full-audit and
+ownership-failure regressions. Whole-project verification and the prescribed
+physical protocol/measurements remain pending; no performance claim is accepted.
