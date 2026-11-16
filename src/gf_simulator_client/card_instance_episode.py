@@ -231,6 +231,7 @@ class CardInstanceEpisode:
                     "generation_ms": (policy_started - generation_started) * 1000,
                     "policy_ms": (finished - policy_started) * 1000,
                     "worker_decision_ms": (finished - started) * 1000,
+                    **getattr(policy, "last_timing", {}),
                 },
                 **binding,
         }

@@ -175,6 +175,9 @@ def test_actual_game_worker_journal6_original_refs_and_sealed_collection5(tmp_pa
             assert selected.table_hash == generated_rows.table.table_hash
             assert all(math.isfinite(number) for number in (selected.logprob, selected.value))
             assert generated_rows.table.frame_hash == frame.frame_hash
+            assert {'tokenization_ms', 'input_pack_transfer_host_ms', 'forward_enqueue_host_ms',
+                'sync_host_ms', 'return_ms', 'sampling_ms'} <= set(worker.last_timings)
+            assert all(math.isfinite(value) and value >= 0 for value in worker.last_timings.values())
             return generated_rows, selected
         finally:
             await worker.close()

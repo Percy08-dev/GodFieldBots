@@ -35,6 +35,57 @@ def test_original_episode_reset_drops_bank_previous_rng_and_denies_use():
         episode.select({})
 
 
+@pytest.mark.parametrize('kind', ['random', 'mlp', 'gru', 'transformer'])
+def test_episode_reply_preserves_actual_optional_policy_host_timings(tmp_path, kind):
+    import math
+
+    from gf_common.structured import event_delta
+    from gf_simulator_client.card_instance_episode import CardInstanceEpisode
+    from gf_simulator_client.structured_worker import _timings
+    from tests.model3_support import LAYOUT, raw_inputs
+
+    owner = None
+    options = None
+    if kind != 'random':
+        from tests.test_card_instance_neural import saved
+        owner, _, execution, _, _, _, _ = saved(tmp_path, kind)
+        options = execution.policy_options
+    try:
+        episode = CardInstanceEpisode(initial(kind, options=options))
+        _, _, frames, bank, _ = raw_inputs(count=1)
+        frame = frames[0]
+        delta = event_delta(frame.actor, frame.episode, 0, bank.view()._prefixes[0],
+            bank.view().events(), layout=LAYOUT)
+        reply = episode.select(message(frame, delta))
+        required = {'generation_ms', 'policy_ms', 'worker_decision_ms'}
+        if kind == 'random':
+            assert not hasattr(episode.policy, 'last_timing')
+            assert set(reply['timings']) == required
+        else:
+            optional = {'tokenization_ms', 'input_pack_transfer_host_ms',
+                'forward_enqueue_host_ms', 'sync_host_ms', 'return_ms', 'sampling_ms'}
+            assert set(episode.policy.last_timing) == optional
+            assert set(reply['timings']) == required | optional
+            assert {key: reply['timings'][key] for key in optional} == episode.policy.last_timing
+            assert episode.policy.cache.position == 1
+        assert all(math.isfinite(value) and value >= 0 for value in reply['timings'].values())
+        _timings(reply['timings'])
+        episode.reset()
+        assert episode.private_state_empty()
+    finally:
+        if owner is not None:
+            owner.release()
+
+
+@pytest.mark.parametrize('key', ['tokenization_ms', 'input_pack_transfer_host_ms',
+    'forward_enqueue_host_ms', 'sync_host_ms', 'return_ms', 'sampling_ms'])
+@pytest.mark.parametrize('invalid', [-1., float('nan'), float('inf'), True, '0', 10**400])
+def test_optional_policy_host_timings_remain_strict_at_receiver(key, invalid):
+    from gf_simulator_client.structured_worker import _timings
+    with pytest.raises(ContractError):
+        _timings({'generation_ms': 0., 'policy_ms': 0., 'worker_decision_ms': 0., key: invalid})
+
+
 def test_cache_reuse_checks_identity_and_resets_inactive_entries():
     from gf_models.resident_cache import ResidentPolicyCache
     cache = ResidentPolicyCache()
