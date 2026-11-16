@@ -30,6 +30,20 @@ is outside the explicitly approved focused-test scope. Independent correctness
 and conformance re-reviews are READY. The final aggregation fix also rejects
 mixed models/options/conditions across repeated pairs; its two focused cases pass.
 
+The initial physical screen at `6abadcf` is preliminary. Default compilation
+executes three backend graphs successfully, but reduce-overhead reveals a
+CUDA Graph output-lifetime failure when successive chunks reuse captured output
+storage. The failed child is waited/reaped and retained. A scoped reviewed fix
+marks captured iterations and clones real-row outputs outside compilation before
+retaining them; its whole-decision clone population stays within the existing
+temporary cap. Eager/default paths and the resident exclusion remain unchanged.
+
+The initial unpinned control also drifts8.70→7.21ms per decision. Factor selection
+will therefore use a fresh paired screen with alternating nearby controls,
+20warm loops and one fixed replay CPU (`2`). Actual games retain the original
+16-CPU affinity and fixed four-worker/two-game conditions. Preliminary timings
+are preserved separately and do not establish the final recommendation.
+
 Fixed replay inputs are prepared with the existing full-original parent validator
 and Numeric6 reader. Each model uses its recorded G0 checkpoint and the same
 three declared prefix locations (`0:3,2:3,12:19`):28decisions,5,187candidate

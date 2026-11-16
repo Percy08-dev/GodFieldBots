@@ -415,3 +415,32 @@ def test_median_population_rejects_mixed_pairs_preserves_repeated_pairs(monkeypa
             rows['c'][field] = rows['d'][field] = value
         with pytest.raises(ValueError, match='median population'):
             aggregate.main()
+
+
+@pytest.mark.parametrize('mode', ['none', 'default', 'reduce-overhead'])
+def test_captured_scorer_outputs_own_storage_across_next_invocation(monkeypatch, mode):
+    storage = torch.empty(2)
+    events = []
+    def scorer(*args):
+        events.append('scorer')
+        storage.fill_(1 if len(events) <= 2 else 0)
+        return storage
+    monkeypatch.setattr(torch, 'compile', lambda fn, **kwargs: scorer)
+    monkeypatch.setattr(torch.compiler, 'cudagraph_mark_step_begin', lambda: events.append('step'))
+    network = make_network(small_model(), 5)
+    network._candidate_chunk_calculate = scorer
+    experiment = install(network, ExperimentOptions(compile=mode))
+    args = (torch.zeros(16), torch.zeros(18,19,16), torch.zeros(2,9),
+            torch.zeros(2,18,dtype=torch.long), torch.zeros(16,9), torch.arange(18)[None])
+    with torch.no_grad():
+        first = experiment.chunk(*args)
+        first_pointer = first.data_ptr()
+        experiment.chunk(*args)
+        storage.zero_()
+    if mode == 'reduce-overhead':
+        assert first_pointer != storage.data_ptr()
+        assert first.count_nonzero().item() == 2
+        assert events == ['step','scorer','step','scorer']
+    else:
+        assert first_pointer == storage.data_ptr()
+        assert events == ['scorer','scorer']

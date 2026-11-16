@@ -263,9 +263,14 @@ class InferenceExperiment:
         temporary_sizes = (padded*(features.shape[1]+feature_tail)*features.element_size(),
             padded*refs.shape[1]*refs.element_size(),
             weight.shape[0]*(weight.shape[1]+feature_tail)*weight.element_size(), padded*4)
+        # Captured scorer outputs must be cloned outside compile before another
+        # invocation can reuse them. Charge the whole decision's retained clones,
+        # bounded by the existing maximum population, alongside current padding.
+        captured = self.options.compile == 'reduce-overhead'
+        owned_output_bytes = self.network.binding.max_candidates*4 if captured else 0
         # Feature-K then row padding can briefly retain both intermediate and
-        # final copies. Count both before either pad allocation.
-        if (sum(temporary_sizes) + temporary_sizes[0] > NETWORK_STORAGE_BYTES-65536 or
+        # final copies. Count both before either pad or clone allocation.
+        if (sum(temporary_sizes) + temporary_sizes[0] + owned_output_bytes > NETWORK_STORAGE_BYTES-65536 or
                 max(temporary_sizes) > self.network.config.resources.max_tensor_bytes):
             raise ContractError('experimental temporary storage cap exceeded before allocation')
         if feature_tail:
@@ -279,10 +284,15 @@ class InferenceExperiment:
         self.stats['calls'] += 1
         started = time.perf_counter()
         try:
+            if captured:
+                # This isolated scorer call is one capture generation. Its only
+                # cross-call outputs are copied to eager-owned storage below.
+                self.torch.compiler.cudagraph_mark_step_begin()
             result = (self.original_chunk if self.compiled_chunk is None else self.compiled_chunk)(
                 shared, projection, features, refs, weight, positions)
             # Slice before the unchanged global finite checks/normalization.
-            return result[:count]
+            real = result[:count]
+            return real.clone() if captured else real
         except Exception as error:
             self.stats['failures'].append(type(error).__name__ + ': ' + str(error)[:2048])
             raise
