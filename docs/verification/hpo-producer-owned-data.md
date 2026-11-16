@@ -248,6 +248,12 @@ to the27.239255seconds of parent wall. Additional substage instrumentation is
 needed to explain their individual costs. Input-bank ACK wait belongs to the
 later learning-update phase and explains none of this collection remainder.
 
+The follow-up [collection latency investigation](hpo-collection-latency.md) now
+measures those client-side substages on a fresh same-condition MLP run. It
+reconciles26.700208seconds of collection wall and48.180624cumulative game seconds,
+leaving0.849857cumulative seconds explicitly unseparated. It reports observer
+effect and separates per-game duration, concurrent wall and server-log limits.
+
 ### Individual accepted physical trials
 
 | Index | Model/arm | Run UUID | Helper seconds | Process seconds |
