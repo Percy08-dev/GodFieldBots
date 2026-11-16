@@ -67,6 +67,10 @@ CPU時間だけを表すものではない。各試合内では入れ子区間�
 capture開始までの区間。既存のdecision timerと新しい外側区間から次のように
 再構成できる。差分項目は明示的に残差とし、純CPU／GPU時間とは扱わない。
 
+後続の[推論・CPU・HTTP接続調査](hpo-device-io-latency.md)では、既存のneural診断を
+渡すようにしてGPU関連host区間とCPU寄り区間を分離し、実プロセスCPUと実TCP再利用も
+計測した。下表の「推論」全体をGPU演算時間と解釈しない。
+
 | 選択処理内の項目 | 延べ秒 |
 | --- | ---: |
 | delta/frame構築：decision.inputを除く | 0.974480 |
