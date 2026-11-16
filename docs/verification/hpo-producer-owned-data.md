@@ -164,7 +164,7 @@ Nested costs: median sum of the named observed spans per trial, seconds. Inclusi
 | Snapshot construction (G0 plus2updates) | N/A | 0.1600 | N/A | 0.1751 | N/A | 0.2019 |
 | Batch FD send observed span | N/A | 0.0228 | N/A | 0.0222 | N/A | 0.0232 |
 | Snapshot receive observed span (G0 plus2updates) | N/A | 0.0461 | N/A | 0.0382 | N/A | 0.0421 |
-| Batch completion wait (includes update/save) | N/A | 5.4505 | N/A | 20.9422 | N/A | 20.7548 |
+| Input-bank completion ACK wait (includes update/sync) | N/A | 5.4505 | N/A | 20.9422 | N/A | 20.7548 |
 
 Collection detail: sequential checkpoint/live-guard wall, seconds. B historical validators and C live guards are different operations at corresponding positions; each position6calls across3trials.
 
@@ -206,9 +206,47 @@ The learner row measures the full parent command, including child update/save,
 old parity or new transport. Child save spans include G0 and both updates; G0 is
 inside startup. GPU-kernel-only wall is not separately measured. New capture,
 tokenize/seal, numeric write, snapshot and observed send/receive costs are shown;
-`batch_completion_wait` includes learner/save work and is not pure transport.
+`batch_completion_wait` waits for input-bank completion ACKs after sending the
+banks. The child receives the input, updates the learner, synchronizes GPU work
+and releases input views before emitting those ACKs. Snapshot construction and
+checkpoint save follow ACK emission. This is not a save-completion wait or pure
+transport time; parent scheduling/ACK-observation latency can also be included.
 The callback row covers both actual participant creations, including zero-Act.
 These scopes expose moved work; whole-helper AND full-process wall improve.
+
+### Collection wall coverage and remaining measurement gaps
+
+The operation distributions above are not a complete additive decomposition of
+collection wall. Most new-route collection time lies inside the game-operation
+spans. To make coverage explicit, the following is an interval-union partition
+of the first actual MLP pair (trials1/2), not medians. Priority is the five
+checkpoint/live-guard positions, then any active game span, then archive spans
+outside games, then uncovered wall. Concurrent and nested spans are counted once.
+
+| Collection wall category, both collections, seconds | MLP B trial1 | MLP C trial2 |
+| --- | ---: | ---: |
+| Five checkpoint/live-guard positions | 16.673644 | 0.005576 |
+| At least one game-operation span active, excluding checkpoints | 29.449060 | 26.372873 |
+| Archive call spans outside the above intervals | 1.197185 | 0.085262 |
+| Remaining collection setup/finalization wall, not individually timed | 0.867813 | 0.775545 |
+| **Total collection wall** | **48.187701** | **27.239255** |
+
+A game span includes runtime evidence checks, Create/Join, actor initialization
+or reuse, Observe/Events/ActionOptions, decision processing, Act/ACK, terminal
+observations, Replay fetch/persistence, journal finalization, logical worker close
+and Delete. Existing timers do not split all those operations individually.
+The uncovered outer interval also includes such work as group/server setup,
+attestation/catalog and collection finalization; no exclusive substage allocation
+is inferred from code inspection alone.
+
+For C trial2, summing the32game spans gives49.258232seconds of cumulative game
+duration because games overlap. Its recorded decision-processing durations sum
+to26.067557seconds; the remaining23.190675cumulative game seconds are outside that
+timer. They cannot be assigned exactly among HTTP, initialization, Replay and
+finalization from existing data. These cumulative durations must not be added
+to the27.239255seconds of parent wall. Additional substage instrumentation is
+needed to explain their individual costs. Input-bank ACK wait belongs to the
+later learning-update phase and explains none of this collection remainder.
 
 ### Individual accepted physical trials
 
