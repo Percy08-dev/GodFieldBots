@@ -2,6 +2,17 @@
 
 ## Status and scope
 
+[ADR0044](adr/0044-inference-performance-comparison.md) accepts the bounded
+[inference comparison design](design/inference-performance-comparison.md) after
+independent preimplementation review. The opt-in experiment compares packing,
+reuse, chunks, temporary padding, actual-path compilation and IEEE/TF32 while
+retaining shared model mathematics, learner behavior and existing limits.
+Experimental private tensors join resident reset verification; all cached
+identities and transitions join admission. Independent implementation reviews and
+focused verification pass; physical measurements and final acceptance remain
+pending. This scope produces a performance recommendation; learning
+quality and any production-default adoption require subsequent evidence.
+
 [ADR0043](adr/0043-hpo-producer-owned-data.md) records the user-approved
 [producer-owned resident HPO design](design/hpo-producer-owned-data.md).
 The concrete design has passed the independent preimplementation architecture

@@ -11,6 +11,9 @@ from gf_common.hpo_resident import CACHE_ENTRIES, CACHE_WEIGHT_BYTES, _sha
 
 
 def policy_private_state_empty(policy: Any) -> bool:
+    experiment = getattr(getattr(policy, 'network', None), '_inference_experiment', None)
+    if experiment is not None and not experiment.private_empty():
+        return False
     cache = getattr(policy, 'cache', None)
     if cache is not None:
         if (cache.position != 0 or cache.owner is not None or cache.revision != -1 or cache.event_end != 0):

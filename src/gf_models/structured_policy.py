@@ -158,6 +158,9 @@ def _select_table(self: Any, frame: DecisionFrame, bank_view: EventBankView,
 def _reset_policy(self: Any, sampling_seed: int) -> None:
     integer(sampling_seed, 0, 2**64 - 1)
     self.cache.reset()
+    experiment = getattr(self.network, '_inference_experiment', None)
+    if experiment is not None:
+        experiment.reset()
     self.last_timing = {}
     self.rng.manual_seed(sampling_seed)
 

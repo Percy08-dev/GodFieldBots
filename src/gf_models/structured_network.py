@@ -221,10 +221,16 @@ def make_network(model: ModelConfigV2 | ModelConfigV3 | ModelConfigV4, seed: int
 
         def _float(self, values: Any) -> Any:
             raw = self._tensor(values, dtype=torch.float32, device=self.device)
+            return self._float_tensor(raw)
+
+        def _float_tensor(self, raw: Any) -> Any:
             return raw.sign() * raw.abs().log1p()
 
         def _onehot(self, values: Any, categories: tuple[tuple[str, ...], ...]) -> Any:
             raw = self._tensor(values, dtype=torch.long, device=self.device)
+            return self._onehot_tensor(raw, categories)
+
+        def _onehot_tensor(self, raw: Any, categories: Any) -> Any:
             return torch.cat([functional.one_hot(raw[..., index], len(vocabulary) + 2).float()
                               for index, vocabulary in enumerate(categories)], -1)
 
@@ -242,32 +248,49 @@ def make_network(model: ModelConfigV2 | ModelConfigV3 | ModelConfigV4, seed: int
             tokens._require_live()
             return self._encode_frame_calculate(tokens)
 
+        def _frame_operand_values(self, tokens: Any, name: str) -> Any:
+            if name == "opponent_mask":
+                return [value != 0 for value in tokens.opponent_learned]
+            if name == "card_category_suffix":
+                return (tokens.card_categories[:, 2:] if type(tokens) is _OwnedFrameTokens else
+                        tuple(row[2:] for row in tokens.card_categories))
+            if name == "card_order":
+                return tuple(row[layout.card_numeric_fields.index(layout.order_field)] for row in tokens.card_numerics)
+            return getattr(tokens, name)
+
+        def _frame_tensor_operand(self, tokens: Any, name: str) -> Any:
+            categories = {"state_categories", "opponent_learned", "card_categories", "card_category_suffix", "interval_categories"}
+            return self._tensor(self._frame_operand_values(tokens, name), dtype=(torch.long if name in categories else
+                torch.bool if name == "card_mask" else torch.float32), device=self.device)
+
         def _encode_frame_calculate(self, tokens: Any) -> tuple[Any, Any]:
-            state_input = torch.cat((self._float(tokens.state_numerics),
-                                     self._tensor(tokens.state_present, dtype=torch.float32, device=self.device),
-                                     self._onehot(tokens.state_categories, layout.state_categories),
-                                     self._tensor(tokens.state_category_present, dtype=torch.float32, device=self.device),
-                                     functional.one_hot(self._tensor(tokens.opponent_learned, dtype=torch.long, device=self.device),
+            # Lazy operands preserve original raw construction/copy/enqueue
+            # expression order, including separate mask/category/order copies.
+            return self._encode_frame_operands(tokens, lambda name: self._frame_tensor_operand(tokens, name))
+
+        def _encode_frame_operands(self, tokens: Any, raw: Any) -> tuple[Any, Any]:
+            state_input = torch.cat((self._float_tensor(raw("state_numerics")),
+                                     raw("state_present"),
+                                     self._onehot_tensor(raw("state_categories"), layout.state_categories),
+                                     raw("state_category_present"),
+                                     functional.one_hot(raw("opponent_learned"),
                                                         len(layout.card_categories[0]) + 2).float().flatten()))
             # PAD opponent slots have no representation; category0 is not a fact.
             opponent_width = len(layout.card_categories[0]) + 2
-            state_input[-18 * opponent_width:] *= self._tensor(
-                [value != 0 for value in tokens.opponent_learned], dtype=torch.float32,
-                device=self.device).repeat_interleave(opponent_width)
+            state_input[-18 * opponent_width:] *= raw("opponent_mask").repeat_interleave(opponent_width)
             state = self.state_encoder(state_input)
-            cats = self._tensor(tokens.card_categories, dtype=torch.long, device=self.device)
-            numbers = torch.cat((self._float(tokens.card_numerics),
-                                 self._tensor(tokens.card_present, dtype=torch.float32, device=self.device)), -1)
+            cats = raw("card_categories")
+            numbers = torch.cat((self._float_tensor(raw("card_numerics")),
+                                 raw("card_present")), -1)
             card_input = torch.cat((self.definition_embedding(cats[:, 0]), self.ability_embedding(cats[:, 1]),
-                                    self._onehot(tokens.card_categories[:, 2:] if type(tokens) is _OwnedFrameTokens else
-                                                 tuple(row[2:] for row in tokens.card_categories), layout.card_categories[2:]), numbers), -1)
-            mask = self._tensor(tokens.card_mask, dtype=torch.bool, device=self.device)
+                                    self._onehot_tensor(raw("card_category_suffix"), layout.card_categories[2:]), numbers), -1)
+            mask = raw("card_mask")
             cards = activate(self.card_encoder(card_input), model.card.activation).masked_fill(~mask[:, None], 0)
             source = functional.one_hot(cats[:, layout.membership_index], len(layout.card_categories[layout.membership_index]) + 2).float().masked_fill(~mask[:, None], 0)
-            order = self._float(tuple(row[layout.card_numeric_fields.index(layout.order_field)] for row in tokens.card_numerics))[:, None]
+            order = self._float_tensor(raw("card_order"))[:, None]
             actor_cards = torch.cat((cards, source, mask.float()[:, None], order), -1)
             if model.hand.kind == "direct":
-                hand = torch.cat((self._onehot(tokens.card_categories, layout.card_categories), numbers), -1)
+                hand = torch.cat((self._onehot_tensor(raw("card_categories"), layout.card_categories), numbers), -1)
                 hand = hand.masked_fill(~mask[:, None], 0).flatten()
             else:
                 hand_cards = cards[None]
@@ -283,15 +306,15 @@ def make_network(model: ModelConfigV2 | ModelConfigV3 | ModelConfigV4, seed: int
                     hand = latent.masked_fill(~mask[:, None], -torch.inf).max(0).values
                     hand = torch.where(mask.any(), hand, torch.zeros_like(hand))
             if len(tokens.interval_numerics):
-                event_input = torch.cat((self._float(tokens.interval_numerics),
-                                         self._tensor(tokens.interval_present, dtype=torch.float32, device=self.device),
-                                         self._onehot(tokens.interval_categories, layout.event_categories)), -1)
+                event_input = torch.cat((self._float_tensor(raw("interval_numerics")),
+                                         raw("interval_present"),
+                                         self._onehot_tensor(raw("interval_categories"), layout.event_categories)), -1)
                 with no_cudnn():
                     _, hidden = self.event_encoder(event_input[None])
                 event = hidden[-1, 0]
             else:
                 event = torch.zeros(model.event.hidden_size, device=self.device)
-            frame = torch.cat((state, hand, event, self._float(tokens.history)))
+            frame = torch.cat((state, hand, event, self._float_tensor(raw("history"))))
             projected = activate(self.frame_projection(frame), model.temporal.activation)
             if model.model_id == "mlp" and model.temporal.num_layers > 1:
                 projected = self.temporal_dense(projected)
@@ -401,10 +424,13 @@ def make_network(model: ModelConfigV2 | ModelConfigV3 | ModelConfigV4, seed: int
             return output[0], cards
 
         def _candidate_features(self, tokens: CandidateTokens) -> Any:
-            kinds = functional.one_hot(self._tensor(tokens.kinds, device=self.device), len(layout.action_kinds) + 2).float()
-            targets = functional.one_hot(self._tensor(tokens.targets, device=self.device), len(layout.targets) + 2).float()
-            return torch.cat((kinds, targets, self._float(tokens.numerics),
-                              self._tensor(tokens.present, dtype=torch.float32, device=self.device)), -1)
+            return self._candidate_feature_operands(lambda name: self._tensor(getattr(tokens, name),
+                dtype=torch.float32 if name in ("numerics", "present") else None, device=self.device))
+
+        def _candidate_feature_operands(self, raw: Any) -> Any:
+            kinds = functional.one_hot(raw("kinds"), len(layout.action_kinds) + 2).float()
+            targets = functional.one_hot(raw("targets"), len(layout.targets) + 2).float()
+            return torch.cat((kinds, targets, self._float_tensor(raw("numerics")), raw("present")), -1)
 
         def _references(self, tokens: CandidateTokens, start: int, end: int) -> Any:
             rows = [list(tokens.slots[tokens.offsets[index]:tokens.offsets[index + 1]]) for index in range(start, end)]
@@ -443,23 +469,23 @@ def make_network(model: ModelConfigV2 | ModelConfigV3 | ModelConfigV4, seed: int
             positions = torch.arange(model.max_positions, device=self.device)[None]
             numeric_weights = first.weight[:, width:width + candidate_width]
 
-            def chunk_forward(shared_arg: Any, projection_arg: Any, feature_arg: Any,
-                              refs_arg: Any, weight_arg: Any) -> Any:
-                x = shared_arg[None] + functional.linear(feature_arg, weight_arg)
-                x = x + projection_arg[positions, refs_arg].sum(1)
-                return self.actor[1:](x).squeeze(-1)
-
             logits = []
             for start in range(0, len(tokens.kinds), chunk_size):
                 end = min(len(tokens.kinds), start + chunk_size)
                 refs = self._references(tokens, start, end)
-                args = (shared, projection, features[start:end], refs, numeric_weights)
+                args = (shared, projection, features[start:end], refs, numeric_weights, positions)
                 if checkpoint and torch.is_grad_enabled():
                     from torch.utils.checkpoint import checkpoint as recompute
-                    logits.append(recompute(chunk_forward, *args, use_reentrant=False))
+                    logits.append(recompute(self._candidate_chunk_calculate, *args, use_reentrant=False))
                 else:
-                    logits.append(chunk_forward(*args))
+                    logits.append(self._candidate_chunk_calculate(*args))
             return torch.cat(logits)
+
+        def _candidate_chunk_calculate(self, shared_arg: Any, projection_arg: Any, feature_arg: Any,
+                                       refs_arg: Any, weight_arg: Any, positions: Any) -> Any:
+            x = shared_arg[None] + functional.linear(feature_arg, weight_arg)
+            x = x + projection_arg[positions, refs_arg].sum(1)
+            return self.actor[1:](x).squeeze(-1)
 
         def distribution(self, context: Any, cards: Any, tokens: CandidateTokens,
                          mask: Any = None, *, dense: bool = False, chunk_size: int | None = None) -> tuple[Any, Any]:
