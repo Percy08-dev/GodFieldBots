@@ -8,10 +8,13 @@ independent preimplementation review. The opt-in experiment compares packing,
 reuse, chunks, temporary padding, actual-path compilation and IEEE/TF32 while
 retaining shared model mathematics, learner behavior and existing limits.
 Experimental private tensors join resident reset verification; all cached
-identities and transitions join admission. Independent implementation reviews and
-focused verification pass; physical measurements and final acceptance remain
-pending. This scope produces a performance recommendation; learning
-quality and any production-default adoption require subsequent evidence.
+identities and transitions join admission. Both final independent reviews are
+FINAL READY; root accepts the comparison after focused/static checks,actual
+CUDA replay/profiling,18alternating trials/576natural games and18strict original/
+numeric/receipt audits. Isolated reuse inference improves9.6–14.7%,but whole-run
+results remain mixed,so production defaults stay unchanged. Conditions and limits
+are in [the verification record](verification/inference-performance-comparison.md).
+Learning quality and any later production adoption require separate evidence.
 
 [ADR0043](adr/0043-hpo-producer-owned-data.md) records the user-approved
 [producer-owned resident HPO design](design/hpo-producer-owned-data.md).

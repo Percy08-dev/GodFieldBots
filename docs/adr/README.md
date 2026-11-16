@@ -14,9 +14,10 @@
 
 ## 一覧
 
-追加: [0044](0044-inference-performance-comparison.md) — Accepted design:
+追加: [0044](0044-inference-performance-comparison.md) — Accepted,implemented and verified:
 推論packing・再利用・chunk・padding・compile・TF32を既存予算内で比較する。
-既定値・学習処理の採用変更と学習品質評価は後続。実装・計測は検証記録に従う。
+独立最終レビュー・576自然試合・18親原本監査を通過。単独推論の再利用は有利だが
+全体時間の改善は一貫せず、既定値は維持。学習品質評価は後続。
 
 追加: [0042](0042-hpo-precollection-validation-reuse.md) — Accepted design:
 resident HPOの収集前3回で実際の検証scanを保持し、元データ・native・所有権を再確認する。

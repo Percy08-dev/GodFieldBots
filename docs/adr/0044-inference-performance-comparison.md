@@ -1,12 +1,12 @@
 # 0044: Experimental inference execution comparison
 
-- Status: Accepted design and reviewed implementation; measurements pending
+- Status: Accepted,implemented and verified; root acceptance after both FINAL READY reviews
 - Date: 2026-11-16
 - Decision owner: root
 - Preimplementation review: `bot_architecture_reviewer` READY after explicit
   private-state reset and all-cache memory-accounting amendments
 - Implementation: independent correctness/spec/quality and architecture
-  conformance READY after the control/compiler/measurement fixes
+  conformance FINAL READY after the control/compiler/measurement/lifetime fixes
 
 ## Context
 
@@ -52,3 +52,18 @@ pairs per model under the unchanged short protocol; original Source/termination
 audits after timing. Record exact commands, individual results and limitations in
 the [verification record](../verification/inference-performance-comparison.md).
 No new output/action equality or custom error-threshold gate is introduced.
+
+Final evidence passes the scoped checks and all physical comparisons:100covering
+checks,57affected policy checks,final30focused checks,Ruff/mypy9;24paired-screen
+and12follow-up replays,14separate CUDA profiles,actual cache-hit proof,18actual
+trials/576natural games and18strict original/numeric/receipt audits.1,620physical
+file instances retain their SHA/stat identity. Both final independent reviews
+are FINAL READY and root accepts this comparison scope.
+
+Reusable input storage improves isolated inference9.6–14.7%,but actual paired
+whole-helper changes are−0.09% MLP,+2.21% GRU and−0.92% Transformer. Keep normal
+defaults. Scorer compilation has no finite measured payback; observed TF32
+TensorOp kernels do not yield a useful whole-route gain. Broader compiled regions,
+maximum-capacity stress,hardware utilization and learning quality remain outside
+this evidence. Revisit adoption only with consistent benefit in the intended
+parallel workflow and any necessary quality/identity acceptance.
