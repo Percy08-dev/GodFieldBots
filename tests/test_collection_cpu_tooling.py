@@ -119,6 +119,7 @@ def test_actual_installer_charge_symmetry_and_original_bootstrap_arguments(tmp_p
     from gf_models import structured_runtime
     from gf_simulator_client.resident_pool import ResidentPhysicalWorker
     base = {'workers':4,'ram_phases':{'collection':100,'save':200},'worker_bytes':30,
+            'worker_host_bytes':40,'cuda_phases':{'collection':50,'save':25},
             'peak_cuda_bytes':50,'managed_ram_bytes':2**40,'managed_cuda_bytes':2**40}
     for settings in (Options(),Options(parent=True,transfer='T2',http=True)):
         replacements = execution_patches(settings,tmp_path)
@@ -132,6 +133,9 @@ def test_actual_installer_charge_symmetry_and_original_bootstrap_arguments(tmp_p
         result = charged(None,InferenceBindingV2())
         assert result['experimental_storage_per_worker']==96*1024**2
         assert result['ram_phases']['collection']==100+4*96*1024**2
+        assert result['worker_bytes']==30+4*96*1024**2
+        assert result['worker_host_bytes']==40+4*96*1024**2
+        assert result['cuda_phases']=={'collection':50+4*96*1024**2,'save':25+4*96*1024**2}
         assert (structured_runtime,'hpo_resident_training_admission') in wrapped
 
 

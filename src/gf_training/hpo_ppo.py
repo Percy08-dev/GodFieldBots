@@ -117,11 +117,13 @@ class _HpoOperations(_GameOperations):
         self.runtime.preflight()
         if config.hpo_spec['schema_version'] in (3,4):
             from gf_models.structured_runtime import hpo_resident_training_admission
+            input_binding_game_v3(config.actions.action_contract,card_instance_rules())
             hpo_resident_training_admission(config.model.architecture(layout=LAYOUT),config.model.inference,
                 config.hpo_spec['training_recipe']['tbptt_length'],config.hpo_spec['operating'],config.hpo_spec['runtime'],layout=LAYOUT)
-        from gf_models.structured_runtime import admit_hpo_training
-        admit_hpo_training(config.actions,config.model.architecture(layout=LAYOUT),config.model.inference,
-            config.hpo_spec['training_recipe']['tbptt_length'],config.hpo_spec['operating'],rules=card_instance_rules())
+        else:
+            from gf_models.structured_runtime import admit_hpo_training
+            admit_hpo_training(config.actions,config.model.architecture(layout=LAYOUT),config.model.inference,
+                config.hpo_spec['training_recipe']['tbptt_length'],config.hpo_spec['operating'],rules=card_instance_rules())
 
     def initialize_state(self,state: Json,config: Any) -> None:
         from gf_training.structured_ppo import execution

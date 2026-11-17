@@ -791,9 +791,10 @@ async def collect_hpo_ppo(loaded: LoadedConfig,plan: CollectionPlan,ledger: Rese
         max_owned_bytes=min(parent_limit,config.model.resources.max_owned_bytes),
         preflight_deadline=preflight_deadline,finalization_deadline=work_deadline))
     try:
-        admissions=[admit_hpo_game_workers(config.actions,(plan.bindings[spec.policies[0]],plan.bindings[spec.policies[1]]),
+        admissions=[(resident.game_admission((plan.bindings[spec.policies[0]],plan.bindings[spec.policies[1]]))
+            if resident is not None else admit_hpo_game_workers(config.actions,(plan.bindings[spec.policies[0]],plan.bindings[spec.policies[1]]),
             rules=card_instance_rules(),game_concurrency=config.run.concurrency,global_cuda_bytes=config.run.global_cuda_budget_bytes,
-            max_workers=config.run.max_participant_workers,learner_cuda_bytes=ledger.learner.resident_bytes if pool is not None and ledger.learner is not None else ledger.cuda_bytes)
+            max_workers=config.run.max_participant_workers,learner_cuda_bytes=ledger.cuda_bytes))
             for group in plan.groups for spec in group.episodes]
         if not admissions: raise ContractError('HPO collection cannot have an empty schedule')
         result=await _run_corrected(loaded,'collect',plan.bindings,tuple(plan.bindings),started=started,

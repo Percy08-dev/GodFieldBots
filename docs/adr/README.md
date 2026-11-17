@@ -14,6 +14,9 @@
 
 ## 一覧
 
+追加: [0051](0051-resident-actor-cuda-admission.md) — 常駐HPO学習に限り、推論参加者のCUDA予約を
+単一意思決定の形状から計算。モデル種別ごとの時系列状態とcacheを実際の台帳へ反映する。
+
 追加: [0050](0050-resident-training-cache-accounting.md) — 常駐HPO学習poolのモデル形状別cache容量と
 並行BEGIN・逐次SYNCの予約を実行時ledgerに反映する。共有推論の仕様判断とlearnerのRAM/CUDA計算は別途。
 

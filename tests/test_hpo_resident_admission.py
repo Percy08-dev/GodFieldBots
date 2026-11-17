@@ -69,7 +69,8 @@ def test_one_cache_slot_does_not_charge_active_weights_twice_but_keeps_positions
     assert admitted['cached_networks_per_worker'] == 1
     assert admitted['cache_weight_bytes'] == 0
     assert admitted['cache_position_bytes'] == 4 * 4194304
-    assert admitted['worker_bytes'] == base['worker_bytes'] + 4 * 4194304
+    assert admitted['worker_host_bytes'] == base['worker_bytes'] + 4 * 4194304
+    assert admitted['worker_bytes'] == 0  # CPU actor; host retention remains full.
 
 
 @pytest.mark.parametrize('kind,weights', [('mlp', 4583688), ('gru', 4979976),
@@ -83,7 +84,8 @@ def test_all_phases_keep_cache_but_only_collection_has_concurrent_begin(kind, we
     extra = 6 * (5 * weights + 6 * 524288)
     resident = base['worker_bytes'] + extra
     fixed = operating['parent_budget_bytes'] + base['learner_bytes']
-    assert admitted['worker_bytes'] == resident
+    assert admitted['worker_host_bytes'] == resident
+    assert admitted['worker_bytes'] == 0
     assert admitted['ram_phases'] == {
         'collection': fixed + resident + operating['collector_budget_bytes'] + 6 * 134217728,
         'update': base['ram_phases']['update'] + resident,
@@ -91,10 +93,10 @@ def test_all_phases_keep_cache_but_only_collection_has_concurrent_begin(kind, we
         'sync': fixed + resident + 134217728,
     }
     assert admitted['cuda_phases'] == {
-        'collection': base['learner_bytes'] + resident + 6 * 134217728,
-        'update': base['learner_bytes'] + resident,
-        'save': base['learner_bytes'] + resident,
-        'sync': base['learner_bytes'] + resident + 134217728,
+        'collection': base['learner_bytes'] + 6 * 134217728,
+        'update': base['learner_bytes'],
+        'save': base['learner_bytes'],
+        'sync': base['learner_bytes'] + 134217728,
     }
     assert admitted['begin_staging_bytes'] == 6 * 134217728
     assert admitted['staging_bytes'] == 134217728
@@ -341,11 +343,11 @@ def test_reaped_begin_import_remains_charged_until_original_uncertain_setup_reti
 
 
 @pytest.mark.parametrize('resource', ['ram', 'cuda'])
-def test_actual_resident_campaign_base_refusal_keeps_phase_and_numbers(tmp_path, resource):
+def test_actual_fresh_campaign_base_refusal_keeps_phase_and_numbers(tmp_path, resource):
     from gf_cli.hpo_config import campaign_config, joint_resource_admission
     from tests.test_hpo_config import campaign_raw
 
-    campaign = campaign_config({**campaign_raw(), 'schema_version': 3, 'runtime': RUNTIME,
+    campaign = campaign_config({**campaign_raw(),
         'operating': {'game_concurrency': 8, 'max_participant_workers': 16,
             'managed_ram_bytes': 128 * 1024**3, 'managed_cuda_bytes': 128 * 1024**3}}, origin=tmp_path)
     config = campaign.config

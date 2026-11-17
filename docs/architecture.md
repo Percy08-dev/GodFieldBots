@@ -2,6 +2,11 @@
 
 ## Status and scope
 
+[ADR0051](adr/0051-resident-actor-cuda-admission.md) refines ADR0050 with a
+role-specific no-grad single-participant CUDA estimate for homogeneous HPO
+resident training. The pool and collector use the same device lease; active
+actor host RAM and learner execution accounting have separate limitations.
+
 [ADR0050](adr/0050-resident-training-cache-accounting.md) adopts shape-based
 Model4 HPO training cache accounting (`hpo-resident-cache-envelope-v2`).
 A constructing participant holds its concurrent BEGIN charge through inner

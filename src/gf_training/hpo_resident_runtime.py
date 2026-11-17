@@ -45,6 +45,20 @@ class ResidentTrainingRuntime:
         self.transition: Any = None
         self.envelope = envelope
 
+    def game_admission(self, roles: tuple[Any,Any]) -> Json:
+        """Collector admission uses this actual pool, including explicit extras."""
+        from gf_common.card_instance_rules import card_instance_rules
+        from gf_common.structured_layout import CORRECTED_CARD_INSTANCE_LAYOUT as layout
+        from gf_models.structured_runtime import admit_hpo_resident_game_workers
+        self.custody._require()
+        ledger, operating = self.job.ledger, self.config.hpo_spec['operating']
+        return admit_hpo_resident_game_workers(self.config.actions,roles,rules=card_instance_rules(),
+            model=self.config.model.architecture(layout=layout),inference=self.config.model.inference,
+            worker_cuda_bytes=self.pool.resident_bytes,begin_import_bytes=self.pool.begin_import_bytes,
+            game_concurrency=operating['game_concurrency'],global_cuda_bytes=ledger.global_cuda_bytes,
+            max_workers=ledger.max_workers,
+            learner_cuda_bytes=0 if ledger.learner is None else ledger.learner.resident_bytes)
+
     def _identity(self, owner: Any) -> Json:
         return self.custody._identity(self.custody._row(owner.lease))
 
