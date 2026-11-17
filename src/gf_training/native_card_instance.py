@@ -936,8 +936,10 @@ class _NativeGameInputs(NativeStructuredSource):
             if self._published is not None:
                 raise ContractError('one native live numeric publication required')
             payload = self._native_call(self._session.export_cohort)
-        metadata, arrays = _payload_views(payload, game=True, recorded=recorded, packed=self._artifact_provider is not None, hpo=self._hpo)
         assert self.summary is not None
+        max_workers = self.summary['parent']['state']['effective_config']['hpo_spec']['operating']['max_participant_workers'] if self._hpo else 4
+        metadata, arrays = _payload_views(payload, game=True, recorded=recorded, packed=self._artifact_provider is not None,
+            hpo=self._hpo, max_workers=max_workers)
         collection = self.summary['collections'][index]
         if (metadata['collection_index'] != index
                 or canonical(metadata['source_proof']) != canonical(collection['source_proof'])

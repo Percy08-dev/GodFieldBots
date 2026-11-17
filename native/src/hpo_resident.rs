@@ -124,7 +124,10 @@ fn ack(value: &Value) -> Result<()> {
     }
     Ok(())
 }
-pub(crate) fn retirement(value: &Value, b: &Arc<Budget>, c: &Control) -> Result<()> {
+pub(crate) fn retirement(value: &Value, max_workers: i128, b: &Arc<Budget>, c: &Control) -> Result<()> {
+    if !(1..=i64::MAX as i128).contains(&max_workers) {
+        return Err(Error::contract("positive signed63 expected resident capacity required"));
+    }
     value.closed(
         &[
             "schema_version",
@@ -145,13 +148,13 @@ pub(crate) fn retirement(value: &Value, b: &Arc<Budget>, c: &Control) -> Result<
     n(value, "pool_epoch", 1, i64::MAX as i128)?;
     n(value, "generation", 0, i64::MAX as i128)?;
     let rows = value.require("owners")?.array()?;
-    if rows.is_empty() || rows.len() > 4 {
+    if rows.is_empty() || rows.len() as i128 > max_workers {
         return Err(Error::contract(
-            "resident owner set must contain1to4physical owners",
+            "resident owner set exceeds expected physical capacity",
         ));
     }
     let mut keys = BTreeSet::new();
-    let mut viewers = [0usize; 2];
+    let mut viewers = [0i128; 2];
     for row in rows {
         c.check()?;
         let mut fields = OWNER.to_vec();
@@ -163,8 +166,8 @@ pub(crate) fn retirement(value: &Value, b: &Arc<Budget>, c: &Control) -> Result<
         }
         let viewer = n(row, "viewer", 1, 2)? as usize - 1;
         viewers[viewer] += 1;
-        if viewers[viewer] > 2 {
-            return Err(Error::contract("resident viewer partition exceeds2owners"));
+        if viewers[viewer] > max_workers / 2 {
+            return Err(Error::contract("resident viewer partition exceeds expected capacity"));
         }
         for (name, command) in [("end_ack", "END"), ("park_ack", "PARK")] {
             let a = row.require(name)?;
@@ -567,8 +570,64 @@ pub(crate) fn cache_references(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
+
+    pub(crate) fn retirement_fixture(b: &Arc<Budget>, c: &Control) -> Value {
+        let mut value = serde_json::json!({
+            "schema_version":1, "kind":"hpo-resident-logical-retirement", "run_id":"run-a",
+            "collection_id":"batch-000000", "job_ticket":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "pool_id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "pool_epoch":1, "generation":0, "owners":[]
+        });
+        for index in 0..8 {
+            let mut row = serde_json::json!({"job_ticket":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "pool_id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "pool_epoch":1,
+                "worker_key":index+1,"pid":1000+index,"viewer":1+index%2,"lease_epoch":1});
+            let mut a = row.clone();
+            for (key, item) in serde_json::json!({"schema_version":1,"protocol":"resident-worker-v1",
+                "run_id":"run-a","generation":0,"checkpoint_sha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+                "cache_identity":null,"clean_reset":true,"private_state_empty":true,"pending_io_empty":true,
+                "cuda_synchronized":true,"reset_version":"resident-reset-v1"}).as_object().unwrap() {
+                a[key] = item.clone();
+            }
+            a["command"] = json::text("END"); a["request_epoch"] = json::integer(1);
+            row["end_ack_sha256"] = json::text(&digest(&a, &b, &c).unwrap()); row["end_ack"] = a.clone();
+            a["command"] = json::text("PARK"); a["request_epoch"] = json::integer(2);
+            row["park_ack_sha256"] = json::text(&digest(&a, &b, &c).unwrap()); row["park_ack"] = a;
+            value["owners"].as_array_mut().unwrap().push(row);
+        }
+        value
+    }
+
+    #[test]
+    fn configurable_retirement_checks_original_capacity_and_all_owner_acks() {
+        let b = Budget::new(8 << 20);
+        let c = Control::new(crate::budget::monotonic() + 30.).unwrap();
+        let value = retirement_fixture(&b, &c);
+        retirement(&value, 8, &b, &c).unwrap();
+        retirement(&value, 9, &b, &c).unwrap();
+        for capacity in [0, 4, 7, i64::MAX as i128 + 1] {
+            assert!(retirement(&value, capacity, &b, &c).is_err());
+        }
+        let mut broken = value.clone();
+        broken["owners"][7] = broken["owners"][0].clone();
+        assert!(retirement(&broken, 8, &b, &c).is_err());
+        broken = value.clone();
+        broken["owners"][7]["viewer"] = json::integer(1);
+        for name in ["end_ack", "park_ack"] {
+            broken["owners"][7][name]["viewer"] = json::integer(1);
+            broken["owners"][7][format!("{name}_sha256")] = json::text(&digest(&broken["owners"][7][name], &b, &c).unwrap());
+        }
+        assert!(retirement(&broken, 9, &b, &c).is_err());
+        broken = value.clone();
+        broken["owners"][7]["park_ack"]["request_epoch"] = json::integer(1);
+        broken["owners"][7]["park_ack_sha256"] = json::text(&digest(&broken["owners"][7]["park_ack"], &b, &c).unwrap());
+        assert!(retirement(&broken, 8, &b, &c).is_err());
+        broken = value.clone();
+        broken["owners"][7]["end_ack"]["private_state_empty"] = Value::Bool(false);
+        broken["owners"][7]["end_ack_sha256"] = json::text(&digest(&broken["owners"][7]["end_ack"], &b, &c).unwrap());
+        assert!(retirement(&broken, 8, &b, &c).is_err());
+    }
 
     #[test]
     #[ignore = "explicit bounded unqualified CPU originals; GFB_RESIDENT_NATIVE_FIXTURES required"]
@@ -641,7 +700,7 @@ mod tests {
             );
             if live {
                 let raw = &pending.summary.root["collections"][0];
-                retirement(&raw["logical_retirement"], &b, &c).unwrap();
+                retirement(&raw["logical_retirement"], 4, &b, &c).unwrap();
                 let selection =
                     json::parse(&std::fs::read(root.join("selection.json")).unwrap(), &b, &c)
                         .unwrap();

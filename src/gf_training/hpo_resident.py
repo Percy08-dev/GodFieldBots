@@ -399,7 +399,7 @@ class ResidentPoolCustody:
                 or worker.key in self._owners or worker._owner is not owner
                 or self.job.ledger.updating or self.ledger._resident_transition):
             raise ContractError('resident registration requires unbound original physical owner')
-        if sum(row.viewer == viewer and not row.worker.released for row in self._owners.values()) >= 2:
+        if sum(row.viewer == viewer and not row.worker.released for row in self._owners.values()) >= self.ledger.max_workers // 2:
             raise ContractError('resident physical viewer partition is full')
         row = _Owner(worker, owner, viewer)
         self._live(row)
@@ -739,7 +739,7 @@ class ResidentPoolCustody:
             'run_id':self.run_id,'collection_id':collection_id,'job_ticket':self.job.ticket,
             'pool_id':self.pool_id,'pool_epoch':self.pool_epoch,'generation':generation,
             'owners':[{**self._identity(row),'end_ack':row.end_ack,'end_ack_sha256':digest(row.end_ack),
-                'park_ack':row.park_ack,'park_ack_sha256':digest(row.park_ack)} for _,row in sorted(self._owners.items()) if not row.worker.released]})
+                'park_ack':row.park_ack,'park_ack_sha256':digest(row.park_ack)} for _,row in sorted(self._owners.items()) if not row.worker.released]}, max_workers=self.ledger.max_workers)
 
     def parked_authority(self, *, generation: int, collection_id: str) -> ParkedAuthority:
         self._require()

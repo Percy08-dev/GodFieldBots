@@ -87,8 +87,8 @@ pub(crate) fn spec<'a>(state: &'a Value, b: &Arc<Budget>, c: &Control) -> Result
     for key in OPERATING {
         n(operating, key, 1, i64::MAX as i128)?;
     }
-    let games = n(operating, "game_concurrency", 1, 2)?;
-    let workers = n(operating, "max_participant_workers", 1, 4)?;
+    let games = n(operating, "game_concurrency", 1, i64::MAX as i128)?;
+    let workers = n(operating, "max_participant_workers", 1, i64::MAX as i128)?;
     if workers < 2 * games {
         return Err(Error::contract(
             "HPO simultaneous player worker projection invalid",
@@ -1630,7 +1630,8 @@ fn update_metadata(
     proof.closed(&proof_keys, &[])?;
     n(proof, "schema_version", if resident {4} else {3}, if resident {4} else {3})?;
     if resident {
-        resident::retirement(proof.require("logical_retirement")?, &b, &c)?;
+        let max_workers = n(spec(state, &b, &c)?.require("operating")?, "max_participant_workers", 1, i64::MAX as i128)?;
+        resident::retirement(proof.require("logical_retirement")?, max_workers, &b, &c)?;
         let retirement = proof.require("logical_retirement")?;
         eq(retirement.require("run_id")?, state.require("run_id")?, "Proof4 original run differs")?;
         eq(retirement.require("generation")?, previous.require("generation")?, "Proof4 original generation differs")?;
@@ -2944,6 +2945,32 @@ mod tests {
             broken["identity"]["integration"]["foreign"] = Value::Bool(true);
             reseal_run(&mut broken, &b, &c);
             assert!(run(&broken, &b, &c).is_err());
+        }
+    }
+
+    #[test]
+    fn hpo_configurable_game_and_worker_capacity_preserves_projection() {
+        let b = Budget::new(128 << 20);
+        let c = Control::new(crate::budget::monotonic() + 30.).unwrap();
+        let all = json::parse(include_bytes!("../tests/fixtures/hpo_metadata5_rules_v2.json"), &b, &c).unwrap();
+        for case in all.root["cases"].array().unwrap() {
+            let mut state = case["state"].clone();
+            state["effective_config"]["hpo_spec"]["operating"]["game_concurrency"] = json::integer(4);
+            state["effective_config"]["hpo_spec"]["operating"]["max_participant_workers"] = json::integer(8);
+            state["effective_config"]["run"]["concurrency"] = json::integer(4);
+            state["effective_config"]["run"]["max_participant_workers"] = json::integer(8);
+            reseal_run(&mut state, &b, &c);
+            assert!(run(&state, &b, &c).is_ok());
+            state["effective_config"]["run"]["max_participant_workers"] = json::integer(4);
+            reseal_run(&mut state, &b, &c);
+            assert!(run(&state, &b, &c).is_err());
+            state["effective_config"]["hpo_spec"]["operating"]["game_concurrency"] = json::integer(i64::MAX as i128 / 2);
+            state["effective_config"]["hpo_spec"]["operating"]["max_participant_workers"] = json::integer(i64::MAX as i128);
+            reseal_run(&mut state, &b, &c);
+            assert!(spec(&state, &b, &c).is_ok());
+            state["effective_config"]["hpo_spec"]["operating"]["game_concurrency"] = json::integer(i64::MAX as i128);
+            reseal_run(&mut state, &b, &c);
+            assert!(spec(&state, &b, &c).is_err());
         }
     }
 

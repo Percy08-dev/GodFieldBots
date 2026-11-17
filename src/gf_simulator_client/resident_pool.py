@@ -417,13 +417,13 @@ class ResidentParticipantPool:
         partition = [owner for owner in self.owners if owner.viewer == viewer and not owner.lease.released]
         available = [owner for owner in partition if owner.loan is None and not owner.closed]
         # Prefer unused physical owners in this collection. Do not infer usage
-        # from configured concurrency or assume all four processes participate.
+        # from configured concurrency or assume every configured physical slot participates.
         available.sort(key=lambda owner: owner.lease.key in self.admission.used)
         if available:
             owner = available[0]
         else:
-            if len(partition) >= 2 or len(self.ledger.workers) >= 4:
-                raise ContractError('resident fixed viewer partition has no physical slot')
+            if len(partition) >= self.ledger.max_workers // 2 or len(self.ledger.workers) >= self.ledger.max_workers:
+                raise ContractError('resident viewer partition has no physical slot')
             try:
                 owner = ResidentPhysicalWorker.__new__(ResidentPhysicalWorker)
                 self.owners.append(owner)

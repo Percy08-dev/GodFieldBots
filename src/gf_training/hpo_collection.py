@@ -93,7 +93,10 @@ def check_hpo_collection(manifest: Json) -> None:
     link = checked_linkage(manifest.get('linkage'), role=hpo_batch_role(recipe.collection_games),
         schedule=manifest.get('schedule', []), registry=manifest.get('policy_bindings'))
     if resident:
-        retirement = checked_retirement(manifest.get('logical_retirement'))
+        max_workers = integer(spec.get('operating', {}).get('max_participant_workers'), 1, 2**63-1)
+        if integer(config.get('run', {}).get('max_participant_workers'), 1, 2**63-1) != max_workers:
+            raise ContractError('resident collection worker capacity differs from HPO operating projection')
+        retirement = checked_retirement(manifest.get('logical_retirement'), max_workers=max_workers)
         if (retirement['run_id'] != link['parent_run_id'] or retirement['collection_id'] != link['batch_id']
                 or retirement['generation'] != link['collection_generation']):
             raise ContractError('Collection7 logical retirement differs from original collection/run/generation')

@@ -276,7 +276,11 @@ def _checked_evaluation_metadata(value: Json) -> Json:
     if resident:
         from gf_common.hpo_resident import checked_evaluation_runtime, checked_retirement
         checked_evaluation_runtime(value['execution_runtime'],raw,value['policy_bindings'])
-        retirement = checked_retirement(value['logical_retirement'])
+        config = value['config']
+        max_workers = integer(config.get('hpo_spec', {}).get('operating', {}).get('max_participant_workers'), 1, 2**63-1)
+        if integer(config.get('run', {}).get('max_participant_workers'), 1, 2**63-1) != max_workers:
+            raise ContractError('resident evaluation worker capacity differs from HPO operating projection')
+        retirement = checked_retirement(value['logical_retirement'], max_workers=max_workers)
         if (retirement['run_id'] != raw['evaluation_id'] or retirement['collection_id'] != raw['evaluation_id']
                 or retirement['job_ticket'] != raw['gpu_ticket'] or retirement['generation'] != 0):
             raise ContractError('resident evaluation retirement differs from actual panel')

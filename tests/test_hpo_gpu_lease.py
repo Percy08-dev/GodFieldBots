@@ -379,7 +379,7 @@ def test_hpo_larger_cuda_ceiling_reuses_joint_accounting_and_preserves_legacy_li
                 process.wait(timeout=5)
     asyncio.run(scenario())
     with pytest.raises(ContractError):
-        gpu.admit_gpu_job(context(), global_cuda_bytes=16 * gib, max_workers=5)
+        gpu.admit_gpu_job(context(), global_cuda_bytes=16 * gib, max_workers=2**63)
 
 
 def test_closed_lock_descriptor_and_closed_job_forbid_further_decision_work(global_root):

@@ -71,8 +71,9 @@ def checked_ack(value: Json) -> Json:
     return raw
 
 
-def checked_retirement(value: Any) -> Json:
+def checked_retirement(value: Any, *, max_workers: int = 4) -> Json:
     from gf_common.domain import canonical, digest
+    integer(max_workers, 1, 2**63-1)
     raw = closed(value, {'schema_version', 'kind', 'run_id', 'collection_id', 'job_ticket',
         'pool_id', 'pool_epoch', 'generation', 'owners'})
     integer(raw['schema_version'], 1, 1)
@@ -80,7 +81,7 @@ def checked_retirement(value: Any) -> Json:
     integer(raw['generation'], 0, 2**63-1)
     if (raw['kind'] != 'hpo-resident-logical-retirement' or type(raw['collection_id']) is not str
             or re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,127}', raw['collection_id']) is None
-            or type(raw['owners']) is not list or not 1 <= len(raw['owners']) <= 4):
+            or type(raw['owners']) is not list or not 1 <= len(raw['owners']) <= max_workers):
         raise ContractError('closed resident logical retirement evidence required')
     seen = set()
     viewers = {1:0, 2:0}
@@ -91,8 +92,8 @@ def checked_retirement(value: Any) -> Json:
             raise ContractError('resident retirement repeats physical owner')
         seen.add(row['worker_key'])
         viewers[row['viewer']] += 1
-        if viewers[row['viewer']] > 2:
-            raise ContractError('resident viewer has more than two physical owners')
+        if viewers[row['viewer']] > max_workers // 2:
+            raise ContractError('resident viewer exceeds declared physical owner partition')
         for name, command in (('end_ack', 'END'), ('park_ack', 'PARK')):
             ack = checked_ack(row[name])
             if ack['command'] != command or row[name+'_sha256'] != digest(ack):

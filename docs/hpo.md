@@ -327,6 +327,38 @@ device全体ピークは別に扱います。進捗保存・表示の失敗は�
 共有encoder、実際のworker数、保持中のSource、更新・保存時の共存を共同で検査します。
 管理上限はOSによるhard quotaではなく、使用量の観測とは区別します。
 
+### 試合の並列数
+
+HPOでは`[operating]`の`game_concurrency`で試合の同時実行数を指定します。
+正の整数を指定でき、従来の固定2試合・4worker上限はありません。
+`max_participant_workers`には、両参加者を確保するため並列数の2倍以上が必要です。
+既定値は2試合・4workerのままで、3モデルの予備検証設定には明示しています。
+4並列にする場合は、既存の`[operating]`内の並列数とworker枠を変更します。
+現在の予備検証設定では4並列のCUDA見積りが約15GiBとなるため、既定12GiBの
+管理予算も変更が必要です。次は管理予算を16GiBにした例です。
+
+```toml
+[operating]
+game_concurrency = 4
+max_participant_workers = 8
+managed_cuda_bytes = 17179869184 # 16GiB; a managed estimate, not a physical fit guarantee.
+```
+
+`training.collection_games = 16`は1回の収集で回す総試合数であり、
+同時実行数とは別です。実際の同時数はスケジュール内で同時に実行できる
+試合数までです。Optunaの提案は引き続き1件ずつ実行します。
+
+並列数を増やすと、参加者プロセス・モデル・CUDA context・キャッシュ等の
+使用量が増えます。`managed_ram_bytes`・`managed_cuda_bytes`に対する
+既存の見積り検査は継続し、設定予算を超える場合は実行前に拒否します。
+この検査は実機での容量保証ではありません。並列数とメモリ予算は利用者が
+環境に合わせて設定し、実際にOOMが起きた場合も利用者側で調整します。
+OOM後に自動で並列数を下げたり、学習を成功扱いで継続したりはしません。
+
+設定変更は新規実行に適用します。実行中・休止中のcampaignの設定を変更して
+resumeせず、新しいcampaign名で`fresh`を使用してください。過去の固定実験条件と
+通常実行の2試合・4worker上限は、このHPO拡張では変更しません。
+
 `[storage]`の`parent_root`・`numeric_root`・`optuna_path`はext4側です。
 現行実装は`numeric_root == parent_root`の配置を要求します。
 `originals_root`は学習・評価の圧縮対戦原本DBの保存先です。

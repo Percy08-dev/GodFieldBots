@@ -378,6 +378,7 @@ def _scan(lock: _Lock, *, allow_missing_current: bool = False) -> dict[str, tupl
 
 class _AuditedLedger(ReservationLedger):
     _MAX_GLOBAL_CUDA_BYTES = 2**63 - 1
+    _MAX_WORKERS = 2**63 - 1
 
     def __init__(self, job: GpuJob, global_cuda_bytes: int, max_workers: int) -> None:
         super().__init__(global_cuda_bytes, max_workers)

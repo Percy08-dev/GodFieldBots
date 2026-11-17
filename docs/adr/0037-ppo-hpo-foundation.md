@@ -5,6 +5,9 @@
 - Date: 2026-11-12
 - Owner: root
 - Baseline: `040184223a4bdcde85875f556daeb4a160ee7027`
+- The fixed HPO2-game/4-worker upper bound is superseded by
+  [ADR0049](0049-configurable-hpo-game-concurrency.md); its default conditions,
+  historical evidence and all other resource/qualification decisions remain.
 
 ## Context
 

@@ -14,6 +14,13 @@
 
 ## 一覧
 
+追加: [0049](0049-configurable-hpo-game-concurrency.md) — Accepted, implemented and verified:
+HPOの試合並列数とworker枠を設定可能にし、元のledger/config容量を
+常駐workerと終了記録のPython/Rust検証へ伝える。既定2/4・同時trial1・
+管理予算検査は維持し、実機OOM時の設定調整は利用者が行う。両独立レビューREADY、
+8owner/4並列のCPU確認、Python/Rust検証、native更新と3モデルのCLI検証はPASS。
+実学習・実機の容量／性能測定は手動実行として未実施。
+
 追加: [0046](0046-standard-bounded-ppo-updates.md) — Accepted design:
 利用者承認に基づくModel4通常経路の高速版統一と、長大入力の事前分割。
 旧経路は内部検証用として保持。極端設定の容量保証は対象外とし、上限と失敗処理を維持。

@@ -9,8 +9,8 @@ import pytest
 from gf_common.domain import RuntimePolicyBinding, clone, digest
 
 
-@pytest.mark.parametrize('resident_parent,resident_execution',[(False,True),(True,False),(True,True)])
-def test_actual_eval_collector_crosses_producer_and_explicit_runtime_independently(tmp_path,monkeypatch,resident_parent,resident_execution):
+@pytest.mark.parametrize('resident_parent,resident_execution,concurrency',[(False,True,2),(True,False,2),(True,True,2),(True,True,4)])
+def test_actual_eval_collector_crosses_producer_and_explicit_runtime_independently(tmp_path,monkeypatch,resident_parent,resident_execution,concurrency):
     import gf_cli.card_instance as core
     from gf_cli.config import LoadedConfig
     from gf_cli.hpo_evaluation import (
@@ -50,6 +50,10 @@ def test_actual_eval_collector_crosses_producer_and_explicit_runtime_independent
     config=replace(loaded.config,storage=replace(loaded.config.storage,db_root=str(tmp_path/'db'),ram_root=str(tmp_path/'ram')))
     if resident_parent:
         config=replace(config,hpo_spec=clone(state['effective_config']['hpo_spec']))
+    if concurrency == 4:
+        spec=clone(config.hpo_spec)
+        spec['operating'].update(game_concurrency=4,max_participant_workers=8)
+        config=replace(config,run=replace(config.run,concurrency=4,max_participant_workers=8),hpo_spec=spec)
     raw=clone(asdict(config))
     loaded=LoadedConfig(config,raw,digest(raw),loaded.inputs)
     link=old_plan.linkage
@@ -57,10 +61,12 @@ def test_actual_eval_collector_crosses_producer_and_explicit_runtime_independent
     parent.update(run_id=state['run_id'],run_path=str(tmp_path/'parent'),training_seed=17,generation=0,
         generation_sha256=state['generation_sha256'],inference_sha256=records[0]['inference_sha256'],policy_label=label)
     job=admit_gpu_job(JobContext(link['campaign_id'],link['evaluation_id'],'evaluation',state['run_id'],link['evaluation_id']),
-        global_cuda_bytes=config.run.global_cuda_budget_bytes,max_workers=4)
+        global_cuda_bytes=config.run.global_cuda_budget_bytes,max_workers=config.run.max_participant_workers)
     pin=pin_hpo_evaluation(tmp_path/'parent',job.ticket,0,records[0]['inference_sha256'],
         max_owned_bytes=1024**3,deadline=start+30)
     link['gpu_ticket']=job.ticket
+    if concurrency == 4:
+        link['game_seeds']=[str(__import__('uuid').UUID(int=index+1)) for index in range(4)]
     groups=hpo_evaluation_groups(link)
     schedule=serialize_schedule(groups,4)
     link.update(schedule_digest=digest(schedule),policy_registry_digest=digest({key:asdict(value) for key,value in bindings.items()}),
@@ -70,7 +76,11 @@ def test_actual_eval_collector_crosses_producer_and_explicit_runtime_independent
         started_monotonic=start,admission_deadline=start+20,execution_deadline=start+90,work_deadline=start+119,wall_deadline=start+120)
     install_component_execution(monkeypatch,cpu_processes=False)
     facts=CardInstanceSimulatorEnvironment.run_group
+    overlap={'live':0,'peak':0,'pids':set()}
+    gate=None
     async def component_group(self,group):
+        nonlocal gate
+        if gate is None: gate=asyncio.Event()
         # Own the real resident processes/leases; facts below remain explicitly
         # hand-authored and cannot pass replay/Source qualification.
         for spec in group.episodes:
@@ -80,6 +90,14 @@ def test_actual_eval_collector_crosses_producer_and_explicit_runtime_independent
                 for viewer in (1,2)]
             for worker in workers:
                 await worker.initialize()
+            if concurrency == 4:
+                overlap['live']+=1
+                overlap['peak']=max(overlap['peak'],overlap['live'])
+                overlap['pids'].update(worker.process.pid for worker in workers)
+                if overlap['live']==4: gate.set()
+                await asyncio.wait_for(gate.wait(),10)
+                overlap['live']-=1
+            for worker in workers:
                 if self.resident_pool is not None: worker.mark_completed()
             await asyncio.gather(*(worker.close() for worker in workers))
         return await facts(self,group)
@@ -88,6 +106,8 @@ def test_actual_eval_collector_crosses_producer_and_explicit_runtime_independent
     progress=[]
     try:
         result=asyncio.run(core.collect_hpo_evaluation(loaded,plan,gpu_job=job,artifact_inputs=owner,_cleanup_observation=observation,progress=progress.append))
+        if concurrency == 4:
+            assert overlap['peak']==4 and len(overlap['pids'])==8
         phases=[value['phase'] for value in progress if 'phase' in value]
         assert phases[0]=='evaluate' and phases[-1]=='cleanup'
         assert any(value.get('transient_games',0)>0 for value in progress)
@@ -96,8 +116,8 @@ def test_actual_eval_collector_crosses_producer_and_explicit_runtime_independent
         assert not job.ledger.workers
         if resident_execution:
             owners=observation._resident_runtime.pool.owners
-            assert len(owners)==4 and job.ledger.serial==4
-            assert all(sum(owner.viewer==viewer for owner in owners)==2 for viewer in (1,2))
+            assert len(owners)==2*concurrency and job.ledger.serial==2*concurrency
+            assert all(sum(owner.viewer==viewer for owner in owners)==concurrency for viewer in (1,2))
         assert job.ticket in read_json(tmp_path/'parent/artifact-registry.json')['evaluation_references']
         artifacts=open_artifact_source(result.locator,deadline=time.monotonic()+30,max_owned_bytes=512*1024**2)
         try:
@@ -108,6 +128,7 @@ def test_actual_eval_collector_crosses_producer_and_explicit_runtime_independent
             if resident_execution:
                 assert manifest['execution_runtime']==plan.execution_runtime
                 assert manifest['logical_retirement']['job_ticket']==job.ticket
+                if concurrency == 4: assert len(manifest['logical_retirement']['owners'])==8
                 assert all(row['end_ack']['generation']==0 for row in manifest['logical_retirement']['owners'])
             else:
                 assert 'execution_runtime' not in manifest and 'logical_retirement' not in manifest

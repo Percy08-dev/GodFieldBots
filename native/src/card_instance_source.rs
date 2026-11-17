@@ -32,7 +32,10 @@ pub(super) fn manifest(
         "complete corrected PPO Collection5 required",
     )?;
     if resident {
-        controls::resident::retirement(m.require("logical_retirement")?,b,c)?;
+        let (_, state) = parent.ok_or_else(|| Error::contract("resident collection requires original parent"))?;
+        let max_workers = controls::hpo::spec(state, b, c)?
+            .require("operating")?.require("max_participant_workers")?.integer(1, i64::MAX as i128)?;
+        controls::resident::retirement(m.require("logical_retirement")?, max_workers, b, c)?;
         let retirement = m.require("logical_retirement")?;
         let link = m.require("linkage")?;
         for (left,right) in [("run_id","parent_run_id"),("collection_id","batch_id"),("generation","collection_generation")] {
@@ -645,6 +648,39 @@ pub(super) fn role<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn resident_manifest_uses_original_parent_capacity_before_source_checks() {
+        let b = Budget::new(128 << 20);
+        let c = Control::new(crate::budget::monotonic() + 30.).unwrap();
+        let all = json::parse(include_bytes!("../tests/fixtures/hpo_metadata5_rules_v2.json"), &b, &c).unwrap();
+        let mut state = all.root["cases"][0]["state"].clone();
+        state["run_variant"] = json::text("hpo-ppo-resident-v1");
+        state["effective_config"]["hpo_spec"]["schema_version"] = json::integer(3);
+        state["effective_config"]["hpo_spec"]["runtime"] = serde_json::json!({"mode":"resident-worker-v1","cache_entries":6,"cache_weight_bytes":134217728});
+        state["effective_config"]["hpo_spec"]["operating"]["game_concurrency"] = json::integer(4);
+        state["effective_config"]["hpo_spec"]["operating"]["max_participant_workers"] = json::integer(8);
+        state["hpo_spec_sha256"] = json::text(&digest(&state["effective_config"]["hpo_spec"], &b, &c).unwrap());
+        let mut m = serde_json::json!({"schema_version":7,"status":"complete","collection_role":"hpo-ppo-batch",
+            "linkage":{"parent_run_id":"run-a","batch_id":"batch-000000","collection_generation":0},
+            "config":{"run":{"max_participant_workers":8},"hpo_spec":{"operating":{"max_participant_workers":8}}}});
+        m["logical_retirement"] = controls::resident::tests::retirement_fixture(&b, &c);
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let limits = CollectionLimits {source_bytes:64 << 20, record_bytes:8 << 20};
+        let mut s = Sources::new(root, b.clone(), c.clone(), 64 << 20).unwrap();
+        // This bounded receipt test deliberately has no policy/game records.
+        // Capacity8 passes retirement and reaches the next independent Source check.
+        let error = manifest(&mut s, &m, Some((root, &state)), &limits, &b, &c,
+            CorrectedCollectionRole::HpoBatch {games:16}).unwrap_err();
+        assert!(format!("{error:?}").contains("action_contract"));
+        state["effective_config"]["hpo_spec"]["operating"]["game_concurrency"] = json::integer(2);
+        state["effective_config"]["hpo_spec"]["operating"]["max_participant_workers"] = json::integer(4);
+        state["hpo_spec_sha256"] = json::text(&digest(&state["effective_config"]["hpo_spec"], &b, &c).unwrap());
+        // A manifest claiming8 cannot replace the SAME original parent's4.
+        let error = manifest(&mut s, &m, Some((root, &state)), &limits, &b, &c,
+            CorrectedCollectionRole::HpoBatch {games:16}).unwrap_err();
+        assert!(format!("{error:?}").contains("expected physical capacity"));
+    }
+
     #[test]
     fn refresh_registry_dispatches_before_retained_neural_inputs() {
         let b = Budget::new(512 << 20);

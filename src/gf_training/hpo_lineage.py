@@ -136,8 +136,8 @@ def hpo_spec(state: Json) -> Json:
     operating = closed(spec["operating"], _OPERATING)
     for value in operating.values():
         integer(value, 1, 2**63 - 1)
-    integer(operating["game_concurrency"], 1, 2)
-    integer(operating["max_participant_workers"], 1, 4)
+    integer(operating["game_concurrency"], 1, 2**63 - 1)
+    integer(operating["max_participant_workers"], 1, 2**63 - 1)
     integer(operating["trial_concurrency"], 1, 1)
     integer(operating["resume_latest"], 2, 1024)
     if operating["max_participant_workers"] < 2 * operating["game_concurrency"]:
@@ -807,7 +807,8 @@ def _proof(value: Json, state: Json, previous: Json, batch: int, delta: int) -> 
     integer(proof["schema_version"], 4 if resident else 3, 4 if resident else 3)
     if resident:
         from gf_common.hpo_resident import checked_retirement
-        retirement = checked_retirement(proof['logical_retirement'])
+        retirement = checked_retirement(proof['logical_retirement'],
+            max_workers=hpo_spec(state)['operating']['max_participant_workers'])
         if (retirement['run_id'] != state['run_id'] or retirement['generation'] != batch
                 or retirement['collection_id'] != f'batch-{batch:06}'):
             raise ContractError('Proof4 logical retirement differs from original parent/collection')

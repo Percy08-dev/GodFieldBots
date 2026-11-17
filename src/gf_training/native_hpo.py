@@ -90,7 +90,8 @@ def authorize_controls(value: Json, native: Any, actions: Any, *, directory: Pat
         for index, raw in enumerate(value['collections']):
             closed(raw, _COLLECTION | ({'logical_retirement'} if resident else set()))
             if resident:
-                retirement = checked_retirement(raw['logical_retirement'])
+                retirement = checked_retirement(raw['logical_retirement'],
+                    max_workers=spec['operating']['max_participant_workers'])
                 if (retirement['run_id'] != state['run_id'] or retirement['generation'] != raw['generation']
                         or retirement['collection_id'] != raw['linkage']['batch_id']):
                     raise ContractError('native logical retirement has foreign original run/collection/generation')

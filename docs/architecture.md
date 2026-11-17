@@ -2,6 +2,16 @@
 
 ## Status and scope
 
+[ADR0049](adr/0049-configurable-hpo-game-concurrency.md) accepts the owner's
+request for configurable HPO game counts above two and user-owned OOM tuning.
+Implementation passes independent correctness/conformance READY and root accepts
+the [functional verification](verification/hpo-game-concurrency.md), including
+actual CPU8-owner/4-game overlap, expanded Python/Rust receipt checks,8/16
+materialization and matching native activation. Existing managed admission,
+default2/4, trial1, ordinary/formal conditions and process/Source ownership
+remain. All3models pass CLI validation at4/8 with16GiB managed CUDA; actual
+higher-concurrency learning, performance and physical capacity remain unverified.
+
 The owner's [2026-11-17 artifact cleanup](verification/run-artifact-cleanup-20261117.md)
 retains latest PPO measurement results/support code and removes historical
 models, learning originals, arrays and superseded outputs. Earlier audit and

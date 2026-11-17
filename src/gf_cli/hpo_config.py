@@ -271,8 +271,8 @@ def _operating(value: Any) -> HPOOperatingConfig:
     raw = _merge(asdict(HPOOperatingConfig()), value)
     for item in raw.values():
         integer(item, 1, 2**63 - 1)
-    integer(raw["game_concurrency"], 1, 2)
-    integer(raw["max_participant_workers"], 1, 4)
+    integer(raw["game_concurrency"], 1, 2**63 - 1)
+    integer(raw["max_participant_workers"], 1, 2**63 - 1)
     integer(raw["trial_concurrency"], 1, 1)
     integer(raw["resume_latest"], 2, 1024)
     if raw["max_participant_workers"] < 2 * raw["game_concurrency"]:

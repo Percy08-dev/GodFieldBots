@@ -184,8 +184,8 @@ def _admit_game_workers(actions: ActionConfigV3,roles: tuple[RuntimePolicyBindin
 def admit_hpo_game_workers(actions: ActionConfigV3,roles: tuple[RuntimePolicyBinding,RuntimePolicyBinding],*,
                             rules: CardInstanceRules,game_concurrency: int,global_cuda_bytes: int,
                             max_workers: int,learner_cuda_bytes: int=0) -> Json:
-    integer(game_concurrency,1,2)
-    integer(max_workers,1,4)
+    integer(game_concurrency,1,2**63-1)
+    integer(max_workers,1,2**63-1)
     integer(global_cuda_bytes,1,2**63-1)
     if type(roles) is not tuple or len(roles)!=2:
         raise ContractError('HPO admission requires both atomic player roles')
@@ -215,8 +215,8 @@ def hpo_training_admission(model: ModelConfigV4,inference: InferenceBindingV2,tb
     if type(model) is not ModelConfigV4:
         raise ContractError('explicit HPO Model4 required')
     integer(tbptt_length,1,1024)
-    integer(operating['game_concurrency'],1,2)
-    integer(operating['max_participant_workers'],1,4)
+    integer(operating['game_concurrency'],1,2**63-1)
+    integer(operating['max_participant_workers'],1,2**63-1)
     integer(operating['managed_cuda_bytes'],1,2**63-1)
     for name in ('managed_ram_bytes','parent_budget_bytes','source_budget_bytes','numeric_budget_bytes',
             'save_budget_bytes','collector_budget_bytes'):

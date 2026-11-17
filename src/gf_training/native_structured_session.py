@@ -532,7 +532,7 @@ class NativeStructuredSource:
         return count, proof, {'rollout.json': numeric_hash, **manifest['data']['files']}
 
 def _payload_views(payload: Any, *, game: bool = False, recorded: bool = False,
-                   packed: bool = False, hpo: bool = False) -> tuple[Json, dict[str, Any]]:
+                   packed: bool = False, hpo: bool = False, max_workers: int = 4) -> tuple[Json, dict[str, Any]]:
     """Validate closed bank descriptors before creating any named NumPy view."""
     import json
     import math
@@ -563,7 +563,7 @@ def _payload_views(payload: Any, *, game: bool = False, recorded: bool = False,
             version=integer(physical.get('schema_version'),3,4)
             if version==4:
                 from gf_common.hpo_resident import checked_retirement
-                retirement=checked_retirement(physical.get('logical_retirement'))
+                retirement=checked_retirement(physical.get('logical_retirement'), max_workers=max_workers)
                 batch=selection['context']['batch']
                 if retirement['generation']!=batch or retirement['collection_id']!=f'batch-{batch:06}':
                     raise ContractError('cohort Proof4 retirement differs from bound selection batch')

@@ -85,6 +85,9 @@ value = 4
 collection_games = 16
 
 [operating]
+# User-selected concurrency; reserve at least two participant workers per game.
+game_concurrency = 3
+max_participant_workers = 6
 max_updates = 1000
 save_budget_bytes = 1073741824
 parent_budget_bytes = 1073741824
