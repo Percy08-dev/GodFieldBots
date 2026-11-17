@@ -1,0 +1,106 @@
+# Manual fixed-recipe budget probe; this is not a completed HPO search.
+# D is a provisional unique-loss-decision budget, not an exact game count.
+# One width-192 proposal PLUS the mandatory canonical default control.
+# Run each model manually. Do not reuse a completed campaign or edit it to extend D.
+schema_version = 4
+origin = "producer-owned-v1"
+encoder = "canonical-python"
+kind = "ppo-hpo"
+base_experiment = "../experiments/hpo-resident-gru-base.toml"
+model_id = "gru"
+stage = "ppo-budget-probe-gru-d10000"
+trial_count = 1
+decision_budget = 10000
+learning_seeds = [17]
+evaluation_game_seeds = [
+  "10000000-0000-0000-0000-000000000001",
+  "10000000-0000-0000-0000-000000000002",
+  "10000000-0000-0000-0000-000000000003",
+  "10000000-0000-0000-0000-000000000004",
+  "10000000-0000-0000-0000-000000000005",
+  "10000000-0000-0000-0000-000000000006",
+  "10000000-0000-0000-0000-000000000007",
+  "10000000-0000-0000-0000-000000000008",
+  "10000000-0000-0000-0000-000000000009",
+  "10000000-0000-0000-0000-000000000010",
+  "10000000-0000-0000-0000-000000000011",
+  "10000000-0000-0000-0000-000000000012",
+  "10000000-0000-0000-0000-000000000013",
+  "10000000-0000-0000-0000-000000000014",
+  "10000000-0000-0000-0000-000000000015",
+  "10000000-0000-0000-0000-000000000016",
+  "10000000-0000-0000-0000-000000000017",
+  "10000000-0000-0000-0000-000000000018",
+  "10000000-0000-0000-0000-000000000019",
+  "10000000-0000-0000-0000-000000000020",
+  "10000000-0000-0000-0000-000000000021",
+  "10000000-0000-0000-0000-000000000022",
+  "10000000-0000-0000-0000-000000000023",
+  "10000000-0000-0000-0000-000000000024",
+  "10000000-0000-0000-0000-000000000025",
+  "10000000-0000-0000-0000-000000000026",
+  "10000000-0000-0000-0000-000000000027",
+  "10000000-0000-0000-0000-000000000028",
+  "10000000-0000-0000-0000-000000000029",
+  "10000000-0000-0000-0000-000000000030",
+  "10000000-0000-0000-0000-000000000031",
+  "10000000-0000-0000-0000-000000000032"
+]
+sampler_seed = 17
+startup_trials = 1
+# Operational ceilings, not convergence claims. Sessions stop at run/eval boundaries.
+session_seconds = 14400
+run_wall_seconds = 7200
+
+[runtime]
+mode = "resident-worker-v1"
+cache_entries = 6
+cache_weight_bytes = 134217728
+
+[model.state]
+hidden_sizes = [192]
+
+[model.hand]
+hidden_sizes = [192]
+latent_size = 192
+
+[model.temporal]
+hidden_size = 192
+num_layers = 2
+feedforward_size = 384
+
+[model.heads]
+actor_hidden_sizes = [192]
+critic_hidden_sizes = [192]
+
+[space]
+coupled = []
+
+[[space.parameters]]
+path = "training.epochs"
+kind = "fixed"
+value = 4
+
+[training]
+collection_games = 16
+
+[operating]
+max_updates = 1000
+save_budget_bytes = 1073741824
+parent_budget_bytes = 1073741824
+
+[storage]
+parent_root = "../../runs/ppo-budget-probe-v1/gru/d10000/parents"
+numeric_root = "../../runs/ppo-budget-probe-v1/gru/d10000/parents"
+optuna_path = "../../runs/ppo-budget-probe-v1/gru/d10000/study.sqlite3"
+originals_root = "../../runs/ppo-budget-probe-v1/gru/d10000/originals"
+destination_capacity_bytes = 107374182400
+admission_reservation_bytes = 1073741824
+
+[training_opponents]
+version = "1"
+preset = "mixed-refresh-16-v1"
+
+[training_opponents.refresh]
+version = "1"
+attack_threshold = 12

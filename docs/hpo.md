@@ -106,6 +106,166 @@ Transformerでのみ有効で、他のモデルでは既定値に正規化され
 対照を置き換えません。探索範囲・D・試行数・seed群・運用予算は別途設定し、
 新しいcampaign・study・保存先を使います。ここでは学習や探索の実行を開始しません。
 
+## 手動で行う学習量の予備検証
+
+既定PPO設定で短い学習を実行し、実際の試合数・学習診断・最終方策の評価を
+見て次の学習量を決めます。初回用は
+`configs/hpo/budget-probe-{mlp,gru,transformer}-d10000.toml`です。
+これは探索範囲や収束予算を確定する設定ではありません。
+
+現在の公開CLIには、Model4の試合数による停止、学習途中の定期評価、
+完了した親のDを増やして延長する操作はありません。ここで実行するのは
+**Dの異なる独立学習による学習量の比較**です。同じ親を1,000試合で評価し、
+その重みから10,000試合へ継続する方式には追加実装が必要です。
+通常の`train --pause-after-update`はModel3用で、このModel4設定には使えません。
+
+| 設定 | 初回用の値と意味 |
+| --- | --- |
+| モデル | 幅192・主幹2層を固定 |
+| `decision_budget` | 10,000。損失に使う一意なlearner意思決定数で、試合数ではない |
+| `learning_seeds` | `[17]`。最初の学習挙動を観察する1seedで、seed間の安定性は未評価 |
+| PPO | 既定recipe。epochs4、学習率0.0003、minibatch128など |
+| `space.parameters` | `training.epochs=4`の固定提案。ランダムな設定探索はしない |
+| `trial_count` | 1。ただし探索空間外の既定対照を追加するため、合計2設定を学習 |
+| 評価 | 共通32GameSeed×席交換で、各設定64試合。既存heuristicに対する最終D方策の評価 |
+| 収集 | mixed16、1更新16試合、同時2試合・参加者worker4個 |
+| `run_wall_seconds` | 7,200秒。各run・評価の運用上限で、収束に十分な時間という意味ではない |
+| `session_seconds` | 14,400秒。正常なrun・評価の完了境界で休止 |
+| `operating.max_updates` | 1,000。D到達前に上限・期限へ達した親は未完了で、目的値を持たない |
+| 保存 | モデル・D別の新規ext4保存先、容量上限100GiB。容量を事前確保する値ではない |
+
+必須の既定対照が`proposals/000000`、幅192の固定設定が`proposals/000001`です。
+既定対照はモデル構造も既定値を使います。PPO設定だけの効果を判断するときは、
+幅192の設定同士を比較します。D10,000が1,000試合程度になるとは保証しません。
+実際の累計試合数を測り、その結果から次のDを調整してください。
+
+### 初回の実行
+
+リポジトリのルートで、GPUを利用できる既存の`.venv`を使います。
+以下はBashまたはZsh用です。`pilot_model`を`gru`または`transformer`に
+変えると対応する設定を使えます。各モデルは順番に手動実行します。
+
+```sh
+cd /home/percy/develop/GodFieldBots
+pilot_model=mlp
+pilot_config="configs/hpo/budget-probe-${pilot_model}-d10000.toml"
+pilot_root="$PWD/runs/ppo-budget-probe-v1/$pilot_model/d10000"
+pilot_campaign="$pilot_root/parents/campaign-01"
+
+.venv/bin/gf-bots hpo validate --config "$pilot_config"
+mkdir -p "$pilot_root/logs"
+set -o pipefail
+.venv/bin/gf-bots hpo run \
+  --config "$pilot_config" --mode fresh \
+  --campaign-dir "$pilot_campaign" --progress plain \
+  > "$pilot_root/logs/campaign-01-result.json" \
+  2> >(tee "$pilot_root/logs/campaign-01-progress.log" >&2)
+```
+
+`fresh`のcampaignディレクトリは存在していない必要があります。
+設定を変えずに別の新規実行を行う場合も、`campaign-02`など新しい名前と
+ログ名を使います。GPUを利用できない環境ではvalidateとwatchだけが可能です。
+validateは設定・資源見積り・保存先を検査し、GPU起動や実学習は検査しません。
+
+別ターミナルでは、変数を引き継がず絶対パスで監視できます。
+
+```sh
+cd /home/percy/develop/GodFieldBots
+.venv/bin/gf-bots hpo watch \
+  --path "$PWD/runs/ppo-budget-probe-v1/mlp/d10000/parents/campaign-01"
+```
+
+`--progress plain`は進捗をstderrへ行形式で出し、上のコマンドは画面表示と
+ログ保存を両立します。`auto`はstderrがTTYの場合だけ表示するため、
+ログへリダイレクトするときは`plain`を明示します。watchはstdoutへ出力し、
+既定1秒間隔で読み取ります。watchのCtrl-Cは監視だけを終了します。
+
+表示項目はモデル、対照/提案、seed、処理フェーズ、commit済みD、更新数、
+現在の収集/評価単位の暫定試合数、利用可能なら処理速度・ETA・total loss・
+entropy・KLです。`collected-games`は累計学習試合数ではなく、収集batchや
+評価が切り替わるとリセットされます。ETAは現runだけの予測です。
+詳細なvalue MSEなどは更新記録、診断の追加項目は`watch --once --json`で確認します。
+更新から5秒超のsnapshotはstaleと表示され、過去のcomplete表示を現在の稼働や
+成功判定に使いません。`telemetry/progress.json`は最新値で、履歴全体ではありません。
+
+### 結果と学習診断の確認
+
+run終了後に結果JSONの`failed_in_session`が0であることを確認し、
+inspectで両提案の`recorded_state`が`COMPLETE`になっていることを確認します。
+campaignの`status=complete`だけでは、内部の提案失敗がないとは判断できません。
+inspectは記録済み状態の構造表示で、独立した成績の再認定ではありません。
+
+```sh
+cat "$pilot_root/logs/campaign-01-result.json"
+.venv/bin/gf-bots hpo inspect --campaign-dir "$pilot_campaign"
+```
+
+各提案の`evaluation.json`には最終評価の`value`、
+`seeds/17/training.json`には親ディレクトリの`run_path`があります。
+親の`updates/000001.json`以降に各更新の`actual_games`、`accepted_decisions`、
+`metrics.total_loss`、`metrics.policy_loss`、`metrics.value_mse`、
+`metrics.entropy`、`metrics.approx_kl`が残ります。自然終局した収集試合数は
+`actual_games`を累積して数えます。評価試合数はこの累計には含めません。
+最終batchは全試合を自然終了させるため、収集decision数がDを超える場合があります。
+
+次の読み取り専用の例は、終了済みcampaignの更新記録をTSVへ出します。
+これはグラフ化・観察用で、Sourceや評価成績を認定する処理ではありません。
+
+```sh
+.venv/bin/python - "$pilot_campaign" > "$pilot_root/logs/learning.tsv" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+campaign = Path(sys.argv[1])
+print("proposal\tseed\tupdate\tgames\tused_D\tloss\tpolicy_loss\tvalue_mse\tentropy\tKL")
+for receipt_path in sorted(campaign.glob("proposals/*/seeds/*/training.json")):
+    receipt = json.loads(receipt_path.read_text())
+    parent = Path(receipt["run_path"])
+    state = json.loads((parent / "run.json").read_text())
+    games = used = 0
+    for number in range(1, state["updates"] + 1):
+        update = json.loads((parent / "updates" / f"{number:06}.json").read_text())
+        games += update["actual_games"]
+        used += update["accepted_decisions"]
+        metrics = update["metrics"]
+        row = [receipt_path.parents[2].name, receipt["training_seed"], number, games, used]
+        row += [metrics.get(key) for key in
+                ("total_loss", "policy_loss", "value_mse", "entropy", "approx_kl")]
+        print(*row, sep="\t")
+PY
+```
+
+lossの停滞だけで収束とは判断しません。次のDでの最終評価、entropy・KL・
+value MSEの推移、実時間と保存量を併せて見ます。初回の1seed・64評価試合だけで
+最適設定やseed間の安定性を判断せず、上位設定の確認ではseed群・評価量も見直します。
+
+### 次の学習量とセッション再開
+
+初回の結果を見て、例えばD30,000やD100,000を次の観測点にできます。
+値を採用するかは実測後に決めます。元のTOMLを同じ`configs/hpo`内へコピーし、
+次の項目を新しい段階用に変更してからvalidateします。
+
+- `stage`と`decision_budget`。
+- `[storage]`の`parent_root`、`numeric_root`、`optuna_path`、`originals_root`。
+  `numeric_root`と`parent_root`は同じ値にします。
+- 初回実測に応じたrunの時間上限・更新上限・保存容量と、新しいcampaign/log名。
+
+モデル・PPO recipe・学習seed・共通評価GameSeedは、学習量だけを比較するときは
+揃えます。新しいDは`--mode fresh`で最初から学習し、重みやoptimizer状態は
+引き継ぎません。既存studyのTOMLやDを書き換えてresumeしてはいけません。
+
+`session_seconds`で正常に休止し、結果が`status=paused`となったcampaignだけは、
+同じTOML・同じcampaignディレクトリに`--mode resume`を指定して残りの処理を
+継続できます。元のrun期限は延長されません。実行中の学習へCtrl-Cを送ることは
+正常なセッション休止の代用ではなく、未完了操作は失敗として残ります。
+
+```sh
+.venv/bin/gf-bots hpo run \
+  --config "$pilot_config" --mode resume \
+  --campaign-dir "$pilot_campaign" --progress plain
+```
+
 ## 常駐workerと進捗監視
 
 schema3の機能確認用設定は`configs/hpo/resident-{mlp,gru,transformer}-smoke.toml`
