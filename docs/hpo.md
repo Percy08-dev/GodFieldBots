@@ -143,7 +143,8 @@ Transformerでのみ有効で、他のモデルでは既定値に正規化され
 | `run_wall_seconds` | 7,200秒。各run・評価の運用上限で、収束に十分な時間という意味ではない |
 | `session_seconds` | 14,400秒。正常なrun・評価の完了境界で休止 |
 | `operating.max_updates` | 1,000。D到達前に上限・期限へ達した親は未完了で、目的値を持たない |
-| 保存 | モデル・D別の新規ext4保存先、容量上限100GiB。容量を事前確保する値ではない |
+| 対戦履歴の原本DB | `D:\godfield\ppo-budget-probe-v2\<model>\d10000\originals`（WSLでは`/mnt/d/godfield/...`） |
+| その他の保存 | 数値配列・チェックポイント・管理情報は現状WSLのext4側。容量上限100GiBは容量の事前確保ではない |
 
 必須の既定対照が`proposals/000000`、幅192の固定設定が`proposals/000001`です。
 既定対照はモデル構造も既定値を使います。PPO設定だけの効果を判断するときは、
@@ -328,8 +329,12 @@ device全体ピークは別に扱います。進捗保存・表示の失敗は�
 
 `[storage]`の`parent_root`・`numeric_root`・`optuna_path`はext4側です。
 現行実装は`numeric_root == parent_root`の配置を要求します。
-`originals_root`は圧縮対戦DBの保存先です。既定は対応済みDドライブ上で、
-明示したext4保存先も対応します。
+`originals_root`は学習・評価の圧縮対戦原本DBの保存先です。
+予備検証用の3設定は`/mnt/d/godfield/ppo-budget-probe-v2/<model>/d10000/originals`
+を指定し、今後の新規実行ではDドライブへ書き込みます。保存対象にはjournal・Replay・
+候補列・HTTPログ等のPack内対戦原本が含まれます。既存履歴の移動・再保存は行いません。
+数値配列・チェックポイント・Optuna DB・campaign管理情報・ターミナルログは
+この変更ではWSL側に残ります。全データをD上の専用ext4へ移す設定は別の作業です。
 容量上限は`destination_capacity_bytes`、開始前の余裕は
 `admission_reservation_bytes`で指定します。Windows側Cドライブも実際のmountと
 空き容量を照合します。存在しないD/CパスをSSD上の祖先へ読み替えません。

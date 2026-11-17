@@ -93,7 +93,7 @@ parent_budget_bytes = 1073741824
 parent_root = "../../runs/ppo-budget-probe-v2/mlp/d10000/parents"
 numeric_root = "../../runs/ppo-budget-probe-v2/mlp/d10000/parents"
 optuna_path = "../../runs/ppo-budget-probe-v2/mlp/d10000/study.sqlite3"
-originals_root = "../../runs/ppo-budget-probe-v2/mlp/d10000/originals"
+originals_root = "/mnt/d/godfield/ppo-budget-probe-v2/mlp/d10000/originals"
 destination_capacity_bytes = 107374182400
 admission_reservation_bytes = 1073741824
 
