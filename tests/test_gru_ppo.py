@@ -405,6 +405,7 @@ def test_worker_releases_each_rollout_before_save_ack_next_load_and_on_failure(m
     monkeypatch.setattr(storage, 'read_rollout', read)
     monkeypatch.setattr(numeric, 'Learner', NumericalChild)
     monkeypatch.setattr(worker.sys, 'stdin', io.StringIO(''.join(json.dumps(value) + '\n' for value in requests)))
+    monkeypatch.setattr(worker.sys, 'argv', ['gf-ppo-learner'])
     if failure:
         with pytest.raises(ContractError, match='synthetic'):
             worker.main()
