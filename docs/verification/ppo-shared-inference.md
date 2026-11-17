@@ -159,3 +159,41 @@ attribution of every residual byte or universal guarantee. Do not subtract
 changes in whole-device use by unrelated desktop clients. Full raw outputs
 and the script (`actor-shape-*.json`, `actor_shape.py`) are next to the
 9fbae49 calibration. Earlier stored runs keep the recipe they actually used.
+
+## Four-game resident run under original managed budgets
+
+On clean branch `9e6cb5da965f1c461b78dca28d02f7a61d4c862d`,
+the new actor CUDA recipe admitted four game slots/eight physical participants
+at the original 24GiB RAM / 12GiB CUDA limits. Old admission refused the same
+configuration. The new planning maxima were 17.637GiB / 10.237GiB, versus the
+original 18.342GiB / 14.842GiB. No budget override was supplied to this run.
+
+Run `b4d9d329-53f9-445f-beb5-74dc28324dc3` in
+`runs/ppo-actor-cuda-calibration/` under the original checkout completed two
+updates with 32 games, 566 actions and 294 learner decisions. It returned
+the requested `incomplete/update_cap`. Eight live resident processes were
+observed; ticket `397ae6e0a1dd4a9d95f62b6f8c2b8874` confirms retirement of
+eight workers and one learner. The normal train/collect call, original receipt
+check and outer probe all returned successfully. The original sampler recorded
+77 samples, 12.140GiB peak observed tree PSS and 5,495MiB peak whole-device
+usage (first sample 2,059MiB; desktop use varies). Collection took 26.898s,
+or 1.190 games/s; updates took 4.970s. Compare 28.322s in the original paired
+three-game configuration and 27.110s in the first cache-only three-game
+run. Concurrency and admission implementation differ; there is one short
+population per condition, not a general scaling or shared-service speedup.
+
+At 8/16 simultaneous games, unchanged host planning and the topology with
+per-actor CUDA contexts still exceed configured budgets. Those cases are
+not live tests. The shared inference service requires a separate Simulator
+contract decision before its independent 1/2/4/8/16 population can run.
+
+To distinguish active games from processes, the verifier separately reopened
+the first collection of each run (SQLite read-only, eight group packs, only
+HTTP-log member scalars). An interval for a game runs from its first
+game-specific request to its last matching response completion. Sweeping these
+intervals across 16 naturally completed games gave maximal simultaneous
+game windows of 3 (original), 3 (corrected cache), and 4 (actor CUDA recipe).
+This establishes overlapping live games, not simultaneous GPU forward passes.
+For four games the observed individual process maxima were 1,317.8MiB PSS for
+a participant and 2,293.8MiB PSS for the learner. Summed tree RSS peaked at
+16,004.9MiB; PSS apportions shared pages and is the better aggregate here.

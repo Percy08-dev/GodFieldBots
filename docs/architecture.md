@@ -2,6 +2,13 @@
 
 ## Status and scope
 
+[ADR0052](adr/0052-owned-learner-device-allowance.md) separates the owned
+learner's execution cap from its invocation's admitted device budget. Future
+participant/cache/BEGIN capacity remains reserved when setting that budget;
+the normal Wire7 creator checks its original lease and the child checks the
+same model and limits. The group planner applies independent host-inclusive
+logical and device gates before numerical work.
+
 [ADR0051](adr/0051-resident-actor-cuda-admission.md) refines ADR0050 with a
 role-specific no-grad single-participant CUDA estimate for homogeneous HPO
 resident training. The pool and collector use the same device lease; active

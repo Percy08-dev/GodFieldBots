@@ -412,7 +412,7 @@ def joint_resource_admission(config: HPOCampaignConfig, *, layout: StructuredLay
     from gf_models.structured_runtime import hpo_resident_training_admission, hpo_training_admission
     if isinstance(config, ResidentHPOCampaignConfig):
         return hpo_resident_training_admission(model,config.inference,recipe.tbptt_length,asdict(limits),
-            resident_runtime(config.runtime),layout=layout)
+            resident_runtime(config.runtime),layout=layout,owned_cuda=config.schema_version==4)
     return hpo_training_admission(model,config.inference,recipe.tbptt_length,asdict(limits),layout=layout)
 
 

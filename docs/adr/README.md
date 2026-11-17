@@ -14,6 +14,9 @@
 
 ## 一覧
 
+追加: [0052](0052-owned-learner-device-allowance.md) — 通常のproducer-owned CUDA学習で、
+論理的な更新上限と、常駐参加者を考慮した実際のGPU予約を別に扱う。
+
 追加: [0051](0051-resident-actor-cuda-admission.md) — 常駐HPO学習に限り、推論参加者のCUDA予約を
 単一意思決定の形状から計算。モデル種別ごとの時系列状態とcacheを実際の台帳へ反映する。
 

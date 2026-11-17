@@ -44,6 +44,10 @@ def prior_runner() -> Any:
 def charged_admission(original: Any, selected: Any = None) -> Any:
     from gf_models.inference_experiment import WORKER_STORAGE_BYTES
     def admitted(*args: Any, **kwargs: Any) -> Any:
+        # Explicit experimental buffers/algorithms keep the original learner
+        # lease; their allocation lifetimes are outside normal owned admission.
+        if 'owned_cuda' in kwargs:
+            kwargs = {**kwargs,'owned_cuda':False}
         if selected is not None:
             from dataclasses import replace
             # Charge the effective experimental chunk/padded bucket everywhere

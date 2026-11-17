@@ -119,7 +119,8 @@ class _HpoOperations(_GameOperations):
             from gf_models.structured_runtime import hpo_resident_training_admission
             input_binding_game_v3(config.actions.action_contract,card_instance_rules())
             hpo_resident_training_admission(config.model.architecture(layout=LAYOUT),config.model.inference,
-                config.hpo_spec['training_recipe']['tbptt_length'],config.hpo_spec['operating'],config.hpo_spec['runtime'],layout=LAYOUT)
+                config.hpo_spec['training_recipe']['tbptt_length'],config.hpo_spec['operating'],config.hpo_spec['runtime'],layout=LAYOUT,
+                owned_cuda=config.hpo_spec['schema_version']==4 and getattr(self,'_training_execution',None) is None)
         else:
             from gf_models.structured_runtime import admit_hpo_training
             admit_hpo_training(config.actions,config.model.architecture(layout=LAYOUT),config.model.inference,

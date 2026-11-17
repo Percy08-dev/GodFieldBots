@@ -134,7 +134,11 @@ never from a policy-owned input flag. Headroom for experimental mechanisms
 must still be charged by those mechanisms. Do not reinterpret `worker_bytes`
 as RAM when adding per-actor experimental allocations.
 
-### Owned CUDA learner allowance (proposal for review)
+### Owned CUDA learner allowance (reviewed design)
+
+Independent architecture review approved this design before implementation.
+The original positional legacy failure path and guaranteed nonempty-singleton floor
+were rechecked in both final scoped reviews.
 
 Keep the existing combined logical execution ceiling L and all frozen format,
 shape and search checks. For normal producer-owned spec4 resident CUDA
@@ -181,3 +185,27 @@ Do not describe D as an exact physical prediction. Host reservation remains
 separate and unchanged by this device-only step. Compare budget-pair grouping,
 singleton refusal, non-group minima and actual lease/worker agreement in a
 small focused test. Do not rerun an HPO campaign to check learning quality.
+
+### Owned host accounts
+
+Keep the existing host compatibility limit identified as such until there
+is an evidenced bound for the CPU process baselines, actor event history,
+Python search/encoding graphs and actual external coordinator metadata.
+The configured parent P is an internal limit for the coordinator's writer
+backed by the same Source account S. Actual coordinator capture, numeric
+encoding, retained snapshot and writer reservations share S. A separate
+server-file SealedScan and the materialized-config/binding graphs sit outside
+it. The size calculation in hpo_artifact_budget constrains those graphs by
+P but does not justify adding P as a fully allocated external block. Source
+also remains live during collection together with a separate collector C.
+The learner's StorageBudget is a second account with a different owner:
+private numeric receiving precedes save/export and persists until the real
+transfer retirement. The same read-only memfd pages enter physical memory
+once; the receiver also charges private descriptors/decoded metadata.
+Do not subtract shared backing from a receiver charge which already excludes it.
+
+Report these owners, sublimits, lifetimes, and measured simultaneous PSS
+alongside the unchanged host compatibility reservation. Do not add a new
+blanket S+P+child upper bound as a substitute for a calibrated host estimator.
+Revisit hard host admission with a measured and enforced per-actor event/IPC/
+search budget or with the new authorized CPU-only actor topology.

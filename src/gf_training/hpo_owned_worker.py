@@ -244,7 +244,7 @@ def _restore_initial(channel: RamBankChannel, request: Json, learner: Any, budge
 
 def main() -> None:
     # Explicit inherited endpoint only; no inherited resume/model/numeric FD.
-    if len(sys.argv) not in (5,8):
+    if len(sys.argv) not in (5,7,8):
         raise ContractError('closed owned learner argv/cap required')
     fd, invocation = int(sys.argv[1]), sys.argv[2]
     from gf_training.hpo_learning_process import parse_execution_cap
@@ -252,6 +252,11 @@ def main() -> None:
     execution = None
     execution_sha = None
     observation_source = None
+    owned_context = None
+    if len(sys.argv)==7:
+        if sys.argv[5]!='--owned-learner-admission':
+            raise ContractError('closed private owned learner admission argument required')
+        owned_context = json.loads(sys.argv[6])
     if len(sys.argv)==8:
         if sys.argv[5]!='--training-execution':
             raise ContractError('closed private training execution argument required')
@@ -298,9 +303,16 @@ def main() -> None:
         raise ContractError('experimental fresh learner reservation/model mismatch')
     from gf_training.hpo_learning_process import checked_execution_cap
     reservation=checked_execution_cap(model,training,binding,reservation)
+    owned_admission = None
+    if owned_context is not None:
+        from gf_training.owned_learner_admission import checked_owned_launch_context
+        owned_admission = checked_owned_launch_context(owned_context,model,training,binding)['admission']
+        if owned_admission['logical_bytes']!=reservation:
+            raise ContractError('owned learner launch logical cap differs from original checked ceiling')
     from gf_training.hpo_numeric import HpoLearner
     learner = HpoLearner(model, training, integer(initial['seed'],0,2**63-1), binding,
-        identity['resume_identity'], actions=actions, rules=card_instance_rules())
+        identity['resume_identity'], actions=actions, rules=card_instance_rules(),
+        **({} if owned_admission is None else {'_owned_device_admission':owned_admission}))
     learner._training_reservation_bytes = reservation
     if execution is not None:
         learner._training_execution = execution

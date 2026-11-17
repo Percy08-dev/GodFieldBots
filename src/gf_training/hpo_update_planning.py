@@ -5,8 +5,9 @@ from dataclasses import dataclass
 from math import prod
 from typing import Any
 
-from gf_common.domain import ContractError
-from gf_models.structured_config import dimensions, resource_estimate
+from gf_common.domain import ContractError, integer
+from gf_models.learner_cuda import learner_group_fixed_bytes, learner_group_metadata_bytes
+from gf_models.structured_config import dimensions
 from gf_models.structured_learning import (
     FrameStagingPlan,
     LearningCapacityError,
@@ -165,8 +166,7 @@ def _estimate(endpoints: list[Any],model: Any,binding: Any,tbptt: int,*,layout: 
               shared: bool,staging: FrameStagingPlan | None) -> dict[str,Any]:
     if not endpoints or len(endpoints)>16:
         raise UpdateCapacityError('nonempty group of at most16 endpoints required')
-    fixed=resource_estimate(model,binding,decisions=1,interval_events=0,candidates=1,suffix_decisions=1,layout=layout)
-    fixed_bytes=fixed['parameter_optimizer_cpu_reference_bytes']+fixed['context_workspace_bytes']
+    fixed_bytes=learner_group_fixed_bytes(model,binding,layout=layout)
     frames=group_frames(endpoints,model,shared)
     candidate=[tokens for _,tokens in endpoints]
     tensors,temporal=_temporal_geometry(endpoints,model,tbptt,shared)
@@ -206,7 +206,7 @@ def _estimate(endpoints: list[Any],model: Any,binding: Any,tbptt: int,*,layout: 
                     prefix_packed=max(prefix_packed,packed)
     activation=4*(retained_activation+candidate_activation+temporal+max(prefix_peak,temporary_peak))
     packed_bytes=4*(retained_packed+prefix_packed)
-    metadata=65536+len(frames)*512+len(endpoints)*1024
+    metadata=learner_group_metadata_bytes(len(frames),len(endpoints))
     return {'fixed_bytes':fixed_bytes,'activation_bytes':activation,'packed_bytes':packed_bytes,
         'retained_input_bytes':retained_packed,'prefix_temporary_bytes':prefix_packed,
         'retained_frame_activation_bytes':4*retained_activation,
@@ -218,23 +218,39 @@ def joint_estimate(endpoints: list[Any],model: Any,binding: Any,tbptt: int,*,lay
     return _estimate(endpoints,model,binding,tbptt,layout=layout,shared=shared,staging=None)
 
 
-def _within(estimate: dict[str,Any],cap: int,resident: int) -> None:
+def _within(estimate: dict[str,Any],cap: int,resident: int, *,
+            device_bytes: int | None = None, position_bytes: int = 0) -> None:
     if estimate['total_bytes']+resident>cap:
         raise UpdateCapacityError('retained graph/input capacity exceeds SAME learner reservation')
+    if device_bytes is not None:
+        integer(device_bytes,1,2**63-1)
+        if estimate['total_bytes']+position_bytes>device_bytes:
+            raise UpdateCapacityError('group exceeds owned learner device allowance: '
+                f'resource=cuda phase=update required={estimate["total_bytes"]+position_bytes} limit={device_bytes}')
 
 
-def admit_group(rollout: Any,indices: Any,model: Any,binding: Any,tbptt: int,*,layout: Any,reservation_bytes: int,shared: bool=False) -> dict[str,Any]:
+def admit_execution_plan(plan: ExecutionPlan,model: Any,binding: Any,*,reservation_bytes: int,
+                         resident_bytes: int,device_bytes: int | None = None) -> None:
+    """Last allocation boundary uses both original logical and independent device caps."""
+    _within(plan.estimate,min(reservation_bytes,model.resources.max_owned_bytes,binding.managed_budget_bytes),
+        resident_bytes,device_bytes=device_bytes,
+        position_bytes=4*model.temporal.max_decisions*model.temporal.hidden_size)
+
+
+def admit_group(rollout: Any,indices: Any,model: Any,binding: Any,tbptt: int,*,layout: Any,reservation_bytes: int,shared: bool=False,device_bytes: int | None=None) -> dict[str,Any]:
     estimate=joint_estimate([rollout.endpoint(index) for index in indices],model,binding,tbptt,layout=layout,shared=shared)
-    _within(estimate,min(reservation_bytes,model.resources.max_owned_bytes,binding.managed_budget_bytes),rollout.resident_bytes)
+    admit_execution_plan(ExecutionPlan(None,estimate),model,binding,reservation_bytes=reservation_bytes,
+        resident_bytes=rollout.resident_bytes,device_bytes=device_bytes)
     return estimate
 
 
 def execution_plan(endpoints: list[Any],model: Any,binding: Any,tbptt: int,*,layout: Any,
-                   reservation_bytes: int,resident_bytes: int,shared: bool=False) -> ExecutionPlan:
+                   reservation_bytes: int,resident_bytes: int,shared: bool=False,device_bytes: int | None=None) -> ExecutionPlan:
     cap=min(reservation_bytes,model.resources.max_owned_bytes,binding.managed_budget_bytes)
+    positions=4*model.temporal.max_decisions*model.temporal.hidden_size
     try:
         estimate=joint_estimate(endpoints,model,binding,tbptt,layout=layout,shared=shared)
-        _within(estimate,cap,resident_bytes)
+        _within(estimate,cap,resident_bytes,device_bytes=device_bytes,position_bytes=positions)
         return ExecutionPlan(None,estimate)
     except UpdateCapacityError:
         pass  # Pure preallocation capacity refinement; no operation has run.
@@ -273,7 +289,7 @@ def execution_plan(endpoints: list[Any],model: Any,binding: Any,tbptt: int,*,lay
         staging=FrameStagingPlan(chunks(sorted(prefixes),maximum),chunks(suffix_indices,maximum))
         estimate=_estimate(endpoints,model,binding,tbptt,layout=layout,shared=shared,staging=staging)
         try:
-            _within(estimate,cap,resident_bytes)
+            _within(estimate,cap,resident_bytes,device_bytes=device_bytes,position_bytes=positions)
             return ExecutionPlan(staging,estimate)
         except UpdateCapacityError:
             if maximum==1:
@@ -282,7 +298,7 @@ def execution_plan(endpoints: list[Any],model: Any,binding: Any,tbptt: int,*,lay
 
 
 def plan_groups(rollout: Any, logical: list[int], model: Any, binding: Any, tbptt: int, *,
-                variant: str, reservation_bytes: int, layout: Any) -> list[UpdateGroup]:
+                variant: str, reservation_bytes: int, layout: Any,device_bytes: int | None=None) -> list[UpdateGroup]:
     if variant=='shared-prefix' and model.model_id=='mlp':
         raise ContractError('shared-prefix is sequence-only')
     endpoints={index:rollout.endpoint(index) for index in logical}
@@ -299,7 +315,7 @@ def plan_groups(rollout: Any, logical: list[int], model: Any, binding: Any, tbpt
     accepted: list[UpdateGroup]=[]
     def planned(indices: list[int],shared: bool) -> UpdateGroup:
         plan=execution_plan([endpoints[i] for i in indices],model,binding,tbptt,layout=layout,
-            reservation_bytes=reservation_bytes,resident_bytes=rollout.resident_bytes,shared=shared)
+            reservation_bytes=reservation_bytes,resident_bytes=rollout.resident_bytes,shared=shared,device_bytes=device_bytes)
         return UpdateGroup(tuple(indices),shared,plan)
     def emit(indices: list[int], shared: bool) -> None:
         current: list[int]=[]
@@ -310,7 +326,7 @@ def plan_groups(rollout: Any, logical: list[int], model: Any, binding: Any, tbpt
             if fits:
                 try:
                     execution_plan([endpoints[i] for i in trial],model,binding,tbptt,layout=layout,
-                        reservation_bytes=reservation_bytes,resident_bytes=rollout.resident_bytes,shared=shared)
+                        reservation_bytes=reservation_bytes,resident_bytes=rollout.resident_bytes,shared=shared,device_bytes=device_bytes)
                 except UpdateCapacityError:
                     fits=False
             if not fits:

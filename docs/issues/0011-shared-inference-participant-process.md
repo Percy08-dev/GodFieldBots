@@ -1,6 +1,6 @@
 # Simulator handoff: participant-scoped inference in a shared tensor executor
 
-Status: open. Affects the proposed optional shared MLP inference path, for both
+Status: open in [GodFieldSimurator #72](https://github.com/Percy08-dev/GodFieldSimurator/issues/72). Affects the proposed optional shared MLP inference path, for both
 ordinary PPO and HPO. The existing per-viewer participant runtime can run.
 
 ## Question for the Simulator contract owner
@@ -36,3 +36,22 @@ If permission is declined, record that decision and select a different design.
 A separately checked Simulator specification revision and hash are needed
 before adopting a changed contract in Bots. This document is a handoff;
 it grants no permission and makes no changes to the Simulator repository.
+
+## Proposed wording for the separate specification decision
+
+The following is a reviewable proposal for §21.1, not an amendment in force:
+
+> 参加者ごとの方策は、同じ参加者に許可された観測・イベント・候補だけを使用する。
+> 推論を別プロセスに委譲する場合に限り、信頼された計算サービスは複数参加者の
+> 入力テンソルを同じバッチで処理できる。各行の出力は、その参加者の入力・
+> 履歴状態および固定したモデルの重みだけで決まること。他の行との正規化・
+> attention・状態の共有を禁止する。応答は元の要求を発行した参加者にだけ返し、
+> 別参加者の入力・中間値・出力を方策へ渡さない。状態・応答は試合、参加者、
+> 世代をまたいで誤用できないようにし、終了時には当該参加者の状態を退役させる。
+> この例外は推論計算に限定する。Simulatorの内部状態、GameSeed、rejectionの詳細、
+> 他者視点から生成した教師信号を方策に供給する権限を追加しない。
+
+Verification on adoption would trace two requests from different participants
+and pinned versions through candidate masking, response delivery and terminal
+cleanup. Any accepted wording and spec digest should come from the Simulator
+owner; an approved decision may differ from this proposal.

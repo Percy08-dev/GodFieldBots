@@ -18,7 +18,7 @@ from gf_training.hpo_retention import pin_hpo_cache, release_hpo_cache
 
 class ResidentTrainingRuntime:
     """Never outlives the SAME actual job, original parent lock or invocation."""
-    def __init__(self, job: Any, ownership: Any, config: Any, state: Json, *, deadline: float, cleanup_deadline: float | None = None, owned_registry: Any = None) -> None:
+    def __init__(self, job: Any, ownership: Any, config: Any, state: Json, *, deadline: float, cleanup_deadline: float | None = None, owned_registry: Any = None, owned_cuda: bool = False) -> None:
         from gf_common.structured_layout import CORRECTED_CARD_INSTANCE_LAYOUT as layout
         from gf_models.structured_runtime import hpo_resident_training_admission
         from gf_training.hpo_lineage import require_hpo_run_owner
@@ -32,7 +32,7 @@ class ResidentTrainingRuntime:
         self.limit = config.hpo_spec['operating']['parent_budget_bytes']
         envelope = hpo_resident_training_admission(config.model.architecture(layout=layout), config.model.inference,
             config.hpo_spec['training_recipe']['tbptt_length'], config.hpo_spec['operating'],
-            config.hpo_spec['runtime'], layout=layout)
+            config.hpo_spec['runtime'], layout=layout,owned_cuda=owned_cuda)
         self.custody = ResidentPoolCustody(job, run_id=state['run_id'], pool_id=uuid.uuid4().hex)
         self.pool = ResidentParticipantPool(self.custody, resident_bytes=envelope['worker_bytes']//envelope['workers'],
             deadline=self.deadline, acquire_cache=self.acquire_cache, release_cache=self.release_cache,
