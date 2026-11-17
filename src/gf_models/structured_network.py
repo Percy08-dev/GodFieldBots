@@ -554,8 +554,17 @@ def make_network(model: ModelConfigV2 | ModelConfigV3 | ModelConfigV4, seed: int
             return logs[None],value[None]
 
         def _learning_frames(self, window: Any, indices: list[int]) -> tuple[Any, Any]:
-            return self._encode_frame_operands(None, lambda name: window.operands[name][indices],
-                batch_lengths=[window.event_lengths[index] for index in indices])
+            lengths=[window.event_lengths[index] for index in indices]
+            maximum=max(lengths)
+            # Trim the event-axis VIEW before advanced frame gathering or
+            # one-hot/feature expansion. The admitted phase-local geometry must
+            # never inherit another phase's global packed interval padding.
+            def raw(name: str) -> Any:
+                values=window.operands[name]
+                if name.startswith('interval_'):
+                    values=values[:,:maximum]
+                return values[indices]
+            return self._encode_frame_operands(None,raw,batch_lengths=lengths)
 
         def _learning_forward(self, window: Any, lengths: list[int], suffix_length: int,
                               *, shared: bool = False) -> tuple[Any, Any]:
@@ -584,7 +593,54 @@ def make_network(model: ModelConfigV2 | ModelConfigV3 | ModelConfigV4, seed: int
                 output, _ = self.encode_temporal(encoded.reshape(batch,suffix_length,-1),past,prefix)
                 context = output[:,-1]
                 cards = all_cards.reshape(batch,suffix_length,18,-1)[:,-1]
-            raw = window.operands
+            return self._learning_heads(window.operands,context,cards)
+
+        def _learning_streamed(self,window: Any,lengths: list[int],suffix_length: int,
+                               *,shared: bool=False) -> tuple[Any,Any]:
+            from gf_models.structured_learning import pack_frames
+            batch=len(lengths)
+            def stage(chunks: Any,retain: bool) -> tuple[dict[int,Any],dict[int,Any]]:
+                projected: dict[int,Any]={}
+                cards: dict[int,Any]={}
+                for indices in chunks:
+                    packed=pack_frames(self,[window.frames[index] for index in indices])
+                    encoded,actor_cards=self._learning_frames(packed,list(range(len(indices))))
+                    projected.update(zip(indices,encoded.unbind(0),strict=True))
+                    if retain:
+                        cards.update(zip(indices,actor_cards.unbind(0),strict=True))
+                        window.retained.append(packed)
+                    window.transfer_count+=packed.transfer_count
+                    del packed,encoded,actor_cards
+                return projected,cards
+            if model.model_id=='mlp':
+                projected,actor_cards=stage(window.staging.suffix_chunks,True)
+                context=torch.stack([projected[index] for index in range(batch)])
+                cards=torch.stack([actor_cards[index] for index in range(batch)])
+            elif shared:
+                projected,actor_cards=stage(window.staging.suffix_chunks,True)
+                output,_=self.encode_temporal(torch.stack([projected[index] for index in range(max(lengths))]))
+                context=output[[length-1 for length in lengths]]
+                cards=torch.stack([actor_cards[length-1] for length in lengths])
+            else:
+                length=lengths[0]
+                if any(value!=length for value in lengths):
+                    raise ContractError('streamed temporal histories must have equal lengths')
+                prefix=length-suffix_length
+                past=None
+                if prefix:
+                    with torch.no_grad():
+                        projected,_=stage(window.staging.prefix_chunks,False)
+                        encoded=torch.stack([projected[row*length+position] for row in range(batch) for position in range(prefix)])
+                        prefix_output,past=self.encode_temporal(encoded.reshape(batch,prefix,-1))
+                        del projected,encoded,prefix_output
+                projected,actor_cards=stage(window.staging.suffix_chunks,True)
+                encoded=torch.stack([projected[row*length+position] for row in range(batch) for position in range(prefix,length)])
+                output,_=self.encode_temporal(encoded.reshape(batch,suffix_length,-1),past,prefix)
+                context=output[:,-1]
+                cards=torch.stack([actor_cards[row*length+length-1] for row in range(batch)])
+            return self._learning_heads(window.operands,context,cards)
+
+        def _learning_heads(self,raw: Any,context: Any,cards: Any) -> tuple[Any,Any]:
             first = self.actor[0]
             width = model.temporal.hidden_size
             shared_context = functional.linear(context,first.weight[:,:width],first.bias)

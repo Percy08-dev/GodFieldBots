@@ -191,9 +191,11 @@ def _select_visibility(initial: Json, binding: InferenceBindingV2, visibility: s
         raise ContractError('wire3 actual visibility mismatch before Torch')
 
 
-def serve(initial: Json, lines: Iterable[str]) -> None:
+def serve(initial: Json, lines: Iterable[str], *, execution_cap: int | None=None) -> None:
     closed(initial, {'protocol_version', 'command', 'identity', 'model', 'seed', 'output', 'restore'})
     hpo = initial.get('protocol_version') == 6
+    if not hpo and execution_cap is not None:
+        raise ContractError('Model4 cap cannot enter older/frozen worker')
     packed = initial.get('protocol_version') == 5 or hpo and 'storage_binding' in initial.get('identity', {})
     game = initial.get('protocol_version') in (4, 5, 6)
     protocol = 6 if hpo else 5 if packed else 4 if game else 3
@@ -230,6 +232,9 @@ def serve(initial: Json, lines: Iterable[str]) -> None:
             cuda_visible_devices=execution['cuda_visible_devices'], _actions=actions, storage_binding=identity.get('storage_binding'))
     if canonical(identity) != canonical(expected):
         raise ContractError('wire3 initialize binding mismatch')
+    if hpo:
+        from gf_training.hpo_learning_process import checked_execution_cap
+        execution_cap=checked_execution_cap(model,training,binding,execution_cap)
     _select_visibility(initial, binding, execution['cuda_visible_devices'])
     integer(initial['seed'], 0, 2**63 - 1)
     for key in ('output', 'restore'):
@@ -238,10 +243,9 @@ def serve(initial: Json, lines: Iterable[str]) -> None:
     if initial['output'] is None:
         raise ContractError('wire3 output required')
     diagnostic = None
-    if hpo and os.environ.get('GFB_HPO_DIAGNOSTIC_INVOCATION'):
-        from gf_common.hpo_progress import DiagnosticEmitter
-        diagnostic = DiagnosticEmitter(os.environ['GFB_HPO_DIAGNOSTIC_INVOCATION'],
-            int(os.environ['GFB_HPO_DIAGNOSTIC_LOG_BYTES']),sys.stderr)
+    if hpo:
+        from gf_common.hpo_progress import optional_diagnostic_emitter
+        diagnostic=optional_diagnostic_emitter(os.environ,sys.stderr)
     started = time.monotonic()
     from gf_models.sharded_arrays import read_json
     from gf_models.torch_runtime import hardware
@@ -251,6 +255,7 @@ def serve(initial: Json, lines: Iterable[str]) -> None:
         from gf_training.hpo_numeric import HpoLearner
         assert actions is not None
         learner: Any = HpoLearner(model, training, initial['seed'], binding, identity['resume_identity'], actions=actions, rules=card_instance_rules())
+        learner._training_reservation_bytes=execution_cap
     else:
         learner = (GameLearner(model, initial['seed'], binding, identity['resume_identity'], actions=actions, rules=card_instance_rules()) if actions is not None else
             Learner(model, initial['seed'], binding, identity['action_config_hash'], identity['resume_identity'],
@@ -374,8 +379,8 @@ def serve(initial: Json, lines: Iterable[str]) -> None:
             del rollout
         learner.synchronize()
         if diagnostic is not None and not diagnostic.disabled:
-            from gf_common.hpo_progress import allocator_facts
-            diagnostic.emit(projection['collection_generation']+1,{**allocator_facts(learner),'diagnostic_boundary':'update-synchronized',
+            from gf_common.hpo_progress import allocator_facts, update_execution_facts
+            diagnostic.emit(projection['collection_generation']+1,{**allocator_facts(learner),**update_execution_facts(learner),'diagnostic_boundary':'update-synchronized',
                 'parity_seconds':learner._last_parity_seconds})
             diagnostic.emit(projection['collection_generation']+1,{'phase':'save'})
         update_seconds = time.monotonic() - started

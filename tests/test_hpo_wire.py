@@ -1,5 +1,6 @@
 """Wire6 numerical component execution; fixtures grant no online Source authority."""
 import json
+import os
 import subprocess
 import sys
 from dataclasses import asdict
@@ -63,18 +64,26 @@ def numerical_request(tmp_path):
 
 
 def test_actual_cpu_wire6_initialize_selected_update_full_ack_and_close(tmp_path):
-    _, _, requests = numerical_request(tmp_path)
-    result = subprocess.run([sys.executable, '-E', '-m', 'gf_training.ppo_worker'],
+    learner, _, requests = numerical_request(tmp_path)
+    launch=['--model4-execution-cap',str(learner._training_reservation_bytes)]
+    environment={**os.environ,'GFB_HPO_DIAGNOSTIC_INVOCATION':'normal-wire6',
+        'GFB_HPO_DIAGNOSTIC_LOG_BYTES':str(1024**2)}
+    result = subprocess.run([sys.executable, '-E', '-m', 'gf_training.ppo_worker',*launch],
         input=''.join(canonical(request)+'\n' for request in requests), text=True,
-        capture_output=True, timeout=60, check=False)
+        capture_output=True, timeout=60, check=False,env=environment)
     assert result.returncode == 0, result.stderr
     replies = [json.loads(line) for line in result.stdout.splitlines()]
     assert [reply['command'] for reply in replies] == ['initialize', 'update', 'close']
     assert replies[1]['artifact']['optimizer_steps'] == 4
     assert replies[1]['metrics']['collected_decisions'] == 3
     assert replies[1]['metrics']['used_decisions'] == 1
+    from gf_common.hpo_progress import TAG
+    facts=[json.loads(line[len(TAG):]) for line in result.stderr.splitlines() if line.startswith(TAG)]
+    routes=[row for row in facts if row['facts'].get('diagnostic_boundary')=='update-synchronized']
+    assert len(routes)==1 and routes[0]['update']==1
+    assert routes[0]['facts']['update_execution']=='shared-prefix'
     restore = dict(requests[0], restore=str(tmp_path/'g1'), output=str(tmp_path/'unused'))
-    restored = subprocess.run([sys.executable, '-E', '-m', 'gf_training.ppo_worker'],
+    restored = subprocess.run([sys.executable, '-E', '-m', 'gf_training.ppo_worker',*launch],
         input=canonical(restore)+'\n'+canonical(requests[-1])+'\n', text=True,
         capture_output=True, timeout=60, check=False)
     assert restored.returncode == 0, restored.stderr
@@ -93,7 +102,7 @@ def test_wire6_wrong_recipe_and_counts_reject_before_update(tmp_path):
 
 @pytest.mark.parametrize('numeric_limit',[1,64*1024**2])
 def test_actual_cpu_serve_admits_first_manifest_and_releases_preliminary_copies(tmp_path,numeric_limit):
-    _, _, requests=numerical_request(tmp_path)
+    learner, _, requests=numerical_request(tmp_path)
     for request in requests:
         request['identity']['phase_limits']['numeric_budget_bytes']=numeric_limit
     # A clean process preserves actual visibility selection, CPU learner/save,
@@ -146,12 +155,13 @@ def observed_update(self,*args,**kwargs):
     return original_update(self,*args,**kwargs)
 HpoLearner.update=observed_update
 try:
-    structured_numeric_worker.serve(requests[0],(json.dumps(row) for row in requests[1:]))
+    from gf_training.hpo_learning_process import parse_execution_cap
+    structured_numeric_worker.serve(requests[0],(json.dumps(row) for row in requests[1:]),execution_cap=parse_execution_cap(tuple(sys.argv[1:])))
 except ContractError as error:
     report['error']=str(error)
 print('PROBE:'+json.dumps(report),flush=True)
 '''
-    result=subprocess.run([sys.executable,'-E','-c',probe],input=json.dumps(requests),
+    result=subprocess.run([sys.executable,'-E','-c',probe,'--model4-execution-cap',str(learner._training_reservation_bytes)],input=json.dumps(requests),
         text=True,capture_output=True,timeout=60,check=False)
     assert result.returncode==0,result.stderr
     lines=result.stdout.splitlines()
@@ -229,3 +239,34 @@ def test_owned_parent_rejects_bad_saved_ack_and_still_reaps(tmp_path, monkeypatc
         finally: await child.close(deadline)
         assert child.process.returncode == 0 and child.lease.released and ledger.learner is None
     asyncio.run(run())
+
+
+@pytest.mark.parametrize('fault',['missing','invalid','constructor'])
+def test_wire6_optional_diagnostic_setup_failure_keeps_update_and_close(tmp_path,fault):
+    learner,_,requests=numerical_request(tmp_path)
+    environment={**os.environ,'GFB_HPO_DIAGNOSTIC_INVOCATION':'optional-wire6',
+        'GFB_HPO_DIAGNOSTIC_LOG_BYTES':'4096'}
+    if fault=='missing':
+        environment.pop('GFB_HPO_DIAGNOSTIC_LOG_BYTES')
+    elif fault=='invalid':
+        environment['GFB_HPO_DIAGNOSTIC_LOG_BYTES']='invalid'
+    launch=['--model4-execution-cap',str(learner._training_reservation_bytes)]
+    if fault=='constructor':
+        program='''
+from gf_common import hpo_progress
+from gf_training.ppo_worker import main
+def failed(*args,**kwargs):
+    raise RuntimeError('optional display constructor')
+hpo_progress.DiagnosticEmitter=failed
+main()
+'''
+        command=[sys.executable,'-E','-c',program,*launch]
+    else:
+        command=[sys.executable,'-E','-m','gf_training.ppo_worker',*launch]
+    result=subprocess.run(command,input=''.join(canonical(request)+'\n' for request in requests),
+        text=True,capture_output=True,timeout=60,check=False,env=environment)
+    assert result.returncode==0,result.stderr
+    replies=[json.loads(line) for line in result.stdout.splitlines()]
+    assert [reply['command'] for reply in replies]==['initialize','update','close']
+    assert replies[1]['artifact']['optimizer_steps']==4 and replies[-1]['closed']
+    assert 'GFB_HPO_DIAGNOSTIC_V1' not in result.stderr

@@ -54,6 +54,7 @@ def test_experimental_update_matches_baseline_parameters_and_adam(kind,variant):
     from gf_training.hpo_config import HPOTrainingConfig
     recipe = replace(HPOTrainingConfig(), epochs=1, minibatch_size=5)
     baseline = learner_for(kind, recipe=recipe)
+    baseline._training_execution=TrainingExecutionSpec(variant='baseline')
     candidate = learner_for(kind, recipe=recipe)
     rollout = rollout_for(baseline, count=7)
     candidate._training_execution = TrainingExecutionSpec(variant=variant)

@@ -23,10 +23,12 @@ def test_actual_wire7_initialize_owned_update_and_reap(tmp_path, kind):
     from tests.test_structured_numeric_worker import assert_artifacts_equal
     learner = learner_for(kind, recipe=replace(HPOTrainingConfig(), epochs=1))
     account, ledger = budget(), ReservationLedger()
+    facts=[]
     async def run():
         child = HpoOwnedLearningProcess(tmp_path, 1024**2, learner.model, learner.training, learner.binding,
             learner.action_config_hash, learner.resume_identity, actions=ACTIONS, ledger=ledger,
-            cuda_visible_devices='', cleanup_deadline=time.monotonic()+60, budget=account)
+            cuda_visible_devices='', cleanup_deadline=time.monotonic()+60, budget=account,
+            diagnostics=True,progress=facts.append)
         deadline = time.monotonic()+60
         await child.start()
         initial = updated = None
@@ -82,6 +84,9 @@ def test_actual_wire7_initialize_owned_update_and_reap(tmp_path, kind):
             if updated is not None: updated.close()
         assert child.process.returncode == 0 and child.lease.released and ledger.learner is None
     asyncio.run(run())
+    actual=[row for row in facts if row.get('diagnostic_boundary')=='update-synchronized']
+    assert len(actual)==1 and actual[0]['diagnostic_update']==1
+    assert actual[0]['update_execution']==('microbatch' if kind=='mlp' else 'shared-prefix')
 
 
 def recapture(record, snapshot, account):

@@ -9,7 +9,10 @@ inputs. Baseline becomes an internal reference, older frozen learners stay
 unchanged, and ordinary resume source identity stays strict. The user accepts
 extreme-setting capacity/OOM risk; conservative caps and explicit failure stay,
 without added rematerialization or fallback. Preimplementation review is READY;
-implementation and normal default activation remain pending.
+implementation now passes independent correctness/conformance, focused and
+normal-worker/source/native/campaign checks plus normal CUDA and streamed
+long-prefix gradient checks. Normal live fresh/pause-resume/audit evidence remains
+pending in [the adoption record](verification/ppo-update-adoption.md).
 
 [ADR0045](adr/0045-learning-update-optimization.md) accepts the bounded
 [PPO update comparison](design/learning-update-optimization.md): cumulative

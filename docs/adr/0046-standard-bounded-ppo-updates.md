@@ -1,6 +1,6 @@
 # 0046: Standard bounded Model4 PPO updates
 
-- Status: Accepted design; implementation and verification pending
+- Status: Accepted, implemented; normal live acceptance pending
 - Date: 2026-11-17
 - Owner: root
 - Baseline: `b3831a0`
@@ -48,3 +48,10 @@ Preimplementation architecture gate, focused capacity/default/ownership/gradient
 tests, existing frozen/reference/resume/native-source regressions, normal CUDA
 fresh/pause-resume and strict original Source/receipt checks, both final independent
 reviews. No new learning-quality/HPO/final-test conclusion follows from adoption.
+
+Implementation passes both independent code reviews after phase-local event
+trimming, suffix-temporary refinement and optional diagnostic-setup guards.
+Focused/reference/capacity/worker/source/native/campaign checks and normal CUDA
+numerical/resume plus streamed1024/default32 gradients pass. Actual ordinary
+fresh/pause-resume and strict Source/receipt acceptance remain pending; exact
+commands and limits are in [the verification record](../verification/ppo-update-adoption.md).

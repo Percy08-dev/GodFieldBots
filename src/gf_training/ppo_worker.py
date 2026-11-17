@@ -20,14 +20,21 @@ from gf_training.ppo import read_rollout
 
 
 def main() -> None:
+    execution_cap=None
+    if len(sys.argv)>1:
+        from gf_training.hpo_learning_process import parse_execution_cap
+        execution_cap=parse_execution_cap(tuple(sys.argv[1:]))
+    sys.argv[:]=['gf-ppo-learner']
     learner: Any = None
     model = None
     for line in sys.stdin:
         request = json.loads(line)
         if 'protocol_version' in request:
             from gf_training.structured_numeric_worker import serve
-            serve(request, sys.stdin)
+            serve(request, sys.stdin, execution_cap=execution_cap)
             return
+        if execution_cap is not None:
+            raise ValueError('Model4 cap cannot enter frozen numerical worker')
         command = request.get('command')
         started = time.monotonic()
         if command == 'initialize':

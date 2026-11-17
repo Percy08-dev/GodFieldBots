@@ -200,10 +200,15 @@ class LearningProcess:
         if result != {'closed': True}:
             raise ContractError('invalid learner close acknowledgement')
 
+    def _launch_arguments(self) -> tuple[str,...]:
+        """Private launch extension; frozen/non-HPO creators retain exact argv."""
+        return ()
+
     async def _create_process(self) -> Any:
+        arguments=self._launch_arguments()  # Validation has no stdlib no-child proof.
         environment = self._environment()
         try:
-            return await asyncio.create_subprocess_exec(sys.executable, '-E', '-m', 'gf_training.ppo_worker',
+            return await asyncio.create_subprocess_exec(sys.executable, '-E', '-m', 'gf_training.ppo_worker', *arguments,
                 stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
                 env=environment, limit=1024 * 1024)
         except Exception as error:

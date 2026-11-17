@@ -369,3 +369,60 @@ def test_external_cancel_during_optional_heartbeat_retirement_is_preserved(tmp_p
             assert all(task.done() for task in tasks)
         asyncio.run(run())
         assert all(inspect.getcoroutinestate(coroutine)==inspect.CORO_CLOSED for coroutine in coroutines)
+
+
+@pytest.mark.parametrize('route',['baseline','metrics','packed','microbatch','shared-prefix'])
+def test_optional_execution_fact_is_closed_and_non_authoritative(route):
+    from gf_common.hpo_progress import DiagnosticEmitter, DiagnosticParser, learner_facts
+    assert learner_facts({'diagnostic_boundary':'update-synchronized','update_execution':route})
+    output=io.StringIO()
+    DiagnosticEmitter('route',4096,output).emit(2,{'diagnostic_boundary':'update-synchronized','update_execution':route})
+    values=[]
+    parser=DiagnosticParser('route',values.append)
+    parser.update=2
+    parser.feed(output.getvalue().encode())
+    assert values[0]['update_execution']==route and values[0]['diagnostic_update']==2
+    assert not learner_facts({'update_execution':'future-unknown'})
+    assert not learner_facts({'update_execution':None})
+
+
+@pytest.mark.parametrize('log_bytes',[None,'invalid','', '0','-1'])
+def test_optional_emitter_setup_disables_invalid_or_missing_budget(log_bytes):
+    from gf_common.hpo_progress import optional_diagnostic_emitter
+    environment={'GFB_HPO_DIAGNOSTIC_INVOCATION':'setup-test'}
+    if log_bytes is not None:
+        environment['GFB_HPO_DIAGNOSTIC_LOG_BYTES']=log_bytes
+    assert optional_diagnostic_emitter(environment,io.StringIO()) is None
+
+
+def test_optional_emitter_setup_constructor_failure_and_control_exceptions(monkeypatch):
+    from gf_common import hpo_progress
+    environment={'GFB_HPO_DIAGNOSTIC_INVOCATION':'setup-test','GFB_HPO_DIAGNOSTIC_LOG_BYTES':'4096'}
+    for error in (RuntimeError('display setup'),KeyboardInterrupt(),SystemExit(7)):
+        def fail(*args,_error=error,**kwargs):
+            raise _error
+        monkeypatch.setattr(hpo_progress,'DiagnosticEmitter',fail)
+        if isinstance(error,Exception):
+            assert hpo_progress.optional_diagnostic_emitter(environment,io.StringIO()) is None
+        else:
+            with pytest.raises(type(error)) as caught:
+                hpo_progress.optional_diagnostic_emitter(environment,io.StringIO())
+            assert caught.value is error
+
+
+@pytest.mark.parametrize('wire',['owned','legacy'])
+def test_worker_constructor_display_failure_preserves_original_update_close(tmp_path,monkeypatch,wire):
+    from gf_common import hpo_progress
+    def fail(*args,**kwargs):
+        raise RuntimeError('optional emitter constructor')
+    monkeypatch.setattr(hpo_progress,'DiagnosticEmitter',fail)
+    monkeypatch.setenv('GFB_HPO_DIAGNOSTIC_INVOCATION','setup-test')
+    monkeypatch.setenv('GFB_HPO_DIAGNOSTIC_LOG_BYTES','4096')
+    if wire=='owned':
+        from tests.test_learning_update_telemetry import (
+            test_worker_off_has_no_observer_markers_and_original_phase_order,
+        )
+        test_worker_off_has_no_observer_markers_and_original_phase_order(tmp_path,monkeypatch,False,None)
+    else:
+        # Same shared factory as Wire6; its constructor is display-only.
+        assert hpo_progress.optional_diagnostic_emitter(dict(__import__('os').environ),io.StringIO()) is None

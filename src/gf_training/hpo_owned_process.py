@@ -352,10 +352,10 @@ class HpoOwnedLearningProcess(HpoLearningProcess):
         request.execution=None  # Consume before endpoint export, environment work or OS creation.
         fd, invocation = self._inherited.inherited_endpoint()
         environment=self._environment()
-        arguments: tuple[str, ...] = ()
+        arguments=self._launch_arguments()
         if self._training_execution is not None:
             path, sha = self._training_execution
-            arguments = (path, sha, str(self.lease.resident_bytes))
+            arguments = (*arguments,'--training-execution',path,sha)
         try:
             return await asyncio.create_subprocess_exec(sys.executable, '-E', '-m', 'gf_training.hpo_owned_worker',
                 str(fd), invocation, *arguments, pass_fds=(fd,), stdin=asyncio.subprocess.PIPE,
@@ -524,6 +524,8 @@ class HpoOwnedLearningProcess(HpoLearningProcess):
                 self.ledger.finish_update()
 
     async def _exchange_owned(self, request: Json, *, deadline: float, batch: Any = None) -> RemoteModelSnapshot:
+        if self.diagnostic_parser is not None:
+            self.diagnostic_parser.update=request['generation']+1 if request['command']=='update_owned' else request.get('generation',0)
         transaction = object()
         transport_timings: dict[str,float] = {}
         try:

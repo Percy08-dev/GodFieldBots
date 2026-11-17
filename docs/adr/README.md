@@ -17,7 +17,8 @@
 追加: [0046](0046-standard-bounded-ppo-updates.md) — Accepted design:
 利用者承認に基づくModel4通常経路の高速版統一と、長大入力の事前分割。
 旧経路は内部検証用として保持。極端設定の容量保証は対象外とし、上限と失敗処理を維持。
-事前アーキテクチャレビューはREADY。実装・検証は未完了。
+事前設計・実装の両独立レビューと対象CUDAチェックはREADY。
+通常実行の連続・一時停止再開・厳密監査は未完了。
 
 追加: [0045](0045-learning-update-optimization.md) — Accepted,implemented and verified:
 PPO更新の指標集約・入力一括化・microbatch・履歴共有を既存予算内で比較する。

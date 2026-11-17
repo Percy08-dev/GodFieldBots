@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import mmap
+import os
 import sys
 from contextlib import nullcontext
 from dataclasses import asdict
@@ -243,22 +244,20 @@ def _restore_initial(channel: RamBankChannel, request: Json, learner: Any, budge
 
 def main() -> None:
     # Explicit inherited endpoint only; no inherited resume/model/numeric FD.
-    if len(sys.argv) not in (3,6):
-        raise ContractError('closed owned learner argv required')
+    if len(sys.argv) not in (5,8):
+        raise ContractError('closed owned learner argv/cap required')
     fd, invocation = int(sys.argv[1]), sys.argv[2]
+    from gf_training.hpo_learning_process import parse_execution_cap
+    reservation=parse_execution_cap(tuple(sys.argv[3:5]))
     execution = None
     execution_sha = None
     observation_source = None
-    reservation = None
-    if len(sys.argv) == 6:
+    if len(sys.argv)==8:
+        if sys.argv[5]!='--training-execution':
+            raise ContractError('closed private training execution argument required')
         from gf_training.hpo_training_execution import read_execution_spec
-        execution = read_execution_spec(Path(sys.argv[3]),sys.argv[4])
-        execution_sha = sys.argv[4]
-        try:
-            reservation = int(sys.argv[5])
-        except ValueError as error:
-            raise ContractError('actual learner reservation required') from error
-        integer(reservation,1,2**63-1)
+        execution = read_execution_spec(Path(sys.argv[6]),sys.argv[7])
+        execution_sha = sys.argv[7]
     sys.argv[:] = ['gf-owned-hpo-learner']
     channel = RamBankChannel._from_inherited(fd, invocation)
     initial = json.loads(sys.stdin.readline())
@@ -297,13 +296,14 @@ def main() -> None:
             or reservation > min(model.resources.max_owned_bytes,binding.managed_budget_bytes)
             or execution.variant == 'shared-prefix' and model.model_id == 'mlp'):
         raise ContractError('experimental fresh learner reservation/model mismatch')
+    from gf_training.hpo_learning_process import checked_execution_cap
+    reservation=checked_execution_cap(model,training,binding,reservation)
     from gf_training.hpo_numeric import HpoLearner
     learner = HpoLearner(model, training, integer(initial['seed'],0,2**63-1), binding,
         identity['resume_identity'], actions=actions, rules=card_instance_rules())
+    learner._training_reservation_bytes = reservation
     if execution is not None:
         learner._training_execution = execution
-        assert reservation is not None
-        learner._training_reservation_bytes = reservation
     # Invocation-local Source admission; phase-specific limits are also enforced.
     budget = StorageBudget(StorageSettings(), float('inf'))
     if restoring:
@@ -321,6 +321,8 @@ def main() -> None:
             observation_source = producer_identity()['source_digest']
         except BaseException:  # noqa: BLE001, S110 - missing source binding makes diagnostics incomplete, not learning
             pass
+    from gf_common.hpo_progress import optional_diagnostic_emitter
+    diagnostic=optional_diagnostic_emitter(os.environ,sys.stderr)
     last_transaction = initial['transaction']
     for line in sys.stdin:
         request = json.loads(line)
@@ -345,8 +347,6 @@ def main() -> None:
         original_completed = False
         if execution is not None and execution.observe_actual:
             try:
-                import os
-
                 from gf_training.hpo_execution_observation import ProcessObservation
                 assert execution.diagnostic_directory is not None
                 Path(execution.diagnostic_directory).mkdir(parents=True,exist_ok=True)
@@ -405,16 +405,21 @@ def main() -> None:
             if execution is not None and execution.diagnostic_directory is not None and not execution.observe_actual:
                 destination = Path(execution.diagnostic_directory)
                 destination.mkdir(parents=True,exist_ok=True)
-                diagnostic = getattr(learner,'_training_update_diagnostics',{'variant':execution.variant})
+                counters = getattr(learner,'_training_update_diagnostics',{'variant':execution.variant})
                 with (destination/f'update-{generation:06d}.json').open('x') as stream:
                     stream.write(canonical({'schema_version':1,'generation':generation,
-                        'reservation_bytes':reservation,**diagnostic}))
+                        'reservation_bytes':reservation,**counters}))
             with observation.phase('input_retirement') if observation is not None else nullcontext():
                 del numeric
                 learner.synchronize()
                 for delivery in deliveries:
                     delivery.complete(learner.synchronize)
                 control.close()
+            if diagnostic is not None and not diagnostic.disabled:
+                from gf_common.hpo_progress import update_execution_facts
+                facts=update_execution_facts(learner)
+                if facts:
+                    diagnostic.emit(request['generation']+1,{**facts,'diagnostic_boundary':'update-synchronized'})
             if observation is not None:
                 try:
                     observation.numeric_loop_update_seconds=float(metrics['update_seconds'])

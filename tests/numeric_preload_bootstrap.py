@@ -62,4 +62,7 @@ def main(template_pid, fault=''):
     from gf_training.ppo_worker import main as original_main
     structured_numeric_worker._select_visibility = lambda initial, binding, visibility: _cpu_origin(initial, binding, visibility, template_pid)
     sys.stdin = AdmissionInput(sys.stdin)
+    # The reviewed CPU3/4 template supplies no Model4 launch allowance; broker
+    # control argv is not numerical-worker argv and must never reach its parser.
+    sys.argv[:] = ['gf-ppo-learner']
     original_main()

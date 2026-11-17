@@ -64,6 +64,8 @@ def test_configurable_loss_preserves_default_and_varies_coefficients():
 @pytest.mark.parametrize("kind", ["mlp", "gru", "transformer"])
 def test_default_same_input_matches_old_learner_all_endpoints(kind):
     learner = learner_for(kind)
+    from gf_training.hpo_training_execution import TrainingExecutionSpec
+    learner._training_execution=TrainingExecutionSpec(variant='baseline')
     raw = asdict(learner.model)
     raw.update(version="3", initialization="orthogonal-structured-v1")
     raw["temporal"]["sequence_length"] = 32

@@ -84,3 +84,8 @@ all9original pairs improve collection-inclusive coordinator time, with median
 paired savings9.54%,31.85%,31.60%. Defaults remain unchanged. Sampled memory,
 one diagnostic pair/model, short histories, one shared GPU and one learning seed
 limit generalization; no quality/HPO/final-test gate is passed by these results.
+
+[ADR0046](0046-standard-bounded-ppo-updates.md) subsequently authorizes normal
+Model4 optimized dispatch. It supersedes only the opt-in/default decision and
+normal launch-cap plumbing; the comparison records and their unchanged-default
+source cohorts above remain historical evidence and are not rewritten.

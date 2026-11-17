@@ -145,7 +145,7 @@ def test_publication_is_exclusive_bounded_and_failure_holds_lease(tmp_path,monke
         observation.ProcessObservation({**bindings(),'bad':object()},allowance_bytes=256*1024**2)
 
 
-@pytest.mark.parametrize('mode',['off','observed','publication_failure'])
+@pytest.mark.parametrize('mode',['off','observed','publication_failure','private_reference'])
 def test_original_cpu_worker_observation_and_close_boundary(tmp_path,mode):
     _owned_observation_lifecycle(tmp_path,mode)
 
@@ -154,7 +154,6 @@ def _owned_observation_lifecycle(tmp_path,mode,*,device='cpu',ledger=None):
     import asyncio
     from dataclasses import replace
 
-    from gf_models.structured_config import resource_estimate
     from gf_simulator_client.structured_resources import ReservationLedger
     from gf_training.hpo_collection import selection_for_counts
     from gf_training.hpo_config import HPOTrainingConfig
@@ -172,8 +171,8 @@ def _owned_observation_lifecycle(tmp_path,mode,*,device='cpu',ledger=None):
     execution=None
     if mode!='off':
         path=tmp_path/'spec.json'
-        sha=write_execution_spec(path,TrainingExecutionSpec(schema_version=2,observe_actual=True,
-            diagnostic_directory=str(diagnostic)))
+        sha=write_execution_spec(path,TrainingExecutionSpec(schema_version=1 if mode=='private_reference' else 2,
+            observe_actual=mode!='private_reference',diagnostic_directory=str(diagnostic)))
         execution=(str(path),sha)
     existing=diagnostic/'update-000000.json'
     if mode=='publication_failure':
@@ -183,11 +182,6 @@ def _owned_observation_lifecycle(tmp_path,mode,*,device='cpu',ledger=None):
             learner.action_config_hash,learner.resume_identity,actions=ACTIONS,ledger=ReservationLedger() if ledger is None else ledger,
             cuda_visible_devices='' if device=='cpu' else os.environ.get('CUDA_VISIBLE_DEVICES','0'),cleanup_deadline=time.monotonic()+60,budget=account,
             _training_execution=execution)
-        if execution is not None and device=='cpu':
-            # CPU fixture reserves the same real original resource envelope so
-            # argv carries a positive genuine lease, without a creator override.
-            child.resident_bytes=resource_estimate(learner.model,learner.binding,
-                suffix_decisions=learner.training.tbptt_length,layout=learner.network.layout)['total_bytes']
         deadline=time.monotonic()+60
         await child.start()
         initial=updated=None
@@ -218,6 +212,10 @@ def _owned_observation_lifecycle(tmp_path,mode,*,device='cpu',ledger=None):
         assert not list(diagnostic.iterdir())
     elif mode=='publication_failure':
         assert existing.read_bytes()==b'preserved original'
+    elif mode=='private_reference':
+        counters=json.loads(existing.read_bytes())
+        assert counters['schema_version']==1 and counters['generation']==0
+        assert counters['variant']=='baseline'
     else:
         value=read_observation(existing)
         validate_observation(value,expected={'role':'worker','pid':pid,'generation':0,
@@ -484,12 +482,12 @@ def test_worker_off_has_no_observer_markers_and_original_phase_order(tmp_path,mo
         'policy_version':'fixture','output':str(tmp_path/'g1')}
     closing={'protocol_version':7,'command':'close','identity':identity}
     monkeypatch.setattr('sys.stdin',io.StringIO('\n'.join(json.dumps(row) for row in (initial,request,closing))+'\n'))
-    argv=['worker','-1','fixture']
+    argv=['worker','-1','fixture','--model4-execution-cap',str(learner._training_reservation_bytes)]
     if observe:
         path=tmp_path/'observed.json'
         sha=write_execution_spec(path,TrainingExecutionSpec(schema_version=2,observe_actual=True,
             diagnostic_directory=str(diagnostic)))
-        argv.extend([str(path),sha,str(learner.binding.managed_budget_bytes)])
+        argv.extend(['--training-execution',str(path),sha])
     monkeypatch.setattr('sys.argv',argv)
     if failure is not None:
         with pytest.raises(OSError) as caught:

@@ -169,6 +169,21 @@ window references end after real last use before the existing retirement ACK.
 Capacity, nonfinite, CUDA, cancellation and I/O failures retain original terminal
 cleanup, without successful ACK/save or guessed outcomes.
 
+## Optional resolved-route observation
+
+For normal live verification, the existing explicitly enabled diagnostic stderr
+channel reports the route actually dispatched, not merely the expected model
+mapping. Add one bounded closed learner fact `update_execution` with the existing
+known variant enum; old diagnostic readers may discard that optional event.
+This is not a Wire6/7 metric/ACK, persisted model field or execution authority.
+Only Model4 emitters include it after successful update at an existing sync
+boundary, with actual invocation/update/sequence tags. Wire7 parser tracks the
+original generation before dispatch; no allocator query/new sync is needed.
+Clear/set the resolved value per update so an explicit reference cannot inherit
+a previous optimized value. Diagnostics off or failed emission never changes
+learning. Root verification requires matching observed facts and no private
+execution ref; missing logs invalidate only verification completeness.
+
 ## Verification and acceptance
 
 TDD regressions: implicit correct route with no experiment flag; explicit private

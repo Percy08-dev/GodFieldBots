@@ -68,7 +68,7 @@ class HpoLearner(Learner):
         self.action_contract, self.purpose, self.synthetic_capacity = actions.action_contract, "qualified_game", False
         self.model, self.training, self.binding = model, training, binding
         self.resume_identity = resume_identity
-        resource_estimate(model, binding, suffix_decisions=training.tbptt_length, **self._options)
+        configured_envelope=resource_estimate(model, binding, suffix_decisions=training.tbptt_length, **self._options)["total_bytes"]
         self.torch = torch_runtime(binding.device)
         self.torch.random.default_generator.manual_seed(seed)
         if binding.device != "cpu":
@@ -78,8 +78,9 @@ class HpoLearner(Learner):
         self.optimizer = self._optimizer(self.network)
         self.shuffle = np.random.Generator(np.random.PCG64(seed))
         self.steps = 0
+        self._last_update_execution: str | None=None
         self._training_execution: Any = None
-        self._training_reservation_bytes: int = 0
+        self._training_reservation_bytes: int = configured_envelope
         self._owned_snapshot: Any = None
         self._owned_generation = 0
         self._owned_failed = False
@@ -116,6 +117,7 @@ class HpoLearner(Learner):
                     raise ContractError("complete rollout plus endpoint exceeds learner reservation")
 
     def update(self, rollout: StructuredRollout) -> Json:
+        self._last_update_execution=None
         self._owned_legacy=True
         self._owned_snapshot=None
         started = time.perf_counter()
@@ -126,6 +128,7 @@ class HpoLearner(Learner):
         return self._update_numeric(rollout, parity, started, self.network)
 
     def update_owned(self, rollout: Any) -> Json:
+        self._last_update_execution=None
         from gf_training.hpo_owned_rollout import OwnedNumericBatch
         if self._owned_legacy:
             raise ContractError('legacy update/restore cannot enter producer-owned numerical route')
@@ -166,8 +169,11 @@ class HpoLearner(Learner):
             raise
 
     def _update_numeric(self, rollout: Any, parity: Json, started: float, forward: Any) -> Json:
+        self._last_update_execution=None
         from gf_training.hpo_training_execution import TrainingExecutionSpec
         spec = getattr(self, '_training_execution', None)
+        if spec is None:
+            spec=TrainingExecutionSpec(variant='microbatch' if self.model.model_id=='mlp' else 'shared-prefix')
         if spec is not None:
             if type(spec) is not TrainingExecutionSpec:
                 raise ContractError('exact experimental execution settings required')
@@ -217,6 +223,7 @@ class HpoLearner(Learner):
         if (self.steps - previous_steps != expected or not all(math.isfinite(value) for value in metrics.values())
                 or any(not torch.isfinite(parameter).all() for parameter in self.network.parameters())):
             raise ContractError("invalid HPO optimizer step count/nonfinite output")
+        self._last_update_execution='baseline'
         return {**metrics, "optimizer_steps": self.steps, "optimizer_step_delta": expected,
             "collected_decisions": rollout.collected_decisions, "used_decisions": rollout.used_decisions,
             "parity": parity, "tbptt_length": recipe.tbptt_length, "epochs": recipe.epochs,
@@ -225,6 +232,14 @@ class HpoLearner(Learner):
 
     def _update_experimental(self, rollout: Any, parity: Json, started: float, forward: Any, spec: Any) -> Json:
         from gf_training.hpo_update_execution import METRICS, execution_groups, group_forward
+        from gf_training.hpo_update_planning import execution_plan
+        # Validate singleton capacity BEFORE shuffle, gradients or optimizer
+        # mutation. Group planning only refines capacity, never runtime failure.
+        if spec.variant in ('microbatch','shared-prefix'):
+            for index in range(len(rollout)):
+                execution_plan([rollout.endpoint(index)],self.model,self.binding,self.training.tbptt_length,
+                    layout=self.network.layout,reservation_bytes=self._training_reservation_bytes,
+                    resident_bytes=rollout.resident_bytes)
         torch, recipe = self.torch, self.training
         totals = torch.zeros(5,dtype=torch.float64,device=self.binding.device)
         denominator = context_decisions = suffix_decisions = 0
@@ -265,6 +280,7 @@ class HpoLearner(Learner):
         if (self.steps-previous_steps != expected or not all(math.isfinite(value) for value in metrics.values())
                 or any(not torch.isfinite(parameter).all() for parameter in self.network.parameters())):
             raise ContractError('invalid HPO optimizer step count/nonfinite output')
+        self._last_update_execution=spec.variant
         self._training_update_diagnostics = {'variant':spec.variant,'frame_encodes':encoded_frames,
             'microbatches':groups_count,'transfers':transfers}
         return {**metrics,'optimizer_steps':self.steps,'optimizer_step_delta':expected,

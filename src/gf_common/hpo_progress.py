@@ -4,13 +4,14 @@ from __future__ import annotations
 import json
 import math
 from collections import deque
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Any, TextIO
 
 from gf_common.domain import Json
 
 TAG = 'GFB_HPO_DIAGNOSTIC_V1 '
 LINE_BYTES = 4096
+UPDATE_EXECUTIONS=('baseline','metrics','packed','microbatch','shared-prefix')
 PHASES = ('startup', 'collect', 'source', 'update', 'save', 'sync', 'evaluate', 'cleanup')
 ProgressCallback = Callable[[Json], object]
 
@@ -66,6 +67,20 @@ class DiagnosticEmitter:
             self.output.flush()
         except Exception:  # noqa: BLE001 - emission is never numerical execution
             self.disabled = True
+
+
+def optional_diagnostic_emitter(environment: Mapping[str,str],output: TextIO) -> DiagnosticEmitter | None:
+    """Optional setup only; never enclose learner/Source/cleanup operations."""
+    try:
+        invocation=environment.get('GFB_HPO_DIAGNOSTIC_INVOCATION')
+        if not invocation:
+            return None
+        maximum=int(environment['GFB_HPO_DIAGNOSTIC_LOG_BYTES'])
+        if maximum<=0:
+            return None
+        return DiagnosticEmitter(invocation,maximum,output)
+    except Exception:  # noqa: BLE001 - ordinary display setup failure disables only diagnostics
+        return None
 
 
 class DiagnosticParser:
@@ -165,7 +180,9 @@ def pool_diagnostic(value: Any) -> Json | None:
 
 
 def learner_facts(value: Any) -> bool:
-    if type(value) is not dict or not value or set(value)-{'phase','cuda_allocator','diagnostic_boundary','save_seconds','parity_seconds'}:
+    if type(value) is not dict or not value or set(value)-{'phase','cuda_allocator','diagnostic_boundary','save_seconds','parity_seconds','update_execution'}:
+        return False
+    if 'update_execution' in value and (type(value['update_execution']) is not str or value['update_execution'] not in UPDATE_EXECUTIONS):
         return False
     if 'phase' in value and value['phase']!='save':
         return False
@@ -180,3 +197,12 @@ def learner_facts(value: Any) -> bool:
         return pool_diagnostic({'schema_version':1,'loads':0,'cache_reuses':0,
             'cpu_weight_restore_bytes':0,'cuda_weight_restore_bytes':0,'cuda_allocator':value['cuda_allocator']}) is not None
     return True
+
+
+def update_execution_facts(learner: Any) -> Json:
+    """Only a successfully resolved branch, never a configured/guessed route."""
+    try:
+        value=getattr(learner,'_last_update_execution',None)
+        return {'update_execution':value} if type(value) is str and value in UPDATE_EXECUTIONS else {}
+    except Exception:  # noqa: BLE001 - optional fact cannot acquire numerical authority
+        return {}

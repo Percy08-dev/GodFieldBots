@@ -3,7 +3,9 @@
 Run commands from the repository root with the existing optional CUDA packages:
 `UV_CACHE_DIR=/tmp/gfb-update-uv-cache uv run --no-sync python -m ...`.
 The accepted design is `docs/design/learning-update-optimization.md` / ADR0045.
-Production defaults stay unchanged. Every output is fresh and immutable.
+Current Model4 defaults select MLP microbatch and GRU/Transformer shared-prefix
+under ADR0046. This historical comparison harness explicitly selects each private
+reference/experimental variant; its old evidence stays version-pinned. Every output is fresh and immutable.
 
 1. Prepare the complete-original six inputs and G0/G1/Adam/RNG starts:
 
