@@ -1,6 +1,7 @@
 """Transfer-only packing at existing tensor math helper seams."""
 from __future__ import annotations
 
+import math
 import time
 from typing import Any
 
@@ -8,6 +9,7 @@ import numpy as np
 
 from gf_common.domain import ContractError
 from gf_models.inference_experiment import NETWORK_STORAGE_BYTES, TensorPacker
+from gf_models.structured_config import resource_estimate
 
 
 class TransferPacker:
@@ -34,36 +36,45 @@ class TransferPacker:
         return sum(cpu.numel()*cpu.element_size() + (0 if cpu is dev else dev.numel()*dev.element_size())
                    for cpu, dev in self.buffers.values())
 
-    def pack(self, values: dict[str, Any], dtypes: dict[str, Any], *, group: str) -> dict[str, Any]:
+    def preflight_shapes(self, shapes: dict[str, tuple[int,...]], dtypes: dict[str,Any], *,
+                         group: str, temporary_bytes: int = 0) -> Any:
         if group in self.inflight:
             raise ContractError('experimental phase still in-flight')
         specs = []
-        offsets: dict[str, int] = {}
-        sizes: dict[str, int] = {}
-        for name, value in values.items():
-            shape = TensorPacker._shape(value)
-            count = int(np.prod(shape))
+        offsets: dict[str,int] = {}
+        sizes: dict[str,int] = {}
+        for name,shape in shapes.items():
+            if any(type(dimension) is not int or dimension < 0 for dimension in shape):
+                raise ContractError('closed nonnegative transfer dimensions required')
+            count = math.prod(shape)
             kind = np.dtype(dtypes[name])
-            if kind not in (np.dtype('float32'), np.dtype('int64'), np.dtype('bool')):
+            if kind not in (np.dtype('float32'),np.dtype('int64'),np.dtype('bool')):
                 raise ContractError('unsupported transfer dtype')
             key = kind.str if self.mode == 'T1' else 'arena'
-            start = sizes.get(key, 0)
+            start = sizes.get(key,0)
             if self.mode != 'T1':
                 start = (start+7)//8*8
             offsets[name] = start
             sizes[key] = start+count*kind.itemsize
-            specs.append((name, shape, kind, count, key))
-        multiplier = 1 if self.device.type == 'cpu' else 2
+            specs.append((name,shape,kind,count,key))
         growth = 0
-        for key, size in sizes.items():
+        multiplier = 1 if self.device.type == 'cpu' else 2
+        for key,size in sizes.items():
             if size > self.max_tensor_bytes:
                 raise ContractError('experimental tensor cap exceeded before allocation')
-            old = self.buffers.get((group, key))
+            old = self.buffers.get((group,key))
             if old is None or old[0].numel()*old[0].element_size() < size:
                 growth += size*multiplier
-        peak = self.retained_bytes+growth
+        peak = self.retained_bytes+growth+temporary_bytes
         if peak > self.max_bytes:
             raise ContractError('experimental CPU+GPU capacity cap exceeded before allocation')
+        return specs,offsets,sizes,peak
+
+    def pack(self, values: dict[str, Any], dtypes: dict[str, Any], *, group: str) -> dict[str, Any]:
+        if group in self.inflight:
+            raise ContractError('experimental phase still in-flight')
+        specs,offsets,sizes,peak = self.preflight_shapes(
+            {name:TensorPacker._shape(value) for name,value in values.items()}, dtypes, group=group)
         self.high_water_bytes = max(self.high_water_bytes, peak)
         for key, size in sizes.items():
             old = self.buffers.get((group, key))
@@ -124,6 +135,10 @@ class TransferExperiment:
     def __init__(self, network: Any, mode: str) -> None:
         import torch
         self.network, self.mode, self.torch = network, mode, torch
+        estimate = resource_estimate(network.config,network.binding,layout=network.layout)
+        if estimate['total_bytes']+2*NETWORK_STORAGE_BYTES > min(
+                network.binding.managed_budget_bytes,network.config.resources.max_owned_bytes):
+            raise ContractError('experimental storage exceeds existing managed cap')
         self.packer = TransferPacker(network.device, mode, max_bytes=NETWORK_STORAGE_BYTES,
                                     max_tensor_bytes=network.config.resources.max_tensor_bytes)
         self.original_factorized = network.factorized_logits
@@ -159,6 +174,16 @@ class TransferExperiment:
         return self.network._encode_frame_operands(tokens, raw.__getitem__)
 
     def features(self, tokens: Any) -> Any:
+        self.require_inference()
+        count,positions = len(tokens.kinds),self.network.config.max_positions
+        if (type(count) is not int or not 1 <= count <= self.network.binding.max_candidates
+                or positions != 18):
+            raise ContractError('candidate dimension cap exceeded before reference allocation')
+        kinds = {'kinds':np.int64,'targets':np.int64,'numerics':np.float32,'present':np.float32,'refs':np.int64}
+        shapes = {name:TensorPacker._shape(getattr(tokens,name)) for name in ('kinds','targets','numerics','present')}
+        shapes['refs'] = (count,positions)
+        temporary = 4096+count*(positions*16+256)
+        self.packer.preflight_shapes(shapes,kinds,group='candidates',temporary_bytes=temporary)
         rows = [(*tokens.slots[tokens.offsets[i]:tokens.offsets[i+1]],
                  *([18]*(self.network.config.max_positions-tokens.offsets[i+1]+tokens.offsets[i])))
                 for i in range(len(tokens.kinds))]

@@ -38,7 +38,9 @@ class ReadOverlap:
 
     def state(self) -> _Episode | None:
         state = self.current.get()
-        return state if state is not None and state.owner is asyncio.current_task() and state.enabled else None
+        if state is not None and state.enabled and state.owner is not asyncio.current_task():
+            raise ContractError('enabled HTTP overlap belongs to original episode Task')
+        return state if state is not None and state.enabled else None
 
     def invalidate(self) -> None:
         state = self.state()
@@ -75,10 +77,24 @@ class ReadOverlap:
             raise ContractError('HTTP overlap events identity mismatch')
         assert state.identity is not None
         obs = state.identity[3]
-        state.tasks = [asyncio.create_task(original_events(client, game, actor, cursor)),
-                       asyncio.create_task(original_options(client, game, actor, obs))]
-        self.pairs += 1
+        def own(coroutine: Any) -> None:
+            try:
+                created = asyncio.create_task(coroutine)
+            except BaseException:
+                # A task factory may transfer this exact coroutine then raise.
+                # Recover actual owners by object identity, never a task name.
+                transferred = [candidate for candidate in asyncio.all_tasks()
+                               if candidate.get_coro() is coroutine]
+                state.tasks.extend(candidate for candidate in transferred if candidate not in state.tasks)
+                if not transferred:
+                    coroutine.close()
+                raise
+            state.tasks.append(created)
+
         try:
+            own(original_events(client, game, actor, cursor))
+            own(original_options(client, game, actor, obs))
+            self.pairs += 1
             events, options = await asyncio.gather(*state.tasks)
             if not self.matches(state, client, game, actor, obs):
                 raise ContractError('HTTP overlap completed identity mismatch')

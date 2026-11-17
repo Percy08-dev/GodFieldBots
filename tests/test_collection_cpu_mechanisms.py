@@ -205,3 +205,132 @@ def test_parent_installer_excludes_inherited_journal_and_memory_override():
             proof.validate(validate, table, frame)
         proof.validate(validate, table, frame)
     assert len(counts) == 2
+
+
+def test_enabled_http_overlap_rejects_foreign_task_before_original_dispatch():
+    from benchmarks.collection_cpu.http_overlap import ReadOverlap
+    async def check():
+        overlap = ReadOverlap()
+        calls = []
+        async def original(*args):
+            calls.append(args)
+        with overlap.episode(True), pytest.raises(ContractError, match='Task'):
+            await asyncio.create_task(overlap.events(original, original, object(), 'g', 1, None))
+        assert calls == []
+    asyncio.run(check())
+
+
+def test_http_second_task_creation_failure_retires_first(monkeypatch):
+    from benchmarks.collection_cpu.http_overlap import ReadOverlap
+    async def check():
+        overlap, client = ReadOverlap(), object()
+        obs = {'actionable':True,'current_player':1,'viewer_player_id':1,'state_revision':1,'result':None}
+        entered, retired = asyncio.Event(), asyncio.Event()
+        spawned, unscheduled = [], []
+        original_create = asyncio.create_task
+        async def events(*args):
+            entered.set()
+            try:
+                await asyncio.Future()
+            finally:
+                retired.set()
+        async def options(*args):
+            await asyncio.Future()
+        def create(coro, **kwargs):
+            if spawned:
+                unscheduled.append(coro)
+                raise RuntimeError('second creation failed')
+            created = original_create(coro, eager_start=True)
+            spawned.append(created)
+            return created
+        monkeypatch.setattr(asyncio,'create_task',create)
+        with overlap.episode(True):
+            overlap.observed(client,'g',1,obs)
+            with pytest.raises(RuntimeError,match='second creation failed'):
+                await overlap.events(events, options, client,'g',1,None)
+            assert entered.is_set() and retired.is_set()
+            assert len(spawned) == 1 and spawned[0].done()
+            assert unscheduled[0].cr_frame is None
+            assert not overlap.current.get().tasks
+    asyncio.run(check())
+
+
+def test_http_task_factory_transfer_then_raise_is_joined(monkeypatch):
+    from benchmarks.collection_cpu.http_overlap import ReadOverlap
+    async def check():
+        overlap, client = ReadOverlap(), object()
+        obs = {'actionable':True,'current_player':1,'viewer_player_id':1,'state_revision':1,'result':None}
+        original_create, spawned = asyncio.create_task, []
+        async def read(*args):
+            await asyncio.Future()
+        def create(coro, **kwargs):
+            created = original_create(coro)
+            spawned.append(created)
+            if len(spawned)==2:
+                raise RuntimeError('factory transferred then raised')
+            return created
+        monkeypatch.setattr(asyncio,'create_task',create)
+        with overlap.episode(True):
+            overlap.observed(client,'g',1,obs)
+            with pytest.raises(RuntimeError,match='transferred'):
+                await overlap.events(read,read,client,'g',1,None)
+            assert len(spawned)==2 and all(t.done() for t in spawned)
+    asyncio.run(check())
+
+
+def test_transfer_joint_resource_admission_precedes_installation():
+    from benchmarks.collection_cpu.transfer import install
+    from gf_models.structured_config import resource_estimate
+    from gf_models.structured_network import make_network
+    from tests.test_structured_network import small_model
+    model = small_model()
+    network = make_network(model,1)
+    base = resource_estimate(model,network.binding,layout=network.layout)['total_bytes']
+    network.binding = replace(network.binding,managed_budget_bytes=base)
+    with pytest.raises(ContractError,match='managed cap'):
+        install(network,'T2')
+    assert not hasattr(network,'_inference_experiment')
+
+
+def test_candidate_refs_capacity_refused_before_rows_constructed(make_input):
+    from benchmarks.collection_cpu.transfer import install
+    from gf_models.structured_network import make_network
+    from tests.test_structured_network import inputs, small_model
+    network = make_network(small_model(),1)
+    _,tokens = inputs(make_input,count=1)
+    experiment = install(network,'T2')
+    experiment.packer.max_bytes = 8
+    class PoisonSlots:
+        def __getitem__(self,index):
+            raise AssertionError('refs constructed before admission')
+    large = replace(tokens,kinds=(tokens.kinds[0],)*257,targets=(tokens.targets[0],)*257,
+        numerics=(tokens.numerics[0],)*257,present=(tokens.present[0],)*257,
+        offsets=tuple(range(258)),slots=PoisonSlots())
+    import torch
+    with torch.no_grad(),pytest.raises(ContractError,match='cap'):
+        experiment.features(large)
+
+
+def test_installed_journal_and_capture_wrappers_execute_full_validation(monkeypatch):
+    from benchmarks.collection_cpu.parent import patches
+    from gf_training.card_instance_journal import CardInstanceJournal
+    from gf_training.hpo_owned_capture import _CaptureContext
+    from gf_training.structured_journal import StructuredJournal
+    calls = []
+    frame, table = SimpleNamespace(actor=1,revision=1), object()
+    proof_ref = []
+    def validator(t,f):
+        calls.append('full')
+    def boundary(*args,**kwargs):
+        proof_ref[0].validate(validator,table,frame)
+    monkeypatch.setattr(StructuredJournal,'begin_frame',boundary)
+    monkeypatch.setattr(_CaptureContext,'begin_decision',boundary)
+    replacements,proof = patches()
+    proof_ref.append(proof)
+    installed = {(owner,name):fn for owner,name,fn in replacements}
+    with proof.decision():
+        proof.validate(validator,table,frame)
+        installed[CardInstanceJournal,'begin_frame'](object())
+        installed[_CaptureContext,'begin_decision'](object())
+        proof.validate(validator,table,frame)
+    assert calls == ['full']*3
