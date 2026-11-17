@@ -130,6 +130,16 @@ def actual_summary(path: Path, *, diagnostic: bool = False) -> dict[str, Any]:
             'request_sha256':sha256(path/'request.json'),'result_sha256':sha256(path/'result.json')}
 
 
+def pair_reference(summary: dict[str,Any]) -> dict[str,Any]:
+    """Link one already validated full ledger summary without duplicating it."""
+    launch = summary['launch_identity']
+    return {'path':launch['output'],'run_id':launch['run_id'],'context_id':launch['context_id'],
+            'collection_seconds':summary['collection_seconds'],
+            'helper_wall_seconds':summary['helper_wall_seconds'],
+            'coordinator_collection_seconds':summary['coordinator_collection_seconds'],
+            'request_sha256':summary['request_sha256'],'result_sha256':summary['result_sha256']}
+
+
 def actual_ledger(plans: list[Any]) -> dict[str, Any]:
     ledger = []
     seen = set()
@@ -185,7 +195,7 @@ def actual_ledger(plans: list[Any]) -> dict[str, Any]:
                             continue
                         delta = base['collection_seconds']-variant['collection_seconds']
                         value.update(status='MEASURED',saving_seconds=delta,percent=100*delta/base['collection_seconds'],
-                            control=base,variant=variant)
+                            control=pair_reference(base),variant=pair_reference(variant))
                     pairs.append(value)
     pilot: dict[str,Any] = {model:{} for model in MODELS}
     for row in ledger:

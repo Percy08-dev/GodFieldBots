@@ -450,3 +450,84 @@ def test_freeze_build_normalizes_materialized_asset_paths(tmp_path,monkeypatch,p
     assert len(result['materializations'])==3
     assert result['materializations'][0]['options']==Options(diagnostic=True).identity()
     json.dumps(result,allow_nan=False)
+
+
+def test_full57_actual_ledger_stores_each_payload_once_with_exact_pair_metrics(tmp_path,monkeypatch):
+    import json
+    import statistics
+
+    from benchmarks.collection_cpu import aggregate
+    from benchmarks.collection_cpu.common import MAX_JSON, MODELS, immutable_json
+    from benchmarks.collection_cpu.trials import materialize
+    plans=[]
+    requests,summaries={},{}
+    numeric_payload=list(range(125000))
+    for phase in ('diagnostic','pilot','confirm','combo'):
+        selected=['P','T'] if phase in ('confirm','combo') else []
+        rows=materialize('12345678-1234-5678-1234-567812345678',phase,selected,'T2')
+        plans.append({'namespace':'12345678-1234-5678-1234-567812345678','phase':phase,
+                      'selected':selected,'transfer':'T2','trials':rows})
+        for row in rows:
+            row['config']={'sha256':'config'}
+            parent='/parents/'+row['run_id']
+            output=Path(row['output'])
+            request={'run_id':row['run_id'],'context_id':row['context_id'],'options':row['options'],
+                     'config_file_sha256':'config','parent':parent}
+            requests[output/'request.json']=request
+            base=100.+20*MODELS.index(row['model'])
+            saving={'C':0.,'P':10.,'T':20.,'H':5.,'B':30.}[row['arm']]
+            if row['arm']!='C' and phase in ('confirm','combo'):
+                saving+=(2-row['pair'])*2
+            collection=base-saving
+            summaries[output]={'path':str(output),'options':row['options'],
+                'launch_identity':{'run_id':row['run_id'],'context_id':row['context_id'],
+                    'options':row['options'],'config_sha256':'config','parent':parent,'output':str(output)},
+                'matched_conditions':{'model':row['model'],'phase':phase,
+                    'materialized':{'hpo_spec':{'storage':{'parent_root':'/parents'}}}},
+                'collection_seconds':collection,'helper_wall_seconds':collection+50.,
+                'coordinator_collection_seconds':collection+1.,
+                'request_sha256':'request-'+row['run_id'],'result_sha256':'result-'+row['run_id'],
+                'games':[{'numeric_fields':numeric_payload,'candidate_count':314,'cutoffs':0}],
+                'memory':{'rss_peak_bytes':123456,'cuda_peak_bytes':789012},
+                'collected_decisions':314,'used_decisions':314}
+    monkeypatch.setattr(aggregate,'read_json',lambda path:requests[path])
+    monkeypatch.setattr(aggregate,'actual_summary',lambda path,**kwargs:summaries[path])
+    report=aggregate.actual_ledger(plans)
+    target=tmp_path/'full-ledger.json'
+    immutable_json(target,report)
+    assert target.stat().st_size<MAX_JSON
+    assert len(report['ledger'])==57 and len(report['pairs'])==21
+    assert report['performance_runs']==54 and report['diagnostic_runs']==3
+    entries={row['output']:row for row in report['ledger']}
+    for row in report['ledger']:
+        assert row['status']=='MEASURED'
+        assert row['summary']['games'][0]['numeric_fields']==numeric_payload
+        assert row['summary']['memory']=={'rss_peak_bytes':123456,'cuda_peak_bytes':789012}
+    for pair in report['pairs']:
+        assert pair['status']=='MEASURED'
+        full=[]
+        for side in ('control','variant'):
+            reference=pair[side]
+            entry=entries[reference['path']]
+            summary=entry['summary']
+            assert reference=={'path':entry['output'],'run_id':entry['run_id'],'context_id':entry['context_id'],
+                'collection_seconds':summary['collection_seconds'],'helper_wall_seconds':summary['helper_wall_seconds'],
+                'coordinator_collection_seconds':summary['coordinator_collection_seconds'],
+                'request_sha256':summary['request_sha256'],'result_sha256':summary['result_sha256']}
+            full.append(summary)
+        assert pair['saving_seconds']==full[0]['collection_seconds']-full[1]['collection_seconds']
+        assert pair['percent']==100*pair['saving_seconds']/full[0]['collection_seconds']
+    expected=[]
+    for phase,candidate,model in sorted({(row['phase'],row['candidate'],row['model']) for row in report['pairs']}):
+        pairs=[row for row in report['pairs'] if (row['phase'],row['candidate'],row['model'])==(phase,candidate,model)]
+        differences=[summaries[Path(row['control']['path'])]['collection_seconds']-
+                     summaries[Path(row['variant']['path'])]['collection_seconds'] for row in pairs]
+        percentages=[100*difference/summaries[Path(row['control']['path'])]['collection_seconds']
+                     for difference,row in zip(differences,pairs,strict=True)]
+        expected.append({'phase':phase,'candidate':candidate,'model':model,'expected_pairs':2 if phase=='confirm' else 3,
+            'measured_pairs':len(pairs),'median_saving_seconds':statistics.median(differences),
+            'median_percent':statistics.median(percentages),'consistent_positive':all(value>0 for value in differences)})
+    assert report['medians']==expected
+    # Every original large numeric field is retained exactly once in the document.
+    assert target.read_text().count('"numeric_fields"')==57
+    assert len(json.loads(target.read_text())['ledger'])==57
