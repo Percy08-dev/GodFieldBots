@@ -42,43 +42,43 @@ private/reference; older frozen models stay on their existing paths.
 Files: structured_learning.py, structured_network.py, hpo_update_planning.py,
 hpo_update_execution.py and focused test_learning_update_* capacity/gradient tests.
 
-- [ ] Add valid singleton1024/default32 and ragged event/slab regressions, plus
+- [x] Add valid singleton1024/default32 and ragged event/slab regressions, plus
   extreme full-gradient/wide-FF rejection coverage; observe RED.
-- [ ] Define private model-side chunk/window descriptions consumed by training
+- [x] Define private model-side chunk/window descriptions consumed by training
   planning, with full preallocation estimates and one-frame finest geometry.
-- [ ] Retain the current packed fast path; implement streamed immutable prefix/
+- [x] Retain the current packed fast path; implement streamed immutable prefix/
   suffix chunks and candidate staging through shared math, no second encoder.
-- [ ] Test hard per-tensor bounds, lifetime peaks, detach/causality/own cards,
+- [x] Test hard per-tensor bounds, lifetime peaks, detach/causality/own cards,
   empty branches/Adam and exact endpoint/tail weighting using existing tolerances.
-- [ ] Run focused checks and report actual commands; independent task review.
+- [x] Run focused checks and report actual commands; independent task review.
 
 ### Task2: Normal dispatch and original worker allowance
 
 Files: hpo_numeric.py, hpo_learning_process.py, hpo_owned_process.py/worker.py,
 ppo_run.py/worker.py, structured_numeric_worker.py, relevant source/worker tests.
 
-- [ ] Add RED implicit MLPMicro/sequenceShared tests, explicit reference tests,
+- [x] Add RED implicit MLPMicro/sequenceShared tests, explicit reference tests,
   normal CPU/GPU cap transport and older-worker argv invariance.
-- [ ] Derive normal route only in Model4 learner; keep experiment capability
+- [x] Derive normal route only in Model4 learner; keep experiment capability
   separate and legacy model/frozen exact checks untouched.
-- [ ] Bind actual normal allowance through the existing launch creator; validate
+- [x] Bind actual normal allowance through the existing launch creator; validate
   and scrub closed args before Model4 allocation; unchanged Wire requests/replies.
-- [ ] Verify legacy/owned fresh/resume/campaign/native-Source, finite/cancel/FD/
+- [x] Verify legacy/owned fresh/resume/campaign/native-Source, finite/cancel/FD/
   process failures and ordinary wrong-source refusal.
-- [ ] Run scoped tests/Ruff/mypy and report; independent task/full reviews.
+- [x] Run scoped tests/Ruff/mypy and report; independent task/full reviews.
 
 ### Task3: Acceptance and live verification
 
 Root owns docs/architecture/ADR0046/verification record and fresh run namespaces.
 
-- [ ] Resolve blocking correctness/conformance findings; accept stable code only.
-- [ ] Run gated bounded CUDA common and streamed cases, then normal no-private-
+- [x] Resolve blocking correctness/conformance findings; accept stable code only.
+- [x] Run gated bounded CUDA common and streamed cases, then normal no-private-
   spec fresh/pause-resume checks across models with original budgets/deadlines.
-- [ ] Strictly audit original Source/numeric/receipts after live runs; do not use
+- [x] Strictly audit original Source/numeric/receipts after live runs; do not use
   action/weight equality across independent trajectories as the acceptance gate.
-- [ ] Small fixed-input unprofiled default-vs-private-reference screen checks
+- [x] Small fixed-input unprofiled default-vs-private-reference screen checks
   common-path regression; record scope/source and do not infer training quality.
-- [ ] Final independent review, current docs/ADR/evidence and verified local commits.
+- [x] Final independent evidence review, current docs/ADR/evidence and verified local acceptance commit.
 
 Root self-review: the five focus cases are assigned to tasks1/2; all interfaces
 and compatibility constraints are in the bounded spec. Internal helper names are

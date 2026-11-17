@@ -1,6 +1,6 @@
 # 0046: Standard bounded Model4 PPO updates
 
-- Status: Accepted, implemented; normal live acceptance pending
+- Status: Accepted, implemented and verified; root acceptance after both FINAL READY reviews
 - Date: 2026-11-17
 - Owner: root
 - Baseline: `b3831a0`
@@ -52,6 +52,9 @@ reviews. No new learning-quality/HPO/final-test conclusion follows from adoption
 Implementation passes both independent code reviews after phase-local event
 trimming, suffix-temporary refinement and optional diagnostic-setup guards.
 Focused/reference/capacity/worker/source/native/campaign checks and normal CUDA
-numerical/resume plus streamed1024/default32 gradients pass. Actual ordinary
-fresh/pause-resume and strict Source/receipt acceptance remain pending; exact
-commands and limits are in [the verification record](../verification/ppo-update-adoption.md).
+numerical/resume plus streamed1024/default32 gradients pass. All9ordinary
+continuous/pause-resume invocations,6strict original-parent audits/192natural
+games and9context-bound receipts pass. The restored fixed-input18-update screen
+finds no common-path regression. Both final independent evidence reviews are
+FINAL READY with no blockers; root accepts the authorized adoption. Exact commands and limits are in
+[the verification record](../verification/ppo-update-adoption.md).

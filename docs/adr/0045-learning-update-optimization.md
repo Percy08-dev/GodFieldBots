@@ -1,6 +1,8 @@
 # 0045: Experimental PPO update execution comparison
 
 - Status: Accepted, implemented and verified; root acceptance after both FINAL READY reviews
+- Normal-dispatch decision superseded by [ADR0046](0046-standard-bounded-ppo-updates.md);
+  this comparison and its source-pinned evidence remain historical
 - Date: 2026-11-17
 - Decision owner: root
 - Baseline: `1364748`

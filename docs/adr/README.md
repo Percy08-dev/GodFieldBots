@@ -18,11 +18,13 @@
 利用者承認に基づくModel4通常経路の高速版統一と、長大入力の事前分割。
 旧経路は内部検証用として保持。極端設定の容量保証は対象外とし、上限と失敗処理を維持。
 事前設計・実装の両独立レビューと対象CUDAチェックはREADY。
-通常実行の連続・一時停止再開・厳密監査は未完了。
+通常9実行・6親192自然終了ゲームの厳密監査と固定入力確認はPASS。
+両最終証拠レビューはFINAL READY、root受入済み。
 
 追加: [0045](0045-learning-update-optimization.md) — Accepted,implemented and verified:
 PPO更新の指標集約・入力一括化・microbatch・履歴共有を既存予算内で比較する。
-通常既定値は維持。84固定更新・18実比較・6別診断と24親の厳密監査を完了。
+当時の通常既定値は維持（通常経路の判断は0046で更新）。
+84固定更新・18実比較・6別診断と24親の厳密監査を完了。
 両最終レビューはFINAL READY、root受入済み。採用案はMLP microbatch、
 GRU/Transformer shared-prefix。品質・正式HPO・final testの合格は主張しない。
 

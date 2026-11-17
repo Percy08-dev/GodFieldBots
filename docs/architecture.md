@@ -11,8 +11,11 @@ extreme-setting capacity/OOM risk; conservative caps and explicit failure stay,
 without added rematerialization or fallback. Preimplementation review is READY;
 implementation now passes independent correctness/conformance, focused and
 normal-worker/source/native/campaign checks plus normal CUDA and streamed
-long-prefix gradient checks. Normal live fresh/pause-resume/audit evidence remains
-pending in [the adoption record](verification/ppo-update-adoption.md).
+long-prefix gradient checks. Normal live continuous/pause-resume execution passes
+all9invocations and6strict original-parent audits/192natural games. A small
+restored-input screen finds no common-path regression. Both final independent
+evidence reviews are FINAL READY; root accepts the adoption, with scope and
+limits in [the adoption record](verification/ppo-update-adoption.md).
 
 [ADR0045](adr/0045-learning-update-optimization.md) accepts the bounded
 [PPO update comparison](design/learning-update-optimization.md): cumulative
@@ -32,9 +35,9 @@ original timing population. Its bounded observational code passes119affected
 host checks, final targeted checks and a genuine CUDA worker/receipt smoke.
 All24experiment parents/768natural games pass strict Source/numeric/receipt
 audits, preserving2160original file instances. Both final independent reviews
-are FINAL READY; root accepts this bounded comparison. The proposal is MLP
-microbatch and GRU/Transformer shared-prefix for later adoption, with unchanged
-defaults and no quality/HPO/final-test conclusion. Source cohorts, scope and
+are FINAL READY; root accepts this bounded comparison. That historical cohort
+proposed MLP microbatch and GRU/Transformer shared-prefix with unchanged defaults;
+ADR0046 above now adopts them. No quality/HPO/final-test conclusion. Source cohorts, scope and
 limits are in [the verification record](verification/learning-update-optimization.md).
 
 [ADR0044](adr/0044-inference-performance-comparison.md) accepts the bounded
