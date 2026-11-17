@@ -489,8 +489,10 @@ def inspect_training_parent(directory: Path, loaded: LoadedHPOConfig, settings: 
             from gf_training.group_pack_resources import StorageBudget
             from gf_training.hpo_owned_restore import OwnedColdImport
             with run_lock(directory) as ownership:
-                budget=StorageBudget(StorageSettings(budget_bytes=loaded.config.operating.source_budget_bytes),deadline)
-                phase=ArtifactPhaseAdmission(budget,loaded.config.operating.parent_budget_bytes)
+                budget=StorageBudget(StorageSettings(budget_bytes=loaded.config.operating.source_budget_bytes),deadline,
+                    name='source',phase='hpo-parent-inspection')
+                phase=ArtifactPhaseAdmission(budget,loaded.config.operating.parent_budget_bytes,
+                    name='parent',phase='hpo-parent-inspection')
                 imported=OwnedColdImport(ownership,budget=budget,parent_budget=phase,deadline=deadline,require_complete=True)
                 try:
                     state,records=imported.state,imported.records
@@ -1003,8 +1005,10 @@ async def evaluate_seed(store: object, loaded: LoadedHPOConfig, campaign: Json, 
             from gf_common.group_pack import StorageSettings
             from gf_training.group_pack_resources import StorageBudget
             from gf_training.hpo_owned_completion import OwnedRunCompletion, retain_for_evaluation
-            evaluation_budget=StorageBudget(StorageSettings(budget_bytes=loaded.config.operating.source_budget_bytes),work)
-            evaluation_phase=ArtifactPhaseAdmission(evaluation_budget,loaded.config.operating.parent_budget_bytes)
+            evaluation_budget=StorageBudget(StorageSettings(budget_bytes=loaded.config.operating.source_budget_bytes),work,
+                name='source',phase='hpo-evaluation')
+            evaluation_phase=ArtifactPhaseAdmission(evaluation_budget,loaded.config.operating.parent_budget_bytes,
+                name='parent',phase='hpo-evaluation')
             if completion is not None:
                 if type(completion) is not OwnedRunCompletion: raise ContractError('actual private completion required')
                 final_data=retain_for_evaluation(completion,budget=evaluation_budget,parent_budget=evaluation_phase)
@@ -1168,8 +1172,10 @@ def _comparison_artifacts(left: Any, right: Any, sources: list[Any], bindings: A
     from gf_training.group_pack_resources import StorageBudget
     from gf_training.hpo_owned_restore import import_owned_final_policy
     from gf_training.structured_lineage import _stat_identity
-    budget=StorageBudget(StorageSettings(budget_bytes=left.config.operating.source_budget_bytes),work)
-    phase=ArtifactPhaseAdmission(budget,left.config.operating.parent_budget_bytes)
+    budget=StorageBudget(StorageSettings(budget_bytes=left.config.operating.source_budget_bytes),work,
+        name='source',phase='hpo-comparison')
+    phase=ArtifactPhaseAdmission(budget,left.config.operating.parent_budget_bytes,
+        name='parent',phase='hpo-comparison')
     imported: dict[Path,Any]={}
     entries={}
     try:

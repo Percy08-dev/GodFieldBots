@@ -61,22 +61,37 @@ def json_bound(value: Any, *, depth: int = 0) -> int:
     raise ValueError("invalid JSON value")
 
 
+def budget_refusal(reason: str, *, name: str, phase: str, used: int, request: int,
+                   limit: int) -> str:
+    """Format an owner's locked scalar snapshot only when admission refuses."""
+    return (f'{reason}: budget={name} phase={phase} used={used} '
+            f'request={request} limit={limit}')
+
+
 class ArtifactPhaseAdmission:
     """One overlapping phase counter backed by the SAME artifact account."""
-    def __init__(self, source: ArtifactAdmission, limit: int) -> None:
+    def __init__(self, source: ArtifactAdmission, limit: int, *, name: str = 'artifact',
+                 phase: str = 'parent') -> None:
         import threading
         if type(limit) is not int or limit<1:
             raise ValueError('positive artifact phase capacity required')
         self.source,self.limit=source,limit
+        self.name,self.phase=name,phase
         self.used=self.peak=0
         self._lock=threading.RLock()
 
     def reserve(self, size: int, *, wait: bool = False) -> _PhaseReservation:
-        if wait:
-            raise ValueError('artifact phase admission does not wait')
         with self._lock:
-            if type(size) is not int or size<0 or self.used+size>self.limit:
+            if wait:
+                if type(size) is not int:
+                    raise ValueError('artifact phase admission does not wait')
+                raise ValueError(budget_refusal('artifact phase admission does not wait',
+                    name=self.name,phase=self.phase,used=self.used,request=size,limit=self.limit))
+            if type(size) is not int or size<0:
                 raise ValueError('shared artifact phase budget exhausted')
+            if self.used+size>self.limit:
+                raise ValueError(budget_refusal('shared artifact phase budget exhausted',
+                    name=self.name,phase=self.phase,used=self.used,request=size,limit=self.limit))
             actual=self.source.reserve(size)
             try: reservation=_PhaseReservation(self,actual,size)
             except BaseException:
