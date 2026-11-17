@@ -4,8 +4,11 @@
 
 [ADR0047](adr/0047-collection-cpu-investigation.md) accepts the user-approved
 [bounded collection CPU/transfer investigation](design/collection-cpu-optimization.md).
-The written preimplementation design is READY. Experimental P/T/H tooling and
-focused verification are in progress; current normal defaults, learning math,
+The written preimplementation design is READY. Experimental P/T/H tooling passes
+focused host/static and actual CUDA mechanism checks; all57actual invocations,
+72fixed replay processes,15profiles and57original audits complete. Both final
+independent whole-branch/evidence reviews are FINAL READY and root accepts the
+[measured investigation](verification/collection-cpu-optimization.md); normal defaults, learning math,
 participant/Source boundaries and Simulator contracts remain unchanged. Fixed
 learner replays screen transfer variants; shared exploratory32-game blocks and
 fresh confirmation/combination comparisons determine actual collection impact.

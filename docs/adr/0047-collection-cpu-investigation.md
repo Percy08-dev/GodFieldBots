@@ -1,6 +1,6 @@
 # 0047: Bounded collection CPU and transfer investigation
 
-- Status: Accepted design; implementation/evidence pending
+- Status: Accepted, implemented and verified; both final reviews READY and root accepted
 - Date: 2026-11-17
 - Owner: root
 - Baseline: `f3aeca2`
@@ -47,3 +47,14 @@ Focused mechanism/regression/static tests, separate profiler populations, origin
 actual-source/file/receipt audits and independent final correctness/conformance.
 Record results in `docs/verification/collection-cpu-optimization.md`. No quality,
 formal-HPO or final-test acceptance follows from the experiment.
+
+All3passive and54performance actual invocations finish normally with32natural
+games/two updates each. Full learner replay72processes and15separate profiles
+complete. Original57parent/receipt audits pass, with5,130unchanged original file
+instances. P improves both new confirmation pairs in every model; T2 reduces
+profiled H2D144→12 but has small/mixed whole-collection gains. Combination gains
+are versus normal controls, not a direct P-only comparison. Normal defaults stay.
+Final correctness/specification/quality and architecture/conformance whole-branch/
+evidence reviews are FINAL READY with no unresolved findings. Root accepts the
+investigation; exact results, commands, source/analysis identities and limits are
+in [the verification record](../verification/collection-cpu-optimization.md).
