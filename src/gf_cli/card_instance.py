@@ -797,9 +797,32 @@ async def collect_hpo_ppo(loaded: LoadedConfig,plan: CollectionPlan,ledger: Rese
             max_workers=config.run.max_participant_workers,learner_cuda_bytes=ledger.cuda_bytes))
             for group in plan.groups for spec in group.episodes]
         if not admissions: raise ContractError('HPO collection cannot have an empty schedule')
+        admission = max(admissions,key=lambda row:row['peak_cuda_bytes'])
+        if online.owned_registry is not None and pool is not None:
+            registry = online.owned_registry
+            source, phase = registry.budget, registry.parent_budget
+            # Existing reservation order is parent phase -> Source. Snapshot
+            # those SAME accounts once, before collector startup, without I/O.
+            with phase._lock, source._condition:
+                host: Json = {'scope':'coordinator admission bookkeeping, not physical memory',
+                    'sample':'before collector startup; peaks are account lifetime high-waters',
+                    'source':{'limit_bytes':source.limit,'used_bytes':source.used,'peak_bytes':source.peak},
+                    'parent_phase':{'limit_bytes':phase.limit,'used_bytes':phase.used,'peak_bytes':phase.peak,
+                        'relationship':'nested in source; already included in source charges'}}
+            host.update(external_graph_estimate_bytes=operating['parent_budget_bytes']-parent_limit,
+                external_graph_scope='existing materialized config/binding graph estimate outside Source; not a full parent-limit allocation',
+                external_scan_retained_bytes=(None if registry.external_controls is None else registry.external_controls.retained),
+                external_scan_scope='separate live coordinator SealedScan admission; not a Source charge',
+                collector_limit_bytes=operating['collector_budget_bytes'],
+                collector_scope='separate configured collector allowance; not measured current use',
+                child_phase_bounds={'numeric_bytes':operating['numeric_budget_bytes'],'save_bytes':operating['save_budget_bytes'],
+                    'scope':'declared phase bounds of one separate learner account; not independent physical allocations or measured child charges'},
+                legacy_ram_limit_bytes=operating['managed_ram_bytes'],
+                legacy_ram_scope='unchanged compatibility reservation, not physical demand')
+            admission['host_accounting'] = host
         result=await _run_corrected(loaded,'collect',plan.bindings,tuple(plan.bindings),started=started,
             artifact_inputs=owner,runtime_evidence=evidence,
-            resource_admission=max(admissions,key=lambda row:row['peak_cuda_bytes']),collection=plan,owned_ledger=ledger,progress=progress,
+            resource_admission=admission,collection=plan,owned_ledger=ledger,progress=progress,
             **({} if online.owned_registry is None else {'_owned_collection':online.owned_registry.capture}),
             **({} if pool is None else {'resident_pool':pool}))
         if online.owned_registry is not None:

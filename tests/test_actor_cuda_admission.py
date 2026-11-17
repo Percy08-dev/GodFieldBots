@@ -120,7 +120,16 @@ def test_actual_owned_collector_reports_the_same_live_pool_amounts(tmp_path, mon
     runtime, run_id, _, _ = owned_runtime(tmp_path, monkeypatch)
     auditable_runtime(monkeypatch)
     original = core._run_corrected
+    artifact_budget = core.hpo_artifact_budget
     rows = []
+    artifact_limits = []
+
+    def observe_artifact_budget(*args, **kwargs):
+        value = artifact_budget(*args, **kwargs)
+        artifact_limits.append(value)
+        return value
+
+    monkeypatch.setattr(core, 'hpo_artifact_budget', observe_artifact_budget)
 
     def forbidden(*args, **kwargs):
         raise AssertionError('resident collector reapplied the obsolete per-role CUDA estimate')
@@ -134,8 +143,27 @@ def test_actual_owned_collector_reports_the_same_live_pool_amounts(tmp_path, mon
         assert row['worker_resident_bytes'] == workers * pool.resident_bytes
         assert row['begin_import_bytes'] == workers * pool.begin_import_bytes
         assert row['peak_cuda_bytes'] == row['learner_cuda_bytes'] + workers * (pool.resident_bytes + pool.begin_import_bytes)
+        host = row['host_accounting']
+        registry = kwargs['_owned_collection'].registry
+        assert host['source'] == {'limit_bytes': registry.budget.limit,
+            'used_bytes': registry.budget.used, 'peak_bytes': registry.budget.peak}
+        assert host['parent_phase'] == {'limit_bytes': registry.parent_budget.limit,
+            'used_bytes': registry.parent_budget.used, 'peak_bytes': registry.parent_budget.peak,
+            'relationship': 'nested in source; already included in source charges'}
+        assert host['external_graph_estimate_bytes'] == runtime.config.hpo_spec['operating']['parent_budget_bytes'] - artifact_limits[-1]
+        assert host['external_scan_retained_bytes'] == registry.external_controls.retained
+        assert host['collector_limit_bytes'] == runtime.config.hpo_spec['operating']['collector_budget_bytes']
+        assert 'not physical memory' in host['scope']
+        assert 'declared' in host['child_phase_bounds']['scope']
+        assert host['child_phase_bounds']['numeric_bytes'] == runtime.config.hpo_spec['operating']['numeric_budget_bytes']
+        assert host['child_phase_bounds']['save_bytes'] == runtime.config.hpo_spec['operating']['save_budget_bytes']
         rows.append(row)
-        return await original(*args, **kwargs)
+        result = await original(*args, **kwargs)
+        from gf_training.hpo_owned_collection import OwnedFinalizedCollection
+        assert type(result) is OwnedFinalizedCollection
+        assert type(result.report) is dict and result.report['healthy'] is True
+        assert result.manifest['resource_admission']['host_accounting'] == host
+        return result
 
     monkeypatch.setattr(core, '_run_corrected', observe)
 
@@ -143,6 +171,7 @@ def test_actual_owned_collector_reports_the_same_live_pool_amounts(tmp_path, mon
         _, operations = await run_owned(runtime, tmp_path / 'parents' / run_id, production=True)
         operations.completion.close()
         assert len(rows) == 2
+        assert len(artifact_limits) == 2
         assert not operations.job.ledger._resident_begin_imports
         assert operations.job.ledger.cuda_bytes == 0
 

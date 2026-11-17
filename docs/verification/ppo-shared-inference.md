@@ -197,3 +197,50 @@ This establishes overlapping live games, not simultaneous GPU forward passes.
 For four games the observed individual process maxima were 1,317.8MiB PSS for
 a participant and 2,293.8MiB PSS for the learner. Summed tree RSS peaked at
 16,004.9MiB; PSS apportions shared pages and is the better aggregate here.
+
+## Separate learner launch allowance and cold resume
+
+Clean source `73d389644975ee2473bb2f8dbe644b251e450ec4`, same width192/4-worker-pairs
+conditions as the four-game check above, with a deliberately smaller **9GiB**
+aggregate CUDA management budget. The checked learner's logical allowance L
+was 2,966,109,712 bytes, and its actual device lease D was 1,638,077,776 bytes.
+The remaining budget was held for the future resident pool and overlapping
+imports. The final original run identity records the same recipe and quantities
+as the prelaunch calculation.
+
+Two fresh GPU jobs executed one parent: pause after the first 16 games, then
+cold resume through the second 16 games and the prescribed update cap. Fresh
+reported paused/one update; resumed reported incomplete/update_cap/two updates,
+294 used decisions. Tickets `1b49b7ed526c4c13afca3dd344182361` and
+`7d0e26332c4b4fe4b4b19c299ba78c3b` each have nine confirmed resource
+terminations in the original admission namespace. Both live checks passed
+and the measurement command returned 0. Total collection 30.760s, update
+6.293s. This lifecycle diagnostic includes a real restart and a different
+budget; keep it out of ordinary throughput comparisons.
+
+Raw evidence under the original checkout:
+`runs/ppo-owned-learner-calibration/9c1d2c6c-9217-4bb5-a7de-541e30bf7345/`.
+Ninety-eight host/device samples observed maximum tree PSS 12.24GiB and
+whole-device use 5,479MiB. The largest sampled sum of unique gf-owned-bank
+inode lengths was 52,052,440 bytes; summing individual FD lengths instead
+reached 111,391,552 bytes. These are file sizes observed at discrete times,
+not resident pages. Peak coordinator Source reservations were 676,216,055
+and 582,330,699 bytes in the two invocations. At each collector return the
+nested parent phase was already included (135,631,752 of 470,733,497 bytes;
+144,960,349 of 363,723,521 bytes). Separate server scan retained 569 bytes.
+The collector separately reported peak RAM counters of 3,473,096 and
+3,083,015 bytes, explicitly scoped to managed/observed RAM rather than RSS.
+
+## Accepted independent scope
+
+The branch improves existing HPO diagnostics, cache/BEGIN/SYNC accounting,
+resident actor CUDA sizing and normal owned learner device budgeting. Its
+per-collection host report identifies accounting scope and sampled charges.
+It retains a conservative compatibility RAM gate, because there is no
+calibrated full-process upper bound for an actor's retained Python event
+history, search and IPC across supported inputs. See the [design](../design/ppo-shared-inference.md)
+for the difference between concurrent independent accounts and subcharges.
+This work does not close every requirement in GodFieldBots issue 2.
+Four concurrent games were physically verified. The separate shared service,
+ordinary PPO integration and shared 1/2/4/8/16 comparison await the upstream
+[Simulator issue 72](https://github.com/Percy08-dev/GodFieldSimurator/issues/72).

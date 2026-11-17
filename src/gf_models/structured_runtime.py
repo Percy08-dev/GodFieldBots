@@ -401,6 +401,7 @@ def hpo_resident_training_admission(model: ModelConfigV4, inference: InferenceBi
         result['owned_learner_admission'] = admission
         result['learner_device_bytes'] = admission['device_bytes']
         result['recipe'] = 'hpo-owned-device-envelope-v4'
+        result['ram_admission_scope'] = 'legacy compatibility reservation; not a physical RAM peak'
         result['cuda_phases'] = {phase:value-result['learner_bytes']+admission['device_bytes']
             for phase,value in result['cuda_phases'].items()}
         result['peak_cuda_bytes'] = max(result['cuda_phases'].values())
