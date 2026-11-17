@@ -2,6 +2,15 @@
 
 ## Status and scope
 
+[ADR0047](adr/0047-collection-cpu-investigation.md) accepts the user-approved
+[bounded collection CPU/transfer investigation](design/collection-cpu-optimization.md).
+The written preimplementation design is READY. Experimental P/T/H tooling and
+focused verification are in progress; current normal defaults, learning math,
+participant/Source boundaries and Simulator contracts remain unchanged. Fixed
+learner replays screen transfer variants; shared exploratory32-game blocks and
+fresh confirmation/combination comparisons determine actual collection impact.
+This is not production adoption or a new learning-quality/HPO qualification.
+
 [ADR0046](adr/0046-standard-bounded-ppo-updates.md) accepts the user-authorized
 [normal Model4 adoption](design/ppo-update-adoption.md): automatic MLP microbatch
 and sequence shared-prefix execution with bounded frame staging for long/large

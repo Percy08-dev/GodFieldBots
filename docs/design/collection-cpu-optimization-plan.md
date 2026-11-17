@@ -23,6 +23,9 @@ previously authorized; fixed absolute historical helpers/data remain available.
 
 Ownership: implementer `benchmarks/collection_cpu/`, relevant new tests only.
 Root owns all docs/project configs/measurement configs/execution/freeze/commits.
+One necessary baseline repair is also assigned: the private
+`src/gf_models/inference_experiment.py` optional `_operands=None` compatibility
+case, with no normal-path or learner-input behavior change.
 
 - [ ] Write focused RED mechanism tests; implement P proof and boundaries, H
   two-task ownership, typed/byte/pinned transfer T variants and full reset/failure.

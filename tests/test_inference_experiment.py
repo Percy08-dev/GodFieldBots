@@ -444,3 +444,14 @@ def test_captured_scorer_outputs_own_storage_across_next_invocation(monkeypatch,
     else:
         assert first_pointer == storage.data_ptr()
         assert events == ['scorer','scorer']
+
+
+def test_inference_wrapper_accepts_only_absent_private_operands(make_input):
+    network = make_network(small_model(), 5)
+    experiment = install(network, ExperimentOptions(packing='reuse'))
+    frames, candidates = inputs(make_input, count=1)
+    with torch.no_grad():
+        context, cards = network.encode_history(frames)
+        network.distribution(context, cards, candidates, _operands=None)
+        with pytest.raises(ContractError, match='learner/owned operands'):
+            experiment.factorized(context, cards, candidates, _operands={})

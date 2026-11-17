@@ -239,8 +239,10 @@ class InferenceExperiment:
         return self._pack({'refs': rows}, {'refs': np.int64}, group='references')['refs']
 
     def factorized(self, context: Any, cards: Any, tokens: Any, chunk_size: int | None = None,
-                   checkpoint: bool = True) -> Any:
+                   checkpoint: bool = True, *, _operands: Any = None) -> Any:
         self._require_inference()
+        if _operands is not None:
+            raise ContractError("experimental inference does not accept learner/owned operands")
         if chunk_size is not None and chunk_size != self.options.chunk:
             raise ContractError('explicit chunk differs from inference experiment')
         # Installation admits the configured maximum population/chunk/padding

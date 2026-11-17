@@ -37,6 +37,13 @@ transport or persisted format is replaced. Tests own mechanism verification.
 Root owns design/configs, source freezes, execution, audits and acceptance;
 one implementer owns Python/test files, independent reviewers do not edit.
 
+Baseline inspection found an existing private experiment compatibility defect:
+shared `distribution` now passes `_operands=None`, while the historical
+`InferenceExperiment.factorized` wrapper lacks that keyword. Its ten failing
+mechanism tests require a narrow compatibility repair in that experimental
+module before reuse. Accept only the existing no-grad inference case; do not
+extend it into learner/owned-input execution or alter normal network defaults.
+
 Every launch first writes an immutable sidecar binding code/config/input/runtime/
 native/Simulator hashes, effective experiment options, run/context IDs, resources
 and a new output namespace in `runs/collection-optimization-v2/`. Production
@@ -121,6 +128,12 @@ on failure/cancellation cancel and join both under original deadline before
 original cleanup. Do not reuse Act-response events/options/Observation as policy
 input, add an endpoint or modify the Simulator. Avoid copying the environment
 or worker orchestration; use a narrow tools-only installer at an original seam.
+An admissible tools seam is to cache the exact original validated Observation,
+start both original reads on the episode Task's Events call, retain the validated
+options until the subsequent original ActionOptions call, then clear them.
+Guard exact client/game/actor/Observation/revision/Task identity, suspend during
+finalization, and invalidate on Act/episode end. No stale-result fallback or
+second hidden fetch on mismatch; fail explicitly and retire all tasks.
 
 Candidate generation is profiled, but existing ~0.10s memo gain, pack encoding
 ~0.078s and JSON ~0.06s remain low-priority historical evidence, not new variants.
