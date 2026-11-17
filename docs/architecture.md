@@ -2,6 +2,13 @@
 
 ## Status and scope
 
+The owner's [2026-11-17 artifact cleanup](verification/run-artifact-cleanup-20261117.md)
+retains latest PPO measurement results/support code and removes historical
+models, learning originals, arrays and superseded outputs. Earlier audit and
+experiment statements below remain historical; removed originals no longer
+permit fresh Source/Replay verification, resume or model reuse. New configured
+experiments remain supported; this is not a recurring deletion policy.
+
 [ADR0048](adr/0048-owner-confirmed-defense-priority.md) implements the owner's
 defense-priority and Rainbow-first correction under both final independent
 reviews READY. Shared public response context and current rules-v2 keep the
