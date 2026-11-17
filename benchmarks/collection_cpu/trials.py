@@ -37,6 +37,7 @@ def select_transfer(rows: dict[str, Any]) -> dict[str, Any]:
     controls: dict[str,float] = {}
     invalid: dict[str,str] = {}
     populations: dict[str,Any] = {}
+    report_identities: set[str] = set()
     for mode in ('reuse','T1','T2','T3'):
         times, bases = [], []
         for model in MODELS:
@@ -47,6 +48,17 @@ def select_transfer(rows: dict[str, Any]) -> dict[str, Any]:
             if any(pair.get('valid') is not True for pair in pairs):
                 invalid[mode] = 'mechanically invalid or missing replay pair'
                 continue
+            if {pair.get('pair') for pair in pairs} != {1,2,3}:
+                raise ValueError('independent replay pair identities1,2,3 required')
+            for pair in pairs:
+                reports = pair.get('reports',[])
+                if len(reports)!=2:
+                    raise ValueError('two independent physical replay report identities required')
+                for name in reports:
+                    identity = str(Path(name).resolve())
+                    if identity in report_identities:
+                        raise ValueError('independent physical replay report identity repeated')
+                    report_identities.add(identity)
             population = pairs[0]['population']
             if model in populations and populations[model] != population:
                 raise ValueError('replay population differs across transfer options')

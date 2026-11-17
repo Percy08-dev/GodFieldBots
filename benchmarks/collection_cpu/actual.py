@@ -38,6 +38,12 @@ def execution_patches(settings: Options, output: Path) -> list[Any]:
     result = [(structured_runtime,'hpo_resident_training_admission',
                original_actual.charged_admission(structured_runtime.hpo_resident_training_admission, settings)),
               (ResidentPhysicalWorker,'_spawn',spawn)]
+    return result
+
+
+def runtime_patches(settings: Options, output: Path) -> list[Any]:
+    """Construct only AFTER original Measurement predecessors are installed."""
+    result: list[Any] = []
     if settings.parent:
         from benchmarks.collection_cpu.parent import patches
         extra, _proof = patches()
@@ -50,6 +56,21 @@ def execution_patches(settings: Options, output: Path) -> list[Any]:
         from benchmarks.collection_cpu.diagnostics import patches as diagnostic_patches
         result.extend(diagnostic_patches(output))
     return result
+
+
+async def layered_execute(execute: Any, settings: Options, runner: Any, args: Any,
+                          result: Any, diagnostic: Any, output: Path) -> Any:
+    replacements = runtime_patches(settings,output)
+    inherited = [(owner,name) for owner,name,_ in replacements if name not in vars(owner)]
+    try:
+        with runner.patches(replacements):
+            return await execute(runner,args,result,diagnostic,output)
+    finally:
+        # Historical patches restores by assignment. Remove temporary shadows
+        # so an originally inherited descriptor remains inherited after exit.
+        for owner,name in reversed(inherited):
+            if name in vars(owner):
+                delattr(owner,name)
 
 
 def require_launch(freeze: Any, *, run_id: str, context_id: str, materialized_sha256: str,
@@ -93,6 +114,13 @@ def main() -> int:
     original.options = options
     original.code_files = code_files
     original.execution_patches = execution_patches
+    monitored = original.monitored_execute
+
+    async def measured(runner: Any, args: Any, result: Any, diagnostic: Any, output: Path) -> None:
+        selected = options(Path(sys.argv[sys.argv.index('--options')+1]))
+        await layered_execute(monitored,selected,runner,args,result,diagnostic,output)
+
+    original.monitored_execute = measured
 
     def write(path: Path, value: Any) -> None:
         if path.name == 'request.json':

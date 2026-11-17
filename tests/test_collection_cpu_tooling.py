@@ -49,7 +49,8 @@ def test_selection_signed_sum_ties_and_negative_candidates():
 def test_transfer_selection_common_all_models_three_pairs():
     from benchmarks.collection_cpu.trials import select_transfer
     rows = {model:{mode:[{'control':10.,'candidate':11. if mode == 'reuse' else 10.95,
-                         'population':'same','valid':True} for _ in range(3)]
+                         'population':'same','valid':True,'pair':i,
+                         'reports':[f'{model}-{mode}-{i}-c',f'{model}-{mode}-{i}-v']} for i in (1,2,3)]
                    for mode in ('reuse','T1','T2','T3')} for model in ('mlp','gru','transformer')}
     result = select_transfer(rows)
     assert result['selected'] == 'reuse' and result['T0_faster'] is True
@@ -161,7 +162,8 @@ def test_all_six_cached_transfer_identities_scrub_before_resident_ack(mode):
 
 def test_transfer_selection_does_not_invent_fallback_for_failed_mode():
     from benchmarks.collection_cpu.trials import select_transfer
-    rows = {model:{mode:[{'control':10.,'candidate':9.,'population':model,'valid':True} for _ in range(3)]
+    rows = {model:{mode:[{'control':10.,'candidate':9.,'population':model,'valid':True,'pair':i,
+        'reports':[f'{model}-{mode}-{i}-c',f'{model}-{mode}-{i}-v']} for i in (1,2,3)]
         for mode in ('reuse','T1','T2','T3')} for model in ('mlp','gru','transformer')}
     rows['mlp']['reuse'] = [{'valid':False,'population':None}]*3
     result = select_transfer(rows)
@@ -178,12 +180,16 @@ def test_actual_ledger_rejects_changed_pilot_conditions_and_duplicate_independen
     for row in rows:
         row['config'] = {'sha256':'config'}
         requests[Path(row['output'])/'request.json'] = {'run_id':row['run_id'],'context_id':row['context_id'],
-            'options':row['options'],'config_file_sha256':'config'}
+            'options':row['options'],'config_file_sha256':'config','parent':'/parents/'+row['run_id']}
     plan = {'namespace':'12345678-1234-5678-1234-567812345678','phase':'pilot','selected':[],
             'transfer':'T1','trials':rows}
     def summary(path,**kwargs):
         condition = 'different' if str(path)==rows[1]['output'] else 'same'
-        return {'collection_seconds':10.,'matched_conditions':{'condition':condition}}
+        row=next(row for row in rows if row['output']==str(path))
+        return {'collection_seconds':10.,'options':row['options'],
+            'launch_identity':{'run_id':row['run_id'],'context_id':row['context_id'],'options':row['options'],
+                'config_sha256':'config','parent':'/parents/'+row['run_id'],'output':str(path)},
+            'matched_conditions':{'condition':condition,'materialized':{'hpo_spec':{'storage':{'parent_root':'/parents'}}}}}
     monkeypatch.setattr(aggregation,'actual_summary',summary)
     monkeypatch.setattr(aggregation,'read_json',lambda path:requests[path])
     result = aggregation.actual_ledger([plan])
@@ -217,3 +223,184 @@ def test_frozen_launch_binds_exact_ids_options_materialization_output(tmp_path):
         with pytest.raises(ValueError,match='root-frozen launch'):
             require_launch({'materializations':[{**row,**changed}]},run_id='run',context_id='context',
                            materialized_sha256='config',selected=Options(),output=tmp_path)
+
+
+@pytest.mark.parametrize('settings',[{}, {'parent':True}, {'diagnostic':True}])
+def test_composed_actual_layers_preserve_original_capture_measurement_and_validation(tmp_path,monkeypatch,settings):
+    import asyncio
+    from types import SimpleNamespace
+
+    from benchmarks.collection_cpu import actual, parent
+    from benchmarks.collection_cpu.common import Options, inference_helper
+    from gf_common.structured import CandidateTable
+    from gf_training.card_instance_journal import CardInstanceJournal
+    from gf_training.hpo_owned_capture import _CaptureContext
+    inherited_before = 'begin_frame' in vars(CardInstanceJournal)
+    runner = inference_helper('actual').prior_runner()
+    measure = runner.Measurement()
+    calls,proofs = [],[]
+    frame,table = SimpleNamespace(actor=1,revision=1),object()
+    def validate(t,f):
+        calls.append('full')
+    def capture(*args):
+        CandidateTable.validate(table,frame)
+    monkeypatch.setattr(CandidateTable,'validate',validate)
+    monkeypatch.setattr(_CaptureContext,'begin_decision',capture)
+    original_patches = parent.patches
+    def expose():
+        replacements,proof = original_patches()
+        proofs.append(proof)
+        return replacements,proof
+    monkeypatch.setattr(parent,'patches',expose)
+    selected = Options(**settings)
+    prepared = actual.execution_patches(selected,tmp_path)
+    base = [(_CaptureContext,'begin_decision',measure.wrap('capture_begin_decision',capture))]
+    async def execute(*args):
+        from contextlib import nullcontext
+        with proofs[0].decision() if proofs else nullcontext():
+            CandidateTable.validate(table,frame)
+            _CaptureContext.begin_decision(object())
+            if proofs:
+                CandidateTable.validate(table,frame)
+    async def check():
+        with runner.patches([*base,*prepared]):
+            await actual.layered_execute(execute,selected,runner,None,{},None,tmp_path)
+    asyncio.run(check())
+    assert ('begin_frame' in vars(CardInstanceJournal)) is inherited_before
+    assert calls==['full','full']
+    assert [row['label'] for row in measure.payload()['rows']]==['capture_begin_decision']
+
+
+def test_replay_signal_exit_race_always_waits_and_publishes_original_failure(tmp_path,monkeypatch):
+    from types import SimpleNamespace
+
+    from benchmarks.collection_cpu import replay
+    source,out = tmp_path/'input',tmp_path/'out'
+    source.mkdir()
+    (source/'manifest.json').write_text('{}')
+    waits = []
+    class Child:
+        pid=123
+        def poll(self):
+            return None
+        def wait(self,timeout=None):
+            waits.append(timeout)
+            return -15
+    monkeypatch.setattr(replay,'namespace',lambda path:path)
+    monkeypatch.setattr(replay,'read_json',lambda path:{'files':{},'simulator_files':{},'population':'learner','decisions':314})
+    monkeypatch.setattr(replay,'runtime_identity',dict)
+    monkeypatch.setattr(replay,'code_files',dict)
+    monkeypatch.setattr(replay.subprocess,'Popen',lambda *a,**k:Child())
+    ticks=iter((0.,2.,3.,4.))
+    monkeypatch.setattr(replay.time,'monotonic',lambda:next(ticks))
+    def race(*args):
+        raise ProcessLookupError('exited between poll and signal')
+    monkeypatch.setattr(replay.os,'killpg',race)
+    args=SimpleNamespace(input=source,output=out,warm_loops=1,timeout=1,transfer='T0',
+                         device='cuda:0',pair=1,position=1,profile=False)
+    assert replay.run(args)==2
+    import json
+    receipt=json.loads((out/'receipt.json').read_text())
+    assert waits and receipt['actual_child_waited'] is True
+    assert receipt['failure']['type']=='TimeoutError'
+    assert receipt['cleanup_failures'][0]['type']=='ProcessLookupError'
+
+
+def test_replay_duplicate_pair_or_report_cannot_be_measured(monkeypatch,tmp_path):
+
+    from benchmarks.collection_cpu import aggregate
+    def summary(path):
+        name=path.name
+        return {'transfer':'T0' if name.endswith('c') else 'T1','pair':1,'position':1 if name.endswith('c') else 2,
+                'population':{'input':'same'},'warm_seconds':1.}
+    monkeypatch.setattr(aggregate,'replay_summary',summary)
+    row={'model':'mlp','transfer':'T1','pair':1,'reports':[str(tmp_path/'c'),str(tmp_path/'v')],
+         'input_manifest_sha256':'same'}
+    report=aggregate.replay_ledger({'pairs':[dict(row) for _ in range(3)]})
+    assert all(row['status']=='FAILED_OR_NOT_RUN' for row in report['ledger'])
+    assert not any(row['valid'] for row in report['rows']['mlp']['T1'])
+
+
+def test_actual_saved_request_cannot_relabel_another_result(tmp_path,monkeypatch):
+    from types import SimpleNamespace
+
+    from benchmarks.collection_cpu import aggregate
+    from benchmarks.collection_cpu.common import immutable_json
+    immutable_json(tmp_path/'request.json',{'options':{'parent':True},'run_id':'P'})
+    immutable_json(tmp_path/'result.json',{'request':{'population':'performance','options':{'parent':False},'run_id':'C'},
+                                        'parent':str(tmp_path/'parent')})
+    monkeypatch.setattr(aggregate,'inference_helper',lambda name:SimpleNamespace(actual_summary=lambda path:{}))
+    with pytest.raises(ValueError,match='embedded.*saved request'):
+        aggregate.actual_summary(tmp_path)
+
+
+def test_transfer_selector_rejects_repeated_physical_pair_even_with_three_rows():
+    from benchmarks.collection_cpu.trials import select_transfer
+    rows={model:{mode:[{'control':1.,'candidate':1.,'population':model,'valid':True,'pair':i,
+        'reports':[f'{model}-{mode}-{i}-c',f'{model}-{mode}-{i}-v']} for i in (1,2,3)]
+        for mode in ('reuse','T1','T2','T3')} for model in ('mlp','gru','transformer')}
+    rows['mlp']['T1'][1]['reports']=rows['mlp']['T1'][0]['reports']
+    with pytest.raises(ValueError,match='physical replay report identity repeated'):
+        select_transfer(rows)
+
+
+def test_replay_pair_order_and_unique_file_identity_are_enforced(tmp_path,monkeypatch):
+    import os
+
+    from benchmarks.collection_cpu import aggregate
+    reports,rows={},[]
+    for pair in (1,2,3):
+        paths=[]
+        order=['T0','T1'] if pair!=2 else ['T1','T0']
+        for position,transfer in enumerate(order,1):
+            path=tmp_path/f'{pair}-{position}'
+            path.mkdir()
+            (path/'receipt.json').write_text('{}')
+            paths.append(str(path))
+            reports[str(path)]={'transfer':transfer,'pair':pair,'position':position,'report':str(path),
+                'population':{'input':'same'},'warm_seconds':1.}
+        rows.append({'model':'mlp','transfer':'T1','pair':pair,'reports':paths,'input_manifest_sha256':'same'})
+    monkeypatch.setattr(aggregate,'replay_summary',lambda path:reports[str(path)])
+    assert all(row['status']=='MEASURED' for row in aggregate.replay_ledger({'pairs':rows})['ledger'])
+    reports[rows[1]['reports'][0]]['transfer']='T0'
+    reports[rows[1]['reports'][1]]['transfer']='T1'
+    assert aggregate.replay_ledger({'pairs':rows})['ledger'][1]['status']=='FAILED_OR_NOT_RUN'
+    source=tmp_path/'1-1'/'receipt.json'
+    target=tmp_path/'3-1'/'receipt.json'
+    target.unlink()
+    os.link(source,target)
+    ledger=aggregate.replay_ledger({'pairs':rows})['ledger']
+    assert ledger[0]['status']==ledger[2]['status']=='FAILED_OR_NOT_RUN'
+
+
+def test_replay_failed_wait_never_claims_reaped(tmp_path,monkeypatch):
+    from types import SimpleNamespace
+
+    from benchmarks.collection_cpu import replay
+    source,out=tmp_path/'input',tmp_path/'out'
+    source.mkdir()
+    (source/'manifest.json').write_text('{}')
+    waits=[]
+    class Child:
+        pid=123
+        def poll(self):
+            return None
+        def wait(self,timeout=None):
+            waits.append(timeout)
+            raise OSError('wait unavailable')
+    monkeypatch.setattr(replay,'namespace',lambda path:path)
+    monkeypatch.setattr(replay,'read_json',lambda path:{'files':{},'simulator_files':{},'population':'learner','decisions':314})
+    monkeypatch.setattr(replay,'runtime_identity',dict)
+    monkeypatch.setattr(replay,'code_files',dict)
+    monkeypatch.setattr(replay.subprocess,'Popen',lambda *a,**k:Child())
+    ticks=iter((0.,2.,3.,4.))
+    monkeypatch.setattr(replay.time,'monotonic',lambda:next(ticks))
+    monkeypatch.setattr(replay.os,'killpg',lambda *args:None)
+    args=SimpleNamespace(input=source,output=out,warm_loops=1,timeout=1,transfer='T0',
+                         device='cuda:0',pair=1,position=1,profile=False)
+    assert replay.run(args)==2
+    import json
+    receipt=json.loads((out/'receipt.json').read_text())
+    assert len(waits)==2 and receipt['actual_child_waited'] is False
+    assert receipt['returncode'] is None and receipt['unconfirmed_child_pid']==123
+    assert receipt['failure']['type']=='TimeoutError'

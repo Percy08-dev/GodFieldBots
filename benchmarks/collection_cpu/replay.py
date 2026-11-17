@@ -385,6 +385,8 @@ def run(args: Any) -> int:
     if args.profile:
         command.append('--profile')
     start,failure = time.monotonic(),None
+    cleanup_failures: list[dict[str,Any]] = []
+    waited,code = False,None
     with (output/'stdout.log').open('xb') as stdout,(output/'stderr.log').open('xb') as stderr:
         process = subprocess.Popen(command,stdout=stdout,stderr=stderr,start_new_session=True)
         try:
@@ -395,20 +397,36 @@ def run(args: Any) -> int:
                     process.wait(timeout=.5)
                 except subprocess.TimeoutExpired:
                     pass
-        except BaseException as error:  # noqa: BLE001 - always retire and reap the owned child
+        except BaseException as error:  # noqa: BLE001 - preserve initiating error through owned retirement
             failure = {'type':type(error).__name__,'message':str(error)[:2048]}
-            if process.poll() is None:
-                os.killpg(process.pid,signal.SIGTERM)
+        finally:
+            def signal_group(signum: int) -> None:
                 try:
-                    process.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    os.killpg(process.pid,signal.SIGKILL)
-            process.wait()
-        code = process.wait()
+                    if process.poll() is None:
+                        os.killpg(process.pid,signum)
+                except BaseException as error:  # noqa: BLE001 - signal races must never skip real wait
+                    cleanup_failures.append({'stage':'signal','signal':signum,
+                                             'type':type(error).__name__,'message':str(error)[:2048]})
+            if failure is not None:
+                signal_group(signal.SIGTERM)
+            try:
+                code = process.wait(timeout=5)
+                waited = True
+            except BaseException as error:  # noqa: BLE001 - preserve bounded cleanup evidence, then retry retirement
+                cleanup_failures.append({'stage':'first_wait','type':type(error).__name__,'message':str(error)[:2048]})
+                signal_group(signal.SIGKILL)
+                try:
+                    code = process.wait(timeout=5)
+                    waited = True
+                except BaseException as final_error:  # noqa: BLE001 - never claim a missing positive reap
+                    cleanup_failures.append({'stage':'final_wait','type':type(final_error).__name__,
+                                             'message':str(final_error)[:2048]})
     immutable_json(output/'receipt.json',{'pid':process.pid,'returncode':code,'failure':failure,
-        'actual_child_waited':True,'controller_seconds':time.monotonic()-start})
-    print(json.dumps({'output':str(output),'returncode':code,'failure':failure}))
-    return 2 if code or failure else 0
+        'actual_child_waited':waited,'cleanup_failures':cleanup_failures,
+        'unconfirmed_child_pid':None if waited else process.pid,'controller_seconds':time.monotonic()-start})
+    print(json.dumps({'output':str(output),'returncode':code,'failure':failure,'actual_child_waited':waited,
+                      'cleanup_failures':cleanup_failures}))
+    return 2 if code or failure or cleanup_failures or not waited else 0
 
 
 def main() -> int:

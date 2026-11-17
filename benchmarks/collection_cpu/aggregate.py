@@ -24,7 +24,7 @@ def replay_summary(path: Path) -> dict[str, Any]:
     request,result,receipt = (read_json(path/name) for name in ('request.json','result.json','receipt.json'))
     if result['device'] != 'cuda:0':
         raise ValueError('approved transfer selection requires actual CUDA replay')
-    if receipt['returncode'] or receipt['failure'] or not receipt['actual_child_waited'] or result['profiled']:
+    if receipt['returncode'] or receipt['failure'] or not receipt['actual_child_waited'] or receipt.get('cleanup_failures') or result['profiled']:
         raise ValueError('successful unprofiled physically reaped replay required')
     rows = result['loops']
     warm = [row for row in rows if row['population'] == 'warm']
@@ -40,21 +40,61 @@ def replay_summary(path: Path) -> dict[str, Any]:
             'pair':request['pair'],'position':request['position'],'report':str(path)}
 
 
+def replay_plan_issues(rows: list[Any]) -> dict[int,str]:
+    issues: dict[int,str] = {}
+    groups: dict[tuple[str,str],list[int]] = {}
+    paths: dict[str,int] = {}
+    physical: dict[tuple[int,int],int] = {}
+    for index,row in enumerate(rows):
+        if row['model'] not in MODELS or row['transfer'] not in ('reuse','T1','T2','T3'):
+            raise ValueError('closed model/transfer replay plan required')
+        groups.setdefault((row['model'],row['transfer']),[]).append(index)
+        if len(row['reports']) != 2:
+            issues[index] = 'exactly two original physical replay reports required'
+        for name in row['reports']:
+            path = Path(name).resolve()
+            key = str(path)
+            if key in paths:
+                issues[index] = issues[paths[key]] = 'physical replay report path repeated'
+            paths[key] = index
+            for component in ('request.json','result.json','receipt.json'):
+                try:
+                    info = (path/component).stat()
+                except OSError:
+                    continue  # Missing reports are retained as NOT RUN below.
+                identity = info.st_dev,info.st_ino
+                if identity in physical:
+                    issues[index] = issues[physical[identity]] = 'physical replay report file identity repeated'
+                physical[identity] = index
+    for indices in groups.values():
+        if len(indices)!=3 or {rows[i]['pair'] for i in indices}!={1,2,3}:
+            for index in indices:
+                issues[index] = 'exact independent replay pair set1,2,3 required'
+    return issues
+
+
 def replay_ledger(plan: Any) -> dict[str, Any]:
     grouped: dict[str,Any] = {model:{mode:[] for mode in ('reuse','T1','T2','T3')} for model in MODELS}
     ledger = []
-    for row in plan['pairs']:
+    issues = replay_plan_issues(plan['pairs'])
+    for index,row in enumerate(plan['pairs']):
         entry = dict(row)
         try:
+            if index in issues:
+                raise ValueError(issues[index])
             reports = [replay_summary(Path(path)) for path in row['reports']]
             control = next(r for r in reports if r['transfer']=='T0')
             candidate = next(r for r in reports if r['transfer']==row['transfer'])
-            if (control['population'] != candidate['population'] or control['pair'] != row['pair']
+            expected_order = ['T0',row['transfer']] if row['pair']!=2 else [row['transfer'],'T0']
+            if ([report['transfer'] for report in reports] != expected_order
+                    or [str(Path(report['report']).resolve()) for report in reports] != [str(Path(path).resolve()) for path in row['reports']]
+                    or control['population'] != candidate['population'] or control['pair'] != row['pair']
                     or candidate['pair'] != row['pair'] or [r['position'] for r in reports] != [1,2]
                     or control['population']['input'] != row['input_manifest_sha256']):
                 raise ValueError('original alternating replay pair population differs')
             grouped[row['model']][row['transfer']].append({'control':control['warm_seconds'],
-                'candidate':candidate['warm_seconds'],'population':control['population'],'valid':True})
+                'candidate':candidate['warm_seconds'],'population':control['population'],'valid':True,
+                'pair':row['pair'],'reports':[str(Path(path).resolve()) for path in row['reports']]})
             entry.update(status='MEASURED',control=control,candidate=candidate)
         except (OSError,ValueError,KeyError,StopIteration,TypeError) as error:
             grouped[row['model']][row['transfer']].append({'valid':False,'population':None})
@@ -64,10 +104,12 @@ def replay_ledger(plan: Any) -> dict[str, Any]:
 
 
 def actual_summary(path: Path, *, diagnostic: bool = False) -> dict[str, Any]:
+    result = read_json(path/'result.json')
+    request = read_json(path/'request.json')
+    if result['request'] != request:
+        raise ValueError('embedded actual request differs from saved request')
     original = inference_helper('aggregate')
     summary = original.actual_summary(path)
-    result = read_json(path/'result.json')
-    request = result['request']
     if request.get('population') != ('passive-diagnostic' if diagnostic else 'performance'):
         raise ValueError('passive/profiler population must remain separate from performance')
     parent = Path(result['parent'])
@@ -77,7 +119,9 @@ def actual_summary(path: Path, *, diagnostic: bool = False) -> dict[str, Any]:
     intervals = [row['elapsed_seconds'] for row in rows if row['label']=='collector_callback']
     if len(intervals) != 2:
         raise ValueError('original two coordinator collection intervals required')
-    return {**summary,'collection_seconds':primary,'coordinator_collection_seconds':sum(intervals),
+    return {**summary,'launch_identity':{'run_id':request['run_id'],'context_id':request['context_id'],
+                'options':request['options'],'config_sha256':request['config_file_sha256'],
+                'parent':str(parent),'output':str(path.absolute())},'collection_seconds':primary,'coordinator_collection_seconds':sum(intervals),
             'collection_batches':[{'collection_seconds':u['collection_seconds'],'decisions':u['collected_decisions'],
                 'used_decisions':u['used_decisions'],'numeric_sha256':u['numeric_sha256'],
                 'source_proof_sha256':u.get('source_proof_sha256'),'actual_games':u['actual_games']} for u in updates],
@@ -102,6 +146,12 @@ def actual_ledger(plans: list[Any]) -> dict[str, Any]:
                 if (request['run_id'] != row['run_id'] or request['context_id'] != row['context_id']
                         or request['options'] != row['options'] or request['config_file_sha256'] != row['config']['sha256']):
                     raise ValueError('actual immutable trial identity/options/config differ')
+                expected_parent = Path(summary['matched_conditions']['materialized']['hpo_spec']['storage']['parent_root'])/row['run_id']
+                expected_launch = {'run_id':row['run_id'],'context_id':row['context_id'],'options':row['options'],
+                    'config_sha256':row['config']['sha256'],'parent':str(expected_parent),'output':str(Path(row['output']).absolute())}
+                if (summary['options'] != row['options'] or summary['launch_identity'] != expected_launch
+                        or request['parent'] != str(expected_parent)):
+                    raise ValueError('actual summary options/launch/parent differ from planned trial')
                 entry.update(status='MEASURED',summary=summary)
             except (OSError,ValueError,KeyError,TypeError) as error:
                 entry.update(status='FAILED_OR_NOT_RUN',error={'type':type(error).__name__,'message':str(error)})
