@@ -299,6 +299,7 @@ class ResidentPhysicalWorker(StructuredParticipantWorker):
 
     async def _close_owned(self, timeout: float, started: float) -> None:
         if (self.lease.released and getattr(self.lease,'_proof',None) is not None and not self._operations and not self._setups
+                and self.lease.key not in self.pool.ledger._resident_begin_imports
                 and self.process is getattr(self.lease,'_process',object())
                 and (self.process is None or self.process.poll() is not None)):
             self.executor.shutdown(wait=False,cancel_futures=False)
@@ -325,6 +326,8 @@ class ResidentPhysicalWorker(StructuredParticipantWorker):
             self.owned_channel.close()
             assert self._owned_inherited is not None
             self._owned_inherited.close()
+        if self.lease.key in self.pool.ledger._resident_begin_imports:
+            self.pool.custody.retire_failed_begin_import(self.lease)
         self.executor.shutdown(wait=False, cancel_futures=False)
         if close_error is not None:
             raise close_error
@@ -333,8 +336,12 @@ class ResidentPhysicalWorker(StructuredParticipantWorker):
 class ResidentParticipantPool:
     def __init__(self, custody: Any, *, resident_bytes: int, deadline: float,
                  acquire_cache: Any = None, release_cache: Any = None, progress: ProgressCallback | None = None,
-                 owned_snapshots: bool = False) -> None:
+                 owned_snapshots: bool = False, begin_import_bytes: int = 0) -> None:
         integer(resident_bytes, 0, custody.ledger.global_cuda_bytes)
+        integer(begin_import_bytes, 0, custody.ledger.global_cuda_bytes)
+        if begin_import_bytes and custody.evaluation_scope is not None:
+            raise ContractError('BEGIN import admission is training-only')
+        self.begin_import_bytes = begin_import_bytes
         self.custody, self.ledger = custody, custody.ledger
         self.progress = progress
         if type(owned_snapshots) is not bool:
@@ -506,6 +513,7 @@ class ResidentParticipantWorker(CardInstanceParticipantWorker):
             raise ContractError('resident logical participant requires SAME ledger')
         self.pool, self.viewer = pool, viewer
         self._completed = False
+        self._begin_import_request: Json | None = None
         super().__init__(*args, **kwargs)
         self.binding_value = RuntimePolicyBinding(self.model_id, self.initial.get('policy_options'))
 
@@ -532,6 +540,9 @@ class ResidentParticipantWorker(CardInstanceParticipantWorker):
                 else:
                     pending_identity = None
             request = self.pool.custody.episode_request(self.lease, 'SELECT' if self.initialized else 'BEGIN')
+            if request['command'] == 'BEGIN' and self.pool.begin_import_bytes:
+                self.pool.custody.reserve_begin_import(self.lease, request, self.pool.begin_import_bytes)
+                self._begin_import_request = request
             response = await self.owner.exchange({'request': request, 'payload': payload}, timeout=self.timeout)
             result = self.pool.custody.acknowledge_episode(self.lease, response)
             if not self.initialized and pending_identity is not None:
@@ -545,6 +556,9 @@ class ResidentParticipantWorker(CardInstanceParticipantWorker):
         await super()._initialize_owned()
         # The complete existing protocol3 ready/model/binding/timing validation
         # has returned. A matching outer BEGIN alone cannot publish load facts.
+        if self._begin_import_request is not None:
+            self.pool.custody.retire_begin_import(self.lease, self._begin_import_request)
+            self._begin_import_request = None
         self.owner.observe_diagnostic()
 
     async def _select_frame_owned(self, frame: Any, delta: Any) -> Any:

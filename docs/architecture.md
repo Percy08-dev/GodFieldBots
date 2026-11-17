@@ -2,6 +2,16 @@
 
 ## Status and scope
 
+[ADR0050](adr/0050-resident-training-cache-accounting.md) adopts shape-based
+Model4 HPO training cache accounting (`hpo-resident-cache-envelope-v2`).
+A constructing participant holds its concurrent BEGIN charge through inner
+READY validation or, on failure, confirmed reap and I/O/FD retirement.
+Postcommit SYNC stages one owner at a time. The legacy learner/execution
+allowance and other mixed host/device estimates still need separate calibration.
+The [verification record](verification/ppo-shared-inference.md) distinguishes
+managed reservations from physical memory. The proposed shared GPU service
+requires [a Simulator contract decision](issues/0011-shared-inference-participant-process.md).
+
 [ADR0049](adr/0049-configurable-hpo-game-concurrency.md) accepts the owner's
 request for configurable HPO game counts above two and user-owned OOM tuning.
 Implementation passes independent correctness/conformance READY and root accepts

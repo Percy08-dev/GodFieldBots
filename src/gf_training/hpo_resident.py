@@ -491,7 +491,8 @@ class ResidentPoolCustody:
             raise ContractError('resident episode lacks original collection admission')
         row.collection.require(row.collection.plan, self.ledger)
         if (command not in ('BEGIN', 'SELECT') or row.state != 'active' or row.pending is not None
-                or row.io or row.setups or self.ledger.updating or command == 'BEGIN' and worker.decisions):
+                or row.io or row.setups or worker._resident_begin_epoch is not None
+                or self.ledger.updating or command == 'BEGIN' and worker.decisions):
             raise ContractError('resident episode request overlaps original work')
         row.request_epoch += 1
         request = {**self._identity(row), 'schema_version': 1, 'protocol': RESIDENT_MODE,
@@ -500,6 +501,58 @@ class ResidentPoolCustody:
         row.pending = request
         self._invalidate()
         return clone(request)
+
+    def reserve_begin_import(self, worker: Any, request: Json, size: int) -> None:
+        """Charge the original BEGIN before setup/FD/framing can start."""
+        row = self._row(worker)
+        self._live(row)
+        integer(size, 1, 2**63 - 1)
+        if (self.evaluation_scope is not None or size != row.owner.pool.begin_import_bytes
+                or request.get('command') != 'BEGIN' or row.pending is None
+                or canonical(request) != canonical(row.pending) or row.state != 'active'
+                or row.io or row.setups or worker.decisions or worker._resident_begin_epoch is not None
+                or self.ledger.updating or self.ledger._resident_transition):
+            raise ContractError('resident BEGIN import requires SAME exclusive training request')
+        required = self.ledger.cuda_bytes + size
+        if required > self.ledger.global_cuda_bytes:
+            raise ContractError('resident BEGIN import exceeds managed budget: resource=cuda '
+                f'phase=collection required={required} limit={self.ledger.global_cuda_bytes} request={size}')
+        epoch = (request['lease_epoch'], request['request_epoch'])
+        self.ledger._resident_begin_imports[worker.key] = worker
+        worker._resident_begin_bytes, worker._resident_begin_epoch = size, epoch
+        self.ledger.peak_cuda_bytes = max(self.ledger.peak_cuda_bytes, self.ledger.cuda_bytes)
+
+    def _release_begin_import(self, worker: _Worker) -> None:
+        if self.ledger._resident_begin_imports.get(worker.key) is not worker:
+            raise ContractError('resident BEGIN import lost original charged owner')
+        del self.ledger._resident_begin_imports[worker.key]
+        worker._resident_begin_bytes, worker._resident_begin_epoch = 0, None
+
+    def retire_begin_import(self, worker: Any, request: Json) -> None:
+        """Only the validated inner READY and completed original transfers release."""
+        row = self._row(worker)
+        self._live(row)
+        logical = row.owner.loan
+        channel = row.owner.owned_channel
+        if (worker._resident_begin_epoch != (request['lease_epoch'], request['request_epoch'])
+                or row.pending is not None or row.io or row.setups or not row.episode_started
+                or logical is None or logical.lease is not worker or not logical.initialized
+                or logical._begin_import_request != request
+                or channel is not None and channel.outstanding):
+            raise ContractError('resident BEGIN import lacks original validated ready/transfer retirement')
+        self._release_begin_import(worker)
+
+    def retire_failed_begin_import(self, worker: _Worker) -> None:
+        """A failed import stays charged across reap until original I/O/FD retirement."""
+        self._require(cleanup=True)
+        row = self._owners.get(worker.key)
+        if row is None or row.worker is not worker:
+            raise ContractError('resident failed BEGIN import changed original owner')
+        self._check_reaped(worker)
+        channel = row.owner.owned_channel
+        if channel is not None and channel.outstanding:
+            raise ContractError('resident failed BEGIN import retains original FD transfers')
+        self._release_begin_import(worker)
 
     def acknowledge_episode(self, worker: Any, response: Json) -> Json:
         row = self._row(worker)
@@ -534,6 +587,7 @@ class ResidentPoolCustody:
         self._live(row)
         integer(generation, 0, 2**63-1)
         if (row.state not in ('idle','parked') or row.pending is not None or row.io or row.setups or worker.decisions
+                or worker._resident_begin_epoch is not None
                 or self.job.ledger.updating or self.ledger._resident_transition):
             raise ContractError('resident BEGIN overlaps work or charged transition')
         row.lease_epoch += 1
@@ -550,6 +604,7 @@ class ResidentPoolCustody:
         row = self._row(worker)
         self._live(row)
         if (row.state != 'active' or row.pending is not None or row.io or row.setups or worker.decisions
+                or worker._resident_begin_epoch is not None
                 or row.collection is not None and not row.episode_started or self.job.ledger.updating):
             raise ContractError('resident decision lacks exclusive active logical lease')
 
@@ -558,6 +613,7 @@ class ResidentPoolCustody:
         self._live(row)
         allowed = ('END','EVICT') if row.state == 'active' else ('PARK','SYNC','EVICT') if row.state in ('idle','parked') else ()
         if (command not in allowed or row.pending is not None or row.io or row.setups or worker.decisions or not row.lease_epoch
+                or worker._resident_begin_epoch is not None
                 or self.job.ledger.updating or command == 'EVICT' and row.state == 'active' and row.episode_started):
             raise ContractError('resident command overlaps request/decision or invalid lifecycle')
         if generation is not None:
@@ -696,7 +752,8 @@ class ResidentPoolCustody:
                 or ledger._resident_pool is not self):
             raise ContractError('resident resource retirement requires SAME actual job/custody/ledger')
         for row in self._owners.values():
-            if (row.io or row.setups or getattr(row.owner,'_operations',None) or getattr(row.owner,'_setups',None)):
+            if (row.io or row.setups or getattr(row.owner,'_operations',None) or getattr(row.owner,'_setups',None)
+                    or row.worker._resident_begin_epoch is not None):
                 raise ContractError('resident original transport I/O/setup has not been explicitly retired')
             self._check_reaped(row.worker)
             _actual_process(row.worker._process,row.owner)
@@ -716,6 +773,7 @@ class ResidentPoolCustody:
         for row in self._owners.values():
             worker=row.worker
             if (row.io or row.setups or getattr(row.owner,'_operations',None) or getattr(row.owner,'_setups',None)
+                    or worker._resident_begin_epoch is not None
                     or not worker.released or worker.key in ledger.workers or worker._proof is None
                     or not any(worker._proof is resource for resource in receipt.resources)
                     or worker._proof.outcome!='reaped' or worker._process is None or worker._process.poll() is None
@@ -731,6 +789,7 @@ class ResidentPoolCustody:
         for row in live.values():
             self._live(row)
             if (row.state != 'parked' or row.pending is not None or row.io or row.setups or row.worker.decisions
+                    or row.worker._resident_begin_epoch is not None
                     or row.generation != generation or row.end_ack is None or row.park_ack is None):
                 raise ContractError('resident owner has unretired lease/I/O/decision/ACK')
 
@@ -867,6 +926,7 @@ class ResidentTransition:
     def __enter__(self) -> Self:
         self.authority.require(self.ledger)
         if (self.active or self.finished or self.ledger.updating or self.ledger._resident_transition
+                or self.ledger._resident_begin_imports
                 or self.ledger.cuda_bytes+self.bytes>self.ledger.global_cuda_bytes):
             raise ContractError('resident transition overlaps or exceeds shared CUDA budget')
         self.ledger._resident_transition = self

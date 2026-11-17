@@ -14,6 +14,9 @@
 
 ## 一覧
 
+追加: [0050](0050-resident-training-cache-accounting.md) — 常駐HPO学習poolのモデル形状別cache容量と
+並行BEGIN・逐次SYNCの予約を実行時ledgerに反映する。共有推論の仕様判断とlearnerのRAM/CUDA計算は別途。
+
 追加: [0049](0049-configurable-hpo-game-concurrency.md) — Accepted, implemented and verified:
 HPOの試合並列数とworker枠を設定可能にし、元のledger/config容量を
 常駐workerと終了記録のPython/Rust検証へ伝える。既定2/4・同時trial1・

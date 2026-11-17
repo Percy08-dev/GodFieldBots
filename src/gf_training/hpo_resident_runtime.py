@@ -36,7 +36,8 @@ class ResidentTrainingRuntime:
         self.custody = ResidentPoolCustody(job, run_id=state['run_id'], pool_id=uuid.uuid4().hex)
         self.pool = ResidentParticipantPool(self.custody, resident_bytes=envelope['worker_bytes']//envelope['workers'],
             deadline=self.deadline, acquire_cache=self.acquire_cache, release_cache=self.release_cache,
-            owned_snapshots=owned_registry is not None)
+            owned_snapshots=owned_registry is not None,
+            begin_import_bytes=envelope['begin_staging_bytes']//envelope['workers'])
         self.pool.execution_deadline = deadline
         self.entries: dict[int, OrderedDict[str, tuple[int, Any]]] = {}
         self.pins: dict[str,tuple[Any,Any]] = {}

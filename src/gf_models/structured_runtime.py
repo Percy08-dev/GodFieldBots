@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from itertools import pairwise
+from math import prod
 
 from gf_common.card_instance import ActionConfigV3
 from gf_common.card_instance_rules import CardInstanceRules
@@ -25,6 +26,7 @@ from gf_models.structured_config import (
     dimensions,
     model_config_v2,
     model_config_v3,
+    parameter_shapes,
     resource_estimate,
 )
 
@@ -233,8 +235,20 @@ def hpo_training_admission(model: ModelConfigV4,inference: InferenceBindingV2,tb
             +operating['numeric_budget_bytes']+operating['save_budget_bytes']}
     peak_ram=max(phases.values())
     peak_cuda=learner+total
-    if peak_ram>operating['managed_ram_bytes']: raise ContractError('joint HPO RAM demand exceeds managed budget')
-    if peak_cuda>operating['managed_cuda_bytes']: raise ContractError('joint HPO CUDA demand exceeds managed budget')
+    if peak_ram>operating['managed_ram_bytes']:
+        phase = max(phases, key=phases.__getitem__)
+        collecting = phase == 'collection'
+        raise ContractError('joint HPO RAM demand exceeds managed budget: '
+            f'resource=ram phase={phase} required={peak_ram} limit={operating["managed_ram_bytes"]} '
+            f'learner={learner} workers={total if collecting else 0} parent={operating["parent_budget_bytes"]} '
+            f'collector={operating["collector_budget_bytes"] if collecting else 0} '
+            f'source={0 if collecting else operating["source_budget_bytes"]} '
+            f'numeric={0 if collecting else operating["numeric_budget_bytes"]} '
+            f'save={operating["save_budget_bytes"] if phase == "save" else 0}')
+    if peak_cuda>operating['managed_cuda_bytes']:
+        raise ContractError('joint HPO CUDA demand exceeds managed budget: '
+            f'resource=cuda phase=collection required={peak_cuda} limit={operating["managed_cuda_bytes"]} '
+            f'learner={learner} workers={total}')
     return {'recipe':'hpo-joint-process-envelope-v1','workers':workers,'learner_bytes':learner,'worker_bytes':total,
         'ram_phases':phases,'peak_ram_bytes':peak_ram,'peak_cuda_bytes':peak_cuda,
         'managed_ram_bytes':operating['managed_ram_bytes'],'managed_cuda_bytes':operating['managed_cuda_bytes']}
@@ -269,10 +283,11 @@ def admit_planned_game_training_v3(actions: ActionConfigV3, model: ModelConfigV3
 def hpo_resident_training_admission(model: ModelConfigV4, inference: InferenceBindingV2,
                                      tbptt_length: int, operating: Json, runtime: Json, *,
                                      layout: StructuredLayout) -> Json:
-    """Retain physical residency through Source/update/save and stage full SYNC.
+    """Shape-based cache additions above the unchanged legacy active envelopes.
 
-    Cache weights, context/activation/allocator envelopes and old+new transfer
-    copies are charged independently. This remains soft managed admission.
+    The configured cache limit also retains the uncalibrated construction/restore
+    allowance per concurrent BEGIN, or for one owner in the serial SYNC loop.
+    These are soft legacy reservation units, not measured physical CUDA bytes.
     """
     from gf_common.hpo_resident import resident_runtime
     limits = resident_runtime(runtime)
@@ -280,20 +295,41 @@ def hpo_resident_training_admission(model: ModelConfigV4, inference: InferenceBi
     # The expanded phases below then make the resident refusal independently.
     base = hpo_training_admission(model, inference, tbptt_length, operating, layout=layout)
     workers = base['workers']
-    cache = workers * limits['cache_weight_bytes']
-    resident = base['worker_bytes'] + cache
-    staging = workers * limits['cache_weight_bytes']
+    weights = 4 * sum(prod(shape) for shape in parameter_shapes(model, layout=layout).values())
+    positions = 4 * model.temporal.max_decisions * model.temporal.hidden_size
+    cached = min(limits['cache_entries'], limits['cache_weight_bytes'] // weights)
+    if cached < 1:
+        raise ContractError('resident cache cannot admit one network: resource=cache-weight '
+            f'phase=resident-load required={weights} limit={limits["cache_weight_bytes"]}')
+    cache = workers * (cached - 1) * weights
+    position_cache = workers * cached * positions
+    resident = base['worker_bytes'] + cache + position_cache
+    staging = limits['cache_weight_bytes']
+    begin_staging = workers * staging
     fixed = operating['parent_budget_bytes'] + base['learner_bytes']
     phases = {
-        'collection': fixed + resident + operating['collector_budget_bytes'],
+        'collection': fixed + resident + operating['collector_budget_bytes'] + begin_staging,
         'update': fixed + resident + operating['source_budget_bytes'] + operating['numeric_budget_bytes'],
         'save': fixed + resident + operating['source_budget_bytes'] + operating['numeric_budget_bytes'] + operating['save_budget_bytes'],
         'sync': fixed + resident + staging,
     }
-    cuda = base['learner_bytes'] + resident + staging
+    cuda_phases = {phase: base['learner_bytes'] + resident + scratch
+        for phase, scratch in (('collection', begin_staging), ('update', 0), ('save', 0), ('sync', staging))}
+    cuda = max(cuda_phases.values())
     ram = max(phases.values())
-    if ram > operating['managed_ram_bytes'] or cuda > operating['managed_cuda_bytes']:
-        raise ContractError('joint resident HPO residency/transition exceeds managed budget')
-    return {**base, 'recipe': 'hpo-resident-process-envelope-v1', 'worker_bytes': resident,
-        'cache_weight_bytes': cache, 'staging_bytes': staging, 'ram_phases': phases,
+    for resource, demands, limit in (('ram', phases, operating['managed_ram_bytes']),
+                                     ('cuda', cuda_phases, operating['managed_cuda_bytes'])):
+        phase = max(demands, key=demands.__getitem__)
+        if demands[phase] > limit:
+            raise ContractError('joint resident HPO residency/transition exceeds managed budget: '
+                f'resource={resource} phase={phase} required={demands[phase]} limit={limit} '
+                f'legacy_learner={base["learner_bytes"]} legacy_workers={base["worker_bytes"]} '
+                f'extra_cache={cache + position_cache} '
+                f'begin_staging={begin_staging if phase == "collection" else 0} '
+                f'sync_staging={staging if phase == "sync" else 0}')
+    return {**base, 'recipe': 'hpo-resident-cache-envelope-v2', 'worker_bytes': resident,
+        'network_weight_bytes': weights, 'network_position_bytes': positions,
+        'cached_networks_per_worker': cached, 'cache_weight_bytes': cache, 'cache_position_bytes': position_cache,
+        'begin_staging_bytes': begin_staging, 'staging_bytes': staging, 'ram_phases': phases,
+        'cuda_phases': cuda_phases,
         'peak_ram_bytes': ram, 'peak_cuda_bytes': cuda}

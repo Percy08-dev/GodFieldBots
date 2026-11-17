@@ -53,7 +53,7 @@ def test_resident_memory_keeps_idle_cache_staging_source_and_save_charged(tmp_pa
     resident = campaign_config({**campaign_raw(), "schema_version": 3, "runtime": RUNTIME}, origin=tmp_path)
     before = joint_resource_admission(old.config, layout=layout)
     after = joint_resource_admission(resident.config, layout=layout)
-    assert after["recipe"] == "hpo-resident-process-envelope-v1"
+    assert after["recipe"] == "hpo-resident-cache-envelope-v2"
     assert after["worker_bytes"] > before["worker_bytes"]
     assert after["ram_phases"]["save"] == before["ram_phases"]["save"] + after["worker_bytes"]
     assert after["ram_phases"]["sync"] >= after["worker_bytes"] + after["learner_bytes"] + after["staging_bytes"]

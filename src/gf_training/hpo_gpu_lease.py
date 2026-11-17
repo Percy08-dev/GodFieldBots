@@ -388,6 +388,7 @@ class _AuditedLedger(ReservationLedger):
         self._resident_temporary = 0
         self._resident_update = False
         self._resident_transition: Any = None
+        self._resident_begin_imports: dict[int, _Worker] = {}
 
     def reserve_worker(self, resident_bytes: int) -> WorkerReservation:
         self._job._require_open()
@@ -429,12 +430,15 @@ class _AuditedLedger(ReservationLedger):
         self._job._require_open()
         if self._resident_pool is not None:
             self._resident_pool._require()
+        if self._resident_begin_imports:
+            raise ContractError('learner update overlaps resident BEGIN import')
         super().begin_update(temporary_bytes)
 
 
     @property
     def cuda_bytes(self) -> int:
-        return super().cuda_bytes + getattr(self, '_resident_temporary', 0)
+        return (super().cuda_bytes + getattr(self, '_resident_temporary', 0)
+                + sum(worker._resident_begin_bytes for worker in self._resident_begin_imports.values()))
 
     def _parked(self, authority: Any) -> None:
         from gf_training.hpo_resident import ParkedAuthority
@@ -446,7 +450,8 @@ class _AuditedLedger(ReservationLedger):
     def begin_resident_update(self, temporary_bytes: int, *, authority: Any) -> None:
         self._parked(authority)
         integer(temporary_bytes, 0, self.global_cuda_bytes)
-        if self.updating or self._resident_transition or self._resident_temporary or self.cuda_bytes + temporary_bytes > self.global_cuda_bytes:
+        if (self.updating or self._resident_transition or self._resident_temporary or self._resident_begin_imports
+                or self.cuda_bytes + temporary_bytes > self.global_cuda_bytes):
             raise ContractError('resident update/transition overlaps or exceeds shared CUDA budget')
         self._resident_temporary = temporary_bytes
         self._resident_update = self.updating = True
@@ -484,6 +489,8 @@ def _actual_process(process: Any, owner: Any) -> None:
 
 
 class _Worker(WorkerReservation):
+    _resident_begin_bytes: int = 0
+    _resident_begin_epoch: tuple[int, int] | None = None
     _owner: Any = None
     _process: Any = None
     _proof: ResourceTermination | None = None
@@ -697,7 +704,7 @@ class GpuJob:
         ledger=self._ledger
         proofs=tuple(token._proof for token in ledger._history)
         if (ledger.workers or ledger.learner is not None or ledger.updating or ledger._resident_temporary
-                or ledger._resident_transition or len(proofs)!=len(receipt.resources)
+                or ledger._resident_transition or ledger._resident_begin_imports or len(proofs)!=len(receipt.resources)
                 or any(not token.released or token.creation_pending or token._proof is None for token in ledger._history)
                 or any(proof is not recorded for proof,recorded in zip(proofs,receipt.resources,strict=True))):
             raise ContractError('confirmed termination original resource history changed')
@@ -716,7 +723,7 @@ class GpuJob:
             return self._receipt
         self._require_open()
         ledger = self._ledger
-        if ledger.workers or ledger.learner is not None or ledger.updating or ledger._resident_temporary or ledger._resident_transition or any(
+        if ledger.workers or ledger.learner is not None or ledger.updating or ledger._resident_temporary or ledger._resident_transition or ledger._resident_begin_imports or any(
                 not token.released or token.creation_pending or token._proof is None for token in ledger._history):
             raise ContractError("GPU resource creation/reap/update remains unconfirmed")
         if ledger._resident_pool is not None:
