@@ -2,6 +2,15 @@
 
 ## Status and scope
 
+[ADR0046](adr/0046-standard-bounded-ppo-updates.md) accepts the user-authorized
+[normal Model4 adoption](design/ppo-update-adoption.md): automatic MLP microbatch
+and sequence shared-prefix execution with bounded frame staging for long/large
+inputs. Baseline becomes an internal reference, older frozen learners stay
+unchanged, and ordinary resume source identity stays strict. The user accepts
+extreme-setting capacity/OOM risk; conservative caps and explicit failure stay,
+without added rematerialization or fallback. Preimplementation review is READY;
+implementation and normal default activation remain pending.
+
 [ADR0045](adr/0045-learning-update-optimization.md) accepts the bounded
 [PPO update comparison](design/learning-update-optimization.md): cumulative
 device metrics, immutable packing, tensor microbatches and short-history sharing
