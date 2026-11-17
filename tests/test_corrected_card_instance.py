@@ -124,7 +124,7 @@ def test_two_exact_full_profiles_same_type_and_unchanged_defaults():
         CardInstanceContract(profile_id=new.profile_id)
 
 
-def test_old_defaults_thirteen_config_hashes_tokens_rules_and_all_goldens_stay_exact():
+def test_old_configs_tokens_and_goldens_stay_exact_but_rules_are_superseded():
     from gf_cli.config import ExperimentConfig, load_config
 
     assert digest(asdict(ExperimentConfig())) == BEFORE["default_config_sha256"]
@@ -134,7 +134,7 @@ def test_old_defaults_thirteen_config_hashes_tokens_rules_and_all_goldens_stay_e
     )
     assert (
         rule_signature(card_instance_contract(), card_instance_rules())
-        == BEFORE["old_rule_signature"]
+        != BEFORE["old_rule_signature"]
     )
     for key, layout in (("legacy", LEGACY_LAYOUT), ("07e", OLD)):
         for window, expected in BEFORE["token_signatures"][key].items():
@@ -521,7 +521,8 @@ def test_corrected_raw_identity_goldens_preserved_and_incomplete_tokens_supersed
     assert result.table.table_hash == expected["table_hash"]
     assert signature(layout=NEW) != expected["token_signature"]
     assert signature(layout=NEW) == "ed0c61152b78fa984aad342be22c6b9d6ef49b12b8f0d1c0f0de89724468002f"
-    assert result.report.rule_signature == expected["rule_signature"]
+    assert result.report.rule_signature != expected["rule_signature"]
+    assert result.report.rule_signature == "081fa1e0b6c186c563c949e65fbce19b77f07db505516330d3ac377b1b02e2d6"
     tokens = tokenize_frame(frame, bank.view(), layout=NEW)
     assert digest(asdict(tokens)) != expected["frame_tokens_sha256"]
     assert digest(asdict(tokens)) == "2c3d318a4a4cb047f68c87b9721db7be0a5c9595e07e82fb4fa2b84bd4bb8d20"

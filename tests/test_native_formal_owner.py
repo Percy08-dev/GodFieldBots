@@ -195,8 +195,14 @@ class BlockOptional(importlib.abc.MetaPathFinder):
 sys.meta_path.insert(0,BlockOptional())
 from tests.test_formal_ppo_contract import config_for,loaded_for
 from gf_training.card_instance_formal import formal_preflight
+from gf_common.domain import ContractError
 for model in ('mlp','gru','transformer'):
- formal_preflight(loaded_for(config_for(model)))
+ try:
+  formal_preflight(loaded_for(config_for(model)))
+ except ContractError as error:
+  assert str(error)=='formal planned input/static semantics differ from literal'
+ else:
+  raise AssertionError('retired formal rules-v1 recipe was admitted')
 assert 'torch' not in sys.modules and 'lightgbm' not in sys.modules
 '''
     result=subprocess.run([sys.executable,'-c',code],capture_output=True,text=True,timeout=30,check=False)

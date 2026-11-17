@@ -650,13 +650,13 @@ mod tests {
         let b = Budget::new(512 << 20);
         let c = Control::new(crate::budget::monotonic() + 60.).unwrap();
         let fixture = json::parse(
-            include_bytes!("../tests/fixtures/card_instance_journal6.json"),
+            include_bytes!("../tests/fixtures/card_instance_journal6_rules_v2.json"),
             &b,
             &c,
         )
         .unwrap();
         let actions = &fixture.root["journals"][0]["rows"][0]["actions"];
-        let label = "heuristic_refresh-card-instance-v2-2f59f18e55cdaff8d82004b2b7867d80001e1aa24a4f28ad695332b8fefa9ce4";
+        let label = "heuristic_refresh-card-instance-v2-636ccfc7684f690b578076713cdf128f28e9dc52c86014bc9b41cbc6b5091af3";
         let binding = json::object([
             ("model_id", json::text("heuristic_refresh")),
             (
@@ -728,7 +728,7 @@ mod tests {
         let b = Budget::new(512 << 20);
         let c = Control::new(crate::budget::monotonic() + 60.).unwrap();
         let neural = json::parse(
-            include_bytes!("../tests/fixtures/card_instance_journal6.json"),
+            include_bytes!("../tests/fixtures/card_instance_journal6_rules_v2.json"),
             &b,
             &c,
         )
@@ -736,7 +736,7 @@ mod tests {
         let h = &neural.root["journals"][1]["rows"][0];
         let actions = &h["actions"];
         let tree = json::parse(
-            include_bytes!("../tests/fixtures/card_instance_tree3_raw_metadata.json"),
+            include_bytes!("../tests/fixtures/card_instance_tree3_raw_metadata_rules_v2.json"),
             &b,
             &c,
         )

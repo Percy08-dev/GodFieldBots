@@ -28,6 +28,7 @@ from gf_training.structured_rollout import (
     _token_dtype,
     game_episode_records,
 )
+from tests.card_instance_tree_fixture_support import require_current_capture_binding
 
 ROOT = Path(__file__).parents[1]
 
@@ -35,6 +36,8 @@ ROOT = Path(__file__).parents[1]
 @pytest.fixture(scope='module')
 def originals(tmp_path_factory):
     fixture = json.loads((ROOT / 'native/tests/fixtures/card_instance_final64_originals.json').read_bytes())
+    captured_manifest = json.loads(bytes.fromhex(fixture['files']['manifest.json']))
+    require_current_capture_binding(captured_manifest, subject='final64 originals')
     root = tmp_path_factory.mktemp('UNADMITTED-final64-decoder-originals')
     for name, raw in fixture['files'].items():
         path = root / name

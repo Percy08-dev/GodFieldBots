@@ -511,7 +511,7 @@ mod hpo_model_tests {
         let budget = Budget::new(64 << 20);
         let control = Control::new(crate::budget::monotonic() + 30.).unwrap();
         let cases = json::parse(
-            include_bytes!("../tests/fixtures/card_instance_models3.json"),
+            include_bytes!("../tests/fixtures/card_instance_models3_rules_v2.json"),
             &budget,
             &control,
         )
@@ -3868,13 +3868,69 @@ pub(crate) fn verify_derived_artifact3(
 
 
 #[cfg(test)]
+mod defense_priority_tests {
+    use super::*;
+
+    #[test]
+    fn captured_old_mlp_and_final64_bindings_are_explicitly_unsupported() {
+        let b = Budget::new(512 << 20);
+        let c = Control::new(crate::budget::monotonic() + 30.).unwrap();
+        let mlp = json::parse(
+            include_bytes!("../tests/fixtures/card_instance_actual_mlp_reference.json"),
+            &b,
+            &c,
+        )
+        .unwrap();
+        let final64 = json::parse(
+            include_bytes!("../tests/fixtures/card_instance_final64_originals.json"),
+            &b,
+            &c,
+        )
+        .unwrap();
+        let hex = final64.root["files"]["manifest.json"].string().unwrap();
+        let bytes: Vec<_> = (0..hex.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
+            .collect();
+        let manifest = json::parse(&bytes, &b, &c).unwrap();
+        for binding in [&mlp.root["collections"][0]["proof"], &manifest.root] {
+            assert_eq!(
+                binding["rule_signature"].string().unwrap(),
+                "3f55f044225fb20c63d683145cdceb397c36f0b7161c7b16793f72210db3e86d"
+            );
+            assert_eq!(
+                game_binding3(binding, &b, &c).err(),
+                Some(Error::contract("game rule signature mismatch"))
+            );
+        }
+    }
+
+    #[test]
+    fn current_binding_accepts_defense_rules_and_rejects_superseded_rules() {
+        let b = Budget::new(128 << 20);
+        let c = Control::new(crate::budget::monotonic() + 30.).unwrap();
+        let mut binding = corrected_game_binding(&b, &c).unwrap();
+        binding["rule_signature"] =
+            json::text("081fa1e0b6c186c563c949e65fbce19b77f07db505516330d3ac377b1b02e2d6");
+        game_binding3(&binding, &b, &c).unwrap();
+        for old in [
+            "3f55f044225fb20c63d683145cdceb397c36f0b7161c7b16793f72210db3e86d",
+            "0000000000000000000000000000000000000000000000000000000000000000",
+        ] {
+            binding["rule_signature"] = json::text(old);
+            assert!(game_binding3(&binding, &b, &c).is_err());
+        }
+    }
+}
+
+#[cfg(test)]
 mod refresh_opponents_tests {
     use super::*;
     #[test]
     fn mixed_training_descriptor_and_registry_are_closed_and_preserve_large_thresholds() {
         let b = Budget::new(128 << 20);
         let c = Control::new(crate::budget::monotonic() + 30.).unwrap();
-        let fixture = json::parse(include_bytes!("../tests/fixtures/card_instance_journal6.json"), &b, &c).unwrap();
+        let fixture = json::parse(include_bytes!("../tests/fixtures/card_instance_journal6_rules_v2.json"), &b, &c).unwrap();
         let actions = fixture.root["journals"][0]["rows"][0]["actions"].clone();
         let descriptor = json::object([
             ("version", json::text("1")), ("preset", json::text("mixed-refresh-16-v1")),

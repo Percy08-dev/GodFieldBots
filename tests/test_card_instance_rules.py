@@ -20,15 +20,15 @@ from tests.card_instance_action_support import facts
 def test_closed_owner_rules_and_separate_compatibility_signature():
     rules = card_instance_rules()
     assert asdict(rules) == {
-        "version": "1",
-        "profile_id": "owner-card-instance-candidates-20261103-v1",
+        "version": "2",
+        "profile_id": "owner-card-instance-candidates-20261117-v2",
         "owner_confirmation_sha256": OWNER_CONFIRMATION_SHA256,
     }
     signature = rule_signature(card_instance_contract(), rules)
     assert len(signature) == 64
     for name, value in (
         ("version", 1),
-        ("version", "2"),
+        ("version", "1"),
         ("profile_id", "unknown"),
         ("owner_confirmation_sha256", "0" * 64),
     ):

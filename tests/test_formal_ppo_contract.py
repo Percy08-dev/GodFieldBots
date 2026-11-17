@@ -67,16 +67,24 @@ def state_for(*, updates=1):
 @pytest.mark.parametrize('device', ['cpu', 'cuda:0'])
 @pytest.mark.parametrize('backend', ['python', 'rust'])
 @pytest.mark.parametrize('seed', [17, 29, 43])
-def test_all36_literal_variants_and_frozen_kernels_without_torch(model, device, backend, seed):
+def test_all36_literal_variants_reject_retired_binding_without_optional_imports(model, device, backend, seed):
     optional_before = {name: module for name, module in sys.modules.items()
         if name.split('.')[0] in ('torch','lightgbm')}
     value = config_for(model, device, backend, seed)
     assert checked_config(value, load_recipe()) == value
-    formal_preflight(loaded_for(value))
+    with pytest.raises(ContractError, match='^formal planned input/static semantics differ from literal$'):
+        formal_preflight(loaded_for(value))
     optional_after = {name: module for name, module in sys.modules.items()
         if name.split('.')[0] in ('torch','lightgbm')}
     assert optional_after.keys() == optional_before.keys()
     assert all(optional_after[name] is module for name, module in optional_before.items())
+
+
+def test_real_preflight_rejects_frozen_v1_recipe_outside_unadmitted_control_helpers():
+    recipe = load_recipe()
+    assert recipe['input_binding']['rule_signature'] == '3f55f044225fb20c63d683145cdceb397c36f0b7161c7b16793f72210db3e86d'
+    with pytest.raises(ContractError, match='^formal planned input/static semantics differ from literal$'):
+        formal_preflight(loaded_for())
 
 
 @pytest.mark.parametrize(('section', 'key', 'value'), [

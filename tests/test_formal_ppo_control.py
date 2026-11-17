@@ -56,7 +56,10 @@ def control_state(value, identity, execution):
         'generation_sha256': 'b' * 64, 'elapsed_seconds': 5500.}
 
 
-def prepared_control(tmp_path):
+def prepared_control(tmp_path, monkeypatch):
+    import gf_training.card_instance_formal as formal
+    from tests.formal_control_support import unadmitted_current_synthetic_formal_shape
+    monkeypatch.setattr(formal, 'formal_preflight', unadmitted_current_synthetic_formal_shape)
     value = loaded(tmp_path)
     control = FormalControl(value)
     control.preflight()
@@ -80,8 +83,8 @@ def complete_state(control, state):
     return state
 
 
-def test_declaration_created_before_g0_and_binds_base_identity_without_cycle(tmp_path):
-    value, control, directory = prepared_control(tmp_path)
+def test_declaration_created_before_g0_and_binds_base_identity_without_cycle(tmp_path, monkeypatch):
+    value, control, directory = prepared_control(tmp_path, monkeypatch)
     with run_lock(directory, create=True) as ownership:
         state = initialize(control, value, directory, ownership)
         declaration = json.loads((directory / 'formal-declaration.json').read_text())
@@ -99,8 +102,8 @@ def test_declaration_created_before_g0_and_binds_base_identity_without_cycle(tmp
 
 
 @pytest.mark.parametrize('entry', ['run.json', 'artifacts'])
-def test_fresh_declaration_cannot_backfill_existing_parent_even_with_real_lock(tmp_path, entry):
-    value, control, directory = prepared_control(tmp_path)
+def test_fresh_declaration_cannot_backfill_existing_parent_even_with_real_lock(tmp_path, entry, monkeypatch):
+    value, control, directory = prepared_control(tmp_path, monkeypatch)
     with run_lock(directory, create=True) as ownership:
         if entry == 'artifacts':
             (directory / entry).mkdir()
@@ -111,8 +114,8 @@ def test_fresh_declaration_cannot_backfill_existing_parent_even_with_real_lock(t
         assert not (directory / 'formal-declaration.json').exists()
 
 
-def test_copied_or_stale_lock_cannot_publish_declaration(tmp_path):
-    value, control, directory = prepared_control(tmp_path)
+def test_copied_or_stale_lock_cannot_publish_declaration(tmp_path, monkeypatch):
+    value, control, directory = prepared_control(tmp_path, monkeypatch)
     directory.mkdir()
     with pytest.raises(ContractError, match='SAME'):
         initialize(control, value, directory, RunOwnership(directory, 'copied-token'))
@@ -120,8 +123,8 @@ def test_copied_or_stale_lock_cannot_publish_declaration(tmp_path):
 
 
 @pytest.mark.parametrize('mutation', ['bytes', 'reference', 'both-references', 'base', 'execution', 'input'])
-def test_original_declaration_identity_mutations_refuse(tmp_path, mutation):
-    value, control, directory = prepared_control(tmp_path)
+def test_original_declaration_identity_mutations_refuse(tmp_path, mutation, monkeypatch):
+    value, control, directory = prepared_control(tmp_path, monkeypatch)
     with run_lock(directory, create=True) as ownership:
         state = initialize(control, value, directory, ownership)
         if mutation == 'bytes':
@@ -142,8 +145,8 @@ def test_original_declaration_identity_mutations_refuse(tmp_path, mutation):
             read_formal_control(directory, state, SealedScan(max_owned_bytes=1024**3, deadline=time.monotonic() + 60))
 
 
-def test_resume_reuses_exact_sidecar_and_changed_config_or_base_cannot_replace_it(tmp_path):
-    value, control, directory = prepared_control(tmp_path)
+def test_resume_reuses_exact_sidecar_and_changed_config_or_base_cannot_replace_it(tmp_path, monkeypatch):
+    value, control, directory = prepared_control(tmp_path, monkeypatch)
     with run_lock(directory, create=True) as ownership:
         state = initialize(control, value, directory, ownership)
         state['status'] = 'paused'
@@ -162,8 +165,8 @@ def test_resume_reuses_exact_sidecar_and_changed_config_or_base_cannot_replace_i
             wrong.attach_identity(directory, {**base_identity(value), 'foreign': True}, state['execution'], mode='resume', deadline=time.monotonic() + 60, ownership=ownership)
 
 
-def test_complete_owned_inode_is_kept_across_lock_exit_and_invalidated_on_late_failure(tmp_path):
-    value, control, directory = prepared_control(tmp_path)
+def test_complete_owned_inode_is_kept_across_lock_exit_and_invalidated_on_late_failure(tmp_path, monkeypatch):
+    value, control, directory = prepared_control(tmp_path, monkeypatch)
     with run_lock(directory, create=True) as ownership:
         state = initialize(control, value, directory, ownership)
         atomic_json(directory / 'run.json', state)
@@ -179,8 +182,8 @@ def test_complete_owned_inode_is_kept_across_lock_exit_and_invalidated_on_late_f
     assert str(initiating) == 'injected late outer run-lock/report failure'
 
 
-def test_success_releases_only_after_outer_lock_exit_and_inert_control_is_not_a_source(tmp_path):
-    value, control, directory = prepared_control(tmp_path)
+def test_success_releases_only_after_outer_lock_exit_and_inert_control_is_not_a_source(tmp_path, monkeypatch):
+    value, control, directory = prepared_control(tmp_path, monkeypatch)
     with run_lock(directory, create=True) as ownership:
         state = initialize(control, value, directory, ownership)
         atomic_json(directory / 'run.json', state)
@@ -192,8 +195,8 @@ def test_success_releases_only_after_outer_lock_exit_and_inert_control_is_not_a_
         pytest.fail('controlled metadata must not qualify without actual original Sources/artifacts')
 
 
-def test_foreign_current_completion_is_preserved_while_known_original_fd_is_invalidated(tmp_path):
-    value, control, directory = prepared_control(tmp_path)
+def test_foreign_current_completion_is_preserved_while_known_original_fd_is_invalidated(tmp_path, monkeypatch):
+    value, control, directory = prepared_control(tmp_path, monkeypatch)
     with run_lock(directory, create=True) as ownership:
         state = initialize(control, value, directory, ownership)
         atomic_json(directory / 'run.json', state)
@@ -210,7 +213,7 @@ def test_foreign_current_completion_is_preserved_while_known_original_fd_is_inva
 
 @pytest.mark.parametrize('role', ['directory', 'completion'])
 def test_single_attempt_close_uncertainty_never_retries_or_inspects_stale_descriptor(tmp_path, monkeypatch, role):
-    value, control, directory = prepared_control(tmp_path)
+    value, control, directory = prepared_control(tmp_path, monkeypatch)
     with run_lock(directory, create=True) as ownership:
         state = initialize(control, value, directory, ownership)
         atomic_json(directory / 'run.json', state)
@@ -257,7 +260,7 @@ def test_mismatching_formal_recipe_refuses_before_any_model_runtime_lease_or_out
 
 def test_terminal_after_close_guard_uses_fresh_known_inode_to_revoke(tmp_path, monkeypatch):
     import gf_training.ppo_run as coordinator
-    value, control, directory = prepared_control(tmp_path)
+    value, control, directory = prepared_control(tmp_path, monkeypatch)
     with run_lock(directory, create=True) as ownership:
         state = initialize(control, value, directory, ownership)
         atomic_json(directory / 'run.json', state)
@@ -277,7 +280,7 @@ def test_terminal_after_close_guard_uses_fresh_known_inode_to_revoke(tmp_path, m
 
 @pytest.mark.parametrize('role', ['directory', 'completion'])
 def test_close_error_reused_foreign_fd_is_never_inspected_or_closed_again(tmp_path, monkeypatch, role):
-    value, control, directory = prepared_control(tmp_path)
+    value, control, directory = prepared_control(tmp_path, monkeypatch)
     with run_lock(directory, create=True) as ownership:
         state = initialize(control, value, directory, ownership)
         atomic_json(directory / 'run.json', state)
@@ -320,7 +323,7 @@ def test_close_error_reused_foreign_fd_is_never_inspected_or_closed_again(tmp_pa
 
 
 def test_failed_invalidation_preserves_primary_and_reachable_owner(tmp_path, monkeypatch):
-    value, control, directory = prepared_control(tmp_path)
+    value, control, directory = prepared_control(tmp_path, monkeypatch)
     with run_lock(directory, create=True) as ownership:
         state = initialize(control, value, directory, ownership)
         atomic_json(directory / 'run.json', state)
@@ -340,8 +343,8 @@ def test_failed_invalidation_preserves_primary_and_reachable_owner(tmp_path, mon
     assert (directory / 'run.json').read_bytes().startswith(b'!')
 
 
-def test_sidecar_input_snapshot_survives_resume_and_cannot_rebind_same_bytes(tmp_path):
-    value, control, directory = prepared_control(tmp_path)
+def test_sidecar_input_snapshot_survives_resume_and_cannot_rebind_same_bytes(tmp_path, monkeypatch):
+    value, control, directory = prepared_control(tmp_path, monkeypatch)
     with run_lock(directory, create=True) as ownership:
         initialize(control, value, directory, ownership)
     path = directory / 'formal-declaration.json'
@@ -362,7 +365,7 @@ def test_formal_context_type_and_original_caller_cannot_be_crossed(tmp_path):
 
 
 def test_failure_note_allocation_cannot_replace_primary_or_hide_uncertain_owner(tmp_path, monkeypatch):
-    value, control, directory = prepared_control(tmp_path)
+    value, control, directory = prepared_control(tmp_path, monkeypatch)
     with run_lock(directory, create=True) as ownership:
         state = initialize(control, value, directory, ownership)
         atomic_json(directory / 'run.json', state)
@@ -393,8 +396,8 @@ def test_formal_parent_borrows_only_explicit_same_lock_and_never_releases_outer_
         assert _OWNED_LOCKS[directory] == ownership.token
 
 
-def test_whole_formal_invocation_holds_original_server_config_identity(tmp_path):
-    value, control, directory = prepared_control(tmp_path)
+def test_whole_formal_invocation_holds_original_server_config_identity(tmp_path, monkeypatch):
+    value, control, directory = prepared_control(tmp_path, monkeypatch)
     with run_lock(directory, create=True) as ownership:
         initialize(control, value, directory, ownership)
     path = Path(value.config.server.config)

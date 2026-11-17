@@ -25,6 +25,7 @@ from gf_simulator_client.card_instance_tree_scoring_worker import CardInstanceTr
 from gf_simulator_client.framing import MAX_FRAME_BYTES, read_frame_admitted
 from gf_simulator_client.structured_resources import ReservationLedger
 from tests.card_instance_action_support import inputs
+from tests.card_instance_tree_fixture_support import require_current_external_pair
 from tests.test_corrected_card_instance import records
 
 MAIN = Path('/home/percy/develop/GodFieldBots')
@@ -33,6 +34,7 @@ ACTIONS = ActionConfigV3(action_contract=CONTRACT, max_candidates=64)
 
 
 def worker(*, scope=COMPONENT, actor=1, episode='corrected-adoption-fixed', ledger=None, deadline=None, actions=None):
+    require_current_external_pair(PAIR)
     return CardInstanceTreeScoringWorker(PAIR, ConfiguredTreeModelV3(),
         actions or (ACTIONS if scope == COMPONENT else ActionConfigV3(action_contract=CONTRACT)),
         17, actor, episode, input_scope=scope, ledger=ledger or ReservationLedger(),
@@ -49,6 +51,7 @@ def fact(*, game=False):
 
 def test_clean_component_process_scores_equal_actual_paired_cpu_predictor(monkeypatch):
     assert PAIR.is_dir()
+    require_current_external_pair(PAIR)
     monkeypatch.setenv('GAME_SEED', 'management-secret')
     monkeypatch.setenv('GF_SERVER_URL', 'management-secret')
     frame, bank, delta, table = fact()
@@ -300,6 +303,7 @@ def test_expired_original_session_cannot_publish_and_close_never_extends_cap():
 
 
 def test_window_scope_and_caller_identity_fail_before_spawn(monkeypatch):
+    require_current_external_pair(PAIR)
     from dataclasses import replace
 
     import gf_simulator_client.card_instance_tree_scoring_worker as module
@@ -319,6 +323,7 @@ def test_window_scope_and_caller_identity_fail_before_spawn(monkeypatch):
 
 
 def _oversized_encoded_pair(tmp_path):
+    require_current_external_pair(PAIR)
     import hashlib
     import shutil
 
@@ -364,6 +369,7 @@ def test_actual_encoded_init_over64mib_refuses_before_popen(tmp_path, monkeypatc
 
 
 def test_initial_cumulative_budget_rejects_before_encoding_and_spawn(monkeypatch):
+    require_current_external_pair(PAIR)
     from dataclasses import replace
 
     import gf_simulator_client.card_instance_tree_scoring_worker as module
@@ -446,6 +452,7 @@ def test_cancelled_close_waits_for_same_cleanup_task_and_never_resets_budget(mon
 
 
 def test_changed_retained_pair_before_initialization_never_loads_child(tmp_path):
+    require_current_external_pair(PAIR)
     import shutil
     target = tmp_path/'pair'; shutil.copytree(PAIR, target)
     async def run():

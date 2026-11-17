@@ -207,7 +207,7 @@ def test_layout_metadata_escaped_leaf_mapping_categories_and_complete_signature(
     layout = feature_layout_v3(encoder)
     assert (TREE3_CONTEXT.card_width, TREE3_CONTEXT.context_width, feature_width_v3(18)) == (64, 1629, 2810)
     assert layout['token_signature'] == layout['layout_signature'] == 'ed0c61152b78fa984aad342be22c6b9d6ef49b12b8f0d1c0f0de89724468002f'
-    assert layout['rule_signature'] == '3f55f044225fb20c63d683145cdceb397c36f0b7161c7b16793f72210db3e86d'
+    assert layout['rule_signature'] == '081fa1e0b6c186c563c949e65fbce19b77f07db505516330d3ac377b1b02e2d6'
     assert layout['policy_input_version'] == 'player-card-refs-v2'
     assert layout['input_recipe'] == 'participant-structured-v2'
     assert layout['action_contract'] == asdict(LAYOUT.action_contract)

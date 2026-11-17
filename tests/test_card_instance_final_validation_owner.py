@@ -13,6 +13,7 @@ from gf_training import card_instance_final_validation as module
 from gf_training.card_instance_collection import CollectionPublication
 from gf_training.card_instance_formal import FormalGameParent
 from gf_training.lineage import _OWNED_LOCKS, run_lock
+from tests.formal_control_support import unadmitted_current_synthetic_formal_shape
 from tests.test_formal_ppo_control import loaded
 
 
@@ -38,6 +39,7 @@ def unadmitted_parent(value, directory, ownership, monkeypatch):
 
 
 def actor_context(tmp_path, monkeypatch):
+    monkeypatch.setattr(module, 'formal_preflight', unadmitted_current_synthetic_formal_shape)
     value = loaded(tmp_path)
     directory = tmp_path / 'UNADMITTED-parent'
     ownership_scope = run_lock(directory, create=True)

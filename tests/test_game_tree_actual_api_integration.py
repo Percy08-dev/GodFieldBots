@@ -45,6 +45,7 @@ from gf_training.card_instance_source_locks import GameSourceCustody
 from gf_training.lineage import _OWNED_LOCKS
 from gf_training.structured_rollout import game_episode_records
 from gf_training.structured_tree_fit import _OwnedTreeFitChild, fit_game_dataset
+from tests.card_instance_tree_fixture_support import require_current_capture_binding
 
 ROOT=Path(__file__).resolve().parents[1]
 
@@ -241,6 +242,8 @@ def test_readonly_opener_requires_same_actual_loan_and_manifest_token_before_con
 def original_records(tmp_path_factory):
     # Frozen accepted structural DTO fixture. It is NEVER formal/runtime evidence.
     fixture=json.loads((ROOT/'native/tests/fixtures/card_instance_final64_originals.json').read_bytes())
+    captured_manifest=json.loads(bytes.fromhex(fixture['files']['manifest.json']))
+    require_current_capture_binding(captured_manifest,subject='final64 originals')
     directory=tmp_path_factory.mktemp('UNADMITTED-dataset-DTOs')
     for name,raw in fixture['files'].items():
         path=directory/name;path.parent.mkdir(exist_ok=True);path.write_bytes(bytes.fromhex(raw))

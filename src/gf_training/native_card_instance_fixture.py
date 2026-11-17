@@ -53,7 +53,7 @@ from gf_training.card_instance_tree_fixture import (
     TreeFixtureSource,
     _FixtureEpisodeBorrow,
 )
-from gf_training.native_backend import binary_identity, load_native
+from gf_training.native_backend import binary_identity, load_native, require_native_defense_priority
 from gf_training.native_execution import NativeExecution
 from gf_training.structured_rollout import CANDIDATE_FIELDS, EVENT_FIELDS, FRAME_FIELDS
 from gf_training.structured_tree_data import _check_output_ancestors, _outside_output
@@ -86,6 +86,7 @@ def _preflight(module: Any, *, diagnostic: bool) -> Json:
         raise ContractError('native binary lacks accepted component fixture-token capability')
     if info.get('card_instance_signature') != signature(128, layout=LAYOUT) or info.get('abi') != 'cp314-gil':
         raise ContractError('native fixture signature/ABI differs')
+    require_native_defense_priority(module)
     checksum(info.get('native_source_sha256'))
     cls = getattr(module, 'CardInstanceFixtureTokens', None)
     if (not callable(cls) or any(not callable(getattr(cls, key, None)) for key in

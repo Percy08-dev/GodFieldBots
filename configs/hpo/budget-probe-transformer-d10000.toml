@@ -8,7 +8,7 @@ encoder = "canonical-python"
 kind = "ppo-hpo"
 base_experiment = "../experiments/hpo-resident-transformer-base.toml"
 model_id = "transformer"
-stage = "ppo-budget-probe-transformer-d10000"
+stage = "ppo-budget-probe-transformer-rules-v2-d10000"
 trial_count = 1
 decision_budget = 10000
 learning_seeds = [17]
@@ -90,10 +90,10 @@ save_budget_bytes = 1073741824
 parent_budget_bytes = 1073741824
 
 [storage]
-parent_root = "../../runs/ppo-budget-probe-v1/transformer/d10000/parents"
-numeric_root = "../../runs/ppo-budget-probe-v1/transformer/d10000/parents"
-optuna_path = "../../runs/ppo-budget-probe-v1/transformer/d10000/study.sqlite3"
-originals_root = "../../runs/ppo-budget-probe-v1/transformer/d10000/originals"
+parent_root = "../../runs/ppo-budget-probe-v2/transformer/d10000/parents"
+numeric_root = "../../runs/ppo-budget-probe-v2/transformer/d10000/parents"
+optuna_path = "../../runs/ppo-budget-probe-v2/transformer/d10000/study.sqlite3"
+originals_root = "../../runs/ppo-budget-probe-v2/transformer/d10000/originals"
 destination_capacity_bytes = 107374182400
 admission_reservation_bytes = 1073741824
 

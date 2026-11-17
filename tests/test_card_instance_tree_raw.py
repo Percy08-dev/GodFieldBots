@@ -17,8 +17,8 @@ from gf_models.card_instance_game_tree_runtime import validate_tree_metadata
 from gf_training.card_instance_journal import read_card_instance_journal
 
 ROOT = Path(__file__).parents[1]
-GOLDEN = json.loads((ROOT/'native/tests/fixtures/card_instance_tree3_raw_metadata.json').read_text())
-CASE = json.loads((ROOT/'native/tests/fixtures/card_instance_tree3_raw_journal.json').read_text())['journals'][0]
+GOLDEN = json.loads((ROOT/'native/tests/fixtures/card_instance_tree3_raw_metadata_rules_v2.json').read_text())
+CASE = json.loads((ROOT/'native/tests/fixtures/card_instance_tree3_raw_journal_rules_v2.json').read_text())['journals'][0]
 
 
 def write_case(directory, rows=None):
@@ -68,7 +68,7 @@ def open_raw(candidate, path, **kwargs):
         kwargs.pop('settings', raw_settings()), kwargs.pop('deadline', time.monotonic()+60), **kwargs)
 
 
-ALL_CASES = [*json.loads((ROOT/'native/tests/fixtures/card_instance_journal6.json').read_text())['journals'], CASE]
+ALL_CASES = [*json.loads((ROOT/'native/tests/fixtures/card_instance_journal6_rules_v2.json').read_text())['journals'], CASE]
 
 
 @pytest.mark.parametrize('case', ALL_CASES, ids=lambda case: case['label'])

@@ -179,7 +179,8 @@ def test_native_mixed_capability_is_additive_and_requires_baseline():
             check(SimpleNamespace(build_info=lambda info=info: info.items()))
     check(SimpleNamespace(build_info=lambda: {'card_instance_refresh': backend.CARD_INSTANCE_REFRESH_BASELINE,
         'card_instance_refresh_opponents': 'mixed16-v1;ordinary1;hpo2',
-        'card_instance_guardian_acted': backend.CARD_INSTANCE_GUARDIAN_ACTED}.items()))
+        'card_instance_guardian_acted': backend.CARD_INSTANCE_GUARDIAN_ACTED,
+        'card_instance_defense_priority': backend.CARD_INSTANCE_DEFENSE_PRIORITY}.items()))
 
 
 @pytest.mark.parametrize('space', [
@@ -234,7 +235,8 @@ def test_ordinary_native_missing_mixed_capability_precedes_runtime_admission(tmp
     loaded = ordinary_config(tmp_path)
     config = replace(loaded.config, preprocessing=replace(loaded.config.preprocessing, backend='rust'))
     module = SimpleNamespace(build_info=lambda: [('card_instance_refresh', CARD_INSTANCE_REFRESH_BASELINE),
-        ('card_instance_guardian_acted', 'card-or-guardian-v1')])
+        ('card_instance_guardian_acted', 'card-or-guardian-v1'),
+        ('card_instance_defense_priority', 'owner-defense-priority-v2')])
     monkeypatch.setattr('gf_training.native_backend.load_native', lambda: module)
     def forbidden(*args, **kwargs):
         pytest.fail('runtime allocation preceded native mixed capability check')
@@ -265,7 +267,8 @@ def test_hpo_native_missing_mixed_capability_precedes_gpu_job_admission(tmp_path
     loaded = campaign_config(raw, origin=tmp_path)
     settings = effective_settings(loaded.config.model, loaded.config.training, {}, layout=LAYOUT)
     module = SimpleNamespace(build_info=lambda: [('card_instance_refresh', CARD_INSTANCE_REFRESH_BASELINE),
-        ('card_instance_guardian_acted', 'card-or-guardian-v1')])
+        ('card_instance_guardian_acted', 'card-or-guardian-v1'),
+        ('card_instance_defense_priority', 'owner-defense-priority-v2')])
     monkeypatch.setattr('gf_training.native_backend.load_native', lambda: module)
     def forbidden(*args, **kwargs):
         pytest.fail('GPU job admission preceded native mixed capability check')

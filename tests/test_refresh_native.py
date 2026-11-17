@@ -25,7 +25,8 @@ def test_native_refresh_accepts_exact_additive_marker():
     from gf_training.native_backend import require_native_refresh_baseline
     require_native_refresh_baseline(SimpleNamespace(build_info=lambda: [
         ('card_instance_refresh', 'baseline1;options1;identity1'),
-        ('card_instance_guardian_acted', 'card-or-guardian-v1')]))
+        ('card_instance_guardian_acted', 'card-or-guardian-v1'),
+        ('card_instance_defense_priority', 'owner-defense-priority-v2')]))
 
 
 @pytest.mark.parametrize('threshold', [12, 2**130])

@@ -29,6 +29,7 @@ from gf_common.card_instance_rules import (
     SequenceAnalysis,
     analyze_sequence,
     card_instance_rules,
+    defense_context,
     defense_kind,
     rule_signature,
 )
@@ -613,12 +614,14 @@ class _Space:
 
 
 class _CardInstanceSpace:
-    def __init__(self, frame: DecisionFrame, config: ActionConfigV3, rules: CardInstanceRules) -> None:
+    def __init__(self, frame: DecisionFrame, config: ActionConfigV3, rules: CardInstanceRules,
+                 bank_view: EventBankView) -> None:
         if frame.layout is not layout_for_contract(config.action_contract):
             raise ContractError("candidate configuration/frame contract mismatch")
         self.frame, self.config, self.rules = frame, config, rules
         self.rule_signature = rule_signature(config.action_contract, rules)
         self.obs, self.raw = frame.observation, frame.raw
+        self.context = defense_context(frame, bank_view)
         self.options = self.raw["action_options"]["action_options"]
         self.cards = tuple(PublicCard(index, card["kind"], card.get("state"), self.raw["catalog"][card["definition_id"]])
                            for index, card in enumerate(self.obs["own"]["cards"]))
@@ -663,7 +666,8 @@ class _CardInstanceSpace:
 
     def analysis(self, family: str, refs: tuple[int, ...]) -> SequenceAnalysis:
         return analyze_sequence(self.cards, refs, family=family, mp=self.obs["own"]["mp"],
-            flash=self.obs["own"]["status"]["flash"], maximum=self.config.max_sequence_length, usable=self.usable)
+            flash=self.obs["own"]["status"]["flash"], maximum=self.config.max_sequence_length, usable=self.usable,
+            rules=self.rules, context=self.context)
 
     def valid(self, family: str, refs: tuple[int, ...]) -> bool:
         if family == "discard":
@@ -1324,7 +1328,7 @@ class PublicCandidateGeneratorV3:
             raise ContractError("generator3 requires the card-instance layout")
         if type(search_rng) is not random.Random or type(numeric_costs) is not NumericCosts:
             raise ContractError("independent Random and closed NumericCosts required")
-        return _run_search(lambda: _CardInstanceSpace(frame, self.config, self.rules), frame, bank_view,
+        return _run_search(lambda: _CardInstanceSpace(frame, self.config, self.rules, bank_view), frame, bank_view,
                            search_rng, numeric_costs, self.clock)
 
     def generate_game(self, frame: DecisionFrame, bank_view: EventBankView,
@@ -1336,7 +1340,7 @@ class PublicCandidateGeneratorV3:
             raise ContractError("game generator frame/bank profile mismatch")
         if type(search_rng) is not random.Random or type(numeric_costs) is not NumericCosts:
             raise ContractError("independent Random and closed NumericCosts required")
-        return _run_search(lambda: _CardInstanceSpace(frame, self.config, self.rules), frame, bank_view,
+        return _run_search(lambda: _CardInstanceSpace(frame, self.config, self.rules, bank_view), frame, bank_view,
                            search_rng, numeric_costs, self.clock, game=True)
 
 

@@ -144,7 +144,7 @@ def test_unreaped_worker_failed_borrow_exit_retains_full_source_sink_and_same_cl
 
 @pytest.mark.parametrize('case_index',[0,-1])
 def test_typed_feature_parity_uses_relevant_local_inputs_and_jointly_counts_them_without_source_permission(case_index):
-    literal = json.loads((Path(__file__).parents[1]/'native/tests/fixtures/card_instance_component_tokens_python.json').read_text())
+    literal = json.loads((Path(__file__).parents[1]/'native/tests/fixtures/card_instance_component_tokens_python_rules_v2.json').read_text())
     case = literal['cases'][case_index]
     metadata = case['metadata']
     model = replace(MODEL,encoder=replace(MODEL.encoder,aggregate_window=metadata['aggregate_window']))

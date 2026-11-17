@@ -61,10 +61,10 @@ def inputs(
     return replace(value, typed_metadata=tuple(obs["typed_action_schema"]))
 
 
-def run(value, *, seed=17, clock=lambda: 0.0, costs=None, **settings):
+def run(value, *, seed=17, clock=lambda: 0.0, costs=None, rules=None, **settings):
     frame, bank, _ = frame_for(value)
     config = ActionConfigV3(action_contract=card_instance_contract(), **settings)
-    result = PublicCandidateGeneratorV3(config, rules=card_instance_rules(), clock=clock).generate(
+    result = PublicCandidateGeneratorV3(config, rules=card_instance_rules() if rules is None else rules, clock=clock).generate(
         frame, bank.view(), random.Random(seed), NumericCosts() if costs is None else costs
     )
     result.table.validate(frame)
@@ -72,7 +72,7 @@ def run(value, *, seed=17, clock=lambda: 0.0, costs=None, **settings):
     return result, actions, frame
 
 
-def facts(spec, refs=None, *, family="offense", mp=50, flash=False, maximum=18, usable=None):
+def facts(spec, refs=None, *, family="offense", mp=50, flash=False, maximum=18, usable=None, **analysis):
     value = inputs(spec, mp=mp, flash=flash)
     cards = tuple(
         PublicCard(index, card["kind"], card.get("state"), value.catalog[card["definition_id"]])
@@ -86,4 +86,5 @@ def facts(spec, refs=None, *, family="offense", mp=50, flash=False, maximum=18, 
         flash=flash,
         maximum=maximum,
         usable=frozenset(range(len(cards))) if usable is None else frozenset(usable),
+        **{"rules": card_instance_rules(), **analysis},
     )

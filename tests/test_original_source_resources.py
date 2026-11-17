@@ -141,7 +141,7 @@ def test_parent_derived_contract_requires_full_original_settings_without_cli_def
     from gf_common.preprocessing import PreparationConfig
     from gf_training.card_instance_final_validation import _original_contract
     root=Path(__file__).parents[1]
-    example=json.loads((root/'native/tests/fixtures/card_instance_models3.json').read_bytes())['cases'][0]
+    example=json.loads((root/'native/tests/fixtures/card_instance_models3_rules_v2.json').read_bytes())['cases'][0]
     parent=primitive_parent(custody,monkeypatch)
     config={'actions':example['actions'],'preprocessing':asdict(PreparationConfig()),'run':{'split':'train'}}
     state={'scope':'UNADMITTED-control-parse-NOT-parent-admission','effective_config':config,

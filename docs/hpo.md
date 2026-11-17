@@ -116,8 +116,13 @@ Transformerでのみ有効で、他のモデルでは既定値に正規化され
 既知の実行失敗: 初回MLP実行では、既定対照と幅192設定の両方が13更新後、
 「土石流」への「エンゼルアーマー＋虹のカーテン」という防御で拒否されました。
 [調査記録](issues/0010-hpo-stopping-armor-response-contract.md)に公開入力・候補判定・
-エラー伝達の問題を記録しています。このcaseの修正は未実施です。
-元の失敗campaignは保持し、正常にpauseしたcampaignとしてresumeしません。
+エラー伝達の問題を記録しています。所有者確認に従うrules-v2で候補判定と虹の先頭制約を
+修正し、対応nativeもこの環境へ反映済みです。[検証記録](verification/defense-priority-owner-adoption.md)
+は単体・native・全体検査とテスト側修正の結果を示し、実際のD10,000完了は未検証です。
+旧署名のデータは互換対象にせず、元の失敗campaignは保持します。新しい保存先
+`runs/ppo-budget-probe-v2`でfresh実行し、旧campaignをresumeしません。
+公開入力で攻撃元を確定できない場合、条件付き特殊効果を持つ防具の併用は完成候補に
+含めません。単独のatomic候補は残します。元エラーが管理エラーに覆われる問題は別件です。
 
 現在の公開CLIには、Model4の試合数による停止、学習途中の定期評価、
 完了した親のDを増やして延長する操作はありません。ここで実行するのは
@@ -155,7 +160,7 @@ Transformerでのみ有効で、他のモデルでは既定値に正規化され
 cd /home/percy/develop/GodFieldBots
 pilot_model=mlp
 pilot_config="configs/hpo/budget-probe-${pilot_model}-d10000.toml"
-pilot_root="$PWD/runs/ppo-budget-probe-v1/$pilot_model/d10000"
+pilot_root="$PWD/runs/ppo-budget-probe-v2/$pilot_model/d10000"
 pilot_campaign="$pilot_root/parents/campaign-01"
 
 .venv/bin/gf-bots hpo validate --config "$pilot_config"
@@ -178,7 +183,7 @@ validateは設定・資源見積り・保存先を検査し、GPU起動や実学
 ```sh
 cd /home/percy/develop/GodFieldBots
 .venv/bin/gf-bots hpo watch \
-  --path "$PWD/runs/ppo-budget-probe-v1/mlp/d10000/parents/campaign-01"
+  --path "$PWD/runs/ppo-budget-probe-v2/mlp/d10000/parents/campaign-01"
 ```
 
 `--progress plain`は進捗をstderrへ行形式で出し、上のコマンドは画面表示と

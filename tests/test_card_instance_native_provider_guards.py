@@ -47,6 +47,7 @@ def identity_for(path):
             'card_instance_contract': native_backend.CARD_INSTANCE_CONTRACT,
             'card_instance_signature': signature(128, layout=CORRECTED_CARD_INSTANCE_LAYOUT),
             'card_instance_guardian_acted': native_backend.CARD_INSTANCE_GUARDIAN_ACTED,
+            'card_instance_defense_priority': native_backend.CARD_INSTANCE_DEFENSE_PRIORITY,
             'card_instance_models': 'mlp,gru,transformer', 'native_source_sha256': 'a' * 64}}
 
 

@@ -295,7 +295,9 @@ def test_explicit_cli_terminal_composition_keeps_pending_owner_across_actual_par
     from gf_training import card_instance_source
     from gf_training.card_instance_formal import FormalGameParent
     from gf_training.lineage import run_lock
+    from tests.formal_control_support import unadmitted_current_synthetic_formal_shape
     from tests.test_formal_ppo_control import loaded
+    monkeypatch.setattr(module, 'formal_preflight', unadmitted_current_synthetic_formal_shape)
     value = loaded(tmp_path)
     parent_path, directory = tmp_path / 'UNADMITTED-CLI-parent', tmp_path / 'validation'
     actual, contexts, publishers, lock_scopes = [], [], [], []

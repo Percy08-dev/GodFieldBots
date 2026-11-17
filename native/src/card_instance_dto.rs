@@ -2191,7 +2191,7 @@ mod full_validation_tests {
     fn card_instance_tree3_full_j6_raw_tokens_and_closed_header_transactions() {
         let (b, c) = owners();
         let all = fixture(
-            include_bytes!("../tests/fixtures/card_instance_tree3_raw_journal.json"),
+            include_bytes!("../tests/fixtures/card_instance_tree3_raw_journal_rules_v2.json"),
             &b,
             &c,
         );
@@ -2345,7 +2345,7 @@ mod full_validation_tests {
     fn corrected_models3_inference4_labels_worker_resources_match_python_nine_configs() {
         let (b, c) = owners();
         let all = fixture(
-            include_bytes!("../tests/fixtures/card_instance_models3.json"),
+            include_bytes!("../tests/fixtures/card_instance_models3_rules_v2.json"),
             &b,
             &c,
         );
@@ -2414,7 +2414,7 @@ mod full_validation_tests {
     fn corrected_inference_and_execution_reject_malformed_mixed_and_resource_metadata() {
         let (b, c) = owners();
         let all = fixture(
-            include_bytes!("../tests/fixtures/card_instance_models3.json"),
+            include_bytes!("../tests/fixtures/card_instance_models3_rules_v2.json"),
             &b,
             &c,
         );
@@ -2492,7 +2492,7 @@ mod full_validation_tests {
     fn full_journal6_transaction_bank_report_and_natural_closure_accept_four_python_records() {
         let (b, c) = owners();
         let all = fixture(
-            include_bytes!("../tests/fixtures/card_instance_journal6.json"),
+            include_bytes!("../tests/fixtures/card_instance_journal6_rules_v2.json"),
             &b,
             &c,
         );
@@ -2529,7 +2529,7 @@ mod full_validation_tests {
     fn full_journal6_rejects_missing_foreign_stale_future_prefix_and_transaction_mutations() {
         let (b, c) = owners();
         let all = fixture(
-            include_bytes!("../tests/fixtures/card_instance_journal6.json"),
+            include_bytes!("../tests/fixtures/card_instance_journal6_rules_v2.json"),
             &b,
             &c,
         );
@@ -2597,7 +2597,7 @@ mod full_validation_tests {
     fn full_journal6_preserves_empty_natural_and_interrupted_pending_outcomes() {
         let (b, c) = owners();
         let all = fixture(
-            include_bytes!("../tests/fixtures/card_instance_journal6.json"),
+            include_bytes!("../tests/fixtures/card_instance_journal6_rules_v2.json"),
             &b,
             &c,
         );
@@ -2654,7 +2654,7 @@ mod full_validation_tests {
     fn full_journal6_python_viewer_win_loss_draw_rewards_are_exact() {
         let (b, c) = owners();
         let all = fixture(
-            include_bytes!("../tests/fixtures/card_instance_journal6_rewards.json"),
+            include_bytes!("../tests/fixtures/card_instance_journal6_rewards_rules_v2.json"),
             &b,
             &c,
         );
@@ -2697,7 +2697,7 @@ mod full_validation_tests {
     fn full_journal6_rejects_wrong_signs_and_fully_rebound_viewer_rewards() {
         let (b, c) = owners();
         let all = fixture(
-            include_bytes!("../tests/fixtures/card_instance_journal6_rewards.json"),
+            include_bytes!("../tests/fixtures/card_instance_journal6_rewards_rules_v2.json"),
             &b,
             &c,
         );

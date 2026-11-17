@@ -460,7 +460,7 @@ mod tests {
         let b = Budget::new(1024 * 1024 * 1024);
         let c = Control::new(crate::budget::monotonic() + 120.).unwrap();
         let doc = json::parse(
-            include_bytes!("../tests/fixtures/card_instance_component_tokens_python.json"),
+            include_bytes!("../tests/fixtures/card_instance_component_tokens_python_rules_v2.json"),
             &b,
             &c,
         )

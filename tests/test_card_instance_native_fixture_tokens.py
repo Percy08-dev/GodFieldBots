@@ -17,7 +17,7 @@ from gf_common.domain import canonical, digest
 from gf_models.sharded_arrays import read_bundle, write_bundle
 
 ROOT = Path(__file__).parents[1]
-ORACLE = ROOT / 'native/tests/fixtures/card_instance_component_tokens_python.json'
+ORACLE = ROOT / 'native/tests/fixtures/card_instance_component_tokens_python_rules_v2.json'
 CASES = json.loads(ORACLE.read_text())['cases']
 
 

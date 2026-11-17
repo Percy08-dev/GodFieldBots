@@ -48,7 +48,8 @@ class _Pending:
 
 
 def _facts(
-    frame: DecisionFrame, generated: GameGeneratedCandidatesV3, actions: ActionConfigV3
+    frame: DecisionFrame, generated: GameGeneratedCandidatesV3, actions: ActionConfigV3,
+    rules: CardInstanceRules,
 ) -> tuple[_Fact, ...]:
     raw, own, table = frame.raw, frame.observation["own"], generated.table
     cards = tuple(
@@ -83,6 +84,7 @@ def _facts(
                 flash=own["status"]["flash"],
                 maximum=actions.max_sequence_length,
                 usable=usable,
+                rules=rules,
             )
             if not analysis.complete:
                 raise ContractError("refresh sequence lacks complete public analysis")
@@ -198,7 +200,7 @@ class RefreshHeuristicPolicy:
                     pending = replace(pending, damage=pending.damage + max(0, event["amount"]))
         samples = [(blocked, origin) for blocked, origin in samples if decision - origin <= 3]
         if choice == "turn_action":
-            facts = _facts(frame, generated, self.actions)
+            facts = _facts(frame, generated, self.actions, self.rules)
             usable = [blocked for blocked, origin in samples if 1 <= decision - origin <= 3]
             count, blocked_sum = len(usable), sum(usable)
             eligible = [

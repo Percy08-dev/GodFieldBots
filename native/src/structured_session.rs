@@ -3194,7 +3194,7 @@ mod card_instance_lifecycle_primitives {
         let b = Budget::new(512 * 1024 * 1024);
         let c = Control::new(crate::budget::monotonic() + 60.).unwrap();
         let model_fixture = json::parse(
-            include_bytes!("../tests/fixtures/card_instance_models3.json"),
+            include_bytes!("../tests/fixtures/card_instance_models3_rules_v2.json"),
             &b,
             &c,
         )
@@ -3670,7 +3670,7 @@ mod card_instance_lifecycle_primitives {
         c: &Control,
     ) {
         let all = json::parse(
-            include_bytes!("../tests/fixtures/card_instance_models3.json"),
+            include_bytes!("../tests/fixtures/card_instance_models3_rules_v2.json"),
             b,
             c,
         )

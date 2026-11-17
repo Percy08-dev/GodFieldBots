@@ -18,11 +18,15 @@ from gf_training.card_instance_formal import FormalGameParent
 from gf_training.card_instance_ppo import _GameOperations, train_formal_card_instance_ppo
 from gf_training.collection import FinalizedCollection
 from gf_training.journal import atomic_json
+from tests.formal_control_support import unadmitted_current_synthetic_formal_shape
 from tests.test_formal_ppo_control import base_identity, loaded
 
 
 def inert_boundaries(monkeypatch, value, *, stop_elapsed=5401., cleanup_seconds=0., fail_cleanup=False, expected_formal=True, cleanup_unix_skew=0.):
+    import gf_training.card_instance_formal as formal
     import gf_training.ppo_run as coordinator
+    if expected_formal:
+        monkeypatch.setattr(formal, 'formal_preflight', unadmitted_current_synthetic_formal_shape)
     anchored_unix, anchored_mono = time.time(), time.monotonic()
     clocks = {'unix': anchored_unix, 'mono': anchored_mono}
     calls = []

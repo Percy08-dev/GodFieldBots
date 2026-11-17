@@ -11,6 +11,7 @@ from gf_common.card_instance_rules import (
     CardInstanceRules,
     PublicCard,
     analyze_sequence,
+    defense_context,
     rule_signature,
 )
 from gf_common.card_instance_runtime import game_binding
@@ -47,6 +48,7 @@ class CardInstanceBaseline:
             raise ContractError("corrected baseline requires the exact game input/config/rules")
         table = generated.table
         frame.bank_view(bank_view)
+        context = defense_context(frame, bank_view)
         table.validate(frame)
         if self.kind == "random":
             index = self.rng.randrange(len(table.kinds))
@@ -84,6 +86,8 @@ class CardInstanceBaseline:
                         flash=own["status"].get("flash", False),
                         maximum=self.actions.max_sequence_length,
                         usable=usable,
+                        rules=self.rules,
+                        context=context,
                     )
                     if not facts.complete:
                         raise ContractError(

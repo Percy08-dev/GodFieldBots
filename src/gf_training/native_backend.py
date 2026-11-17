@@ -22,14 +22,22 @@ CARD_INSTANCE_TREE_RAW = 'journal6;lightgbm3;inference4;codec2'
 CARD_INSTANCE_GROUP_PACK = 'provider1;proof2;plan4'
 CARD_INSTANCE_PACK_CHECKSUM = 'pack-checksum-v1;custody2'
 CARD_INSTANCE_GUARDIAN_ACTED = 'card-or-guardian-v1'
+CARD_INSTANCE_DEFENSE_PRIORITY = 'owner-defense-priority-v2'
 CARD_INSTANCE_REFRESH_BASELINE = 'baseline1;options1;identity1'
 CARD_INSTANCE_REFRESH_OPPONENTS = 'mixed16-v1;ordinary1;hpo2'
+
+
+def require_native_defense_priority(native: Any) -> None:
+    """Require current rules before any corrected native input admission."""
+    if dict(native.build_info()).get('card_instance_defense_priority') != CARD_INSTANCE_DEFENSE_PRIORITY:
+        raise ContractError('native defense priority rules-v2 capability unavailable; no fallback')
 
 
 def require_native_guardian_acted(native: Any) -> None:
     """Require corrected closed-union validation before active native work."""
     if dict(native.build_info()).get('card_instance_guardian_acted') != CARD_INSTANCE_GUARDIAN_ACTED:
         raise ContractError('native GuardianActed union capability unavailable; no fallback')
+    require_native_defense_priority(native)
 
 
 def require_native_refresh_baseline(native: Any = None) -> None:

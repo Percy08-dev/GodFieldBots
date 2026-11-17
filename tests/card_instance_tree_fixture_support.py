@@ -3,9 +3,12 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import json
 import time
 from dataclasses import asdict, replace
 from pathlib import Path
+
+import pytest
 
 from gf_common import card_instance_fixture as fixture
 from gf_common.candidate_columns import encode_candidate_columns_v2
@@ -16,6 +19,19 @@ from gf_common.structured_layout import CORRECTED_CARD_INSTANCE_LAYOUT as LAYOUT
 from gf_common.structured_tokens import signature
 from gf_common.structured_wire import frame_dict
 from tests.card_instance_action_support import inputs
+
+OLD_CAPTURE_RULE_SIGNATURE = '3f55f044225fb20c63d683145cdceb397c36f0b7161c7b16793f72210db3e86d'
+
+
+def require_current_capture_binding(binding, *, subject):
+    """Only the recognized retired identity makes a captured input unavailable."""
+    if binding['rule_signature'] == OLD_CAPTURE_RULE_SIGNATURE:
+        pytest.skip('captured rules-v1 '+subject+' unsupported; current-v2 '+subject+' required')
+
+
+def require_current_external_pair(path):
+    request = json.loads((path/'request.json').read_text())
+    require_current_capture_binding(request['input_binding'], subject='Tree pair')
 
 
 def write(path, value):

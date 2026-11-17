@@ -672,7 +672,7 @@ mod tests {
     fn card_instance_tree3_exact_execution_and_array_thresholds_without_booster() {
         let (b, c) = owners();
         let oracle = json::parse(
-            include_bytes!("../tests/fixtures/card_instance_tree3_raw_metadata.json"),
+            include_bytes!("../tests/fixtures/card_instance_tree3_raw_metadata_rules_v2.json"),
             &b,
             &c,
         )
@@ -709,7 +709,7 @@ mod tests {
     fn card_instance_tree3_layout_python_full_recipe_and_window_hashes() {
         let (b, c) = owners();
         let references = json::parse(
-            include_bytes!("../tests/fixtures/card_instance_tree3_layout_python.json"),
+            include_bytes!("../tests/fixtures/card_instance_tree3_layout_python_rules_v2.json"),
             &b,
             &c,
         )
@@ -734,7 +734,7 @@ mod tests {
         // actual Source or fitting permission is represented by this mutation.
         let (b, c) = owners();
         let oracle = json::parse(
-            include_bytes!("../tests/fixtures/card_instance_tree3_raw_metadata.json"),
+            include_bytes!("../tests/fixtures/card_instance_tree3_raw_metadata_rules_v2.json"),
             &b,
             &c,
         )
@@ -803,7 +803,7 @@ mod tests {
     fn card_instance_tree3_metadata_python_settings_label_and_mutations() {
         let (b, c) = owners();
         let oracle = json::parse(
-            include_bytes!("../tests/fixtures/card_instance_tree3_raw_metadata.json"),
+            include_bytes!("../tests/fixtures/card_instance_tree3_raw_metadata_rules_v2.json"),
             &b,
             &c,
         )

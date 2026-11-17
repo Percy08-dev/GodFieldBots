@@ -8,6 +8,10 @@ search DTO dependency, rejection probing, future draw or hidden-state inference.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from gf_common.structured import DecisionFrame, EventBankView
 
 from gf_common.card_instance import (
     GENERATOR_VERSION,
@@ -16,7 +20,7 @@ from gf_common.card_instance import (
 )
 from gf_common.domain import ContractError, Json, closed, digest, integer
 
-OWNER_CONFIRMATION_SHA256 = "3f3090f521041293bcb6de2a3cbac7e74ffc635b4acc0f7f02c957bbcf0e44ee"
+OWNER_CONFIRMATION_SHA256 = "bdd1792cde50eae2338b5f068436e40ca87cfbdf0c276ad096651bc0ff27375c"
 UTILITY_IDS = frozenset(
     (
         "smile-dew",
@@ -51,8 +55,8 @@ SATURATION = 2**63 - 1
 
 @dataclass(frozen=True)
 class CardInstanceRules:
-    version: str = "1"
-    profile_id: str = "owner-card-instance-candidates-20261103-v1"
+    version: str = "2"
+    profile_id: str = "owner-card-instance-candidates-20261117-v2"
     owner_confirmation_sha256: str = OWNER_CONFIRMATION_SHA256
 
     def __post_init__(self) -> None:
@@ -82,6 +86,56 @@ def rule_signature(contract: CardInstanceContract, rules: CardInstanceRules) -> 
             "rules": asdict(rules),
         }
     )
+
+
+@dataclass(frozen=True)
+class DefenseContext:
+    incoming: str = "unknown"
+
+    def __post_init__(self) -> None:
+        if self.incoming not in ("unknown", "miracle", "weapon"):
+            raise ContractError("closed public defense context required")
+
+
+UNKNOWN_DEFENSE_CONTEXT = DefenseContext()
+
+
+def defense_context(frame: DecisionFrame, bank_view: EventBankView) -> DefenseContext:
+    """Recognize only one complete direct cause in the verified own prefix.
+
+    No missing miracle event proves a weapon. Weapon classification requires a
+    matching definition already in this participant's perceived own catalog.
+    Unsupported events anywhere in the current action block leave it unknown.
+    """
+    view = frame.bank_view(bank_view)
+    obs = frame.observation
+    unknown = DefenseContext()
+    if obs["required_choice"] != "defense" or obs["own"]["status"]["fog"]:
+        return unknown
+    events = view.events()
+    start = next((i for i in range(len(events) - 1, -1, -1)
+                  if events[i]["type"] == "action_accepted"), None)
+    if start is None:
+        return unknown
+    block = events[start:]
+    if len(block) not in (3, 4) or block[0]["player"] != 3 - frame.actor:
+        return unknown
+    use, attack = block[1], block[-1]
+    if (use["type"] != "artifact_used" or use["player"] != 3 - frame.actor
+            or attack["type"] != "attack_declared" or attack["attacker"] != 3 - frame.actor
+            or attack["target"] != frame.actor):
+        return unknown
+    if len(block) == 4:
+        miracle = block[2]
+        if (miracle["type"] == "miracle_used" and miracle["player"] == use["player"]
+                and miracle["definition_id"] == use["definition_id"]):
+            return DefenseContext("miracle")
+        return unknown
+    own_ids = {row["definition_id"] for row in obs["own"]["cards"] if row["kind"] == "artifact"}
+    definition = frame.raw["catalog"].get(use["definition_id"]) if use["definition_id"] in own_ids else None
+    if definition is not None and "weapon" in definition["classification"]["use_roles"]:
+        return DefenseContext("weapon")
+    return unknown
 
 
 @dataclass(frozen=True)
@@ -127,6 +181,7 @@ class SequenceAnalysis:
     attribute: str = "neutral"
     effects: tuple[str, ...] = ()
     opponent_only: bool = False
+    context_unknown: bool = False
 
 
 def _attribute(left: str | None, right: str) -> str:
@@ -163,6 +218,8 @@ def analyze_sequence(
     flash: bool,
     maximum: int,
     usable: frozenset[int],
+    rules: CardInstanceRules,
+    context: DefenseContext = UNKNOWN_DEFENSE_CONTEXT,
 ) -> SequenceAnalysis:
     """Separate extendable prefixes from completed affordable public proposals.
 
@@ -172,6 +229,9 @@ def analyze_sequence(
     """
     integer(mp, 0, 2**32 - 1)
     integer(maximum, 1, 128)
+    if type(rules) is not CardInstanceRules or type(context) is not DefenseContext:
+        raise ContractError("explicit rules and public defense context required")
+    uncertain = False
     if type(flash) is not bool or family not in ("offense", "defense", "utility", "status"):
         raise ContractError("closed sequence family and public Flash state required")
     by_slot = {card.slot: card for card in cards}
@@ -207,6 +267,20 @@ def analyze_sequence(
             return SequenceAnalysis()
     elif family == "defense":
         kinds = [defense_kind(card) for card in effective]
+        if any(card.ability == "filterAtkElement" and index != 0
+               for index, card in enumerate(selected)):
+            return SequenceAnalysis()
+        for index, card in enumerate(effective):
+            if card.definition.get("defense", 0) > 0 and card.ability in (
+                "blockMiracle", "bounceMiracle", "reflectMiracle"
+            ):
+                if context.incoming == "miracle":
+                    kinds[index] = "exclusive"
+                elif context.incoming == "weapon":
+                    kinds[index] = "ordinary"
+                elif len(effective) > 1:
+                    kinds[index] = "ordinary"
+                    uncertain = True
         if any(kind is None for kind in kinds) or "exclusive" in kinds and len(kinds) != 1:
             return SequenceAnalysis()
     else:
@@ -284,7 +358,7 @@ def analyze_sequence(
     )
     return SequenceAnalysis(
         affordable or salvage,
-        affordable,
+        affordable and not uncertain,
         payment,
         spent,
         tuple(card.slot for card in effective),
@@ -295,4 +369,5 @@ def analyze_sequence(
         attribute or "neutral",
         tuple(sorted({card.ability for card in effective if card.ability})),
         bool(mirages) and not any(card.ability == "danger" for card in effective),
+        uncertain,
     )

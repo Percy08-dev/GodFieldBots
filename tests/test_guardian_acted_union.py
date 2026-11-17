@@ -93,9 +93,10 @@ def test_current_preflights_refuse_old_validator_before_identity_or_ownership(mo
             native_backend.require_native_refresh_baseline(module)
 
 
-def test_current_refresh_preflight_accepts_exact_both_markers():
+def test_current_refresh_preflight_accepts_exact_current_markers():
     module = SimpleNamespace(build_info=lambda: {'card_instance_refresh':
-        native_backend.CARD_INSTANCE_REFRESH_BASELINE, 'card_instance_guardian_acted': CAPABILITY}.items())
+        native_backend.CARD_INSTANCE_REFRESH_BASELINE, 'card_instance_guardian_acted': CAPABILITY,
+        'card_instance_defense_priority': native_backend.CARD_INSTANCE_DEFENSE_PRIORITY}.items())
     native_backend.require_native_refresh_baseline(module)
 
 

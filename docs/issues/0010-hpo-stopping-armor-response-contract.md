@@ -1,8 +1,8 @@
 # HPO stopping armor response contract
 
-- Status: Open. A rejected defense selection and masking of its diagnostic are
-  identified. Production behavior is unchanged; conditional defense semantics
-  need public-contract clarification before a legality predicate is adopted.
+- Status: Defense predicate corrected under ADR0048; diagnostic masking remains
+  open as a separate problem. Current rules-v2 rejects old identities without
+  compatibility readers. Failed parents remain unchanged and ineligible.
 - Date: 2026-11-17.
 - Bots revision: `812a88a42036325c19e071ad75713539ab4bcae0`.
 - Simulator revision: `91d5926a7572db327eaea3751e7c24f428120996`.
@@ -79,7 +79,12 @@ The matching response is HTTP422, `INVALID_ACTION`,
 no natural outcome, and remains incomplete. No retry/probe of alternative
 responses was performed during this investigation.
 
-## Bots predicate reproduction
+## Historical Bots predicate reproduction
+
+This section records the pre-adoption behavior at812a88a. The current-v2
+regressions in [test_defense_priority.py](../../tests/test_defense_priority.py)
+instead verify that the recorded public miracle case excludes this combination
+and that numerical use obeys Rainbow-first order. No legacy analyzer is retained.
 
 In [card_instance_rules.py](../../src/gf_common/card_instance_rules.py),
 `defense_kind` marks `blockMiracle` as exclusive only when its numeric defense is
@@ -115,6 +120,17 @@ Simulator legality or a completed training run.
 
 ## Public contract clarification
 
+Owner resolution on2026-11-17: the explicit
+[defense-priority clarification](../contracts/owner-20261117-defense-priority.md)
+confirms that Angel Armor stops the incoming Mudflow miracle before numerical
+defense, prioritized stop/reflect/deflect cannot combine with another defense,
+and Rainbow Curtain must be first when used with numerical defense. This
+supersedes the need for another owner clarification below. Simulator revision
+and normative hashes remain unchanged; [ADR0048](../adr/0048-owner-confirmed-defense-priority.md)
+governs the separate versioned Bots adoption. The historical reasoning below
+explains why a rejection-derived predicate was not introduced before that
+confirmation.
+
 The current normative documents do not unambiguously specify the dual role of
 positive-defense stopping armor:
 
@@ -134,7 +150,8 @@ miracle to Stop/exclusive and rejects more than one effective defense card.
 implementation evidence; neither this handler nor the rejection authorizes a
 new policy predicate.
 
-A separate Simulator/public-contract task should specify:
+The historical clarification request, subsequently resolved by the owner above,
+asked the following:
 
 1. Whether positive-defense BlockMiracle armor must use an exclusive stop mode
    against miracles, or may instead use a numeric-defense mode.
@@ -202,7 +219,9 @@ inspection and the DB hashes match their pending manifests. PASS: pure Bots
 candidate-admission reproduction. Independent read-only code review confirms
 the masking path and the need to clarify conditional positive-defense semantics.
 
-No training, Simulator gameplay, alternate-action rejection probing, GPU work,
-or production repair was performed. Existing failed records and budgets remain
-unchanged. This investigation does not qualify the parents or demonstrate that
-a proposed repair succeeds.
+The original investigation performed no training, Simulator gameplay,
+alternate-action rejection probing, GPU work or production repair. Its failed
+records and budgets remain unchanged. The later predicate repair is accepted
+under [ADR0048](../adr/0048-owner-confirmed-defense-priority.md) and its
+[verification](../verification/defense-priority-owner-adoption.md); that bounded
+evidence does not qualify these parents or claim a completed real HPO run.

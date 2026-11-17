@@ -16,6 +16,7 @@ from gf_common.preprocessing import PreparationConfig, preparation_config
 from gf_training.native_backend import card_instance_reader_settings
 from gf_training.native_card_instance import _NativeGameInputs
 from gf_training.native_structured_session import _payload_views
+from tests.card_instance_tree_fixture_support import require_current_capture_binding
 
 ROOT = Path(__file__).resolve().parents[1]
 ORIGINAL = ROOT / 'runs/card-instance-v2-91d5926/ppo-acceptance/mlp-cpu-resume-1'
@@ -34,6 +35,26 @@ def test_public_corrected_reader_rejects_class_without_real_capability():
         CardInstanceNativeSession=type('DiagnosticClassOnly', (), {}))
     with pytest.raises(ContractError, match='capability'):
         card_instance_reader_settings(PreparationConfig(backend='rust', reader='participant-structured-v2'), native)
+
+
+def test_current_reader_refuses_otherwise_valid_pre_defense_native(monkeypatch):
+    from gf_common.structured_layout import CORRECTED_CARD_INSTANCE_LAYOUT
+    from gf_common.structured_tokens import signature
+    from gf_training import native_backend
+
+    info = {'card_instance_contract': native_backend.CARD_INSTANCE_CONTRACT,
+        'card_instance_signature': signature(128, layout=CORRECTED_CARD_INSTANCE_LAYOUT),
+        'card_instance_models': 'mlp,gru,transformer', 'native_source_sha256': 'a' * 64,
+        'card_instance_guardian_acted': native_backend.CARD_INSTANCE_GUARDIAN_ACTED}
+    methods = ('control_summary', 'original_config_inputs', 'authorize', 'export_cohort',
+        'retire_payload', 'bind_numeric', 'begin_update', 'prepare_commit', 'finalize_read',
+        'recheck', 'close', 'used_bytes', 'peak_bytes', 'cancel_handle', 'control_reserved_bytes')
+    session = type('OldSession', (), dict.fromkeys(methods, lambda: None))
+    module = SimpleNamespace(build_info=lambda: info, CardInstanceNativeSession=session,
+        CancelHandle=type('Cancel', (), {'cancel': lambda: None}))
+    monkeypatch.setattr(native_backend, 'binary_identity', lambda _: {'build': info, 'gil_disabled': False})
+    with pytest.raises(ContractError, match='defense.*capability'):
+        card_instance_reader_settings(PreparationConfig(backend='rust', reader='participant-structured-v2'), module)
 
 
 def test_payload_context_cannot_relabel_recorded_export_as_live():
@@ -102,6 +123,7 @@ def original_configuration():
     if not ORIGINAL.is_dir():
         pytest.fail('approved genuine originals absent; opt-in check cannot count as PASS')
     state = json.loads((ORIGINAL / 'run.json').read_text())
+    require_current_capture_binding(state, subject='MLP parent originals')
     settings = replace(preparation_config(state['effective_config']['preprocessing']), backend='rust')
     actions = action_config_v3(state['effective_config']['actions'])
     plan = {'schema_version': 3, 'mode': 'historical_parent',

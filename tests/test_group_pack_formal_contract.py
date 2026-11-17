@@ -142,10 +142,11 @@ def test_cross_variant_schema_and_storage_refuse(schema, variant):
         validate_formal_state(state)
 
 
-def test_packed_formal_preflight_uses_same_literal_and_rejects_short_budget():
+def test_packed_formal_preflight_rejects_retired_binding_and_short_budget():
     from gf_training.card_instance_formal import formal_preflight
     from tests.test_formal_ppo_contract import loaded_for
-    assert formal_preflight(loaded_for(packed_config())) == load_recipe()
+    with pytest.raises(ContractError, match='^formal planned input/static semantics differ from literal$'):
+        formal_preflight(loaded_for(packed_config()))
     changed = packed_config()
     changed['training']['max_updates'] = 2
     with pytest.raises(ContractError):
@@ -167,7 +168,10 @@ def test_native_packed_formal_requires_both_exact_markers():
         require_native_formal_controls(SimpleNamespace(build_info=lambda: info), packed=True)
 
 
-def test_real_control_lock_writes_variant2_before_any_generation_but_grants_no_source(tmp_path):
+def test_real_control_lock_writes_variant2_before_any_generation_but_grants_no_source(tmp_path, monkeypatch):
+    import gf_training.card_instance_formal as formal
+    from tests.formal_control_support import unadmitted_current_synthetic_formal_shape
+    monkeypatch.setattr(formal, 'formal_preflight', unadmitted_current_synthetic_formal_shape)
     import json
     import time
     from dataclasses import asdict

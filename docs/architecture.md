@@ -2,6 +2,19 @@
 
 ## Status and scope
 
+[ADR0048](adr/0048-owner-confirmed-defense-priority.md) implements the owner's
+defense-priority and Rainbow-first correction under both final independent
+reviews READY. Shared public response context and current rules-v2 keep the
+generator/layout unchanged; Tree feature signatures change with the rule binding.
+Under the owner's explicit scope, old signatures reject without compatibility
+readers or data rewriting. Ambiguous public causes remain unknown and do not
+certify conditional combinations. Native source-matched activation, package/
+optional-free checks, Rust174PASS/13IGNORE and documented Python whole-plus-delta
+evidence pass bounded acceptance in [the verification record](verification/defense-priority-owner-adoption.md).
+Captured current formal/final64 acceptance and real learning remain unverified;
+the original issue0010 failed parents stay unchanged and ineligible. Its separate
+error-masking problem remains open; no HPO/quality or new whole-green claim follows.
+
 [ADR0047](adr/0047-collection-cpu-investigation.md) accepts the user-approved
 [bounded collection CPU/transfer investigation](design/collection-cpu-optimization.md).
 The written preimplementation design is READY. Experimental P/T/H tooling passes

@@ -211,26 +211,26 @@ def test_summary_uses_same_role_payment_facts_and_keeps_physical_remaining_slots
     from gf_common.diverse_actions import _CardInstanceSpace, _Proposal
 
     config = ActionConfigV3(action_contract=card_instance_contract())
-    frame, _, _ = frame_for(inputs([("fireball", "learned"), ("spiritual-staff", None)], mp=0))
-    space = _CardInstanceSpace(frame, config, card_instance_rules())
+    frame, bank, _ = frame_for(inputs([("fireball", "learned"), ("spiritual-staff", None)], mp=0))
+    space = _CardInstanceSpace(frame, config, card_instance_rules(), bank.view())
     analysis = space.analysis("offense", (0, 1))
     summary = space.summary(_Proposal("play_sequence", "opponent", (0, 1)))
     assert summary.attack == analysis.attack == 2
     assert summary.resources[0] == analysis.spent_mp == 0
     assert summary.effects == analysis.effects and "cutCost" not in summary.effects
     assert summary.remaining == (0,)  # Learned miracle retains its physical slot.
-    full_frame, _, _ = frame_for(inputs([("fireball", "learned")] * 18, mp=50, can_pray=True))
-    full = _CardInstanceSpace(full_frame, config, card_instance_rules())
+    full_frame, full_bank, _ = frame_for(inputs([("fireball", "learned")] * 18, mp=50, can_pray=True))
+    full = _CardInstanceSpace(full_frame, config, card_instance_rules(), full_bank.view())
     assert full.summary(_Proposal("play_sequence", "opponent", (0,))).refresh == 0
     assert full.summary(_Proposal("pray")).refresh == 1
     assert full.summary(_Proposal("pray")).remaining == tuple(range(18))  # Random victim unknown.
     assert full.summary(_Proposal("discard", refs=(0, 1))).refresh == 0
     assert full.summary(_Proposal("sacrifice", refs=(0, 1))).refresh == 2
     assert full.summary(_Proposal("sacrifice", refs=(0, 1))).remaining == tuple(range(2, 18))
-    sell_frame, _, _ = frame_for(
+    sell_frame, sell_bank, _ = frame_for(
         inputs([("sell", None), ("steel-armor", None), ("fireball", "learned")])
     )
-    sell = _CardInstanceSpace(sell_frame, config, card_instance_rules())
+    sell = _CardInstanceSpace(sell_frame, config, card_instance_rules(), sell_bank.view())
     assert sell.summary(_Proposal("sell", "self", (0, 1))).remaining == (1, 2)
     assert sell.summary(_Proposal("sell", "opponent", (0, 1))).remaining == (2,)
 
@@ -390,7 +390,7 @@ def test_long_band_budgets_deadlines_saturation_and_search_rng_separation():
 
     frame, bank, _ = frame_for(value)
     config = ActionConfigV3(action_contract=card_instance_contract(), count_states=1)
-    space = _CardInstanceSpace(frame, config, card_instance_rules())
+    space = _CardInstanceSpace(frame, config, card_instance_rules(), bank.view())
     huge = NumericCosts(
         context_width=8,
         card_width=16,

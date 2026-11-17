@@ -13,12 +13,81 @@ from gf_common.domain import ContractError
 from gf_common.preprocessing import PreparationConfig
 from gf_training.card_instance_tree_fixture import TreeFixtureSource
 from gf_training.native_card_instance_fixture import native_fixture_diagnostics
+from tests.card_instance_tree_fixture_support import (
+    OLD_CAPTURE_RULE_SIGNATURE as OLD_PAIR_RULE_SIGNATURE,
+)
+from tests.card_instance_tree_fixture_support import (
+    require_current_capture_binding,
+)
+from tests.card_instance_tree_fixture_support import (
+    require_current_external_pair as _require_current_external_pair,
+)
 from tests.test_card_instance_tree_fixture import copied
 
 pytest_plugins = ('tests.test_card_instance_tree_fixture',)
 
 SETTINGS = PreparationConfig(reader='participant-structured-v2', memory_budget_mib=2048)
 LIMIT = 2*1024**3
+DURABLE_PAIR = Path('/home/percy/develop/GodFieldBots/runs/card-instance-v2-91d5926/tree-component-acceptance/fixture-default-1/fit-default-1')
+
+
+@pytest.mark.parametrize('marker', [None, '0'*64, '081fa1e0b6c186c563c949e65fbce19b77f07db505516330d3ac377b1b02e2d6'])
+def test_external_pair_gate_does_not_skip_unknown_or_current_rule_identity(tmp_path, marker):
+    (tmp_path/'request.json').write_text(json.dumps({'input_binding': {'rule_signature': marker}}))
+    _require_current_external_pair(tmp_path)
+
+
+def test_external_pair_gate_does_not_skip_malformed_request(tmp_path):
+    (tmp_path/'request.json').write_text('{}')
+    with pytest.raises(KeyError):
+        _require_current_external_pair(tmp_path)
+
+
+def test_capture_gate_checks_only_current_outer_binding_with_old_nested_identity():
+    binding = {'rule_signature': '081fa1e0b6c186c563c949e65fbce19b77f07db505516330d3ac377b1b02e2d6',
+        'nested': {'rule_signature': OLD_PAIR_RULE_SIGNATURE}}
+    require_current_capture_binding(binding, subject='mixed diagnostic')
+
+
+@pytest.mark.parametrize('binding', [{}, None, []])
+def test_capture_gate_does_not_convert_missing_or_malformed_binding_into_skip(binding):
+    with pytest.raises((KeyError, TypeError)):
+        require_current_capture_binding(binding, subject='malformed diagnostic')
+
+
+def test_capture_gate_recognizes_only_the_declared_old_root():
+    with pytest.raises(pytest.skip.Exception, match='captured rules-v1.*current-v2'):
+        require_current_capture_binding({'rule_signature': OLD_PAIR_RULE_SIGNATURE}, subject='diagnostic')
+
+
+def test_captured_old_tree_pair_rejects_before_model_or_fit_input_reads(monkeypatch):
+    import gf_models.structured_tree_artifacts as artifacts
+    import gf_models.structured_tree_pairing as pairing
+    from gf_models.structured_sealed import SealedScan
+
+    if not DURABLE_PAIR.is_dir():
+        pytest.skip('captured external Tree pair absent; rejection check requires original bytes')
+    request = json.loads((DURABLE_PAIR/'request.json').read_text())
+    assert request['input_binding']['rule_signature'] == OLD_PAIR_RULE_SIGNATURE
+    reached = []
+
+    def forbidden(*args, **kwargs):
+        reached.append('model or fit input')
+        pytest.fail('old binding reached model or fit input work')
+
+    original_file = SealedScan.file
+
+    def metadata_only(self, path, *args, **kwargs):
+        if path.name == 'model.txt' or path.parent.name == 'inputs':
+            forbidden()
+        return original_file(self, path, *args, **kwargs)
+
+    monkeypatch.setattr(SealedScan, 'file', metadata_only)
+    monkeypatch.setattr(artifacts, 'inspect_artifact', forbidden)
+    monkeypatch.setattr(pairing, 'inspect_fit_inputs', forbidden)
+    with pytest.raises(ContractError, match='^Tree3 exact corrected component input binding required$'):
+        pairing.inspect_training_v3(DURABLE_PAIR, max_owned_bytes=LIMIT, deadline=time.monotonic()+30)
+    assert reached == []
 
 
 @pytest.fixture
@@ -136,6 +205,46 @@ def test_default_fixture_capability_refuses_before_source_or_output_allocation(t
     assert not (tmp_path/'must-not-exist').exists()
 
 
+@pytest.mark.parametrize('diagnostic', [False, True])
+@pytest.mark.parametrize('marker', [None, 'owner-defense-priority-v1'])
+def test_fixture_defense_gate_precedes_identity_source_borrow_and_constructor(tmp_path, monkeypatch, diagnostic, marker):
+    import gf_training.native_card_instance_fixture as adapter
+    from gf_common.structured_layout import CORRECTED_CARD_INSTANCE_LAYOUT
+    from gf_common.structured_tokens import signature
+
+    info = {'card_instance_signature': signature(128, layout=CORRECTED_CARD_INSTANCE_LAYOUT),
+        'abi': 'cp314-gil', 'native_source_sha256': 'a'*64}
+    if not diagnostic:
+        info['card_instance_fixture_tokens'] = adapter.FIXTURE_CONTRACT
+    if marker is not None:
+        info['card_instance_defense_priority'] = marker
+    reached = []
+
+    def forbidden(name):
+        def fail(*args, **kwargs):
+            reached.append(name)
+            pytest.fail(name + ' preceded defense capability admission')
+        return fail
+
+    methods = ('export_tokens', 'used_bytes', 'peak_bytes', 'control_reserved_bytes', 'cancel_handle', 'close')
+    cls = type('UnadmittedFixture', (), {**dict.fromkeys(methods, lambda: None),
+        '__init__': forbidden('native constructor')})
+    module = SimpleNamespace(build_info=lambda: info, CardInstanceFixtureTokens=cls,
+        CancelHandle=type('Cancel', (), {'cancel': lambda: None}))
+    monkeypatch.setattr(adapter, 'load_native', lambda: module)
+    monkeypatch.setattr(adapter, 'binary_identity', forbidden('binary identity'))
+    monkeypatch.setattr(TreeFixtureSource, 'guard', forbidden('Source guard'))
+    monkeypatch.setattr(TreeFixtureSource, 'borrow_diagnostic_episode', forbidden('Source borrow'))
+    monkeypatch.setattr(adapter, '_NativeEpisode', forbidden('adapter constructor'))
+    owner = source(tmp_path/'missing/manifest.json', 'a'*64)
+    output = tmp_path/'must-not-exist'
+    with pytest.raises(ContractError, match='defense priority rules-v2 capability'):
+        native_fixture_diagnostics(owner, output, max_owned_bytes=LIMIT,
+            deadline=time.monotonic()+30, diagnostic_native=module if diagnostic else None)
+    assert reached == []
+    assert not output.exists()
+
+
 @pytest.mark.parametrize('failure', ['scratch','caller','cancel'])
 def test_native_diagnostic_failures_cannot_complete_source(originals, native, tmp_path, monkeypatch, failure):
     import gf_training.native_card_instance_fixture as adapter
@@ -162,6 +271,8 @@ def test_all_nine_cohorts_raw_persistence_and_2810_features_keep_same_source_aut
     path = root/'manifest.json'
     if not path.is_file():
         pytest.fail('approved durable originals absent')
+    declaration = json.loads((root/'declaration.json').read_text())
+    require_current_capture_binding(declaration['input_binding'], subject='fixture originals')
     from gf_models.arrays import sha256
     settings = PreparationConfig(reader='participant-structured-v2')
     with TreeFixtureSource(path, sha256(path), settings, max_owned_bytes=8*1024**3,
@@ -228,7 +339,7 @@ def test_unadmitted_storage_decoder_rejects_malformed_arrays(mutation):
     import numpy as np
 
     from gf_training.native_card_instance_fixture import _arrays, _semantics, _tokens
-    literal = json.loads((Path(__file__).parents[1]/'native/tests/fixtures/card_instance_component_tokens_python.json').read_text())['cases'][0]
+    literal = json.loads((Path(__file__).parents[1]/'native/tests/fixtures/card_instance_component_tokens_python_rules_v2.json').read_text())['cases'][0]
     metadata = copy.deepcopy(literal['metadata'])
     groups = tuple(tuple(np.frombuffer(bytes.fromhex(value),dtype=dtype) for value in literal['banks_hex'][dtype])
         for dtype in ('uint8','int64','float32'))
@@ -270,6 +381,7 @@ def test_all_nine_cohorts_cpu_predictions_match_healthy_default_pair(native, tmp
     from gf_models.structured_tree_pairing import TrainingBinding, inspect_training_v3
     root = Path('/home/percy/develop/GodFieldBots/runs/card-instance-v2-91d5926/tree-component-acceptance/fixture-default-1')
     fit = root/'fit-default-1'
+    _require_current_external_pair(fit)
     expected = {'artifact/inference.json':'cffe4fb62c5f3f58300a33a9866ad50ce0614787ee216d63848e7273bba843f1',
         'artifact/model.txt':'19bbc4bdc1e00ddca169b812e4f01fa68f3d0656059abfea7a6b6bb459cd685c',
         'training.json':'b8962cfae1db47a488919e7fa14500ac5c849c1ac10557a2920ab549569f6b50'}
@@ -512,9 +624,10 @@ def healthy_adapter_pairs(tmp_path_factory):
         provenance_for_request,
     )
     pytest.importorskip('lightgbm')
-    original = ROOT_PAIR = Path('/home/percy/develop/GodFieldBots/runs/card-instance-v2-91d5926/tree-component-acceptance/fixture-default-1/fit-default-1')
+    original = ROOT_PAIR = DURABLE_PAIR
     if not original.is_dir():
         pytest.skip('durable healthy component pair unavailable; no synthetic fit substitute')
+    _require_current_external_pair(original)
     def hash_file(path):
         return hashlib.sha256(path.read_bytes()).hexdigest()
     def write(path,value):
@@ -681,7 +794,8 @@ def test_facade_health_is_readonly_snapshot_with_actual_process_returncode():
 
 def test_real_component_scorer_close_records_actual_process_returncode():
     from gf_training.native_card_instance_fixture import _FacadeLoop
-    from tests.test_card_instance_tree_scoring_worker import worker
+    from tests.test_card_instance_tree_scoring_worker import PAIR, worker
+    _require_current_external_pair(PAIR)
     with _FacadeLoop() as loop:
         loop.worker = worker()
         loop.run(loop.worker.initialize())

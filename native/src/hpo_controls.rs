@@ -2828,7 +2828,7 @@ mod tests {
         let b = Budget::new(128 << 20);
         let c = Control::new(crate::budget::monotonic() + 30.).unwrap();
         let all = json::parse(
-            include_bytes!("../tests/fixtures/hpo_metadata5.json"),
+            include_bytes!("../tests/fixtures/hpo_metadata5_rules_v2.json"),
             &b,
             &c,
         )
@@ -2892,7 +2892,7 @@ mod tests {
         let b = Budget::new(128 << 20);
         let c = Control::new(crate::budget::monotonic() + 30.).unwrap();
         let all = json::parse(
-            include_bytes!("../tests/fixtures/hpo_metadata5.json"),
+            include_bytes!("../tests/fixtures/hpo_metadata5_rules_v2.json"),
             &b,
             &c,
         )
@@ -2951,7 +2951,7 @@ mod tests {
     fn resident_run5_spec3_is_explicit_and_preserves_old_native_contract() {
         let b = Budget::new(128 << 20);
         let c = Control::new(crate::budget::monotonic() + 30.).unwrap();
-        let all = json::parse(include_bytes!("../tests/fixtures/hpo_metadata5.json"), &b, &c).unwrap();
+        let all = json::parse(include_bytes!("../tests/fixtures/hpo_metadata5_rules_v2.json"), &b, &c).unwrap();
         for case in all.root["cases"].array().unwrap() {
             let old = case["state"].clone();
             let mut state = old.clone();
@@ -3032,7 +3032,7 @@ mod tests {
         let b = Budget::new(64 << 20);
         let c = Control::new(crate::budget::monotonic() + 30.).unwrap();
         let cases = json::parse(
-            include_bytes!("../tests/fixtures/card_instance_models3.json"),
+            include_bytes!("../tests/fixtures/card_instance_models3_rules_v2.json"),
             &b,
             &c,
         )
@@ -3075,7 +3075,7 @@ mod tests {
             let label = neural_metadata(&raw, case.require("actions").unwrap(), &b, &c).unwrap();
             assert!(label.contains("-ppo-v4-"));
             let journals = json::parse(
-                include_bytes!("../tests/fixtures/card_instance_journal6.json"),
+                include_bytes!("../tests/fixtures/card_instance_journal6_rules_v2.json"),
                 &b,
                 &c,
             )

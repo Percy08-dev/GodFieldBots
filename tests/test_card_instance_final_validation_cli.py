@@ -265,6 +265,8 @@ def test_existing_publisher_includes_report_write_cost_only_for_final_role(tmp_p
 @pytest.mark.parametrize('duration', [0, 59, 60, float('inf'), float('nan')])
 def test_explicit_entry_rejects_caller_cap_before_original_parent_io(tmp_path, monkeypatch, duration):
     from gf_training.card_instance_formal import FormalGameParent
+    from tests.formal_control_support import unadmitted_current_synthetic_formal_shape
+    monkeypatch.setattr(module, 'formal_preflight', unadmitted_current_synthetic_formal_shape)
     value = loaded(tmp_path)
     monkeypatch.setattr(FormalGameParent, '__enter__', lambda *args: pytest.fail('parent I/O before caller reserve rejection'))
     monkeypatch.setattr(cli, 'CardInstanceRuntimeEvidence', lambda *args, **kwargs: pytest.fail('runtime before caller reserve rejection'))
