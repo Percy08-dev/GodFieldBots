@@ -43,7 +43,7 @@ def build(plans: list[Path]) -> dict[str,Any]:
         path = original.PRIOR/name
         files[str(path)] = sha256(path)
     native = binary_identity()
-    files[native['extension_path']] = native['extension_sha256']
+    files[str(Path(native['extension_path']))] = native['extension_sha256']
     materializations = []
     for path in plans:
         plan = read_json(path)
@@ -57,9 +57,10 @@ def build(plans: list[Path]) -> dict[str,Any]:
             loaded,_,runtime = runner.materialize(config,row['run_id'],'C')
             files[str(config)],files[str(option)] = sha256(config),sha256(option)
             for item in loaded.inputs:
-                files[item['path']] = item['sha256']
+                files[str(Path(item['path']))] = item['sha256']
             server = runtime.config.server
-            files[str(server.binary)],files[str(server.config)] = sha256(server.binary),sha256(server.config)
+            binary,server_config = Path(server.binary),Path(server.config)
+            files[str(binary)],files[str(server_config)] = sha256(binary),sha256(server_config)
             simulator = Path(server.source_dir)
             simulator_revision = subprocess.run(['git','-C',str(simulator),'rev-parse','HEAD'],
                 check=True,capture_output=True,text=True).stdout.strip()

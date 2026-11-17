@@ -1,5 +1,6 @@
 """Protocol population, deterministic selection and immutable launch checks."""
 from copy import deepcopy
+from pathlib import Path
 
 import pytest
 
@@ -404,3 +405,48 @@ def test_replay_failed_wait_never_claims_reaped(tmp_path,monkeypatch):
     assert len(waits)==2 and receipt['actual_child_waited'] is False
     assert receipt['returncode'] is None and receipt['unconfirmed_child_pid']==123
     assert receipt['failure']['type']=='TimeoutError'
+
+
+@pytest.mark.parametrize('path_type',[str,Path])
+def test_freeze_build_normalizes_materialized_asset_paths(tmp_path,monkeypatch,path_type):
+    import json
+    from types import SimpleNamespace
+
+    from benchmarks.collection_cpu import freeze
+    from benchmarks.collection_cpu.common import Options, sha256
+    from benchmarks.collection_cpu.trials import materialize
+    from gf_common import card_instance
+    from gf_training import native_backend
+    assets={}
+    for name in ('runner.py','measure.py','analyze.py','native.so','server','server.toml','spec.md','input.toml','options.json'):
+        path=tmp_path/name
+        path.write_text(name)
+        assets[name]=path
+    rows=materialize('12345678-1234-5678-1234-567812345678','diagnostic',[],'reuse')
+    for row in rows:
+        row['config']={'path':str(assets['input.toml']),'sha256':sha256(assets['input.toml'])}
+        row['options_file']={'path':str(assets['options.json']),'sha256':sha256(assets['options.json'])}
+    plan=tmp_path/'plan.json'
+    plan.write_text(json.dumps({'namespace':'12345678-1234-5678-1234-567812345678',
+        'phase':'diagnostic','selected':[],'transfer':'reuse','trials':rows}))
+    server=SimpleNamespace(binary=path_type(assets['server']),config=path_type(assets['server.toml']),
+        source_dir=path_type(tmp_path),simulator_revision='sim-revision')
+    loaded=SimpleNamespace(inputs=[{'path':path_type(assets['input.toml']),'sha256':sha256(assets['input.toml'])}])
+    runtime=SimpleNamespace(config=SimpleNamespace(server=server),sha256='materialized')
+    runner=SimpleNamespace(materialize=lambda *args:(loaded,None,runtime))
+    helper=SimpleNamespace(PRIOR=tmp_path,prior_runner=lambda:runner)
+    monkeypatch.setattr(freeze,'code_files',dict)
+    monkeypatch.setattr(freeze,'inference_helper',lambda name:helper)
+    def git(command,**kwargs):
+        value='' if 'status' in command else 'bots-revision' if command[2]==str(freeze.REPO) else 'sim-revision'
+        return SimpleNamespace(stdout=value)
+    monkeypatch.setattr(freeze.subprocess,'run',git)
+    monkeypatch.setattr(native_backend,'binary_identity',lambda:{'extension_path':path_type(assets['native.so']),
+        'extension_sha256':sha256(assets['native.so'])})
+    monkeypatch.setattr(card_instance,'CORRECTED_REVIEWED_SPEC_HASHES',{'spec.md':sha256(assets['spec.md'])})
+    result=freeze.build([plan])
+    for name in ('server','server.toml','native.so','input.toml','spec.md'):
+        assert result['files'][str(assets[name])]==sha256(assets[name])
+    assert len(result['materializations'])==3
+    assert result['materializations'][0]['options']==Options(diagnostic=True).identity()
+    json.dumps(result,allow_nan=False)
