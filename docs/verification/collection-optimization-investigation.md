@@ -13,6 +13,13 @@ Simulator HTTP calls also deserve attention; the three proposed categories do no
 cover the whole collection path. These are priorities for further experiments,
 not accepted production optimizations or predicted whole-run speedups.
 
+Subsequent user clarification: the CPU result applies only to the measured small
+configuration and is not a general recommendation for varying HPO model sizes.
+For that broader scope, prioritize parent synchronous work and GPU-path overhead,
+then HTTP calls and candidate generation. CPU remains a conditional small-model
+option. The [HTTP follow-up](collection-http-bottleneck.md) separates request,
+JSON/validation and parent scheduling observations.
+
 ## Provenance and measurement scope
 
 Bots revision: `0220d8be361adfb62c6af1853a17a9b7f4f5f405`; production implementation
@@ -307,8 +314,9 @@ training or the Source validator. Whole application tests, new quality/HPO/final
 test, full32-game CPU adoption comparison, event-driven transport A/B, HTTP A/B,
 broader compilation and inference-mode comparisons are NOT RUN.
 
-Recommended next decision: design and measure **CPU actor inference while
-retaining GPU learning**, followed by parent same-frame validation/recording and
-event-loop work, with HTTP subcalls included in the collection ledger. Keep
+For the measured small configuration, CPU actor inference with GPU learning is
+an optional full-route comparison. Across varying HPO model sizes, prioritize
+parent same-frame validation/recording and event-loop work plus GPU-path overhead,
+with HTTP subcalls included in the collection ledger. Keep
 candidate-analysis memoization lower priority given its measured 0.10s call saving.
 Normal production behavior remains unchanged by this investigation.
