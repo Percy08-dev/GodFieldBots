@@ -464,6 +464,44 @@ impl Dispatcher {
             .retain(|(r, t, g, _), _| r != run || t != trial || g != game);
         Ok(())
     }
+    /// Ended game authority waits original producer/exported leases on the SAME queue.
+    pub async fn release_game_async(
+        &self,
+        run: &str,
+        trial: &str,
+        game: &str,
+        deadline: f64,
+    ) -> Result<()> {
+        wait_duration(deadline)?;
+        loop {
+            let wake = self.async_wake.notified();
+            tokio::pin!(wake);
+            wake.as_mut().enable();
+            {
+                let mut state = self.state.lock().unwrap();
+                if let Some(error) = &state.closed {
+                    return Err(error.clone());
+                }
+                let pending = state.pending.values().any(|p| {
+                    p.identity.run == run && p.identity.trial == trial && p.identity.game == game
+                });
+                let producing = state
+                    .producers
+                    .keys()
+                    .any(|(r, t, g, _)| r == run && t == trial && g == game);
+                if !pending && !producing {
+                    state
+                        .participants
+                        .retain(|(r, t, g, _), _| r != run || t != trial || g != game);
+                    return Ok(());
+                }
+            }
+            if monotonic() >= deadline {
+                return Err(Error::Deadline);
+            }
+            let _ = tokio::time::timeout(wait_duration(deadline)?, wake).await;
+        }
+    }
     pub fn checkpoint_references(&self) -> HashMap<String, usize> {
         let s = self.state.lock().unwrap();
         let mut out = HashMap::new();
@@ -966,5 +1004,75 @@ mod tests {
             d.close(Error::Closed);
         }
         assert!(Dispatcher::new(1, 1, f64::MAX, "test".into()).is_err());
+    }
+    #[tokio::test(flavor = "current_thread")]
+    async fn ended_game_async_release_waits_original_exports_and_never_blocks_w1() {
+        for subscription_first in [true, false] {
+            let dispatcher = Dispatcher::new(1, 1, 0., "test".into()).unwrap();
+            let (identity, row) = row("ended", monotonic() + 10.);
+            dispatcher
+                .enqueue_async(identity.clone(), row, 17)
+                .await
+                .unwrap();
+            let original = dispatcher.next_batch(monotonic() + 1.).unwrap();
+            dispatcher.retire(&identity).unwrap();
+            let own = dispatcher.clone();
+            let release = tokio::spawn(async move {
+                own.release_game_async("r", "t", "ended", monotonic() + 2.)
+                    .await
+            });
+            if subscription_first {
+                tokio::task::yield_now().await;
+                assert!(!release.is_finished());
+            }
+            dispatcher
+                .submit_results(original.id, vec![response(identity)])
+                .unwrap();
+            tokio::time::timeout(Duration::from_secs(1), release)
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+            assert!(dispatcher.state.lock().unwrap().participants.is_empty());
+        }
+    }
+    #[tokio::test(flavor = "current_thread")]
+    async fn ended_game_release_deadline_drop_and_close_preserve_custody() {
+        let dispatcher = Dispatcher::new(1, 1, 0., "test".into()).unwrap();
+        let (identity, row) = row("ended", monotonic() + 10.);
+        dispatcher
+            .enqueue_async(identity.clone(), row, 17)
+            .await
+            .unwrap();
+        let original = dispatcher.next_batch(monotonic() + 1.).unwrap();
+        dispatcher.retire(&identity).unwrap();
+        let expiry = monotonic() + 0.01;
+        assert_eq!(
+            dispatcher
+                .release_game_async("r", "t", "ended", expiry)
+                .await
+                .unwrap_err(),
+            Error::Deadline
+        );
+        assert!(monotonic() >= expiry);
+        assert!(!dispatcher.state.lock().unwrap().participants.is_empty());
+        let own = dispatcher.clone();
+        let abandoned = tokio::spawn(async move {
+            own.release_game_async("r", "t", "ended", monotonic() + 5.)
+                .await
+        });
+        tokio::task::yield_now().await;
+        abandoned.abort();
+        assert!(abandoned.await.unwrap_err().is_cancelled());
+        assert!(!dispatcher.state.lock().unwrap().participants.is_empty());
+        let own = dispatcher.clone();
+        let closing = tokio::spawn(async move {
+            own.release_game_async("r", "t", "ended", monotonic() + 5.)
+                .await
+        });
+        tokio::task::yield_now().await;
+        dispatcher.close(Error::Closed);
+        assert_eq!(closing.await.unwrap().unwrap_err(), Error::Closed);
+        drop(original);
     }
 }

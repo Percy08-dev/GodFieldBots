@@ -235,7 +235,7 @@ pub(crate) fn observation(
 ) -> Result<()> {
     observation_context(value, viewer, budget, control, false)
 }
-fn observation_context(
+pub(crate) fn observation_context(
     value: &Value,
     viewer: Option<i128>,
     budget: &Arc<Budget>,
@@ -440,7 +440,7 @@ fn hint_entries<'a>(
     }
     Ok(seen)
 }
-fn hints(value: &Value, obs: &Value, control: &Control) -> Result<()> {
+pub(crate) fn hints(value: &Value, obs: &Value, control: &Control) -> Result<()> {
     value.closed(
         &["state_revision", "viewer_player_id", "action_options"],
         &[],
@@ -2780,7 +2780,7 @@ mod full_validation_tests {
     }
 }
 
-fn action_value2(value: &Value, obs: Option<&Value>) -> Result<()> {
+pub(crate) fn action_value2(value: &Value, obs: Option<&Value>) -> Result<()> {
     let kind = value.require("type")?.string()?;
     let choice = if kind == "respond" {
         "defense"

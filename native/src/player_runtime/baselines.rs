@@ -215,7 +215,8 @@ impl RefreshState {
                 "refresh history changed participant/episode without reset",
             )?;
             ensure(
-                last.boundary <= input.boundary && input.hashes[last.boundary] == last.prefix_hash,
+                last.boundary <= input.boundary
+                    && input.prefix_hash(last.boundary) == last.prefix_hash,
                 "refresh history prefix changed",
             )?;
             if input.frame_hash == last.frame_hash {
@@ -325,7 +326,7 @@ impl RefreshState {
             revision: input.revision,
             frame_hash: input.frame_hash.clone(),
             boundary: input.boundary,
-            prefix_hash: input.hashes[input.boundary].clone(),
+            prefix_hash: input.prefix_hash(input.boundary),
             turn: input.turn,
             table_hash: table.table_hash.clone(),
             index,
@@ -404,6 +405,24 @@ fn renew_or_fallback(
     }
     heuristic(input, config, rows)
 }
+/// Validate the complete Refresh option; only the private comparison value is
+/// bounded. Callers retain the original JSON integer for capture and identity.
+pub(crate) fn comparison_threshold(value: &Value) -> Result<u64> {
+    let number = value
+        .as_number()
+        .ok_or_else(|| error("refresh positive integer threshold required"))?;
+    let text = number.as_str();
+    ensure(
+        crate::json::integer_token(number)
+            && !text.starts_with('-')
+            && text.bytes().any(|b| b != b'0'),
+        "refresh positive integer threshold required",
+    )?;
+    // Public attacks saturate at i64::MAX, so every above-u64 threshold has
+    // identical comparisons. Never replace the caller's original JSON value.
+    Ok(text.parse::<u64>().unwrap_or(u64::MAX))
+}
+
 pub fn select_diagnostic(
     input: &Input,
     config: &Config,
@@ -449,19 +468,7 @@ pub fn select_diagnostic(
             use crate::json::ValueExt;
             options.closed(&["version", "attack_threshold"], &[])?;
             ensure(options["version"] == "1", "refresh version")?;
-            let threshold_number = options["attack_threshold"]
-                .as_number()
-                .ok_or_else(|| error("refresh positive integer threshold required"))?;
-            let threshold_text = threshold_number.as_str();
-            ensure(
-                crate::json::integer_token(threshold_number)
-                    && !threshold_text.starts_with('-')
-                    && threshold_text.bytes().any(|b| b != b'0'),
-                "refresh positive integer threshold required",
-            )?;
-            // Public attack is saturated at i64::MAX; every larger positive
-            // threshold compares identically. Preserve its full JSON identity.
-            let threshold = threshold_text.parse::<u64>().unwrap_or(u64::MAX);
+            let threshold = comparison_threshold(&options["attack_threshold"])?;
             let mut state: RefreshState = if v["state"].is_null() {
                 RefreshState::default()
             } else {

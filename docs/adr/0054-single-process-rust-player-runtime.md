@@ -111,3 +111,15 @@ projection/token-kernel factoring also pass their preimplementation gates. They
 preserve original lease/producer lifetime and feature semantics, keep untrusted
 diagnostic validation, and remove redundant whole-prefix work. Actual actor
 implementation, conformance and prescribed verification remain pending.
+
+## Scoped live actor implementation
+
+The common external-HTTP game actor and actual Tokio/fixed-worker schedulers pass
+independent correctness/conformance READY after one fix round. Failed service
+status now precedes route settlement, preserving actual holds through join; live
+Refresh preserves arbitrary positive threshold identity. Original policy/frame/
+token/hash semantics remain exact, with incremental Arc history and borrowed
+immutable capture. Final197native/13ignored and537Python/18explicit skips pass,
+including actual overlap/natural/Replay/CPU-CUDA cancellation. This accepts the
+actor component only; real writer/Source/learning/supervisor/CLI integration and
+approved performance/default gates remain outstanding.

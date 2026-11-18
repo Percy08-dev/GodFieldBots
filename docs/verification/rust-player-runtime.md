@@ -139,6 +139,59 @@ to original pre-fix sourceaa9e5a74, not final corrected source or an end-to-end
 speed comparison. Full actors/storage/learning/process-tree/audits and approved
 physical matrix remain required before any complete-runtime/adoption claim.
 
+## Common live game runtime and A/B schedulers
+
+Accepted bounded actor/transport component after independent correctness and
+architecture conformance READY, including one repair/re-review round. One native
+game::run handles external HTTPv2, participant-local history/candidates/sampling,
+pending/ACK/terminal records and Replay/outcome reconciliation for both Tokio
+task-per-game and fixed-worker schedulers. W1/W2 genuine two-game/four-participant
+tests hold two pending games before either can Act; MLP tests observe a real
+mixed-game batch. Idle worker runtimes keep pumping the shared HTTP client between
+waves. Python owns one optional inference consumer; no Python player process or
+policy/HTTP/tokenizer callback is used.
+
+History admits deltas once and shares Arc typed events/32-byte prefix backing
+with one decision input. Trusted and validated token paths share mathematics;
+malformed new deltas reject at the owner boundary and unique append survives
+success/cancel/failure. Borrowed capture DTOs avoid transient full table/bank/
+Replay Value copies. New transport JSON preserves actual selected f32 values by
+explicit f64 promotion; original frame/table/report hashes remain unchanged.
+Read-only byte views retain the SAME immutable native allocation/reservation to
+last use. ACK is custody acceptance, not persistence/Source qualification.
+
+Initial candidate checks:197nativePASS/13IGNORE,524PythonPASS/18existing opt-in
+skips plus strengthened48runtimePASS. Reviews found failed-service settlement
+could release holds while traceback-owned Tensors survived, and live Refresh
+narrowed arbitrary positive thresholds to u64. Both repaired with forced-schedule
+and above-u64 identity tests. Optional O(N) proposal copy for one selected action
+was removed with indexed columns; no speedup magnitude is inferred.
+
+Final correction:197nativePASS/13IGNORE,537PythonPASS/18existing opt-in skips,
+including61runtime cases and actual CPU/CUDA response cancellation. Root fresh
+13covering checksPASS in5.52s and loaded release/source/lock assertionsPASS. Both
+independent re-reviews mark bothP2s and optionalP3 ADDRESSED, no remaining findings.
+Final native source SHA256:
+`7c95c3c8653d34f1b1d3e8441120836a7a435589ea6bbd1e0f0ddbd061ea5282`;
+Cargo.lock unchanged `bb8e9e3cae6eab6c2877016c18d58256ea46f5f5807f8b41a6d475642bae692d`.
+Release flags empty. New facade Ruff/format/mypy and changed Rust formatting pass;
+whole card_instance_dto formatting has a pre-existing unchanged line1496 issue.
+
+Actual approved external binary SHA256 is
+`76aff19c2f720a572bfe422d9b1e089a1467f253038cda66de3d8c35180d0f7d`.
+Raw genuine baseline/natural/Replay/HTTP/process evidence remains under temporary
+`/tmp/rust-player-task4-overlap-c8b25f4` and `...evidence-c8b25f4`; its recorded c8
+identity is historical. New fixed identities are at
+`/tmp/rust-player-task4-fix1-evidence/identities.json` and final execution logs;
+oldb2/c8 evidence was not relabeled. These are component diagnostics, not durable
+learning parents or passed archive/learning/performance gates.
+
+Root-approved next integration must provide the real thread writer/SQL/seal,
+new outer Source/capture authority, same-process learner, original-host supervisor
+and normal entrypoints. Actual game/planned episode mapping, checkpoint retains
+and failed-service holds, original lease/producer settlement and physical consumer/
+Tensor/GPU retirement remain required contracts for those owners.
+
 ## Companion/descendant feasibility
 
 Independent preimplementation architecture supplement READY for concrete installed
@@ -152,10 +205,8 @@ and host reentry still require implementation/verification.
 
 ## Required evidence still outstanding
 
-- Integrate the accepted typed policy core with live incremental own-view state.
-- Logical participant independence, transactional RNG adoption, expired replies,
-  immutable checkpoint publication and final-dtype buffer lifetime.
-- Both actual schedulers/common HTTP contract, W1/W2 four-participant failure tests.
+- Real writer/SQL/collection Source integration around the accepted actor and
+  inference components, with actual same-owner retirement/encoding authority.
 - Single Python process, bounded writer custody and original-handle supervisor/
   same-namespace GPU admission termination, source/producer version checks.
 - Model3/4 actual CUDA continuous2 and pause1/resume2, same-input restore and

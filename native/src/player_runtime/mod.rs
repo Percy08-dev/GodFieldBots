@@ -1,10 +1,14 @@
 //! Own-participant policy core and owned serving boundary; game actors integrate directly.
 pub mod baselines;
 pub mod batch;
+pub mod game;
+pub mod history;
+pub mod http;
 pub mod numeric;
 pub mod requests;
 pub mod rng;
 pub mod rules;
+pub mod scheduler;
 pub mod search;
 use crate::{
     budget::{Budget, Control},
@@ -120,7 +124,7 @@ pub struct Input {
     pub frame_hash: String,
     pub interval_start: usize,
     pub boundary: usize,
-    pub hashes: Vec<String>,
+    pub hashes: Arc<Vec<[u8; 32]>>,
     pub turn: u64,
     pub choice: String,
     pub action_kinds: Vec<String>,
@@ -139,7 +143,7 @@ pub struct Input {
     pub can_sacrifice: bool,
     pub can_allow: bool,
     pub context: Incoming,
-    pub events: Vec<VisibleEvent>,
+    pub events: Arc<Vec<VisibleEvent>>,
 }
 impl Input {
     /// Original public DTO boundary. Corrected-layout frame hashes retain their
@@ -152,12 +156,7 @@ impl Input {
         control: &Control,
     ) -> Result<Self> {
         crate::structured_journal::card_instance::frame(frame, budget, control)?;
-        let raw = &frame["payload"];
-        let obs = &raw["observation"];
-        let own = &obs["own"];
-        let hints = &raw["action_options"]["action_options"];
         let actor = frame["actor"].as_u64().unwrap() as u8;
-        let episode = frame["episode"].as_str().unwrap().to_owned();
         let events = events.array()?;
         let boundary = frame["boundary"]["end"].as_u64().unwrap() as usize;
         let start = frame["interval_start"].as_u64().unwrap() as usize;
@@ -176,13 +175,13 @@ impl Input {
             budget,
             control,
         )?;
-        let mut hashes = vec![crate::structured_journal::event_prefix_text(&chain)];
+        let mut hashes = vec![chain];
         let recipe = crate::structured_tokens::Recipe::corrected(16, budget, control)?;
         let mut typed_events = Vec::with_capacity(events.len());
         for e in events {
             crate::structured_journal::card_instance::event(e, &recipe, budget, control)?;
             chain = crate::structured_journal::event_prefix_next(&chain, e, budget, control)?;
-            hashes.push(crate::structured_journal::event_prefix_text(&chain));
+            hashes.push(chain);
             typed_events.push(match e["type"].as_str().unwrap() {
                 "turn_started" => VisibleEvent::Turn(e["turn"].as_u64().unwrap()),
                 "damage_applied" => VisibleEvent::Damage {
@@ -193,10 +192,41 @@ impl Input {
             });
         }
         ensure(
-            hashes[boundary] == frame["boundary"]["prefix_hash"]
-                && hashes[start] == frame["interval_start_hash"],
+            crate::structured_journal::event_prefix_text(&hashes[boundary])
+                == frame["boundary"]["prefix_hash"]
+                && crate::structured_journal::event_prefix_text(&hashes[start])
+                    == frame["interval_start_hash"],
             "own event prefix binding mismatch",
         )?;
+        Self::from_owned_projection(
+            frame,
+            events,
+            config,
+            Arc::new(hashes),
+            Arc::new(typed_events),
+        )
+    }
+    pub(crate) fn prefix_hash(&self, index: usize) -> String {
+        crate::structured_journal::event_prefix_text(&self.hashes[index])
+    }
+    /// Rust-only live actor boundary. History has already validated each new
+    /// event and incrementally bound this exact own frame/prefix. No public DTO
+    /// or historical reader may call this in place of its untrusted validation.
+    pub(crate) fn from_owned_projection(
+        frame: &Value,
+        events: &[Value],
+        config: &Config,
+        hashes: Arc<Vec<[u8; 32]>>,
+        typed_events: Arc<Vec<VisibleEvent>>,
+    ) -> Result<Self> {
+        let raw = &frame["payload"];
+        let obs = &raw["observation"];
+        let own = &obs["own"];
+        let hints = &raw["action_options"]["action_options"];
+        let actor = frame["actor"].as_u64().unwrap() as u8;
+        let episode = frame["episode"].as_str().unwrap().to_owned();
+        let boundary = frame["boundary"]["end"].as_u64().unwrap() as usize;
+        let start = frame["interval_start"].as_u64().unwrap() as usize;
         let rows = own["cards"].as_array().unwrap();
         let cards: Vec<_> = rows
             .iter()

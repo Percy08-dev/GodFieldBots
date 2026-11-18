@@ -205,6 +205,27 @@ pub fn frame_tokens(
     budget: &Arc<Budget>,
     control: &Control,
 ) -> Result<OwnedTokens> {
+    frame_tokens_context(frame, events, recipe, budget, control, false)
+}
+/// Rust-only live History owns validation of every appended event exactly once.
+/// The token/aggregation kernel below is identical to the validated DTO path.
+pub(crate) fn frame_tokens_owned(
+    frame: &Value,
+    events: &[Value],
+    recipe: &Recipe,
+    budget: &Arc<Budget>,
+    control: &Control,
+) -> Result<OwnedTokens> {
+    frame_tokens_context(frame, events, recipe, budget, control, true)
+}
+fn frame_tokens_context(
+    frame: &Value,
+    events: &[Value],
+    recipe: &Recipe,
+    budget: &Arc<Budget>,
+    control: &Control,
+    owned: bool,
+) -> Result<OwnedTokens> {
     control.check()?;
     let actor = frame.require("actor")?.integer(1, 2)?;
     let start = frame
@@ -217,7 +238,7 @@ pub fn frame_tokens(
     if end - start > 65536 {
         return Err(Error::contract("structured interval token capacity"));
     }
-    if recipe.is_corrected() {
+    if recipe.is_corrected() && !owned {
         // Validate only this participant's original prefix. A later tail is
         // never read to construct an earlier frame's tokens.
         for value in &events[..end] {

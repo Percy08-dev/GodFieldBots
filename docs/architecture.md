@@ -9,7 +9,10 @@ The bounded native v5 search/RNG/Random/Heuristic/Refresh core passes independen
 correctness and conformance review after two local parity repairs. Its owned
 array-serving/async-dispatcher/transactional-RNG component also passes both reviews
 after retirement/timer failure repairs, including actual CUDA row/RNG checks.
-Live game/storage/learning runtime implementation remains in progress. New runtime/producer/prepared/exit/completion
+The common live HTTP/game actor and both real A/B schedulers also pass scoped
+correctness/conformance after failed-service custody and Refresh-domain repairs,
+including genuine overlap/natural/Replay/fault smokes. Storage/learning/supervisor/
+CLI and measured adoption remain in progress. New runtime/producer/prepared/exit/completion
 identities, actual original-host reaping and cold continuation will preserve
 historical process receipts and existing evaluation admission. Neither a new
 runtime nor performance/default adoption is accepted yet; required evidence is
@@ -848,7 +851,7 @@ Wire DTOs may resolve representation details; no engine dependency is allowed.
 | `gf_evaluation` | paired scheduling, aggregation and costs | common |
 | `gf_models` | participant-local policies, common encoder/config/artifacts, trusted shared MLP row scoring/immutable registry and allocator wrapper | common, lazy extras |
 | `gf_cli` | strict config, composition, commands, manifest | application packages |
-| `gf_native` (optional Rust extension) | Serde offline parsing/structural validation, fixed feature kernels, typed staging/index columns and numeric capacity/document-admission leases; ADR0054 adds own-view v5 policy core and bounded array-serving/RNG dispatcher | Rust crates, Serde, PyO3, rust-numpy, Tokio; no Simulator engine, upper Python package or learning dependency |
+| `gf_native` (optional Rust extension) | Serde offline parsing/structural validation, fixed feature kernels, typed staging/index columns and numeric capacity/document-admission leases; ADR0054 adds own-view v5 policies, bounded array-serving/RNG dispatcher and common external-HTTP/game actors with A/B scheduling | Rust crates, Serde, PyO3, rust-numpy, Tokio/reqwest; no Simulator engine, upper Python package or learning dependency |
 
 The existing `godfieldbots` entry point becomes a compatibility wrapper.
 Common never imports upper layers. Models never handle HTTP or management

@@ -104,6 +104,56 @@ impl ServingRow {
         budget: &Arc<Budget>,
         control: &Control,
     ) -> Result<Self> {
+        Self::build_context(
+            frame,
+            events,
+            input,
+            config,
+            table,
+            window,
+            max_positions,
+            budget,
+            control,
+            false,
+        )
+    }
+    /// Native actor only: its incremental History owns original validation.
+    pub(crate) fn build_owned(
+        frame: &Value,
+        events: &[Value],
+        input: &Input,
+        config: &Config,
+        table: &Table,
+        window: usize,
+        max_positions: usize,
+        budget: &Arc<Budget>,
+        control: &Control,
+    ) -> Result<Self> {
+        Self::build_context(
+            frame,
+            events,
+            input,
+            config,
+            table,
+            window,
+            max_positions,
+            budget,
+            control,
+            true,
+        )
+    }
+    fn build_context(
+        frame: &Value,
+        events: &[Value],
+        input: &Input,
+        config: &Config,
+        table: &Table,
+        window: usize,
+        max_positions: usize,
+        budget: &Arc<Budget>,
+        control: &Control,
+        owned: bool,
+    ) -> Result<Self> {
         let at = Instant::now();
         ensure(
             (1..=65536).contains(&window) && (1..=128).contains(&max_positions),
@@ -116,7 +166,11 @@ impl ServingRow {
             "serving table own binding mismatch",
         )?;
         let recipe = Recipe::corrected(window, budget, control)?;
-        let tokens = structured_tokens::frame_tokens(frame, events, &recipe, budget, control)?;
+        let tokens = if owned {
+            structured_tokens::frame_tokens_owned(frame, events, &recipe, budget, control)?
+        } else {
+            structured_tokens::frame_tokens(frame, events, &recipe, budget, control)?
+        };
         let t = &tokens.value;
         let layout: Value =
             serde_json::from_slice(crate::structured_controls::CARD_INSTANCE_RECIPE).unwrap();
