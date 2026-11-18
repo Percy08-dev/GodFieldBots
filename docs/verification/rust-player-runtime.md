@@ -29,6 +29,23 @@ PASS:200passed,7skipped,7.32s,exit0 (independent verifier). Raw output retained 
 claim. ADR0053's recorded whole-suite result remains historical51FAIL/7158PASS/
 574SKIP with documented triage; it is not silently converted to whole-green.
 
+## Native dependency foundation
+
+Reviewed pins Tokio1.53.1 and reqwest0.13.5 resolve without upgrading existing
+locked packages; reqwest has default features disabled and JSON enabled.
+`cargo check --manifest-path native/Cargo.toml` PASS. Native tests initially fail
+to link `_Py_Dealloc` with plain cargo test because extension-module builds do
+not add the interpreter library. The existing project's documented test recipe
+resolves this without a code change:
+
+```sh
+env RUSTFLAGS='-L /home/percy/.local/share/uv/python/cpython-3.14.10-linux-x86_64-gnu/lib -C link-arg=-lpython3.14' LD_LIBRARY_PATH=/home/percy/.local/share/uv/python/cpython-3.14.10-linux-x86_64-gnu/lib PYO3_PYTHON=/home/percy/.codex/worktrees/37cb/GodFieldBots/.venv/bin/python cargo test --offline --locked --manifest-path native/Cargo.toml --lib --quiet
+```
+
+PASS:177passed,13ignored,3.11s test execution. Extension-wheel builds must unset
+these test-only linker flags. This verifies the dependency foundation, not a
+player runtime or installed-companion acceptance.
+
 ## Current-v5 reference originals
 
 PASS: nine own-view episodes/twelve decisions, exact fixed-clock reports and
