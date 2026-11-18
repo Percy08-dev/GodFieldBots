@@ -112,8 +112,9 @@ New outer run/collection/proof/update/registry/import/completion discriminants m
 bind Rust online/capture provenance and host/thread retirement explicitly. Do not
 reuse old owned actor protocol9/10 as Rust custody, or construct a legacy process
 receipt. Preserve existing inner data validators and meanings instead of globally
-bumping unrelated data-format constants. Root agrees the exact outer-version
-inventory before implementing those source/lineage branches.
+bumping unrelated data-format constants. The [accepted outer-record inventory](rust-player-runtime-records.md) pins exact
+variants/versions, cache-reference transactions and the typed cold-parent handoff
+before implementing those source/lineage branches.
 
 
 Native facade operations (precise Python spelling may follow existing bindings):
@@ -132,6 +133,17 @@ Native facade operations (precise Python spelling may follow existing bindings):
   pending/ACK/terminal records plus one unique byte reservation to the writer.
 - cancel(reason), quiesce(), join() stop admissions, wake all waiters and report
   original tasks, queues, buffers, checkpoint references and actual completion.
+
+The live game owner additionally uses
+`Dispatcher::release_game_async(run, trial, actual_game, original_deadline)`.
+It subscribes/enables the SAME Notify before checking the SAME mutex state,
+waits for both original pending/exported service leases and started admission
+registrations to settle, then removes that ended game's routing/tombstone state.
+It drops the lock before await and rechecks the original absolute deadline with
+the common checked timer conversion; close returns an explicit failure. This
+adds no queue or polling loop and preserves W1 responsiveness. It proves routing/
+service-lease retirement only, not Python/Tensor/GPU physical completion. The
+actual ended-game owner must still prevent readmission after release.
 
 Use typed Rust core APIs for these operations, with PyO3 wrappers limited to
 control and owned arrays. JSON remains acceptable for compact controls and
@@ -169,6 +181,27 @@ only for the exact participant. Dedicated inference/sampling consumes native
 batches while waits release the GIL. A cancellation after valid acceptance may
 cancel Act but never creates unacknowledged experience. Tests cross the deadline
 between sampling and native acceptance and inject duplicate/foreign responses.
+
+The live actor validates each new HTTP view/hint and visible event delta once,
+maintains one incremental typed event bank and prefix-hash vector, and shares
+those immutable vectors with its per-decision Input using Arc. The decision Input
+must drop before the next append; append requires the history backing to be
+uniquely owned, rather than Arc::make_mut cloning an entire prefix. Recorded
+pending/ACK data retains event deltas and prefix bindings plus current own frame,
+not an Arc to every historical full prefix. This keeps error/abort ownership
+simpler than a manual Vec loan/return protocol.
+
+Factor Input's existing typed field projection into a Rust-only trusted
+constructor for already-admitted frame/history values. Factor the existing
+frame-token function into shared mathematical code with distinct validated and
+trusted entries, and add ServingRow::build_trusted for this actor path. Trusted
+entries skip only whole-view/full-prefix validation already performed by that
+owner; all token/reference interpretation, shape/capacity and numerical semantics
+stay identical. Existing diagnostics, Python-exposed enqueue and historical
+readers retain their full untrusted-input validation. No public skip-validation
+flag or new format/dependency is introduced. History feature aggregation still
+performs whatever work the unchanged feature definition requires; distinguish it
+from redundant prefix validation/serialization.
 
 Preserve exact candidate ordering and tie rules, public-rule signature, policy
 labels and recorded RNG under a fixed clock. Wall-clock search cutoffs remain
@@ -225,7 +258,15 @@ reuses existing group pack validation, seal/checkpoint and storage formats.
 Bound its queue in bytes under the recorded storage allocation, plus existing
 item capacity where needed; reserve actual concurrently retained bytes once,
 including data held by blocked producers. Pending records are validated/encoded
-before Act; only a matching accepted ACK commits experience. Duplicate commands
+before Act; only a matching accepted ACK commits experience. Native capture
+transport carries closed typed JSON facts with deterministic encoding; it is not
+itself canonical Journal6/Numeric bytes. Borrowed DTO serialization avoids cloning
+large tables/history/Replay Values. Inference float32 scalars are promoted to
+float64 before JSON serialization so Python reconstructs the exact original scalar,
+not merely an f32-shortest decimal. Existing frame/table/report hash algorithms
+stay unchanged; transport-byte hashes and later Python canonical-content hashes
+are distinct. The real encoder/source owner must preserve all required facts
+through that encoding boundary, rather than equating those different byte hashes. Duplicate commands
 are idempotent and mismatched/late ACK never double-commits. Store zero-Act
 terminal bank identities as the existing capture contract requires.
 

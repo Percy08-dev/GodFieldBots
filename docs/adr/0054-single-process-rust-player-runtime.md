@@ -94,3 +94,20 @@ encoding and Rust online capture have distinct producer identity. New strict
 outer run/collection/proof/update/registry/import/completion selectors remain
 mandatory. Exact outer-version mapping must pass its gate before implementation;
 this clarification does not preapprove unspecified mappings or legacy receipts.
+
+## Exact outer records and live history refinements
+
+The [outer-record inventory](../design/rust-player-runtime-records.md) is
+independently READY after explicit cache transactions and cold parent/evaluation
+handoff resolved the two initial omissions. It keeps unchanged Journal6/DTO3,
+normal Numeric4/HPO Numeric6 and Python checkpoint4/5; new outer selectors and
+actual owner/exit authority remain explicit. Cache records carry no fictional
+broker/GPU PIDs. Evaluation consumes validated new-parent inference data through
+the existing independently admitted fresh runtime, without reconstructing legacy
+training completion or actor9/10 authority.
+
+The typed async game-release helper and incremental Arc-backed history/trusted
+projection/token-kernel factoring also pass their preimplementation gates. They
+preserve original lease/producer lifetime and feature semantics, keep untrusted
+diagnostic validation, and remove redundant whole-prefix work. Actual actor
+implementation, conformance and prescribed verification remain pending.
