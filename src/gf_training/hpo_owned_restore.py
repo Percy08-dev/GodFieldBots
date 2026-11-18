@@ -830,11 +830,20 @@ def _audit_owned_cohort(scan: Any, state: Json, records: list[Json], number: int
     counts=[len(record.frames) for record in selected]
     if len(selected)!=recipe.collection_games or counts!=update['source_proof']['selection']['episode_counts']:
         raise ContractError('owned complete original learner population differs')
+    # This external reconstruction owns originals and scan state; the recorded
+    # live RAM-bank receiver allowance describes a different operation.
+    budget=original.pool.budget
+    with budget._condition:
+        audit_limit=min(scan.limit,model.resources.max_owned_bytes)
+        extra=scan.retained+original.used
+        available=min(audit_limit-extra,budget.limit-budget.used)
+    if available<=0:
+        raise ContractError('external numeric audit has no remaining caller capacity')
     rollout=read_hpo_rollout(scan.root/update['numeric'],update['numeric_sha256'],model,recipe,
         actions=actions,rules=card_instance_rules(),expected_selection=update['source_proof']['selection'],
         expected_records=selected,expected_snapshot_identity=records[number]['snapshot_identity'],
-        numeric_budget_bytes=state['effective_config']['hpo_spec']['operating']['numeric_budget_bytes'],
-        max_owned_bytes=scan.limit,extra_owned_bytes=scan.retained+original.used,check=original.check,
+        numeric_budget_bytes=available,
+        max_owned_bytes=audit_limit,extra_owned_bytes=extra,check=original.check,
         reserve=_AuditNumericPeak(original))
     anchor.rollout(rollout)
     rollout.require_learning()
