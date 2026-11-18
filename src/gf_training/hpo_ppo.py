@@ -80,8 +80,8 @@ class _HpoOperations(_GameOperations):
             raise ContractError('HPO requires exact fresh Model4/actions3')
         raw=asdict(config)
         initial={'effective_config':raw,'hpo_spec_sha256':digest(config.hpo_spec)}
-        if config.hpo_spec.get('schema_version') in (3,4):
-            initial['run_variant']='hpo-ppo-owned-v1' if config.hpo_spec['schema_version']==4 else RESIDENT_VARIANT
+        if config.hpo_spec.get('schema_version') in (3,4,5):
+            initial['run_variant']=('hpo-ppo-owned-shared-v1' if config.hpo_spec['schema_version']==5 else 'hpo-ppo-owned-v1') if config.hpo_spec['schema_version'] in (4,5) else RESIDENT_VARIANT
         spec=hpo_spec(initial)
         recipe=hpo_training_config(spec['training_recipe'])
         training=_runtime_training(raw['training'],spec)
@@ -89,7 +89,7 @@ class _HpoOperations(_GameOperations):
         if canonical(asdict(normalize_training_for_model(config.model.model_id,recipe)))!=canonical(spec['training_recipe']):
             raise ContractError('HPO production recipe must already be canonical')
         from gf_common.training_opponents import training_opponents
-        if training_opponents(raw) is not None and spec['schema_version']!=4:
+        if training_opponents(raw) is not None and spec['schema_version'] not in (4,5):
             from gf_training.native_backend import require_native_refresh_opponents
             require_native_refresh_opponents()
         op=spec['operating']
@@ -113,14 +113,18 @@ class _HpoOperations(_GameOperations):
         from gf_simulator_client.card_instance_runtime import CardInstanceRuntimeEvidence
         if config.server.external_url is not None or config.server.source_dir is None:
             raise ContractError('HPO requires locally managed verified runtime')
-        self.runtime=CardInstanceRuntimeEvidence(Path(config.server.binary),Path(config.server.source_dir),deadline=deadline)
+        self.runtime=CardInstanceRuntimeEvidence(Path(config.server.binary),Path(config.server.source_dir),contract=config.actions.action_contract,deadline=deadline)
         self.runtime.preflight()
-        if config.hpo_spec['schema_version'] in (3,4):
+        if config.hpo_spec['schema_version']==5:
+            from gf_models.shared_admission import shared_training_admission
+            shared_training_admission(config.model.architecture(layout=LAYOUT),config.model.inference,
+                config.hpo_spec['training_recipe']['tbptt_length'],config.hpo_spec['operating'],config.hpo_spec['runtime'],layout=LAYOUT)
+        elif config.hpo_spec['schema_version'] in (3,4):
             from gf_models.structured_runtime import hpo_resident_training_admission
             input_binding_game_v3(config.actions.action_contract,card_instance_rules())
             hpo_resident_training_admission(config.model.architecture(layout=LAYOUT),config.model.inference,
                 config.hpo_spec['training_recipe']['tbptt_length'],config.hpo_spec['operating'],config.hpo_spec['runtime'],layout=LAYOUT,
-                owned_cuda=config.hpo_spec['schema_version']==4 and getattr(self,'_training_execution',None) is None)
+                owned_cuda=config.hpo_spec['schema_version'] in (4,5) and getattr(self,'_training_execution',None) is None)
         else:
             from gf_models.structured_runtime import admit_hpo_training
             admit_hpo_training(config.actions,config.model.architecture(layout=LAYOUT),config.model.inference,
@@ -387,7 +391,7 @@ async def train_hpo_ppo(loaded_run: Any,collector: Any,directory: Path,*,gpu_job
         if spec.variant == 'shared-prefix' and loaded_run.config.model.model_id == 'mlp':
             raise ContractError('shared-prefix is sequence-only')
     operations: _HpoOperations
-    if loaded_run.config.hpo_spec.get('schema_version')==4:
+    if loaded_run.config.hpo_spec.get('schema_version') in (4,5):
         from gf_training.hpo_owned_run import _OwnedHpoOperations
         operations=_OwnedHpoOperations(gpu_job,progress,diagnostics,_training_execution=_training_execution)
     else:

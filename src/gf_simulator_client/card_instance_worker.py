@@ -72,6 +72,8 @@ class CardInstanceParticipantWorker(StructuredParticipantWorker):
         deadline: float | None = None,
     ) -> None:
         self.rules = card_instance_rules()
+        from gf_common.card_instance import shared_card_instance_contract
+        self._profile_io=actions.action_contract==shared_card_instance_contract()
         self.binding = game_binding(
             actions.action_contract, rule_signature(actions.action_contract, self.rules)
         )
@@ -350,6 +352,7 @@ class CardInstanceParticipantWorker(StructuredParticipantWorker):
             _timings(received["timings"])
             self.last_timings = {
                 **received["timings"],
+                **getattr(self,"_last_io_write",{}),**getattr(self,"_last_io_read",{}),
                 "parent_request_ms": (time.monotonic() - started) * 1000,
             }
             self.last_timings["communication_decode_host_ms"] = max(

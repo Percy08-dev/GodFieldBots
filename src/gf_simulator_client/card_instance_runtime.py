@@ -11,12 +11,17 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-from gf_common.card_instance import corrected_card_instance_contract
+from gf_common.card_instance import (
+    CardInstanceContract,
+    corrected_card_instance_contract,
+    reviewed_specs,
+    shared_card_instance_contract,
+)
 from gf_common.card_instance_runtime import (
     APPROVED_BINARY_SHA256,
     APPROVED_CHANGE_FILES,
     APPROVED_CHANGE_SHA256,
-    APPROVED_SPEC_FILES,
+    SHARED_APPROVED_BINARY_SHA256,
     validate_runtime_receipt,
 )
 from gf_common.domain import ContractError, Json, clone
@@ -55,7 +60,9 @@ def _read_hash(path: Path, deadline: float) -> tuple[str, list[int]]:
 class CardInstanceRuntimeEvidence:
     """No caller-supplied approval hashes; retain original source/binary evidence."""
 
-    def __init__(self, binary: Path, source_root: Path, *, deadline: float = float("inf")) -> None:
+    def __init__(self, binary: Path, source_root: Path, *, deadline: float = float("inf"), contract: CardInstanceContract | None = None) -> None:
+        self.contract = corrected_card_instance_contract() if contract is None else contract
+        self.shared = self.contract == shared_card_instance_contract()
         self.binary, self.source_root = binary.absolute(), source_root.absolute()
         self.deadline = deadline
         self._receipt: Json | None = None
@@ -73,33 +80,38 @@ class CardInstanceRuntimeEvidence:
         except subprocess.SubprocessError as error:
             raise ContractError("runtime source revision read failed") from error
         maps = []
-        for expected in (APPROVED_SPEC_FILES, APPROVED_CHANGE_FILES):
+        for expected in (reviewed_specs(self.contract), APPROVED_CHANGE_FILES):
             actual = {
                 name: _read_hash(self.source_root / name, self.deadline)[0] for name in expected
             }
             if actual != dict(expected):
                 raise ContractError("runtime source content differs from approved file inventory")
             maps.append(actual)
-        return {
+        result: Json = {
             "path": str(self.source_root),
             "revision": revision,
             "spec_files": maps[0],
             "change_files": maps[1],
         }
+        if self.shared:
+            status = subprocess.run(["git","-C",str(self.source_root),"status","--porcelain","--untracked-files=normal"],
+                check=True,capture_output=True,text=True,timeout=max(.001,min(10.,self.deadline-time.monotonic())))
+            result["dirty"] = bool(status.stdout.strip())
+        return result
 
     def preflight(self) -> Json:
         if self._closed:
             raise ContractError("runtime owner already finalized")
-        contract = corrected_card_instance_contract()
+        contract = self.contract
         sha, identity = _read_hash(self.binary, self.deadline)
         actual = {
-            "schema_version": 1,
+            "schema_version": 2 if self.shared else 1,
             "action_contract": asdict(contract),
             "build": {
-                "binary_sha256": APPROVED_BINARY_SHA256,
+                "binary_sha256": SHARED_APPROVED_BINARY_SHA256 if self.shared else APPROVED_BINARY_SHA256,
                 "spec_inventory_sha256": contract.spec_inventory_sha256,
                 "change_inventory_sha256": APPROVED_CHANGE_SHA256,
-                "spec_files": dict(APPROVED_SPEC_FILES),
+                "spec_files": reviewed_specs(contract),
                 "change_files": dict(APPROVED_CHANGE_FILES),
             },
             "binary": {"path": str(self.binary), "sha256": sha, "identity": identity},

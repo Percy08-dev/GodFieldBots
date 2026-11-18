@@ -27,7 +27,7 @@ def checked_storage_binding(value: object) -> Json:
 def packed_state(state: Json) -> bool:
     """Select an explicit variant, never interpreting a high version as corrected."""
     hpo = (type(state.get('schema_version')) is int and state['schema_version'] == 5
-        and state.get('run_variant') in ('hpo-ppo-v1','hpo-ppo-resident-v1','hpo-ppo-owned-v1') and state.get('model_version') == '4')
+        and state.get('run_variant') in ('hpo-ppo-v1','hpo-ppo-resident-v1','hpo-ppo-owned-v1','hpo-ppo-owned-shared-v1') and state.get('model_version') == '4')
     if (state.get('schema_version') == 4 and type(state.get('schema_version')) is int) or hpo and 'storage_binding' in state:
         checked_storage_binding(state.get('storage_binding'))
         return True
@@ -108,8 +108,17 @@ def checked_packed_proof(value: Json) -> Json:
         'rule_signature', 'layout_signature', 'qualified', 'parent_qualification',
         'manifest_sha256', 'source_set_sha256', 'files', 'games', 'accepted_decisions',
         'closure_counts', 'missing_replays', 'storage', 'custody'}
-    closed(value, fields)
-    if type(value['schema_version']) is not int or value['schema_version'] != 2 or value['kind'] != PROOF_KIND:
+    shared=type(value.get('schema_version')) is int and value['schema_version']==3
+    closed(value, fields | ({'service_usage'} if shared else set()))
+    if shared:
+        from dataclasses import asdict
+
+        from gf_common.card_instance import shared_card_instance_contract
+        if value['action_contract']!=asdict(shared_card_instance_contract()):
+            raise ContractError('shared packed proof requires adopted contract')
+        from gf_common.shared_inference import checked_usage
+        checked_usage(value['service_usage'])
+    if type(value['schema_version']) is not int or value['schema_version'] != (3 if shared else 2) or value['kind'] != PROOF_KIND:
         raise ContractError('explicit original packed proof2 required')
     storage, _ = checked_storage_custody(value['storage'], value['custody'])
     if not isinstance(value['files'], dict):

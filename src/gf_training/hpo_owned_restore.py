@@ -54,6 +54,7 @@ class _ColdScan(SealedScan):
         # mutation without decoding or reopening every historical file again.
         self.check()
         _check_archive_presence(self)
+        self.recheck_directories()
         from gf_models.structured_sealed import _identity
         for path,(identity,_sha) in self.files.items():
             if _identity(path.lstat())!=identity or path.is_symlink():
@@ -229,7 +230,9 @@ def _owned_update_metadata(update: Json, state: Json, previous: Json, current: J
     from gf_training.hpo_lineage import _CLASSIFICATION, HPO_UPDATE_FIELDS, _selection, hpo_spec
     from gf_training.hpo_source import learner_context_costs
     require_owned_record_version(update,'update')
-    closed(update,HPO_UPDATE_FIELDS|{'origin','encoder'}|({'storage_binding'} if 'storage_binding' in state else set()))
+    shared=state['run_variant']=='hpo-ppo-owned-shared-v1'
+    closed(update,HPO_UPDATE_FIELDS|{'origin','encoder'}|({'storage_binding'} if 'storage_binding' in state else set())|({'service_usage'} if shared else set()))
+    if update['schema_version']!=(7 if shared else 6):raise ContractError('owned update mode/version differs')
     generation=current['generation']
     integer(update['generation'],generation,generation)
     for key in ('run_id','model_id','model_version','input_recipe','hpo_spec_sha256',*_CLASSIFICATION):
@@ -241,7 +244,8 @@ def _owned_update_metadata(update: Json, state: Json, previous: Json, current: J
     if 'storage_binding' in state and update['storage_binding']!=state['storage_binding']:
         raise ContractError('owned update storage binding mismatch')
     proof=closed(update['source_proof'],{'schema_version','origin','encoder','manifest_sha256','games','generation','batch_id',
-        'selection','selection_sha256','replay_reconciled','snapshot_identity','expected_optimizer_step_delta','context_costs'})
+        'selection','selection_sha256','replay_reconciled','snapshot_identity','expected_optimizer_step_delta','context_costs'}|({'service_usage'} if shared else set()))
+    if proof['schema_version']!=(6 if shared else 5):raise ContractError('owned proof mode/version differs')
     require_owned_record_version(proof,'proof')
     if (proof['generation']!=generation-1 or type(proof['generation']) is not int
             or proof['batch_id']!=batch or proof['replay_reconciled'] is not False
@@ -358,7 +362,7 @@ def _read_owned_metadata(scan: Any, *, require_complete: bool=False) -> tuple[Js
     hpo_state(state)
     from gf_training.structured_lineage import _artifact_directories
     _artifact_directories(scan.root,state['updates'],scan)
-    if state['run_variant']!='hpo-ppo-owned-v1': raise ContractError('owned import requires exact owned Run5')
+    if state['run_variant'] not in ('hpo-ppo-owned-v1','hpo-ppo-owned-shared-v1'): raise ContractError('owned import requires exact owned Run5')
     if require_complete and state['status']!='complete': raise ContractError('complete owned final-D parent required')
     count=state['updates']
     if type(scan) is _ColdScan:
@@ -399,7 +403,12 @@ def _read_owned_metadata(scan: Any, *, require_complete: bool=False) -> tuple[Js
             raise ContractError('owned recorded schedule/registry/seats mismatch')
     registry=scan.object(scan.root/'artifact-registry.json')
     require_owned_record_version(registry,'registry')
-    closed(registry,{'schema_version','origin','encoder','generations','evaluation_references','cache_references'})
+    shared=state['run_variant']=='hpo-ppo-owned-shared-v1'
+    closed(registry,{'schema_version','origin','encoder','generations','evaluation_references','cache_references'} | ({'service_references'} if shared else set()))
+    if registry['schema_version']!=(7 if shared else 6):raise ContractError('owned registry mode/version mismatch')
+    if shared:
+        from gf_training.shared_serving import validate_service_references
+        validate_service_references(registry,state,records,scan)
     if set(registry['generations'])!={str(number) for number in range(count+1)}:
         raise ContractError('owned registry generation inventory mismatch')
     _owned_cache_journal(scan,state,records,registry)

@@ -43,6 +43,7 @@ from gf_common.card_instance import ActionConfigV3
 from gf_common.card_instance_collection import HPO_EVALUATION_STREAM_VERSION
 from gf_common.domain import ContractError, Json, canonical, digest
 from gf_common.hpo_progress import ProgressCallback
+from gf_common.shared_inference import evaluation_runtime
 from gf_common.structured_layout import CORRECTED_CARD_INSTANCE_LAYOUT as LAYOUT
 from gf_models.structured_binding import ConfiguredNeuralModelV3
 
@@ -69,7 +70,7 @@ def validate(loaded: LoadedHPOConfig) -> Json:
 
 def _conditions(loaded: LoadedHPOConfig) -> Json:
     """Measure source/binary facts without Torch/device allocation or gameplay."""
-    from gf_common.card_instance import CORRECTED_REVIEWED_SPEC_HASHES
+    from gf_common.card_instance import reviewed_specs
     from gf_common.card_instance_rules import card_instance_rules, rule_signature
     from gf_models.arrays import sha256
     from gf_models.structured_binding import child_cuda_visibility
@@ -78,29 +79,32 @@ def _conditions(loaded: LoadedHPOConfig) -> Json:
     config = loaded.base.config
     if type(config.actions) is not ActionConfigV3 or type(config.model) is not ConfiguredNeuralModelV3:
         raise ContractError('HPO conditions require the exact corrected model3 base')
-    if hasattr(loaded.config, 'training_opponents') and loaded.config.schema_version!=4:
+    if hasattr(loaded.config, 'training_opponents') and loaded.config.schema_version not in (4,5):
         from gf_training.native_backend import require_native_refresh_opponents
         require_native_refresh_opponents()
     deadline = time.monotonic() + loaded.config.run_wall_seconds
     if config.server.source_dir is None or config.server.external_url is not None:
         raise ContractError('HPO requires its approved locally managed Simulator source/binary')
-    evidence = CardInstanceRuntimeEvidence(Path(config.server.binary), Path(config.server.source_dir), deadline=deadline)
+    evidence = CardInstanceRuntimeEvidence(Path(config.server.binary), Path(config.server.source_dir), contract=config.actions.action_contract, deadline=deadline)
     measured = evidence.preflight()
-    value = {'schema_version': 1, 'kind': 'hpo-study-conditions', 'producer_identity': source_identity(deadline),
+    value: Json = {'schema_version': 1, 'kind': 'hpo-study-conditions', 'producer_identity': source_identity(deadline),
         'integration_identity': {'binary_sha256': measured['binary']['sha256'],
             'server_config_sha256': sha256(Path(config.server.config), deadline),
             'declared_simulator_revision': config.server.simulator_revision, 'binary_build_revision': None,
-            'source_revision': measured['source']['revision'], 'source_spec_sha256': dict(CORRECTED_REVIEWED_SPEC_HASHES)},
+            'source_revision': measured['source']['revision'], 'source_spec_sha256': reviewed_specs(config.actions.action_contract)},
         'action_config_sha256': digest(asdict(config.actions)), 'action_contract': asdict(config.actions.action_contract),
         'rule_signature': rule_signature(config.actions.action_contract, card_instance_rules()),
         'input_recipe': LAYOUT.input_recipe, 'evaluation_streams': HPO_EVALUATION_STREAM_VERSION,
         'decision_budget': loaded.config.decision_budget, 'learning_seeds': list(loaded.config.learning_seeds),
         'game_seeds': list(loaded.config.evaluation_game_seeds), 'inference_binding': asdict(loaded.config.inference),
         'cuda_visible_devices': child_cuda_visibility(loaded.config.inference.device, config.model.cuda_visible_devices)}
+    if measured['schema_version']==2:value['integration_identity']['source_dirty']=measured['source']['dirty']
     if hasattr(loaded.config,'runtime'):
-        from gf_common.hpo_resident import resident_runtime
-        value['evaluation_runtime'] = resident_runtime(loaded.config.runtime)
-    if loaded.config.schema_version==4:
+        value['evaluation_runtime'] = evaluation_runtime(loaded.config)
+    if loaded.config.schema_version==5:
+        from gf_common.shared_inference import shared_dependency_versions
+        value['shared_inference_libraries']=shared_dependency_versions()
+    if loaded.config.schema_version in (4,5):
         value.update(origin=loaded.effective['origin'],encoder=loaded.effective['encoder'])
     elif config.preprocessing.backend == 'rust':
         from gf_training.native_backend import binary_identity, hpo_reader_settings, load_native
@@ -151,6 +155,9 @@ async def _train_seed(store: CampaignStore, loaded: LoadedHPOConfig, campaign: J
     composition = owned_runtime_module('gf_cli.hpo_config', ('materialize_hpo_run',))
     core = owned_runtime_module('gf_cli.card_instance', ('collect_hpo_ppo',))
     runtime = owned_runtime_module('gf_training.hpo_ppo', ('train_hpo_ppo', 'HpoRunResult'))
+    if loaded.config.schema_version==5:
+        from gf_cli.hpo_evaluation import prospective_evaluation_admission
+        prospective_evaluation_admission(loaded,proposal.settings)
     run_id = str(uuid.uuid4())
     directory = Path(loaded.config.storage.parent_root) / run_id
     materialized = composition.materialize_hpo_run(loaded, proposal.settings, learning_seed=seed, run_id=run_id)
@@ -159,7 +166,7 @@ async def _train_seed(store: CampaignStore, loaded: LoadedHPOConfig, campaign: J
         'proposal_sha256': proposal.sha256, 'training_seed': seed, 'run_id': run_id, 'run_path': str(directory),
         'config_sha256': materialized.sha256})
     from gf_common.training_opponents import training_opponents
-    if training_opponents(materialized.effective) is not None and materialized.config.hpo_spec['schema_version']!=4:
+    if training_opponents(materialized.effective) is not None and materialized.config.hpo_spec['schema_version'] not in (4,5):
         from gf_training.native_backend import require_native_refresh_opponents
         require_native_refresh_opponents()
     with admit_gpu_job(JobContext(campaign['campaign_id'], run_id, 'training', run_id, None),
@@ -180,7 +187,7 @@ async def _train_seed(store: CampaignStore, loaded: LoadedHPOConfig, campaign: J
         try:
             persist_training_receipt(store, loaded, campaign, proposal, training_seed=seed, run_id=run_id,
                 directory=directory, termination=result.gpu_termination, deadline=time.monotonic() + loaded.config.run_wall_seconds,
-                **({'completion':completion} if materialized.config.hpo_spec['schema_version']==4 else {}))
+                **({'completion':completion} if materialized.config.hpo_spec['schema_version'] in (4,5) else {}))
             return completion
         except BaseException:
             if completion is not None: completion.close()
@@ -198,6 +205,9 @@ async def run_campaign(loaded: LoadedHPOConfig, directory: Path, *, mode: str,
     owned_runtime_module('gf_cli.hpo_config', ('materialize_hpo_run',))
     owned_runtime_module('gf_training.hpo_ppo', ('train_hpo_ppo',))
     validate(loaded)
+    if loaded.config.schema_version==5:
+        from gf_cli.hpo_evaluation import prospective_evaluation_admission
+        prospective_evaluation_admission(loaded)
     check_storage(loaded.config.storage, campaign_dir=directory, originals_root=_originals(loaded),
         deadline=time.monotonic() + loaded.config.run_wall_seconds)
     conditions = _conditions(loaded)
@@ -468,7 +478,7 @@ async def compare_trials(common: LoadedHPOConfig, left_path: Path, right_path: P
                             panel = await evaluate_comparison(store, left, right, left_proposal, right_proposal,
                                 left_training, right_training, comparison_id=comparison_id, conditions_sha256=condition_sha,
                                 output=output / 'evaluations' / str(uuid.uuid4()),
-                                evaluation_runtime=getattr(common.config,'runtime',None),progress=owner.emit)
+                                evaluation_runtime=evaluation_runtime(common.config),progress=owner.emit)
                             panels.append(panel)
                             if hasattr(common.config,'runtime'):
                                 matchup_receipts[f'{left_seed}-{right_seed}'] = store.get(f'matchups/{left_seed}-{right_seed}/receipt.json')[1]

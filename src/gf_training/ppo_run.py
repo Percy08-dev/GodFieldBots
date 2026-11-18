@@ -558,8 +558,8 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
                     ops.initialize_state(state, config)
                 if ops:
                     ops.persist_control(directory / 'artifact-registry.json', ({'schema_version':ops.registry_schema,'generations':{},'evaluation_references':{}}
-                        | ({'cache_references':{}} if ops.registry_schema in (5,6) else {}) if hpo else
-                        {'schema_version': 3 if game else 2, 'generations': {}}), config, deadline=identity_deadline)
+                        | ({'cache_references':{}} if ops.registry_schema in (5,6,7) else {}) | ({'service_references':{}} if ops.registry_schema==7 else {}) if hpo else
+                        ({'schema_version': ops.registry_schema if game else 2, 'generations': {}} | ({'service_references':{}} if game and ops.registry_schema==4 else {}))), config, deadline=identity_deadline)
                     ops.persist_control(directory / 'run.json', state, config, deadline=identity_deadline)
                 else:
                     atomic_json(directory / 'artifact-registry.json', {})
@@ -593,6 +593,14 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
             execution = invocation_started + state['execution_deadline_unix'] - now
             admission = invocation_started + state['admission_deadline_unix'] - now
             # Even initialization and source-identity work consume the original clock.
+            shared_invocation: Json | None=None
+            if game:
+                from gf_common.shared_inference import serving_config
+                if serving_config(config) is not None:
+                    from gf_training.shared_inventory import new_invocation
+                    shared_invocation={'mode':mode,'elapsed_seconds':0.,'child_health':{},
+                        'shared_service':new_invocation(state['updates'])}
+                    state['invocations'].append(shared_invocation)
             state['status'] = 'running'
             if hpo: state['stop_reason']=None
             if ops:
@@ -716,6 +724,8 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
                         if collection.directory.resolve() != (directory / 'collections' / batch_id).resolve() or collection.report.get('comparison_valid') is not True:
                             raise ContractError('collection callback did not finalize requested original batch')
                         if game:
+                            if getattr(ops,'shared_controller',None) is not None:
+                                ops.shared_controller.finish_collection(plan)
                             ops.accept_collection(collection, config)
                         check_clock()
                         from gf_common.schedule import serialize_schedule
@@ -835,6 +845,9 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
                         if ops:
                             if game:
                                 ops.update_record(update, state, numeric_files)
+                                if shared_invocation is not None:
+                                    update['service_usage']=proof['service_usage']
+                                    update['schema_version']=7 if hpo else 5
                             else:
                                 update.update(schema_version=2, model_id=state['model_id'], model_version='2', input_recipe=state['input_recipe'],
                                               action_contract=state['action_contract'], purpose='component', synthetic_capacity=False,
@@ -845,6 +858,9 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
                                 generation_scope.close()  # Retire original Source/control/registry snapshots BEFORE pins.
                                 ops.phase('sync')
                                 await ops.resident_runtime.after_commit(next_generation, committed_record)
+                            if not hpo and getattr(ops,'shared_controller',None) is not None:
+                                generation_scope.close()
+                                ops.shared_controller.after_commit(next_generation)
                             ops.retain(directory, next_generation, config, execution)
                         else:
                             commit_generation(directory, state, generation=next_generation, update=update, controls=_controls(rng, pool, next_generation), deadline=execution)
@@ -868,11 +884,22 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
                     error = error or failure
                     state['cleanup_failure'] = str(failure)
                 try:
+                    if not hpo and getattr(ops,'shared_controller',None) is not None:
+                        ops.shared_controller.close()
+                except BaseException as failure:  # noqa: BLE001 - service failure never skips independent learner reap.
+                    if error is not None:error.add_note('shared service cleanup: '+str(failure))
+                    error = error or failure
+                    state['cleanup_failure'] = str(failure)
+                    if getattr(ops,'shared_controller',None) is not None:
+                        vars(error)['shared_cleanup_owner']=ops.shared_controller
+                try:
                     if owned: await ops.close_owned_child(child,min(wall,time.monotonic()+training.cleanup_seconds))
                     else: await child.close(min(wall, time.monotonic() + training.cleanup_seconds))
                 except BaseException as failure:  # noqa: BLE001 - persist failure after owned cleanup
+                    if error is not None:error.add_note('learner cleanup: '+str(failure))
                     error = error or failure
                     state['cleanup_failure'] = str(failure)
+                    vars(error)['learner_cleanup_owner']=child
             if game:
                 try:
                     ops.close_batch()
@@ -888,7 +915,9 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
                     error = clock_failure
                 else:
                     error.add_note('PPO cleanup clock observation: ' + str(clock_failure))
-            state['invocations'].append({'mode': mode, 'elapsed_seconds': time.monotonic() - invocation_started, 'child_health': child.health})
+            invocation_end={'mode':mode,'elapsed_seconds':time.monotonic()-invocation_started,'child_health':child.health}
+            if shared_invocation is None:state['invocations'].append(invocation_end)
+            else:shared_invocation.update(invocation_end)
             state['elapsed_seconds'] = state['last_unix'] - state['created_unix']
             try:
                 storage_bytes = measure_owned(wall)
@@ -910,6 +939,13 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
                     if error is not None: error.add_note('HPO final cleanup: '+str(cleanup))
                     error=error or cleanup
                     state['cleanup_failure']=str(cleanup)
+            if shared_invocation is not None:
+                try:
+                    from gf_training.shared_inventory import finish_invocation
+                    finish_invocation(ops,state,shared_invocation['shared_service'],error=error)
+                except BaseException as cleanup:  # noqa: BLE001 - missing proof invalidates this invocation.
+                    if error is not None:error.add_note('shared invocation finalization: '+str(cleanup))
+                    error=error or cleanup
             if error is not None or time.monotonic() >= wall or storage_bytes is None or storage_bytes > training.max_owned_bytes:
                 state.update(status='failed', failure=type(error).__name__ if error else 'LimitOverrun', quarantine=True)
             else:

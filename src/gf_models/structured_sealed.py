@@ -95,6 +95,7 @@ class SealedScan:
         self.limit, self.deadline, self.retained, self.peak = max_owned_bytes, deadline, 0, 0
         self.files: dict[Path, tuple[tuple[int, ...], str]] = {}
         self.inventories: dict[Path, tuple[str, ...]] = {}
+        self.directory_inventories: dict[Path, tuple[Any,tuple[str,...]]] = {}
 
     def verified_digest(self, path: Path) -> str:
         """Digest from an explicitly admitted physical original."""
@@ -160,6 +161,32 @@ class SealedScan:
                 raise ContractError('sealed object required')
             return value
 
+    def directories(self, path: Path, expected: set[str]) -> None:
+        self.check()
+        self.charge(1024+1024*len(expected))
+        before=path.lstat()
+        if not stat.S_ISDIR(before.st_mode) or path.is_symlink():raise ContractError('sealed directory namespace required')
+        seen=set()
+        with os.scandir(path) as entries:
+            for entry in entries:
+                self.check()
+                if entry.name not in expected or entry.name in seen or not entry.is_dir(follow_symlinks=False):
+                    raise ContractError('sealed directory inventory differs')
+                seen.add(entry.name)
+        names=tuple(sorted(seen))
+        if seen!=expected:raise ContractError('sealed directory inventory differs')
+        if _identity(path.lstat())!=_identity(before):raise ContractError('sealed directory changed')
+        prior=self.directory_inventories.get(path)
+        value=(_identity(before),names)
+        if prior is not None and prior!=value:raise ContractError('sealed directory inventory changed')
+        self.directory_inventories[path]=value
+
+    def recheck_directories(self) -> None:
+        for path,(identity,names) in self.directory_inventories.items():
+            self.check()
+            if path.is_symlink() or _identity(path.lstat())!=identity or tuple(sorted(entry.name for entry in path.iterdir()))!=names:
+                raise ContractError('sealed directory namespace changed')
+
     def inventory(self, directory: Path, expected: set[str]) -> None:
         names, storage = self._inventory(directory, expected)
         previous = self.inventories.get(directory)
@@ -199,6 +226,7 @@ class SealedScan:
 
     def finalize(self) -> None:
         self.check()
+        self.recheck_directories()
         self.charge(128 * len(self.files) + 512, temporary=True)
         snapshots = list(self.files.items())
         for path, (_, expected) in snapshots:
@@ -279,16 +307,12 @@ def static_semantics_v3(model: Any, *, layout: StructuredLayout, action_contract
     from dataclasses import asdict
 
     from gf_common.card_instance import CATALOG_META as CARD_CATALOG
-    from gf_common.card_instance import (
-        CORRECTED_REVIEWED_SPEC_HASHES,
-        CORRECTED_SPEC_INVENTORY_HASH,
-    )
-    from gf_common.card_instance import REVIEWED_SPEC_HASHES as OLD_CARD_SPECS
     from gf_common.card_instance_rules import rule_signature
     model_config_v3(asdict(model), layout=layout)
     if layout is not layout_for_contract(action_contract):
         raise ContractError("recorded model3 profile/layout mismatch")
-    specs = CORRECTED_REVIEWED_SPEC_HASHES if action_contract.spec_inventory_sha256 == CORRECTED_SPEC_INVENTORY_HASH else OLD_CARD_SPECS
+    from gf_common.card_instance import reviewed_specs
+    specs = reviewed_specs(action_contract)
     return {"input_recipe": layout.input_recipe, "generator_version": layout.generator,
         "policy_input_version": layout.policy_input_version, "end_projection_version": END_PROJECTION_VERSION,
         "reward_policy_version": "natural-terminal-v1", "reviewed_spec_hashes": specs,

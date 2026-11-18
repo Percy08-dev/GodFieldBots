@@ -1,0 +1,40 @@
+# New Simulator contract; Python preprocessing. The benchmark harness binds an exact source/binary.
+# Resident HPO functional base; not a formal training declaration.
+schema_version = 1
+kind = "experiment"
+
+[references]
+actions = "../actions/card-instance-v2-shared.toml"
+model = "../models/card-instance-mlp.toml"
+opponent = "../models/random.toml"
+preprocessing = "../preprocessing/card-instance-python.toml"
+
+[run]
+name = "mlp-shared-inference-base"
+output_dir = "../../runs/ppo-shared-inference-v1/base"
+split = "train"
+wall_seconds = 600
+admission_seconds = 480
+execution_seconds = 540
+finalization_seconds = 60
+sampling_seeds = [17]
+concurrency = 2
+max_participant_workers = 4
+global_cuda_budget_bytes = 12884901888
+
+[server]
+gameplay_api = "v2"
+simulator_revision = "072dabbca1458c9526897781d2fd64edeeb4f9ca"
+source_dir = "../../../GodFieldSimurator"
+binary = "../../../GodFieldSimurator/target/release/gf-test-server"
+config = "../test-server.toml"
+fixed_seed_experiment = true
+
+[model.inference]
+device = "cuda:0"
+
+[training]
+algorithm = "ppo"
+device = "cuda:0"
+seeds = [17]
+max_updates = 2

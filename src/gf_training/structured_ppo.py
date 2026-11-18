@@ -112,8 +112,16 @@ def preprocessing_identity(config: Any, *, deadline: float) -> Json:
 def execution(config: Any) -> Json:
     inference = config.model.inference
     learner = replace(inference, device=config.training.device)
-    return {role: {'binding': asdict(binding), 'cuda_visible_devices': child_cuda_visibility(binding.device, config.model.cuda_visible_devices)}
+    result: Json = {role: {'binding': asdict(binding), 'cuda_visible_devices': child_cuda_visibility(binding.device, config.model.cuda_visible_devices)}
             for role, binding in (('learner', learner), ('inference', inference))}
+    from gf_common.shared_inference import (
+        SHARED_ADMISSION,
+        serving_config,
+        shared_dependency_versions,
+    )
+    runtime=serving_config(config)
+    if runtime is not None: result['service']={'runtime':runtime,'admission_recipe':SHARED_ADMISSION,'libraries':shared_dependency_versions(),'record_version':2}
+    return result
 
 
 def initialize_state(state: Json, config: Any) -> None:

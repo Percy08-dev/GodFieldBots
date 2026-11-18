@@ -21,10 +21,13 @@ class ReservationLedger:
         self.updating = False
         self.peak_cuda_bytes = learner_bytes
         self.learner: LearnerReservation | None = None
+        self.service: ServiceReservation | None = None
+        self._shared_update_bytes = 0
 
     @property
     def cuda_bytes(self) -> int:
         return (self.learner_bytes + (self.learner.resident_bytes if self.learner is not None else 0)
+                + (self.service.resident_bytes if self.service is not None else 0) + self._shared_update_bytes
                 + sum(worker.resident_bytes + sum(worker.decisions.values()) for worker in self.workers.values()))
 
     def reserve_learner(self, resident_bytes: int, owner: Any) -> LearnerReservation:
@@ -47,7 +50,7 @@ class ReservationLedger:
 
     def begin_update(self, temporary_bytes: int) -> None:
         integer(temporary_bytes, 0, self.global_cuda_bytes)
-        if self.workers or self.updating or self.cuda_bytes + temporary_bytes > self.global_cuda_bytes:
+        if self.workers or self.service is not None or self.updating or self.cuda_bytes + temporary_bytes > self.global_cuda_bytes:
             raise ContractError("learner update overlaps collection or exceeds shared CUDA budget")
         self.updating = True
         self.peak_cuda_bytes = max(self.peak_cuda_bytes, self.cuda_bytes + temporary_bytes)
@@ -56,6 +59,59 @@ class ReservationLedger:
         if not self.updating:
             raise ContractError("learner update reservation is not active")
         self.updating = False
+        self._shared_update_bytes = 0
+
+    def reserve_service(self, resident_bytes: int, owner: Any) -> ServiceReservation:
+        integer(resident_bytes,0,self.global_cuda_bytes)
+        if self.service is not None or self.updating or self.cuda_bytes+resident_bytes>self.global_cuda_bytes:
+            raise ContractError('shared service residency exceeds or duplicates live reservation')
+        self.service = ServiceReservation(self,resident_bytes,owner)
+        self.peak_cuda_bytes=max(self.peak_cuda_bytes,self.cuda_bytes)
+        return self.service
+
+    def begin_shared_update(self, temporary_bytes: int, *, service: ServiceReservation, quiescence: object) -> None:
+        integer(temporary_bytes,0,self.global_cuda_bytes)
+        service.require_quiescent(quiescence)
+        if service is not self.service or self.updating or any(worker.decisions for worker in self.workers.values()) or self.cuda_bytes+temporary_bytes>self.global_cuda_bytes:
+            raise ContractError('shared update overlaps requests or exceeds managed CUDA budget')
+        self._shared_update_bytes=temporary_bytes
+        self.updating=True
+        self.peak_cuda_bytes=max(self.peak_cuda_bytes,self.cuda_bytes)
+
+
+@dataclass
+class ServiceReservation:
+    ledger: ReservationLedger
+    resident_bytes: int
+    owner: Any = field(repr=False)
+    released: bool = False
+    _quiescence: object | None = field(default=None,repr=False)
+    proof: Any = None
+
+    def _require(self, owner: Any) -> None:
+        if owner is not self.owner or self.released or self.ledger.service is not self:
+            raise ContractError('SAME actual shared service owner required')
+
+    def quiescent(self, owner: Any) -> object:
+        self._require(owner)
+        self._quiescence=object()
+        return self._quiescence
+
+    def require_quiescent(self, token: object) -> None:
+        self._require(self.owner)
+        if token is not self._quiescence or token is None:
+            raise ContractError('original current shared service quiescence required')
+
+    def invalidate(self, owner: Any) -> None:
+        self._require(owner)
+        self._quiescence=None
+
+    def retired(self, owner: Any, proof: Any) -> None:
+        self._require(owner)
+        owner.require_retirement(proof)
+        self.proof=proof
+        self.released=True
+        self.ledger.service=None
 
 
 @dataclass

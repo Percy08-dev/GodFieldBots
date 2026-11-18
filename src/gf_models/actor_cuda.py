@@ -14,6 +14,7 @@ from gf_common.domain import ContractError, Json
 from gf_common.structured_layout import StructuredLayout
 from gf_models.structured_config import (
     InferenceBindingV2,
+    ModelConfigV3,
     ModelConfigV4,
     dimensions,
     parameter_shapes,
@@ -57,7 +58,7 @@ def _attention_scratch(width: int, heads: int, feedforward: int, queries: int, k
 def actor_cuda_estimate(model: ModelConfigV4, binding: InferenceBindingV2, *,
                         layout: StructuredLayout) -> Json:
     """Keep all legacy shape/managed guards; change no policy-visible costs."""
-    if type(model) is not ModelConfigV4:
+    if type(model) not in (ModelConfigV3,ModelConfigV4):
         raise ContractError('actor device estimate requires homogeneous Model4')
     resource_estimate(model, binding, layout=layout, suffix_decisions=1)
     d = dimensions(model, layout=layout)

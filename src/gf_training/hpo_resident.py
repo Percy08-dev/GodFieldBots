@@ -318,7 +318,7 @@ class EvaluationPoolScope:
 
 class ResidentPoolCustody:
     """One actual-job lifetime; physical viewers never change or disappear on PARK."""
-    def __init__(self, job: GpuJob, *, run_id: str, pool_id: str, evaluation_scope: EvaluationPoolScope | None = None) -> None:
+    def __init__(self, job: GpuJob, *, run_id: str, pool_id: str, evaluation_scope: EvaluationPoolScope | None = None, shared: bool = False) -> None:
         if type(job) is not GpuJob or type(job.ledger) is not _AuditedLedger:
             raise ContractError('resident custody requires actual HPO job/audited ledger')
         job._require_open()
@@ -341,6 +341,9 @@ class ResidentPoolCustody:
             raise ContractError('actual HPO job already has resident custody')
         self.job, self.run_id, self.pool_id = job, run_id, pool_id
         self.evaluation_scope = evaluation_scope
+        self.shared=shared
+        self.service: Any=None
+        self.service_quiescence: Any=None
         self.ledger = cast(_AuditedLedger, job.ledger)
         self.pool_epoch = 1
         self._epoch = 0
@@ -353,6 +356,20 @@ class ResidentPoolCustody:
         self._cached: dict[int, set[str]] = {}
         self._releases: dict[str, CacheReleaseAuthority] = {}
         job.ledger._resident_pool = self
+
+    @property
+    def _protocol(self) -> str:
+        from gf_common.shared_inference import CPU_PROTOCOL
+        return CPU_PROTOCOL if self.shared else RESIDENT_MODE
+
+    def _reset_fields(self) -> Json:
+        from gf_common.shared_inference import cpu_reset_fields
+        return cpu_reset_fields() if self.shared else {'clean_reset':True,'private_state_empty':True,
+            'pending_io_empty':True,'cuda_synchronized':True,'reset_version':'resident-reset-v1'}
+
+    def _checked_ack(self,value: Json) -> Json:
+        from gf_common.shared_inference import checked_cpu_ack
+        return checked_cpu_ack(value) if self.shared else checked_ack(value)
 
     def _require(self, *, cleanup: bool = False) -> None:
         self.job._require_open()
@@ -433,7 +450,7 @@ class ResidentPoolCustody:
         self._live(row)
         if row.bootstrap is not None or row.pending is not None or row.io or row.setups or row.lease_epoch:
             raise ContractError('resident bootstrap requires new original owner')
-        request = {'schema_version': 1, 'protocol': RESIDENT_MODE, 'command': 'READY',
+        request = {'schema_version': 2 if self.shared else 1, 'protocol': self._protocol, 'command': 'READY',
             'run_id': self.run_id, **self._identity(row)}
         row.pending = request
         return clone(request)
@@ -443,8 +460,7 @@ class ResidentPoolCustody:
         self._live(row)
         try:
             expected = {**(row.pending or {}), 'kind': 'READY', 'clean_reset': True,
-                'private_state_empty': True, 'pending_io_empty': True, 'cuda_synchronized': True,
-                'reset_version': 'resident-reset-v1'}
+                **self._reset_fields()}
             if (row.bootstrap is not None or row.io or row.setups or row.worker.decisions
                     or not row.pending or row.pending.get('command') != 'READY'
                     or canonical(response) != canonical(expected)):
@@ -495,7 +511,7 @@ class ResidentPoolCustody:
                 or self.ledger.updating or command == 'BEGIN' and worker.decisions):
             raise ContractError('resident episode request overlaps original work')
         row.request_epoch += 1
-        request = {**self._identity(row), 'schema_version': 1, 'protocol': RESIDENT_MODE,
+        request = {**self._identity(row), 'schema_version': 2 if self.shared else 1, 'protocol': self._protocol,
             'run_id': self.run_id, 'generation': row.generation, 'command': command,
             'request_epoch': row.request_epoch, 'checkpoint_sha256': row.checkpoint}
         row.pending = request
@@ -621,11 +637,10 @@ class ResidentPoolCustody:
             if command != 'SYNC' or generation != row.generation + 1:
                 raise ContractError('resident SYNC target must be exactly next generation')
         row.request_epoch += 1
-        request = {**self._identity(row), 'schema_version':1, 'protocol':RESIDENT_MODE,
+        request = {**self._identity(row), 'schema_version':2 if self.shared else 1, 'protocol':self._protocol,
             'run_id':self.run_id,'generation':row.generation if generation is None else generation,'command':command,
             'request_epoch':row.request_epoch,'checkpoint_sha256':checkpoint_sha256,'cache_identity':cache_identity}
-        checked_ack({**request, 'clean_reset':True,'private_state_empty':True,'pending_io_empty':True,
-            'cuda_synchronized':True,'reset_version':'resident-reset-v1'})
+        self._checked_ack({**request, **self._reset_fields()})
         row.pending = request
         row.park_ack = None
         self._invalidate()
@@ -635,7 +650,7 @@ class ResidentPoolCustody:
         row = self._row(worker)
         self._live(row)
         try:
-            raw = checked_ack(acknowledgement)
+            raw = self._checked_ack(acknowledgement)
             if row.pending is None or canonical({key:raw[key] for key in REQUEST_KEYS}) != canonical(row.pending):
                 raise ContractError('resident original ACK identity/epoch/request differs')
             if raw['command'] == 'END':
@@ -674,7 +689,7 @@ class ResidentPoolCustody:
         if row.state not in ('idle','parked') or row.pending is not None or row.io or row.setups or worker.decisions:
             raise ContractError('resident CLOSE requires actual idle transport')
         row.request_epoch += 1
-        request = {**self._identity(row),'schema_version':1,'protocol':RESIDENT_MODE,'run_id':self.run_id,
+        request = {**self._identity(row),'schema_version':2 if self.shared else 1,'protocol':self._protocol,'run_id':self.run_id,
             'generation':row.generation,'command':'CLOSE','request_epoch':row.request_epoch}
         row.pending = request
         self._invalidate()
@@ -794,11 +809,16 @@ class ResidentPoolCustody:
                 raise ContractError('resident owner has unretired lease/I/O/decision/ACK')
 
     def _evidence(self, generation: int, collection_id: str) -> Json:
-        return checked_retirement({'schema_version':1,'kind':'hpo-resident-logical-retirement',
+        value: Json={'schema_version':2 if self.shared else 1,'kind':'hpo-shared-cpu-logical-retirement' if self.shared else 'hpo-resident-logical-retirement',
             'run_id':self.run_id,'collection_id':collection_id,'job_ticket':self.job.ticket,
             'pool_id':self.pool_id,'pool_epoch':self.pool_epoch,'generation':generation,
             'owners':[{**self._identity(row),'end_ack':row.end_ack,'end_ack_sha256':digest(row.end_ack),
-                'park_ack':row.park_ack,'park_ack_sha256':digest(row.park_ack)} for _,row in sorted(self._owners.items()) if not row.worker.released]}, max_workers=self.ledger.max_workers)
+                'park_ack':row.park_ack,'park_ack_sha256':digest(row.park_ack)} for _,row in sorted(self._owners.items()) if not row.worker.released]}
+        if self.shared:
+            from gf_common.shared_inference import checked_cpu_retirement
+            value['service_quiescence']=self.service_quiescence
+            return checked_cpu_retirement(value,max_workers=self.ledger.max_workers)
+        return checked_retirement(value,max_workers=self.ledger.max_workers)
 
     def parked_authority(self, *, generation: int, collection_id: str) -> ParkedAuthority:
         self._require()

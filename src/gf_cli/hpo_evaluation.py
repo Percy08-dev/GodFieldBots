@@ -33,6 +33,7 @@ from gf_common.domain import (
 )
 from gf_common.hpo_progress import observe
 from gf_common.schedule import serialize_schedule
+from gf_common.shared_inference import evaluation_runtime
 from gf_training.hpo_gpu_lease import GpuJob
 
 if TYPE_CHECKING:
@@ -464,6 +465,27 @@ def _parent_conditions(inspection: ParentInspection, campaign: Json) -> None:
         raise ContractError('original parent native preprocessing identity changed')
 
 
+def prospective_evaluation_admission(loaded: LoadedHPOConfig,settings: Any=None) -> Json:
+    """Full-campaign guard only; direct bounded training does not create evaluation."""
+    from gf_common.card_instance_rules import card_instance_rules
+    from gf_common.domain import RuntimePolicyBinding
+    from gf_models.structured_binding import input_binding_game_v3
+    from gf_models.structured_runtime import admit_hpo_game_workers
+    config=loaded.config
+    model=config.model if settings is None else settings.model
+    actions: Any=loaded.base.config.actions
+    base_model: Any=loaded.base.config.model
+    options={'version':'4','checkpoint':'/prospective-final-inference','expected_manifest_digest':'0'*64,
+        'model':asdict(model),'inference':asdict(config.inference),
+        'cuda_visible_devices':base_model.cuda_visible_devices,
+        'action_config_hash':digest(asdict(actions)),**input_binding_game_v3(actions.action_contract,card_instance_rules())}
+    op=config.operating
+    result=admit_hpo_game_workers(actions,(RuntimePolicyBinding(model.model_id,options),RuntimePolicyBinding('heuristic')),
+        rules=card_instance_rules(),game_concurrency=op.game_concurrency,global_cuda_bytes=op.managed_cuda_bytes,
+        max_workers=op.max_participant_workers)
+    return result|{'evaluation_runtime':evaluation_runtime(config),'scope':'planned fresh final-policy vs baseline; no evaluation authority'}
+
+
 def inspect_training_parent(directory: Path, loaded: LoadedHPOConfig, settings: object, *,
                             training_seed: int, run_id: str, deadline: float, completion: Any = None) -> ParentInspection:
     """Actually validate complete originals; Run5/JSON alone is never authority."""
@@ -478,7 +500,7 @@ def inspect_training_parent(directory: Path, loaded: LoadedHPOConfig, settings: 
     directory = directory.resolve()
     if training_seed not in loaded.config.learning_seeds or not directory.is_relative_to(Path(loaded.config.storage.parent_root)):
         raise ContractError('parent is outside the declared campaign run/seed namespace')
-    if loaded.config.schema_version==4:
+    if loaded.config.schema_version in (4,5):
         from gf_training.hpo_owned_completion import OwnedRunCompletion
         if completion is not None:
             if type(completion) is not OwnedRunCompletion: raise ContractError('actual owned completion required')
@@ -718,6 +740,8 @@ def verify_seed_evaluation(store: object, loaded: LoadedHPOConfig, campaign: Jso
         if canonical(training[key]) != canonical(source[key]):
             raise ContractError('training receipt differs from full final-D Source facts')
     termination, term_sha = store.get(folder + '/training-gpu-termination.json')
+    if termination.get('schema_version')!=(2 if loaded.config.schema_version==5 else 1):
+        raise ContractError('training GPU termination version differs from explicit campaign mode')
     verify_gpu_termination(termination, campaign_id=campaign['campaign_id'], operation_id=training['run_id'],
         run_id=training['run_id'], evaluation_id=None)
     if term_sha != training['gpu_termination_sha256']:
@@ -732,7 +756,7 @@ def verify_seed_evaluation(store: object, loaded: LoadedHPOConfig, campaign: Jso
             or canonical(link['left_parent']) != canonical(final_reference)):
         raise ContractError('seed evaluation differs from exact training/conditions identity')
     manifest, proof = verify_saved_evaluation(Path(evaluation['directory']), loaded, link, deadline=deadline,
-        evaluation_runtime=getattr(loaded.config,'runtime',None))
+        evaluation_runtime=evaluation_runtime(loaded.config))
     check_evaluation_receipt_runtime(evaluation,manifest)
     if canonical(manifest['policy_bindings'].get(final_reference['policy_label'])) != canonical(asdict(final_binding)):
         raise ContractError('original evaluated policy differs from the inspected final-D binding')
@@ -813,11 +837,12 @@ def persist_training_receipt(store: object, loaded: LoadedHPOConfig, campaign: J
     from gf_cli.hpo_campaign import Proposal
     from gf_cli.hpo_storage import CampaignStore
     from gf_common.domain import clone
-    from gf_training.hpo_gpu_lease import TerminationReceipt
+    from gf_training.hpo_gpu_lease import SharedTerminationReceipt, TerminationReceipt
 
-    if type(store) is not CampaignStore or type(proposal) is not Proposal or type(termination) is not TerminationReceipt:
+    expected_termination=SharedTerminationReceipt if loaded.config.schema_version==5 else TerminationReceipt
+    if type(store) is not CampaignStore or type(proposal) is not Proposal or type(termination) is not expected_termination:
         raise ContractError('actual campaign/proposal/termination outputs required')
-    if loaded.config.schema_version==4:
+    if loaded.config.schema_version in (4,5):
         from gf_training.hpo_owned_completion import OwnedRunCompletion
         if type(completion) is not OwnedRunCompletion: raise ContractError('owned training receipt requires actual private completion')
     inspection = inspect_training_parent(directory, loaded, proposal.settings,
@@ -855,6 +880,8 @@ def verify_training_receipt(store: object, loaded: LoadedHPOConfig, campaign: Js
     if canonical(source) != canonical(actual.source) or value['source_receipt_sha256'] != source_sha:
         raise ContractError('closed training receipt no longer matches full original Source')
     gpu_value, gpu_sha = store.get(folder + '/training-gpu-termination.json')
+    if gpu_value.get('schema_version')!=(2 if loaded.config.schema_version==5 else 1):
+        raise ContractError('training GPU termination version differs from explicit campaign mode')
     if gpu_sha != value['gpu_termination_sha256']:
         raise ContractError('training termination receipt hash differs')
     verify_gpu_termination(gpu_value, campaign_id=campaign['campaign_id'], operation_id=value['run_id'],
@@ -1000,7 +1027,7 @@ async def evaluate_seed(store: object, loaded: LoadedHPOConfig, campaign: Json, 
         reference = retention.pin_hpo_evaluation(Path(training['run_path']), job.ticket, training['generation'], training['inference_sha256'],
             max_owned_bytes=loaded.config.operating.source_budget_bytes, deadline=execution)
         pins.append((Path(training['run_path']), reference))
-        if loaded.config.schema_version==4:
+        if loaded.config.schema_version in (4,5):
             from gf_common.artifacts import ArtifactPhaseAdmission
             from gf_common.group_pack import StorageSettings
             from gf_training.group_pack_resources import StorageBudget
@@ -1035,7 +1062,7 @@ async def evaluate_seed(store: object, loaded: LoadedHPOConfig, campaign: Json, 
             schedule = clone(serialize_schedule(groups, 4))
             link['learner_seats'] = {spec['episode_id']: spec['learner_viewer'] for group in schedule for spec in group['episodes']}
             link['schedule_digest'] = digest(schedule)
-            resident_runtime = getattr(loaded.config,'runtime',None)
+            resident_runtime = evaluation_runtime(loaded.config)
             plan = execution_plan(groups, bindings, output, link,runtime=resident_runtime,pins=tuple(pins), started_monotonic=started,
                 admission_deadline=started + run.admission_seconds, execution_deadline=execution,
                 work_deadline=work, wall_deadline=wall)
@@ -1057,7 +1084,7 @@ async def evaluate_seed(store: object, loaded: LoadedHPOConfig, campaign: Json, 
                 observe(progress, {'phase':'source'})
                 manifest, proof = verify_saved_evaluation(result.directory, loaded, link, deadline=work,
                     extra_owned_bytes=owner.retained_bytes if final_data is not None else owner._scan.peak, _cleanup_observation=observation,
-                    evaluation_runtime=getattr(loaded.config,'runtime',None))
+                    evaluation_runtime=evaluation_runtime(loaded.config))
                 owner.finalize(deadline=work)
             except BaseException as error:
                 try:
@@ -1124,6 +1151,7 @@ _RUNTIME_OMITTED = object()
 
 def comparison_execution_runtime(left: Any,right: Any,*,choice: Any = _RUNTIME_OMITTED) -> Json | None:
     if choice is _RUNTIME_OMITTED:
+        if getattr(left,'schema_version',None)==5 and getattr(right,'schema_version',None)==5:return None
         if hasattr(left,'runtime') or hasattr(right,'runtime'):
             raise ContractError('resident producer requires an explicit evaluation runtime table or explicit None for fresh')
         return None
@@ -1161,7 +1189,7 @@ def _comparison_artifacts(left: Any, right: Any, sources: list[Any], bindings: A
     """Profile dispatch, never rejection-triggered fallback or origin promotion."""
     from gf_common.card_instance_rules import card_instance_rules
     from gf_models.card_instance_artifacts import RetainedGameArtifacts
-    if left.config.schema_version!=4 or right.config.schema_version!=4:
+    if left.config.schema_version not in (4,5) or right.config.schema_version not in (4,5):
         owner=RetainedGameArtifacts.for_hpo_registry(bindings,config.actions,rules=card_instance_rules(),
             pool_size=config.hpo_spec['operating']['opponent_pool_size'],max_owned_bytes=max_owned_bytes,
             preflight_deadline=deadline,finalization_deadline=work)

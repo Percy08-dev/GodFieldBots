@@ -14,11 +14,13 @@ from gf_common.action_contract import engineering_contract, parse_action_contrac
 from gf_common.card_instance import (
     CARD_INSTANCE_SIMULATOR_REVISION,
     CORRECTED_SIMULATOR_REVISION,
+    SHARED_SIMULATOR_REVISION,
     ActionConfigV3,
     action_config_v3,
     card_instance_contract,
-    corrected_card_instance_contract,
+    is_corrected_contract,
     parse_card_instance_contract,
+    shared_card_instance_contract,
 )
 from gf_common.domain import (
     SIMULATOR_REVISION,
@@ -77,6 +79,11 @@ class RunConfig:
 class RunConfigV2(RunConfig):
     global_cuda_budget_bytes: int = 12884901888
     max_participant_workers: int = 4
+
+
+@dataclass(frozen=True)
+class SharedRunConfigV2(RunConfigV2):
+    inference_service: Json = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -171,6 +178,8 @@ class PackedRefreshOpponentsExperimentConfig(GroupPackExperimentConfig):
 
 
 def require_storage_command(config: ExperimentConfig, command: str, *, standalone: bool = True) -> None:
+    if getattr(getattr(config,'run',None),'inference_service',None) is not None and command not in ('train','validate') and not (command=='collect' and not standalone):
+        raise ContractError('shared serving currently requires owned ordinary PPO training')
     if type(getattr(config, 'model', None)) is ConfiguredNeuralModelV4:
         from gf_cli.hpo_config import HPOExperimentConfig
         if type(config) is not HPOExperimentConfig or command not in ('collect','evaluate') or standalone:
@@ -288,6 +297,9 @@ def _validate_table(name: str, values: Json, *, context: Json | None = None) -> 
         defaults = asdict(CorrectedServerConfigV2() if values.get("simulator_revision") == CORRECTED_SIMULATOR_REVISION else ServerConfigV2())
     elif name == "run" and context.get("actions", {}).get("version") in ("2", "3"):
         defaults = asdict(RunConfigV2())
+        if "inference_service" in values:
+            from gf_common.shared_inference import shared_runtime
+            defaults["inference_service"] = shared_runtime(values["inference_service"],game_concurrency=values.get("concurrency",2))
     if name in ("model", "opponent") and "model_id" not in values and not structured_model:
         defaults["inference"] = asdict(MLPModelConfig().inference)
         defaults["network"].update(asdict(MLPModelConfig().network))
@@ -409,11 +421,14 @@ def load_config(path: str | Path, overrides: Json | None = None) -> LoadedConfig
         card_revision = selected_contract.simulator_revision
         if data["server"].get("simulator_revision") != card_revision:
             raise ContractError("Gameplay v2 requires the explicit pinned simulator revision")
-        if card_revision == CORRECTED_SIMULATOR_REVISION:
+        if card_revision in (CORRECTED_SIMULATOR_REVISION,SHARED_SIMULATOR_REVISION):
             card_server_cls = CorrectedServerConfigV2
         base["actions"] = asdict(ActionConfigV3(action_contract=selected_contract))
         base["server"] = asdict(card_server_cls())
         base["run"] = asdict(RunConfigV2())
+        if "inference_service" in data.get("run",{}):
+            from gf_common.shared_inference import shared_runtime
+            base["run"]["inference_service"] = shared_runtime(data["run"]["inference_service"],game_concurrency=data["run"].get("concurrency",2))
         for table, key in _PATHS:
             if table in ("server", "run") and base[table].get(key) is not None:
                 base[table][key] = str((source.parent / base[table][key]).resolve())
@@ -426,7 +441,7 @@ def load_config(path: str | Path, overrides: Json | None = None) -> LoadedConfig
         base["actions"] = asdict(ActionConfigV2(action_contract=engineering_contract()))
         base["run"] = asdict(RunConfigV2())
     if (any(data.get(name, {}).get("version") == "3" for name in ("model", "opponent"))
-            and (not card_instance_actions or card_revision != CORRECTED_SIMULATOR_REVISION)):
+            and (not card_instance_actions or card_revision not in (CORRECTED_SIMULATOR_REVISION,SHARED_SIMULATOR_REVISION))):
         raise ContractError("model3 experiment Config requires the corrected card-instance contract")
     for name in ("model", "opponent"):
         if data.get(name, {}).get("model_id") == "heuristic_refresh":
@@ -474,7 +489,7 @@ def load_config(path: str | Path, overrides: Json | None = None) -> LoadedConfig
         if run["max_participant_workers"] < 2 * run["concurrency"]:
             raise ContractError("participant capacity must cover both players of every concurrent game")
     if (any(effective[name].get("model_id") == "heuristic_refresh" for name in ("model", "opponent"))
-            and (not card_instance_actions or card_revision != CORRECTED_SIMULATOR_REVISION)):
+            and (not card_instance_actions or card_revision not in (CORRECTED_SIMULATOR_REVISION,SHARED_SIMULATOR_REVISION))):
         raise ContractError("refresh baseline requires the corrected card-instance layout")
     models = {name: model_config(effective[name], layout=layout_for_contract(selected_contract))
               if effective[name].get("version") == "3" or effective[name].get("model_id") == "heuristic_refresh" else model_config(effective[name])
@@ -493,7 +508,7 @@ def load_config(path: str | Path, overrides: Json | None = None) -> LoadedConfig
     if card_instance_actions:
         actions_v3 = action_config_v3(effective["actions"])
         game_reader = (preprocessing.backend in ("python", "rust") and preprocessing.reader == "participant-structured-v2"
-            and actions_v3.action_contract == corrected_card_instance_contract()
+            and is_corrected_contract(actions_v3.action_contract)
             and (isinstance(models["model"], ConfiguredNeuralModelV3) and isinstance(training, PPOTrainingConfig)
                  or type(models["model"]) is ConfiguredTreeModelV3 and type(training) is TrainingConfig))
         if not game_reader and (preprocessing.backend != "python" or preprocessing.reader != "legacy"):
@@ -552,6 +567,16 @@ def load_config(path: str | Path, overrides: Json | None = None) -> LoadedConfig
             raise ContractError("expected fingerprint/seed mismatch")
     for key in ("bootstrap_samples",):
         integer(effective["evaluation"][key], 1)
+    if "inference_service" in run:
+        from gf_common.shared_inference import shared_runtime
+        run["inference_service"] = shared_runtime(run["inference_service"],game_concurrency=run["concurrency"])
+        if (not card_instance_actions or selected_contract != shared_card_instance_contract()
+                or type(models["model"]) is not ConfiguredNeuralModelV3 or models["model"].model_id != "mlp"
+                or models["model"].inference.device != "cuda:0" or type(training) is not PPOTrainingConfig
+                or preprocessing.backend != "python" or preprocessing.reader != "participant-structured-v2"):
+            raise ContractError("shared mode requires new-profile Python MLP CUDA PPO")
+    if card_instance_actions and selected_contract == shared_card_instance_contract() and preprocessing.backend != "python":
+        raise ContractError("shared contract profile has no native implementation")
     converted: dict[str, Any] = {}
     for name, cls in _TABLES.items():
         if name in models:
@@ -572,17 +597,17 @@ def load_config(path: str | Path, overrides: Json | None = None) -> LoadedConfig
         if name == "server" and card_instance_server:
             cls = card_server_cls
         if name == "run" and (structured_actions or card_instance_actions):
-            cls = RunConfigV2
+            cls = SharedRunConfigV2 if "inference_service" in effective["run"] else RunConfigV2
         values = effective[name]
         defaults = asdict(cls())
         values = {k: tuple(v) if isinstance(defaults[k], tuple) else v for k, v in values.items()}
         converted[name] = cls(**values)
     mixed = data.get("training_opponents")
-    if mixed is not None and (not card_instance_actions or card_revision != CORRECTED_SIMULATOR_REVISION
+    if mixed is not None and (not card_instance_actions or card_revision not in (CORRECTED_SIMULATOR_REVISION,SHARED_SIMULATOR_REVISION)
             or type(models["model"]) is not ConfiguredNeuralModelV3 or type(training) is not PPOTrainingConfig):
         raise ContractError("training_opponents requires corrected ordinary Model3 PPO")
     if "storage" in data:
-        if (not card_instance_actions or card_revision != CORRECTED_SIMULATOR_REVISION
+        if (not card_instance_actions or card_revision not in (CORRECTED_SIMULATOR_REVISION,SHARED_SIMULATOR_REVISION)
                 or server["external_url"] is not None):
             raise ContractError("storage requires corrected actions3 and a locally managed server")
         config: ExperimentConfig = (PackedRefreshOpponentsExperimentConfig(**converted,

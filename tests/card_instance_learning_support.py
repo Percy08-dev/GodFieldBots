@@ -82,6 +82,10 @@ def initial_parent(directory, *, updates=2, device='cpu', training_opponents=Non
 
 
 def original_collection(plan, state, learner, *, decisions=True):
+    from gf_common.card_instance import action_config_v3
+    from tests.shared_inference_support import fixture_runtime_receipt
+    ACTIONS=action_config_v3(state['effective_config']['actions'])
+    receipt=lambda:fixture_runtime_receipt(ACTIONS.action_contract)
     directory = plan.output
     directory.mkdir()
     owner = RetainedGameArtifacts.for_registry(plan.bindings, ACTIONS, rules=RULES, max_owned_bytes=1024**3,

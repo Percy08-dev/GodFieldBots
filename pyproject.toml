@@ -77,5 +77,5 @@ disallow_untyped_defs = true
 warn_unused_ignores = true
 
 [[tool.mypy.overrides]]
-module = ["pyarrow", "pyarrow.*", "lightgbm", "lightgbm.*"]
+module = ["pyarrow", "pyarrow.*", "lightgbm", "lightgbm.*", "torchrl", "torchrl.*", "tensordict", "tensordict.*"]
 ignore_missing_imports = true

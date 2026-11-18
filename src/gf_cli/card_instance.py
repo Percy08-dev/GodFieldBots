@@ -20,7 +20,10 @@ from gf_cli.config import (
     require_storage_command,
 )
 from gf_common.artifacts import ArtifactReader
-from gf_common.card_instance import ActionConfigV3, corrected_card_instance_contract
+from gf_common.card_instance import (
+    ActionConfigV3,
+    is_corrected_contract,
+)
 from gf_common.card_instance_validation import reconcile_replay, replay_closure
 from gf_common.domain import (
     ContractError,
@@ -66,7 +69,7 @@ def _check(deadline: float) -> None:
 def _require_actions(loaded: LoadedConfig) -> None:
     config = loaded.config
     if (type(config.actions) is not ActionConfigV3
-            or config.actions.action_contract != corrected_card_instance_contract()
+            or not is_corrected_contract(config.actions.action_contract)
             or config.actions.max_sequence_length > 18 or not isinstance(config.run, RunConfigV2)):
         raise ContractError("corrected baseline collection requires the corrected contract and real18card limits")
 
@@ -220,7 +223,7 @@ async def run_inference(loaded: LoadedConfig, command: str) -> tuple[Path, Json]
     tree_runtime = any(type(model) is ConfiguredTreeModelV3 for model in neural)
     evidence = None
     if not tree_runtime:
-        evidence = CardInstanceRuntimeEvidence(Path(config.server.binary), Path(config.server.source_dir),
+        evidence = CardInstanceRuntimeEvidence(Path(config.server.binary), Path(config.server.source_dir),contract=config.actions.action_contract,
                                               deadline=preflight_deadline)
         evidence.preflight()
     from gf_common.card_instance_rules import card_instance_rules
@@ -238,7 +241,7 @@ async def run_inference(loaded: LoadedConfig, command: str) -> tuple[Path, Json]
             config.actions, rules=rules, **ownership_options)
     try:
         if evidence is None:
-            evidence = CardInstanceRuntimeEvidence(Path(config.server.binary), Path(config.server.source_dir),
+            evidence = CardInstanceRuntimeEvidence(Path(config.server.binary), Path(config.server.source_dir),contract=config.actions.action_contract,
                                                   deadline=preflight_deadline)
             evidence.preflight()
         bindings, labels = _baseline_labels(loaded, artifact_inputs=owner)
@@ -301,7 +304,7 @@ async def _run_corrected(loaded: LoadedConfig, command: str,
     replay_deadline = work_deadline - config.server.cleanup_reserve_seconds
     execution_deadline = started + config.run.execution_seconds if collection is None else collection.execution_deadline
     preflight_deadline = min(execution_deadline, replay_deadline)
-    evidence = runtime_evidence or CardInstanceRuntimeEvidence(Path(config.server.binary), Path(config.server.source_dir), deadline=preflight_deadline)
+    evidence = runtime_evidence or CardInstanceRuntimeEvidence(Path(config.server.binary), Path(config.server.source_dir), contract=config.actions.action_contract, deadline=preflight_deadline)
     evidence.preflight()
     planned = (schedule(config.run.seeds, config.run.sampling_seeds, config.run.pairs_per_seed,
                         labels[0], labels[1], deadline=preflight_deadline)
@@ -334,6 +337,16 @@ async def _run_corrected(loaded: LoadedConfig, command: str,
     ledger = (ReservationLedger(config.run.global_cuda_budget_bytes, config.run.max_participant_workers)
               if owned_ledger is None else owned_ledger)
     extra: dict[str, Any] = {} if artifact_inputs is None else {"artifact_inputs": artifact_inputs}
+    game_events: list[Json]=[]
+    from gf_common.hpo_progress import observe
+    def game_observer(value: Json) -> None:
+        game_events.append(value)
+        observe(progress,{'game_lifecycle':value})
+    from gf_common.card_instance import SHARED_SIMULATOR_REVISION
+    diagnose_games=progress is not None or config.actions.action_contract.simulator_revision==SHARED_SIMULATOR_REVISION
+    if diagnose_games:extra['game_observer']=game_observer
+    service=None if ledger.service is None else ledger.service.owner
+    if service is not None:service._exchange({'command':'METRICS_RESET'})
     if resident_pool is not None:
         extra["resident_pool"] = resident_pool
     if _owned_collection is not None:
@@ -485,6 +498,12 @@ async def _run_corrected(loaded: LoadedConfig, command: str,
         summary = report(episodes, planned, bootstrap_samples=config.evaluation.bootstrap_samples,
             bootstrap_seed=config.evaluation.bootstrap_seed, wall_seconds=time.monotonic() - started,
             groups_health=[group.health for group in groups], deadline=work_deadline)
+        if diagnose_games:summary['game_lifecycle']={'scope':'actual-created-to-first-terminal-abort-or-retirement','events':game_events}
+        if service is not None:
+            service.quiesce()
+            summary['shared_service']=service.telemetry
+            observe(progress,{'shared_service':service.telemetry,'collection_boundary':'drained',
+                'collection_batch':None if collection is None else collection.linkage.get('batch_id')})
         # Every runtime clone checks its executed process and finalizes after reap.
         evidence.deadline = work_deadline
         evidence.preflight()
@@ -698,7 +717,7 @@ def _validate_online_collection(loaded: LoadedConfig, plan: CollectionPlan,
 
 
 async def collect_ppo(loaded: LoadedConfig, plan: CollectionPlan,
-                      ledger: ReservationLedger) -> FinalizedCollection:
+                      ledger: ReservationLedger, *, progress: Any = None) -> FinalizedCollection:
     """Same live parent's frozen plan; metadata cannot mint admission."""
     require_storage_command(loaded.config, "collect", standalone=False)
     _require_actions(loaded)
@@ -718,7 +737,7 @@ async def collect_ppo(loaded: LoadedConfig, plan: CollectionPlan,
     started = time.monotonic() if plan.started_monotonic is None else plan.started_monotonic
     work_deadline = plan.wall_deadline - config.run.report_reserve_seconds
     preflight_deadline = min(plan.execution_deadline, work_deadline - config.server.cleanup_reserve_seconds)
-    evidence = CardInstanceRuntimeEvidence(Path(config.server.binary), Path(config.server.source_dir),
+    evidence = CardInstanceRuntimeEvidence(Path(config.server.binary), Path(config.server.source_dir),contract=config.actions.action_contract,
                                           deadline=preflight_deadline)
     evidence.preflight()
     from gf_common.card_instance_rules import card_instance_rules
@@ -730,10 +749,14 @@ async def collect_ppo(loaded: LoadedConfig, plan: CollectionPlan,
                             config.preprocessing.memory_budget_mib * 1024**2),
         preflight_deadline=preflight_deadline, finalization_deadline=work_deadline)
     try:
-        admissions = [admit_game_workers_v3(config.actions,
+        if ledger.service is not None:
+            ledger.service.owner.controller.ensure(plan.bindings,owner)
+        admissions: list[Json] = [({'recipe':'shared-mlp-admission-v1','peak_cuda_bytes':ledger.cuda_bytes,
+            'workers':2*config.run.concurrency,'worker_resident_bytes':0,'service_cuda_bytes':ledger.service.resident_bytes}
+            if ledger.service is not None else admit_game_workers_v3(config.actions,
             (plan.bindings[spec.policies[0]], plan.bindings[spec.policies[1]]), rules=rules,
             game_concurrency=config.run.concurrency, global_cuda_bytes=config.run.global_cuda_budget_bytes,
-            max_workers=config.run.max_participant_workers, learner_cuda_bytes=ledger.cuda_bytes)
+            max_workers=config.run.max_participant_workers, learner_cuda_bytes=ledger.cuda_bytes))
             for group in plan.groups for spec in group.episodes]
         if not admissions:
             raise ContractError("empty frozen PPO collection schedule")
@@ -742,7 +765,7 @@ async def collect_ppo(loaded: LoadedConfig, plan: CollectionPlan,
         result = await _run_corrected(loaded, "collect", plan.bindings,
             tuple(plan.bindings), started=started, artifact_inputs=owner, runtime_evidence=evidence,
             resource_admission=max(admissions, key=lambda value: value["peak_cuda_bytes"]),
-            collection=plan, owned_ledger=ledger)
+            collection=plan, owned_ledger=ledger,progress=progress)
         if type(result) is PackedRunResult:
             from gf_training.collection import PackedFinalizedCollection
             return PackedFinalizedCollection(result.directory, result.report, result.locator,
@@ -780,7 +803,7 @@ async def collect_hpo_ppo(loaded: LoadedConfig,plan: CollectionPlan,ledger: Rese
     started=time.monotonic() if plan.started_monotonic is None else plan.started_monotonic
     work_deadline=plan.wall_deadline-config.run.report_reserve_seconds
     preflight_deadline=min(plan.execution_deadline,work_deadline-config.server.cleanup_reserve_seconds)
-    evidence=CardInstanceRuntimeEvidence(Path(config.server.binary),Path(config.server.source_dir),deadline=preflight_deadline)
+    evidence=CardInstanceRuntimeEvidence(Path(config.server.binary),Path(config.server.source_dir),contract=config.actions.action_contract,deadline=preflight_deadline)
     evidence.preflight()
     # The retained registry shares the parent phase envelope with its already
     # admitted immutable config/plan graphs; collection bytes use Pack's account.
@@ -791,6 +814,8 @@ async def collect_hpo_ppo(loaded: LoadedConfig,plan: CollectionPlan,ledger: Rese
         max_owned_bytes=min(parent_limit,config.model.resources.max_owned_bytes),
         preflight_deadline=preflight_deadline,finalization_deadline=work_deadline))
     try:
+        if resident is not None and resident.shared_controller is not None:
+            resident.shared_controller.ensure(plan.bindings,owner)
         admissions=[(resident.game_admission((plan.bindings[spec.policies[0]],plan.bindings[spec.policies[1]]))
             if resident is not None else admit_hpo_game_workers(config.actions,(plan.bindings[spec.policies[0]],plan.bindings[spec.policies[1]]),
             rules=card_instance_rules(),game_concurrency=config.run.concurrency,global_cuda_bytes=config.run.global_cuda_budget_bytes,
@@ -935,7 +960,7 @@ async def _collect_hpo_evaluation(loaded: LoadedConfig,plan: HpoEvaluationPlan,*
     retained=(artifact_inputs.retained_bytes if type(artifact_inputs) is OwnedGameArtifacts else artifact_inputs._scan.peak)
     if retained>hpo_artifact_budget(loaded,bindings):
         raise ContractError('evaluation artifact custody exceeds additional parent envelope')
-    evidence=CardInstanceRuntimeEvidence(Path(config.server.binary),Path(config.server.source_dir),
+    evidence=CardInstanceRuntimeEvidence(Path(config.server.binary),Path(config.server.source_dir),contract=config.actions.action_contract,
         deadline=min(plan.execution_deadline,plan.work_deadline-config.server.cleanup_reserve_seconds))
     evidence.preflight()
     admissions=[admit_hpo_game_workers(config.actions,(bindings[spec.policies[0]],bindings[spec.policies[1]]),
@@ -997,7 +1022,7 @@ async def collect_owned_final_validation(context: Any) -> Any:
     config = loaded.config
     work_deadline = plan.wall_deadline - config.run.report_reserve_seconds
     preflight_deadline = min(plan.execution_deadline, work_deadline - config.server.cleanup_reserve_seconds)
-    evidence = CardInstanceRuntimeEvidence(Path(config.server.binary), Path(config.server.source_dir), deadline=preflight_deadline)
+    evidence = CardInstanceRuntimeEvidence(Path(config.server.binary), Path(config.server.source_dir), contract=config.actions.action_contract, deadline=preflight_deadline)
     evidence.preflight()
     from gf_common.card_instance_rules import card_instance_rules
     from gf_models.card_instance_artifacts import RetainedGameArtifacts

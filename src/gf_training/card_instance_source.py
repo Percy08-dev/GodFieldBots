@@ -400,14 +400,14 @@ def _game_header(header: Json, manifest: Json, episode: Json, spec: Json,
     else:
         raw = manifest['neural_inputs']['policies'][header['policy']]
         safe, label = validate_neural_metadata(raw, actions=actions, rules=card_instance_rules())
-        if manifest['schema_version'] in (6, 7, 8):
+        if manifest['schema_version'] in (6, 7, 8, 9):
             # Inference5 is written by atomic_json's canonical UTF-8+newline
             # codec. Retained Journal6 metadata keeps that complete document
             # even after Registry4 deliberately deletes the physical manifest.
             encoded = (canonical(raw['inference_manifest']) + '\n').encode()
             if hashlib.sha256(encoded).hexdigest() != safe['expected_manifest_digest']:
                 raise ContractError('HPO original neural manifest bytes/hash differ from generation identity')
-        if header['model_version'] != ('4' if manifest['schema_version'] in (6, 7, 8) else '3') or label != header['policy'] or canonical(safe) != canonical(binding['policy_options']) or canonical(header.get('neural')) != canonical(raw):
+        if header['model_version'] != ('4' if manifest['schema_version'] in (6, 7, 8, 9) else '3') or label != header['policy'] or canonical(safe) != canonical(binding['policy_options']) or canonical(header.get('neural')) != canonical(raw):
             raise ContractError('original neural metadata differs from frozen registry')
 
 
@@ -971,6 +971,10 @@ class _GameBatchSource:
             proof.update(schema_version=4 if resident else 3, kind=PROOF_KINDS[int(_packed(self.state))], selection=self.selection,
                 expected_optimizer_step_delta=optimizer_delta(self.selection['used_decisions'],
                     epochs=recipe['epochs'], minibatch_size=recipe['minibatch_size']))
+        if self.online is not None and self.online.ledger.service is not None:
+            controller=self.online.ledger.service.owner.controller
+            if controller is not None:
+                proof.update(schema_version=3 if _packed(self.state) else 2,service_usage=json.loads(canonical(controller.collection_usage)))
         return proof
 
     def correspondence(self) -> Json:
@@ -1130,7 +1134,7 @@ class _GameBatchSource:
 def _open_batch(plan: CollectionPlan, state: Json, records: list[Json], controls: _ChainScan,
                 settings: PreparationConfig, *, online: _OnlineGameOwner | None,
                 max_owned_bytes: int, deadline: float, extra_owned_bytes: int = 0) -> Iterator[_GameBatchSource]:
-    if state.get('run_variant')=='hpo-ppo-owned-v1':
+    if state.get('run_variant') in ('hpo-ppo-owned-v1','hpo-ppo-owned-shared-v1'):
         raise ContractError('owned origin cannot enter legacy Proof4/Source issuance; use dedicated external audit')
     with ExitStack() as scope:
         hpo = _hpo(state)
@@ -1367,8 +1371,12 @@ def _open_game_parent_inputs(directory: Path, *, require_complete: bool = True, 
         with _open_batch(plan, state, records, scan, settings, online=None, max_owned_bytes=max_owned_bytes,
                          deadline=deadline, extra_owned_bytes=extra_owned_bytes) as source:
             from gf_common.group_pack_game import same_packed_proof
-            if not (same_packed_proof(source.proof, update['source_proof']) if state['schema_version'] == 4
-                    else canonical(source.proof) == canonical(update['source_proof'])):
+            expected_proof=update['source_proof']
+            if 'service' in state['execution']:
+                expected_proof={key:value for key,value in expected_proof.items() if key!='service_usage'}
+                expected_proof['schema_version']=2 if state['schema_version']==4 else 1
+            if not (same_packed_proof(source.proof, expected_proof) if state['schema_version'] == 4
+                    else canonical(source.proof) == canonical(expected_proof)):
                 raise ContractError('original Source proof differs from committed generation')
             if state['schema_version'] == 4:
                 vars(source)['_historical_proof'] = update['source_proof']

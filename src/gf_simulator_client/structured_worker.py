@@ -128,6 +128,10 @@ class StructuredParticipantWorker(ParticipantWorker):
             raise
 
     def _read_reply(self, source: Any) -> Json:
+        if getattr(self,'_profile_io',False):
+            from gf_simulator_client.framing import read_frame_profiled
+            result,self._last_io_read=read_frame_profiled(source)
+            return result
         return read_frame(source)
 
     async def _roundtrip(self, payload: Json) -> Json:
@@ -139,7 +143,10 @@ class StructuredParticipantWorker(ParticipantWorker):
             messages: queue.SimpleQueue[Json | BaseException] = queue.SimpleQueue()
             def exchange() -> None:
                 try:
-                    write_frame(destination, payload)
+                    if getattr(self,'_profile_io',False):
+                        from gf_simulator_client.framing import write_frame_profiled
+                        self._last_io_write=write_frame_profiled(destination,payload)
+                    else:write_frame(destination, payload)
                     messages.put(self._read_reply(source))
                 except BaseException as exc:  # noqa: BLE001 - owned thread reports exact failure to parent
                     messages.put(exc)
@@ -320,7 +327,8 @@ def _failed_spawn(process: subprocess.Popen[bytes] | None, lease: WorkerReservat
 def _timings(values: Json, *, ready: bool = False) -> None:
     required = {"model_load_ms"} if ready else {"generation_ms", "policy_ms", "worker_decision_ms"}
     optional = set() if ready else {"tokenization_ms", "input_pack_transfer_host_ms", "forward_enqueue_host_ms",
-                                    "sync_host_ms", "return_ms", "sampling_ms"}
+                                    "sync_host_ms", "return_ms", "sampling_ms", "shared_request_roundtrip_ms", "shared_accept_to_forward_ms",
+                                    "shared_transport_batch_size", "shared_tensor_batch_size"}
     closed(values, required, optional)
     if any(type(value) not in (int, float) or value < 0 or value > sys.float_info.max or not math.isfinite(value) for value in values.values()):
         raise ContractError("invalid structured host timing metrics")

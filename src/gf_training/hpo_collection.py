@@ -76,17 +76,18 @@ def check_hpo_collection(manifest: Json) -> None:
     from gf_training.hpo_config import hpo_training_config
     config = manifest.get('config', {})
     spec = config.get('hpo_spec', {})
-    from gf_common.hpo_resident import checked_retirement, resident_runtime
-    owned=type(spec.get('schema_version')) is int and spec['schema_version']==4
-    resident = type(spec.get('schema_version')) is int and spec['schema_version'] in (3,4)
+    from gf_common.hpo_resident import checked_retirement
+    owned=type(spec.get('schema_version')) is int and spec['schema_version'] in (4,5)
+    resident = type(spec.get('schema_version')) is int and spec['schema_version'] in (3,4,5)
     if resident:
-        resident_runtime(spec.get('runtime'))
+        from gf_common.shared_inference import runtime_for_spec
+        runtime_for_spec(spec)
     if owned and (spec.get('origin')!='producer-owned-v1' or spec.get('encoder')!='canonical-python'
             or manifest.get('origin')!='producer-owned-v1' or manifest.get('encoder')!='canonical-python'
-            or manifest.get('actor_protocol_version')!=9 or manifest.get('replay_reconciled') is not False):
+            or manifest.get('actor_protocol_version')!=(10 if spec['schema_version']==5 else 9) or manifest.get('replay_reconciled') is not False):
         raise ContractError('Collection8 requires explicit truthful producer/encoder/actor provenance')
     recipe = hpo_training_config(spec.get('training_recipe'))
-    if (type(manifest.get('schema_version')) is not int or manifest['schema_version'] != (8 if owned else 7 if resident else 6)
+    if (type(manifest.get('schema_version')) is not int or manifest['schema_version'] != (9 if spec['schema_version']==5 else 8 if owned else 7 if resident else 6)
             or manifest.get('model_version') != '4' or manifest.get('collection_role') != 'hpo-ppo-batch'
             or manifest.get('config_hash') != digest(config)):
         raise ContractError('explicit HPO Collection6 required')
@@ -96,7 +97,8 @@ def check_hpo_collection(manifest: Json) -> None:
         max_workers = integer(spec.get('operating', {}).get('max_participant_workers'), 1, 2**63-1)
         if integer(config.get('run', {}).get('max_participant_workers'), 1, 2**63-1) != max_workers:
             raise ContractError('resident collection worker capacity differs from HPO operating projection')
-        retirement = checked_retirement(manifest.get('logical_retirement'), max_workers=max_workers)
+        from gf_common.shared_inference import checked_cpu_retirement
+        retirement = (checked_cpu_retirement if spec['schema_version']==5 else checked_retirement)(manifest.get('logical_retirement'), max_workers=max_workers)
         if (retirement['run_id'] != link['parent_run_id'] or retirement['collection_id'] != link['batch_id']
                 or retirement['generation'] != link['collection_generation']):
             raise ContractError('Collection7 logical retirement differs from original collection/run/generation')
@@ -115,9 +117,9 @@ def hpo_collection_metadata(*, linkage: Json, logical_retirement: Json | None = 
     value.update(collection_role='hpo-ppo-batch', linkage=linkage)
     if logical_retirement is not None:
         value.update(schema_version=7, logical_retirement=logical_retirement)
-    if value['config']['hpo_spec']['schema_version']==4:
-        value.update(schema_version=8,origin='producer-owned-v1',encoder='canonical-python',
-            actor_protocol_version=9,replay_reconciled=False)
+    if value['config']['hpo_spec']['schema_version'] in (4,5):
+        value.update(schema_version=9 if value['config']['hpo_spec']['schema_version']==5 else 8,origin='producer-owned-v1',encoder='canonical-python',
+            actor_protocol_version=10 if value['config']['hpo_spec']['schema_version']==5 else 9,replay_reconciled=False)
     check_hpo_collection(value)
     return value
 

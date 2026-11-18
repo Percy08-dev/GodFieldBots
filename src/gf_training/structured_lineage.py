@@ -463,7 +463,7 @@ def _state(state: Json, *, recorded_signature: str | None = None, _game: bool = 
     if any(canonical(state[key]) != canonical(value) for key, value in expected.items()):
         raise ContractError('component run Config classification mismatch')
     if _game:
-        from gf_common.card_instance import CORRECTED_REVIEWED_SPEC_HASHES
+        from gf_common.card_instance import reviewed_specs
         from gf_common.card_instance_runtime import APPROVED_BINARY_SHA256
         from gf_common.preprocessing import preparation_config
         settings = preparation_config(config['preprocessing'])
@@ -474,13 +474,15 @@ def _state(state: Json, *, recorded_signature: str | None = None, _game: bool = 
             preprocessing = state['identity'].get('preprocessing', {})
             recorded_card_instance_preprocessing(preprocessing, binding=expected)
         integration = state['identity'].get('integration', {})
+        if actions.action_contract.simulator_revision=='072dabbca1458c9526897781d2fd64edeeb4f9ca' and integration.get('source_dirty') is not False:
+            raise ContractError('shared-profile source cleanliness evidence required')
         checksum(integration.get('server_config_sha256'))
         if (settings.backend not in ('python', 'rust') or settings.reader != 'participant-structured-v2'
                 or canonical(state['identity'].get('preprocessing')) != canonical(preprocessing)
                 or integration.get('binary_sha256') != APPROVED_BINARY_SHA256
                 or integration.get('declared_simulator_revision') != actions.action_contract.simulator_revision
                 or integration.get('source_revision') != actions.action_contract.simulator_revision
-                or canonical(integration.get('source_spec_sha256')) != canonical(dict(CORRECTED_REVIEWED_SPEC_HASHES))):
+                or canonical(integration.get('source_spec_sha256')) != canonical(reviewed_specs(actions.action_contract))):
             raise ContractError('game parent recorded reader/runtime/input identity mismatch')
     model = _model(config, recorded_signature, _game=_game)
     if model.model_id != state['model_id']:
@@ -493,8 +495,14 @@ def _state(state: Json, *, recorded_signature: str | None = None, _game: bool = 
     integer(state['seed'], 0, 2**63 - 1)
     if tuple(training.seeds) != (state['seed'],):
         raise ContractError('component learning seed differs from Config')
-    execution = closed(state['execution'], {'learner', 'inference'})
-    for role, recorded in execution.items():
+    service_runtime=config['run'].get('inference_service')
+    execution = closed(state['execution'], {'learner', 'inference'} | ({'service'} if service_runtime is not None else set()))
+    if service_runtime is not None:
+        from gf_common.shared_inference import SHARED_ADMISSION, SHARED_LIBRARIES, shared_runtime
+        if execution['service']!={'runtime':shared_runtime(service_runtime,game_concurrency=config['run']['concurrency']),'admission_recipe':SHARED_ADMISSION,'libraries':dict(SHARED_LIBRARIES),'record_version':2}:
+            raise ContractError('shared execution differs from frozen Config')
+    for role in ('learner','inference'):
+        recorded=execution[role]
         closed(recorded, {'binding', 'cuda_visible_devices'})
         binding = InferenceBindingV2(**closed(recorded['binding'], set(InferenceBindingV2.__dataclass_fields__)))
         device = training.device if role == 'learner' else config['model']['inference']['device']
@@ -580,7 +588,8 @@ def _update(directory: Path, update: Json, state: Json, previous: Json, scan: Se
             inference_declaration: Json, *, _game: bool = False) -> int:
     classification = GAME_CLASSIFICATION if _game else CLASSIFICATION
     packed = _game and state['schema_version'] == 4
-    closed(update, UPDATE_FIELDS | (GAME_EXTRA if _game else set()) | ({'storage_binding'} if packed else set()))
+    shared=_game and 'service' in state['execution']
+    closed(update, UPDATE_FIELDS | (GAME_EXTRA if _game else set()) | ({'storage_binding'} if packed else set()) | ({'service_usage'} if shared else set()))
     if packed and canonical(update['storage_binding']) != canonical(state['storage_binding']):
         raise ContractError('packed update storage binding differs from run4')
     integer(update['generation'], 1, 1000)
@@ -597,7 +606,7 @@ def _update(directory: Path, update: Json, state: Json, previous: Json, scan: Se
     if update['numeric_files']['rollout.json'] != update['numeric_sha256']:
         raise ContractError('numeric required manifest hash mismatch')
     _classification(update, state)
-    if (type(update['schema_version']) is not int or update['schema_version'] != (4 if packed else 3 if _game else 2) or update['status'] != 'complete'
+    if (type(update['schema_version']) is not int or update['schema_version'] != (5 if shared else 4 if packed else 3 if _game else 2) or update['status'] != 'complete'
             or update['run_id'] != state['run_id'] or update['generation'] != previous['generation'] + 1
             or update['parent_sha256'] != scan.files[generation_path(directory, previous['generation'])][1]
             or type(update['planned_games']) is not int or update['planned_games'] != 16 or update['actual_games'] != 16
@@ -658,7 +667,7 @@ def _update(directory: Path, update: Json, state: Json, previous: Json, scan: Se
     if count != sum(len(episode['frames']) for episode in episodes) or update['accepted_decisions'] != count or type(update['accepted_decisions']) is not int:
         raise ContractError('learner-only numeric decision counter mismatch')
     proof = update['source_proof']
-    if (type(proof.get('schema_version')) is not int or proof['schema_version'] != (2 if packed else 1)
+    if (type(proof.get('schema_version')) is not int or proof['schema_version'] != ((3 if packed else 2) if shared else (2 if packed else 1))
             or proof.get('kind') != ('card-instance-packed-original-source-proof' if packed else 'card-instance-original-source-proof' if _game else 'structured-component-source-proof') or proof.get('qualified') is not False
             or proof.get('parent_qualification') != 'not_performed' or proof.get('games') != 16
             or proof.get('manifest_sha256') != update['collection_manifest_sha256']):
@@ -716,8 +725,9 @@ def _validate_component_chain(directory: Path, *, require_complete: bool, requir
         raise ContractError('component run/latest counters mismatch')
     scan.inventory(directory / 'generations', {f'{number:06}.json' for number in range(count + 1)})
     scan.inventory(directory / 'updates', {f'{number:06}.json' for number in range(1, count + 1)})
-    registry = closed(scan.object(directory / 'artifact-registry.json'), {'schema_version', 'generations'})
-    if (type(registry['schema_version']) is not int or registry['schema_version'] != (3 if _game else 2)
+    shared=_game and 'inference_service' in state['effective_config']['run']
+    registry = closed(scan.object(directory / 'artifact-registry.json'), {'schema_version', 'generations'} | ({'service_references'} if shared else set()))
+    if (type(registry['schema_version']) is not int or registry['schema_version'] != (4 if shared else 3 if _game else 2)
             or not isinstance(registry['generations'], dict) or set(registry['generations']) != {str(number) for number in range(count + 1)}):
         raise ContractError('component artifact registry2 inventory mismatch')
     records: list[Json] = []
@@ -785,6 +795,9 @@ def _validate_component_chain(directory: Path, *, require_complete: bool, requir
     if parent != latest['sha256'] or accepted != state['accepted_decisions'] or steps != state['optimizer_steps']:
         raise ContractError('component final generation/run counters mismatch')
     _artifact_directories(directory, count, scan)
+    if shared:
+        from gf_training.shared_serving import validate_service_references
+        validate_service_references(registry,state,records,scan)
     scan.finalize()
     return state, records
 
@@ -969,7 +982,9 @@ def commit_component_generation(directory: Path, state: Json, *, generation: int
         else:
             if update is not None or parent is not None or state['updates'] != 0 or state['accepted_decisions'] != 0 or state['optimizer_steps'] != 0:
                 raise ContractError('component initial commit counters mismatch')
-            registry = {'schema_version': 3 if _game else 2, 'generations': {}}
+            shared=_game and 'inference_service' in state['effective_config']['run']
+            registry = {'schema_version': 4 if shared else 3 if _game else 2, 'generations': {}}
+            if shared:registry['service_references']={}
         scan.finalize()
         if _precommit is not None:
             _precommit.prepare_commit()
@@ -1001,6 +1016,8 @@ def retain_component_generations(directory: Path, generation: int, *, max_owned_
         if state['updates'] != generation:
             raise ContractError('retention requires the current committed generation')
         registry = scan.object(directory / 'artifact-registry.json')
+        if any(row['phase']=='acquire' and row['binding']['generation']==predecessor for row in registry.get('service_references',{}).values()):
+            return
         record = records[predecessor]
         receipt = registry['generations'][str(predecessor)]
         if receipt['status'] != 'retained':

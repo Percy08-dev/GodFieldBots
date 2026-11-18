@@ -78,6 +78,6 @@ def require_owned_record_version(value: Json, kind: str) -> None:
     if kind not in versions:
         raise ContractError('unknown owned record kind')
     if (type(value) is not dict or type(value.get('schema_version')) is not int
-            or value['schema_version']!=versions[kind] or value.get('origin')!='producer-owned-v1'
+            or value['schema_version'] not in ((8,9) if kind=='collection' else (6,7) if kind in ('registry','update') else (5,6) if kind=='proof' else (versions[kind],)) or value.get('origin')!='producer-owned-v1'
             or value.get('encoder')!='canonical-python'):
         raise ContractError('mixed legacy/producer-owned record versions or origin/encoder')

@@ -24,7 +24,7 @@ def resident_runtime(value: Json) -> Json:
 
 
 def is_resident(state: Json) -> bool:
-    return state.get('run_variant') in (RESIDENT_VARIANT, OWNED_VARIANT)
+    return state.get('run_variant') in (RESIDENT_VARIANT, OWNED_VARIANT,'hpo-ppo-owned-shared-v1')
 
 
 CACHE_OWNER_KEYS = {'job_ticket', 'pool_id', 'pool_epoch', 'worker_key', 'pid', 'viewer', 'lease_epoch'}
@@ -144,11 +144,12 @@ def checked_cache_release(binding: Json, value: Any) -> Json:
 
 def require_hpo_runtime_execution(spec: Json) -> None:
     """Validate explicit execution dispatch; legacy specifications remain fresh."""
-    if type(spec.get('schema_version')) is int and spec['schema_version'] in (3,4):
+    from gf_common.shared_inference import runtime_for_spec
+    if type(spec.get('schema_version')) is int and spec['schema_version'] in (3,4,5):
         if 'runtime' not in spec:
             raise ContractError('resident execution requires explicit runtime')
-        resident_runtime(spec['runtime'])
-        if spec['schema_version']==4 and (spec.get('origin')!='producer-owned-v1' or spec.get('encoder')!='canonical-python'):
+        runtime_for_spec(spec)
+        if spec['schema_version'] in (4,5) and (spec.get('origin')!='producer-owned-v1' or spec.get('encoder')!='canonical-python'):
             raise ContractError('explicit owned origin and canonical Python encoder required')
 
 

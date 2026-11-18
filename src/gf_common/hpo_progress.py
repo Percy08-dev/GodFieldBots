@@ -158,12 +158,19 @@ def pool_diagnostic(value: Any) -> Json | None:
     """Drop only malformed optional facts; management validation stays separate."""
     try:
         if (type(value) is not dict or len(json.dumps(value,allow_nan=False).encode())>LINE_BYTES
-                or set(value)!={'schema_version','loads','cache_reuses','cpu_weight_restore_bytes',
+                or set(value)-{'host_memory'}!={'schema_version','loads','cache_reuses','cpu_weight_restore_bytes',
                     'cuda_weight_restore_bytes','cuda_allocator'} or type(value['schema_version']) is not int
                 or value['schema_version']!=1):
             return None
         for key in ('loads','cache_reuses','cpu_weight_restore_bytes','cuda_weight_restore_bytes'):
             if type(value[key]) is not int or not 0<=value[key]<=2**63-1:
+                return None
+        host=value.get('host_memory')
+        if host is not None:
+            if (type(host) is not dict or set(host)!={'scope','boundary','pss_bytes','private_bytes','shared_clean_bytes','shared_dirty_bytes','max_rss_bytes'}
+                    or host['scope']!='process-current-after-command' or host['boundary'] not in ('BEGIN','END','PARK','SYNC','EVICT','CLOSE')):
+                return None
+            if any(type(host[key]) is not int or host[key]<0 for key in ('pss_bytes','private_bytes','shared_clean_bytes','shared_dirty_bytes','max_rss_bytes')):
                 return None
         allocator = value['cuda_allocator']
         if allocator is not None:

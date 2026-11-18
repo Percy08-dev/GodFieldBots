@@ -314,8 +314,10 @@ async def owned_fixture_collection(ops,config,plan,ledger,*,empty=False):
     from gf_training.group_pack_publication import GroupPackCollectionPublication
     from gf_training.hpo_collection import hpo_collection_metadata
     from tests.card_instance_action_support import inputs
-    from tests.test_card_instance_baseline_runtime import receipt
-    from tests.test_card_instance_learning import ACTIONS, LAYOUT
+    from tests.test_card_instance_learning import LAYOUT
+    ACTIONS=config.actions
+    from tests.shared_inference_support import fixture_runtime_receipt
+    def receipt():return fixture_runtime_receipt(ACTIONS.action_contract)
     from tests.test_hpo_owned_capture import terminal
     registry=ops.owned_registry
     attachment=registry.capture
@@ -333,6 +335,7 @@ async def owned_fixture_collection(ops,config,plan,ledger,*,empty=False):
     pool=ops.resident_runtime.pool
     plan.output.mkdir()
     artifacts=registry.artifacts(plan.bindings)
+    if pool.shared:ops.shared_controller.ensure(plan.bindings,artifacts)
     collection=GroupPackCollection(config.storage.settings(),str(uuid.uuid4()),deadline=plan.execution_deadline,
         owned_directory=__import__('pathlib').Path(config.storage.db_root)/registry.state['run_id']/'collections'/plan.linkage['batch_id'])
     attachment.bind_collection(collection)
@@ -355,7 +358,8 @@ async def owned_fixture_collection(ops,config,plan,ledger,*,empty=False):
                     label=spec.policies[viewer-1]
                     binding=plan.bindings[label]
                     logical=pool.worker(viewer,binding.model_id,spec.sampling_seeds[viewer-1],ACTIONS,ledger=ledger,
-                        policy_options=binding.policy_options,artifact_inputs=artifacts if binding.policy_options is not None else None)
+                        policy_options=binding.policy_options,artifact_inputs=artifacts if binding.policy_options is not None else None,
+                        **({"game":game} if pool.shared else {}))
                     await logical.initialize()
                     if not empty:
                         value=inputs([],can_pray=True)
@@ -464,7 +468,7 @@ def test_owned_conditions_skip_rust_base_reader(tmp_path,monkeypatch):
     monkeypatch.setattr('gf_training.native_backend.require_native_refresh_opponents',forbidden)
     monkeypatch.setattr('gf_training.ppo_run.source_identity',lambda deadline:{'fixture_origin':'conditions-only'})
     monkeypatch.setattr('gf_simulator_client.card_instance_runtime.CardInstanceRuntimeEvidence.preflight',lambda self:{
-        'binary':{'sha256':'a'*64},'source':{'revision':CORRECTED_SIMULATOR_REVISION}})
+        'schema_version':1,'binary':{'sha256':'a'*64},'source':{'revision':CORRECTED_SIMULATOR_REVISION}})
     conditions=_conditions(loaded)
     assert conditions['origin']=='producer-owned-v1' and conditions['encoder']=='canonical-python'
     assert 'native_identity' not in conditions

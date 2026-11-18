@@ -50,9 +50,11 @@ class _ActorBankBudget:
 
 
 class ResidentEpisodeTransport:
-    def __init__(self, viewer: int, *, owned_channel: Any = None) -> None:
+    def __init__(self, viewer: int, *, owned_channel: Any = None, score_channel: Any = None) -> None:
         self.viewer = viewer
         self.owned_channel = owned_channel
+        self.score_channel=score_channel
+        self.profile_host=score_channel is not None
         self._owned_request: Json | None = None
         self._owned_outer_request: Json | None=None
         self._owned_usage: str | None=None
@@ -69,7 +71,26 @@ class ResidentEpisodeTransport:
         self._execution_profile: Json | None = None
         self._execution_environment: Json | None = None
 
+    @property
+    def _protocol(self) -> str:
+        from gf_common.shared_inference import CPU_PROTOCOL
+        return CPU_PROTOCOL if self.score_channel is not None else RESIDENT_MODE
+
+    def _reset_fields(self) -> Json:
+        from gf_common.shared_inference import cpu_reset_fields
+        return cpu_reset_fields() if self.score_channel is not None else {'clean_reset':True,'private_state_empty':True,
+            'pending_io_empty':True,'cuda_synchronized':True,'reset_version':'resident-reset-v1'}
+
+    def _check_ack(self,value: Json) -> Json:
+        from gf_common.shared_inference import checked_cpu_ack
+        return checked_cpu_ack(value) if self.score_channel is not None else checked_ack(value)
+
     def _load(self, model_id: str, options: Json | None, actions: Any, rules: Any, load: Any) -> Any:
+        from gf_common.card_instance import SHARED_SIMULATOR_REVISION
+        self.profile_host=self.profile_host or actions.action_contract.simulator_revision==SHARED_SIMULATOR_REVISION
+        if self.score_channel is not None:
+            from gf_simulator_client.shared_channel import policy_loader
+            return policy_loader(self.score_channel,model_id,options,actions,rules,load)
         if model_id == 'lightgbm':
             raise ContractError('resident HPO does not admit tree policies')
         if model_id in ('mlp','gru','transformer'):
@@ -198,6 +219,7 @@ class ResidentEpisodeTransport:
             raise
 
     def _reset(self) -> None:
+        if self.score_channel is not None:self.score_channel.bind_request(None,None)
         if self.episode is not None:
             self.episode.reset()
             if not self.episode.private_state_empty():
@@ -207,17 +229,32 @@ class ResidentEpisodeTransport:
         self.cache.reset_all()
         self.cache.synchronize()
 
+    def diagnostic(self,command: str) -> Json:
+        value=self.cache.diagnostic()
+        if self.profile_host and command!='READY':
+            try:
+                import resource
+                fields={line.partition(':')[0]:int(line.partition(':')[2].split()[0])*1024
+                    for line in Path('/proc/self/smaps_rollup').read_text().splitlines() if ':' in line}
+                value['host_memory']={'scope':'process-current-after-command','boundary':command,
+                    'pss_bytes':fields['Pss'],'private_bytes':fields['Private_Clean']+fields['Private_Dirty'],
+                    'shared_clean_bytes':fields['Shared_Clean'],'shared_dirty_bytes':fields['Shared_Dirty'],
+                    'max_rss_bytes':resource.getrusage(resource.RUSAGE_SELF).ru_maxrss*1024}
+            except (OSError,ValueError,KeyError):pass  # Optional diagnostics never change transport/control.
+        return value
+
     def exchange(self, envelope: Json) -> Json:
-        closed(envelope, {'request'}, {'payload', 'owned'})
+        closed(envelope, {'request'}, {'payload','owned'} | ({'shared_request','shared_deadline'} if self.score_channel is not None else set()))
+        if self.score_channel is not None:self.score_channel.bind_request(envelope.get('shared_request'),envelope.get('shared_deadline'))
         if 'owned' in envelope:
             if self.owned_channel is None or envelope['request'].get('command') not in ('BEGIN','SYNC') or self._owned_request is not None:
                 raise ContractError('actor9 SYNC_OWNED requires original idle BEGIN/SYNC boundary')
             self._owned_request = envelope['owned']
             self._owned_outer_request=envelope['request']
         request = envelope['request']
-        if type(request) is not dict or request.get('protocol') != RESIDENT_MODE or request.get('schema_version') != 1:
+        if type(request) is not dict or request.get('protocol') != self._protocol or request.get('schema_version') != (2 if self.score_channel is not None else 1):
             raise ContractError('resident original envelope required')
-        integer(request.get('schema_version'),1,1)
+        integer(request.get('schema_version'),2 if self.score_channel is not None else 1,2 if self.score_channel is not None else 1)
         if self.owner is None:
             closed(request, CACHE_OWNER_KEYS | {'schema_version', 'protocol', 'command', 'run_id'})
             if (request['command'] != 'READY' or request['viewer'] != self.viewer
@@ -227,7 +264,7 @@ class ResidentEpisodeTransport:
             cache_owner({key:request[key] for key in CACHE_OWNER_KEYS} | {'lease_epoch':1})
             self.owner = {key: request[key] for key in CACHE_OWNER_KEYS - {'lease_epoch'}} | {'run_id': request['run_id']}
             return {**request, 'kind': 'READY', 'clean_reset': True, 'private_state_empty': True,
-                'pending_io_empty': True, 'cuda_synchronized': True, 'reset_version': 'resident-reset-v1'}
+                **self._reset_fields()}
         if any(request.get(key) != value for key, value in self.owner.items()):
             raise ContractError('resident fixed original owner/viewer differs')
         cache_owner({key:request[key] for key in CACHE_OWNER_KEYS})
@@ -267,8 +304,7 @@ class ResidentEpisodeTransport:
                 raise ContractError('resident CLOSE overlaps original episode')
             self._reset()
             return {'request':request,'kind':'CLOSED'}
-        checked_ack({**request, 'clean_reset': True, 'private_state_empty': True,
-            'pending_io_empty': True, 'cuda_synchronized': True, 'reset_version': 'resident-reset-v1'})
+        self._check_ack({**request, **self._reset_fields()})
         if command not in ('SYNC','EVICT') and request['generation'] != self.generation:
             raise ContractError('resident reset control generation differs')
         if command == 'END':
@@ -298,8 +334,7 @@ class ResidentEpisodeTransport:
             self._reset()
         else:
             raise ContractError('resident command unsupported')
-        return {**request, 'clean_reset': True, 'private_state_empty': self.cache.private_state_empty(),
-            'pending_io_empty': True, 'cuda_synchronized': True, 'reset_version': 'resident-reset-v1'}
+        return {**request,**self._reset_fields(),'private_state_empty':self.cache.private_state_empty()}
 
 
 def main() -> None:
@@ -308,16 +343,20 @@ def main() -> None:
         if len(_VIEWER) not in (1, 3) or _VIEWER[0] not in ('1', '2'):
             raise ContractError('resident viewer must be sanitized1or2')
         channel = None
-        if len(_VIEWER) == 3:
+        score_channel=None
+        if len(_VIEWER)==3 and _VIEWER[1]=='--shared':
+            from gf_simulator_client.shared_channel import ParticipantScoreChannel
+            score_channel=ParticipantScoreChannel(int(_VIEWER[2]))
+        elif len(_VIEWER) == 3:
             from gf_common.ram_bank import RamBankChannel
             channel = RamBankChannel._from_inherited(int(_VIEWER[1]), _VIEWER[2])
-        transport = ResidentEpisodeTransport(int(_VIEWER[0]), owned_channel=channel)
+        transport = ResidentEpisodeTransport(int(_VIEWER[0]), owned_channel=channel,score_channel=score_channel)
         while True:
             envelope = read_frame(source)
             response = transport.exchange(envelope)
             if envelope['request']['command'] != 'SELECT':
                 # Separate outer diagnostic leaf; never part of a strict ACK.
-                response['_diagnostic'] = transport.cache.diagnostic()
+                response['_diagnostic'] = transport.diagnostic(envelope['request']['command'])
             write_frame(output, response)
             if envelope["request"]["command"] == "CLOSE":
                 return

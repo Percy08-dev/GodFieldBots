@@ -125,7 +125,7 @@ class _OwnedHpoOperations(_HpoOperations):
         vars(error)['hpo_gpu_termination']=self.receipt
 
     def validate_config(self, config: Any) -> Any:
-        if (config.hpo_spec.get('schema_version')!=4 or config.hpo_spec.get('origin')!='producer-owned-v1'
+        if (config.hpo_spec.get('schema_version') not in (4,5) or config.hpo_spec.get('origin')!='producer-owned-v1'
                 or config.hpo_spec.get('encoder')!='canonical-python' or config.preprocessing.backend!='python'):
             raise ContractError('owned operations require explicit spec4 canonical Python producer')
         model = super().validate_config(config)
@@ -143,8 +143,8 @@ class _OwnedHpoOperations(_HpoOperations):
 
     def initialize_state(self, state: Json, config: Any) -> None:
         super().initialize_state(state,config)
-        self.registry_schema=6
-        state['run_variant']='hpo-ppo-owned-v1'
+        self.registry_schema=7 if config.hpo_spec['schema_version']==5 else 6
+        state['run_variant']='hpo-ppo-owned-shared-v1' if config.hpo_spec['schema_version']==5 else 'hpo-ppo-owned-v1'
 
     def persist_control(self, path: Path, value: Json, config: Any, *, deadline: float, original: Any=None) -> None:
         if original is not None: raise ContractError('owned control cannot borrow a historical scanner')
@@ -315,6 +315,7 @@ class _OwnedHpoOperations(_HpoOperations):
         if registry.capture is None:
             registry.plan=plan
             registry.capture=_OwnedCollection(registry,plan,registry.binding(registry.current.generation)[0])
+        self.resident_runtime.ensure_service(self)
         pool=self.resident_runtime.pool
         if pool.admission is None or pool.admission.plan is not plan: pool.admit(plan)
         self.guard_collection(plan,ledger,resident_phase=pool.admission,deadline=deadline)

@@ -20,7 +20,7 @@ from gf_common.card_instance import (
     GENERATOR_VERSION,
     ActionConfigV3,
     CardInstanceContract,
-    corrected_card_instance_contract,
+    is_corrected_contract,
 )
 from gf_common.card_instance_rules import (
     UTILITY_IDS,
@@ -340,7 +340,7 @@ class GameGeneratedCandidatesV3:
     report: SearchReportV3
 
     def __post_init__(self) -> None:
-        if type(self.table) is not CandidateTable or self.table.action_contract != corrected_card_instance_contract():
+        if type(self.table) is not CandidateTable or not is_corrected_contract(self.table.action_contract):
             raise ContractError("game candidates require the corrected contract")
         _validate_generated(self.table, self.report, SearchReportV3, purpose="qualified_game")
 
@@ -1333,7 +1333,7 @@ class PublicCandidateGeneratorV3:
 
     def generate_game(self, frame: DecisionFrame, bank_view: EventBankView,
                       search_rng: random.Random, numeric_costs: NumericCosts) -> GameGeneratedCandidatesV3:
-        if self.config.action_contract != corrected_card_instance_contract():
+        if not is_corrected_contract(self.config.action_contract):
             raise ContractError("game generation requires the corrected contract")
         expected = layout_for_contract(self.config.action_contract)
         if frame.layout is not expected or bank_view.layout is not expected:
