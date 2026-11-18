@@ -2,16 +2,26 @@
 
 ## Status and scope
 
-[ADR0053](adr/0053-mlp-shared-batch-inference.md) accepts the owner's
-[MLP shared-inference implementation design](design/mlp-shared-batch-inference.md)
-after independent preimplementation architecture READY. Simulator072dabb now
-permits trusted cross-participant serving under section21.1; the historical
-issue72 blocker is resolved. Implementation, independence/routing/retirement
-verification and the bounded physical comparison remain pending. The new mode
-uses official optional TorchRL0.15.0/TensorDict0.15.2, CPU participant generation/
-sampling and one GPU service with explicit service custody and immutable
-checkpoint versions for HPOModel4 and ordinaryModel3. Old evidence retains its
-recorded contract and execution scope.
+[ADR0053](adr/0053-mlp-shared-batch-inference.md) implements the owner's
+[shared MLP design](design/mlp-shared-batch-inference.md) under Simulator
+072dabb section 21.1. Independent correctness and architecture conformance are
+READY. The bounded comparison and full Original/Replay/numeric audits pass:
+384 required HPO games, 128 near-tie confirmation games, and 32 ordinary Model3
+games. HPO parents remain incomplete at D10000; this is not quality acceptance.
+Shared C4/B4 is selected for the 32-game scaling preset. At matched C3, shared
+mode saves memory but is about 5% slower in collection; resident presets remain
+available. [The verification record](verification/ppo-shared-inference.md)
+contains identities, measurements and the whole-suite baseline disposition.
+
+One optional official TorchRL 0.15.0/TensorDict 0.15.2 service serves clean CPU
+participants for HPO Model4 and ordinary Model3. Immutable checkpoint publication,
+request identity/retirement, separate service custody and cold reference proofs
+are explicit. The host recipe is calibrated soft planning, with documented
+extreme-shape, long-run and shared-page attribution limits. Fresh external audits
+may contain the recorded original pool in a caller-owned capacity loan, while
+numeric reconstruction owns a separate peak; existing/borrowed pools keep their
+previous custody. GRU, Transformer and formal/final-test shared serving remain
+future work. Historical evidence retains its recorded contract and scope.
 
 [ADR0052](adr/0052-owned-learner-device-allowance.md) separates the owned
 learner's execution cap from its invocation's admitted device budget. Future
@@ -823,7 +833,7 @@ Wire DTOs may resolve representation details; no engine dependency is allowed.
 | `gf_simulator_client` | validated HTTP, attestation, subprocess/game ownership, worker transport | common, httpx; v2 stdlib-only model binding/config/cost metadata |
 | `gf_training` | journals/projection, split/feasibility, owned numeric training, generation lineage and frozen datasets | common, model adapters, optional PyArrow; shared client.structured_resources owner, corrected-runtime preflight-only client.card_instance_runtime, and the private component-diagnostic Tree scores facade |
 | `gf_evaluation` | paired scheduling, aggregation and costs | common |
-| `gf_models` | participant-local Random/heuristic/LightGBM/MLP/GRU/Transformer, common encoder/config and artifacts | common, lazy extras |
+| `gf_models` | participant-local policies, common encoder/config/artifacts, trusted shared MLP row scoring/immutable registry and allocator wrapper | common, lazy extras |
 | `gf_cli` | strict config, composition, commands, manifest | application packages |
 | `gf_native` (optional Rust extension) | Serde offline parsing/structural validation, fixed feature kernels, typed staging/index columns and numeric capacity/document-admission leases | Rust crates, Serde, PyO3, rust-numpy; no upper Python package or learning dependency |
 
@@ -846,11 +856,22 @@ game-policy authority. Revisit placement if another independent training workflo
 needs that transport or the facade gains management/game responsibilities; do not
 duplicate its process/reap protocol inside training.
 Runtime is CPython 3.14, GIL enabled, uv; baseline dependencies httpx/NumPy.
+ADR0053 adds a narrow production process-facade edge from the training
+coordinator to `gf_simulator_client.shared_service`. Client code retains broker,
+socket, relay and process retirement I/O; training retains committed checkpoint
+publication and service-shaped reference transactions. This imports no HTTP or
+Environment into training. Model code has no reverse dependency on the training
+controller. Revisit the facade placement if unrelated consumers or HTTP/game
+responsibilities enter it; do not duplicate its lifecycle protocol.
+
 Extras are `data` (PyArrow), `lightgbm`, mutually exclusive `torch` (CPU) and
 `torch-cuda` (cu132), and `hpo` (Optuna5.0.0); dev is pytest/ruff/mypy. NumPy is pinned to 2.5.4, Torch to
 2.14.1 and torchvision to 0.29.1. PyTorch indexes are explicit; baseline
 dependencies continue to resolve from PyPI.
 Optional libraries must not load for baseline or CLI help.
+The opt-in `shared-inference` extra pins TorchRL0.15.0 and TensorDict0.15.2;
+combine it with `torch-cuda` for shared production inference. CPU component
+transport tests do not authorize CPU fallback for that mode.
 
 The separate `godfieldbots-native` uv workspace member uses Maturin1.15.0,
 PyO3 0.30.1, rust-numpy0.30.0 and ndarray0.17.2, pinned in its build configuration
@@ -973,6 +994,18 @@ leases fully clear private history/RNG/cache/request state at verified handoff.
 No physical process receives both seats' views. Parked owners retain real GPU
 residency and require live authority through update/Source/commit; only actual
 reap releases physical ownership. Ordinary and historical paths remain fresh.
+
+ADR0053 separately permits trusted shared MLP serving under Simulator072dabb
+section21.1. Participant CPU processes still receive only their own inputs and
+own ordered results; the trusted broker/GPU executor may internally cohost rows.
+CPU participants own candidate generation, sampling and Act. Each request binds
+execution/game/participant/request/revision/checkpoint; normalization and model
+math are local to its row, and expired results cannot produce actions or data.
+Shared service residency/cache references are separate from participant slots
+and require positive original-child, relay/IPC and broker retirement. Ordinary
+PPO retains invocation-local custody; HPO retains its durable GPU gate. The
+current implementation/measurement acceptance state is recorded at the top of
+this document and in ADR0053; older isolation variants keep their own meanings.
 
 Clean-bootstrap amendment reviewed READY on 2026-10-27: launch a fixed
 `python -m gf_simulator_client.worker_bootstrap` with a minimal platform environment,

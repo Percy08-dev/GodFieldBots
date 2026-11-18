@@ -1,6 +1,7 @@
 # Fixed collector capacity across the1/2/4/8/16 panel; existing32-game HPO schedule.
 # Random/heuristic/frozen opponents; this panel is separate from matched mixed16.
-# Bounded shared-MLP measurement preset; seed17, width192, epochs4, updates2.
+# Bounded shared-MLP scaling preset; seed17, width192, epochs4, updates2.
+# C4/B4 selected from the measured C4/C8 throughput plateau and host headroom.
 # Not a full HPO search or a completed D10000 parent.
 schema_version = 5
 origin = "producer-owned-v1"
@@ -54,7 +55,7 @@ run_wall_seconds = 7200
 
 [runtime]
 mode = "shared-mlp-v1"
-max_batch_size = 3
+max_batch_size = 4
 formation_wait_ms = 1.0
 cache_entries = 6
 cache_weight_bytes = 134217728
@@ -92,8 +93,8 @@ collection_games = 32
 [operating]
 collector_budget_bytes = 4294967296
 # User-selected concurrency; reserve at least two participant workers per game.
-game_concurrency = 3
-max_participant_workers = 6
+game_concurrency = 4
+max_participant_workers = 8
 max_updates = 2
 save_budget_bytes = 1073741824
 parent_budget_bytes = 1073741824
