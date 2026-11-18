@@ -1,5 +1,8 @@
-//! Own-participant typed policy core. Transport/routing/replay are outside this module.
+//! Own-participant policy core and owned serving boundary; game actors integrate directly.
 pub mod baselines;
+pub mod batch;
+pub mod numeric;
+pub mod requests;
 pub mod rng;
 pub mod rules;
 pub mod search;

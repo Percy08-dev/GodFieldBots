@@ -99,6 +99,23 @@ config and parent identity include the complete runtime and producer identity
 An old parent always resumes through its recorded runtime. Each new mode has
 explicit strict source/receipt readers; do not relabel old receipts as thread joins.
 
+Preserve Journal6 and participant DTO3 when their content/chronology is unchanged:
+these fields attest own-view decision data, not Python actor process existence.
+Its runtime_evidence remains the real external Simulator process receipt. Numeric6
+may likewise remain unchanged when the existing Python canonical feature/numeric
+encoder still produces its content. In that case `encoder=canonical-python` is
+truthful for persisted numerics; it does not label the Rust online player or
+native serving-row encoder as Python. Keep those producer/encoder roles distinct.
+Native serving rows have their own Rust identity; changing persisted numeric
+encoding to Rust would require a new exact encoder/reader branch, not relabeling.
+New outer run/collection/proof/update/registry/import/completion discriminants must
+bind Rust online/capture provenance and host/thread retirement explicitly. Do not
+reuse old owned actor protocol9/10 as Rust custody, or construct a legacy process
+receipt. Preserve existing inner data validators and meanings instead of globally
+bumping unrelated data-format constants. Root agrees the exact outer-version
+inventory before implementing those source/lineage branches.
+
+
 Native facade operations (precise Python spelling may follow existing bindings):
 
 - start(runtime_config, run_id, trial_id, accepted games and own-policy descriptors)

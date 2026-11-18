@@ -79,3 +79,18 @@ paths and0755mode; installed distribution inventory drives discovery. Ordinary
 native-only builds remain companion-free. Actual runtime-wheel installation and
 forced-exit tests remain required; this refinement accepts design feasibility,
 not implementation or performance.
+
+## Scoped inference component and record compatibility
+
+The owned array/dispatcher/Python inference component passes independent
+correctness/conformance READY after blocked-admission retirement and timer
+representation fixes. Final55inference checks (including CUDA) and189native/
+13ignored checks pass; full live runtime/performance remain pending.
+
+The record-semantics clarification is independently READY: unchanged Journal6/
+DTO3 contents are not Python-process proofs; persisted Numeric6 remains honest
+only when its canonical-python encoder actually runs in Python. Native serving
+encoding and Rust online capture have distinct producer identity. New strict
+outer run/collection/proof/update/registry/import/completion selectors remain
+mandatory. Exact outer-version mapping must pass its gate before implementation;
+this clarification does not preapprove unspecified mappings or legacy receipts.

@@ -95,6 +95,50 @@ speed/memory remain required work. Diagnostic Refresh state is replay data,
 not a new admitted checkpoint format or Source proof. Existing Python production
 and historical readers/goldens are unchanged.
 
+## Owned inference boundary
+
+The bounded array-serving/dispatcher stage passes independent correctness and
+architecture conformance READY, including one scoped repair/re-review round.
+`ServingRow` reuses existing corrected native token kernels and transfers final
+float32/int64/bool allocations into NumPy; torch.from_numpy aliases CPU storage
+and last-reference tests preserve its lifetime. One shared Dispatcher supports
+blocking adapters and direct Tokio admission/result waits without Python callbacks
+or numeric JSON in the live path. Formation starts at first valid admission's
+absolute timestamp, including aged queues and first-row retirement.
+
+Rust owns committed opaque participant Torch bytes and atomically accepts only
+matching valid request/sample/next-state tuples. Invalid/expired/retired results
+adopt no RNG. Exported canceled leases retain quota until original service
+settlement; logical queue close does not prove Tensor/GPU completion. Game actors
+must bind actual Simulator gameID separately from planned frame.episode, retain
+active/frozen checkpoints before descriptor admission, release after actual leases
+settle, and use the same Torch serialization lock for learner operations. Registry
+publication additionally restores CPU and already-initialized CUDA RNG; learning
+retains its intentional RNG changes under the lock.
+
+Original component evidence:8RustPASS,49inferencePASS including real CUDA,
+470broaderPythonPASS/18existing explicit opt-in skips. Review found retirement
+missed capacity-blocked/unseen admissions, and unsupported finite timers could
+panic/poison cleanup. Both corrected with RED→GREEN tests: pre-capacity epoch
+ownership/tombstones, drop-safe started-producer registration, and checked actual
+Duration/host-clock representation with no arbitrary short cap.
+
+Final repair evidence:12focusedRustPASS,55inferencePASS/0SKIP including real CUDA;
+root fresh6coveringPASS and loaded native source/lock match. Root full native after
+fixes:189PASS/13IGNORE in3.24s. Both independent re-reviews mark bothP2findings
+ADDRESSED, no remaining findings. The unchanged broader470selection was not
+rerun after this local repair; its result is historical, not a final whole suite.
+Fixed native release SHA256:
+`e62691d7fa8fa4eb61cfe6b4b9558fc62ad64c4260792d629c560b066b25f999`;
+Cargo.lock remains `bb8e9e3cae6eab6c2877016c18d58256ea46f5f5807f8b41a6d475642bae692d`.
+Extension flags empty; Python adapter Ruff/format/mypy pass.
+
+Six-row CPU/CUDA mechanism timings separate assembly, sharing, synchronous
+transfer, fenced forward and return. They include cold first forward and belong
+to original pre-fix sourceaa9e5a74, not final corrected source or an end-to-end
+speed comparison. Full actors/storage/learning/process-tree/audits and approved
+physical matrix remain required before any complete-runtime/adoption claim.
+
 ## Companion/descendant feasibility
 
 Independent preimplementation architecture supplement READY for concrete installed
