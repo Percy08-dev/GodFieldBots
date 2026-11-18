@@ -2,6 +2,15 @@
 
 ## Status and scope
 
+[ADR0054](adr/0054-single-process-rust-player-runtime.md) accepts the owner's
+[single-process Rust player plan](design/rust-player-runtime-approved-plan.md)
+and the independently reviewed [bounded design](design/rust-player-runtime.md).
+Implementation is in progress. New runtime/producer/prepared/exit/completion
+identities, actual original-host reaping and cold continuation will preserve
+historical process receipts and existing evaluation admission. Neither a new
+runtime nor performance/default adoption is accepted yet; required evidence is
+tracked in [the verification record](verification/rust-player-runtime.md).
+
 [ADR0053](adr/0053-mlp-shared-batch-inference.md) implements the owner's
 [shared MLP design](design/mlp-shared-batch-inference.md) under Simulator
 072dabb section 21.1. Independent correctness and architecture conformance are
