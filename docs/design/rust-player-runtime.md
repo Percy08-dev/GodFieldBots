@@ -63,7 +63,14 @@ The companion is packaged in the native wheel as `gf_native_runtime/gf-player-su
 plus a generated manifest containing executable SHA256, native source/Cargo-lock
 identity and build profile. `tools/build_rust_player_wheel.py` is the explicit
 runtime-wheel build entry: cargo builds the pinned release binary, the helper
-writes the manifest and Maturin includes both in the wheel. This does not require
+writes the manifest and Maturin includes both in the wheel. The verified include
+pattern is `{ path = "gf_native_runtime/**/*", format = "wheel" }`, relative to
+native/pyproject.toml, with generated staging only under native/gf_native_runtime/.
+The helper cleans staging in finally; executable mode0755 and exact distribution
+file paths are preserved. The ordinary Maturin build explicitly selects the
+extension cdylib when the Cargo binary target exists, so it remains companion-free
+unless the runtime-wheel helper stages the companion. Verify actual installed
+wheel inventory rather than treating an editable install as release evidence. This does not require
 another Python package dependency or a Simulator build. Plain offline-native
 builds remain usable for old modes but may lack the companion; selecting the new
 mode then fails with the exact runtime-wheel build instruction before GPU/game
@@ -256,7 +263,24 @@ eligible completion. It exits. The supervisor waits its ORIGINAL child handle,
 then durably records `rust-player-exit-v1` with actual status/signal, exact
 admission and authenticated close acknowledgement. Only confirmed reap plus
 durable evidence may resolve physical admission. Forced exit may establish reap
-but leaves parent data ineligible. Uncertain reap, supervisor loss or missing
+but leaves parent data ineligible. On the Linux target, supervisor enables
+PR_SET_CHILD_SUBREAPER before spawning each host in its own isolated process
+group/session and retains that original group identity. Existing ManagedServer
+inherits the group and pinned Simulator072dabb starts no OS child processes.
+Closing its stdin requests shutdown; EOF never proves exit. Cooperative host
+cleanup still records actual Simulator wait/shutdown/log outcomes before prepared.
+After original host wait, the supervisor also positively reaps adopted descendants
+until no owned child remains, within existing cleanup/server deadlines. Stop/join
+its own telemetry child helpers before this drain so one wait owner cannot consume
+another helper's status. If needed, TERM/KILL only the owned host group and record
+every actual adopted PID/wait status and whether cleanup signaled it. Exit evidence
+includes this positive descendant-retirement result, separate from already-reaped
+Simulator outcomes recorded by the host. Supervisor cleanup never invents natural
+game termination, a clean server status, or qualified completion. Unknown/out-of-
+group descendants, unconfirmed wait or durable receipt failure prevent continuation
+and retain quarantine. This contract relies on the pinned process topology;
+setsid/child-spawning Simulator changes require a new containment review.
+Uncertain reap, supervisor loss or missing
 durable evidence retains the same quarantine and existing explicit recovery
 rules; recovery never creates completion evidence.
 

@@ -95,6 +95,17 @@ speed/memory remain required work. Diagnostic Refresh state is replay data,
 not a new admitted checkpoint format or Source proof. Existing Python production
 and historical readers/goldens are unchanged.
 
+## Companion/descendant feasibility
+
+Independent preimplementation architecture supplement READY for concrete installed
+wheel paths and Linux subreaper/isolated-group descendant retirement. A disposable
+Maturin1.15probe PASS confirms `gf_native_runtime/gf-player-supervisor` and manifest
+paths in Distribution.files plus executable0755. It is not the actual companion
+wheel. Current ManagedServer inherits its host group and pinned Simulator starts
+no OS child processes; stdinEOF requests shutdown and does not prove exit. Actual
+original-host/adopted-child waits, failure injection, installed companion identity
+and host reentry still require implementation/verification.
+
 ## Required evidence still outstanding
 
 - Integrate the accepted typed policy core with live incremental own-view state.

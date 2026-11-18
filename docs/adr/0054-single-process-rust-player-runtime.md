@@ -63,3 +63,19 @@ are resolved and independently re-reviewed. Original broad679Python checks pass;
 final11covering/245affectedPython and180native/13ignored checks pass. This is
 core acceptance only; the [verification record](../verification/rust-player-runtime.md)
 keeps complete-runtime/learning/performance/adoption work outstanding.
+
+## Supervisor/packaging design refinement
+
+Independent `/root/runtime_architecture` preimplementation supplement review is
+READY. Linux subreaper adoption plus an isolated original-host group and actual
+adopted-child wait statuses close the orphan-Simulator boundary; stdinEOF alone
+is only a shutdown request. WNOHANG zero means still running. Cleanup signals
+may establish physical retirement but never qualified completion. Unknown/reap/
+durable-proof failure retains quarantine. Revisit containment if a later pinned
+Simulator spawns OS children or changes groups/sessions.
+
+A disposable Maturin1.15 wheel proves the exact wheel-only companion include
+paths and0755mode; installed distribution inventory drives discovery. Ordinary
+native-only builds remain companion-free. Actual runtime-wheel installation and
+forced-exit tests remain required; this refinement accepts design feasibility,
+not implementation or performance.
