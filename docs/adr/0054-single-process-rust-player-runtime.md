@@ -123,3 +123,18 @@ immutable capture. Final197native/13ignored and537Python/18explicit skips pass,
 including actual overlap/natural/Replay/CPU-CUDA cancellation. This accepts the
 actor component only; real writer/Source/learning/supervisor/CLI integration and
 approved performance/default gates remain outstanding.
+
+## Thread storage accounting and failure ownership
+
+The [storage bridge design](../design/rust-player-runtime-storage.md) passes
+independent preimplementation architecture READY. One native parent recording
+account serves native captures and additional Python staging/pack byte leases;
+original bundle/view custody is charged once. Decoder/private metadata scratch
+has its separately admitted role, and a new restrictive formula still requires
+bounded evidence/root review. No second interpreter/IPC estimate is inherited.
+
+A genuine fault probe shows transitional readonly FD ownership could be lost
+when old-original close failed; process exit formerly retired it, thread exit
+would not. The new owner must retain every transitional/db handle before fallible
+handoff and report uncertain cleanup honestly. Actual thread/bridge implementation
+and fault verification remain pending.
