@@ -86,6 +86,7 @@ class _ChainScan(SealedScan):
         self._pool_control_charge = 0
         self._pool_control_uncertain = False
         self._packed_state: Json | None = None
+        self._owned_audit_capacity: Any = None
         self._closed = False
         self._cleanup_children: list[Any] = []
         self._game_source_inventories: list[Any] = []
@@ -152,7 +153,12 @@ class _ChainScan(SealedScan):
         if self._packed_pool is None:
             state = self._packed_state
             limit = min(self.limit, state['effective_config']['storage']['budget_mib'] * 1024**2)
+            audit=self._owned_audit_capacity
+            if audit is not None:
+                limit=audit.original_limit
+                audit.reserve_originals(self)  # Full parent loan before concrete child allocation.
             self._packed_pool = PackedArtifactPool.__new__(PackedArtifactPool)
+            if audit is not None:audit.pool=self._packed_pool
             try:
                 PackedArtifactPool.__init__(self._packed_pool, max_owned_bytes=limit, deadline=self.deadline)
                 self.admit_pool_controls()
@@ -219,10 +225,13 @@ class _ChainScan(SealedScan):
     def close(self, *, recheck: bool = True, error: BaseException | None = None) -> None:
         if self._closed:
             return
-        if self._packed_pool is not None:
+        if self._packed_pool is not None or self._owned_audit_capacity is not None:
             try:
-                self._packed_pool.require_terminal_close()
+                if self._owned_audit_capacity is not None:
+                    self._owned_audit_capacity.retry_retirements()
+                if self._packed_pool is not None:self._packed_pool.require_terminal_close()
             except BaseException as cleanup:
+                if self._owned_audit_capacity is not None:cleanup.__dict__['cleanup_owner']=self
                 if error is not None:
                     error.__dict__['cleanup_owner'] = self
                     error.add_note('original scan terminal close: ' + str(cleanup))
@@ -250,10 +259,17 @@ class _ChainScan(SealedScan):
             if self._pool_control_uncertain:
                 raise ContractError('shared control admission remains uncertain')
             if self._packed_pool is not None and self._pool_control_charge:
-                self._packed_pool.budget.release(self._pool_control_charge)
-                self._pool_control_charge = 0
+                budget=self._packed_pool.budget
+                with budget._condition:
+                    before,amount=budget.used,self._pool_control_charge
+                    try:budget.release(amount)
+                    finally:
+                        if budget.used==before-amount:self._pool_control_charge=0
+                        elif budget.used!=before:self._pool_control_uncertain=True
             for custody in tuple(self._packed_borrows.values()):
                 custody.release(self)
+            if self._owned_audit_capacity is not None:
+                self._owned_audit_capacity.close_after_scan(self)
             self._closed = True
         except BaseException as caught:  # noqa: BLE001 -- retain concrete unconfirmed resources.
             cleanup_error = caught

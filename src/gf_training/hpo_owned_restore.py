@@ -725,19 +725,120 @@ def audit_owned_artifacts(scan: Any, state: Json, records: list[Json], registry:
             raise ContractError('owned external retained artifact map mismatch')
 
 
+class _AuditExternalCharge:
+    """One private parent-account charge, including observed failed effects."""
+    def __init__(self, budget: Any, deadline: float) -> None:
+        self.budget,self.deadline=budget,deadline
+        self.amount=0
+        self.closed=self.failed=self.uncertain=False
+
+    def grow(self, size: int) -> None:
+        if self.closed or self.failed:raise ContractError('external audit admission already retired or failed')
+        with self.budget._condition:
+            before=self.budget.used
+            try:self.budget.acquire(size,self.deadline)
+            except BaseException:  # Preserve the original admission and retain any actual effect.
+                self.failed=True
+                raise
+            finally:
+                if self.budget.used==before+size:self.amount+=size
+                elif self.budget.used!=before:self.uncertain=True
+
+    def close(self) -> None:
+        if self.closed:return
+        if self.uncertain:raise ContractError('external audit charge effect remains uncertain')
+        with self.budget._condition:
+            if self.amount:
+                amount,before=self.amount,self.budget.used
+                try:self.budget.release(amount)
+                finally:
+                    if self.budget.used==before-amount:self.amount=0
+                    elif self.budget.used!=before:self.uncertain=True
+            if self.uncertain:raise ContractError('external audit refund remains uncertain')
+            self.closed=True
+
+
+class _ExternalAuditCapacity:
+    """Fresh scan's original-capacity loan and separately retained numeric peaks."""
+    def __init__(self, scan: Any, external: int, original: int) -> None:
+        from gf_training.group_pack_resources import ByteBudget
+        self.scan,self.limit,self.deadline=scan,external,scan.deadline
+        self.original_limit=min(external,original)
+        self.nested=external>original
+        self.pool: Any=None
+        self.account: Any=None
+        self.loan: _AuditExternalCharge | None=None
+        self.retirements: list[Any]=[]
+        self.closed=False
+        if self.nested:
+            self.account=ByteBudget(external,name='external-owned-audit',phase='originals-plus-numeric')
+            self.loan=_AuditExternalCharge(self.account,self.deadline)
+
+    def reserve_originals(self, scan: Any) -> None:
+        if scan is not self.scan or not scan._owns_packed_pool or scan._packed_borrows:
+            raise ContractError('external audit cannot own borrowed original capacity')
+        if self.loan is not None and not self.loan.amount:
+            try:self.loan.grow(self.original_limit)
+            except BaseException as error:
+                vars(error)['cleanup_owner']=scan
+                raise
+
+    def require_pool(self, scan: Any, pool: Any) -> None:
+        if (scan is not self.scan or not scan._owns_packed_pool or scan._packed_borrows
+                or self.pool is not pool or scan._packed_pool is not pool):
+            raise ContractError('external audit requires its SAME independently owned pool')
+
+    def retry_retirements(self) -> None:
+        for retirement in self.retirements:
+            if retirement.last_use_observed and not retirement.retired:retirement.last_use()
+            retirement.require_retired()
+
+    def close_after_scan(self, scan: Any) -> None:
+        if scan is not self.scan:raise ContractError('foreign external audit capacity owner')
+        self.retry_retirements()
+        if self.loan is not None and self.pool is not None and (not self.pool.closed or self.pool.budget.used):
+            raise ContractError('original audit pool/control capacity has not positively retired')
+        if self.loan is not None:self.loan.close()
+        self.closed=True
+
+
+def _prepare_external_audit(scan: Any, state: Json, model: Any) -> _ExternalAuditCapacity | None:
+    owner=getattr(scan,'_owned_audit_capacity',None)
+    if owner is not None:return owner
+    # Existing/borrowed custody remains flat; it must never receive our loan.
+    if scan._packed_pool is not None or not scan._owns_packed_pool or scan._packed_borrows:return None
+    config=state['effective_config']
+    external=min(scan.limit,model.resources.max_owned_bytes)
+    original=min(config['preprocessing']['memory_budget_mib'],config['storage']['budget_mib'])*1024**2
+    owner=_ExternalAuditCapacity.__new__(_ExternalAuditCapacity)
+    scan._owned_audit_capacity=owner  # Reachable before parent-account/admission effects.
+    _ExternalAuditCapacity.__init__(owner,scan,external,original)
+    return owner
+
+
 class _AuditNumericPeak:
     """Offline reader callback is an absolute live peak, not additive demand."""
-    def __init__(self, original: Any) -> None:
+    def __init__(self, original: Any, *, capacity: _ExternalAuditCapacity | None=None) -> None:
         self.original=original
         self.peak=0
+        self.capacity=capacity if capacity is not None and capacity.nested else None
+        self.retirement: Any=None
+        self.charge=(_AuditExternalCharge(self.capacity.account,self.capacity.deadline)
+            if self.capacity is not None else None)
 
     def __call__(self, size: int) -> None:
         integer(size,0)
         delta=max(0,size-self.peak)
         if delta:
-            self.original.charge(delta)
+            if self.charge is not None:
+                if self.retirement is None:raise ContractError('numeric audit lacks its actual cohort retirement owner')
+                self.charge.grow(delta)
+            else:self.original.charge(delta)
             self.peak=size  # Only actual successful admission advances the peak.
         else: self.original.check()
+
+    def close(self) -> None:
+        if self.charge is not None:self.charge.close()
 
 
 class _AuditCohortRetirement:
@@ -745,8 +846,10 @@ class _AuditCohortRetirement:
     def __init__(self, original: Any) -> None:
         self.original=original
         self.retired=False
+        self.last_use_observed=False
         self.error: BaseException | None=None
         self.hold: Any=None
+        self.numeric: list[_AuditNumericPeak]=[]
         try: self.hold=original.pool.hold_close(self)
         except BaseException as error:
             for hold in tuple(original.pool._close_holds):
@@ -760,11 +863,23 @@ class _AuditCohortRetirement:
                     else: self.hold=None; self.retired=True
             raise
 
+    def add_numeric(self, peak: _AuditNumericPeak) -> None:
+        if peak.retirement is not None:raise ContractError('numeric audit retirement already attached')
+        self.numeric.append(peak)
+        peak.retirement=self
+        if peak.capacity is not None and self not in peak.capacity.retirements:
+            peak.capacity.retirements.append(self)
+
     def last_use(self) -> None:
-        try: self.hold.retire(self)
+        self.last_use_observed=True
+        try:
+            if self.hold is not None:
+                self.hold.retire(self)
+                self.hold=None
+            for peak in self.numeric:peak.close()
         except BaseException as error:  # noqa: BLE001 - actual finalizer cannot invent successful retirement
             self.error=error
-        else: self.hold=None; self.retired=True
+        else:self.error=None;self.retired=True
 
     def require_retired(self) -> None:
         if self.error is not None: raise self.error
@@ -783,6 +898,7 @@ class _AuditCohortAnchor:
     """Only this cohort's decoded records/tokens/arrays and stack retain the hold."""
     def __init__(self, retirement: _AuditCohortRetirement) -> None:
         self._ids: set[int]=set()
+        self.retirement=retirement
         weakref.finalize(self,_audit_last_use,retirement)
 
     def bind(self, value: Any) -> None:
@@ -832,11 +948,22 @@ def _audit_owned_cohort(scan: Any, state: Json, records: list[Json], number: int
         raise ContractError('owned complete original learner population differs')
     # This external reconstruction owns originals and scan state; the recorded
     # live RAM-bank receiver allowance describes a different operation.
-    budget=original.pool.budget
-    with budget._condition:
-        audit_limit=min(scan.limit,model.resources.max_owned_bytes)
-        extra=scan.retained+original.used
-        available=min(audit_limit-extra,budget.limit-budget.used)
+    capacity=getattr(scan,'_owned_audit_capacity',None)
+    if capacity is not None and capacity.nested:
+        capacity.require_pool(scan,original.pool)
+        with capacity.account._condition:
+            audit_limit=capacity.limit
+            extra=capacity.account.used  # Full original loan includes all child/control growth.
+            available=audit_limit-extra
+        peak=_AuditNumericPeak(original,capacity=capacity)
+        anchor.retirement.add_numeric(peak)  # Before manifest parsing or any numerical admission.
+    else:
+        budget=original.pool.budget
+        with budget._condition:
+            audit_limit=min(scan.limit,model.resources.max_owned_bytes)
+            extra=scan.retained+original.used
+            available=min(audit_limit-extra,budget.limit-budget.used)
+        peak=_AuditNumericPeak(original)
     if available<=0:
         raise ContractError('external numeric audit has no remaining caller capacity')
     rollout=read_hpo_rollout(scan.root/update['numeric'],update['numeric_sha256'],model,recipe,
@@ -844,7 +971,7 @@ def _audit_owned_cohort(scan: Any, state: Json, records: list[Json], number: int
         expected_records=selected,expected_snapshot_identity=records[number]['snapshot_identity'],
         numeric_budget_bytes=available,
         max_owned_bytes=audit_limit,extra_owned_bytes=extra,check=original.check,
-        reserve=_AuditNumericPeak(original))
+        reserve=peak)
     anchor.rollout(rollout)
     rollout.require_learning()
     if rollout.policy_version!=label: raise ContractError('owned numeric original learner identity differs')
@@ -860,11 +987,13 @@ def audit_owned_samples(scan: Any, state: Json, records: list[Json], *, deadline
     actions,model,_=hpo_state(state)
     recipe=hpo_training_config(state['effective_config']['hpo_spec']['training_recipe'])
     scan.configure_packed(state)
+    _prepare_external_audit(scan,state,model)
     games=decisions=0
     for number in range(state['updates']):
         plan,label,_=recorded_hpo_plan(scan.root,state,records,number,deadline)
         original=scan.packed_owner(plan.output)
-        original.charge(scan.retained)
+        # The SAME concrete pool already funds identical retained scan controls.
+        scan.admit_pool_controls()
         retirement=_AuditCohortRetirement(original)
         anchor=_AuditCohortAnchor(retirement)
         try:
