@@ -29,10 +29,23 @@ PASS:200passed,7skipped,7.32s,exit0 (independent verifier). Raw output retained 
 claim. ADR0053's recorded whole-suite result remains historical51FAIL/7158PASS/
 574SKIP with documented triage; it is not silently converted to whole-green.
 
+## Current-v5 reference originals
+
+PASS: nine own-view episodes/twelve decisions, exact fixed-clock reports and
+34,285 clock reads, ordered tables/actions/hashes, CPython search/baseline RNG
+and sequential/repeated Refresh behavior. Largest capture has2048candidates and
+12visible cards. Fixture SHA256:
+`ecf073cdb848e97752711e4f9b0a39f6f5d1b2206206a7acb293d25047d080f3`.
+All47source hashes match baseline9680f06. Explicit recapture is byte-identical;
+implicit overwrite refuses. Scoped regression333PASS and Ruff check/format PASS.
+Independent `/root/v5_reference_review`: spec READY, task quality READY; optional
+README public-cause wording corrected. This supplies comparison originals only.
+Full18-card/maximum-row extremes, every trade/allocation family and broad RNG API
+boundaries need separate port tests. See [fixture scope](../../tests/fixtures/rust_player_v5/README.md).
+
 ## Required evidence still outstanding
 
-- Current-v5 fixed-clock comparison originals, then exact Rust candidate/report/
-  order/hash, selections and RNG state compatibility.
+- Exact Rust candidate/report/order/hash, selections and RNG state compatibility.
 - Logical participant independence, transactional RNG adoption, expired replies,
   immutable checkpoint publication and final-dtype buffer lifetime.
 - Both actual schedulers/common HTTP contract, W1/W2 four-participant failure tests.
