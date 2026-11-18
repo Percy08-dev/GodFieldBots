@@ -14,6 +14,11 @@
 
 ## 一覧
 
+追加: [0053](0053-mlp-shared-batch-inference.md) — Accepted design:
+Simulator072dabbの共有推論契約を採用し、MLPの通常PPO/HPOを公式TorchRLへ接続する。
+CPU参加者、共有GPUサービス、checkpointと要求の独立性、実際の終了証明を分離する。
+事前設計レビューREADY。実装・契約テスト・384試合の実測による受入は進行中。
+
 追加: [0052](0052-owned-learner-device-allowance.md) — 通常のproducer-owned CUDA学習で、
 論理的な更新上限と、常駐参加者を考慮した実際のGPU予約を別に扱う。
 

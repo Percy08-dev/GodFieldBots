@@ -1,7 +1,14 @@
 # Simulator handoff: participant-scoped inference in a shared tensor executor
 
-Status: open in [GodFieldSimurator #72](https://github.com/Percy08-dev/GodFieldSimurator/issues/72). Affects the proposed optional shared MLP inference path, for both
-ordinary PPO and HPO. The existing per-viewer participant runtime can run.
+Status: resolved upstream by Simulator PR73 at
+`072dabbca1458c9526897781d2fd64edeeb4f9ca`; Bots adoption/implementation is in
+progress under [the MLP design](../design/mlp-shared-batch-inference.md).
+The adopted spec07 SHA-256 is
+`8e5223b45a6e8c4c80e272736ed97b9e271136c939eca74427a035ddfdbfcac2`.
+Its section21.1 permits trusted shared execution subject to participant
+independence, immutable request checkpoints, exact response matching and
+retirement verification before enabling batching. The text below preserves the
+historical91d5926 question and proposal; it does not describe the new contract.
 
 ## Question for the Simulator contract owner
 

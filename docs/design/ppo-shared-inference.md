@@ -1,5 +1,11 @@
 # PPO resource admission and shared inference
 
+Continuation: Simulator issue72 is resolved at072dabbca1458c9526897781d2fd64edeeb4f9ca.
+The [MLP adoption and implementation design](mlp-shared-batch-inference.md)
+supersedes the historical specification-waiting statements below for new shared
+runs. Existing resource milestones and91d5926 evidence retain their original
+scope and semantics.
+
 Baseline: GodFieldBots dad129f, Simulator 91d5926a7572db327eaea3751e7c24f428120996, corrected gameplay API v2, public-ja-v3 catalog schema 2. The HPO probe uses Model4, producer-owned-v1, resident-worker-v1, collection16, concurrency3 and six participant workers. Ordinary corrected PPO uses Model3.
 
 ## Shared inference objective and contract

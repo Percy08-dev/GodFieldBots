@@ -2,6 +2,17 @@
 
 ## Status and scope
 
+[ADR0053](adr/0053-mlp-shared-batch-inference.md) accepts the owner's
+[MLP shared-inference implementation design](design/mlp-shared-batch-inference.md)
+after independent preimplementation architecture READY. Simulator072dabb now
+permits trusted cross-participant serving under section21.1; the historical
+issue72 blocker is resolved. Implementation, independence/routing/retirement
+verification and the bounded physical comparison remain pending. The new mode
+uses official optional TorchRL0.15.0/TensorDict0.15.2, CPU participant generation/
+sampling and one GPU service with explicit service custody and immutable
+checkpoint versions for HPOModel4 and ordinaryModel3. Old evidence retains its
+recorded contract and execution scope.
+
 [ADR0052](adr/0052-owned-learner-device-allowance.md) separates the owned
 learner's execution cap from its invocation's admitted device budget. Future
 participant/cache/BEGIN capacity remains reserved when setting that budget;
@@ -21,8 +32,9 @@ READY validation or, on failure, confirmed reap and I/O/FD retirement.
 Postcommit SYNC stages one owner at a time. The legacy learner/execution
 allowance and other mixed host/device estimates still need separate calibration.
 The [verification record](verification/ppo-shared-inference.md) distinguishes
-managed reservations from physical memory. The proposed shared GPU service
-requires [a Simulator contract decision](issues/0011-shared-inference-participant-process.md).
+managed reservations from physical memory. The shared GPU service's historical
+[Simulator contract handoff](issues/0011-shared-inference-participant-process.md)
+is resolved; ADR0053 governs adoption and implementation.
 
 [ADR0049](adr/0049-configurable-hpo-game-concurrency.md) accepts the owner's
 request for configurable HPO game counts above two and user-owned OOM tuning.
