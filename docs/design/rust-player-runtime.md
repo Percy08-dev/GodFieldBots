@@ -29,7 +29,11 @@ component benchmark or an unexecuted experiment.
 Use Simulator `072dabbca1458c9526897781d2fd64edeeb4f9ca`, specification07 SHA256
 `8e5223b45a6e8c4c80e272736ed97b9e271136c939eca74427a035ddfdbfcac2`, v2
 Observation/typed Action/ActionOptions/events and public catalog2/public-ja-v3.
-Keep existing adopted public-rule signatures including defense priority. Capture
+Keep existing adopted public-rule signatures including defense priority. Existing corrected-layout
+frame/EventBank hashes intentionally retain their historical91d5926 layout
+contract even for shared072dabb action/runtime settings. Preserve those actual
+identities separately and test their binding; never relabel a frame hash to the
+new runtime revision. Capture
 actual external executable SHA256 and config for each run; never use an old
 binary with a new normative label. Historical91d5926 data stays historical.
 

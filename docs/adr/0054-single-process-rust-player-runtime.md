@@ -53,3 +53,13 @@ Model3/4 CUDA continuous/save/resume and strict original/numeric/Replay audits;
 actual single-Python process tree and original-handle termination; approved C8,
 C16 and deployment-concurrency timing protocol. Record results and unresolved
 limitations in docs/verification/rust-player-runtime.md before acceptance.
+
+## Scoped core implementation evidence
+
+The native v5 public policy core is implemented and passes independent correctness
+and architecture conformance READY after one local fix round. The two blocking
+parity findings (empty table after deadline and separate baseline capacity18)
+are resolved and independently re-reviewed. Original broad679Python checks pass;
+final11covering/245affectedPython and180native/13ignored checks pass. This is
+core acceptance only; the [verification record](../verification/rust-player-runtime.md)
+keeps complete-runtime/learning/performance/adoption work outstanding.

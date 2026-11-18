@@ -5,7 +5,9 @@
 [ADR0054](adr/0054-single-process-rust-player-runtime.md) accepts the owner's
 [single-process Rust player plan](design/rust-player-runtime-approved-plan.md)
 and the independently reviewed [bounded design](design/rust-player-runtime.md).
-Implementation is in progress. New runtime/producer/prepared/exit/completion
+The bounded native v5 search/RNG/Random/Heuristic/Refresh core passes independent
+correctness and conformance review after two local parity repairs; live runtime
+implementation remains in progress. New runtime/producer/prepared/exit/completion
 identities, actual original-host reaping and cold continuation will preserve
 historical process receipts and existing evaluation admission. Neither a new
 runtime nor performance/default adoption is accepted yet; required evidence is

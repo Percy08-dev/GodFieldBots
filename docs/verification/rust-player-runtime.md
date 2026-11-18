@@ -60,9 +60,44 @@ README public-cause wording corrected. This supplies comparison originals only.
 Full18-card/maximum-row extremes, every trade/allocation family and broad RNG API
 boundaries need separate port tests. See [fixture scope](../../tests/fixtures/rust_player_v5/README.md).
 
+## Native v5 policy core
+
+Accepted bounded core after independent correctness/spec-quality and architecture
+conformance READY, including one scoped repair/re-review round. New modules
+`native/src/player_runtime/` implement public rules, bounded v5 search, CPython
+used RNG APIs, Random/Heuristic and participant-local Refresh. Whole-call
+GIL-detached diagnostics are `player_search_v5`, `player_select_v5` and
+`player_rng_v5`; later actors must use the typed core and incremental bank
+custody, rather than repeatedly rebuild full-prefix diagnostic JSON.
+
+Original broad comparison:679PythonPASS, including346new collected tests;
+237owned perceived definitions across four modes,40mixed seeded searches,
+65,536rows/18cards, resource/allocation/sequence rules and Refresh histories.
+This broad run preceded the two final fixes. Independent review found deadline
+truncation could return an empty table, and baseline capacity18 was not enforced
+separately from search capacity128. Both are corrected with meaningful RED→GREEN
+coverage; search capacity is preserved and no candidate is synthesized.
+
+Final repair evidence:11coveringPythonPASS,245affectedPythonPASS,3focusedRustPASS.
+Root's full native suite after fixes:180PASS/13IGNORE in3.30s; root fresh11covering
+checks PASS and loaded release/lock hashes verified. Both independent re-reviews
+are READY with bothP2findings ADDRESSED and no remaining findings. The unchanged
+broad679selection was not rerun after these two local fixes; no final whole-Python
+green claim follows. Source-matched fixed release native SHA256:
+`9bfc13beae4c1d308ae0267c0a9d0815fb08d0d74e5f42f193901d28938a536a`;
+Cargo.lock SHA256:
+`bb8e9e3cae6eab6c2877016c18d58256ea46f5f5807f8b41a6d475642bae692d`.
+Extension RUSTFLAGS are empty. Saved reference fixture hash remains unchanged.
+
+This accepts the policy core only. Live HTTP/state ingestion, Tensor ownership,
+sampling retirement, complete runtime isolation, training/resume and measured
+speed/memory remain required work. Diagnostic Refresh state is replay data,
+not a new admitted checkpoint format or Source proof. Existing Python production
+and historical readers/goldens are unchanged.
+
 ## Required evidence still outstanding
 
-- Exact Rust candidate/report/order/hash, selections and RNG state compatibility.
+- Integrate the accepted typed policy core with live incremental own-view state.
 - Logical participant independence, transactional RNG adoption, expired replies,
   immutable checkpoint publication and final-dtype buffer lifetime.
 - Both actual schedulers/common HTTP contract, W1/W2 four-participant failure tests.
