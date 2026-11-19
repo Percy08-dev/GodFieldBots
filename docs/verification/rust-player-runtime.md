@@ -926,3 +926,59 @@ NOT RUN: actual final exec/HostControl/admission/Source/Parent, public commands,
 GPU/game/Simulator/PPO/campaign/evaluation/resume experiments, native build/install,
 full suite, calibration/profile/primary performance populations or default adoption.
 No numeric P default, tail sufficiency or physical capacity claim follows.
+
+
+## Public ordinary routing and campaign CONFIG foundation
+
+C2c passes both original independent final reviews after R1/R2. The ordinary
+timed train branch calls the real sealed factory; final exec is mocked in unit
+evidence. Cold output uses actual typed-owner guards and serializes scalar DATA
+while live, then closes result, releases parent and closes control before stdout.
+Pinned CONFIG/seed snapshots, real CampaignStore OFDs, exact initial soft/hard
+fields, cursor CAS and limited known-native-ACK failure history are implemented.
+Known-ACK routing tests use a labelled DATA-boundary double with real new parent
+ownership; they are not new actual native ACK or Source proof.
+
+Two original P2s close through native6 conditions explicitly using legacy-fresh
+evaluation None, and existing real materializations checking P for all four
+planning callers. R2 closes a resource cache defect: scientific identity excludes
+resources, so a requested canonical512MiB context preview could be reused for
+an actual1GiB in-space proposal. The real CONFIG/Optuna regression observes fixed
+805306368 versus1342177280 bytes RED, then GREEN. Reuse now requires the identical
+actual requested object; otherwise actual selected resources are calculated.
+An optional full-state clone is removed by scalar extraction from already-held
+validated state after Parent.require. No measured memory/speed claim follows.
+
+Root freshly precollects and runs333 CPU/config/file nodes:333 PASS/4 CUDA-labelled
+deselections/29 known Optuna group warnings in13.54s. The original327-node order
+is preserved; added six are actual trial/control P60/P59, real conditions and
+in-space resource regression. Both CUDA visibility empty and not-cuda filtering
+are enforced. Root Ruff11/mypy7 and all11 frozen source/test hashes PASS. Worker
+R1 original327 and R2 focused29 remain separate preserved executions.
+
+Final inventory `1dbf08a2e1ac6aefabc456b49955325f7790376575d8195d2dbb2998ebd5981a`,
+combined repair patch `ac36abcbbe317a8eb568b29d4e14dd16c6960f70ec6a2e16705085d0c71c3b71`,
+R2-only `9e1905bfff4c6760b943165b6217a21f82b2a4b4693d8ef2277ad76e99b214bb`.
+Checkpoint Python source
+`68dd3b40eb6521a88497cde15042e41bd4467d71eb90af7e896a5056920920bd`,
+seven-package runtime
+`f2dcf4f3ab00510c0e77441bde2032c0f7bdb82300a6cf9d59a5c198b2b2834e`.
+Current native source
+`381ef85a15c2843f6e6b56847226a8fd65391182914dd0f175fe95dbcb177944`
+remains UNMATCHED to installed931417c4/extension03fa4461/companion4c866c31.
+No current native protocol certification or wheel installation is claimed.
+
+PUBLIC HPO run stays guarded; successful-history/source validation is explicitly
+unsupported by this foundation until genuine C2b/C2d composition replaces that
+limited guard. No run_campaign stub is provided. Actual host/admission/Source/
+Parent/GPU/Simulator/training/evaluation/build/profile/calibration/performance
+and full-suite checks are NOT RUN here. Full actual Task6 and unchanged Task7
+populations/default criteria remain mandatory.
+
+Component raw control evidence is durably preserved under primary ignored
+`runs/rust-player-runtime-v1/components/entry-control-33de33e-e9de08c` (3139 entries,
+105 historical roots, final manifestd59e5891fb488d628217e094bc89150ef042dafeb54e2d58932115464a831333),
+including hash-verified R2 actual private executable and original wheel filename.
+These copies are DATA, not Original FDs or current authority. Earlier candidates
+remain historical. C2a review/source evidence is separately preserved under
+`components/public-factory-5baa086`, manifest258ab5540262a0450dfdcf62b6b42317ccf3d1e65c7ce5cdcdc130bbf59d3b00.

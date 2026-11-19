@@ -1,4 +1,4 @@
-"""Internal public-launch composition; public execution routing stays guarded.
+"""Ordinary public launch and CONFIG planning; HPO execution stays guarded.
 
 Configuration previews are DATA, not admission or a physical-capacity promise.
 Torch/native/process imports belong only to the explicit ordinary preparation.
@@ -35,14 +35,22 @@ def _config(loaded: LoadedConfig) -> tuple[Any, bool, float]:
 def startup_preview(loaded: LoadedConfig) -> Json:
     """Known fresh network demand only; no Torch, hardware or live account."""
     from gf_common.structured_layout import CORRECTED_CARD_INSTANCE_LAYOUT as layout
-    from gf_models.rust_player_device import CudaCheckpointProfile
-
     cfg, hpo, _p = _config(loaded)
-    profile = CudaCheckpointProfile(cfg.model.architecture(layout=layout), cfg.model.inference, layout=layout)
-    learner, serving = cfg.training.device, cfg.model.inference.device
+    row = _startup_geometry(cfg.model.architecture(layout=layout), cfg.model.inference,
+        learner=cfg.training.device, global_bytes=cfg.hpo_spec['operating']['managed_cuda_bytes'] if hpo else cfg.run.global_cuda_budget_bytes)
+    return {**row,
+        'declared_ram_bytes': cfg.hpo_spec['operating']['managed_ram_bytes'] if hpo else 24 * 1024**3,
+        'declared_source_bytes': cfg.preprocessing.memory_budget_mib * 1024**2,
+        'declared_storage_bytes': cfg.storage.settings().budget_bytes}
+
+
+def _startup_geometry(model: Any, inference: Any, *, learner: str, global_bytes: int) -> Json:
+    from gf_common.structured_layout import CORRECTED_CARD_INSTANCE_LAYOUT as layout
+    from gf_models.rust_player_device import CudaCheckpointProfile
+    profile = CudaCheckpointProfile(model, inference, layout=layout)
+    serving = inference.device
     active = learner != 'cpu' or serving != 'cpu'
-    global_bytes = (cfg.hpo_spec['operating']['managed_cuda_bytes'] if hpo
-        else cfg.run.global_cuda_budget_bytes) if active else 0
+    global_bytes = global_bytes if active else 0
     fixed = profile.fixed_bytes if active else 0
     learner_bytes = profile.network_bytes if learner != 'cpu' else 0
     serving_bytes = profile.network_bytes if serving != 'cpu' else 0
@@ -54,10 +62,51 @@ def startup_preview(loaded: LoadedConfig) -> Json:
         'host_fixed_bytes': fixed, 'learner_tensor_bytes': learner_bytes,
         'g0_serving_tensor_bytes': serving_bytes, 'startup_cuda_bytes': startup,
         'declared_cuda_bytes': global_bytes,
-        'declared_ram_bytes': cfg.hpo_spec['operating']['managed_ram_bytes'] if hpo else 24 * 1024**3,
-        'declared_source_bytes': cfg.preprocessing.memory_budget_mib * 1024**2,
-        'declared_storage_bytes': cfg.storage.settings().budget_bytes,
         'host_admission': False, 'future_phase_checks_required': True}
+
+
+def campaign_startup_preview(loaded: Any, *, settings: Any = None) -> Json:
+    """Native6 proposal/validation DATA bound to the original campaign CONFIG."""
+    from gf_cli.hpo_config import LoadedHPOConfig, RustPlayerHPOCampaignConfig, materialize_hpo_run
+    from gf_common.structured_layout import CORRECTED_CARD_INSTANCE_LAYOUT as layout
+    from gf_training.hpo_config import effective_settings
+    if type(loaded) is not LoadedHPOConfig:
+        raise ContractError('actual loaded native6 campaign CONFIG required for materialization')
+    config = loaded.config
+    if (not isinstance(config, RustPlayerHPOCampaignConfig) or not hasattr(config.operating, 'post_host_seconds')
+            or canonical(asdict(config)) != canonical(loaded.effective)
+            or loaded.sha256 != digest({'campaign': loaded.effective, 'base': loaded.base.sha256})):
+        raise ContractError('explicit timed native6 campaign configuration required')
+    selected = effective_settings(config.model, config.training, {}, layout=layout) if settings is None else settings
+    # Nonexecuted CONFIG identity only, never an operation/producer placeholder.
+    planned: Any = materialize_hpo_run(loaded, selected, learning_seed=config.learning_seeds[0],
+        run_id='00000000-0000-0000-0000-000000000000').config
+    return {'config_sha256': loaded.sha256,
+        'effective_settings_sha256': selected.identity,
+        'startup': _startup_geometry(planned.model.architecture(layout=layout), planned.model.inference,
+            learner=planned.training.device, global_bytes=planned.run.global_cuda_budget_bytes),
+        'operating': asdict(config.operating), 'host_admission': False, 'future_phase_checks_required': True}
+
+
+def training_summary_data(state: Json, completion: Json, *, directory: Path,
+                          completion_path: Path, completion_sha256: str,
+                          clock_reference: Json) -> str:
+    """Copy scalar cold DATA to an independent output string before owner close."""
+    if (state['status'] != completion['state'] or state['updates'] != completion['committed_update']
+            or state['generation_sha256'] != completion['generation_sha256']
+            or state['status'] != 'complete' and completion['eligible']):
+        raise ContractError('finalized state/completion summary differs')
+    output = {'run_dir': str(directory), 'status': completion['state'], 'updates': completion['committed_update'],
+        'accepted_decisions': state['accepted_decisions'], 'generation_sha256': completion['generation_sha256'],
+        'elapsed_seconds': state['last_unix'] - state['created_unix'],
+        'rust_player': {'completion_path': str(completion_path), 'completion_sha256': completion_sha256,
+            'audit_path': completion['audit_path'], 'audit_sha256': completion['audit_sha256'],
+            'runtime_binding_sha256': state['runtime_binding_sha256'], 'eligible': completion['eligible'], **clock_reference}}
+    if 'used_decisions' in state:
+        output.update(used_decisions=state['used_decisions'], collected_decisions=state['collected_decisions'],
+            decision_budget=state['effective_config']['hpo_spec']['decision_budget'], stop_reason=state['stop_reason'])
+    # No borrowed state/completion graph escapes into post-close printing.
+    return canonical(output)
 
 
 def _inputs(config: Any) -> Json:

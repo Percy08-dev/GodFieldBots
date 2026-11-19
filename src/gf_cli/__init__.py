@@ -714,6 +714,14 @@ def main(argv: list[str] | None = None) -> int:
         if args.command in ("train", "train-formal") and args.mode != "fresh" and args.run_dir is None:
             raise ValueError("resume is unsupported without --run-dir; no work performed")
         loaded = load_config(args.config, overrides)
+        if args.command == 'train' and hasattr(loaded.config.run, 'player_runtime'):
+            # The explicit native config parser owns supported MLP/packed shape
+            # checks; its factory requires P and execs this process in place.
+            if args.run_dir is None:
+                raise ValueError('card-instance PPO train requires --run-dir')
+            from gf_cli.rust_player_entry import exec_ordinary
+            exec_ordinary(loaded, args.run_dir, mode=args.mode, pause_after_update=args.pause_after_update)
+            return 0  # A successful fixed exec replaces this interpreter.
         from gf_cli.config import require_storage_command
         require_storage_command(loaded.config, args.command)
         if args.command == "validate":

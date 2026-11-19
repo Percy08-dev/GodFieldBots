@@ -423,3 +423,33 @@ subprocesses are not training hosts. Public execution guards remain closed.
 Full ordinary/campaign/evaluation composition and all actual Task6/Task7 gates
 remain mandatory, including original clocks, strict Source audits and default
 comparison. No training quality or universal resource guarantee is accepted.
+
+
+## Ordinary public routing and campaign CONFIG foundation acceptance
+
+C2c now connects explicit timed ordinary gf-bots train to its real sealed factory.
+Earlier argument checks and legacy/unsupported-command behavior remain. Cold
+output accepts real typed owners, extracts held validated scalar DATA, then
+positively closes result, releases parent and closes control before stdout.
+Actual training/Source/termination authority is not granted by these diagnostics.
+
+Native6 planning uses existing actual pure trial/control/selected materializations
+and same-host geometry. Initial CPU campaign operation uses exact session soft
+for its first four fields and hard finish; pinned campaign CONFIG uses the
+existing normalized parsers and exact canonical/base/combined hash roundtrip.
+Actual Store/SAME-OFD/sealed launch retains original clocks and fixed facts.
+Legacy1–5 types/identities/validators and global resident resolver remain strict.
+
+Both original final reviewers are READY after R1/R2. Native6 conditions now
+explicitly identify existing legacy-fresh evaluation; actual materialization
+validates the strict P tail before preview. A later cached-preview defect is
+fixed by reusing requested DATA only for the identical actual outside-control
+object; reconstructed in-space resources are recalculated without changing
+scientific identity. Root333 CPU checks, Ruff11/mypy7 and frozen11 hashes pass.
+
+At the earlier C2a milestone public guards were closed. Ordinary routing is now
+wired; PUBLIC HPO execution remains closed and its module supplies CONFIG factory
+only, with no fake handler. Successful-history validation and the actual C2b/
+campaign/evaluation composition are mandatory before HPO activation. No installed
+source match, real host/GPU/Source acceptance, experiment quality or default
+adoption is inferred. All actual Task6/Task7 gates remain outstanding.

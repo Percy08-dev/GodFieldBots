@@ -1,7 +1,9 @@
 # Public ordinary and HPO entry through the Rust supervisor
 
 Status: accepted bounded integration design. C1 control protocol passes independent
-correctness/conformance review; Part2 application wiring and full acceptance remain pending.
+correctness/conformance review. C2c ordinary routing/planning/CONFIG bootstrap is
+also engineering-accepted; full campaign/evaluation application and actual
+experiment acceptance remain pending.
 Architecture R1 READY on proposal SHA
 9e368d6324aaf7b5ed7c27e11b6a1f3fe3769adbd8ae8d5dd9b221a21ca6c219. Owner: root.
 Extends accepted integration/records/supervision/operation2 designs. Device account,

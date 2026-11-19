@@ -18,7 +18,8 @@ independent reviews after four phase-clock, group-identity, ACK and packaging
 repairs, with actual Linux process/kernel and both namespace-direction checks.
 Targeted retained-bank storage measurements pass only their recorded shaped-bank/
 small-terminal scope. Pure closed normal/HPO6 configuration also passes both independent reviews;
-actual new execution is explicitly refused through legacy entries.
+legacy entries explicitly refuse new selectors; the separately reviewed timed
+ordinary train route now uses its actual sealed-launch factory.
 Local numerical/data support, canonical effective-config handoff, actual parent
 borrowers, ordered writer inventory/deferred contexts and strict Simulator cleanup
 also pass independent reviews after five boundary repairs. Private Source/common-PPO/save/restore/cold integration now passes scoped
@@ -63,8 +64,8 @@ durable FAIL/disposition acknowledgment remains separate from parent release and
 scientific completion. Pending terminal Stop ACKs require strict settlement then
 actual EOF. An uncertain raw close never retries a numeric FD. Fixed control-only
 CPU cases and fresh57 Python/3 native terminal checks pass. Public application
-routing, genuine evaluation import, full CUDA/restart/audit populations and all
-performance/default decisions remain required.
+HPO application routing, genuine evaluation import, full CUDA/restart/audit
+populations and all performance/default decisions remain required.
 
 The [explicit post-host clock and launch factory](design/rust-player-runtime-public-clock.md)
 passes independent correctness/conformance after one repair round. New native-only
@@ -74,8 +75,19 @@ The actual ordinary factory retains the original run OFD, canonical config and
 clock provenance, verified installed companion and fixed venv interpreter through
 sealed exec. Resume reuses every original clock bit; reconstructed inspection
 wrappers cannot issue launch/companion facts. Root250 CPU checks and127 joined
-C1/factory checks pass. Public command routing remains the next implementation
-step; no actual training, capacity or adoption acceptance follows from the factory.
+C1/factory checks pass. C2c subsequently connects ordinary timed train; actual
+training, capacity and adoption acceptance remain separate requirements.
+
+The ordinary timed train route, cold scalar output, native6 planning and campaign
+CONFIG/bootstrap foundation also pass independent correctness/conformance after
+two repair rounds. Actual conditions identify legacy-fresh evaluation; previews
+use real trial/control/selected materializations and actual published resources.
+Cold result close, parent release and control close precede stdout. Canonical
+pinned settings reconstruct without rereading original TOMLs; actual Store OFD
+and exact original soft/hard clocks survive sealed launch. Root333 CPU checks and
+scoped lint/typing pass. Public HPO execution remains guarded until full campaign/
+evaluation composition and genuine successful-history validation are implemented.
+No actual host/GPU/source qualification or performance claim follows here.
 
 [ADR0053](adr/0053-mlp-shared-batch-inference.md) implements the owner's
 [shared MLP design](design/mlp-shared-batch-inference.md) under Simulator

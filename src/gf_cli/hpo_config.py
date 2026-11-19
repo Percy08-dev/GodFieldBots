@@ -485,7 +485,7 @@ def _seeds(value: Any, *, games: bool) -> tuple[Any, ...]:
     return tuple(result)
 
 
-def campaign_config(value: Json, *, origin: Path) -> LoadedHPOConfig:
+def campaign_config(value: Json, *, origin: Path, _pinned_base: LoadedConfig | None = None) -> LoadedHPOConfig:
     required = {"schema_version", "kind", "base_experiment", "model_id", "stage", "trial_count",
                 "decision_budget", "learning_seeds", "evaluation_game_seeds", "sampler_seed",
                 "startup_trials", "session_seconds", "run_wall_seconds", "space"}
@@ -535,7 +535,14 @@ def campaign_config(value: Json, *, origin: Path) -> LoadedHPOConfig:
     storage = _storage(value.get("storage", {}), origin)
     base_path = _path(value["base_experiment"], origin)
     # Only after all caller experiment fields pass do we read the legacy base.
-    base = load_config(base_path)
+    if _pinned_base is None:
+        base = load_config(base_path)
+    else:
+        if (not rust_player or type(_pinned_base) is not LoadedConfig
+                or canonical(asdict(_pinned_base.config)) != canonical(_pinned_base.effective)
+                or digest(_pinned_base.effective) != _pinned_base.sha256):
+            raise ContractError('explicit unchanged pinned native campaign base required')
+        base = _pinned_base
     if hasattr(base.config.run,'inference_service'):
         raise ContractError('HPO base must not declare ordinary run.inference_service; campaign runtime is authoritative')
     if hasattr(base.config.run, 'player_runtime'):

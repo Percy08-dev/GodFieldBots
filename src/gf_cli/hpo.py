@@ -57,8 +57,13 @@ def _originals(loaded: LoadedHPOConfig) -> Path:
 def validate(loaded: LoadedHPOConfig) -> Json:
     control = canonical_control(loaded.config)
     from dataclasses import replace
-    admission = joint_resource_admission(loaded.config, layout=LAYOUT)
-    control_admission = joint_resource_admission(replace(loaded.config, model=control.model, training=control.training), layout=LAYOUT)
+    if loaded.config.schema_version == 6:
+        from gf_cli.rust_player_entry import campaign_startup_preview
+        admission = campaign_startup_preview(loaded)
+        control_admission = campaign_startup_preview(loaded, settings=control)
+    else:
+        admission = joint_resource_admission(loaded.config, layout=LAYOUT)
+        control_admission = joint_resource_admission(replace(loaded.config, model=control.model, training=control.training), layout=LAYOUT)
     storage = check_storage(loaded.config.storage, campaign_dir=Path(loaded.config.storage.parent_root) / 'campaign-validation',
         originals_root=_originals(loaded), deadline=time.monotonic() + loaded.config.run_wall_seconds)
     return {'schema_version': 1, 'kind': 'hpo-config-validation', 'config_sha256': loaded.sha256,
@@ -99,7 +104,9 @@ def _conditions(loaded: LoadedHPOConfig) -> Json:
         'game_seeds': list(loaded.config.evaluation_game_seeds), 'inference_binding': asdict(loaded.config.inference),
         'cuda_visible_devices': child_cuda_visibility(loaded.config.inference.device, config.model.cuda_visible_devices)}
     if measured['schema_version']==2:value['integration_identity']['source_dirty']=measured['source']['dirty']
-    if hasattr(loaded.config,'runtime'):
+    if loaded.config.schema_version == 6:
+        value['evaluation_runtime'] = None  # Explicit existing legacy-fresh evaluation, not Rust training runtime.
+    elif hasattr(loaded.config,'runtime'):
         value['evaluation_runtime'] = evaluation_runtime(loaded.config)
     if loaded.config.schema_version==5:
         from gf_common.shared_inference import shared_dependency_versions
@@ -116,7 +123,8 @@ def _conditions(loaded: LoadedHPOConfig) -> Json:
 
 def _settings_inputs(paths: tuple[Path, ...], loaded: LoadedHPOConfig) -> tuple[tuple[Any, ...], list[Json]]:
     before = [(path, path.stat()) for path in paths]
-    settings = import_settings(paths, loaded.config, study_identity='')
+    settings = (import_settings(paths, loaded.config, study_identity='', _loaded=loaded)
+        if loaded.config.schema_version == 6 else import_settings(paths, loaded.config, study_identity=''))
     records = []
     for (path, original), effective in zip(before, settings, strict=True):
         raw = path.read_bytes()
