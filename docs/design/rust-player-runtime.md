@@ -98,6 +98,9 @@ config and parent identity include the complete runtime and producer identity
 `rust-player-producer-v1`; old shared and resident values keep their old meaning.
 An old parent always resumes through its recorded runtime. Each new mode has
 explicit strict source/receipt readers; do not relabel old receipts as thread joins.
+The accepted [learning integration seams](rust-player-runtime-integration.md) pin
+raw field placement, actual producer binding, common-loop deadlines/lock ownership
+and local snapshot publication before the next implementation slice.
 
 Preserve Journal6 and participant DTO3 when their content/chronology is unchanged:
 these fields attest own-view decision data, not Python actor process existence.

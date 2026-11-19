@@ -159,3 +159,16 @@ retained flock OFDs and explicit close-only lock transfer preserve authority.
 Prepared precedes Exit/handoff; independent cache retirement precedes host-close.
 Fixed application dispatch and cold Source qualification stay distinct. Actual
 process/namespace/installed-wheel implementation tests remain pending.
+
+
+## Learning integration refinement
+
+The [learning integration seams](../design/rust-player-runtime-integration.md)
+pass independent preimplementation architecture READY. Ordinary run.player_runtime
+and HPO6 runtime hold the materialized declaration; actual producer/admission
+identity comes from owned code/control, not raw configuration. The common PPO
+coordinator gains closed new-mode operations using original monotonic authority
+and actual OFD transfer. Local saved banks/ACKs issue new service publications
+without borrowing protocol9 actor authority. Live committed work awaits the
+original host reap and cold audit before final eligibility. Implementation,
+real numerical/Source/restore checks and deployment measurements remain required.

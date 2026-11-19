@@ -232,6 +232,15 @@ sampledPSS186MB, OS-high-waterRSS535MB and exactrecord peak84.6MB. These are not
 inconclusive execution-bound evidence, not a capacity failure. Scripts/results
 are temporary `/tmp/task5a-*-study-final.json` with exact producer/script identities.
 
+The follow-up source-pinned retained-bank investigation is INCONCLUSIVE: its
+10-minute setup/execution bound expired before a new case started. No concurrent
+C2/C4/C16 or near262144-event memory observation was obtained. The verifier
+confirmed frozen de43f2e Python29549dc9 and loaded nativefb6c090e/extension289cf2a1;
+this is a loaded-build identity, not a current-tree match after later edits.
+Its temporary status/identity records are `/tmp/gfb-retained-bank-study.md` and
+`.json`. This contributes no new capacity evidence; the original calibration
+limits and follow-up measurement requirement remain in force.
+
 Production/default memory acceptance stays OPEN: complete the targeted retained-
 ACTIVE-bank/terminal overlap study and actual C4/C2/C16 workload measurements.
 Larger262144event active-bank populations and arbitrary rawAPI histories/strings
