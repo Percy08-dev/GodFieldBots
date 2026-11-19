@@ -156,9 +156,13 @@ def _checked_hpo_spec(state: Json) -> Json:
     hpo_training_config(spec["training_recipe"])
     for name in ("effective_settings_sha256", "base_config_sha256", "campaign_config_sha256", "study_identity"):
         checksum(spec[name])
-    operating = closed(spec["operating"], _OPERATING)
-    for value in operating.values():
-        integer(value, 1, 2**63 - 1)
+    timed_native = rust_player and 'post_host_seconds' in spec['operating']
+    operating = closed(spec["operating"], _OPERATING | ({'post_host_seconds'} if timed_native else set()))
+    for name, value in operating.items():
+        if name == 'post_host_seconds':
+            _number(value, positive=True)
+        else:
+            integer(value, 1, 2**63 - 1)
     integer(operating["game_concurrency"], 1, 2**63 - 1)
     integer(operating["max_participant_workers"], 1, 2**63 - 1)
     integer(operating["trial_concurrency"], 1, 1)
@@ -207,7 +211,8 @@ def _runtime_training(value: Json, spec: Json) -> PPOTrainingConfig:
 
 
 def _run_projection(config: Json, spec: Json, training: PPOTrainingConfig) -> tuple[float,float,float]:
-    run = closed(config["run"], _RUN)
+    timed_native = spec['schema_version'] == 6 and 'post_host_seconds' in spec['operating']
+    run = closed(config["run"], _RUN | ({'post_host_seconds'} if timed_native else set()))
     if run["split"] != "train":
         raise ContractError("HPO requires training split")
     operating = spec['operating']
@@ -220,6 +225,9 @@ def _run_projection(config: Json, spec: Json, training: PPOTrainingConfig) -> tu
     wall = inputs["run_wall_seconds"]
     final = inputs["base_finalization_seconds"]
     execute = wall - final
+    if timed_native and (run['post_host_seconds'] != operating['post_host_seconds']
+            or not 0 < _number(run['post_host_seconds'], positive=True) < wall - execute):
+        raise ContractError('HPO native post_host_seconds projection differs from operating allocation')
     admission = execute * (inputs["base_admission_seconds"] / inputs["base_execution_seconds"])
     expected = {"wall_seconds": wall, "execution_seconds": execute,
         "admission_seconds": admission, "finalization_seconds": final}

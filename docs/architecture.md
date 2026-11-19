@@ -66,6 +66,17 @@ CPU cases and fresh57 Python/3 native terminal checks pass. Public application
 routing, genuine evaluation import, full CUDA/restart/audit populations and all
 performance/default decisions remain required.
 
+The [explicit post-host clock and launch factory](design/rust-player-runtime-public-clock.md)
+passes independent correctness/conformance after one repair round. New native-only
+timing variants require owner-selected P with no numeric default and preserve old
+serialized shapes. Pure previews count the planned learner and G0 networks once.
+The actual ordinary factory retains the original run OFD, canonical config and
+clock provenance, verified installed companion and fixed venv interpreter through
+sealed exec. Resume reuses every original clock bit; reconstructed inspection
+wrappers cannot issue launch/companion facts. Root250 CPU checks and127 joined
+C1/factory checks pass. Public command routing remains the next implementation
+step; no actual training, capacity or adoption acceptance follows from the factory.
+
 [ADR0053](adr/0053-mlp-shared-batch-inference.md) implements the owner's
 [shared MLP design](design/mlp-shared-batch-inference.md) under Simulator
 072dabb section 21.1. Independent correctness and architecture conformance are

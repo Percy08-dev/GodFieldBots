@@ -876,3 +876,53 @@ explicitly NOT source-matched to this join. No wheel installation, actual host/
 control/Original/game/GPU/training/evaluation/profile/calibration/full-suite run
 was performed for this mechanical join. Final all-source packaging and all
 remaining public Task6/Task7 conditions stay required.
+
+
+## Explicit clock/configuration and ordinary-launch factory component
+
+C2a passes both original independent R1 re-reviews. The original parser P2 closes
+by applying the existing merged non-P type validator once before timing arithmetic.
+The factory reconstruction P2 and adjacent companion interaction close by issuing
+private facts only inside actual preparation; constructors/dataclasses.replace
+leave them unset. Execution uses the original discovered companion and established
+final ELF-hash/FD/sealed-launch checks. No extra discovery/handshake I/O is added.
+One canonical manifest string is retained (573 serialized bytes in this installed
+metadata, not a heap/RSS measurement); it adds bounded startup comparisons only.
+
+Witnessed RED/GREEN: six malformed-timer failures plus three prior passes become
+nine PASS; eleven reconstruction/manifest failures become eleven PASS. The exact
+original230-node list/order is preserved and PASS. Root freshly precollects and
+runs all250 CPU checks:250 PASS/4 CUDA-labelled deselections,3.73s. Ruff3/mypy2 and
+all7 frozen hashes PASS. After the C1 dependency fast-forward, Root freshly runs
+the127 relevant factory/clock/protocol/storage/bootstrap CPU nodes:127 PASS/3
+deselections,2.80s, plus mypy5 PASS. Empty CUDA visibility and not-cuda filtering
+are both enforced. Pure preview's fresh CPU interpreter checks all4 configured
+role combinations with no Torch import; excluded CUDA-named nodes are not claimed
+as executed device tests.
+
+Root250 command (precollection is the same plus --collect-only):
+```sh
+CUDA_VISIBLE_DEVICES='' .venv/bin/python -m pytest -q -p no:cacheprovider tests/test_rust_player_clock.py tests/test_rust_player_public_entry.py tests/test_rust_player_config.py tests/test_hpo_config.py tests/test_hpo_numeric.py::test_all_eight_frozen_kernels_remain_exact -k 'not cuda' --basetemp /tmp/gfb-root-c2a-r1-cpu
+```
+Joined127 selection uses clock/public_entry/entry_protocol/hpo_storage/supervisor
+files, historical-model/eight-kernels config node and the single fixed-bootstrap
+LoadedConfig-by-keyword node. No whole learning/Source suite is selected.
+
+R1 seven-file inventory is
+`b4775b73291a832538d4c59313455edcaf71135c24784a49850e84adabedb2fc`;
+repair patch `7ad462985529f529172ab3ede41674d5549dbea260a66b3357916ef162316b36`.
+The factory snapshot reviewed at d0 records checkpoint Python source
+`fe15cb6b955b802bb9d66efb32856a065c72865a3884162dd9324d6e7a4784df`
+and seven-package runtime
+`86b4e06d61e89998f190e383cd6a39cfbcfb4af4b155ab089f5dd87dbe8a578f`.
+Its installed native/extension/companion are the previously recorded931417c4/
+03fa4461/4c866c31 intermediate artifacts. They are NOT relabeled source-matched
+after joining C1; final all-source packaging remains required. Actual factory
+tests use real temporary run owners/independent-open competition/seals/FDs and
+mock the final exec. Existing sampling-runtime BUILD metadata may import CPU
+Torch only during actual preparation; no device query/context/tensor is used.
+
+NOT RUN: actual final exec/HostControl/admission/Source/Parent, public commands,
+GPU/game/Simulator/PPO/campaign/evaluation/resume experiments, native build/install,
+full suite, calibration/profile/primary performance populations or default adoption.
+No numeric P default, tail sufficiency or physical capacity claim follows.

@@ -395,3 +395,31 @@ handshake/failure-return chain and original wait-instant diagnostic are retained
 together; campaign-return CPU startup uses the existing startup phase on both
 ends. Root fresh57 Python and4 pure native checks pass. This source integration
 does not establish new scientific, packaging, CUDA or performance acceptance.
+
+
+## Explicit public clock and ordinary-launch factory acceptance
+
+The independently reviewed public-clock refinement is implemented and passes
+both final correctness/conformance reviews after R1. Native-only concrete timing
+variants preserve all old types/asdict/defaults and six-field runtime declarations.
+Ordinary run.post_host_seconds and authoritative HPO6 operating.post_host_seconds
+are explicit with no inferred numeric reserve. For original anchor t: A=t+A,
+E=t+E, finish=t+W and TERM=KILL=finish-P, with representable E<TERM<finish.
+Operation-clock1 is provenance DATA, separate from actual launch/operation authority.
+Pure startup preview counts one learner and one G0 network for actual CUDA roles
+with context/workspace once; future phase and physical capacity stay unproven.
+
+Actual ordinary preparation uses the existing registered run owner/SAME descriptor,
+canonical effective snapshot, original input fingerprints, verified companion and
+fixed venv interpreter. Resume checks original boot/config/producer/paused lineage
+and reuses all original clock bits without recapture or paused-time refund.
+Factory facts are issued only by actual preparation; dataclass reconstruction
+and companion/manifest retargeting cannot reissue them. R1 also restores existing
+merged timer validation before P arithmetic; no blanket CLI exception handling.
+
+Root fresh250 CPU checks and127 checks after joining C1 pass, with scoped lint/
+typing. All actual execs in these tests are mocked; normal metadata/import helper
+subprocesses are not training hosts. Public execution guards remain closed.
+Full ordinary/campaign/evaluation composition and all actual Task6/Task7 gates
+remain mandatory, including original clocks, strict Source audits and default
+comparison. No training quality or universal resource guarantee is accepted.

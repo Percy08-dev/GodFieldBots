@@ -94,6 +94,16 @@ class RustPlayerRunConfigV2(RunConfigV2):
     player_runtime: Json = field(default_factory=dict)
 
 
+@dataclass(frozen=True, kw_only=True)
+class RustPlayerPublicRunConfigV2(RustPlayerRunConfigV2):
+    post_host_seconds: float
+
+
+@dataclass(frozen=True, kw_only=True)
+class RustPlayerPublicHpoRunConfigV2(RunConfigV2):
+    post_host_seconds: float
+
+
 @dataclass(frozen=True)
 class ServerConfig:
     binary: str = "../GodFieldSimurator/target/debug/gf-test-server"
@@ -292,6 +302,7 @@ def _validate_table(name: str, values: Json, *, context: Json | None = None) -> 
     cls = TransformerModelConfig if name in ("model", "opponent") and values.get("model_id") == "transformer" else GRUModelConfig if name in ("model", "opponent") and values.get("model_id") == "gru" else SequencePPOTrainingConfig if name == "training" and "sequence_length" in values else MLPModelConfig if name in ("model", "opponent") and values.get("model_id") == "mlp" else PPOTrainingConfig if name == "training" and values.get("algorithm") == "ppo" else _TABLES[name]
     # Partial model presets may specify closed structural keys before dispatch.
     defaults = asdict(cls())
+    timed_native_run = False
     structured_model = name in ("model", "opponent") and values.get("version") in ("2", "3")
     if name in ("model", "opponent") and values.get("model_id") == "heuristic_refresh":
         defaults = asdict(RefreshHeuristicConfig())
@@ -313,6 +324,9 @@ def _validate_table(name: str, values: Json, *, context: Json | None = None) -> 
             if "inference_service" in values:
                 raise ContractError("run.inference_service and run.player_runtime are mutually exclusive")
             defaults["player_runtime"] = player_runtime(values["player_runtime"],game_concurrency=values.get("concurrency",2))
+        if 'post_host_seconds' in values and ('player_runtime' in values
+                or context.get('hpo_spec', {}).get('schema_version') == 6):
+            timed_native_run = True
         if "inference_service" in values:
             from gf_common.shared_inference import shared_runtime
             defaults["inference_service"] = shared_runtime(values["inference_service"],game_concurrency=values.get("concurrency",2))
@@ -324,7 +338,10 @@ def _validate_table(name: str, values: Json, *, context: Json | None = None) -> 
         defaults["inference"].update(asdict(GRUModelConfig().inference))
     if name == "training" and "algorithm" not in values:
         defaults.update(asdict(SequencePPOTrainingConfig()))
-    check(values, defaults)
+    check({key: value for key, value in values.items() if key != 'post_host_seconds'}
+        if timed_native_run else values, defaults)
+    if timed_native_run:
+        _validate_post_host(asdict(RunConfigV2()) | values)
 
 
 def load_config(path: str | Path, overrides: Json | None = None) -> LoadedConfig:
@@ -606,8 +623,11 @@ def _normalized_config(effective: Json, *, data: Json, inputs: tuple[Json, ...])
             cls = card_server_cls
         if name == "run" and (structured_actions or card_instance_actions):
             cls = RustPlayerRunConfigV2 if "player_runtime" in effective["run"] else SharedRunConfigV2 if "inference_service" in effective["run"] else RunConfigV2
+            if 'post_host_seconds' in effective['run'] and cls is RustPlayerRunConfigV2:
+                cls = RustPlayerPublicRunConfigV2
         values = effective[name]
-        defaults = asdict(cls())
+        defaults = asdict(cls(**({'post_host_seconds': values['post_host_seconds']}
+            if cls is RustPlayerPublicRunConfigV2 else {})))
         values = {k: tuple(v) if isinstance(defaults[k], tuple) else v for k, v in values.items()}
         converted[name] = cls(**values)
     mixed = data.get("training_opponents")
@@ -648,6 +668,15 @@ def _validate_run_controls(run: Json, *, hpo: bool = False) -> None:
         integer(seed)
     if run["admission_seconds"] > run["execution_seconds"] or run["execution_seconds"] + run["finalization_seconds"] > run["wall_seconds"]:
         raise ContractError("run deadlines inconsistent")
+    if 'post_host_seconds' in run:
+        _validate_post_host(run)
+
+
+def _validate_post_host(run: Json) -> None:
+    p = run['post_host_seconds']
+    if (type(p) not in (int, float) or not 0 < p < run['wall_seconds'] - run['execution_seconds']
+            or not math.isfinite(p)):
+        raise ContractError('post_host_seconds must be explicit, finite and inside the original total tail')
 
 
 def _validate_server_controls(server: Json, run: Json, *, revision: str) -> None:
@@ -718,7 +747,10 @@ def load_rust_player_effective(path: Path, *, expected_sha256: str) -> LoadedCon
         raise ContractError("explicit supported Rust player HPO spec6 required")
     if spec is not None:
         from gf_cli.hpo_config import normalized_rust_player_hpo
-        loaded = normalized_rust_player_hpo(effective, inputs=inputs)
+        try:
+            loaded = normalized_rust_player_hpo(effective, inputs=inputs)
+        except (KeyError, TypeError) as error:
+            raise ContractError('complete normalized HPO effective settings required') from error
     else:
         closed(effective, {"schema_version", "kind", *_TABLES, "storage"}, {"training_opponents"})
         try:
