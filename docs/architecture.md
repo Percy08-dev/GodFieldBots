@@ -38,6 +38,13 @@ repairs, with19 command-level and14 helper checks. It observes an actual command
 without a Python controller or Source/termination authority. Application telemetry,
 overhead calibration and the approved comparison/adoption protocol remain open.
 
+The pure [native MLP row storage estimate](design/rust-player-runtime-native-cuda.md)
+also passes scoped correctness/conformance and57 CPU checks. It compiles immutable
+checkpoint-specific geometry and counts actual row inputs/aliases once, without
+Torch/device access. Whole-host CUDA admission and physical capacity remain
+unaccepted until their separate integration and measurement gates pass.
+
+
 
 [ADR0053](adr/0053-mlp-shared-batch-inference.md) implements the owner's
 [shared MLP design](design/mlp-shared-batch-inference.md) under Simulator
