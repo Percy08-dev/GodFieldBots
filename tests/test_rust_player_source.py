@@ -11,6 +11,137 @@ from gf_training.rust_player_storage import RustWriterInventory, _WriterWorkspac
 from tests.test_rust_player_storage import fix1_completed_storage  # noqa: F401 -- real native/writer pytest fixture
 
 
+def _failed_operation_source_data(*, hpo=False):
+    """Real CPU funding + cleanup receiver, never Source/admission authority."""
+    import weakref
+    from types import SimpleNamespace
+
+    import numpy as np
+
+    from gf_models.rust_player_device import RustPlayerDeviceAccount
+    from gf_training.group_pack_pool import PackedArtifactPool
+    from gf_training.rust_player_learning import RustGameOperations, RustHpoOperations
+    from gf_training.rust_player_source import RustPlayerSource
+    from tests.test_rust_player_device import checkpoint_profile
+    profile = checkpoint_profile()
+    account = RustPlayerDeviceAccount(global_bytes=10**9, learner_device='cpu', serving_device='cuda:0',
+        learner_profile=profile, admitted_profiles=(profile,))
+    local = SimpleNamespace(device_account=account)
+    hold = account.begin_update(logical_bytes=10**9, operation_id='cleanup-data', generation=1, owner=local)
+    pool = PackedArtifactPool(max_owned_bytes=128 * 1024**2, deadline=time.monotonic() + 30)
+    source = RustPlayerSource.__new__(RustPlayerSource)
+    source.state, source._rollout, source._records = 'FAILED', np.arange(512), ()
+    reference = weakref.ref(source._rollout)
+    source.manifest = {'logical_retirement': {'service_settlement_sha256': 'a' * 64}}
+    source._numeric, source._numeric_originals = None, {}
+    source._proof_json = source._numeric_metadata = ''
+    source._episode_digests, source.numeric_files = (), {}
+    source.collection = SimpleNamespace(require=lambda *args: None, close=lambda: None)
+    source._parent_lease = SimpleNamespace(close=lambda owner: None)
+    source._charges = [pool.budget.reserve(4096)]
+    source._pool_hold = pool.hold_close(source)
+    registry = SimpleNamespace(local=local, pending=source, hpo=hpo)
+    source.registry = registry
+    ops = (RustHpoOperations if hpo else RustGameOperations).__new__(RustHpoOperations if hpo else RustGameOperations)
+    ops.registry, ops.device_account = registry, account
+    return source, ops, hold, pool, reference
+
+
+@pytest.mark.parametrize('nested_uncertain', [False, True])
+def test_projection_failure_keeps_source_funding_through_external_tb_clear(tmp_path, monkeypatch, nested_uncertain):
+    import traceback
+
+    import numpy as np
+
+    from gf_common.ram_bank import RamBankBuilder
+    from gf_training.rust_player_source import RustPlayerSource
+    source, ops, hold, pool, reference = _failed_operation_source_data()
+    bank = RamBankBuilder({'value': np.arange(512, dtype=np.float32)}, pool.budget).seal()
+    monkeypatch.setattr(RustPlayerSource, 'project', classmethod(lambda cls, collection: source))
+    monkeypatch.setattr(RustPlayerSource, 'persist', lambda self, path: {})
+    monkeypatch.setattr(RustPlayerSource, 'proof', property(lambda self: {}))
+    before = pool.budget.used
+    def numerical_failure():
+        actual_rollout = source._rollout
+        actual_view = bank.array('value')
+        assert actual_rollout.size == 512
+        assert actual_view.size == 512
+        try:
+            raise ValueError('original numerical failure')
+        except ValueError as error:
+            error.cleanup_owner = bank
+            hold.fail(error)
+            error.cleanup_owner = source  # Actual outer Source overwrite occurs later.
+            raise
+    with (pytest.raises(ValueError, match='original numerical') as failed,
+            ops.project(source.collection, object(), tmp_path, None, pool.deadline)):
+        numerical_failure()
+    traceback.clear_frames(failed.value.__traceback__)
+    assert failed.value is hold.error and failed.value.source_cleanup_owner is source
+    assert source.registry.pending is source
+    assert source.state != 'CLOSED' and pool.budget.used == before and reference() is not None
+    with pytest.raises(ValueError):
+        hold.retire_failed(gpu_settled=False)
+    with pytest.raises(BufferError, match='operation'):
+        ops.close_batch()
+    assert pool.budget.used == before
+    if nested_uncertain:
+        actual_close = bank.close
+        def uncertain():
+            raise OSError('actual nested close uncertain')
+        monkeypatch.setattr(bank, 'close', uncertain)
+        with pytest.raises(OSError, match='uncertain') as cleanup:
+            hold.retire_failed(gpu_settled=True)
+        assert hold.retirement_errors[-1] is cleanup.value
+        assert pool.budget.used == before and hold.state == 'FAILED_HELD'
+        with pytest.raises(BufferError):
+            ops.close_batch()
+        assert not source._charges[0].closed
+        monkeypatch.setattr(bank, 'close', actual_close)
+    hold.retire_failed(gpu_settled=True)
+    assert not source._charges[0].closed  # Hold retirement never refunds outer Source.
+    ops.close_batch()
+    assert source.state == 'CLOSED' and reference() is None
+    pool.close()
+    assert pool.budget.used == 0
+
+
+def test_hpo_close_batch_after_refused_retirement_preserves_actual_source_charge():
+    import traceback
+
+    source, ops, hold, pool, reference = _failed_operation_source_data(hpo=True)
+    before = pool.budget.used
+    def fail():
+        actual_data_graph = source._rollout
+        assert actual_data_graph.size == 512
+        try:
+            raise ValueError('held data')
+        except ValueError as error:
+            hold.fail(error)
+    fail()
+    traceback.clear_frames(hold.error.__traceback__)
+    with pytest.raises(ValueError):
+        hold.retire_failed(gpu_settled=False)
+    with pytest.raises(BufferError, match='operation'):
+        ops.close_batch()
+    assert source.state != 'CLOSED' and pool.budget.used == before and reference() is not None
+    hold.retire_failed(gpu_settled=True)
+    ops.close_batch()
+    assert reference() is None
+    pool.close()
+    assert pool.budget.used == 0
+
+
+def test_no_account_source_cleanup_keeps_existing_refund_behavior():
+    source, ops, hold, pool, reference = _failed_operation_source_data()
+    hold.complete()
+    source.registry.local.device_account = None
+    ops.close_batch()
+    assert source.state == 'CLOSED' and reference() is None
+    pool.close()
+    assert pool.budget.used == 0
+
+
 def test_inventory_immutable_rows_and_actual_last_owner_workspace_retirement():
     account = StorageBudget(StorageSettings(), time.monotonic() + 30)
     workspace = _WriterWorkspace(account.reserve(4096))

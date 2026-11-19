@@ -220,6 +220,99 @@ def test_source_capability_copy_is_refused_before_any_payload_access():
         copy.deepcopy(partial)
 
 
+@pytest.mark.parametrize('hpo,version', [(False, 6), (True, 8)])
+def test_new_update_accepts_only_closed_embedded_device_plan(hpo, version):
+    from gf_models.rust_player_device import DeviceUpdatePlan
+    from gf_training.rust_player_lineage import record_fields, validate_record_shape
+    row = dict.fromkeys(record_fields('update', hpo=hpo))
+    row.update(schema_version=version, generation=1)
+    plan = DeviceUpdatePlan('actual-source-op', 1, 'cpu', 'cuda:0',
+        10000, 10000, 0, 10, 0, 100, 0, 200).record()
+    row['device_plan'] = plan
+    assert validate_record_shape(row, 'update', hpo=hpo) is row
+    with pytest.raises(ContractError):
+        validate_record_shape(row | {'device_plan': plan | {'extra': 0}}, 'update', hpo=hpo)
+    with pytest.raises(ContractError):
+        validate_record_shape(row | {'device_plan': plan | {'generation': 2}}, 'update', hpo=hpo)
+
+
+def test_cold_plan_data_binds_source_saved_receipts_and_holds_temporary_loans(tmp_path):
+    import time
+    from types import SimpleNamespace
+
+    from gf_common.domain import digest
+    from gf_models.rust_player_device import CudaCheckpointProfile, RustPlayerDeviceAccount
+    from gf_models.structured_config import resource_estimate
+    from gf_training.group_pack_pool import PackedArtifactPool
+    from gf_training.rust_player_completion import _audit_source_device_plan
+    from gf_training.rust_player_supervision import write_control_record
+    from tests.test_rust_player_device import checkpoint_profile
+    from tests.test_rust_player_supervisor import _new_namespace_records
+    # Saved receipt DATA with real files/loans; no HostAdmission/Cold capability.
+    saved, _ = _new_namespace_records()
+    admission = saved['host_admission']
+    admission['budget']['managed_cuda_bytes'] = 8 * 1024**3
+    profile = checkpoint_profile()
+    model = profile.model
+    configured = SimpleNamespace(inference=profile.binding, architecture=lambda **kwargs: model)
+    loaded = SimpleNamespace(sha256=admission['config_sha256'], config=SimpleNamespace(
+        model=configured, training=SimpleNamespace(device='cuda:0'),
+        hpo_spec={'schema_version': 6, 'training_recipe': {'tbptt_length': 1}}))
+    operation = operation_data()
+    operation.update(operation_id=admission['operation_id'], run_id=admission['run_id'], mode='hpo', operation_type='hpo-train',
+        config_path=str(tmp_path / 'config.json'), config_sha256=loaded.sha256,
+        runtime_binding_sha256=admission['runtime_binding_sha256'], expected_context=admission['context'], deadlines=admission['deadlines'])
+    op_path, admit_path = tmp_path / 'source-operation.json', tmp_path / 'source-admission.json'
+    op_sha, admit_sha = write_control_record(op_path, operation), write_control_record(admit_path, admission)
+    source_id = admission['invocation_id']
+    state = {'run_id': admission['run_id'], 'runtime_binding_sha256': admission['runtime_binding_sha256'],
+        'identity': {'player_runtime': {'producer': admission['producer']}},
+        'invocations': {source_id: {'operation_path': str(op_path), 'operation_sha256': op_sha,
+            'admission_path': str(admit_path), 'admission_sha256': admit_sha}}}
+    geometry = CudaCheckpointProfile(model, configured.inference, layout=profile.layout)
+    logical = resource_estimate(model, configured.inference, suffix_decisions=1, layout=profile.layout)['total_bytes']
+    account = RustPlayerDeviceAccount(global_bytes=admission['budget']['managed_cuda_bytes'], learner_device='cuda:0',
+        serving_device='cuda:0', learner_profile=geometry, admitted_profiles=(geometry,))
+    hold = account.begin_update(logical_bytes=logical, operation_id=operation['operation_id'], generation=1)
+    update = {'generation': 1, 'device_plan': hold.plan.record()}
+    pool = PackedArtifactPool(max_owned_bytes=128 * 1024**2, deadline=time.monotonic() + 30)
+    loans = []
+    try:
+        _audit_source_device_plan(update, loaded=loaded, state=state, source_invocation=source_id,
+            record_root=tmp_path, pool=pool, deadline=pool.deadline, loans=loans)
+        assert loans and pool.budget.used > pool._base_charge
+        with pytest.raises(ContractError):
+            _audit_source_device_plan(update | {'device_plan': update['device_plan'] | {'operation_id': 'current-resume'}},
+                loaded=loaded, state=state, source_invocation=source_id, record_root=tmp_path,
+                pool=pool, deadline=pool.deadline, loans=loans)
+        assert digest(admission) == admit_sha
+    finally:
+        for loan in loans:
+            loan.close()
+        pool.close()
+        hold.complete()
+
+
+@pytest.mark.parametrize('escaped', ['operation', 'admission'])
+def test_source_receipt_parent_traversal_refuses_both_paths_before_any_read(tmp_path, monkeypatch, escaped):
+    from types import SimpleNamespace
+
+    from gf_training import rust_player_completion as completion
+    root = tmp_path / 'session'
+    paths = {'operation': root / 'operation.json', 'admission': root / 'admission.json'}
+    paths[escaped] = root / '..' / 'foreign' / (escaped + '.json')
+    entry = {'operation_path': str(paths['operation']), 'admission_path': str(paths['admission']),
+        'operation_sha256': 'a' * 64, 'admission_sha256': 'b' * 64}
+    loaded = SimpleNamespace(config=SimpleNamespace(training=SimpleNamespace(device='cuda:0'),
+        model=SimpleNamespace(inference=SimpleNamespace(device='cuda:0'))))
+    def forbidden(*args, **kwargs):
+        raise AssertionError('receipt read occurred before namespace rejection')
+    monkeypatch.setattr(completion, '_read', forbidden)
+    with pytest.raises(ContractError, match='record root'):
+        completion._audit_source_device_plan({}, loaded=loaded, state={'invocations': {'source': entry}},
+            source_invocation='source', record_root=root, pool=SimpleNamespace(budget=None), deadline=1., loans=[])
+
+
 def test_rust_common_operations_require_actual_same_host_control_and_admission():
     from gf_training.rust_player_learning import RustGameOperations
     with pytest.raises(ContractError, match='actual'):

@@ -32,6 +32,235 @@ def test_local_device_environment_matches_registry_visibility_without_cuda(monke
         assert os.environ['CUBLAS_WORKSPACE_CONFIG'] == ':4096:8'
 
 
+def test_model3_operation_limit_refuses_before_parity_and_preserves_binding(monkeypatch):
+    from dataclasses import asdict
+
+    from tests.test_card_instance_learning import learner_for, rollout_for
+    learner = learner_for()
+    rollout = rollout_for(learner)
+    original = asdict(learner.binding)
+    shuffle = canonical(learner.shuffle.bit_generator.state)
+    def forbidden(*args, **kwargs):
+        raise AssertionError('parity ran before device capacity refusal')
+    monkeypatch.setattr(learner, '_parity', forbidden)
+    with pytest.raises(ContractError, match='device'):
+        learner.update_with_device_limit(rollout, device_bytes=1)
+    assert learner.steps == 0 and canonical(learner.shuffle.bit_generator.state) == shuffle
+    assert asdict(learner.binding) == original
+
+
+def test_model4_legacy_restore_digest_keyword_refuses_before_any_mutation(tmp_path):
+    from tests.test_hpo_numeric import learner_for
+    learner = learner_for()
+    before = (learner.network, learner.optimizer, learner.steps, learner._owned_legacy, learner._owned_snapshot)
+    shuffle = canonical(learner.shuffle.bit_generator.state)
+    with pytest.raises(ContractError, match='held-policy'):
+        learner.restore(tmp_path / 'not-read', expected_resume_sha256='a' * 64)
+    assert (learner.network, learner.optimizer, learner.steps, learner._owned_legacy, learner._owned_snapshot) == before
+    assert canonical(learner.shuffle.bit_generator.state) == shuffle
+
+
+def test_model3_nonbinding_operation_scopes_preserve_exact_default_math():
+    from dataclasses import asdict
+
+    from tests.test_card_instance_learning import learner_for, rollout_for
+    from tests.test_structured_learning import assert_same_learners
+    scoped, legacy = learner_for(), learner_for()
+    binding = asdict(scoped.binding)
+    logical = min(scoped.model.resources.max_owned_bytes, scoped.binding.managed_budget_bytes)
+    for limit in (logical, logical - 4096):
+        rollout = rollout_for(scoped)
+        expected = legacy.update(rollout)
+        actual = scoped.update_with_device_limit(rollout, device_bytes=limit)
+        assert actual == expected
+        assert_same_learners(scoped, legacy)
+        assert getattr(scoped, '_rust_operation_limit', None) is None
+    assert asdict(scoped.binding) == binding
+
+
+def test_model3_operation_scope_nesting_and_exception_reset_do_not_settle_account(monkeypatch):
+    from gf_models.rust_player_device import RustPlayerDeviceAccount
+    from tests.test_card_instance_learning import learner_for
+    from tests.test_rust_player_device import checkpoint_profile
+    learner = learner_for()
+    profile = checkpoint_profile()
+    account = RustPlayerDeviceAccount(global_bytes=10**9, learner_device='cuda:0', serving_device='cpu',
+        learner_profile=profile, admitted_profiles=(profile,))
+    hold = account.begin_update(logical_bytes=10**9, operation_id='component', generation=1)
+    def failed_update(rollout):
+        assert learner._rust_operation_limit.device_bytes == hold.device_bytes
+        with pytest.raises(ContractError, match='non-nested'):
+            learner.update_with_device_limit(rollout, device_bytes=hold.device_bytes - 1)
+        raise ValueError('numerical failure')
+    monkeypatch.setattr(learner, 'update', failed_update)
+    def invoke():
+        try:
+            learner.update_with_device_limit(None, device_bytes=hold.device_bytes)
+        except ValueError as error:
+            hold.fail(error)
+    invoke()
+    assert getattr(learner, '_rust_operation_limit', None) is None
+    assert hold.state == 'FAILED_HELD' and account._active is hold
+    hold.retire_failed(gpu_settled=True)  # Pure accounting test, no CUDA work.
+    assert hold.state == 'FAILED_RETIRED'
+
+
+def test_local_cpu_learner_cuda_serving_emits_plan_without_cpu_numeric_cap(monkeypatch):
+    from dataclasses import replace
+
+    from gf_models.rust_player_device import CudaCheckpointProfile, RustPlayerDeviceAccount
+    from gf_training.rust_player_learning import LocalGameLearner
+    from tests.test_card_instance_learning import ACTIONS, RESUME, RULES, learner_for, rollout_for
+    template = learner_for()
+    profile = CudaCheckpointProfile(template.model, replace(template.binding, device='cuda:0'), layout=template.network.layout)
+    account = RustPlayerDeviceAccount(global_bytes=8 * 1024**3, learner_device='cpu', serving_device='cuda:0',
+        learner_profile=profile, admitted_profiles=(profile,))
+    local = LocalGameLearner(template.model, 17, template.binding, RESUME, actions=ACTIONS, rules=RULES,
+        device_account=account)
+    actual = local.learner.update
+    calls = []
+    def unchanged(batch, **kwargs):
+        calls.append(kwargs)
+        return actual(batch, **kwargs)
+    monkeypatch.setattr(local.learner, 'update', unchanged)
+    local.update(rollout_for(local.learner))
+    assert calls == [{}]
+    plan = local.last_device_plan
+    assert plan.learner_device == 'cpu' and plan.serving_device == 'cuda:0'
+    assert plan.device_bytes == plan.learner_fixed_bytes == plan.post_update_learner_tensor_bytes == 0
+    assert plan.publication_network_bytes == profile.network_bytes
+    assert account._active is None
+
+
+def test_local_account_role_mismatch_refuses_before_numerical_constructor(monkeypatch):
+    from dataclasses import replace
+
+    from gf_models.rust_player_device import CudaCheckpointProfile, RustPlayerDeviceAccount
+    from gf_training import structured_numeric
+    from gf_training.rust_player_learning import LocalGameLearner
+    from tests.test_card_instance_learning import ACTIONS, RESUME, RULES, learner_for
+    template = learner_for()
+    profile = CudaCheckpointProfile(template.model, replace(template.binding, device='cuda:0'), layout=template.network.layout)
+    account = RustPlayerDeviceAccount(global_bytes=8 * 1024**3, learner_device='cuda:0', serving_device='cpu',
+        learner_profile=profile, admitted_profiles=(profile,))
+    def forbidden(*args, **kwargs):
+        raise AssertionError('constructor ran with mismatched accounting role')
+    monkeypatch.setattr(structured_numeric, 'GameLearner', forbidden)
+    with pytest.raises(ContractError, match='role'):
+        LocalGameLearner(template.model, 17, template.binding, RESUME,
+            actions=ACTIONS, rules=RULES, device_account=account)
+
+
+def test_local_numerical_failure_keeps_account_owner_until_positive_settlement(monkeypatch):
+    from dataclasses import replace
+
+    from gf_models.rust_player_device import CudaCheckpointProfile, RustPlayerDeviceAccount
+    from gf_training.rust_player_learning import LocalGameLearner
+    from tests.test_card_instance_learning import ACTIONS, RESUME, RULES, learner_for
+    template = learner_for()
+    profile = CudaCheckpointProfile(template.model, replace(template.binding, device='cuda:0'), layout=template.network.layout)
+    account = RustPlayerDeviceAccount(global_bytes=8 * 1024**3, learner_device='cpu', serving_device='cuda:0',
+        learner_profile=profile, admitted_profiles=(profile,))
+    local = LocalGameLearner(template.model, 17, template.binding, RESUME, actions=ACTIONS, rules=RULES,
+        device_account=account)
+    def fail(*args):
+        raise ValueError('actual local numerical failure')
+    monkeypatch.setattr(local.learner, 'update', fail)
+    with pytest.raises(ValueError):
+        local.update(None)
+    hold = account._active
+    assert hold.state == 'FAILED_HELD' and hold.owner is local and local._failed
+    local.retire_device_failure()
+    assert hold.state == 'FAILED_RETIRED' and account._poisoned
+    with pytest.raises(ContractError):
+        local.update(None)
+
+
+@pytest.mark.parametrize('learner_device,serving_device', [('cpu', 'cpu'), ('cpu', 'cuda:0'), ('cuda:0', 'cpu'), ('cuda:0', 'cuda:0')])
+def test_actual_self_pool_account_profiles_before_init_without_component_d_guard(learner_device, serving_device):
+    from dataclasses import replace
+    from types import SimpleNamespace
+
+    from gf_models.structured_binding import inference_model
+    from gf_training.rust_player_learning import _configured_device_account
+    from tests.test_rust_player_device import checkpoint_profile
+    profile = checkpoint_profile()
+    configured = SimpleNamespace(inference=replace(profile.binding, device=serving_device),
+        architecture=lambda **kwargs: profile.model)
+    config = SimpleNamespace(model=configured, training=SimpleNamespace(device=learner_device))
+    account = _configured_device_account(config, global_bytes=8 * 1024**3,
+        saved_models=(inference_model(profile.model),))
+    if learner_device == serving_device == 'cpu':
+        assert account is None
+    else:
+        assert account.learner_device == learner_device and account.serving_device == serving_device
+        # A partial-D resume or another legitimate generation is now planned
+        # from actual state; no D64/max2/component-only future reservation.
+        operation = account.begin_update(logical_bytes=10**9, operation_id='source', generation=3)
+        assert operation.plan.generation == 3
+        operation.complete()
+        wrong = inference_model(profile.model) | {'model_id': 'gru'}
+        with pytest.raises(ContractError, match='self-pool'):
+            _configured_device_account(config, global_bytes=8 * 1024**3, saved_models=(wrong,))
+
+
+def test_model4_owned_operation_limit_precedes_batch_dispatch_and_is_per_call(tmp_path):
+    from dataclasses import asdict
+
+    from gf_training.hpo_collection import selection_for_counts
+    from gf_training.hpo_owned_rollout import encode_owned_batch
+    from tests.test_card_instance_learning import ACTIONS, RULES
+    from tests.test_hpo_numeric import learner_for
+    from tests.test_hpo_owned_numeric import captured_record
+    learner = learner_for()
+    batch, owner, plan, snapshot, account, _ = captured_record(learner)
+    selection = selection_for_counts((3,), learning_seed=17, batch=0, decision_budget=2, used_before=0)
+    numeric = encode_owned_batch(batch, owner=owner, plan=plan, snapshot_owner=snapshot,
+        model=learner.model, training=learner.training, actions=ACTIONS, rules=RULES,
+        selected_locations=tuple((0, index) for index in selection['indices']), selection=selection, budget=account)
+    numeric.persist(tmp_path / 'numeric')
+    binding = asdict(learner.binding)
+    original = learner._training_device_bytes, learner._training_reservation_bytes
+    shuffle = canonical(learner.shuffle.bit_generator.state)
+    try:
+        with pytest.raises(ContractError):
+            learner.update_owned(numeric, _device_bytes=1)
+        assert learner.steps == 0 and numeric._state == 'PERSISTED'
+        assert canonical(learner.shuffle.bit_generator.state) == shuffle
+        result = learner.update_owned(numeric, _device_bytes=learner._training_reservation_bytes)
+        assert result['optimizer_steps'] > 0
+        assert asdict(learner.binding) == binding
+        assert (learner._training_device_bytes, learner._training_reservation_bytes) == original
+    finally:
+        numeric.close()
+        batch.close()
+        snapshot.close()
+
+
+def test_model4_two_operation_limits_stay_fixed_through_group_forward(monkeypatch):
+    from dataclasses import asdict
+
+    from gf_training import hpo_update_execution
+    from tests.test_hpo_numeric import learner_for, rollout_for
+    learner = learner_for()
+    before = learner._training_device_bytes, learner._training_reservation_bytes, asdict(learner.binding)
+    actual_groups, actual_forward = hpo_update_execution.execution_groups, hpo_update_execution.group_forward
+    seen = []
+    def groups(*args, **kwargs):
+        seen.append(kwargs['_device_bytes'])
+        return actual_groups(*args, **kwargs)
+    def forward(*args, **kwargs):
+        seen.append(kwargs['_device_bytes'])
+        return actual_forward(*args, **kwargs)
+    monkeypatch.setattr(hpo_update_execution, 'execution_groups', groups)
+    monkeypatch.setattr(hpo_update_execution, 'group_forward', forward)
+    for cap in (learner._training_reservation_bytes, learner._training_reservation_bytes - 4096):
+        seen.clear()
+        learner.update(rollout_for(learner), _device_bytes=cap)
+        assert seen and all(value == cap for value in seen)
+    assert (learner._training_device_bytes, learner._training_reservation_bytes, asdict(learner.binding)) == before
+
+
 def test_failed_local_close_still_attempts_other_actual_cleanup_boundaries(tmp_path):
     import asyncio
     import time
@@ -91,25 +320,34 @@ def test_failed_local_close_still_attempts_other_actual_cleanup_boundaries(tmp_p
 
 
 @pytest.mark.parametrize('used', [32, 64])
-def test_bounded_component_resume_requires_exact_decision_budget_before_cuda(used):
+def test_generic_resume_counts_actual_two_caches_and_next_publication(used):
     from pathlib import Path
-    from types import SimpleNamespace
 
-    from gf_training.rust_player_learning import RustHpoOperations
+    from gf_training.rust_player_learning import RustHpoOperations, _configured_device_account
     from tests.test_rust_player_spine import prepare_exec_hpo
     _, _, loaded = prepare_exec_hpo(Path('unused-no-host'), config_only=True)
+    config = loaded.config
     ops = RustHpoOperations.__new__(RustHpoOperations)
-    ops.config = loaded.config
-    ops.admission = SimpleNamespace(observation={'budget': {'managed_cuda_bytes': 12 * 1024**3}})
-    ops.control = SimpleNamespace(operation={'execution_request': {'mode': 'resume', 'pause_after_update': None}})
-    ops.resume_audit = SimpleNamespace(current={'parent_controls': {'snapshot_pool': [0]}},
-        state={'updates': 1, 'used_decisions': used})
-    if used != 64:
-        with pytest.raises(ContractError, match='bounded component'):
-            ops.component_device_admission()
-    else:
-        result = ops.component_device_admission()
-        assert result['pool_cuda_bytes'] == 15_492_112
+    ops.stop_reason = None
+    state = {'updates': 1, 'used_decisions': used}
+    if used == 64:
+        assert ops.stop(state, config, 0, 1., 2., 1.5)
+        return  # Exact D has no further update/publication, preserving real B behavior.
+    assert not ops.stop(state, config, 0, 1., 2., 1.5)
+    account = _configured_device_account(config, global_bytes=12 * 1024**3)
+    profile = account.learner_profile
+    for name, pointer in (('G0', 1), ('G1', 2)):
+        account.observe_cache(name, profile, {('cuda', 0, pointer, profile.network_bytes): profile.network_bytes})
+    update = account.begin_update(logical_bytes=3 * 1024**3, operation_id='resume', generation=2)
+    assert update.plan.retained_cache_tensor_bytes == 2 * profile.network_bytes
+    assert update.plan.publication_network_bytes == profile.network_bytes
+    update.complete()
+    required = profile.fixed_bytes + 4 * profile.parameter_bytes + profile.position_bytes + 3 * profile.network_bytes
+    tight = _configured_device_account(config, global_bytes=required - 1)
+    for name, pointer in (('G0', 1), ('G1', 2)):
+        tight.observe_cache(name, profile, {('cuda', 0, pointer, profile.network_bytes): profile.network_bytes})
+    with pytest.raises(ContractError, match='publication'):
+        tight.begin_update(logical_bytes=3 * 1024**3, operation_id='resume', generation=2)
 
 
 def test_model3_restore_binds_actual_resume_metadata_before_publication(tmp_path):

@@ -293,3 +293,23 @@ their existing preservation policy. These are unaccepted integration requirement
 not permanent debt. User CLI/campaign/evaluation, full CUDA two-update/resume and
 process/audit acceptance and the complete approved timing/default protocol remain
 open; no default switch follows from this engineering milestone.
+
+## Generic same-host CUDA engineering scope
+
+The [whole-host device account](../design/rust-player-runtime-device-account.md)
+and accepted Model3 export/frozen-kernel supplements are implemented under both
+independent scoped rereviews READY. One actual host account and existing Torch
+mutex compose actual learner/cache storage with checkpoint-cached native-row
+geometry and immutable per-update numerical allowances. Update scratch and
+prospective publication are separate phases; mixed CPU/CUDA roles retain their
+actual storage responsibilities. New update6/8 embeds the closed15-field plan as
+DATA bound to its actual Source invocation, without a new namespace capability.
+
+R1 preserves actual CPU Source funding while failed device copies still retain
+rollout/token aliases, retires the actual captured cause/context/nested cleanup
+owners before proof, and prevents historical `..` receipt-path escape. Original
+errors and uncertain owners remain retained. Existing bindings, checkpoint
+formats and all eight frozen kernels stay unchanged; no new resource margin or
+external model loader is introduced. CPU/data tests establish this engineering
+scope. Full actual CUDA two-update/resume, Source/process/campaign/evaluation and
+physical/performance/default gates remain required before final acceptance.

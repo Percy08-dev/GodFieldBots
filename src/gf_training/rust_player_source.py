@@ -600,6 +600,15 @@ class RustPlayerSource:
     def close(self) -> None:
         if self.state == 'CLOSED':
             return
+        registry = getattr(self, 'registry', None)
+        local = getattr(registry, 'local', None)
+        account = getattr(local, 'device_account', None)
+        operation = account._active if account is not None else None
+        if operation is not None and operation.state == 'FAILED_HELD':
+            # The numerical hold can still own copied rollout/token/raw aliases.
+            # Keep this SAME actual Source grant and owner until positive device
+            # retirement; poison alone does not fund retained CPU graphs.
+            raise BufferError('actual failed operation still owns Source aliases/funding')
         self._rollout, self._records, self.manifest = None, (), None
         if self._numeric is not None:
             self._numeric.close()

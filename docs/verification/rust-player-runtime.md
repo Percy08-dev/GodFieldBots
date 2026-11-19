@@ -569,3 +569,57 @@ resume (allocated/reserved, process Torch scope). No universal capacity or PSS
 claim follows. This scoped private-engineering acceptance leaves all mandatory
 pre-public work, full Task6 CUDA2/resume2/real campaign/eval/process/audit conditions
 and Task7 exact performance/default protocol open.
+
+## Generic device-account engineering component
+
+2026-11-20 Root accepts scoped implementation of the reviewed whole-host phase
+account and immutable operation allowance, after both independent R1 rereviews
+READY. Baseline reviews found two P1 lifetime defects (Source charges refunded
+while device-held copies lived; cause/context and nested cleanup omitted) and a
+P2 historical path traversal. R1 captures actual numerical owners before outer
+Source replacement, preserves Source funding/custody until positive retirement,
+keeps uncertain nested errors/owners held, and rejects `..` before either read.
+Both original reviewers find all three addressed with no new scoped blocker.
+The conformance reviewer reruns the original pure exception-chain probe: graphs
+retire and nested owners close once, with original error/poison retained and no
+Torch/native import. This is not actual GPU-settlement evidence.
+
+Root freshly precollects the exact CPU selections, forcing empty GPU visibility
+and `not cuda`:150 compatibility checks pass6.03s (the known readonly NumPy/Torch
+warning), and10 selected pure Source/constructor checks pass0.14s. The latter
+selection excludes actual-game tests. Fresh Root Ruff7files, mypy4Source files
+and diff checks pass; formal eight-kernel checks are included. Baseline-repair
+patch b4df127d6eb118e0fcc660e33282850eb86750ef25991576ac4d6eb27ab14d7f,
+inventory6ebdbade855696bf27184affd29ed0c56ab9ce57157be2e11fa7c0a34a792539.
+All16 current Source/test files and seven deltas independently match the frozen
+before/after metadata. Earlier257/203 and R1 150/10 agent results remain their
+own executions, not a new whole-suite claim.
+
+Current Python Source is93aaaf5d30452156351154dcffd1d30d7246e01372209e0bacdcb883009cca8a,
+runtime7593c9d9e8069a10fa105bf7f26e7cf1e4f596f9b88760b392f0fbbad494c83e.
+Native/extension/installed companion/private test supervisor/wheel remain the
+recorded82f25/2383/9035/efc18/100876 artifacts. The account's dimensions, configured
+backend allowances and actual tensor storage remain estimates/data observations,
+not allocator-reserved/PSS measurements or a hard physical quota. Heterogeneous
+account profiles are unit-tested; the actual training caller still uses its own
+model self-pool and has no new external loader.
+
+One earlier expanded verification command omitted its CUDA exclusion. Actual CUDA
+model/publication and one Simulator launch occurred before Ctrl-C; the original
+pytest process was observed exiting2 after169 earlier passes. That interrupted
+execution is NOT an acceptance, approved experiment or GPU/performance proof.
+The in-process Torch/native owner ended, but no original Simulator wait was
+captured. Later OS/NVML absence is supporting observation only: descendant reap
+remains NOT PROVEN. Exact command, selected nodes, stdout, original tool-result
+transcription and preserved Simulator stdout/stderr hashes are archived in primary
+ignored `components/task6b-interrupted-cuda-selection`. Its original pytest temp
+case directory was removed by later pytest retention; no replacement/original
+identity is fabricated. Subsequent CPU checks use both safeguards and precollection.
+No extra GPU/query/cleanup experiment was run to replace the missing evidence.
+
+No successful authorized actual Task6b CUDA/training/end-to-end measurement is
+claimed. The separately required genuine supervised continuous2/pause1-resume2,
+all Original/Replay/numeric/saved-state audits, one-Python tree, real campaign/eval,
+merged telemetry, full24-run timing/default protocol and observation calibration
+remain open. This component milestone does not qualify learning quality, arbitrary
+physical capacity, public activation or a default switch.

@@ -24,8 +24,11 @@ borrowers, ordered writer inventory/deferred contexts and strict Simulator clean
 also pass independent reviews after five boundary repairs. Private Source/common-PPO/save/restore/cold integration now passes scoped
 independent correctness and conformance after two repair rounds, including actual
 ordinary CPU single-use and current-source Model4 CUDA returned-Parent handoff.
-General CUDA planning, artifact-retention and healthy-empty parity remain required
-before public activation. User CLI execution and deployment memory/adoption remain
+The generic same-host CUDA account also passes scoped independent correctness
+and conformance after actual Source-funding, exception-chain cleanup and historical
+path-containment repairs. It estimates managed phase demand; actual CUDA capacity
+and the complete learning/resume measurements remain Task6/7. Artifact-retention
+and healthy-empty integration/evidence remain required before public activation. User CLI execution and deployment memory/adoption remain
 in progress. New runtime/producer/prepared/exit/physical
 identities preserve historical receipts; actual scientific cold Source completion
 and evaluation handoff remain to be connected. A fully integrated new runtime

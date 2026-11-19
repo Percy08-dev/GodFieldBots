@@ -8,7 +8,6 @@ Only native participant custody commits sampling state; this module keeps none.
 from __future__ import annotations
 
 import json
-import threading
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -18,15 +17,7 @@ from typing import Any
 import numpy as np
 
 from gf_common.domain import ContractError, digest
-
-_TORCH_LOCK = threading.RLock()
-
-
-@contextmanager
-def serialized_torch() -> Iterator[None]:
-    """Shared serialization boundary for the host learner and serving registry."""
-    with _TORCH_LOCK:
-        yield
+from gf_models.torch_runtime import serialized_torch
 
 
 @cache
@@ -107,17 +98,25 @@ class RustPlayerInference:
         cache_entries: int,
         cache_weight_bytes: int,
         visibility: str | None = None,
+        device_account: Any = None,
     ) -> None:
         from gf_models.shared_registry import make_registry
 
-        with serialized_torch(), _preserve_global_rng():
-            self.registry = make_registry(
-                device=device,
-                cache_entries=cache_entries,
-                cache_weight_bytes=cache_weight_bytes,
-                visibility=visibility,
-            )
-        self.device = device
+        if device_account is not None and device_account.serving_device != device:
+            raise ContractError('actual inference/account serving role differs')
+        self.device, self.device_account = device, device_account
+        with serialized_torch():
+            hold = device_account.begin_backend(owner=self) if device_account is not None and device != 'cpu' else None
+            try:
+                with _preserve_global_rng():
+                    self.registry = make_registry(device=device, cache_entries=cache_entries,
+                        cache_weight_bytes=cache_weight_bytes, visibility=visibility)
+                if hold is not None:
+                    hold.complete()
+            except BaseException as error:
+                if hold is not None:
+                    hold.fail(error)
+                raise
         self.runtime = sampling_runtime_identity()
         self.references: dict[str, int] = {}
         self.timings = {
@@ -139,19 +138,70 @@ class RustPlayerInference:
     def publish(self, network: Any, checkpoint: str) -> None:
         from gf_models.shared_registry import publication
 
-        with serialized_torch(), _preserve_global_rng():
-            self.registry.load_policy_weights(publication(network, checkpoint))
-            self.references[checkpoint] = 0
+        with serialized_torch():
+            self._publish_payload(network.config, network.binding, publication(network, checkpoint), checkpoint)
 
     def publish_banks(self, model: Any, binding: Any, banks: Any, checkpoint: str) -> None:
         from gf_models.shared_registry import bank_publication
 
-        with serialized_torch(), _preserve_global_rng():
-            self.registry.load_policy_weights(bank_publication(model, binding, banks, checkpoint))
-            if self.device != "cpu":
+        with serialized_torch():
+            self._publish_payload(model, binding, bank_publication(model, binding, banks, checkpoint), checkpoint)
+
+    def _publish_payload(self, model: Any, binding: Any, payload: Any, checkpoint: str) -> None:
+        from gf_common.structured_layout import CORRECTED_CARD_INSTANCE_LAYOUT as layout
+        from gf_models.rust_player_device import CudaCheckpointProfile
+
+        with serialized_torch():
+            account = self.device_account if self.device != 'cpu' else None
+            profile = (account.cached_profile(checkpoint) or CudaCheckpointProfile(model, binding, layout=layout)
+                if account is not None else None)
+            hold = account.begin_construction(checkpoint, profile, owner=self) if account is not None else None
+            was_present = checkpoint in self.registry.networks
+            try:
+                with _preserve_global_rng():
+                    self.registry.load_policy_weights(payload)
+                if self.device != 'cpu':
+                    import torch
+                    torch.cuda.synchronize(self.device)
+                if account is not None:
+                    account.refresh_cache(checkpoint, profile, self.registry.networks[checkpoint])
+                if hold is not None:
+                    hold.complete()
+                self.references[checkpoint] = 0
+            except BaseException as error:
+                if hold is not None:
+                    self._failed_publication = checkpoint, was_present
+                    hold.fail(error, references=payload)
+                raise
+
+    def retire_device_failure(self, *, dispatcher: Any = None) -> None:
+        """Only after the original producer stopped; actual GPU fence precedes credit."""
+        from tensordict import NonTensorData, TensorDict
+
+        with serialized_torch():
+            account = getattr(self, 'device_account', None)
+            hold = account._active if account is not None else None
+            if account is None or hold is None or hold.owner is not self:
+                return
+            if hold.state != 'FAILED_HELD':
+                raise ContractError('inference device operation has not stopped')
+            if self.device != 'cpu':
                 import torch
                 torch.cuda.synchronize(self.device)
-            self.references[checkpoint] = 0
+            provisional = getattr(self, '_failed_publication', None)
+            if provisional is not None:
+                checkpoint, was_present = provisional
+                if not was_present and checkpoint in self.registry.networks:
+                    if self.references.get(checkpoint, 0) or (dispatcher is not None
+                            and dispatcher.checkpoint_references().get(checkpoint, 0)):
+                        raise ContractError('failed provisional network still has actual consumers')
+                    self.registry.load_policy_weights(TensorDict({'publication': NonTensorData(
+                        {'command': 'EVICT', 'checkpoint': checkpoint})}, batch_size=[]))
+                    if checkpoint in self.registry.networks:
+                        raise ContractError('failed provisional network removal remains uncertain')
+                    account.discard_failed_cache(checkpoint)
+            hold.retire_failed(gpu_settled=True)
+            self._failed_publication = None
 
     def retain(self, checkpoint: str) -> None:
         with serialized_torch():
@@ -179,6 +229,11 @@ class RustPlayerInference:
                     batch_size=[],
                 )
             )
+            account = self.device_account if self.device != 'cpu' else None
+            if account is not None:
+                import torch
+                torch.cuda.synchronize(self.device)
+                account.evict_cache(checkpoint, gpu_settled=True)
             del self.references[checkpoint]
 
     def cache_state(self) -> dict[str, Any]:
@@ -209,53 +264,72 @@ class RustPlayerInference:
                 checkpoint = identity["checkpoint"]
                 if checkpoint not in self.registry.networks:
                     raise ContractError("unpublished native checkpoint")
-                at = time.perf_counter()
+                account = getattr(self, 'device_account', None) if self.device != 'cpu' else None
+                hold = (account.begin_row(checkpoint,
+                    interval_events=row['inputs']['interval_numerics'].shape[0],
+                    candidates=row['inputs']['kinds'].shape[0],
+                    input_leaf_bytes=sum(value.nbytes for value in row['inputs'].values()), owner=self)
+                    if account is not None else None)
+                inputs: dict[str, Any] = {}
+                if hold is not None:
+                    hold.references = inputs  # Retain BEFORE a partial H2D can fail.
                 try:
-                    cpu = tensor_views(row["inputs"], device="cpu")
-                finally:
-                    self.timings["cpu_share"] += time.perf_counter() - at
-                at = time.perf_counter()
-                try:
-                    inputs = {
-                        name: value.to(self.device, non_blocking=False)
-                        for name, value in cpu.items()
-                    }
-                finally:
-                    self.timings["h2d"] += time.perf_counter() - at
-                at = time.perf_counter()
-                try:
-                    logs, value = score_numeric_row(self.registry.networks[checkpoint], inputs)
-                    if self.device != "cpu":
-                        torch.cuda.synchronize(self.device)
-                finally:
-                    self.timings["forward"] += time.perf_counter() - at
-                at = time.perf_counter()
-                try:
-                    sample, next_state = provisional_sample(
-                        logs.exp(),
-                        state=row["rng_state"],
-                        seed=row["sampling_seed"],
-                        runtime=batch["runtime"],
-                    )
-                finally:
-                    self.timings["sampling"] += time.perf_counter() - at
-                at = time.perf_counter()
-                try:
-                    logs = logs.detach().to("cpu", non_blocking=False)
-                    value = value.detach().to("cpu", non_blocking=False)
-                    answers.append(
-                        {
-                            "identity": row["identity"],
-                            "logs": logs.reshape(-1).numpy(),
-                            "value": float(value.item()),
-                            "sample": sample,
-                            "next_state": next_state,
-                            "runtime": self.runtime,
-                        }
-                    )
-                    self.calls["rows"] += 1
-                finally:
-                    self.timings["return"] += time.perf_counter() - at
+                    at = time.perf_counter()
+                    try:
+                        cpu = tensor_views(row["inputs"], device="cpu")
+                    finally:
+                        self.timings["cpu_share"] += time.perf_counter() - at
+                    at = time.perf_counter()
+                    try:
+                        for name, cpu_value in cpu.items():
+                            inputs[name] = cpu_value.to(self.device, non_blocking=False)
+                    finally:
+                        self.timings["h2d"] += time.perf_counter() - at
+                    at = time.perf_counter()
+                    try:
+                        logs, value = score_numeric_row(self.registry.networks[checkpoint], inputs)
+                        if self.device != "cpu":
+                            torch.cuda.synchronize(self.device)
+                    finally:
+                        self.timings["forward"] += time.perf_counter() - at
+                    at = time.perf_counter()
+                    try:
+                        sample, next_state = provisional_sample(
+                            logs.exp(),
+                            state=row["rng_state"],
+                            seed=row["sampling_seed"],
+                            runtime=batch["runtime"],
+                        )
+                    finally:
+                        self.timings["sampling"] += time.perf_counter() - at
+                    at = time.perf_counter()
+                    try:
+                        logs = logs.detach().to("cpu", non_blocking=False)
+                        value = value.detach().to("cpu", non_blocking=False)
+                        answers.append(
+                            {
+                                "identity": row["identity"],
+                                "logs": logs.reshape(-1).numpy(),
+                                "value": float(value.item()),
+                                "sample": sample,
+                                "next_state": next_state,
+                                "runtime": self.runtime,
+                            }
+                        )
+                        self.calls["rows"] += 1
+                    finally:
+                        self.timings["return"] += time.perf_counter() - at
+                    # Forward synchronization and blocking CPU result transfers
+                    # have completed. Last GPU input references retire INSIDE
+                    # this same Torch lock, before another row/update can start.
+                    inputs.clear()
+                    if hold is not None:
+                        hold.references = None
+                        hold.complete()
+                except BaseException as error:
+                    if hold is not None:
+                        hold.fail(error, references=inputs)
+                    raise
         return answers
 
     def serve_next(self, dispatcher: Any, *, deadline: float) -> int:

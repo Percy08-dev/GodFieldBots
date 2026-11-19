@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import os
 import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +29,31 @@ def _admit_device(binding: Any, admission: HostAdmission | None) -> None:
         admission.require()
     if binding.device != "cpu" and admission is None:
         raise ContractError("CUDA allocation requires actual HostAdmission")
+
+
+def _configured_device_account(config: Any, *, global_bytes: int,
+                                saved_models: tuple[Json, ...] = ()) -> Any:
+    """CPU metadata only; fixed caller already owns actual HostAdmission.
+
+    Training references own-parent generations. Model4's inference header has no
+    resource policy; use the actual current config, never technical parse defaults.
+    Heterogeneous external loader/authority is outside this training composition.
+    """
+    from dataclasses import replace
+
+    from gf_common.domain import canonical
+    from gf_common.structured_layout import CORRECTED_CARD_INSTANCE_LAYOUT as layout
+    from gf_models.rust_player_device import CudaCheckpointProfile, RustPlayerDeviceAccount
+    from gf_models.structured_binding import inference_model
+    model = config.model.architecture(layout=layout)
+    if any(canonical(saved) != canonical(inference_model(model)) for saved in saved_models):
+        raise ContractError('actual training self-pool checkpoint architecture differs before CUDA initialization')
+    learner, serving = config.training.device, config.model.inference.device
+    if learner == serving == 'cpu':
+        return None
+    profile = CudaCheckpointProfile(model, replace(config.model.inference, device=learner), layout=layout)
+    return RustPlayerDeviceAccount(global_bytes=global_bytes, learner_device=learner, serving_device=serving,
+        learner_profile=profile, admitted_profiles=(profile,))
 
 
 class LocalSavedPair:
@@ -60,11 +87,75 @@ class LocalSavedPair:
 
 
 class _LocalLearner:
-    def _own(self, admission: HostAdmission | None) -> None:
+    learner: Any
+
+    def _own(self, admission: HostAdmission | None, *, device_account: Any = None) -> None:
         self.admission = admission
         self._pid, self._thread = os.getpid(), threading.get_ident()
         self._failed = False
         self._saved: dict[Path, LocalSavedPair] = {}
+        self.device_account = device_account
+        self._device_generation = 0
+        self.last_device_plan: Any = None
+
+    @contextmanager
+    def _device_phase(self, phase: str, *, moment_bytes: int = 0) -> Iterator[Any]:
+        """Fixed local operation lifecycle under the caller's SAME Torch lock."""
+        account = self.device_account
+        if account is None:
+            yield None
+            return
+        if hasattr(self, 'learner'):
+            account.refresh_learner(self.learner.network, self.learner.optimizer)
+        if phase == 'initialize':
+            operation = account.begin_initialize(owner=self)
+        elif phase == 'update':
+            logical = (self.learner._training_reservation_bytes if self.learner.model.version == '4'
+                else min(self.learner.model.resources.max_owned_bytes, self.learner.binding.managed_budget_bytes))
+            operation = account.begin_update(logical_bytes=logical,
+                operation_id=self.admission.observation['operation_id'] if self.admission is not None else 'cpu-component',
+                generation=self._device_generation + 1, owner=self)
+        elif phase == 'restore':
+            operation = account.begin_restore(moment_bytes=moment_bytes, owner=self)
+        elif phase == 'export':
+            operation = account.begin_export(owner=self)
+        else:
+            raise ContractError('unknown fixed local device phase')
+        try:
+            yield operation
+            account.refresh_learner(self.learner.network, self.learner.optimizer)
+            if phase == 'update':
+                self.last_device_plan = operation.plan
+                self._device_generation += 1
+            operation.complete()
+        except BaseException as error:
+            self._failed = True
+            operation.fail(error, references={'learner': getattr(self, 'learner', None)})
+            raise
+
+    def _resume_moment_bytes(self, metadata: Json) -> int:
+        from math import prod
+
+        from gf_models.structured_config import parameter_shapes
+        shapes = parameter_shapes(self.learner.model, **self.learner._options)
+        return 8 * sum(prod(shapes[name]) for name, facts in metadata['parameter_states'].items() if facts['present'])
+
+    def retire_device_failure(self) -> None:
+        """Terminal cleanup after the original numerical frames stopped."""
+        if (self._pid, self._thread) != (os.getpid(), threading.get_ident()):
+            raise ContractError('original local owner required for device cleanup')
+        if self.admission is not None:
+            self.admission.require()
+        with serialized_torch():
+            account = self.device_account
+            hold = account._active if account is not None else None
+            if hold is None or hold.owner is not self:
+                return
+            if hold.state != 'FAILED_HELD':
+                raise ContractError('local device operation has not stopped')
+            self.learner.synchronize()
+            account.refresh_failed_learner(self.learner.network, self.learner.optimizer, owner=self)
+            hold.retire_failed(gpu_settled=True)
 
     def require(self) -> None:
         if self._failed or (self._pid, self._thread) != (os.getpid(), threading.get_ident()):
@@ -84,12 +175,16 @@ class _LocalLearner:
 
 class LocalGameLearner(_LocalLearner):
     def __init__(self, model: Any, seed: int, binding: Any, resume_identity: str,
-                 *, actions: Any, rules: Any, admission: HostAdmission | None = None) -> None:
+                 *, actions: Any, rules: Any, admission: HostAdmission | None = None,
+                 device_account: Any = None) -> None:
         _admit_device(binding, admission)
         from gf_training.structured_numeric import GameLearner
 
-        self._own(admission)
-        with serialized_torch():
+        if device_account is not None and (device_account.learner_device != binding.device
+                or device_account.learner_profile.model != model):
+            raise ContractError('local learner/account role or model differs')
+        self._own(admission, device_account=device_account)
+        with serialized_torch(), self._device_phase('initialize'):
             self.learner = GameLearner(model, seed, binding, resume_identity,
                 actions=actions, rules=rules)
 
@@ -97,7 +192,10 @@ class LocalGameLearner(_LocalLearner):
         self.require()
         with serialized_torch():
             try:
-                return self.learner.update(rollout)
+                with self._device_phase('update') as operation:
+                    if operation is not None and operation.device_bytes is not None:
+                        return self.learner.update_with_device_limit(rollout, device_bytes=operation.device_bytes)
+                    return self.learner.update(rollout)
             except BaseException:
                 self._failed = True
                 raise
@@ -105,7 +203,7 @@ class LocalGameLearner(_LocalLearner):
     def save(self, directory: Path, **options: Any) -> LocalSavedPair:
         self.require()
         directory = directory.absolute()
-        with serialized_torch():
+        with serialized_torch(), self._device_phase('export'):
             try:
                 result = self.learner.save(directory, **options)
                 return self._record_save(directory, result)
@@ -115,6 +213,8 @@ class LocalGameLearner(_LocalLearner):
 
     def restore(self, directory: Path) -> None:
         self.require()
+        if self.device_account is not None:
+            raise ContractError('same-host restore requires the actual held-policy owner')
         with serialized_torch():
             self.learner.restore(directory)
 
@@ -126,9 +226,11 @@ class LocalGameLearner(_LocalLearner):
         if policy.resume_manifest is None:
             raise ContractError('actual full restored resume metadata required')
         policy.require_restore(self, policy.resume_manifest)
-        with serialized_torch():
+        with serialized_torch(), self._device_phase('restore', moment_bytes=(
+                self._resume_moment_bytes(policy.resume_manifest) if self.device_account is not None else 0)):
             self.learner.restore(policy.directory,
                 expected_resume_sha256=policy._held['resume.json'].sha256)
+        self._device_generation = policy.generation
         policy.require()
 
 
@@ -136,40 +238,54 @@ class LocalHpoLearner(_LocalLearner):
     def __init__(self, model: Any, training: Any, seed: int, binding: Any,
                  resume_identity: str, *, actions: Any, rules: Any, budget: Any,
                  admission: HostAdmission | None = None,
-                 device_admission: Json | None = None) -> None:
+                 device_admission: Json | None = None, device_account: Any = None) -> None:
         _admit_device(binding, admission)
         from gf_training.hpo_numeric import HpoLearner
 
-        self._own(admission)
+        if device_account is not None and (device_account.learner_device != binding.device
+                or device_account.learner_profile.model != model):
+            raise ContractError('local learner/account role or model differs')
+        self._own(admission, device_account=device_account)
         self.budget, self.actions = budget, actions
-        with serialized_torch():
+        with serialized_torch(), self._device_phase('initialize'):
+            same_host_bytes = None
+            if device_account is not None and binding.device != 'cpu':
+                from gf_models.structured_config import resource_estimate
+                logical = resource_estimate(model, binding, suffix_decisions=training.tbptt_length,
+                    layout=device_account.learner_profile.layout)['total_bytes']
+                same_host_bytes = device_account.numerical_limit(logical)
             self.learner = HpoLearner(model, training, seed, binding, resume_identity,
-                actions=actions, rules=rules, _owned_device_admission=device_admission)
+                actions=actions, rules=rules, _owned_device_admission=device_admission,
+                _same_host_device_bytes=same_host_bytes)
             self.learner._owned_source_budget = budget
 
     def update_owned(self, rollout: Any) -> Json:
         self.require()
         with serialized_torch():
             try:
-                return self.learner.update_owned(rollout)
+                with self._device_phase('update') as operation:
+                    return (self.learner.update_owned(rollout) if operation is None or operation.device_bytes is None else
+                        self.learner.update_owned(rollout, _device_bytes=operation.device_bytes))
             except BaseException:
                 self._failed = True
                 raise
 
     def snapshot_owned(self, **options: Any) -> Any:
         self.require()
-        with serialized_torch():
+        with serialized_torch(), self._device_phase('export'):
             return self.learner.snapshot_owned(budget=self.budget, **options)
 
     def restore_snapshot(self, snapshot: Any, *, resume_manifest: Json) -> None:
         self.require()
         from gf_training.hpo_artifacts import _restore_owned_learner
 
-        with serialized_torch():
+        with serialized_torch(), self._device_phase('restore', moment_bytes=(
+                2 * self.device_account.learner_profile.parameter_bytes if self.device_account is not None else 0)):
             _restore_owned_learner(self.learner, inference=snapshot.inference,
                 resume=snapshot.resume, actor_metadata=None, resume_manifest=resume_manifest,
                 generation=snapshot.generation, budget=self.budget, actions=self.actions,
                 local_snapshot=snapshot)
+        self._device_generation = snapshot.generation
 
     def restore_policy(self, policy: Any) -> None:
         from gf_training.hpo_artifacts import _restore_owned_learner
@@ -180,18 +296,21 @@ class LocalHpoLearner(_LocalLearner):
         if policy.resume_manifest is None:
             raise ContractError('actual full restored resume metadata required')
         policy.require_restore(self, policy.resume_manifest)
-        with serialized_torch():
+        with serialized_torch(), self._device_phase('restore', moment_bytes=(
+                2 * self.device_account.learner_profile.parameter_bytes if self.device_account is not None else 0)):
             _restore_owned_learner(self.learner, inference=policy.inference, resume=policy.resume,
                 actor_metadata=None, resume_manifest=policy.resume_manifest, generation=policy.generation,
                 budget=self.budget, actions=self.actions, restored_policy=policy)
+        self._device_generation = policy.generation
         policy.require()
 
     def save(self, directory: Path, *, save_budget_bytes: int = 512 * 1024**2, **options: Any) -> LocalSavedPair:
         self.require()
         directory = directory.absolute()
-        with serialized_torch():
+        with serialized_torch(), self._device_phase('export'):
             try:
-                snapshot = self.snapshot_owned(save_budget_bytes=save_budget_bytes)
+                snapshot = (self.snapshot_owned(save_budget_bytes=save_budget_bytes) if self.device_account is None else
+                    self.learner.snapshot_owned(budget=self.budget, save_budget_bytes=save_budget_bytes))
                 ack = snapshot.save(directory, **options)
                 ack.require(snapshot)
                 return self._record_save(directory, {"files": ack.files}, snapshot=snapshot)
@@ -233,6 +352,7 @@ class RustGameOperations:
         self.writer: Any = None
         self.registry: Any = None
         self.collector: Any = None
+        self.device_account: Any = None
         self._ownership: Any = None
         self.host_health: Json
         self.resume_audit: Any = None
@@ -462,25 +582,35 @@ class RustGameOperations:
         if directory != self._ownership.directory or state is not self.state:
             raise ContractError('actual same parent/local run required')
         binding = replace(config.model.inference, device=config.training.device)
+        saved_models = []
+        if self.resume_audit is not None:
+            numbers = set(self.resume_audit.current['parent_controls']['snapshot_pool']) | {self.resume_audit.state['updates']}
+            for generation in sorted(numbers):
+                row = self.resume_audit.records[generation]
+                manifest = self.resume_audit.scan.object(directory / 'artifacts' / f'{generation:06}' / 'inference.json',
+                    row['inference_sha256'])
+                saved_models.append(manifest['model'])
+        self.device_account = _configured_device_account(config,
+            global_bytes=self.admission.observation['budget']['managed_cuda_bytes'], saved_models=tuple(saved_models))
         if self._is_hpo:
             from gf_training.hpo_config import hpo_training_config
             assert type(self) is RustHpoOperations
-            self._checked_device_admission = self.component_device_admission()
             local: Any = LocalHpoLearner(config.model.architecture(layout=layout),
                 hpo_training_config(config.hpo_spec['training_recipe']), config.training.seeds[0],
                 binding, state['resume_identity'], actions=config.actions, rules=card_instance_rules(),
                 admission=self.admission, budget=self.pool.budget,
-                device_admission=getattr(self, '_checked_device_admission', None))
+                device_account=self.device_account)
         else:
             local = LocalGameLearner(config.model.architecture(layout=layout), config.training.seeds[0],
-                binding, state['resume_identity'], actions=config.actions, rules=card_instance_rules(), admission=self.admission)
+                binding, state['resume_identity'], actions=config.actions, rules=card_instance_rules(),
+                admission=self.admission, device_account=self.device_account)
         # Five fixed normal pool policies + current + the newly prepared next
         # generation. This is cache occupancy, not per-thread/process memory.
         service = RustPlayerInference(device=config.model.inference.device,
             cache_entries=config.hpo_spec['operating']['opponent_pool_size'] + 2 if self._is_hpo else 7,
             cache_weight_bytes=self.admission.observation['budget']['managed_ram_bytes']
                 if config.model.inference.device == 'cpu' else self.admission.observation['budget']['managed_cuda_bytes'],
-            visibility=config.model.cuda_visible_devices)
+            visibility=config.model.cuda_visible_devices, device_account=self.device_account)
         self.registry = RustRunRegistry(self._ownership, state, config=config, admission=self.admission,
             pool=self.pool, writer=self.writer, local=local, service=service)
         self.collector = RustPlayerCollector(self.registry)
@@ -563,8 +693,14 @@ class RustGameOperations:
                 # metadata. Retire those aliases before their concrete Source
                 # loans; executing common-loop aliases retire via its scope.
                 traceback.clear_frames(error.__traceback__)
+                try:
+                    source.close()
+                except BaseException as cleanup:  # noqa: BLE001 -- original numerical error remains primary.
+                    vars(error)['source_cleanup_owner'] = source
+                    vars(error)['source_cleanup_error'] = cleanup
+                    error.add_note('actual Source cleanup remains owned: ' + str(cleanup))
                 raise
-            finally:
+            else:
                 source.close()
         return projection()
 
@@ -588,6 +724,8 @@ class RustGameOperations:
             numeric_files=numeric_files, runtime_binding_sha256=state['runtime_binding_sha256'],
             collection_retirement_sha256=source.collection.retirement_sha256,
             service_usage=source.manifest['service_usage'], parent_snapshot_identity=source.parent.identity)
+        if self.registry.local.last_device_plan is not None:
+            update['device_plan'] = self.registry.local.last_device_plan.record()
         # Result identity is inserted by registry.commit only after its genuine
         # provisional saved-policy owner exists, before the complete Source guard.
 
@@ -654,6 +792,11 @@ class RustGameOperations:
             failures.append(failure)
             self.host_health['errors'].append(stage + ':' + type(failure).__name__)
             vars(failure)['cleanup_owner'] = self
+        if getattr(self, 'device_account', None) is not None:
+            try:
+                local.retire_device_failure()
+            except BaseException as failure:  # noqa: BLE001 -- keep failed actual GPU owner/funding.
+                failed('learner-device', failure)
         try:
             self.close_batch()
         except BaseException as failure:  # noqa: BLE001 -- independently stop original producers too.
@@ -707,6 +850,14 @@ class RustGameOperations:
             self.host_health.update(actors_joined=True, service_joined=True, gpu_fenced=True)
         except BaseException as failure:  # noqa: BLE001 -- no retirement proof or refunds for uncertain consumers.
             failed('native-service', failure)
+        if getattr(self, 'device_account', None) is not None:
+            try:
+                thread = runtime._service_thread
+                if thread is not None and thread.is_alive():
+                    raise ContractError('actual service producer must stop before device cleanup')
+                self.registry.service.retire_device_failure(dispatcher=runtime.dispatcher)
+            except BaseException as failure:  # noqa: BLE001 -- no hold credit for unconfirmed service cleanup.
+                failed('service-device', failure)
         if failures:
             primary = failures[0]
             for later_failure in failures[1:]:
@@ -980,40 +1131,6 @@ class RustHpoOperations(RustGameOperations):
         if canonical(asdict(normalize_training_for_model('mlp', recipe))) != canonical(config.hpo_spec['training_recipe']):
             raise ContractError('actual normalized Model4 recipe required')
         return config.model.architecture(layout=layout)
-
-    def component_device_admission(self) -> Json:
-        """Approved bounded component ONLY; no generic collection fit claim."""
-        from math import prod
-
-        from gf_common.structured_layout import CORRECTED_CARD_INSTANCE_LAYOUT as layout
-        from gf_models.learner_cuda import owned_learner_cuda_admission
-        from gf_models.structured_config import parameter_shapes, resource_estimate
-        config, actual = self.config, self.admission.observation
-        model = config.model.architecture(layout=layout)
-        recipe = config.hpo_spec['training_recipe']
-        runtime = config.hpo_spec['runtime']
-        request = self.control.operation['execution_request']
-        logical = resource_estimate(model, config.model.inference,
-            suffix_decisions=recipe['tbptt_length'], layout=layout)['total_bytes']
-        if (config.hpo_spec['decision_budget'] != 64 or config.training.max_updates != 2
-                or recipe['collection_games'] != 16 or runtime['game_concurrency'] != 1
-                or runtime['player_worker_threads'] != 1 or runtime['max_batch_size'] != 1
-                or logical != 2_966_109_712 or actual['budget']['managed_cuda_bytes'] != 12 * 1024**3
-                or request['mode'] == 'fresh' and request['pause_after_update'] != 1
-                or request['mode'] == 'resume' and self.resume_audit.state['used_decisions'] != 64):
-            raise ContractError('general Rust CUDA phase planning is not approved; bounded component differs')
-        weights = 4 * sum(prod(shape) for shape in parameter_shapes(model, layout=layout).values())
-        positions = 4 * model.temporal.max_decisions * model.temporal.hidden_size
-        # This component explicitly loads original pool0/current1 on resume;
-        # there is no future update, but those two actual cache networks count.
-        generations = {0, 1} if request['mode'] == 'fresh' else set(
-            self.resume_audit.current['parent_controls']['snapshot_pool']) | {self.resume_audit.state['updates']}
-        pool_bytes = len(generations) * (weights + positions)
-        if pool_bytes != 15_492_112:
-            raise ContractError('actual reachable/imported component cache differs from approved bound')
-        return owned_learner_cuda_admission(model, config.model.inference,
-            logical_bytes=logical, global_cuda_bytes=actual['budget']['managed_cuda_bytes'],
-            pool_cuda_bytes=pool_bytes, overlap_scratch_bytes=0, layout=layout)
 
     def initialize_state(self, state: Json, config: Any) -> None:
         from gf_common.domain import digest

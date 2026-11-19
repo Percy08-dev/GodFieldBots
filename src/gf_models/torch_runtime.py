@@ -5,6 +5,9 @@ import importlib.metadata
 import os
 import platform
 import sys
+import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import Any
 
 import numpy as np
@@ -13,6 +16,15 @@ from gf_common.domain import ContractError, Json
 
 NUMERICS = {"precision": "ieee-fp32", "tf32": False, "amp": False, "deterministic": True,
             "cublas_workspace_config": ":4096:8", "threads": 1}
+
+_TORCH_LOCK = threading.RLock()
+
+
+@contextmanager
+def serialized_torch() -> Iterator[None]:
+    """The one shared host learner/serving/accounting serialization boundary."""
+    with _TORCH_LOCK:
+        yield
 
 
 def runtime_metadata() -> Json:

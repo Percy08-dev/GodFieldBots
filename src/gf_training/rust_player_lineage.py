@@ -86,7 +86,10 @@ def record_fields(record_type: str, *, hpo: bool = False) -> frozenset[str]:
 
 def validate_record_shape(value: Json, record_type: str, *, hpo: bool = False) -> Json:
     """Select exact new kind/version/keys only; callers must validate CONTENT/OWNERS."""
-    raw = closed(value, set(record_fields(record_type, hpo=hpo)))
+    allowed = set(record_fields(record_type, hpo=hpo))
+    if record_type == 'update' and type(value) is dict and 'device_plan' in value:
+        allowed.add('device_plan')
+    raw = closed(value, allowed)
     if type(raw["schema_version"]) is not int or raw["schema_version"] != _VERSIONS[record_type][int(hpo)]:
         raise ContractError("unknown Rust-player record version")
     if record_type == "collection" and (raw["kind"] != "card-instance-collection" or raw["command"] != "collect"):
@@ -95,6 +98,9 @@ def validate_record_shape(value: Json, record_type: str, *, hpo: bool = False) -
         expected = "rust-player-hpo-source-proof-v1" if hpo else "rust-player-source-proof-v1"
         if raw["kind"] != expected or raw["qualified"] is not False or raw["parent_qualification"] != "not_performed":
             raise ContractError("Source metadata cannot grant parent/update authority")
+    if record_type == 'update' and 'device_plan' in raw:
+        from gf_models.rust_player_device import validate_device_plan
+        validate_device_plan(raw['device_plan'], generation=raw['generation'])
     return raw
 
 

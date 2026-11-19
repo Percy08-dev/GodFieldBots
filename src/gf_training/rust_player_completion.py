@@ -313,7 +313,7 @@ class _FailedRawAudit:
 
 def _audit_raw_originals(originals: Any, *, loaded: Any, state: Json, previous: Json,
                          update: Json, proof: Json, generation: int, hpo: bool,
-                         expected: Path) -> tuple[int, int, tuple[str, ...]]:
+                         expected: Path) -> tuple[int, int, tuple[str, ...], str]:
     """Private raw DATA audit; live-owner construction remains in _audit_update."""
     from gf_common.card_instance_collection import PPO_BATCH, hpo_batch_role
     from gf_training.card_instance_collection_source import inspect_rust_game_manifest
@@ -369,18 +369,74 @@ def _audit_raw_originals(originals: Any, *, loaded: Any, state: Json, previous: 
             'snapshot_identity': previous['snapshot_identity'], 'numeric_files': update['numeric_files']}
         if digest(correspondence) != proof['source_correspondence']:
             raise ContractError('cold original/numeric correspondence differs')
+        source_invocation = manifest['capture_authority']['invocation_id']
+        if (source_invocation != manifest['logical_retirement']['invocation_id']
+                or source_invocation != manifest['service_usage']['invocation_id']):
+            raise ContractError('actual Source invocation witnesses differ')
         # Do not retain a second whole raw graph while reconstructing numeric.
         del outputs, records, manifest, episodes, specs
         originals.close()
     except BaseException as error:
         vars(error)['cleanup_owner'] = _FailedRawAudit(originals, error)
         raise
-    return count, collected, episode_digests
+    return count, collected, episode_digests, source_invocation
+
+
+def _audit_source_device_plan(update: Json, *, loaded: Any, state: Json, source_invocation: str,
+                              record_root: Path, pool: PackedArtifactPool, deadline: float,
+                              loans: list[Any]) -> None:
+    """Saved source receipts are DATA, not an old live HostAdmission/operation."""
+    from dataclasses import replace
+
+    from gf_common.rust_player import validate_local_admission, validate_operation
+    from gf_common.structured_layout import CORRECTED_CARD_INSTANCE_LAYOUT as layout
+    from gf_models.rust_player_device import CudaCheckpointProfile, bind_update_device_plan
+    from gf_models.structured_config import resource_estimate
+    learner, serving = loaded.config.training.device, loaded.config.model.inference.device
+    if learner == serving == 'cpu':
+        bind_update_device_plan(update, operation_id='', learner_device=learner,
+            serving_device=serving, global_bytes=0)
+        return
+    entry = state['invocations'][source_invocation]
+    op_path, admit_path = Path(entry['operation_path']), Path(entry['admission_path'])
+    if any(not path.is_absolute() or not path.is_relative_to(record_root) or '..' in path.parts
+            for path in (op_path, admit_path)):
+        raise ContractError('source operation/admission leaves original record root')
+    operation, operation_sha = _read(op_path, pool.budget, deadline, entry['operation_sha256'], loans=loans)
+    admission, admission_sha = _read(admit_path, pool.budget, deadline, entry['admission_sha256'], loans=loans)
+    validate_operation(operation)
+    validate_local_admission(admission)
+    if (operation['schema_version'] != 2 or admission['invocation_id'] != source_invocation
+            or operation_sha != entry['operation_sha256'] or admission_sha != entry['admission_sha256']
+            or operation['operation_id'] != admission['operation_id']
+            or operation['run_id'] != admission['run_id'] or operation['run_id'] != state['run_id']
+            or operation['config_sha256'] != admission['config_sha256'] or operation['config_sha256'] != loaded.sha256
+            or operation['runtime_binding_sha256'] != admission['runtime_binding_sha256']
+            or operation['runtime_binding_sha256'] != state['runtime_binding_sha256']
+            or admission['producer'] != state['identity']['player_runtime']['producer']
+            or operation['deadlines'] != admission['deadlines'] or operation['expected_context'] != admission['context']):
+        raise ContractError('embedded plan actual source operation/admission binding differs')
+    plan = bind_update_device_plan(update, operation_id=operation['operation_id'], learner_device=learner,
+        serving_device=serving, global_bytes=admission['budget']['managed_cuda_bytes'])
+    assert plan is not None
+    model = loaded.config.model.architecture(layout=layout)
+    binding = replace(loaded.config.model.inference, device=learner)
+    profile = CudaCheckpointProfile(model, binding, layout=layout)
+    hpo = getattr(loaded.config, 'hpo_spec', {}).get('schema_version') == 6
+    logical = (resource_estimate(model, binding,
+        suffix_decisions=loaded.config.hpo_spec['training_recipe']['tbptt_length'], layout=layout)['total_bytes']
+        if hpo else min(model.resources.max_owned_bytes, binding.managed_budget_bytes))
+    expected = {'logical_bytes': logical, 'host_fixed_bytes': profile.fixed_bytes,
+        'learner_fixed_bytes': profile.fixed_bytes if learner != 'cpu' else 0,
+        'post_update_learner_tensor_bytes': 4 * profile.parameter_bytes + profile.position_bytes if learner != 'cpu' else 0,
+        'publication_network_bytes': profile.network_bytes if serving != 'cpu' else 0}
+    if any(plan[name] != value for name, value in expected.items()):
+        raise ContractError('device plan differs from actual self-pool model/resource recipe')
 
 
 def _audit_update(cold: Any, ownership: Any, pool: PackedArtifactPool,
                   loaded: Any, state: Json, previous: Json, current: Json,
-                  update: Json, deadline: float) -> Json:
+                  update: Json, deadline: float, *, control_loans: list[Any]) -> Json:
     from gf_common.card_instance_rules import card_instance_rules
     from gf_common.group_pack_game import storage_binding
     from gf_common.structured_layout import CORRECTED_CARD_INSTANCE_LAYOUT as layout
@@ -414,9 +470,18 @@ def _audit_update(cold: Any, ownership: Any, pool: PackedArtifactPool,
             raise ContractError('actual cold or current-host resume audit required')
         originals = RustResumeOriginals(cold, expected, proof['storage']['descriptor_sha256'],
             settings=loaded.config.preprocessing, deadline=deadline)
-    count, _collected, episode_digests = _audit_raw_originals(originals, loaded=loaded,
+    count, _collected, episode_digests, source_invocation = _audit_raw_originals(originals, loaded=loaded,
         state=state, previous=previous, update=update, proof=proof,
         generation=generation, hpo=hpo, expected=expected)
+    mark = len(control_loans)
+    control = cold._control if type(cold) is ColdContinuation else cold.control
+    _audit_source_device_plan(update, loaded=loaded, state=state, source_invocation=source_invocation,
+        record_root=control.root, pool=pool, deadline=deadline, loans=control_loans)
+    # The helper returned no borrowed JSON. Failure instead leaves loans with
+    # the existing outer owner until its stopped-frame/child cleanup succeeds.
+    for loan in control_loans[mark:]:
+        loan.close()
+    del control_loans[mark:]
     model = loaded.config.model.architecture(layout=layout)
     if hpo:
         from gf_training.structured_rollout import _hpo_semantics, _RolloutContext
@@ -540,7 +605,7 @@ def finalize_cold(control: HostControl, cold: ColdContinuation, *, loaded: Any) 
                 update, _ = _read(path, pool.budget, deadline, current['update_sha256'], loans=result._control_loans)
                 update_loans = result._control_loans[mark:]
                 facts = _audit_update(cold, ownership, pool, loaded, state,
-                    previous, current, update, deadline)
+                previous, current, update, deadline, control_loans=result._control_loans)
                 updates.append(facts)
                 del update
                 from gf_training.structured_rollout import _owned_bytes

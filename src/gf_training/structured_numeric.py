@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import math
 from contextlib import nullcontext
-from dataclasses import asdict, replace
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -58,6 +58,11 @@ from gf_training.ppo_math import losses
 from gf_training.structured_rollout import StructuredRollout
 
 
+@dataclass(frozen=True)
+class _OperationDeviceLimit:
+    device_bytes: int
+
+
 class Learner:
     def __init__(self, model: Any, seed: int, binding: InferenceBindingV2,
                  action_config_hash: str, resume_identity: str, *, action_contract: Any,
@@ -87,7 +92,8 @@ class Learner:
         if self.binding.device != "cpu":
             self.torch.cuda.synchronize(self.binding.device)
 
-    def admit(self, rollout: StructuredRollout) -> None:
+    def admit(self, rollout: StructuredRollout, *, _device_bytes: int | None = None) -> None:
+        _device_bytes = self._current_device_limit(_device_bytes)
         if type(rollout.model) is not (ModelConfigV2 if self._context.schema == 3 else ModelConfigV3):
             raise ContractError('historical history descriptor cannot enter active learning')
         self._context.bind(self.network)
@@ -96,6 +102,8 @@ class Learner:
         rollout.require_learning()
         if architecture_identity(rollout.model, **self._options) != architecture_identity(self.model, **self._options) or rollout.action_config_hash != self.action_config_hash:
             raise ContractError("learner rollout architecture/action mismatch")
+        if _device_bytes is not None:
+            integer(_device_bytes, 1, 2**63 - 1)
         # Complete batch preflight before reference construction, packing or any
         # optimizer step; no legacy4096 candidate total admission is inherited.
         for index in range(len(rollout)):
@@ -105,19 +113,34 @@ class Learner:
                               candidates=len(candidates.kinds), suffix_decisions=min(len(frames), self.model.temporal.sequence_length), **self._options)["total_bytes"]
             if rollout.resident_bytes + endpoint_bytes > min(self.model.resources.max_owned_bytes, self.binding.managed_budget_bytes):
                 raise ContractError("whole rollout plus endpoint exceeds learner reservation")
+            positions = 4 * self.model.temporal.max_decisions * self.model.temporal.hidden_size
+            if _device_bytes is not None and endpoint_bytes + positions > _device_bytes:
+                raise ContractError('actual endpoint plus position storage exceeds operation device allowance')
 
-    def parity(self, rollout: StructuredRollout) -> Json:
+    def parity(self, rollout: StructuredRollout, *, _device_bytes: int | None = None) -> Json:
+        _device_bytes = self._current_device_limit(_device_bytes)
+        if _device_bytes is not None:
+            # Refuse before RNG capture/reference construction; do not perform
+            # the same complete logical preflight twice on this new route.
+            self.admit(rollout, _device_bytes=_device_bytes)
         # Component2 preserves its original stream behavior. Game parity is read-only.
         devices = list(range(self.torch.cuda.device_count())) if self.binding.device != "cpu" else []
         scope = self.torch.random.fork_rng(devices=devices) if self._context.schema >= 4 else nullcontext()
         with scope:
-            return self._parity(rollout)
+            return (self._parity(rollout) if _device_bytes is None else
+                self._parity(rollout, _device_bytes=_device_bytes, _preflight_done=True))
 
     def _suffix_length(self, decisions: int) -> int:
         return min(decisions, self.model.temporal.sequence_length)
 
-    def _parity(self, rollout: StructuredRollout) -> Json:
-        self.admit(rollout)
+    def _parity(self, rollout: StructuredRollout, *, _device_bytes: int | None = None,
+                _preflight_done: bool = False) -> Json:
+        _device_bytes = self._current_device_limit(_device_bytes)
+        if not _preflight_done:
+            if _device_bytes is None:
+                self.admit(rollout)
+            else:
+                self.admit(rollout, _device_bytes=_device_bytes)
         torch = self.torch
         cpu_binding = replace(self.binding, device="cpu")
         cpu = make_network(self.model, 0, cpu_binding, **self._options)
@@ -153,6 +176,25 @@ class Learner:
         return {"atol": 1e-5, "rtol": 1e-5, "max_abs_error": maximum,
                 "decisions": sum(len(episode.frames) for episode in rollout.episodes),
                 "checks": ["saved", "cpu-cache", "cpu-full", "learner-full", "learner-split"]}
+
+    def _current_device_limit(self, explicit: int | None) -> int | None:
+        current = getattr(self, '_rust_operation_limit', None)
+        return current.device_bytes if current is not None else explicit
+
+    def update_with_device_limit(self, rollout: StructuredRollout, *, device_bytes: int) -> Json:
+        """Rust-only context around the exact frozen update, not another loop.
+
+        Caller holds serialized_torch. Removing this numerical context does NOT
+        settle a failed device-account operation or release its actual graphs.
+        """
+        integer(device_bytes, 1, 2**63 - 1)
+        if self.model.version != '3' or getattr(self, '_rust_operation_limit', None) is not None:
+            raise ContractError('non-nested Model3 operation device limit required')
+        self._rust_operation_limit = _OperationDeviceLimit(device_bytes)
+        try:
+            return self.update(rollout)
+        finally:
+            del self._rust_operation_limit
 
     def update(self, rollout: StructuredRollout) -> Json:
         torch = self.torch

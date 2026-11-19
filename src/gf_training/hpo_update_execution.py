@@ -24,17 +24,19 @@ def endpoint_terms(logprobs: Any, values: Any, mask: Any, selected: Any,
     return loss,measured
 
 
-def execution_groups(learner: Any, rollout: Any, logical: list[int], spec: TrainingExecutionSpec) -> list[UpdateGroup]:
+def execution_groups(learner: Any, rollout: Any, logical: list[int], spec: TrainingExecutionSpec, *,
+                     _device_bytes: int | None = None) -> list[UpdateGroup]:
     if spec.variant in ('metrics','packed'):
         return [UpdateGroup((index,)) for index in logical]
     return plan_groups(rollout,logical,learner.model,learner.binding,learner.training.tbptt_length,
         variant=spec.variant,reservation_bytes=learner._training_reservation_bytes,layout=learner.network.layout,
-        device_bytes=learner._training_device_bytes)
+        device_bytes=learner._training_device_bytes if _device_bytes is None else _device_bytes)
 
 
 def group_forward(learner: Any, rollout: Any, group: UpdateGroup, spec: TrainingExecutionSpec,
-                  forward: Any) -> tuple[Any, Any, Any, Any, int, int]:
+                  forward: Any, *, _device_bytes: int | None = None) -> tuple[Any, Any, Any, Any, int, int]:
     torch = learner.torch
+    device_bytes = learner._training_device_bytes if _device_bytes is None else _device_bytes
     endpoints = [rollout.endpoint(index) for index in group.indices]
     for frames,candidates in endpoints:
         if type(frames[0]) is _OwnedFrameTokens:
@@ -53,11 +55,11 @@ def group_forward(learner: Any, rollout: Any, group: UpdateGroup, spec: Training
         return loss,metrics,None,None,(1 if learner.model.model_id=='mlp' else lengths[0]),4
     plan=group.plan or execution_plan(endpoints,learner.model,learner.binding,learner.training.tbptt_length,
         layout=learner.network.layout,reservation_bytes=learner._training_reservation_bytes,
-        resident_bytes=rollout.resident_bytes,shared=group.shared,device_bytes=learner._training_device_bytes)
-    if learner._training_device_bytes is not None:
+        resident_bytes=rollout.resident_bytes,shared=group.shared,device_bytes=device_bytes)
+    if device_bytes is not None:
         from gf_training.hpo_update_planning import admit_execution_plan
         admit_execution_plan(plan,learner.model,learner.binding,reservation_bytes=learner._training_reservation_bytes,
-            resident_bytes=rollout.resident_bytes,device_bytes=learner._training_device_bytes)
+            resident_bytes=rollout.resident_bytes,device_bytes=device_bytes)
     frames=group_frames(endpoints,learner.model,group.shared)
     window: Any
     if plan.staging is not None and spec.variant!='packed':
@@ -69,7 +71,7 @@ def group_forward(learner: Any, rollout: Any, group: UpdateGroup, spec: Training
             from gf_training.hpo_update_planning import admit_group
             admit_group(rollout,group.indices,learner.model,learner.binding,learner.training.tbptt_length,
                 layout=learner.network.layout,reservation_bytes=learner._training_reservation_bytes,shared=group.shared,
-                device_bytes=learner._training_device_bytes)
+                device_bytes=device_bytes)
         window=pack_window(learner.network,frames,[tokens for _,tokens in endpoints],vectors)
         if spec.variant=='packed':
             logs,values=learner.network._learning_serial(window,*endpoints[0],suffix)

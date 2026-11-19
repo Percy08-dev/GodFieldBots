@@ -126,7 +126,7 @@ class RustResumeAudit:
                     mark = len(self._loans)
                     update, _ = _read(ownership.directory / 'updates' / f'{generation:06}.json',
                         self.budget, self.deadline, row['update_sha256'], loans=self._loans)
-                    facts = _audit_update(self, ownership, pool, loaded, self.state, previous, row, update, self.deadline)
+                    facts = _audit_update(self, ownership, pool, loaded, self.state, previous, row, update, self.deadline, control_loans=self._loans)
                     self.last_source_manifest_sha256 = facts['manifest_sha256']
                     del update, facts
                     for loan in self._loans[mark:]:

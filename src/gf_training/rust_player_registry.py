@@ -364,6 +364,14 @@ class RustRunRegistry:
             if update is not None:
                 update['result_snapshot_identity'] = policy.identity
                 self.pending.require_saved_result(self, pair, update, policy)
+                from gf_models.rust_player_device import bind_update_device_plan
+                actual_plan = bind_update_device_plan(update,
+                    operation_id=self.admission.observation['operation_id'],
+                    learner_device=self.config.training.device, serving_device=self.config.model.inference.device,
+                    global_bytes=self.admission.observation['budget']['managed_cuda_bytes'])
+                if actual_plan is not None and (self.local.last_device_plan is None
+                        or actual_plan != self.local.last_device_plan.record()):
+                    raise ContractError('update plan differs from SAME local immutable operation')
                 validate_record_shape(update, "update", hpo=self.hpo)
                 row["update_sha256"] = self.writer.write(self.directory / "updates" / f"{generation:06}.json",
                     update, deadline=deadline, immutable=True)
