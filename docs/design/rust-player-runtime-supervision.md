@@ -248,3 +248,14 @@ quarantine/recovery and durable proof failure. Verify new operation cannot reset
 old deadline or run before exact prior pair finalization. Actual fixed dispatch,
 installed companion/extension identity and onePython training tree remain task5b/6
 checks; no scientific/model-quality/performance acceptance follows from protocol.
+
+
+## Production invocation control refinement
+
+The accepted [operation2 contract](rust-player-runtime-operation-v2.md) adds a
+closed execution_request to schema2/kind rust-player-operation-v2 for actual
+fresh/resume/pause training. Operation1 above retains its strict historical
+control/component meaning. No admission1/Prepared1/Exit1 fields are silently
+reinterpreted: actual current operation SHA/request is recorded in the immutable
+Run5 invocation snapshot bound by Prepared.state_sha256 and the exact cold pair.
+Fixed executable/bootstrap arguments and original run/session budgets remain.

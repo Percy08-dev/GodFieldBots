@@ -302,3 +302,14 @@ review without new resource policy. Local numerical CPU controls and one actual
 supervised synthetic CUDA comparison plus post-reap no-Torch saved-state audit
 pass their explicit component scope. No new Source/outer-record/common-PPO/cold
 completion issuer exists yet; task5c1B and user CLI/experiment6/7 remain required.
+
+
+## Explicit invocation and settled report refinement
+
+The [operation2/completed-wave/restored-owner refinement](rust-player-runtime-operation-v2.md)
+passes independent preimplementation READY. It binds explicit fresh/resume/absolute
+pause requests through actual operation SHA in immutable invocation state, keeps
+computational status separate from cold eligibility without a hash cycle, queries
+actual full-key settled reports without shutting persistent workers, and separates
+original saved lineage from fresh-process readonly bank ownership. Old operation1
+remains strict control-only compatibility; B production requires operation2.

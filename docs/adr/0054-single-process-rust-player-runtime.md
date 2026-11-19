@@ -246,3 +246,17 @@ retains its793b source; later validation repairs/current76d9 source are not sile
 relabelled as that run. No numerical kernel/checkpoint format changed. Source B,
 common-PPO/new outer issuers, cold qualification, public CLI/campaign and full
 CPU/CUDA/performance/default gates remain unimplemented/unaccepted downstream.
+
+
+## Explicit invocation and restored identity design
+
+The [bounded operation2 refinement](../design/rust-player-runtime-operation-v2.md)
+passes independent architecture READY before B code. Explicit fresh/resume/pause
+controls are immutable and bound to the current operation SHA, avoiding deadline
+inference or config/budget changes. Frozen invocation states retain that hash
+through Prepared/Exit/completion without back-reference cycles. Computational
+complete status alone grants no Source eligibility. Completed-wave queries use
+full run/trial/episode identities and actual post-handoff reports while persistent
+workers stay alive. A restored-policy data owner preserves original saved lineage
+separately from newly loaded bank identities; it never fabricates a save ACK or
+re-saves unchanged prior generations. Actual implementation remains pending.
