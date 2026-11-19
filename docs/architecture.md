@@ -29,6 +29,13 @@ and evaluation handoff remain to be connected. A fully integrated new runtime
 and performance/default adoption are unaccepted; required evidence is
 tracked in [the verification record](verification/rust-player-runtime.md).
 
+The standalone std-only Rust [process observer](design/rust-player-runtime-observer.md)
+passes scoped correctness/conformance after original-file and ancestry-binding
+repairs, with19 command-level and14 helper checks. It observes an actual command
+without a Python controller or Source/termination authority. Application telemetry,
+overhead calibration and the approved comparison/adoption protocol remain open.
+
+
 [ADR0053](adr/0053-mlp-shared-batch-inference.md) implements the owner's
 [shared MLP design](design/mlp-shared-batch-inference.md) under Simulator
 072dabb section 21.1. Independent correctness and architecture conformance are
