@@ -304,6 +304,9 @@ never synthesize a win/loss, bootstrap or completed update.
 
 ## Supervisor, termination and GPU admission
 
+The [accepted exact supervision protocol](rust-player-runtime-supervision.md)
+defines original clock/credential/lock/record fields and dependency order.
+
 The normal CLI replaces itself with the Rust supervisor before starting a
 Python campaign/ordinary host. Exactly one Python host is live during training.
 Python retains campaign proposal/materialization decisions. Before training GPU

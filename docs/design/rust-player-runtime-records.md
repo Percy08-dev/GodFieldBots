@@ -118,10 +118,14 @@ only when publication never completed. Evidence is exactly one of:
   minted from SAME service/controller after authorized game retains and original
   batch/result owners settle, actual eviction succeeds, and GPU work is fenced.
 - {schema_version:1,kind:rust-player-cache-retirement-ack-v1,invocation_id,
-  service_id,checkpoint,cache_identity,host_close_ack_sha256}, minted only after
-  actual consumer/worker joins, buffer release, cache removal and GPU fencing in
-  the real host-close acknowledgement. CUDA context/allocator lifetime may remain
-  until host exit; this is cache retirement, not physical host termination.
+  service_id,checkpoint,cache_identity,service_retirement_sha256,
+  consumer_settlement_sha256,entry_absent:true,gpu_fenced:true}, minted only from
+  actual independent consumer/worker joins, buffer settlement, cache removal and
+  GPU fencing. It has NO backwards host-close digest. Service/settlement evidence
+  does not itself depend on host-close/cache-reference journal records. Cache
+  release records then close actual source/staging loans; their aggregate is what
+  host-close cache_retirement_sha256 binds. CUDA context/allocator lifetime may
+  remain until host exit; this is cache retirement, not physical termination.
 
 No release is recorded on uncertain eviction/settlement; keep the real pin until
 confirmed cleanup/host failure. Source/staging loans close only at actual last use.
@@ -257,3 +261,13 @@ that one immutable pair and cannot extend original invocation/session deadlines.
   paused versus complete final-D and actual installed CLI/evaluation handoff.
 - Full Original/Replay/numeric/saved-state audits and approved measured protocol
   remain required; schema smokes do not claim learning quality or performance.
+
+## Immutable dependency order
+
+Independent native/service/writer settlement → per-cache retirement/eviction ACK
+→ cache-release/source-loan retirement manifest → host-close ACK → Prepared →
+original Exit → physical termination and HPO handoff → cold Source/completion →
+parent-validation/closed seed-training → independently admitted evaluation.
+No prior record contains a hash of its own downstream finalization. Cold original
+audit/saved-state evidence is data-only and precedes completion; parent-validation3
+may bind that completion afterwards, never substitute for its own prerequisite.

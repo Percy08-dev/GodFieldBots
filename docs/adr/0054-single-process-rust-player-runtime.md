@@ -149,3 +149,13 @@ loan is soft planning, and bounded studies retain their original producer hashes
 Production/default retained-active-bank calibration and prescribed workloads stay
 open, alongside Source/local-learning/supervisor/CLI integration. This is not
 archive/learning qualification or performance adoption.
+
+## Exact supervisor protocol
+
+The [supervision protocol](../design/rust-player-runtime-supervision.md) passes
+independent preimplementation READY after two immutable hash cycles were removed.
+Original monotonic f64-bit deadlines, credential-bound Linux packets, actual
+retained flock OFDs and explicit close-only lock transfer preserve authority.
+Prepared precedes Exit/handoff; independent cache retirement precedes host-close.
+Fixed application dispatch and cold Source qualification stay distinct. Actual
+process/namespace/installed-wheel implementation tests remain pending.
