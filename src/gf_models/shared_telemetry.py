@@ -23,7 +23,7 @@ def read_allocator(block: Any) -> dict[str,Any] | None:
 
 
 def make_served_registry(*,device: str,cache_entries: int,cache_weight_bytes: int,
-                         diagnostic_block: Any,visibility: str | None=None) -> Any:
+                         diagnostic_block: Any,visibility: str | None=None, performance_callback: Any=None) -> Any:
     from gf_models.shared_registry import make_registry
     registry=make_registry(device=device,cache_entries=cache_entries,cache_weight_bytes=cache_weight_bytes,visibility=visibility)
     import torch
@@ -58,7 +58,12 @@ def make_served_registry(*,device: str,cache_entries: int,cache_weight_bytes: in
             self._sample(2)
 
         def forward(self,batch: Any) -> Any:
-            result=self.registry(batch)
+            if performance_callback is None:
+                result=self.registry(batch)
+            else:
+                with torch.profiler.record_function("gf-legacy-transport-forward"):
+                    result=self.registry(batch)
+                performance_callback.after_forward(scored_rows=len(batch), boundary="legacy-post-transport-forward")
             self._sample(1)
             return result
 

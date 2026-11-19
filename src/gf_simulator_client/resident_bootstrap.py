@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 import sys
 
+_TIMING = os.environ.get("GF_BOTS_PERFORMANCE_TIMING") == "1"
 _VIEWER = sys.argv[1:]
 sys.argv[:] = ['gf-resident-participant-worker']
 os.environ.clear()
@@ -347,6 +348,7 @@ def main() -> None:
         if len(_VIEWER)==3 and _VIEWER[1]=='--shared':
             from gf_simulator_client.shared_channel import ParticipantScoreChannel
             score_channel=ParticipantScoreChannel(int(_VIEWER[2]))
+            vars(score_channel)["diagnostic_timing"] = _TIMING
         elif len(_VIEWER) == 3:
             from gf_common.ram_bank import RamBankChannel
             channel = RamBankChannel._from_inherited(int(_VIEWER[1]), _VIEWER[2])

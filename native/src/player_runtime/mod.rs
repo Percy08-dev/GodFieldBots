@@ -5,6 +5,7 @@ pub mod game;
 pub mod history;
 pub mod http;
 pub mod numeric;
+pub mod metrics;
 pub mod requests;
 pub mod rng;
 pub mod rules;

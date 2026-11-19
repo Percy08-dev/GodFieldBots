@@ -328,7 +328,7 @@ def _timings(values: Json, *, ready: bool = False) -> None:
     required = {"model_load_ms"} if ready else {"generation_ms", "policy_ms", "worker_decision_ms"}
     optional = set() if ready else {"tokenization_ms", "input_pack_transfer_host_ms", "forward_enqueue_host_ms",
                                     "sync_host_ms", "return_ms", "sampling_ms", "shared_request_roundtrip_ms", "shared_accept_to_forward_ms",
-                                    "shared_transport_batch_size", "shared_tensor_batch_size"}
+                                    "shared_transport_batch_size", "shared_tensor_batch_size", "shared_numeric_ready_ns"}
     closed(values, required, optional)
-    if any(type(value) not in (int, float) or value < 0 or value > sys.float_info.max or not math.isfinite(value) for value in values.values()):
+    if any(type(value) not in (int, float) or value < 0 or value > sys.float_info.max or not math.isfinite(value) for key, value in values.items() if key != "shared_numeric_ready_ns"):
         raise ContractError("invalid structured host timing metrics")

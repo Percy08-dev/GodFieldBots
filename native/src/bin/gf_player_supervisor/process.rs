@@ -56,6 +56,8 @@ pub(crate) struct GroupSignal {
 #[derive(Serialize)]
 pub(crate) struct Retirement {
     #[serde(skip)]
+    pub host_reaped_monotonic_ns: Option<u64>,
+    #[serde(skip)]
     pub origin: HostIdentity,
     pub wait: WaitRecord,
     pub descendants: Vec<Descendant>,
@@ -135,6 +137,8 @@ pub(crate) struct OwnedHost {
     child: Child,
     pub identity: HostIdentity,
     leader_retained: bool,
+    pub(crate) diagnostic_clock: bool,
+    host_reaped_monotonic_ns: Option<u64>,
 }
 impl OwnedHost {
     pub fn spawn(command: &mut Command, deadline: Instant) -> Result<Self> {
@@ -166,6 +170,9 @@ impl OwnedHost {
                 child,
                 identity,
                 leader_retained: true,
+                diagnostic_clock: std::env::var_os("GF_BOTS_PERFORMANCE_DIAGNOSTICS_DIR").is_some()
+                    && std::env::var_os("GF_BOTS_PERFORMANCE_OBSERVATION_ID").is_some(),
+                host_reaped_monotonic_ns: None,
             }),
             Err(error) => {
                 // No group authority was issued. Target only the original returned Child.
@@ -278,7 +285,9 @@ impl OwnedHost {
         }
         // No later code path may signal the group, including wait errors.
         self.leader_retained = false;
-        Ok(wait_record(self.child.wait()?))
+        let status = self.child.wait()?;
+        if self.diagnostic_clock { self.host_reaped_monotonic_ns = crate::diagnostic_monotonic_ns(); }
+        Ok(wait_record(status))
     }
     fn final_exhaustion() -> Result<()> {
         let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
@@ -316,6 +325,7 @@ impl OwnedHost {
                     let wait = self.consume_original()?;
                     Self::final_exhaustion()?;
                     return Ok(Retirement {
+                        host_reaped_monotonic_ns: self.host_reaped_monotonic_ns,
                         origin: self.identity.clone(),
                         wait,
                         descendants,
@@ -335,6 +345,7 @@ impl OwnedHost {
                             let wait = self.consume_original()?;
                             Self::final_exhaustion()?;
                             return Ok(Retirement {
+                        host_reaped_monotonic_ns: self.host_reaped_monotonic_ns,
                                 origin: self.identity.clone(),
                                 wait,
                                 descendants,

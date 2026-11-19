@@ -88,6 +88,7 @@ class ManagedServer:
                 "--http-log-dir", str(self.directory / "http"), "--shutdown-on-stdin-eof",
                 stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE, limit=1024 * 1024,
+                env=_simulator_environment(),
             )
             if self.strict_cleanup_deadline:
                 self._creation = asyncio.create_task(creation)
@@ -286,3 +287,10 @@ class ManagedServer:
                     task.cancel()
             vars(error)["cleanup_owner"] = self
             raise
+
+
+def _simulator_environment() -> dict[str, str]:
+    import os
+
+    from gf_simulator_client.performance_diagnostics import external_environment
+    return external_environment(os.environ)

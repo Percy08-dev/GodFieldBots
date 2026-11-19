@@ -71,6 +71,12 @@ class CardInstanceParticipantWorker(StructuredParticipantWorker):
         artifact_inputs: RetainedGameArtifacts | RetainedGamePolicyArtifacts | OwnedGameArtifacts | None = None,
         deadline: float | None = None,
     ) -> None:
+        from gf_common.performance_metrics import PhaseMetrics
+        from gf_simulator_client.performance_diagnostics import host_diagnostics
+        self._performance = host_diagnostics()
+        self._performance_metrics = (PhaseMetrics(scope=self._performance.current_scope or self._performance.scope(phase="idle"),
+            start_ns=time.monotonic_ns(), counters=("inference_successes",),
+            histograms=("inference_roundtrip",)) if self._performance is not None else None)
         self.rules = card_instance_rules()
         from gf_common.card_instance import shared_card_instance_contract
         self._profile_io=actions.action_contract==shared_card_instance_contract()
@@ -193,6 +199,8 @@ class CardInstanceParticipantWorker(StructuredParticipantWorker):
 
     def _spawn(self, ledger: ReservationLedger, residency: int, arguments: list[str], environment: dict[str, str],
                *, pass_fds: tuple[int, ...] = ()) -> None:
+        if self._performance is not None:
+            environment = {**environment, "GF_BOTS_PERFORMANCE_TIMING": "1"}
         """Original audited creation boundary; resident logical validators borrow transport."""
         boundary = self._creation_boundary = threading.Event()
         self._creation_observer_failure: BaseException | None = None
@@ -362,6 +370,10 @@ class CardInstanceParticipantWorker(StructuredParticipantWorker):
             self.inference_elapsed_ms = self.last_timings["policy_ms"]
             self._last_frame, self._search_state = frame, generated.report.rng_after
             self.lease.reply(scope)
+            performance_metrics = getattr(self, "_performance_metrics", None)
+            if performance_metrics is not None and (hasattr(self, "service") or getattr(self, "_performance_shared", False)) and self.model_id == "mlp":
+                from gf_simulator_client.performance_diagnostics import record_accepted_reply
+                record_accepted_reply(performance_metrics, received["timings"], end_ns=time.monotonic_ns())
             return generated, selected
         except BaseException as error:  # noqa: BLE001 - reap before preserving original failure.
             await self._abort(error)
@@ -452,6 +464,10 @@ class CardInstanceParticipantWorker(StructuredParticipantWorker):
             assert self._session_deadline is not None
             timeout = min(timeout, max(0., self._session_deadline-time.monotonic()))
         await super().close(timeout)
+        if self._performance_metrics is not None:
+            assert self._performance is not None
+            self._performance.metrics(self._performance_metrics, role="legacy-coordinator")
+            self._performance_metrics = None
         if type(self.artifact_inputs) is RetainedGamePolicyArtifacts:
             self.artifact_inputs.retire_worker(self)
         if self._tree and not self._tree_failed:

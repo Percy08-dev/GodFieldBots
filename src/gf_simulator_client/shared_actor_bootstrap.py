@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 import sys
 
+_TIMING = os.environ.get("GF_BOTS_PERFORMANCE_TIMING") == "1"
 _CONTROL=tuple(sys.argv[1:])
 sys.argv[:]=['gf-shared-cpu-participant']
 os.environ.clear()
@@ -27,6 +28,7 @@ def main() -> None:
     try:
         if len(_CONTROL)!=1 or not _CONTROL[0].isdigit():raise ContractError('shared actor requires one inherited own endpoint')
         channel=ParticipantScoreChannel(int(_CONTROL[0]))
+        vars(channel)["diagnostic_timing"] = _TIMING
         initial=read_frame(source)
         episode=CardInstanceEpisode(initial,policy_loader=lambda *args:policy_loader(channel,*args))
         _cpu_only(episode)

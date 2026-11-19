@@ -42,8 +42,10 @@ tracked in [the verification record](verification/rust-player-runtime.md).
 The standalone std-only Rust [process observer](design/rust-player-runtime-observer.md)
 passes scoped correctness/conformance after original-file and ancestry-binding
 repairs, with19 command-level and14 helper checks. It observes an actual command
-without a Python controller or Source/termination authority. Application telemetry,
-overhead calibration and the approved comparison/adoption protocol remain open.
+without a Python controller or Source/termination authority. Application telemetry also passes scoped independent correctness/conformance
+after diagnostic processing isolation, terminal profile-window, closed scope and
+relay-observation ordering repairs. Actual merged measurement, overhead
+calibration and the approved comparison/adoption protocol remain open.
 
 The pure [native MLP row storage estimate](design/rust-player-runtime-native-cuda.md)
 also passes scoped correctness/conformance and57 CPU checks. It compiles immutable

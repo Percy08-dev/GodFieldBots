@@ -121,6 +121,7 @@ pub(crate) struct Supervisor {
     root: PathBuf,
     mode: String,
     session_finish: f64,
+    performance: Option<crate::PerformanceDiagnostics>,
     session_cutoff: Instant,
     locks: Vec<HeldLock>,
     bound: Bound,
@@ -132,6 +133,7 @@ pub(crate) struct Supervisor {
 }
 impl Supervisor {
     pub fn new(launch_owner: LaunchOwner) -> Result<Self> {
+        let performance = crate::PerformanceDiagnostics::from_environment()?;
         let finish = launch(&launch_owner.value)?;
         let session_cutoff = crate::deadline_from_bits(text(
             &launch_owner.value["session_deadlines"]["finish_bits"],
@@ -173,6 +175,7 @@ impl Supervisor {
             root,
             mode,
             session_finish: finish,
+            performance,
             session_cutoff,
             locks,
             bound,
@@ -270,6 +273,10 @@ impl Supervisor {
                 }
                 Ok(())
             });
+        }
+        if let Some(d) = &self.performance {
+            d.phase(json!({"run_id":self.bound.value["run_id"],"operation_id":self.bound.value["operation_id"],"invocation_id":invocation,"batch_id":null,"phase":if phase=="host"{"startup"}else{"cold"}}),
+                "phase_start",crate::diagnostic_monotonic_ns(),json!({"operation_sha256":self.bound.sha,"prepared_sha256":null,"exit_sha256":null,"completion_sha256":null}));
         }
         let host = OwnedHost::spawn(&mut command, self.bound.clock.finish)?;
         channel.peer_pid = host.pid();
@@ -444,6 +451,10 @@ impl Supervisor {
             let mut finalized = false;
             let mut finalized_sha: Option<String> = None;
             let handshake = self.handshake(&mut host, &mut channel, cold.as_ref());
+            if let Some(d) = &self.performance {
+                d.phase(json!({"run_id":self.bound.value["run_id"],"operation_id":self.bound.value["operation_id"],"invocation_id":channel.invocation,"batch_id":null,"phase":if cold.is_some(){"cold"}else{"startup"}}),
+                    "phase_end",crate::diagnostic_monotonic_ns(),json!({"operation_sha256":self.bound.sha,"prepared_sha256":null,"exit_sha256":null,"completion_sha256":null}));
+            }
             let mut server_seq = match handshake {
                 Ok(seq) => seq,
                 Err(_) => {
@@ -799,6 +810,10 @@ impl Supervisor {
                 exit(&exit_record, &local)?;
                 let exit_path = self.root.join(format!("exit-{}.json", channel.invocation));
                 let exit_sha = write(&exit_path, &exit_record, true)?;
+                if let Some(d) = &self.performance {
+                    d.phase(json!({"run_id":local["run_id"],"operation_id":local["operation_id"],"invocation_id":channel.invocation,"batch_id":null,"phase":"retirement"}),
+                        "host_reaped",actual.host_reaped_monotonic_ns,json!({"operation_sha256":self.bound.sha,"prepared_sha256":prepared_result.as_ref().map(|p|p.sha.as_str()),"exit_sha256":exit_sha,"completion_sha256":null}));
+                }
                 if let Some(owner) = namespace.take() {
                     owner.confirm(&exit_record, &actual)?;
                     drop(owner);

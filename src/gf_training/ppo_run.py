@@ -453,6 +453,13 @@ async def train_ppo(loaded: Any, collector: Collector, directory: Path, *, mode:
 async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 'fresh',
                    pause_after_update: int | None = None, _structured_component: bool = False,
                    _structured_ops: Any = None, _game_ops: Any = None) -> Json:
+    from gf_simulator_client.performance_diagnostics import (
+        finish_phase,
+        host_diagnostics,
+        transition_phase,
+    )
+    performance = host_diagnostics()
+    transition_phase(performance, 'startup')
     operation_started = time.monotonic()
     operation_unix = time.time()
     operation_monotonic_after = time.monotonic()
@@ -475,6 +482,10 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
         if type(_game_ops) not in (_GameOperations,_HpoOperations,_OwnedHpoOperations,RustGameOperations,RustHpoOperations) or _structured_component or _structured_ops is not None:
             raise ContractError("closed corrected game operations required")
         ops = _game_ops
+        if rust and performance is not None:
+            actual_performance_owner = ops.admission.observation
+            transition_phase(performance, 'startup', run_id=actual_performance_owner['run_id'],
+                operation_id=actual_performance_owner['operation_id'], invocation_id=actual_performance_owner['invocation_id'])
         if rust:
             request = ops.control.operation['execution_request']
             if request != {'mode': mode, 'pause_after_update': pause_after_update}:
@@ -738,12 +749,17 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
                         if game:
                             linkage = ops.linkage(state, directory, generation, groups, registry)
                         if hpo: ops.phase('collect', transient_games=0, transient_learner_decisions=None, transient_total_game_actions=0)
+                        transition_phase(performance, 'collection', run_id=state['run_id'], batch_id=batch_id)
                         collection_started = time.monotonic()
                         plan = CollectionPlan(groups, registry, directory / 'collections' / batch_id, linkage, execution, wall)
                         if ops:
                             assert ledger is not None
                             with ops.precollection_scope(plan, ledger, config=config, deadline=execution) if hpo and not rust else nullcontext():
                                 ops.validate_owned_collection(plan, ledger, config=config, deadline=execution)
+                                if getattr(ops, 'shared_controller', None) is not None:
+                                    ops.shared_controller.begin_collection(plan)
+                                    transition_phase(performance, 'collection', run_id=state['run_id'],
+                                        invocation_id=ops.shared_controller.service.execution, batch_id=batch_id)
                                 collection = await collector(plan, ledger)
                             if hpo and getattr(ops, 'resident_runtime', None) is not None:
                                 ops.resident_runtime.pool.authority.require(ledger)
@@ -845,6 +861,7 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
                             next_generation = generation + 1
                             await asyncio.sleep(0)  # Serve pending cancellation before optimizer side effects.
                             if hpo: ops.phase('update', transient_learner_decisions=decision_count)
+                            transition_phase(performance, 'update')
                             update_started = time.monotonic()
                             if ops:
                                 acknowledgement = (ops.update_local(issued_projection,checkpoint_path(directory,next_generation),deadline=execution) if rust else
@@ -885,6 +902,7 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
                                   'planned_games': config.hpo_spec['training_recipe']['collection_games'] if hpo else 16, 'actual_games': proof['games'], 'health': {},
                                   'policy_bindings': {key: asdict(value) for key, value in registry.items()},
                                   'learner_seats': linkage['learner_seats'], 'collection_seconds': collection_seconds, 'update_seconds': update_seconds}
+                        transition_phase(performance, 'save')
                         if ops:
                             if game:
                                 ops.update_record(update, state, numeric_files)
@@ -921,6 +939,7 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
             except BaseException as failure:  # noqa: BLE001 - persist failure after owned cleanup
                 error = failure
             finally:
+                transition_phase(performance, 'retirement')
                 if hpo: ops.phase('cleanup')
                 try:
                     if hpo and not rust:
@@ -963,6 +982,7 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
                     error = clock_failure
                 else:
                     error.add_note('PPO cleanup clock observation: ' + str(clock_failure))
+            finish_phase(performance)
             invocation_end = ({'mode':mode, 'elapsed_seconds':time.monotonic()-invocation_started,
                 'host_health':ops.host_health} if rust else
                 {'mode':mode,'elapsed_seconds':time.monotonic()-invocation_started,'child_health':child.health})

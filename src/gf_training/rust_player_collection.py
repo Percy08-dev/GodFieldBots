@@ -161,6 +161,11 @@ class RustPlayerCollector:
         self._source_control_charge.close()
         self._source_control_charge = None
         self.current = result
+        self.runtime.measurement_end()
+        if self.runtime.diagnostics is not None:
+            self.runtime.measurement_begin(self.runtime.diagnostics.scope(run_id=self.registry.state["run_id"],
+                operation_id=self.registry.admission.observation["operation_id"],
+                invocation_id=self.registry.admission.observation["invocation_id"], phase="idle"))
         return result
 
     async def _collect_owned(self, plan: Any) -> RustCollectedBatch:
@@ -180,6 +185,13 @@ class RustPlayerCollector:
         for binding in plan.bindings.values():
             if binding.model_id == "mlp":
                 self.registry.publish(int(Path(binding.policy_options["checkpoint"]).name), deadline=plan.execution_deadline)
+        diagnostics = self.runtime.diagnostics
+        if diagnostics is not None:
+            scope = diagnostics.scope(run_id=self.registry.state['run_id'],
+                operation_id=actual['operation_id'], invocation_id=actual['invocation_id'],
+                batch_id=plan.linkage['batch_id'], phase='collection')
+            diagnostics.current_scope = scope
+            self.runtime.measurement_begin(scope)
         start_counters = self._counters()
         contexts = self._contexts(plan)
         self._source_control_charge = self.registry.budget.reserve(_owned_bytes(contexts))
@@ -385,6 +397,10 @@ class RustPlayerCollector:
             return RustCollectedBatch(_ISSUER, self, plan, writer, pending, manifest_sha,
                 capture_sha, retirement_sha)
         except BaseException as error:
+            if diagnostics is not None:
+                diagnostics.error("collection_interrupted")
+                if self.runtime._profile_status is not None:
+                    self.runtime._profile_status.end()
             vars(error)["cleanup_owner"] = self
             self.runtime.cancel("collection failed")
             writer.cancel("collection failed")

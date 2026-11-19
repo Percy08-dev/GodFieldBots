@@ -161,9 +161,18 @@ class SharedServingController:
         try:self.ensure(bindings,artifacts)
         finally:artifacts.release()
 
+    def begin_collection(self, plan: Any) -> None:
+        diagnostics = self.service.diagnostics
+        if diagnostics is not None:
+            scope = diagnostics.scope(run_id=self.state['run_id'], invocation_id=self.service.execution,
+                batch_id=plan.linkage['batch_id'], phase='collection')
+            diagnostics.current_scope = scope
+            self.service.measurement_begin(scope)
+
     def finish_collection(self,plan: Any) -> Json:
         from gf_common.domain import clone
         self.service.quiesce()
+        self.service.measurement_end()
         end={key:self.service.telemetry[key] for key in ('requests','publications')}
         required={label:{'checkpoint':binding.policy_options['expected_manifest_digest'],
             'token':self.pins[binding.policy_options['expected_manifest_digest']].binding['token']}

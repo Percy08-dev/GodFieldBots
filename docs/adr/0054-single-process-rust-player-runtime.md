@@ -345,3 +345,22 @@ frames before its decision budget is exhausted. That engine case is conditionall
 UNREACHABLE / NOT APPLICABLE, not an executed PASS. Generic DATA/marker compatibility
 and negative auditing stay. Revisit before any listed invariant changes. Genuine
 pruned-checkpoint resume and every other Task6/7 requirement remain mandatory.
+
+## Bounded application telemetry engineering acceptance
+
+The [closed telemetry contract](../design/rust-player-runtime-telemetry-contract.md)
+is implemented under both independent R1 rereviews READY. Fixed histograms,
+actual logical Events pages/accepted RTT, full-window batch coverage, queue models,
+PyO3 entries and explicit monotonic phases remain diagnostic DATA. Optional
+worker-thread profiling has a terminal first-collection window and original trace
+custody; primary timing remains profiler-off.
+
+The [failure clarification](../design/rust-player-runtime-diagnostic-failures.md)
+contains healthy, completely framed diagnostic processing errors while preserving
+real shared-transport/framing/timeout quarantine. It adds no resynchronization or
+authority. Profile END precedes fallible snapshots, noncollection batch IDs remain
+null, and completed delivery observation precedes diagnostic retirement through
+the existing positive relay wait. Policy/scientific behavior, deadlines and native
+interfaces are unchanged by the R1 repairs. Matching final integrated execution,
+Source/process acceptance, observation-cost calibration, genuine GPU profiles and
+the full conditional performance/default protocol remain mandatory.

@@ -229,6 +229,29 @@ int main(int argc,char**argv) {
         assert!(outcome.signals.is_empty());
     }
     #[test]
+    fn observation_ids_are_nonempty_utf8_metadata_not_path_components() {
+        use std::os::unix::ffi::OsStringExt;
+        let id = "計測 α ".repeat(50);
+        assert_eq!(diagnostic_observation_id(id.clone().into()).unwrap(), id);
+        assert!(diagnostic_observation_id("".into()).is_err());
+        assert!(diagnostic_observation_id("bad\0id".into()).is_err());
+        assert!(diagnostic_observation_id(std::ffi::OsString::from_vec(vec![0xff])).is_err());
+    }
+    #[test]
+    fn diagnostic_host_reap_uses_actual_wait_and_never_changes_retirement_record() {
+        let _serial = PROCESS_TEST.lock().unwrap();
+        enable_subreaper().unwrap();
+        let mut command = std::process::Command::new("/bin/true");
+        let mut owner = OwnedHost::spawn(&mut command, cleanup_clock().finish).unwrap();
+        owner.diagnostic_clock = true;
+        let before = diagnostic_monotonic_ns().unwrap();
+        let result = owner.retire(cleanup_clock()).unwrap();
+        let after = diagnostic_monotonic_ns().unwrap();
+        let ns = result.host_reaped_monotonic_ns.unwrap();
+        assert!(before <= ns && ns <= after);
+        assert!(serde_json::to_value(&result).unwrap().get("host_reaped_monotonic_ns").is_none());
+    }
+    #[test]
     fn actual_live_adopted_c_child_requires_term_then_kill_and_positive_wait() {
         let _serial = PROCESS_TEST.lock().unwrap();
         enable_subreaper().unwrap();
@@ -945,5 +968,79 @@ with gpu.admit_gpu_job(gpu.JobContext('legacy','operation','training','run',None
         let error = host.observe_exit().unwrap_err();
         assert_eq!(error.raw_os_error(), Some(libc::ECHILD));
         assert!(host.retire(cleanup_clock()).is_err());
+    }
+}
+
+/// Separate evidence files; none of these helpers can issue an authority packet.
+struct PerformanceDiagnostics {
+    directory: std::fs::File,
+    observation_id: String,
+    owner: Value,
+    clock: Value,
+}
+fn diagnostic_observation_id(value: std::ffi::OsString) -> Result<String> {
+    let value = value.into_string().map_err(|_| invalid("observation ID must be UTF-8"))?;
+    if value.is_empty() || value.contains('\0') {
+        return Err(invalid("nonempty observation ID without NUL required"));
+    }
+    Ok(value)
+}
+fn diagnostic_monotonic_ns() -> Option<u64> {
+    let mut t = libc::timespec { tv_sec: 0, tv_nsec: 0 };
+    (unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut t) } == 0)
+        .then(|| t.tv_sec as u64 * 1_000_000_000 + t.tv_nsec as u64)
+}
+impl PerformanceDiagnostics {
+    fn from_environment() -> Result<Option<Self>> {
+        use std::os::{fd::FromRawFd, unix::{ffi::OsStrExt, fs::MetadataExt}};
+        let path = std::env::var_os("GF_BOTS_PERFORMANCE_DIAGNOSTICS_DIR");
+        let id = std::env::var_os("GF_BOTS_PERFORMANCE_OBSERVATION_ID")
+            .map(diagnostic_observation_id).transpose()?;
+        let profile = match std::env::var("GF_BOTS_PERFORMANCE_PROFILE") {
+            Ok(value) => value,
+            Err(std::env::VarError::NotPresent) => "off".into(),
+            Err(_) => return Err(invalid("performance profile recipe must be UTF-8")),
+        };
+        if !["off", "forward-window-v1"].contains(&profile.as_str()) {
+            return Err(invalid("invalid performance profile recipe"));
+        }
+        if path.is_none() && id.is_none() && profile == "off" { return Ok(None); }
+        let path = path.ok_or_else(|| invalid("performance directory/ID pair required"))?;
+        let id = id.ok_or_else(|| invalid("performance directory/ID pair required"))?;
+        if !std::path::Path::new(&path).is_absolute() {
+            return Err(invalid("invalid performance directory/observation ID"));
+        }
+        let cpath = std::ffi::CString::new(path.as_bytes()).map_err(|_| invalid("invalid performance directory"))?;
+        let fd=unsafe {libc::open(cpath.as_ptr(), libc::O_RDONLY|libc::O_DIRECTORY|libc::O_NOFOLLOW|libc::O_CLOEXEC)};
+        if fd<0{return Err(io::Error::last_os_error());}
+        let directory=unsafe {std::fs::File::from_raw_fd(fd)};
+        if directory.metadata()?.uid()!=unsafe{libc::getuid()}{return Err(invalid("performance directory owner differs"));}
+        Ok(Some(Self{directory,observation_id:id,
+            owner:json!({"pid":std::process::id(),"start_ticks":process::start_ticks(std::process::id())?,"role":"native-supervisor"}),
+            clock:json!({"name":"CLOCK_MONOTONIC","boot_id":std::fs::read_to_string("/proc/sys/kernel/random/boot_id")?.trim()})}))
+    }
+    fn phase(&self, scope:Value, event:&str, ns:Option<u64>, links:Value) {
+        // Deliberately no propagation to the supervisor's result/cleanup grace.
+        let _=self.write_phase(scope,event,ns,links);
+    }
+    fn write_phase(&self,scope:Value,event:&str,ns:Option<u64>,links:Value)->Result<()> {
+        use std::{io::Write, os::{fd::{AsRawFd,FromRawFd},unix::fs::MetadataExt}};
+        let ns=ns.ok_or_else(||invalid("unavailable diagnostic monotonic clock"))?;
+        let row=json!({"schema_version":1,"kind":"rust-player-phase-event-v1","observation_id":self.observation_id,
+            "owner":self.owner,"clock":self.clock,"scope":scope,"monotonic_ns":ns,"event":event,"links":links});
+        let name=std::ffi::CString::new(format!("phase-{}-{}.json",std::process::id(),records::random_id()?)).unwrap();
+        let fd=unsafe{libc::openat(self.directory.as_raw_fd(),name.as_ptr(),libc::O_WRONLY|libc::O_CREAT|libc::O_EXCL|libc::O_NOFOLLOW|libc::O_CLOEXEC,0o600)};
+        if fd<0{return Err(io::Error::last_os_error());}
+        let mut file=unsafe{std::fs::File::from_raw_fd(fd)};
+        let original=file.metadata()?;
+        serde_json::to_writer(&mut file,&row).map_err(io::Error::other)?;
+        file.write_all(b"\n")?;file.sync_all()?;
+        let mut published:libc::stat=unsafe{std::mem::zeroed()};
+        if unsafe{libc::fstatat(self.directory.as_raw_fd(),name.as_ptr(),&mut published,libc::AT_SYMLINK_NOFOLLOW)}!=0
+            || published.st_ino!=original.ino() || published.st_dev!=original.dev()
+            || published.st_mode&libc::S_IFMT!=libc::S_IFREG {
+            return Err(invalid("diagnostic phase file replaced"));
+        }
+        Ok(())
     }
 }

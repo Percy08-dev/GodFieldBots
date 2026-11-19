@@ -32,6 +32,7 @@ struct Ledger {
     peak: usize,
 }
 pub struct Account {
+    metrics: Arc<super::super::metrics::Metrics>,
     limit: usize,
     ledger: Mutex<Ledger>,
 }
@@ -82,33 +83,42 @@ pub struct RecordingAccount {
 impl RecordingAccount {
     #[getter]
     fn limit(&self) -> usize {
+        self.account.metrics.increment("pyo3_other", 1);
         self.account.limit
     }
     #[getter]
     fn used(&self) -> usize {
+        self.account.metrics.increment("pyo3_other", 1);
         let s = self.account.ledger.lock().unwrap();
         s.native + s.external
     }
     #[getter]
     fn peak(&self) -> usize {
+        self.account.metrics.increment("pyo3_other", 1);
         self.account.ledger.lock().unwrap().peak
     }
     #[getter]
     fn native_bytes(&self) -> usize {
+        self.account.metrics.increment("pyo3_other", 1);
         self.account.ledger.lock().unwrap().native
     }
     #[getter]
     fn external_bytes(&self) -> usize {
+        self.account.metrics.increment("pyo3_other", 1);
         self.account.ledger.lock().unwrap().external
     }
     fn same_account(&self, other: &Self) -> bool {
+        self.account.metrics.increment("pyo3_other", 1);
         Arc::ptr_eq(&self.account, &other.account)
     }
     fn owns(&self, bundle: &StorageBundle) -> bool {
+        self.account.metrics.increment("pyo3_other", 1);
         Arc::ptr_eq(&self.account, &bundle.record._reservation.account)
     }
     fn reserve(&self, bytes: usize) -> PyResult<RecordingLease> {
+        self.account.metrics.increment("pyo3_other", 1);
         Ok(RecordingLease {
+            metrics: self.account.metrics.clone(),
             lease: Mutex::new(Some(
                 self.account
                     .reserve(bytes, false)
@@ -119,15 +129,18 @@ impl RecordingAccount {
 }
 #[pyclass(frozen)]
 pub struct RecordingLease {
+    metrics: Arc<super::super::metrics::Metrics>,
     lease: Mutex<Option<Reservation>>,
 }
 #[pymethods]
 impl RecordingLease {
     #[getter]
     fn size(&self) -> usize {
+        self.metrics.increment("pyo3_other", 1);
         self.lease.lock().unwrap().as_ref().map_or(0, |r| r.bytes)
     }
     fn resize(&self, bytes: usize) -> PyResult<()> {
+        self.metrics.increment("pyo3_other", 1);
         let mut s = self.lease.lock().unwrap();
         let r = s
             .as_mut()
@@ -139,6 +152,7 @@ impl RecordingLease {
         Ok(())
     }
     fn close(&self) {
+        self.metrics.increment("pyo3_other", 1);
         self.lease.lock().unwrap().take();
     }
 }
@@ -157,6 +171,7 @@ struct Entry {
     answer: Arc<StorageAnswer>,
     exported: bool,
     deadline: f64,
+    enqueued_ns: Option<u64>,
 }
 #[derive(Default)]
 struct StorageAnswer {
@@ -202,9 +217,13 @@ pub struct Mailbox {
     async_wake: tokio::sync::Notify,
     account: Arc<Account>,
     capacity: usize,
+    pub metrics: Arc<super::super::metrics::Metrics>,
 }
 impl Mailbox {
     pub fn new(limit: usize, capacity: usize) -> Result<Arc<Self>> {
+        Self::new_monitored(limit, capacity, Arc::new(super::super::metrics::Metrics::default()))
+    }
+    pub fn new_monitored(limit: usize, capacity: usize, metrics: Arc<super::super::metrics::Metrics>) -> Result<Arc<Self>> {
         ensure(
             limit > 0 && capacity > 0,
             "positive storage bounds required",
@@ -219,11 +238,26 @@ impl Mailbox {
             wake: Condvar::new(),
             async_wake: tokio::sync::Notify::new(),
             account: Arc::new(Account {
+                metrics: metrics.clone(),
                 limit,
                 ledger: Mutex::new(Ledger::default()),
             }),
             capacity,
+            metrics,
         }))
+    }
+    pub fn measurement_quiet(&self) -> bool {
+        let s = self.state.lock().unwrap();
+        s.queue.is_empty() && s.entries.is_empty()
+    }
+    fn observe_queue(&self, s: &State) {
+        if self.metrics.now().is_none() { return; }
+        let mut queued = 0; let mut in_service = 0;
+        for entry in s.entries.values() {
+            if entry.exported { in_service += entry.record.array.len(); }
+            else { queued += entry.record.array.len(); }
+        }
+        self.metrics.queue(queued, in_service, queued + in_service, s.queue.len());
     }
     pub fn used(&self) -> usize {
         self.account.ledger.lock().unwrap().native
@@ -277,6 +311,7 @@ impl Mailbox {
         let transport_sha256 = format!("{:x}", Sha256::digest(&encoded));
         let answer = Arc::new(StorageAnswer::default());
         let mut owned = Some((Array1::from_vec(encoded), reservation));
+        let mut admission = super::super::metrics::StorageAdmission::new(&self.metrics);
         loop {
             let wake = self.async_wake.notified();
             tokio::pin!(wake);
@@ -310,9 +345,12 @@ impl Mailbox {
                             answer: answer.clone(),
                             exported: false,
                             deadline,
+                            enqueued_ns: self.metrics.now(),
                         },
                     );
                     s.queue.push_back(id);
+                    admission.admitted();
+                    self.observe_queue(&s);
                     self.notify();
                     break;
                 }
@@ -343,7 +381,10 @@ impl Mailbox {
             if let Some(id) = s.queue.pop_front() {
                 let entry = s.entries.get_mut(&id).unwrap();
                 entry.exported = true;
-                return Ok(entry.record.clone());
+                self.metrics.interval("storage_queue_age", entry.enqueued_ns, self.metrics.now());
+                let record = entry.record.clone();
+                self.observe_queue(&s);
+                return Ok(record);
             }
             if monotonic() >= deadline {
                 return Err(Error::Deadline);
@@ -367,6 +408,7 @@ impl Mailbox {
         )?;
         let expired = failure.is_none() && monotonic() >= entry.deadline;
         let entry = s.entries.remove(&record.id).unwrap();
+        self.observe_queue(&s);
         if expired {
             entry.answer.finish(Err(Error::Deadline));
             self.notify();
@@ -406,33 +448,41 @@ pub struct StorageBundle {
 impl StorageBundle {
     #[getter]
     fn id(&self) -> u64 {
+        self.record._reservation.account.metrics.increment("pyo3_other", 1);
         self.record.id
     }
     #[getter]
     fn kind(&self) -> &str {
+        self.record._reservation.account.metrics.increment("pyo3_other", 1);
         &self.record.kind
     }
     #[getter]
     fn episode(&self) -> &str {
+        self.record._reservation.account.metrics.increment("pyo3_other", 1);
         &self.record.episode
     }
     #[getter]
     fn game(&self) -> &str {
+        self.record._reservation.account.metrics.increment("pyo3_other", 1);
         &self.record.game
     }
     #[getter]
     fn transport_sha256(&self) -> &str {
+        self.record._reservation.account.metrics.increment("pyo3_other", 1);
         &self.record.transport_sha256
     }
     #[getter]
     fn release_key(&self) -> Option<(String, String, String)> {
+        self.record._reservation.account.metrics.increment("pyo3_other", 1);
         self.record.release_key.clone()
     }
     #[getter]
     fn reserved_bytes(&self) -> usize {
+        self.record._reservation.account.metrics.increment("pyo3_other", 1);
         self.record.array.len()
     }
     fn view<'py>(slf: Bound<'py, Self>) -> PyResult<Bound<'py, PyArray1<u8>>> {
+        slf.borrow().record._reservation.account.metrics.increment("pyo3_other", 1);
         let record = slf.borrow().record.clone();
         // Base owns StorageBundle -> Arc<Record> -> Array + SAME reservation.
         let array = unsafe { PyArray1::borrow_from_array(&record.array, slf.into_any()) };
@@ -469,6 +519,57 @@ mod tests {
             .build()
             .unwrap()
             .block_on(future);
+    }
+    #[test]
+    fn ingress_admission_wait_excludes_original_count_encode_and_hash_preparation() {
+        use std::sync::atomic::{AtomicUsize,Ordering};
+        use super::super::super::metrics::{Metrics,test_clock,set_test_clock};
+        struct TimedEncoding(AtomicUsize);
+        impl Serialize for TimedEncoding {
+            fn serialize<S:serde::Serializer>(&self,serializer:S)->std::result::Result<S::Ok,S::Error>{
+                let pass=self.0.fetch_add(1,Ordering::Relaxed)+1;
+                set_test_clock(pass as u64 * 1_000);
+                serializer.serialize_u64(1)
+            }
+        }
+        let _clock=test_clock(0);
+        let metrics=Arc::new(Metrics::default());
+        metrics.begin(serde_json::json!({"batch_id":"queue"}),0).unwrap();
+        let mailbox=Mailbox::new_monitored(4096,1,metrics.clone()).unwrap();
+        run(async {
+            let producer=mailbox.clone();
+            let task=tokio::spawn(async move {
+                producer.publish("pending","episode","game",&TimedEncoding(AtomicUsize::new(0)),None,monotonic()+5.).await
+            });
+            tokio::task::yield_now().await;
+            let record=mailbox.next(monotonic()+5.).unwrap();
+            mailbox.ack(&record,None).unwrap();
+            task.await.unwrap().unwrap();
+        });
+        let data=metrics.end(3_000,true).unwrap();
+        assert_eq!(data["histograms"]["storage_admission_wait"]["count"],1);
+        assert_eq!(data["histograms"]["storage_admission_wait"]["min_ns"],0);
+    }
+    #[test]
+    fn monitored_ingress_uses_real_enqueue_export_ack_boundaries() {
+        let metrics=Arc::new(super::super::super::metrics::Metrics::default());
+        metrics.begin(serde_json::json!({"batch_id":"ingress"}),0).unwrap();
+        let mailbox=Mailbox::new_monitored(4096,1,metrics.clone()).unwrap();
+        run(async {
+            let producer=mailbox.clone();
+            let task=tokio::spawn(async move {producer.publish("pending","episode","game",&serde_json::json!({"x":1}),None,monotonic()+5.).await});
+            tokio::task::yield_now().await;
+            assert!(!mailbox.measurement_quiet());
+            let record=mailbox.next(monotonic()+5.).unwrap();
+            mailbox.ack(&record,None).unwrap();
+            task.await.unwrap().unwrap();
+            assert!(mailbox.measurement_quiet());
+        });
+        let data=metrics.end(super::super::super::metrics::monotonic_ns(),true).unwrap();
+        assert_eq!(data["counters"]["writer_admissions"],1);
+        assert_eq!(data["histograms"]["storage_queue_age"]["count"],1);
+        assert!(data["queue"]["queued_bytes_peak"].as_u64().unwrap()>0);
+        assert_eq!(data["queue"]["queued_bytes_peak"],data["queue"]["in_service_bytes_peak"]);
     }
     #[test]
     fn expired_publication_never_counts_encodes_or_enqueues() {

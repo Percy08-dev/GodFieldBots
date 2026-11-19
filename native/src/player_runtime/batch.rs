@@ -53,6 +53,7 @@ pub struct Dispatcher {
     max_batch: usize,
     wait: f64,
     pub runtime: String,
+    pub metrics: Arc<super::metrics::Metrics>,
     state: Mutex<State>,
     wake: Condvar,
     async_wake: tokio::sync::Notify,
@@ -94,6 +95,7 @@ impl Dispatcher {
         )?;
         checked_duration(formation_wait_ms / 1000.)?;
         Ok(Arc::new(Self {
+            metrics: Arc::new(super::metrics::Metrics::default()),
             capacity,
             max_batch,
             wait: formation_wait_ms / 1000.,
@@ -112,6 +114,10 @@ impl Dispatcher {
             wake: Condvar::new(),
             async_wake: tokio::sync::Notify::new(),
         }))
+    }
+    pub fn measurement_quiet(&self) -> bool {
+        let s = self.state.lock().unwrap();
+        s.pending.is_empty() && s.producers.is_empty()
     }
     fn notify(&self) {
         self.wake.notify_all();
@@ -319,6 +325,7 @@ impl Dispatcher {
                     });
                 }
                 s.formation_deadline = s.queue.front().map(|k| s.pending[k].received + self.wait);
+                self.metrics.batch(rows.len());
                 break Ok(Batch {
                     id,
                     rows,
@@ -582,7 +589,24 @@ impl PlayerInferenceDispatcher {
             handles: Mutex::new(HashMap::new()),
         })
     }
+    fn measurement_begin(&self, encoded: &[u8]) -> PyResult<()> {
+        self.core.metrics.increment("pyo3_other", 1);
+        let scope:serde_json::Value=serde_json::from_slice(encoded).map_err(|e|pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+        ensure(self.core.measurement_quiet() && self.handles.lock().unwrap().is_empty(), "measurement requires actual dispatcher/producer/handle quiescence").map_err(crate::python_error)?;
+        self.core.metrics.begin(scope,super::metrics::monotonic_ns()).map_err(crate::python_error)?;
+        self.core.metrics.increment("pyo3_other", 1);
+        Ok(())
+    }
+    fn measurement_end<'py>(&self, py:Python<'py>,encoded:&[u8])->PyResult<Bound<'py,PyBytes>> {
+        self.core.metrics.increment("pyo3_other", 1);
+        let scope:serde_json::Value=serde_json::from_slice(encoded).map_err(|e|pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+        ensure(self.core.measurement_quiet() && self.handles.lock().unwrap().is_empty(), "measurement requires actual dispatcher/producer/handle quiescence").map_err(crate::python_error)?;
+        let data=self.core.metrics.end_scope(&scope,super::metrics::monotonic_ns(),true).map_err(crate::python_error)?;
+        Ok(PyBytes::new(py,&serde_json::to_vec(&data).unwrap()))
+    }
+
     fn enqueue(&self, py: Python<'_>, encoded: &[u8]) -> PyResult<u64> {
+        self.core.metrics.increment("pyo3_other", 1);
         let (token, handle) = py
             .detach(|| -> Result<_> {
                 let c: ControlInput =
@@ -616,6 +640,7 @@ impl PlayerInferenceDispatcher {
         Ok(token)
     }
     fn next_batch(&self, py: Python<'_>, deadline: f64) -> PyResult<Py<PyDict>> {
+        self.core.metrics.increment("pyo3_next_batch", 1);
         let batch = py
             .detach(|| self.core.next_batch(deadline))
             .map_err(crate::python_error)?;
@@ -661,6 +686,7 @@ impl PlayerInferenceDispatcher {
         batch_id: u64,
         rows: &Bound<'_, PyList>,
     ) -> PyResult<usize> {
+        self.core.metrics.increment("pyo3_submit_results", 1);
         let parsed = (|| -> PyResult<Vec<Response>> {
             let mut responses = vec![];
             for item in rows.iter() {
@@ -699,6 +725,7 @@ impl PlayerInferenceDispatcher {
         }
     }
     fn wait_result(&self, py: Python<'_>, token: u64, deadline: f64) -> PyResult<Py<PyDict>> {
+        self.core.metrics.increment("pyo3_other", 1);
         wait_duration(deadline).map_err(crate::python_error)?;
         let handle = self
             .handles
@@ -722,22 +749,27 @@ impl PlayerInferenceDispatcher {
         Ok(out.unbind())
     }
     fn retire(&self, encoded: &[u8]) -> PyResult<()> {
+        self.core.metrics.increment("pyo3_other", 1);
         let identity: Identity = serde_json::from_slice(encoded)
             .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
         self.core.retire(&identity).map_err(crate::python_error)
     }
     fn release_game(&self, run: &str, trial: &str, game: &str) -> PyResult<()> {
+        self.core.metrics.increment("pyo3_other", 1);
         self.core
             .release_game(run, trial, game)
             .map_err(crate::python_error)
     }
     fn checkpoint_references(&self) -> HashMap<String, usize> {
+        self.core.metrics.increment("pyo3_other", 1);
         self.core.checkpoint_references()
     }
     fn cancel(&self, reason: String) {
+        self.core.metrics.increment("pyo3_other", 1);
         self.core.close(error(reason));
     }
     fn close(&self) {
+        self.core.metrics.increment("pyo3_other", 1);
         self.core.close(Error::Closed);
     }
 }

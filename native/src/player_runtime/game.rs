@@ -442,6 +442,7 @@ impl Actor {
                         &budget,
                         &control,
                     )?;
+                    let mut measurement = super::metrics::InferenceSpan::new(&dispatcher.metrics);
                     let identity = Identity {
                         run: self.spec.run.clone(),
                         trial: self.spec.trial.clone(),
@@ -453,6 +454,7 @@ impl Actor {
                         checkpoint: seat.spec.checkpoint.clone().unwrap(),
                         deadline: self.spec.deadline,
                     };
+                    let result = async {
                     let (_, handle) = dispatcher
                         .enqueue_async(identity.clone(), row, seat.spec.seed)
                         .await?;
@@ -461,6 +463,10 @@ impl Actor {
                         answer.identity == identity,
                         "own inference answer identity mismatch",
                     )?;
+                    Ok::<_, crate::error::Error>(answer)
+                    }.await;
+                    measurement.finish(&result);
+                    let answer = result?;
                     let selected = answer.sample;
                     scores = Some(capture::Scores {
                         identity: answer.identity,
@@ -678,6 +684,7 @@ pub async fn run(
             };
         }
     };
+    actor.http.metrics = Some(dispatcher.metrics.clone());
     let result = tokio::select! {biased;_=cancel.wait()=>Err(Error::Cancelled),result=actor.play(&dispatcher,&storage)=>result};
     if let Err(e) = result {
         if matches!(e, Error::ResourceLimit(_)) {

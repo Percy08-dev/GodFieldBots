@@ -826,7 +826,18 @@ def finalize_cold(control: HostControl, cold: ColdContinuation, *, loaded: Any) 
             'parent_metadata_validation': None}
         validate_completion(completion)
         completion_path = control.root / f'completion-{admission["invocation_id"]}.json'
-        write_control_record(completion_path, completion)
+        import time
+
+        from gf_simulator_client.performance_diagnostics import host_diagnostics
+        diagnostics = host_diagnostics()
+        written_completion_sha = write_control_record(completion_path, completion)
+        written_ns = time.monotonic_ns() if diagnostics is not None else None
+        if diagnostics is not None:
+            diagnostics.phase('completion_written', diagnostics.scope(run_id=admission['run_id'],
+                operation_id=admission['operation_id'], invocation_id=admission['invocation_id'], phase='cold'), monotonic_ns=written_ns,
+                links={'operation_sha256': control.operation_sha256,
+                    'prepared_sha256': cold._payload['prepared_sha256'], 'exit_sha256': cold._payload['exit_sha256'],
+                    'completion_sha256': written_completion_sha})
         completion_sha = cold.acknowledge_finalizer_output(completion_path)
         result.completion, result.audit = completion, audit
         result.completion_path = completion_path

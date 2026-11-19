@@ -36,6 +36,9 @@ class SharedInferenceService:
     def __init__(self,ledger: Any,runtime: Json,*,execution: str,directory: Path,
                  slots: int,estimate: Json,visibility: str | None=None,job_id: str | None=None,
                  device: str='cuda:0',deadline: float=float('inf'),execution_deadline: float | None=None,run_id: str | None=None,config_sha256: str | None=None) -> None:
+        from gf_simulator_client.performance_diagnostics import host_diagnostics
+        self.diagnostics = host_diagnostics()
+        self._measurement_scope: Json | None = None
         self.ledger,self.runtime=ledger,shared_runtime(runtime,game_concurrency=slots//2)
         self.execution,self.service_id=execution,uuid.uuid4().hex
         self.directory=directory/'services'/self.service_id
@@ -78,6 +81,9 @@ class SharedInferenceService:
             self.channel.bind_child(self.process)
             write_frame(self.process.stdin,{'service_id':self.service_id,'execution':execution,
                 'job_id':job_id or execution,'run_id':run_id or execution,'config_sha256':config_sha256,'epoch':1,'runtime':self.runtime,'device':device,'visibility':visibility,
+                **({'performance_diagnostics': {'directory': str(self.diagnostics.directory),
+                    'observation_id': self.diagnostics.observation_id, 'profile_recipe': self.diagnostics.profile_recipe}}
+                    if self.diagnostics is not None else {}),
                 'endpoints':[right.fileno() for _,right in self._pairs],'bank_fd':bank_fd,
                 'bank_invocation':bank_invocation,'cleanup_deadline':deadline if math.isfinite(deadline) else None,'host_bytes':max(estimate.get('host_bytes',0),
                     runtime['cache_weight_bytes']*4+estimate.get('batch_input_bytes',0)*34+65536)})
@@ -148,6 +154,29 @@ class SharedInferenceService:
                 self.uncertain=True
                 raise ContractError('shared inference infrastructure failure')
             return response
+
+    def measurement_begin(self, scope: Json) -> None:
+        if self.diagnostics is None:
+            return
+        try:
+            response = self._exchange({'command': 'DIAGNOSTIC_BEGIN', 'scope': scope})
+            if response != {'accepted': True}:
+                raise ValueError('diagnostic start not positively quiescent')
+            self._measurement_scope = dict(scope)
+        except Exception as error:  # noqa: BLE001 - diagnostic failure is never policy/Source authority.
+            self.diagnostics.error('legacy_measurement_begin:' + type(error).__name__)
+
+    def measurement_end(self) -> None:
+        if self.diagnostics is None or self._measurement_scope is None:
+            return
+        try:
+            response = self._exchange({'command': 'DIAGNOSTIC_END', 'scope': self._measurement_scope})
+            if response.get('accepted') is not True:
+                raise ValueError('diagnostic end not positively quiescent')
+        except Exception as error:  # noqa: BLE001 - diagnostic failure is never policy/Source authority.
+            self.diagnostics.error('legacy_measurement_end:' + type(error).__name__)
+        finally:
+            self._measurement_scope = None
 
     def acquire_endpoint(self,owner: Any) -> tuple[int,int]:
         for index,(left,_) in enumerate(self._pairs):

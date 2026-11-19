@@ -411,7 +411,8 @@ def test_model3_export_actual_moments_and_fresh_restore_are_separate_phases():
         account.begin_export()
 
 
-def test_serving_row_inputs_retire_before_next_transfer_and_lock_exit(monkeypatch):
+@pytest.mark.parametrize('profile_enabled', [False, True])
+def test_serving_row_inputs_retire_before_next_transfer_and_lock_exit(monkeypatch, profile_enabled):
     import json
     from types import SimpleNamespace
 
@@ -426,6 +427,7 @@ def test_serving_row_inputs_retire_before_next_transfer_and_lock_exit(monkeypatc
     account.observe_cache('checkpoint', profile, {})
     service = rust_player.RustPlayerInference.__new__(rust_player.RustPlayerInference)
     service.device, service.runtime, service.device_account = 'cuda:0', 'fixture', account
+    service.performance_callback = None
     service.registry = SimpleNamespace(networks={'checkpoint': object()})
     service.timings = dict.fromkeys(('assembly', 'cpu_share', 'h2d', 'forward', 'sampling', 'return'), 0.)
     service.calls = {'rows': 0}
@@ -443,6 +445,24 @@ def test_serving_row_inputs_retire_before_next_transfer_and_lock_exit(monkeypatc
             if self.name == 'interval_numerics':
                 assert alive[0] == 0, 'previous row inputs overlap next H2D'
             return Input()
+    callbacks, ranges = [], []
+    def after_forward(**facts):
+        assert torch_runtime._TORCH_LOCK._is_owned()
+        assert account._active.state == 'ACTIVE' and alive[0] == 2
+        callbacks.append(facts)
+    class ForwardRange:
+        def __init__(self, name):
+            assert profile_enabled, 'disabled profiling must not create a range'
+            assert name == 'gf-native-row-forward'
+        def __enter__(self):
+            assert torch_runtime._TORCH_LOCK._is_owned()
+            ranges.append('begin')
+        def __exit__(self, *args):
+            assert torch_runtime._TORCH_LOCK._is_owned()
+            ranges.append('end')
+    if profile_enabled:
+        service.performance_callback = SimpleNamespace(after_forward=after_forward)
+    monkeypatch.setattr(torch.profiler, 'record_function', ForwardRange)
     monkeypatch.setattr(rust_player, 'tensor_views', lambda arrays, **kwargs: {name: CpuView(name) for name in arrays})
     monkeypatch.setattr(shared_numeric, 'score_numeric_row', lambda *args: (torch.tensor([0.]), torch.tensor(1.)))
     monkeypatch.setattr(rust_player, 'provisional_sample', lambda *args, **kwargs: (0, b'state'))
@@ -455,6 +475,8 @@ def test_serving_row_inputs_retire_before_next_transfer_and_lock_exit(monkeypatc
     assert len(answers) == 2 and alive[0] == 0
     assert len(retired_under_lock) == 4 and all(retired_under_lock)
     assert account._active is None
+    assert callbacks == ([{'scored_rows': 1, 'boundary': 'native-post-row-forward'}] * 2 if profile_enabled else [])
+    assert ranges == (['begin', 'end'] * 2 if profile_enabled else [])
 
 
 def test_cpu_serving_accepts_shared_account_without_gpu_cache_charge():

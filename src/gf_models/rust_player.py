@@ -117,6 +117,7 @@ class RustPlayerInference:
                 if hold is not None:
                     hold.fail(error)
                 raise
+        self.performance_callback: Any = None
         self.runtime = sampling_runtime_identity()
         self.references: dict[str, int] = {}
         self.timings = {
@@ -287,11 +288,17 @@ class RustPlayerInference:
                         self.timings["h2d"] += time.perf_counter() - at
                     at = time.perf_counter()
                     try:
-                        logs, value = score_numeric_row(self.registry.networks[checkpoint], inputs)
+                        if self.performance_callback is None:
+                            logs, value = score_numeric_row(self.registry.networks[checkpoint], inputs)
+                        else:
+                            with torch.profiler.record_function("gf-native-row-forward"):
+                                logs, value = score_numeric_row(self.registry.networks[checkpoint], inputs)
                         if self.device != "cpu":
                             torch.cuda.synchronize(self.device)
                     finally:
                         self.timings["forward"] += time.perf_counter() - at
+                    if self.performance_callback is not None:
+                        self.performance_callback.after_forward(scored_rows=1, boundary="native-post-row-forward")
                     at = time.perf_counter()
                     try:
                         sample, next_state = provisional_sample(

@@ -974,7 +974,16 @@ class RustGameOperations:
         path = self.control.root / f'prepared-{invocation}.json'
         with self.writer.parent_budget.reserve(32 * json_bound(prepared) + 65536):
             remaining(deadline)
-            write_control_record(path, prepared)
+            import time
+
+            from gf_simulator_client.performance_diagnostics import host_diagnostics
+            diagnostics = host_diagnostics()
+            prepared_sha = write_control_record(path, prepared)
+            written_ns = time.monotonic_ns() if diagnostics is not None else None
+            if diagnostics is not None:
+                diagnostics.phase('prepared_written', diagnostics.scope(run_id=actual['run_id'],
+                    operation_id=actual['operation_id'], invocation_id=invocation, phase='retirement'), monotonic_ns=written_ns,
+                    links={'operation_sha256': self.control.operation_sha256, 'prepared_sha256': prepared_sha})
             remaining(deadline)
             return self.control.prepare(self.admission, path)
 
@@ -1018,6 +1027,10 @@ def _configure_device_environment(config: Any) -> bool:
 
 
 def _run_local(control: Any, operation: Json, *, loaded: Any, hpo: bool) -> Json:
+    from gf_simulator_client.performance_diagnostics import host_diagnostics, transition_phase
+    performance = host_diagnostics()
+    transition_phase(performance, 'startup', run_id=operation.get('run_id'),
+        operation_id=operation.get('operation_id'))
     import asyncio
     import hashlib
     from contextlib import nullcontext
@@ -1082,8 +1095,19 @@ def _run_local(control: Any, operation: Json, *, loaded: Any, hpo: bool) -> Json
 
 
 def finalize_cold(control: Any, cold: Any, *, loaded: Any) -> Any:
+    from gf_simulator_client.performance_diagnostics import (
+        finish_phase,
+        host_diagnostics,
+        transition_phase,
+    )
     from gf_training.rust_player_completion import finalize_cold as actual_finalize
-    return actual_finalize(control, cold, loaded=loaded)
+    performance = host_diagnostics()
+    transition_phase(performance, 'cold', operation_id=control.operation.get('operation_id'),
+        run_id=control.operation.get('run_id'))
+    try:
+        return actual_finalize(control, cold, loaded=loaded)
+    finally:
+        finish_phase(performance)
 
 
 class RustHpoOperations(RustGameOperations):

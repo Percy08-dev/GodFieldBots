@@ -35,6 +35,7 @@ pub struct Http {
     poisoned: bool,
     reconnect: bool,
     pub deadline: f64,
+    pub metrics: Option<std::sync::Arc<super::metrics::Metrics>>,
 }
 impl Http {
     pub fn new(client: Client, server: Server, deadline: f64) -> Result<Self> {
@@ -59,6 +60,7 @@ impl Http {
         Ok(Self {
             client,
             server,
+            metrics: None,
             cached: None,
             poisoned: false,
             reconnect: false,
@@ -181,6 +183,7 @@ impl Http {
             if crate::budget::monotonic() >= self.deadline {
                 return Err(Error::Deadline);
             }
+            if path.contains("/events/") { if let Some(m) = &self.metrics { m.increment("event_transport_attempts", 1); } }
             let response = match self.wire(method.clone(), path, body.as_deref()).await {
                 Ok(v) => v,
                 Err(e) => {
@@ -399,6 +402,8 @@ impl Http {
                 url.query_pairs_mut().append_pair("after", c);
             }
             let path = format!("{}?{}", url.path(), url.query().unwrap());
+            let metrics = self.metrics.clone();
+            let mut span = metrics.as_ref().map(|m| super::metrics::PageSpan::new(m));
             let page = self.request(Method::GET, &path, None, false).await?;
             page.closed(
                 &[
@@ -431,6 +436,8 @@ impl Http {
                 !more || next.is_some() && next != cursor,
                 "event pagination made no progress",
             )?;
+            if let Some(span) = &mut span { span.success(); }
+            drop(span);
             events.extend(rows.iter().cloned());
             cursor = next;
             if !more {

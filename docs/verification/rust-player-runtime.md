@@ -716,3 +716,83 @@ may differ. No production change or hidden cleanup experiment was inferred.
 Installed native82f25 remains UNMATCHED to joined test-sourceD428. Only pure CPU/
 data/static checks ran; the final combined native/companion build and actual
 Source/CUDA/process/campaign/evaluation/measurement gates remain required.
+
+## Application telemetry engineering component
+
+2026-11-20 both independent R1 correctness/conformance reviews are READY after
+four P2 repairs: diagnostic processing escaped into infrastructure shutdown;
+snapshot failure left the first profile scope active; update/save scopes carried
+non-null batch IDs; delivery observation raced completed retirement. The reviewed
+failure-boundary clarification distinguishes healthy framed diagnostic rejection
+from real channel uncertainty. Original `_exchange` fail-stop is unchanged:
+clearing it could mistake a late diagnostic acceptance for authority acceptance.
+Broker processing returns the existing negative reply without poisoning a healthy
+service. Profile END is unconditional before fallible snapshots; collection IDs
+stay absent outside collection; diagnostic retirement follows the existing positive
+relay wait without changing authoritative retirement or holding its lock across
+that wait. No scientific/policy/learning schema, capacity or math changed.
+
+Root freshly precollects38 pure failure/lifecycle/race and2 framing/frozen-kernel
+nodes with empty GPU visibility and `not cuda`, excluding actual workload probes.
+Execution passes38 in0.27s and2 in0.76s. Final Root Ruff6files, mypy4modules and diff
+checks pass. R1 six-file delta is
+00bf544a4bb71d6442214bf2fb0e947ce4a77c3af47eaa642f650cf010e479b6;
+before/after inventories2fec91c79e3a607d5ae1d11f5657fe8021f29c56a39154aac6edec9e26a949b4 /
+8616283a7b7fd59e5b791039ea73b1324b60e138fd42c432d4e1469efa426af1.
+Both reviewers independently verify38 current/before files and unchanged installed
+artifacts. Earlier52focused/83compatibility/32native/18supervisor results belong
+to their recorded runs, not a fresh full suite.
+
+The isolated matching release native source is
+3ce55bf35e56f19e4be8f978041237df1ffc7d4ab9682cb5f7ca4d7f73d74c93,
+extension8dffe4bf6590e977b52c316a42145ce4e01802a84b95419e09ac427ff865cfff,
+companion932a154f63161c9c58ae369d25337e3f7596a8e4528bb2b5bd66699bfe1af1d9,
+manifest72c3ea84d1cde7ab83c9b39c981978ecd97865147ec2cf6f54e9b797612d4b6a,
+wheelbe8187c194efa159d87ba8bb85fc13173eea5771f883c3bb4a653712f23919b4.
+R1 changes only Python source/tests; native artifacts remain unchanged.
+
+The earlier six CPU mechanism cases passed under historical producer888d43a9
+with their own raw logs/manifest. They tested one legacy endpoint, both native
+schedulersW1/W2 and a distinct SQLite FIFO path. Their native admission latency
+included preparation before the later deterministic timing repair; those samples
+are NOT final matched capacity-wait data. Other later fixes changed profiling,
+reply acceptance placement and helper completeness. The historical cases are
+therefore not relabeled final R1 actual execution, GPU/profile or throughput data.
+
+Final merged-source actual measurement/process/Source checks, evaluation phase
+hooks at the real application owner, enabled/disabled cost calibration, separate
+GPU trace population and the unchanged full24-run/adoption protocol remain open.
+No measured speed, PSS reduction, overhead guarantee, quality or default switch is
+claimed by this bounded telemetry milestone.
+
+## Joined telemetry/device/retention engineering scope
+
+The accepted telemetry6f4143c joins the accepted device/retention ebc2e54 branch.
+The sole production conflict is resolved by preserving the complete device parent
+and overlaying only its optional forward range/post-forward callback. Both remain
+inside the existing Torch lock and row error scope, after forward synchronization
+and before sampling/input retirement. Failure holds, partial input custody and
+last-input clearing inside the lock are unchanged. The corresponding cleanup-only
+fixture tests callback on/off with the same actual accounting object and lock;
+all other automatic source joins remain byte-identical. Independent scoped joined
+conformance is READY, with no new blocker or optional finding.
+
+Root freshly precollects and runs352 CPU/data/API checks (7.15s,16 deselected,
+known readonly warning) and12 pure Source checks (0.14s). GPU visibility is empty,
+CUDA/workload probes are excluded and the mixed Source file is never run whole.
+Joined evidence inventory48164916f9c3e8dc837e279c1304f1f9a6673ef403f9dac82905777f8d2489bd,
+resolution860c60907deedd1dcf489f38395fba189d1c1c7af1d813784c3273786627f4dd.
+Implementer mypy24/Ruff28 pass after one authorized intermediate matching native
+build: the old installed stub’s two missing-API errors remain recorded rather than
+masked. No private harness build or actual controller/game/GPU work was required.
+
+Intermediate actual native source
+931417c4cb84d627db25deadffffa69dc1b9651d1d9372d3925ffba3fa994c02,
+extension03fa4461c0cfa85105303f6f4e24093e6d69c3685d254f5ad6a66be825345b82,
+companion4c866c31923c7ae7293cbd8b80b9577aed3a5d10aad9f6a3ab884c7b213918a3,
+wheel184e81d70d0b8f5ea5afeca8445694a668f9667212d5e738fb8971cfad6cd856.
+Python Source dc961676c3324f7b29281c5e061a32395deede6ae5bd466a879ed38a77252780,
+runtime8161c0dbfab53969541038d26267907443f3119dc86b15a592c5a2b49fcfc3ca.
+This static/API matching scope does not certify the later final C1 composition,
+Source, actual CUDA/profile, one-Python process tree or performance. Those complete
+Task6/7/public/clock/all-original audit/evaluation/default gates remain required.

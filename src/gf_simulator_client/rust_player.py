@@ -21,6 +21,13 @@ class RustPlayerRuntime:
     """
 
     def __init__(self, config: dict[str, Any], *, service: Any = None) -> None:
+        from gf_simulator_client.performance_diagnostics import host_diagnostics
+        self.diagnostics = host_diagnostics()
+        self._measurement_scope: dict[str, Any] | None = None
+        self._measurement_stages: dict[str, float] | None = None
+        self._performance_wait_started: float | None = None
+        self._profile_status: Any = None
+        self._profile_reported = False
         self._native = gf_native.PlayerRuntime(canonical(config).encode())
         self.dispatcher = self._native.dispatcher
         self.service = service
@@ -47,16 +54,101 @@ class RustPlayerRuntime:
             ):
                 raise ContractError("runtime requires same immutable inference service identity")
 
+        if self.diagnostics is not None:
+            self.measurement_begin(self.diagnostics.current_scope or self.diagnostics.scope(phase='startup'))
+
+    def _stage_snapshot(self) -> dict[str, float]:
+        if self.service is None:
+            return {}
+        stages = dict(self.service.timings)
+        if self._performance_wait_started is not None:
+            stages['native_wait'] += time.perf_counter() - self._performance_wait_started
+        return stages
+
+    def measurement_begin(self, scope: dict[str, Any]) -> None:
+        if self.diagnostics is None:
+            return
+        if self._measurement_scope is not None:
+            self.measurement_end()
+        try:
+            with self._settled:
+                if self._active_routes or self._holds:
+                    raise ValueError('measurement overlaps unsettled actual inference')
+                self._native.measurement_begin(canonical(scope).encode())
+                self._measurement_scope = dict(scope)
+                self._measurement_stages = self._stage_snapshot() if self.service is not None else None
+                if self.diagnostics.profile_recipe == 'forward-window-v1' and self._profile_status is None and self.service is not None:
+                    from gf_simulator_client.performance_profile import (
+                        ForwardProfile,
+                        ProfileStatus,
+                    )
+                    self._profile_status = ProfileStatus.local()
+                    self.service.performance_callback = ForwardProfile(self.diagnostics.directory,
+                        self.diagnostics.observation_id, self._profile_status, role='native-inference')
+                if self._profile_status is not None and scope['phase'] == 'collection':
+                    self._profile_status.begin(scope)
+        except Exception as error:  # noqa: BLE001 - diagnostic failure is never policy/Source authority.
+            self.diagnostics.error('native_measurement_begin:' + type(error).__name__)
+
+    def measurement_end(self, *, complete: bool = True) -> None:
+        if self.diagnostics is None or self._measurement_scope is None:
+            return
+        try:
+            # Logical END is independent of fallible native snapshots/decoding/publication.
+            if self._profile_status is not None and self._measurement_scope['phase'] == 'collection':
+                self._profile_status.end()
+            with self._settled:
+                if complete and (self._active_routes or self._holds):
+                    raise ValueError('measurement overlaps unsettled actual inference')
+                data = json.loads(self._native.measurement_end(canonical(self._measurement_scope).encode(), complete))
+                self.diagnostics.metrics(data, role='native-runtime')
+                if self._measurement_stages is not None:
+                    from gf_common.performance_metrics import PhaseMetrics
+                    stages = self._stage_snapshot()
+                    stage_metrics = PhaseMetrics(scope=self._measurement_scope,
+                        start_ns=data['start_monotonic_ns'], counters=(), histograms=())
+                    for name, start in self._measurement_stages.items():
+                        seconds = stages[name] - start
+                        if seconds < 0:
+                            stage_metrics.error('invalid_stage_interval:' + name)
+                        else:
+                            stage_metrics.stages[name] = {'method': 'synchronized-host-wall-v1', 'seconds': seconds}
+                    self.diagnostics.metrics(stage_metrics.snapshot(end_ns=data['end_monotonic_ns'], complete=complete), role='native-inference')
+                if (self._profile_status is not None and self._measurement_scope['phase'] == 'collection'
+                        and not self._profile_reported):
+                    import torch
+
+                    from gf_simulator_client.performance_profile import missing_profile_result
+                    result = self._profile_status.read()['result']
+                    if result is None:
+                        result = missing_profile_result(observation_id=self.diagnostics.observation_id,
+                            owner=self.diagnostics.owner | {'role': 'native-inference'}, clock=self.diagnostics.clock,
+                            scope=self._measurement_scope, boundary='native-post-row-forward', torch_version=torch.__version__)
+                    self.diagnostics.write(result)
+                    self._profile_reported = True
+        except Exception as error:  # noqa: BLE001 - diagnostic failure is never policy/Source authority.
+            self.diagnostics.error('native_measurement_end:' + type(error).__name__)
+        finally:
+            self._measurement_scope = self._measurement_stages = None
+
     def _serve(self) -> None:
         in_batch = False
         try:
             while True:
                 at = time.perf_counter()
+                if self.diagnostics is not None:
+                    with self._settled:
+                        self._performance_wait_started = at
                 try:
                     self.service.calls["next_batch"] += 1
                     batch = self.dispatcher.next_batch(10_000_000_000.0)
                 finally:
-                    self.service.timings["native_wait"] += time.perf_counter() - at
+                    if self.diagnostics is None:
+                        self.service.timings["native_wait"] += time.perf_counter() - at
+                    else:
+                        with self._settled:
+                            self.service.timings["native_wait"] += time.perf_counter() - at
+                            self._performance_wait_started = None
                 in_batch = True
                 routes = []
                 for row in batch["rows"]:
@@ -287,6 +379,7 @@ class RustPlayerRuntime:
                 self._join_error = f"{type(exc).__name__}: {exc}"
             raise
         finally:
+            self.measurement_end(complete=self._join_error is None)
             with self._join_done:
                 self._joined = True
                 self._joining = False

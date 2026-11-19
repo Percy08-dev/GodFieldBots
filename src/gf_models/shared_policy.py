@@ -68,6 +68,7 @@ class SharedParticipantPolicy:
         resource_estimate(self.model,self.original_binding,decisions=self.position+1,
             interval_events=len(tokens.interval_numerics),candidates=len(candidates.kinds),suffix_decisions=1,layout=self.layout)
         numeric=numeric_row(tokens,candidates,self.model,layout=self.layout)
+        ready_ns = time.monotonic_ns() if getattr(self.channel, "diagnostic_timing", False) else None
         encode_ms=(time.perf_counter()-started)*1000
         requested=time.perf_counter()
         response=self.channel.request(frame,self.checkpoint,numeric)
@@ -86,4 +87,6 @@ class SharedParticipantPolicy:
         self.previous=frame
         self.last_timing={'tokenization_ms':encode_ms,'sampling_ms':(time.perf_counter()-sampling)*1000,
             'shared_request_roundtrip_ms':roundtrip}
+        if ready_ns is not None:
+            self.last_timing['shared_numeric_ready_ns'] = ready_ns
         return Selection(generated.table.table_hash,selected,self.version,float(logs[selected]),float(response['value']))

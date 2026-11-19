@@ -203,7 +203,8 @@ class ResidentPhysicalWorker(StructuredParticipantWorker):
         try:
             self._spawn(pool.ledger, pool.resident_bytes, arguments,
                 {'PATH': os.defpath, 'LANG': 'C.UTF-8', 'LC_ALL': 'C.UTF-8', 'PYTHONHASHSEED': '0',
-                    'OPENBLAS_NUM_THREADS': '1', 'OMP_NUM_THREADS': '1', 'MKL_NUM_THREADS': '1'},
+                    'OPENBLAS_NUM_THREADS': '1', 'OMP_NUM_THREADS': '1', 'MKL_NUM_THREADS': '1',
+                    **({'GF_BOTS_PERFORMANCE_TIMING': '1'} if pool.shared and pool.service.diagnostics is not None else {})},
                 **({'pass_fds': pass_fds} if pass_fds else {}))
             if self.owned_channel is not None:
                 self.owned_channel.bind_child(self.process)
@@ -546,6 +547,7 @@ class ResidentParticipantWorker(CardInstanceParticipantWorker):
         if kwargs.get('ledger') is not pool.ledger:
             raise ContractError('resident logical participant requires SAME ledger')
         self.pool, self.viewer = pool, viewer
+        self._performance_shared = pool.shared
         self.game=kwargs.pop("game",None)
         self._completed = False
         self._begin_import_request: Json | None = None

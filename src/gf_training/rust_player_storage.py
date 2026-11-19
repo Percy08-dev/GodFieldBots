@@ -680,6 +680,7 @@ class _Command:
     done: threading.Event
     accepted: bool = False
     result: Any = None
+    diagnostic_ticket: Any = None
 
 
 class _WriterWorkspace:
@@ -836,6 +837,11 @@ class RustPlayerStorage:
             raise ValueError("original native admission preceded deferred context registration")
         self.committed: set[str] = set()
         self._condition = threading.Condition()
+        from gf_common.performance_metrics import StorageMetrics
+        from gf_simulator_client.performance_diagnostics import host_diagnostics
+        self._performance = host_diagnostics()
+        self._performance_queue: Any = (StorageMetrics(scope=self._performance.current_scope or self._performance.scope(phase='idle'),
+            start_ns=time.monotonic_ns(), model='thread-fifo') if self._performance is not None else None)
         self._queue: deque[_Command] = deque()
         self._queued_bytes = 0
         self._active: _Command | None = None
@@ -888,22 +894,32 @@ class RustPlayerStorage:
 
     def _rpc(self, kind: str, value: Any = None) -> Any:
         command = _Command(kind, value, threading.Event())
-        size = value.reserved_bytes if kind == "bundle" else 0
-        if size > self.settings.queue_bytes:
-            self.cancel("native record exceeds storage queue byte bound")
-            raise ValueError("native record exceeds storage queue byte bound")
-        with self._condition:
-            self._check()
-            while kind == "bundle" and self._queued_bytes + size > self.settings.queue_bytes:
-                self._condition.wait(remaining(self.deadline))
+        try:
+            size = value.reserved_bytes if kind == "bundle" else 0
+            if size > self.settings.queue_bytes:
+                self.cancel("native record exceeds storage queue byte bound")
+                raise ValueError("native record exceeds storage queue byte bound")
+            if self._performance_queue is not None:
+                command.diagnostic_ticket = self._performance_queue.attempt(time.monotonic_ns())
+            with self._condition:
                 self._check()
-                if self._closing:
+                while kind == "bundle" and self._queued_bytes + size > self.settings.queue_bytes:
+                    self._condition.wait(remaining(self.deadline))
+                    self._check()
+                    if self._closing:
+                        raise RuntimeError("storage admission closed")
+                if self._closing or self._sealed:
                     raise RuntimeError("storage admission closed")
-            if self._closing or self._sealed:
-                raise RuntimeError("storage admission closed")
-            self._queued_bytes += size
-            self._queue.append(command)
-            self._condition.notify_all()
+                self._queued_bytes += size
+                self._queue.append(command)
+                if command.diagnostic_ticket is not None:
+                    self._performance_queue.admit(command.diagnostic_ticket, time.monotonic_ns(), size)
+                self._condition.notify_all()
+        except BaseException:
+            if command.diagnostic_ticket is not None:
+                with self._condition:
+                    self._performance_queue.fail(command.diagnostic_ticket, time.monotonic_ns())
+            raise
         if not command.done.wait(remaining(self.deadline)):
             self.cancel("storage operation deadline")
             raise TimeoutError("storage operation deadline")
@@ -997,6 +1013,13 @@ class RustPlayerStorage:
         self._thread.join(remaining(self.cleanup_deadline))
         if self._thread.is_alive():
             raise TimeoutError("original storage thread join unconfirmed")
+        if self._performance_queue is not None and not getattr(self, '_performance_flushed', False):
+            if self._failure is not None or self.cleanup_errors:
+                self._performance_queue.metrics.error('writer_retirement_incomplete')
+            assert self._performance is not None
+            self._performance.metrics(self._performance_queue.metrics, role='writer')
+            self._performance_flushed = True
+            self._performance_queue = None
         if self.cleanup_errors:
             raise RuntimeError(
                 "storage cleanup remains unconfirmed: " + ",".join(self.cleanup_errors)
@@ -1216,6 +1239,8 @@ class RustPlayerStorage:
                         break
                     command = self._queue.popleft()
                     self._active = command
+                    if command.diagnostic_ticket is not None:
+                        self._performance_queue.dispatch(command.diagnostic_ticket, time.monotonic_ns())
                 if command.kind == "bundle":
                     bundle = command.value
                     encoder = self.encoders.get(bundle.episode)
@@ -1273,6 +1298,8 @@ class RustPlayerStorage:
                 with self._condition:
                     if command.kind == "bundle":
                         self._queued_bytes -= command.value.reserved_bytes
+                    if command.diagnostic_ticket is not None:
+                        self._performance_queue.release(command.diagnostic_ticket)
                     self._active = None
                     self._condition.notify_all()
                 command = None

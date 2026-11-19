@@ -304,7 +304,7 @@ impl PlayerRuntime {
             config.runtime_identity.clone(),
         )
         .map_err(crate::python_error)?;
-        let storage = Mailbox::new(config.storage_bytes, config.storage_queue)
+        let storage = Mailbox::new_monitored(config.storage_bytes, config.storage_queue, dispatcher.metrics.clone())
             .map_err(crate::python_error)?;
         Ok(Self {
             config,
@@ -337,15 +337,18 @@ impl PlayerRuntime {
     }
     #[getter]
     fn dispatcher(&self) -> PlayerInferenceDispatcher {
+        self.dispatcher.metrics.increment("pyo3_other", 1);
         PlayerInferenceDispatcher::from_core(self.dispatcher.clone())
     }
     fn start(&self, py: Python<'_>, encoded: &[u8]) -> PyResult<()> {
+        self.dispatcher.metrics.increment("pyo3_other", 1);
         let games: Vec<GameSpec> = serde_json::from_slice(encoded)
             .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
         py.detach(|| self.submit_inner(games))
             .map_err(crate::python_error)
     }
     fn next_storage(&self, py: Python<'_>, deadline: f64) -> PyResult<StorageBundle> {
+        self.dispatcher.metrics.increment("pyo3_other", 1);
         let record = py
             .detach(|| self.storage.next(deadline))
             .map_err(crate::python_error)?;
@@ -353,17 +356,21 @@ impl PlayerRuntime {
     }
     #[pyo3(signature=(bundle, failure=None))]
     fn storage_ack(&self, bundle: &StorageBundle, failure: Option<String>) -> PyResult<()> {
+        self.dispatcher.metrics.increment("pyo3_other", 1);
         self.storage
             .ack(&bundle.record, failure)
             .map_err(crate::python_error)
     }
     fn recording_account(&self) -> RecordingAccount {
+        self.dispatcher.metrics.increment("pyo3_other", 1);
         self.storage.account()
     }
     fn storage_bytes(&self) -> usize {
+        self.dispatcher.metrics.increment("pyo3_other", 1);
         self.storage.used()
     }
     fn wait(&self, py: Python<'_>, deadline: f64) -> PyResult<()> {
+        self.dispatcher.metrics.increment("pyo3_other", 1);
         py.detach(|| -> Result<()> {
             wait_duration(deadline)?;
             let mut done = self.shared.done.lock().unwrap();
@@ -387,6 +394,7 @@ impl PlayerRuntime {
     }
     fn completed_reports<'py>(&self, py: Python<'py>, keys: Vec<(String, String, String)>)
         -> PyResult<Bound<'py, pyo3::types::PyBytes>> {
+        self.dispatcher.metrics.increment("pyo3_other", 1);
         let encoded = py.detach(|| -> Result<Vec<u8>> {
             let unique: HashSet<_> = keys.iter().collect();
             ensure(unique.len() == keys.len(), "duplicate completed-report key")?;
@@ -406,20 +414,52 @@ impl PlayerRuntime {
         Ok(pyo3::types::PyBytes::new(py, &encoded))
     }
     fn quiesce(&self) {
+        self.dispatcher.metrics.increment("pyo3_other", 1);
         let mut life = self.life.lock().unwrap();
         life.accepting = false;
         life.senders.clear();
     }
     fn cancel(&self, reason: String) {
+        self.dispatcher.metrics.increment("pyo3_other", 1);
         self.cancel.cancel();
         self.storage.close(error(reason)); /* Retire actual games; keep exported service leases until original submit/close. */
     }
     fn join<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, pyo3::types::PyBytes>> {
+        self.dispatcher.metrics.increment("pyo3_other", 1);
         let report = py
             .detach(|| self.join_inner())
             .map_err(crate::python_error)?;
         Ok(pyo3::types::PyBytes::new(py, &report))
     }
+    fn measurement_begin(&self, encoded: &[u8]) -> PyResult<()> {
+        self.dispatcher.metrics.increment("pyo3_other", 1);
+        let scope: serde_json::Value = serde_json::from_slice(encoded)
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+        let _life = self.life.lock().unwrap();
+        let done = self.shared.done.lock().unwrap();
+        ensure(done.completed == self.shared.submitted.load(Ordering::Acquire)
+            && done.errors.is_empty() && self.dispatcher.measurement_quiet()
+            && self.storage.measurement_quiet(), "measurement requires positively quiescent wave/request/producer/storage boundary")
+            .map_err(crate::python_error)?;
+        self.dispatcher.metrics.begin(scope, super::metrics::monotonic_ns()).map_err(crate::python_error)?;
+        self.dispatcher.metrics.increment("pyo3_other", 1);
+        Ok(())
+    }
+    #[pyo3(signature=(encoded, complete=true))]
+    fn measurement_end<'py>(&self, py: Python<'py>, encoded: &[u8], complete: bool) -> PyResult<Bound<'py, pyo3::types::PyBytes>> {
+        self.dispatcher.metrics.increment("pyo3_other", 1);
+        let scope: serde_json::Value = serde_json::from_slice(encoded)
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+        let _life = self.life.lock().unwrap();
+        let done = self.shared.done.lock().unwrap();
+        let quiet = (done.completed == self.shared.submitted.load(Ordering::Acquire) || (!complete && _life.joined))
+            && (!complete || done.errors.is_empty()) && self.dispatcher.measurement_quiet()
+            && self.storage.measurement_quiet() && (complete || _life.joined);
+        ensure(quiet, "measurement requires positively quiescent wave/request/producer/storage boundary").map_err(crate::python_error)?;
+        let data = self.dispatcher.metrics.end_scope(&scope, super::metrics::monotonic_ns(), complete).map_err(crate::python_error)?;
+        Ok(pyo3::types::PyBytes::new(py, &serde_json::to_vec(&data).unwrap()))
+    }
+
 }
 impl Drop for PlayerRuntime {
     fn drop(&mut self) {
