@@ -27,8 +27,12 @@ ordinary CPU single-use and current-source Model4 CUDA returned-Parent handoff.
 The generic same-host CUDA account also passes scoped independent correctness
 and conformance after actual Source-funding, exception-chain cleanup and historical
 path-containment repairs. It estimates managed phase demand; actual CUDA capacity
-and the complete learning/resume measurements remain Task6/7. Artifact-retention
-and healthy-empty integration/evidence remain required before public activation. User CLI execution and deployment memory/adoption remain
+and the complete learning/resume measurements remain Task6/7. The artifact-retention and healthy-empty DATA/ownership component also passes
+scoped independent correctness/conformance after historical completion-schema
+and protected-inventory repairs. Genuine pruned-checkpoint resume remains Task6;
+source review proves a healthy zero-frame engine cohort unreachable under the
+current paired/repeated-seed contract, with its explicit revisit condition in
+[the verification proof](design/rust-player-runtime-empty-feasibility.md). User CLI execution and deployment memory/adoption remain
 in progress. New runtime/producer/prepared/exit/physical
 identities preserve historical receipts; actual scientific cold Source completion
 and evaluation handoff remain to be connected. A fully integrated new runtime

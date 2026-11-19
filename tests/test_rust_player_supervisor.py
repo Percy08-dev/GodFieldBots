@@ -722,6 +722,11 @@ def _host_fixture(mode, control_fd, launch_fd, phase):
             transfer_run_lock(ownership, control)
             assert require_hpo_run_owner(parent, ownership) is ownership
         competitor_blocked()
+        if mode == "retention-control":
+            import sys
+            sys.path.insert(0, str(Path(__file__).parents[1]))
+            from tests.test_rust_player_retention import run_retention_control
+            run_retention_control(control, ownership)
         if mode == "cpu-source":
             import sys
             sys.path.insert(0, str(Path(__file__).parents[1]))
@@ -758,7 +763,7 @@ def _host_fixture(mode, control_fd, launch_fd, phase):
             output.mkdir()
             run_cuda_numerical_component(admission, output)
     assert not control._parent_borrowers
-    if mode in ("cuda-numeric", "cpu-source"):
+    if mode in ("cuda-numeric", "cpu-source", "retention-control"):
         control.close()
         return  # actual reap diagnostics only; NEVER Prepared/Source/final-D
     if mode == "lost-transfer-ack":

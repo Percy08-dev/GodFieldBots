@@ -623,3 +623,96 @@ all Original/Replay/numeric/saved-state audits, one-Python tree, real campaign/e
 merged telemetry, full24-run timing/default protocol and observation calibration
 remain open. This component milestone does not qualify learning quality, arbitrary
 physical capacity, public activation or a default switch.
+
+## Retention and healthy-empty engineering component
+
+2026-11-20 Root accepts the isolated `feat/rust-player-runtime-retention` component
+under both final independent correctness/conformance reviews. Initial review found
+three blockers: a historical reader expected an unproduced completion admission
+field, its synthetic positive did not use the actual closed completion schema,
+and cold inventory omitted parts of the applicable protection policy. R1 closes
+the two completion/history issues and adds complete HPO/evaluation protection;
+R2 retains ordinary `inference.json` outside the fully protected set. No persisted
+format or warm/physical-retirement policy changed. Both scoped R2 reviews are
+READY; no third repair/advisor cycle is needed.
+
+Root fresh precollection selects exactly122 CPU-only retention/empty/frozen-kernel
+checks with empty GPU visibility and `not cuda`; execution passes122 in1.95s.
+Final Root Ruff12Python files, mypy4Source files and diff checks pass. Earlier
+implementer evidence includes417affected checks, R1 182affected/14legacy and
+R2 91retention checks; these are not silently relabeled as a repeated whole suite.
+R2 patch is6d5a52fa418916f9dbe559dec5f8e154622b654fb3947a8a9712f8a560b790d5,
+review inventoryf10d37ae9c0d6ecd00cac16e432c6294fe16466bc9be30e13230a2c8ac43435c.
+
+Before the reader repairs,16genuine original-supervisor CPU control/fault cases
+pass45.63s under one exact historical Python producer
+b228e942764b87dda6dc268c941cf92823fa38d0a5eaa27d118bf8c94c333573.
+They cover SHA/inode replacement, intent/rename/unlink/fsync/stage contamination,
+uncertain close, positive preterminal cleanup retry and receipt failure. All16
+actual original admission hashes were independently verified. The physical
+retirement class is AST-identical after R1/R2; those earlier cases are NOT current
+reader/engine-resume evidence. Actual private supervisor
+53608d685b147b052a740b5a6d3f5303056e84b0e880596b5353fe17dc61b403 differs from
+installed companion136347f0b1e1fc7a9a240ec0edffd8b9df5b44c605065d59a6055c73302d0fac.
+Native d4282ec2d1d18d1eb1d9637d6ca697837b9249d1caeee3526dd81f8287d0f333,
+extension3497880d025c546b4d13e08eccc01292aef1ab7ab5f41760e27cf6be56b87fe8,
+wheel95caed6e7bbb0843f64c27f4850c72cedb0d1e2b4ac8dec8468571d47f965ffc.
+The native source change is confined to its private cfg(test) control fixture.
+
+Genuine retired-checkpoint resume, first/later all-natural zero-own-seat engine
+capture and extra full engine Raw/Replay finalization remain NOT RUN here and
+required integrated Task6 evidence. No actual gameplay/GPU/training or calibration/
+performance/default claim follows from these controls or synthetic DATA tests.
+The complete approved Task6/24-run Task7 protocol and current producer integration
+remain open.
+
+## Healthy-empty engine reachability disposition
+
+Subsequent read-only verifier investigation and independent architecture review
+find the genuine first/later all-natural zero-own-seat engine case UNREACHABLE /
+NOT APPLICABLE under Simulator072d and the currently admitted paired schedules.
+This refines the initial NOT RUN reservation above; it is not an executed PASS.
+The [conditional proof](../design/rust-player-runtime-empty-feasibility.md) checks
+actual native MLP/singleton capture, storage ACK, journal/Raw/Replay frames and
+selection, not just a legacy counter. Swapped learner seats share the repeated
+engine seed/first player; each complete pair contributes at least one learner
+frame. A dispatched cohort has remainingD>0, so selected=min(remainingD,L)>0.
+For8/16/32 games the collected lower bounds are4/8/16. No seed search or changed
+schedule/budget/engine/outcome was used to obtain this conclusion.
+
+Generic healthy-empty DATA/ownership/marker and negative cold validation remain.
+Revisit and add a genuine engine test BEFORE changing paired seats, repeated seed,
+first-action semantics, singleton/frame recording, learner selection or budget
+stop. An observed healthy zero under current contracts is an invariant failure.
+Full genuine pruned-checkpoint resume and ALL other Task6/7 experiments remain
+mandatory. This proof does not establish deterministic training, quality, speed
+or physical memory capacity.
+
+## Joined device-account and retention composition
+
+The accepted device79ae8fb and retention44d2bd7 components auto-merge all production
+source without a conflict. Root resolves only the three design/evidence document
+conflicts by preserving both engineering histories. A cleanup-only test receiver
+needs the new inspection-owned raw alias, parent lease and same-pool close hold;
+its four failing terminal-close cases become12 passing cleanup/constructor cases.
+No production code, learning/record semantics or failure guard is changed for this
+fixture adaptation. Independent joined-composition review is READY, preserving
+Source funding/empty DATA separation, source-invocation plan/loan binding, strict
+historical completion and HPO protection forwarding.
+
+Root freshly precollects exactly270 CPU/data plus12 pure Source cleanup nodes,
+with empty GPU visibility/`not cuda` and no actual-game cases. Execution passes270
+in6.85s (the known readonly NumPy/Torch warning) and12 in0.14s. The implementer’s
+joined mypy15 and Ruff22 checks pass. Original automatic23-file staged bytes match
+inventoryc5355a322eee9ff259c621c4df553928fee793ea4d1594b53231b7ee1a74c70b;
+sole fixture deltaef6137371cd96d5c840fa097f0cb86261ec521eb507af8cc03527b3d9870744f,
+joined evidence inventoryaf911423861ff027d2f401fa21b3606391bf2db7a3b15365a3c7b304bcf051e9.
+
+Two restricted-sandbox attempts (the initial270 selection and an isolated asyncio
+executor/I/O-double node) were interrupted with exit130; no completed PASS is
+claimed. Faulthandler/logs remain preserved. The isolated node and full selection
+pass outside that sandbox, but the cause is UNPROVEN: test order and environment
+may differ. No production change or hidden cleanup experiment was inferred.
+Installed native82f25 remains UNMATCHED to joined test-sourceD428. Only pure CPU/
+data/static checks ran; the final combined native/companion build and actual
+Source/CUDA/process/campaign/evaluation/measurement gates remain required.

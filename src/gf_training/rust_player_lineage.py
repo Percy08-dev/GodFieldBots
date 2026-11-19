@@ -6,6 +6,8 @@ Historical record kinds/readers remain separate.
 
 from __future__ import annotations
 
+from typing import Any
+
 from gf_common.domain import ContractError, Json, closed, digest
 from gf_common.rust_player import validate_runtime_binding
 
@@ -51,11 +53,18 @@ def validate_run(value: Json, *, hpo: bool = False) -> Json:
         from gf_common.rust_player import hex_identity
         hex_identity(invocation, 32)
         closed(entry, {'operation_path', 'operation_sha256', 'execution_request',
-            'admission_path', 'admission_sha256', 'mode', 'elapsed_seconds', 'host_health'})
+            'admission_path', 'admission_sha256', 'mode', 'elapsed_seconds', 'host_health'}, {'empty_collection'} if hpo else set())
         hex_identity(entry['operation_sha256'])
         hex_identity(entry['admission_sha256'])
         if entry['mode'] not in ('fresh', 'resume') or entry['execution_request']['mode'] != entry['mode']:
             raise ContractError('Run5 invocation/request differs')
+        if 'empty_collection' in entry:
+            from types import SimpleNamespace
+            storage = SimpleNamespace(**raw['effective_config']['storage'])
+            validate_empty_collection(entry['empty_collection'], state=raw, config=SimpleNamespace(storage=storage))
+    markers = [entry for entry in raw['invocations'].values() if 'empty_collection' in entry]
+    if hpo and ((raw['stop_reason'] == 'empty_collection') != (len(markers) == 1)):
+        raise ContractError('empty stop requires exactly one actual uncommitted collection marker')
     return raw
 
 _CLASSIFICATION = frozenset(["action_contract", "rule_signature", "layout_signature", "purpose", "synthetic_capacity"])
@@ -112,3 +121,51 @@ def resume_identity(*, effective_config: Json, identity: Json, execution: Json,
     return digest({"recipe": "rust-player-hpo-resume-v1" if hpo else "rust-player-ppo-resume-v1",
         "effective_config": effective_config, "identity": identity, "execution": execution,
         "classification": classification, "storage_binding": storage_binding})
+
+
+def validate_empty_collection(value: Json, *, state: Json, config: Any) -> Json:
+    """Closed marker data; physical descriptor and logical SQLite member differ."""
+    from pathlib import Path
+
+    from gf_common.domain import integer
+    from gf_common.rust_player import hex_identity
+    row = closed(value, {'batch_id', 'collection_generation', 'manifest_path', 'manifest_sha256',
+        'descriptor_path', 'descriptor_sha256', 'learner_decisions'})
+    generation = integer(row['collection_generation'], 0)
+    integer(row['learner_decisions'], 0, 0)
+    root = Path(config.storage.db_root) / state['run_id'] / 'collections' / f'batch-{generation:06}'
+    if (state['status'] != 'incomplete' or state.get('stop_reason') != 'empty_collection'
+            or generation != state['updates'] or row['batch_id'] != f'batch-{generation:06}'
+            or row['descriptor_path'] != str(root / 'collection.pending.json')
+            or row['manifest_path'] != str(root / 'manifest.json')):
+        raise ContractError('empty collection exact current logical/physical binding differs')
+    hex_identity(row['manifest_sha256'])
+    hex_identity(row['descriptor_sha256'])
+    return row
+
+
+def validate_completion(value: Json) -> Json:
+    """Closed existing completion1 DATA; parsing grants no finalizer authority."""
+    from pathlib import Path
+
+    from gf_common.domain import integer
+    from gf_common.rust_player import hex_identity, text
+    row = closed(value, {'schema_version', 'kind', 'supervision_id', 'invocation_id', 'operation_id',
+        'run_id', 'config_sha256', 'runtime_binding_sha256', 'operation_sha256', 'prepared_sha256',
+        'exit_sha256', 'state_sha256', 'generation_sha256', 'source_manifest_sha256', 'state',
+        'committed_update', 'audit_path', 'audit_sha256', 'eligible', 'parent_metadata_validation'})
+    if (type(row['schema_version']) is not int or row['schema_version'] != 1
+            or row['kind'] != 'rust-player-training-completion-v1'):
+        raise ContractError('existing Rust completion1 required')
+    for key in ('supervision_id', 'invocation_id'):
+        hex_identity(row[key], 32)
+    for key in ('operation_id', 'run_id', 'audit_path'):
+        text(row[key])
+    for key in ('config_sha256', 'runtime_binding_sha256', 'operation_sha256', 'prepared_sha256',
+            'exit_sha256', 'state_sha256', 'generation_sha256', 'source_manifest_sha256', 'audit_sha256'):
+        hex_identity(row[key])
+    integer(row['committed_update'], 0)
+    if (row['state'] not in ('complete', 'paused', 'incomplete') or type(row['eligible']) is not bool
+            or row['parent_metadata_validation'] is not None or not Path(row['audit_path']).is_absolute()):
+        raise ContractError('completion1 result/audit fields differ')
+    return row

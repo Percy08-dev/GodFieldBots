@@ -677,7 +677,7 @@ class RustGameOperations:
     def project(self, collection: Any, plan: Any, numeric: Path, config: Any, deadline: float) -> Any:
         from contextlib import contextmanager
 
-        from gf_training.rust_player_source import RustPlayerSource
+        from gf_training.rust_player_source import RustEmptyCollection, RustPlayerSource
 
         @contextmanager
         def projection() -> Any:
@@ -685,9 +685,15 @@ class RustGameOperations:
             collection.require(self.registry, plan)
             source = RustPlayerSource.project(collection)
             try:
-                source.persist(numeric)
                 self.last_consumer_settlement_sha256 = source.manifest['logical_retirement']['service_settlement_sha256']
-                yield source.decision_count, source.proof, dict(source.numeric_files), source
+                if isinstance(source, RustEmptyCollection):
+                    actual = self.admission.observation
+                    self.state['invocations'][actual['invocation_id']]['empty_collection'] = source.empty_marker()
+                    self.last_source_manifest_sha256 = source.collection.manifest_sha256
+                    yield 0, None, None, source
+                else:
+                    source.persist(numeric)
+                    yield source.decision_count, source.proof, dict(source.numeric_files), source
             except BaseException as error:
                 # Stopped producer/kernel frames can still own arrays and
                 # metadata. Retire those aliases before their concrete Source

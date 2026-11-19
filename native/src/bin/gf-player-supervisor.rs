@@ -457,7 +457,7 @@ with gpu.admit_gpu_job(gpu.JobContext('legacy','operation','training','run',None
             .parent()
             .unwrap();
         for &mode in cases {
-            let ordinary = ["ordinary-normal", "cuda-numeric", "cpu-source", "cpu-common"].contains(&mode);
+            let ordinary = ["ordinary-normal", "cuda-numeric", "cpu-source", "cpu-common", "retention-control"].contains(&mode);
             let runtime_mode = if ordinary { "ordinary" } else { "hpo" };
             let root = std::env::temp_dir().join(format!(
                 "{}-{mode}-{}",
@@ -471,7 +471,7 @@ with gpu.admit_gpu_job(gpu.JobContext('legacy','operation','training','run',None
             let bits = |n: f64| format!("{:016x}", n.to_bits());
             let deadlines = if mode == "cpu-common" {
                 json!({"admission_bits":bits(now+480.0),"execution_bits":bits(now+540.0),"term_bits":bits(now+570.0),"kill_bits":bits(now+585.0),"finish_bits":bits(now+600.0)})
-            } else if mode == "cuda-numeric" || mode == "cpu-source" {
+            } else if mode == "cuda-numeric" || mode == "cpu-source" || mode == "retention-control" {
                 json!({"admission_bits":bits(now+30.0),"execution_bits":bits(now+80.0),"term_bits":bits(now+90.0),"kill_bits":bits(now+100.0),"finish_bits":bits(now+120.0)})
             } else {
                 json!({"admission_bits":bits(now+1.5),"execution_bits":bits(now+2.0),"term_bits":bits(now+2.5),"kill_bits":bits(now+3.0),"finish_bits":bits(now+5.0)})
@@ -481,13 +481,13 @@ with gpu.admit_gpu_job(gpu.JobContext('legacy','operation','training','run',None
             } else {
                 json!({"campaign_id":"campaign","operation_id":"operation","kind":"training","run_id":"run","evaluation_id":null})
             };
-            let operation_id = if ["cuda-numeric", "cpu-source", "cpu-common"].contains(&mode) {
+            let operation_id = if ["cuda-numeric", "cpu-source", "cpu-common", "retention-control"].contains(&mode) {
                 format!("{mode}-{}", records::random_id().unwrap())
             } else {
                 "operation".to_owned()
             };
             let mut operation = json!({"schema_version":1,"kind":"rust-player-operation-v1","operation_id":operation_id,"run_id":"run","mode":runtime_mode,"operation_type":if ordinary {"ordinary-train"} else {"hpo-train"},"config_path":root.join("config.json"),"config_sha256":"a".repeat(64),"runtime_binding_sha256":"b".repeat(64),"deadlines":deadlines,"parent_directory":parent,"expected_context":context});
-            if mode == "cpu-source" || mode == "cpu-common" {
+            if mode == "cpu-source" || mode == "cpu-common" || mode == "retention-control" {
                 let helper = if mode == "cpu-common" { "prepare_cpu_common" } else { "prepare_cpu_source" };
                 let code = format!("import json,sys;from pathlib import Path;from tests.test_rust_player_spine import {helper};print(json.dumps({helper}(Path(sys.argv[1]),Path(sys.argv[2]))))");
                 let output = std::process::Command::new(python()).args(["-c", &code])
@@ -521,7 +521,7 @@ with gpu.admit_gpu_job(gpu.JobContext('legacy','operation','training','run',None
             } else {
                 json!([{"lock_kind":if mode=="cpu-common"{"parent"}else{"campaign"},"fd":campaign.into_raw_fd(),"device":metadata.dev(),"inode":metadata.ino()}])
             };
-            let launch = json!({"schema_version":1,"kind":"rust-player-launch-v1","supervision_id":records::random_id().unwrap(),"python_executable":python(),"operation_path":operation_path,"operation_sha256":operation_sha,"record_directory":root,"mode":runtime_mode,"session_deadlines":{"finish_bits":bits(now+if mode=="session-expire"{5.3}else if mode=="cpu-common"{600.0}else if mode=="cuda-numeric" || mode=="cpu-source"{120.0}else{10.0})},"clock_binding":{"boot_id":records::boot_id().unwrap(),"monotonic_before_bits":bits(now),"monotonic_after_bits":bits(now),"unix_anchor_bits":bits(records::unix_ns().unwrap() as f64/1e9)},"binding":{"python_abi":identity["python_abi"],"extension_sha256":identity["extension_sha256"],"build":build},"locks":mapping});
+            let launch = json!({"schema_version":1,"kind":"rust-player-launch-v1","supervision_id":records::random_id().unwrap(),"python_executable":python(),"operation_path":operation_path,"operation_sha256":operation_sha,"record_directory":root,"mode":runtime_mode,"session_deadlines":{"finish_bits":bits(now+if mode=="session-expire"{5.3}else if mode=="cpu-common"{600.0}else if mode=="cuda-numeric" || mode=="cpu-source" || mode=="retention-control"{120.0}else{10.0})},"clock_binding":{"boot_id":records::boot_id().unwrap(),"monotonic_before_bits":bits(now),"monotonic_after_bits":bits(now),"unix_anchor_bits":bits(records::unix_ns().unwrap() as f64/1e9)},"binding":{"python_abi":identity["python_abi"],"extension_sha256":identity["extension_sha256"],"build":build},"locks":mapping});
             let launch_path = root.join("launch.json");
             records::write(&launch_path, &launch, true).unwrap();
             let launch_file = std::fs::File::open(&launch_path).unwrap();
@@ -724,6 +724,12 @@ with gpu.admit_gpu_job(gpu.JobContext('legacy','operation','training','run',None
                 );
                 eprintln!("CUDA numerical component artifacts: {}", result.display());
             }
+            if mode == "retention-control" {
+                assert!(root.join("retention-control-result.json").exists(), "actual artifact retention control did not finish: {}", root.display());
+                assert!(!root.join("component-prepared.json").exists());
+                assert!(!root.join("cold-started").exists());
+                eprintln!("Retention control artifacts: {}", root.display());
+            }
             if mode == "cpu-source" {
                 assert!(root.join("cpu-source-result.json").exists(), "actual CPU Source component did not finish: {}", root.display());
                 assert!(!root.join("component-prepared.json").exists());
@@ -738,6 +744,11 @@ with gpu.admit_gpu_job(gpu.JobContext('legacy','operation','training','run',None
                 eprintln!("COMMON PPO CPU artifacts: {}",root.display());
             }
         }
+    }
+    #[test]
+    #[ignore = "requires Root-approved actual CPU control-only retention scope"]
+    fn actual_retention_control_only_component() {
+        run_host_cases(&["retention-control"]);
     }
     #[test]
     #[ignore = "requires matched release extension"]

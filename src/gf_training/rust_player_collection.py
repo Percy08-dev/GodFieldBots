@@ -45,6 +45,7 @@ class RustCollectedBatch:
         self.capture_sha256, self.retirement_sha256 = capture_sha256, retirement_sha256
         self.originals: RustPlayerOriginals | None = None
         self._closed = False
+        self._cleanup_children: list[Any] = []
 
     def require(self, registry: RustRunRegistry, plan: Any) -> None:
         registry.require()
@@ -58,8 +59,13 @@ class RustCollectedBatch:
     def open(self) -> RustPlayerOriginals:
         self.require(self.registry, self.plan)
         if self.originals is None:
-            self.originals = RustPlayerOriginals(self.pending, pool=self.registry.pool,
-                settings=self.registry.config.preprocessing, deadline=self.plan.execution_deadline)
+            try:
+                self.originals = RustPlayerOriginals(self.pending, pool=self.registry.pool,
+                    settings=self.registry.config.preprocessing, deadline=self.plan.execution_deadline)
+            except BaseException as error:
+                from gf_training.group_pack_resources import retain_cleanup
+                retain_cleanup(self, error)
+                raise
         return self.originals
 
     @property
@@ -73,9 +79,8 @@ class RustCollectedBatch:
     def close(self) -> None:
         if self._closed:
             return
-        if self.originals is not None:
-            self.originals.close()
-        self.pending.close()
+        from gf_training.group_pack_resources import close_resources
+        close_resources(self, [self.originals, self.pending])
         self._closed = True
 
 

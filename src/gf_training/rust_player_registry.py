@@ -92,6 +92,7 @@ class RustSavedPolicy:
             raise ContractError("actual saved-policy preparation required")
         self._state = "PREPARING"
         self._held: dict[str, OriginalFile] = {}
+        self._cleanup_children: list[Any] = []
         self._charges: list[Any] = []
         self._consumers: set[_PolicyLease] = set()
         self._snapshot: Any = None
@@ -163,7 +164,8 @@ class RustSavedPolicy:
                 output._state = "EXPORTED"
                 return output
         except BaseException as error:
-            vars(error)["cleanup_owner"] = output
+            from gf_training.group_pack_resources import retain_cleanup
+            retain_cleanup(output, error)
             raise
 
     @property
@@ -237,8 +239,8 @@ class RustSavedPolicy:
             self._snapshot.close()
         elif self.inference is not None:
             self.inference.close()
-        for original in self._held.values():
-            original.close()
+        from gf_training.group_pack_resources import close_resources
+        close_resources(self, list(self._held.values()))
         self._held.clear()
         self._manifest_bytes = b""
         for charge in self._charges:
@@ -278,6 +280,8 @@ class RustRunRegistry:
         self.cache: dict[int, Any] = {}
         self.released_references: Json = {}
         self.pending: Any = None
+        self._retirement_owners: list[Any] = []
+        self._cleanup_children: list[Any] = []
         self._restored_metadata_loans: list[Any] = []
         self.failed, self.closed = False, False
         self.current: Any = None
@@ -501,6 +505,8 @@ class RustRunRegistry:
             self.writer.write(self.directory / 'artifact-registry.json', self.registry, deadline=deadline)
             owner['lease'].close(owner)
             releases[data['token']] = checksum
+        if any(owner.phase != 'complete' for owner in self._retirement_owners):
+            raise ContractError('artifact retirement remains quarantined')
         for policy in self.policies.values():
             policy.close()
         aggregate = {'schema_version': 1, 'kind': 'rust-player-cache-retirement-v1',
@@ -516,12 +522,14 @@ class RustRunRegistry:
         if self.hpo:
             raise ContractError('ordinary retention requires its exact normal recipe')
         self._retain_inference_cache(runtime, consumer_settlement_sha256=consumer_settlement_sha256, deadline=deadline)
+        self._retain_artifact_files(deadline=deadline)
 
     def retain_hpo(self, runtime: Any, *, consumer_settlement_sha256: str, deadline: float) -> None:
         self.require()
         if not self.hpo:
             raise ContractError('HPO retention requires its exact spec6 recipe')
         self._retain_inference_cache(runtime, consumer_settlement_sha256=consumer_settlement_sha256, deadline=deadline)
+        self._retain_artifact_files(deadline=deadline)
 
     def _retain_inference_cache(self, runtime: Any, *, consumer_settlement_sha256: str, deadline: float) -> None:
         generation = self.state['updates']
@@ -557,3 +565,26 @@ class RustRunRegistry:
             owner['lease'].close(owner)
             policy.close()
             del self.cache[number], self.policies[number]
+
+
+    def _retain_artifact_files(self, *, deadline: float) -> None:
+        from gf_training.rust_player_retention import RustArtifactRetirement, protected_files
+        self.require()
+        pending = [self.pending.parent.generation] if self.pending is not None else []
+        protected = protected_files(self.records, self.registry, generation=self.state['updates'],
+            operating=self.config.hpo_spec['operating'] if self.hpo else None, pending=pending)
+        for generation, policy in tuple(self.policies.items()):
+            policy.retire_resume()
+            if not (set(policy.manifest['weights']['files']) | {'inference.json'}) <= protected[generation]:
+                if policy._consumers:
+                    protected[generation].update(self.records[generation]['artifact_files'])
+                else:
+                    policy.close()
+                    del self.policies[generation]
+        for generation, record in self.records.items():
+            for name in record['artifact_files']:
+                row = self.registry['generations'][str(generation)]['files'][name]
+                if name in protected[generation] or row['status'] == 'deleted':
+                    continue
+                retirement = RustArtifactRetirement(self, generation, name, row, deadline)
+                retirement.run()

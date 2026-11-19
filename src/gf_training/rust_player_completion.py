@@ -12,7 +12,7 @@ from gf_training.group_pack_pool import PackedArtifactPool
 from gf_training.group_pack_resources import close_resources, retain_cleanup
 from gf_training.group_pack_source import OriginalFile
 from gf_training.lineage import borrow_run_lock
-from gf_training.rust_player_lineage import validate_record_shape, validate_run
+from gf_training.rust_player_lineage import validate_completion, validate_record_shape, validate_run
 from gf_training.rust_player_supervision import ColdContinuation, HostControl, write_control_record
 
 _ISSUER = object()
@@ -20,7 +20,8 @@ _PARENT_ISSUER = object()
 
 
 def _audit_retirement(control: HostControl, state: Json, prepared: Json,
-                      pool: PackedArtifactPool, loans: list[Any], deadline: float, *, hpo: bool = False) -> None:
+                      pool: PackedArtifactPool, loans: list[Any], deadline: float, *, hpo: bool = False,
+                      operating: Json | None = None) -> None:
     from gf_training.rust_player_supervision import read_control_record
     close, checksum = read_control_record(Path(prepared['close_ack_path']), control.root)
     if checksum != prepared['close_ack_sha256']:
@@ -55,6 +56,8 @@ def _audit_retirement(control: HostControl, state: Json, prepared: Json,
     validate_record_shape(registry, 'registry', hpo=hpo)
     if registry['run_id'] != state['run_id'] or registry['runtime_binding_sha256'] != state['runtime_binding_sha256']:
         raise ContractError('cold actual artifact registry identity differs')
+    from gf_training.rust_player_retention import audit_artifact_files
+    audit_artifact_files(control, state, prepared, registry, pool, loans, deadline, hpo=hpo, operating=operating)
     for token, entry in registry['service_references'].items():
         if entry['status'] != 'released' or entry['release_sha256'] is None:
             raise ContractError('cold cache reference was not actually released')
@@ -530,6 +533,145 @@ def _audit_update(cold: Any, ownership: Any, pool: PackedArtifactPool,
         'episode_digests': episode_digests, 'source_set_sha256': proof['source_set_sha256']}
 
 
+def _audit_empty_schedule(manifest: Json, *, state: Json, current: Json, loaded: Any,
+                          parent: Path, inference_files: dict[int, str]) -> None:
+    """Pure schedule correspondence from saved RNG/pool and retained identities."""
+    import numpy as np
+
+    from gf_common.schedule import serialize_schedule
+    from gf_common.training_opponents import training_opponents
+    from gf_training.hpo_collection import training_groups_hpo, training_groups_hpo_refresh
+    labels = {}
+    for label, binding in manifest['policy_bindings'].items():
+        if binding['model_id'] != 'mlp':
+            continue
+        options = binding['policy_options']
+        path = Path(options['checkpoint'])
+        matches = [generation for generation, sha in inference_files.items()
+            if path == parent / 'artifacts' / f'{generation:06}' and options['expected_manifest_digest'] == sha]
+        if len(matches) != 1 or matches[0] in labels:
+            raise ContractError('empty collection inference binding is not the frozen pool/current generation')
+        labels[matches[0]] = label
+    if set(labels) != set(inference_files):
+        raise ContractError('empty collection omits a frozen inference pool/current binding')
+    learner = labels[state['updates']]
+    snapshots = tuple(labels[g] for g in current['parent_controls']['snapshot_pool'])
+    rng = np.random.Generator(np.random.PCG64())
+    rng.bit_generator.state = current['parent_controls']['schedule_opponent_rng']
+    games = loaded.config.hpo_spec['training_recipe']['collection_games']
+    mixed = training_opponents(loaded.effective)
+    groups = (training_groups_hpo_refresh(state['seed'], state['updates'], learner, snapshots, rng,
+        collection_games=games, actions=loaded.config.actions, training_opponents=mixed) if mixed is not None else
+        training_groups_hpo(state['seed'], state['updates'], learner, snapshots, rng, collection_games=games))
+    if canonical(serialize_schedule(groups, 4)) != canonical(manifest['schedule']):
+        raise ContractError('empty collection differs from independently reconstructed frozen schedule')
+
+
+def _audit_empty_originals(originals: Any, *, loaded: Any, state: Json, current: Json,
+                           marker: Json, admission: Json, parent: Path, inference_files: dict[int, str]) -> None:
+    """Extra sealed Raw/Replay audit with no numeric reader or update proof."""
+    from gf_common.card_instance_collection import hpo_batch_role
+    from gf_common.domain import closed
+    from gf_training.card_instance_collection_source import inspect_rust_game_manifest
+    from gf_training.rust_player_source import learner_records
+    from gf_training.structured_source import _inspect_collection_content
+    try:
+        manifest = originals.object(originals.root / 'manifest.json')
+        link = manifest['linkage']
+        capture, retirement = manifest['capture_authority'], manifest['logical_retirement']
+        closed(capture, {'schema_version', 'kind', 'actor_protocol_version', 'run_id', 'batch_id',
+            'generation', 'invocation_id', 'admission_sha256', 'runtime_binding_sha256',
+            'encoding_contexts_sha256', 'accepted_records', 'completed_reports_sha256'})
+        closed(retirement, {'schema_version', 'kind', 'run_id', 'batch_id', 'generation', 'invocation_id',
+            'admission_sha256', 'runtime_binding_sha256', 'service_id', 'episode_ids', 'completed_reports',
+            'accepted_records_sha256', 'service_settlement', 'service_settlement_sha256', 'gpu_fenced'})
+        if (digest(manifest) != marker['manifest_sha256'] or originals._descriptor_sha256 != marker['descriptor_sha256']
+                or originals.root / 'manifest.json' != Path(marker['manifest_path'])
+                or canonical(manifest['config']) != canonical(loaded.effective)
+                or canonical(manifest['code']) != canonical(state['identity']['code'])
+                or canonical(manifest['inputs']) != canonical(state['config_inputs'])
+                or manifest['config_hash'] != loaded.sha256
+                or manifest['runtime_binding_sha256'] != state['runtime_binding_sha256']
+                or manifest['player_producer'] != admission['producer']
+                or manifest['snapshot_identity'] != current['snapshot_identity']
+                or link['parent_run_id'] != state['run_id'] or link['parent_run_path'] != str(parent)
+                or link['collection_generation'] != state['updates'] or link['batch_id'] != marker['batch_id']):
+            raise ContractError('empty original manifest/config/current parent differs')
+        for row in (capture, retirement):
+            if (type(row['schema_version']) is not int or row['schema_version'] != 1
+                    or row['run_id'] != state['run_id'] or row['batch_id'] != marker['batch_id']
+                    or row['generation'] != state['updates'] or row['invocation_id'] != admission['invocation_id']
+                    or row['admission_sha256'] != digest(admission)
+                    or row['runtime_binding_sha256'] != state['runtime_binding_sha256']):
+                raise ContractError('empty capture/retirement actual admission differs')
+        if (capture['kind'] != 'rust-player-capture-authority-v1' or capture['actor_protocol_version'] != 11
+                or retirement['kind'] != 'rust-player-collection-retirement-v1' or retirement['gpu_fenced'] is not True
+                or capture['completed_reports_sha256'] != digest(retirement['completed_reports'])
+                or retirement['accepted_records_sha256'] != digest(capture['accepted_records'])
+                or retirement['service_settlement_sha256'] != digest(retirement['service_settlement'])):
+            raise ContractError('empty actual capture/retirement correspondence differs')
+        settlement = retirement['service_settlement']
+        if (settlement['run_id'] != state['run_id'] or settlement['batch_id'] != marker['batch_id']
+                or settlement['generation'] != state['updates'] or settlement['invocation_id'] != admission['invocation_id']
+                or settlement['service_id'] != retirement['service_id'] or settlement['gpu_fenced'] is not True
+                or any(type(settlement[key]) is not int or settlement[key] != 0 for key in
+                    ('active_policy_references', 'native_pending', 'started_producers'))):
+            raise ContractError('empty actual consumer settlement differs')
+        from gf_common.hpo import selection_context
+        expected_context = selection_context(decision_budget=loaded.config.hpo_spec['decision_budget'],
+            used_before=state['used_decisions'], learning_seed=state['seed'], batch=state['updates'])
+        if canonical(link['selection_context']) != canonical(expected_context):
+            raise ContractError('empty collection frozen selection context differs')
+        _audit_empty_schedule(manifest, state=state, current=current, loaded=loaded, parent=parent, inference_files=inference_files)
+        role = hpo_batch_role(loaded.config.hpo_spec['training_recipe']['collection_games'])
+        episodes, specs = inspect_rust_game_manifest(originals, manifest, loaded.config.actions, 'train', role=role)
+        outputs, _accepted, closures, missing = _inspect_collection_content(originals,
+            loaded.config.actions, manifest, episodes, specs, _game=True, packed=True)
+        records = learner_records(outputs, link['learner_seats'], closures, missing, games=role.games)
+        from gf_training.hpo_collection import selection_for_counts
+        selection = selection_for_counts(tuple(len(record.frames) for record in records),
+            learning_seed=state['seed'], batch=state['updates'], decision_budget=loaded.config.hpo_spec['decision_budget'],
+            used_before=state['used_decisions'])
+        if sum(len(record.frames) for record in records) or selection['used_decisions']:
+            raise ContractError('empty marker contradicts independently replayed learner decisions')
+        del outputs, records, manifest, episodes, specs, link, capture, retirement, settlement
+        originals.close()
+    except BaseException as error:
+        failure = _FailedRawAudit(originals, error)
+        vars(error)['cleanup_owner'] = failure
+        raise
+
+
+def _audit_empty(cold: ColdContinuation, ownership: Any, pool: PackedArtifactPool,
+                 loaded: Any, state: Json, current: Json, marker: Json, deadline: float, loans: list[Any]) -> None:
+    from gf_training.rust_player_lineage import validate_empty_collection
+    from gf_training.rust_player_source import RustColdOriginals
+    validate_empty_collection(marker, state=state, config=loaded.config)
+    admission, _, _ = cold.require_pair()
+    originals = RustColdOriginals(cold, ownership, Path(marker['descriptor_path']), marker['descriptor_sha256'],
+        pool=pool, settings=loaded.config.preprocessing, deadline=deadline)
+    mark = len(loans)
+    inference_files = {state['updates']: current['inference_sha256']}
+    try:
+        if (ownership.directory / 'numeric' / marker['batch_id']).exists():
+            raise ContractError('empty batch must not have a numeric payload')
+        for generation in current['parent_controls']['snapshot_pool']:
+            if generation not in inference_files:
+                row, _ = _read(ownership.directory / 'generations' / f'{generation:06}.json', pool.budget,
+                    deadline, loans=loans)
+                inference_files[generation] = row['inference_sha256']
+                del row
+    except BaseException as error:
+        vars(error)['cleanup_owner'] = _FailedRawAudit(originals, error)
+        raise
+    _audit_empty_originals(originals, loaded=loaded, state=state, current=current,
+        marker=marker, admission=admission, parent=ownership.directory, inference_files=inference_files)
+    inference_files.clear()
+    for loan in loans[mark:]:
+        loan.close()
+    del loans[mark:]
+
+
 def finalize_cold(control: HostControl, cold: ColdContinuation, *, loaded: Any) -> ColdFinalizedRustInvocation | ColdFinalizedRustParent:
     """Actual fixed cold entry; full ordinary data audit, no Torch/CUDA calls."""
     import hashlib
@@ -578,7 +720,8 @@ def finalize_cold(control: HostControl, cold: ColdContinuation, *, loaded: Any) 
                 or invocation['admission_sha256'] != digest(admission)
                 or state['generation_sha256'] != prepared['generation_sha256']):
             raise ContractError('cold frozen state/current actual operation/Prepared differs')
-        _audit_retirement(control, state, prepared, pool, result._control_loans, deadline, hpo=hpo)
+        _audit_retirement(control, state, prepared, pool, result._control_loans, deadline, hpo=hpo,
+            operating=loaded.config.hpo_spec['operating'] if hpo else None)
         updates: list[Json] = []
         previous: Any = None
         parent_sha: Any = None
@@ -615,9 +758,21 @@ def finalize_cold(control: HostControl, cold: ColdContinuation, *, loaded: Any) 
                 loan.close()
             previous_loans = current_loans
         chain_digest.update(b']')
+        marker = invocation.get('empty_collection')
+        if hpo and ((state['stop_reason'] == 'empty_collection') != (marker is not None)):
+            raise ContractError('empty marker must belong to the actual current frozen invocation')
+        if marker is not None:
+            if current is None:
+                raise ContractError('empty collection requires genuine current saved generation')
+            _audit_empty(cold, ownership, pool, loaded, state, current, marker, deadline, result._control_loans)
+        expected_batches = {f'batch-{number:06}' for number in range(state['updates'] + int(marker is not None))}
+        collection_root = Path(loaded.config.storage.db_root) / state['run_id'] / 'collections'
+        if collection_root.exists() and {path.name for path in collection_root.iterdir()} != expected_batches:
+            raise ContractError('cold unexpected committed/uncommitted collection inventory')
+        last_source = marker['manifest_sha256'] if marker is not None else (updates[-1]['manifest_sha256'] if updates else None)
         if (parent_sha != prepared['generation_sha256'] or current is None
                 or digest(current['artifact_files']) != prepared['artifacts_sha256']
-                or updates[-1]['manifest_sha256'] != prepared['source_manifest_sha256']):
+                or last_source != prepared['source_manifest_sha256']):
             raise ContractError('cold current committed artifacts/source differs')
         # Existing sealed content scanner owns no CUDA API. Its declared
         # remaining workspace is the SAME actual pool grant through return.
@@ -669,6 +824,7 @@ def finalize_cold(control: HostControl, cold: ColdContinuation, *, loaded: Any) 
             'audit_sha256': audit_sha, 'eligible': state['status'] == 'complete' and (
                 not hpo or state['used_decisions'] == loaded.config.hpo_spec['decision_budget']),
             'parent_metadata_validation': None}
+        validate_completion(completion)
         completion_path = control.root / f'completion-{admission["invocation_id"]}.json'
         write_control_record(completion_path, completion)
         completion_sha = cold.acknowledge_finalizer_output(completion_path)

@@ -265,6 +265,13 @@ class RustResumeOriginals(RustPlayerOriginals):
 
 
 
+def learner_records(outputs: Any, seats: Json, closures: Json, missing: Any, *, games: int) -> tuple[Any, ...]:
+    """Pure own-seat selection after full Raw/Replay; never outcome filtering."""
+    if missing or closures != {'natural': games}:
+        raise ContractError('actual complete natural curriculum required')
+    return tuple(item.records for item in outputs if item.viewer == seats[item.episode_id])
+
+
 class RustPlayerSource:
     """Private same-host projection of actual native capture and sealed originals."""
 
@@ -285,6 +292,7 @@ class RustPlayerSource:
     closure_counts: Json
     missing_replays: list[str]
     _numeric: Any
+    _inspection: RustEmptyCollection
     selection: Json
 
     def __init__(self, issuer: object = None) -> None:
@@ -295,63 +303,23 @@ class RustPlayerSource:
         raise TypeError('actual same-host Source authority cannot be serialized')
 
     @classmethod
-    def project(cls, collection: Any) -> RustPlayerSource:
-        from gf_common.card_instance_collection import PPO_BATCH, hpo_batch_role
-        from gf_training.card_instance_collection_source import inspect_rust_game_manifest
-        from gf_training.card_instance_source import _check_collection_parent
-        from gf_training.rust_player_collection import RustCollectedBatch
-        from gf_training.structured_source import _inspect_collection_content
-        if type(collection) is not RustCollectedBatch:
-            raise ContractError('actual same-host native/writer collection required')
-        registry, plan = collection.registry, collection.plan
-        collection.require(registry, plan)
-        if registry.pending is not None:
-            raise ContractError('actual unused Source transaction required')
+    def project(cls, collection: Any) -> RustPlayerSource | RustEmptyCollection:
+        inspection = RustEmptyCollection._inspect(collection)
+        if inspection.registry.hpo and inspection.collected_decisions == 0:
+            return inspection
         result = cls(_SOURCE_ISSUER)
-        result.collection, result.registry, result.plan = collection, registry, plan
-        result.parent = registry.current
-        result.state, result._rollout = 'INSPECTING', None
-        result._numeric = None
-        result._charges = []
-        result._numeric_originals = {}
-        registry.pending = result  # Retain actual partially acquired owner on error.
-        result._parent_lease = result.parent.retain(result)
-        result._pool_hold = registry.pool.hold_close(result)
-        owner = collection.open()
-        result.originals = owner
-        try:
-            manifest = collection.manifest
-            actual = registry.admission.observation
-            if (digest(manifest) != collection.manifest_sha256
-                    or manifest['runtime_binding_sha256'] != registry.state['runtime_binding_sha256']
-                    or manifest['player_producer'] != actual['producer']
-                    or digest(manifest['capture_authority']) != collection.capture_sha256
-                    or digest(manifest['logical_retirement']) != collection.retirement_sha256):
-                raise ContractError('actual collection identity/runtime/capture differs')
-            _check_collection_parent(manifest, registry.state, plan)
-            role = hpo_batch_role(registry.config.hpo_spec['training_recipe']['collection_games']) if registry.hpo else PPO_BATCH
-            episodes, specs = inspect_rust_game_manifest(owner, manifest, registry.config.actions,
-                registry.config.run.split, role=role)
-            outputs, accepted, closure, missing = _inspect_collection_content(owner,
-                registry.config.actions, manifest, episodes, specs, _game=True, packed=True)
-            seats = plan.linkage['learner_seats']
-            records = tuple(item.records for item in outputs if item.viewer == seats[item.episode_id])
-            if missing or closure != {'natural': role.games}:
-                raise ContractError('actual complete natural curriculum required')
-            result.manifest, result._records = manifest, records
-            result.accepted_decisions = accepted
-            result.closure_counts, result.missing_replays = closure, missing
-            if registry.hpo:
-                from gf_training.hpo_collection import selection_for_counts
-                result.selection = selection_for_counts(tuple(len(record.frames) for record in records),
-                    learning_seed=registry.state['seed'], batch=registry.state['updates'],
-                    decision_budget=registry.config.hpo_spec['decision_budget'], used_before=registry.state['used_decisions'])
-            result.state = 'SEALED'
-            return result
-        except BaseException as error:
-            result.state = 'FAILED'
-            vars(error)['cleanup_owner'] = result
-            raise
+        result._inspection = inspection
+        result.collection, result.registry, result.plan = inspection.collection, inspection.registry, inspection.plan
+        result.parent, result.originals = inspection.parent, inspection.originals
+        result.manifest, result._records = inspection.manifest, inspection._records
+        result.accepted_decisions = inspection.accepted_decisions
+        result.closure_counts, result.missing_replays = inspection.closure_counts, inspection.missing_replays
+        result.state, result._rollout, result._numeric = 'SEALED', None, None
+        result._charges, result._numeric_originals = [], {}
+        if inspection.registry.hpo:
+            result.selection = inspection.selection
+        result.registry.pending = result
+        return result
 
     def require(self) -> None:
         from gf_training.group_pack_resources import remaining
@@ -619,12 +587,135 @@ class RustPlayerSource:
         for original in self._numeric_originals.values():
             original.close()
         self._numeric_originals.clear()
-        self.collection.close()
-        self._parent_lease.close(self)
+        self._inspection.close()
         for charge in self._charges:
             charge.close()
         self._charges.clear()
-        self._pool_hold.retire(self)
         if self.registry.pending is self:
             self.registry.pending = None
         self.state = 'CLOSED'
+
+
+class RustEmptyCollection:
+    """Actual all-natural zero-selection DATA owner; no numeric/update authority."""
+    collection: Any
+    registry: Any
+    plan: Any
+    parent: Any
+    state: str
+    _cleanup_children: list[Any]
+    _parent_lease: Any
+    _pool_hold: Any
+    _records: Any
+    originals: RustPlayerOriginals
+    manifest: Any
+    accepted_decisions: int
+    closure_counts: Json
+    missing_replays: list[str]
+    selection: Json
+
+    def __init__(self, issuer: object) -> None:
+        if issuer is not _SOURCE_ISSUER:
+            raise ContractError('actual inspected all-natural collection required')
+
+    @classmethod
+    def _inspect(cls, collection: Any) -> Any:
+        from gf_common.card_instance_collection import PPO_BATCH, hpo_batch_role
+        from gf_training.card_instance_collection_source import inspect_rust_game_manifest
+        from gf_training.card_instance_source import _check_collection_parent
+        from gf_training.rust_player_collection import RustCollectedBatch
+        from gf_training.structured_source import _inspect_collection_content
+        if type(collection) is not RustCollectedBatch:
+            raise ContractError('actual same-host native/writer collection required')
+        registry, plan = collection.registry, collection.plan
+        collection.require(registry, plan)
+        if registry.pending is not None:
+            raise ContractError('actual unused Source transaction required')
+        result = cls(_SOURCE_ISSUER)
+        result.collection, result.registry, result.plan = collection, registry, plan
+        result.parent = registry.current
+        result.state = 'INSPECTING'
+        registry.pending = result  # Retain actual partially acquired owner on error.
+        result._cleanup_children = []
+        result._parent_lease = result._pool_hold = None
+        result._records, result.manifest = (), None
+        try:
+            result._parent_lease = result.parent.retain(result)
+            result._pool_hold = registry.pool.hold_close(result)
+            owner = collection.open()
+            result.originals = owner
+            manifest = collection.manifest
+            actual = registry.admission.observation
+            if (digest(manifest) != collection.manifest_sha256
+                    or manifest['runtime_binding_sha256'] != registry.state['runtime_binding_sha256']
+                    or manifest['player_producer'] != actual['producer']
+                    or digest(manifest['capture_authority']) != collection.capture_sha256
+                    or digest(manifest['logical_retirement']) != collection.retirement_sha256):
+                raise ContractError('actual collection identity/runtime/capture differs')
+            _check_collection_parent(manifest, registry.state, plan)
+            role = hpo_batch_role(registry.config.hpo_spec['training_recipe']['collection_games']) if registry.hpo else PPO_BATCH
+            episodes, specs = inspect_rust_game_manifest(owner, manifest, registry.config.actions,
+                registry.config.run.split, role=role)
+            outputs, accepted, closure, missing = _inspect_collection_content(owner,
+                registry.config.actions, manifest, episodes, specs, _game=True, packed=True)
+            seats = plan.linkage['learner_seats']
+            records = learner_records(outputs, seats, closure, missing, games=role.games)
+            result.manifest, result._records = manifest, records
+            result.accepted_decisions = accepted
+            result.closure_counts, result.missing_replays = closure, missing
+            if registry.hpo:
+                from gf_training.hpo_collection import selection_for_counts
+                result.selection = selection_for_counts(tuple(len(record.frames) for record in records),
+                    learning_seed=registry.state['seed'], batch=registry.state['updates'],
+                    decision_budget=registry.config.hpo_spec['decision_budget'], used_before=registry.state['used_decisions'])
+            result.state = 'SEALED'
+            return result
+        except BaseException as error:
+            result.state = 'FAILED'
+            retain_cleanup(result, error)
+            raise
+
+    @property
+    def collected_decisions(self) -> int:
+        return sum(len(record.frames) for record in self._records)
+
+    @property
+    def decision_count(self) -> int:
+        return 0
+
+    def require(self) -> None:
+        self.collection.require(self.registry, self.plan)
+        self.parent.require()
+        pending = self.registry.pending
+        if (self.state not in ('SEALED', 'INSPECTING') or self.registry.current is not self.parent
+                or pending is not self and getattr(pending, '_inspection', None) is not self):
+            raise ContractError('actual same-batch collected DATA owner required')
+
+    def empty_marker(self) -> Json:
+        self.require()
+        if not self.registry.hpo or self.collected_decisions or self.selection['used_decisions']:
+            raise ContractError('actual zero learner collection required')
+        pending = self.collection.pending
+        pending.recheck()
+        return {'batch_id': self.plan.linkage['batch_id'],
+            'collection_generation': self.parent.generation,
+            'manifest_path': str(self.originals.root / 'manifest.json'),
+            'manifest_sha256': self.collection.manifest_sha256,
+            'descriptor_path': str(pending.path), 'descriptor_sha256': pending.descriptor_sha256,
+            'learner_decisions': 0}
+
+    def close(self) -> None:
+        if self.state == 'CLOSED':
+            return
+        self._records, self.manifest = (), None
+        close_resources(self, [self.collection])
+        if self._parent_lease is not None:
+            self._parent_lease.close(self)
+        if self._pool_hold is not None:
+            self._pool_hold.retire(self)
+        if self.registry.pending is self:
+            self.registry.pending = None
+        self.state = 'CLOSED'
+
+    def __reduce__(self) -> Any:
+        raise TypeError('actual empty collection cannot be copied/serialized')

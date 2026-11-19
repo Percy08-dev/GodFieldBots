@@ -24,7 +24,7 @@ from gf_training.group_pack_source import OriginalFile
 from gf_training.hpo_owned_restore import _ColdScan, _decode_banks_data
 from gf_training.lineage import require_hpo_run_owner
 from gf_training.rust_player_completion import _audit_retirement, _audit_update, _read
-from gf_training.rust_player_lineage import validate_record_shape, validate_run
+from gf_training.rust_player_lineage import validate_completion, validate_record_shape, validate_run
 from gf_training.rust_player_registry import _backings, _PolicyLease, policy_binding_data
 from gf_training.rust_player_supervision import HostAdmission, HostControl, read_control_record
 
@@ -98,6 +98,7 @@ class RustResumeAudit:
             prepared, prepared_sha = read_control_record(prior_root / f'prepared-{invocation}.json', prior_root)
             exit_record, exit_sha = read_control_record(prior_root / f'exit-{invocation}.json', prior_root)
             completion, completion_sha = read_control_record(prior_root / f'completion-{invocation}.json', prior_root)
+            validate_completion(completion)
             validate_prepared(prepared, old_admission)
             validate_exit(exit_record, old_admission)
             if (operation_sha != entry['operation_sha256'] or admission_sha != entry['admission_sha256']
@@ -112,7 +113,8 @@ class RustResumeAudit:
                     or completion['generation_sha256'] != self.state['generation_sha256']):
                 raise ContractError('prior immutable PAUSED operation/Prepared/Exit/completion chain differs')
             self.prior_completion_sha256 = completion_sha
-            _audit_retirement(control, self.state, prepared, pool, self._loans, self.deadline, hpo=hpo)
+            _audit_retirement(control, self.state, prepared, pool, self._loans, self.deadline, hpo=hpo,
+                operating=loaded.config.hpo_spec['operating'] if hpo else None)
             parent_sha = None
             previous: Any = None
             for generation in range(self.state['updates'] + 1):
@@ -243,6 +245,7 @@ class RustRestoredPolicy:
         self._consumers: set[Any] = set()
         self._held: dict[str, OriginalFile] = {}
         self._closed = False
+        self._cleanup_children: list[Any] = []
         self.inference = self.resume = None
         self.generation = generation
         record = audit.records[generation]
@@ -292,7 +295,8 @@ class RustRestoredPolicy:
             self.current_bank_identity = digest({'kind': 'rust-player-restored-backing-v1',
                 'original_lineage_identity': self.identity, 'inference_backings': self._inference_backings})
         except BaseException as error:
-            vars(error)['cleanup_owner'] = self
+            from gf_training.group_pack_resources import retain_cleanup
+            retain_cleanup(self, error)
             raise
 
     def require(self) -> None:
@@ -335,6 +339,12 @@ class RustRestoredPolicy:
         if self.resume is not None:
             self.resume.close()
             self.resume = None
+        inference_files = {'inference.json', *self.manifest['weights']['files']}
+        for name, original in tuple(self._held.items()):
+            if name not in inference_files:
+                original.close()
+                del self._held[name]
+        self.resume_manifest = None
 
     def close(self) -> None:
         if self._closed:
@@ -345,8 +355,8 @@ class RustRestoredPolicy:
             self.resume.close()
         if self.inference is not None:
             self.inference.close()
-        for original in self._held.values():
-            original.close()
+        from gf_training.group_pack_resources import close_resources
+        close_resources(self, list(self._held.values()))
         self._held.clear()
         self.manifest, self.resume_manifest, self.files = {}, None, {}
         self._closed = True

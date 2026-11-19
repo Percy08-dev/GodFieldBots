@@ -313,3 +313,35 @@ formats and all eight frozen kernels stay unchanged; no new resource margin or
 external model loader is introduced. CPU/data tests establish this engineering
 scope. Full actual CUDA two-update/resume, Source/process/campaign/evaluation and
 physical/performance/default gates remain required before final acceptance.
+
+## Artifact retention and healthy-empty engineering scope
+
+The accepted [artifact-retention](../design/rust-player-runtime-artifact-retention.md)
+and [healthy-empty](../design/rust-player-runtime-empty-collection.md) designs are
+implemented and pass scoped independent correctness/conformance after two repair
+rounds. Retirement is declared-artifact-only with actual current owners, held
+original directories/files, both synchronization barriers and positive FD closure
+before receipt. Cold reading binds the historical retirement invocation and the
+existing strict completion1/audit1 chain; current protected payloads and ordinary
+inference manifests remain mandatory. Existing warm recipes, Raw/numeric retention,
+scientific formats and the eight frozen kernels are unchanged.
+
+All-natural zero-own-seat HPO results carry DATA-only extra-collection markers,
+stop incomplete before numeric/update/new generation, and receive independent
+extra Raw/Replay checks without a fabricated Source/Parent. Bounded genuine
+control/fault cases cover physical retirement; first/later genuine engine-empty
+capture and complete genuine pruned-checkpoint resume remain explicit Task6
+verification, before final public/experiment acceptance. This is engineering
+component acceptance, not learning quality, physical capacity or default adoption.
+
+## Conditional verification domain for healthy-empty HPO
+
+The earlier engineering-scope reservation for a genuine first/later empty-engine
+capture is superseded by the independently reviewed
+[reachability proof](../design/rust-player-runtime-empty-feasibility.md). Under
+current same-seed mirrored two-player HPO pairs, initial-action and frame-recording
+contracts, every complete cohort has positive learner frames and positive selected
+frames before its decision budget is exhausted. That engine case is conditionally
+UNREACHABLE / NOT APPLICABLE, not an executed PASS. Generic DATA/marker compatibility
+and negative auditing stay. Revisit before any listed invariant changes. Genuine
+pruned-checkpoint resume and every other Task6/7 requirement remain mandatory.

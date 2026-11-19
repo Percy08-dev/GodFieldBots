@@ -21,7 +21,7 @@ def _failed_operation_source_data(*, hpo=False):
     from gf_models.rust_player_device import RustPlayerDeviceAccount
     from gf_training.group_pack_pool import PackedArtifactPool
     from gf_training.rust_player_learning import RustGameOperations, RustHpoOperations
-    from gf_training.rust_player_source import RustPlayerSource
+    from gf_training.rust_player_source import RustEmptyCollection, RustPlayerSource
     from tests.test_rust_player_device import checkpoint_profile
     profile = checkpoint_profile()
     account = RustPlayerDeviceAccount(global_bytes=10**9, learner_device='cpu', serving_device='cuda:0',
@@ -37,11 +37,18 @@ def _failed_operation_source_data(*, hpo=False):
     source._proof_json = source._numeric_metadata = ''
     source._episode_digests, source.numeric_files = (), {}
     source.collection = SimpleNamespace(require=lambda *args: None, close=lambda: None)
-    source._parent_lease = SimpleNamespace(close=lambda owner: None)
     source._charges = [pool.budget.reserve(4096)]
-    source._pool_hold = pool.hold_close(source)
     registry = SimpleNamespace(local=local, pending=source, hpo=hpo)
     source.registry = registry
+    # Joined retention owns raw records/lease/pool hold through inspection. This
+    # is still a cleanup-only receiver, never a collected Source issuer.
+    inspection = RustEmptyCollection.__new__(RustEmptyCollection)
+    inspection.state, inspection._cleanup_children = 'SEALED', []
+    inspection.collection, inspection.registry = source.collection, registry
+    inspection._records, inspection.manifest = (source._rollout,), source.manifest
+    inspection._parent_lease = SimpleNamespace(close=lambda owner: None)
+    inspection._pool_hold = pool.hold_close(inspection)
+    source._inspection = inspection
     ops = (RustHpoOperations if hpo else RustGameOperations).__new__(RustHpoOperations if hpo else RustGameOperations)
     ops.registry, ops.device_account = registry, account
     return source, ops, hold, pool, reference

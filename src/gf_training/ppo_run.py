@@ -786,6 +786,10 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
                                     proof = update = collection_manifest = None
                                     numeric_files = acknowledgement = metrics = None
                                 generation_scope.callback(retire_rust_source_aliases)
+                                if hpo and decision_count == 0:
+                                    ops.stop_reason = 'empty_collection'
+                                    final_status = 'incomplete'
+                                    break
                             elif owned:
                                 decision_count,proof,numeric_files,issued_projection=generation_scope.enter_context(
                                     ops.project_owned(collection,plan,numeric,config,execution))
