@@ -215,7 +215,7 @@ class Learner:
                           "inference.json": sha256(directory / "inference.json"),
                           "resume.json": sha256(directory / "resume.json")}}
 
-    def restore(self, directory: Path) -> None:
+    def restore(self, directory: Path, *, expected_resume_sha256: str | None = None) -> None:
         self._context.bind(self.network)
         self._context.check(self.input_binding)
         # Stage complete weights/optimizer validation in fresh owners. A failed
@@ -234,14 +234,16 @@ class Learner:
         # Stream/validate every resume shard and RNG/header before constructing
         # a staged network. The final publisher revalidates its own fresh data.
         read_resume(directory, self.model, self.binding, self.resume_identity, action_contract=self.action_contract,
-                    purpose=self.purpose, synthetic_capacity=self.synthetic_capacity, _context=self._context)
+                    purpose=self.purpose, synthetic_capacity=self.synthetic_capacity, _context=self._context,
+                    expected_resume_sha256=expected_resume_sha256)
         network, _ = load_inference(directory, model=self.model, binding=self.binding,
                                      action_config_hash=self.action_config_hash, action_contract=self.action_contract,
                           purpose=self.purpose, synthetic_capacity=self.synthetic_capacity, _context=self._context)
         optimizer = self.torch.optim.Adam(network.parameters(), lr=3e-4, betas=(.9, .999), eps=1e-8)
         steps = restore_resume(directory, network, optimizer, self.shuffle, self.model,
                                 self.binding, self.resume_identity, action_contract=self.action_contract,
-                                purpose=self.purpose, synthetic_capacity=self.synthetic_capacity, _context=self._context)
+                                purpose=self.purpose, synthetic_capacity=self.synthetic_capacity, _context=self._context,
+                                expected_resume_sha256=expected_resume_sha256)
         self.network, self.optimizer, self.steps = network, optimizer, steps
 
 

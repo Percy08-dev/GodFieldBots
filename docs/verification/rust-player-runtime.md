@@ -393,3 +393,179 @@ required. No Source qualification is inferred from the data-only owners.
 - Exact approved C8 W sweep, C16 forward/reverse and per-entrance C4/C2 two-pair
   comparison; no adoption decision without all predeclared evidence.
 - Independent final correctness and architecture conformance, root disposition.
+
+## Actual ordinary CPU common-loop component
+
+The second fresh ordinary component invocation passes the actual common PPO
+loop through cold completion:16 natural games,230 learner decisions,8 Adam
+steps, actual G1 saved-pair commit/publication, original consumer/server/writer/
+service/cache/buffer retirement, immutable invocation state, Prepared, actual
+original-host wait, then fresh CPU full raw/Replay/numeric/saved-content audit.
+The private supervisor test reports1PASS/101.01s and exits after the actual cold
+child wait. Original host exit0 is cooperative with descendants reaped and no
+signals. This is one explicitly configured CPU update, not the required Model3/4
+CUDA two-update/resume population, public-entry acceptance or scientific quality.
+The returned owner is a generic cold invocation, not an HPO exact-D parent.
+
+The original operation's admission480/execution540/TERM570/KILL585/finish600s
+milestones were not renewed. Settings are unchanged ordinary16-game curriculum,
+C1/W1/B1,24GiB declared managed host,2GiB same Source account,1GiB recording and
+zero CUDA. Declared/accounted peak is not measured RSS/PSS. Before Source reads,
+writer/inventory workspace holders are absent and the account uses72,188,328B
+including pool base, inference banks and saved metadata. Actual recording native/
+external counters are checked at retirement; control metadata allowance remains
+owned through final protocol writes.
+
+Successful original root is `/tmp/task5c1b-common-cpu-common-ca94c6daa5b47bea6a874d93f9beb3d1`.
+Native source SHA is `e782b8d52977f7253dcd1d8d119282bd26ca2219317113a73d694ad87c0eb524`;
+loaded extension `2df104877f482e071fe24790d77eea2aec00fee539a21f998dcf26c121b933d0`;
+Python checkpoint producer `3a73cbea2700fd0c75df10497e5f9b4ba7921f062e851665804f08a3334e3a4d`;
+seven-package runtime `9a3d152ae5e8f74890c56adb118b7550e7ac394e869d625488e47af8a8d931f3`.
+Runtime wheel is `f61971e11f75b4befd6d59fde72e640b4907b548e66063296bb1b208d11d4869`.
+Its installed companion is `88df0ab576e5a6e30b7ef0f80598a780473c4de321f448e8cc102b87588a007c`;
+the actual private-test original-handle supervisor is separately recorded as
+`4cd0abdc51be0528f5e7ce896d8a5126a92a637720f6fa576c8129026645240b`.
+This is not evidence that the public CLI dispatched the installed companion.
+
+Root independently checks exact Prepared/Exit/frozen-state/operation/audit/
+completion hashes, final saved files,16 episode audits and all350 frozen producer
+inventory files. Completion SHA is
+`0036ce55ff33b414e98a8b3323bcef1b9a88779fb880f0dfe2cad097280c5f23`;
+audit SHA is `a7d8397f81410a3cdb96a08479227da29f3bf173fa3bcf9d45de028c0d10fe77`.
+Both original attempts, matching source/binaries, command logs and892 verified
+files are preserved under ignored `runs/rust-player-runtime-v1/components/ordinary-common-cpu-1-update`
+in the primary workspace. Original absolute provenance paths remain unchanged.
+
+The first invocation reaches G1 and actual healthy closure but fails before
+Prepared because the new closed Run5 fieldset omits required `resume_identity`.
+Its original exit1/prepared-null stays failed. A saved-record reproduction is
+RED before the one-required-field fix and GREEN after it; missing, unknown and
+config-inconsistent fields still reject. It is never relabeled successful.
+HPO/real restored owners, public entrances, CUDA acceptance, diagnostics and the
+complete approved performance/default protocol remain required work.
+
+## Actual Model4 bounded CUDA pause/resume component
+
+The genuine16-game Model4 component passes39.12s with174 collected learner
+endpoints, predeclared D64/one update/four Adam steps, paused cold completion,
+current-host full prior-data audit and actual restore, then exact-D cold Parent/
+metadata3. Named weights/Adam/CPU+CUDA RNG/PCG64 restore equal the saved state.
+Resume performs zero additional Adam steps; this does not replace Task6's
+continuous2 versus pause1/resume2 cases. Original admission720/execution810/
+TERM855/KILL885/finish900s bits remain identical across both operations.
+
+Both actual original-host exits are0/cooperative/reaped/no signals; the last
+cold child is actually waited before the private supervisor returns success.
+Default shared HPO namespace tickets have real admission and schema3 termination
+records, whose embedded exits match the case bytes. Campaign setup is explicitly
+a private component descriptor with real CampaignStore/OFDs inherited through
+management-Python exec into the actual private supervisor. It claims no Optuna
+proposal, closed seed receipt, public campaign/evaluation or quality acceptance.
+
+Root independently checks both complete hash chains, paused eligibleFalse to
+complete eligibleTrue with reserved-null parent_metadata_validation, separate
+forward-linked metadata3,16 episode audits and unchanged G1 six-file SHA plus
+original device/inode/size/mtime/ctime. Actual354 frozen producer-inventory entries
+match;356 producer files includes the inventory/control manifests themselves.
+482 rehashed files, command log and the four actual shared-namespace records are
+preserved in primary ignored
+`runs/rust-player-runtime-v1/components/hpo-model4-cuda-pause-resume-D64`.
+Original root: `/tmp/task5c1b-hpo-resume-9_icjztk`.
+
+Actual frozen Python checkpoint producer is
+`ee8228f8e35b955b58e3db7fa7ff561be4dcd8dab6d44d17ced486fd87c01722`,
+seven-package runtime `8851a45cbd01d6124e0ba67b1e5cfad7a831af29f93035cd1ef7d61bf2e9bc7e`;
+native source `82f25a60fac3e2d58d0ed9e35e03903da94639f7b142913b23b7a44a7d6c38d2`;
+extension `2383e1453e2b71abbfe132443436b64a41d83da7152390d737be86d67ba9578f`.
+Runtime wheel `100876b7dab31bbccb43295041747fc78c55d1da4af6eb744cbfe3d7676c8a82`
+contains installed companion `9035bfa145e4fa69f9981ff2f4194c195de4b917a07b1ce0988eb4ada65ad31b`;
+actual PRIVATE test supervisor is separately
+`efc18de33c04b42965cf52afac2a8f9ec001cb9066a3dedc797438f02bee4e96`.
+The public CLI did not dispatch that installed companion in this component.
+
+Final completion SHA is
+`b8838c7043a4c01097b8da91374947d05c62e93045235af6ca800480f6647928`;
+metadata3 `66499813b4e2c4a4050841554e81935a88fd128e88e52aab92f820d777b54ee1`;
+audit `241b2542f71cf9539de1a2e2cf586dc662ff9b96a3669a86510ec2f031d3e4d7`.
+Process Torch fresh peaks are183,889,408B allocated/218,103,808B reserved; resume
+37,836,800B/52,428,800B. These differ from whole-device observations and the12GiB
+managed declaration. Whole-device before/after used2063MiB with no compute apps
+remaining supports observations, not original-handle termination authority.
+No whole-host PSS or universal native CUDA capacity claim follows.
+
+## Final ordinary CPU single-use and cleanup component
+
+After accepted independent-cleanup, control-alias and metadata-original lifetime
+repairs, a fresh ordinary component passes101.07s:16 natural games/230 learner
+endpoints/one update/eight Adam steps, G1 commit/publication, positive retirement,
+Prepared/original exit and fresh full cold audit. The real Source refuses copying,
+duplicate persistence and duplicate consumption; steps are0 before the real
+update and8 after it and the rejected repeat. No synthetic Source permission is
+used. Original600s milestones and24GiB declared host/2GiB Source/1GiB recording/
+C1W1B1/zero CUDA remain unchanged.
+
+Root independently verifies immutable byte chains, actual healthy exit, all six
+saved files, single-use diagnostic and354 producer entries. Both this success and
+the preceding test-wrapper failure remain under primary ignored
+`runs/rust-player-runtime-v1/components/ordinary-common-final-cpu-singleuse`, with
+884 rehashed files/logs. Failed attempt207260 reaches Source/PERSISTED then exits1
+before any Adam/G1/Prepared: its wrapper failed to catch the Source's correct
+TypeError copy refusal. Only the test wrapper changed before the distinct retry;
+the failed parent is not relabeled or resumed.
+
+Successful root is `/tmp/task5c1b-common-cpu-common-76aa2e47a17d0e74fb8c42e280000573`.
+Actual checkpoint Python producer is
+`aacdfe6ccaf88be1415c97e620858bc765e8f10396582f51365ec4b786a2e5ca`,
+seven-package runtime `d7b0e63c1902fe0a05112bcb791cc6812e8e03be24067d0eab607de4a2d5f485`.
+Native/extension/installed/private/wheel identities match the preceding Model4
+component; its Python identities do not. Completion SHA is
+`5c69e0c090bf67c27c3053f2beb87b702b41e11f33dd5f30d4f4ddaf1c779a19`,
+audit `c31000976c9387faaac2e5f1b41e098459b0c0ef351c81a0d472cbacd23e74ff`,
+single-use diagnostic `5a0435348ba9abd9bfccb27987c1afddf752eb01f480864352c1bbdc06b18705`.
+
+Final current source has only subsequent import formatting and typing.cast
+changes: checkpoint producer `366a82047c1bdc8ba42e3f82a10449e69f7a940ae723c455158797d6c9d0c997`,
+runtime `f355dc0ff9d818b164c61ec6560f44d4ef016985a65a9c52838906b24f9e3254`;
+48 post-change compatibility checks pass. Prior real cases retain their actual
+frozen source and remain historical evidence. The current34-file package is
+frozen for independent correctness/conformance review. Generic combined CUDA
+planning, disk-retention and healthy empty-collection parity are mandatory before
+public activation. Public entrances, real two-update/restart/evaluation/process
+acceptance and the complete performance/default protocol remain unexecuted.
+
+## Scoped final B acceptance after ownership repairs
+
+Both independent final engineering reviews are READY after two repair rounds.
+Five P2 obligations close: actual returned Parent lock/control liveness; restored
+control-graph funding through the final consumer including pre-adoption failures;
+raw-audit traceback funding; nested/partially constructed actual FD cleanup; and
+refusal of partial-D resume outside the explicitly bounded component plan.
+Root freshly runs125 CPU regressions (5.13s), two pure component-boundary cases,
+scoped mypy and Ruff successfully. The known readonly NumPy-to-Torch warning
+remains; no write to those shared banks is introduced. Whole-suite and formal
+acceptance are not claimed.
+
+A final current-source Model4 replay passes38.91s. The actual caller, after
+finalize_cold returns, calls Parent.require/state/metadata, checks unchanged G1
+six files/stat identity, positively closes it and then releases the parent lock.
+Both originals exit0/cooperative/reaped/no signals; last cold is actually waited.
+16 games/174 collected/64 used/one update/four Adam steps, with zero additional
+resume steps and the unchanged shared900s authority. Root independently verifies
+both receipt chains, actual two namespace terminations, metadata3 and saved-file
+identities plus354 producer entries, then rehashes482 archived files at primary
+ignored `runs/rust-player-runtime-v1/components/hpo-model4-final-parent-handoff`.
+Original root is `/tmp/task5c1b-hpo-resume-vldazodb`.
+
+Current producer is `79945b7a9fbea555264f6f00c3f6c05ca8b792e239f3c43dae768b5f060fca9f`,
+runtime `c09a462f2091990bfed3d1fab0d4172ca766988a1e5b3e02791091fc28377dbf`.
+Native/extension/installed/private/wheel remain82f25/2383/9035/efc18/100876 as the
+full identities above; the actual private test supervisor remains distinct from
+the installed production companion. Final completion is
+`1402c4c00b2ad4075cd464dd3cf9bcf6d0348e0a779af6638395fd53c0ffe297`,
+audit `72fcd961c1423d992c5225fdedab5d8d0195d368108f142a559ee193e27a0f71`,
+metadata3 `838c45e8564a96b13638e687f647ff1eafd49db037341f2051b3ae89e5f6ee0e`.
+Allocator peaks remain183,889,408/218,103,808B fresh and37,836,800/52,428,800B
+resume (allocated/reserved, process Torch scope). No universal capacity or PSS
+claim follows. This scoped private-engineering acceptance leaves all mandatory
+pre-public work, full Task6 CUDA2/resume2/real campaign/eval/process/audit conditions
+and Task7 exact performance/default protocol open.

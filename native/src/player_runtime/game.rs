@@ -47,6 +47,13 @@ pub struct PolicySpec {
     pub limits: Option<Limits>,
     #[serde(default = "threshold")]
     pub attack_threshold: Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub numeric_costs: Option<Value>,
+}
+impl PolicySpec {
+    fn effective_costs<'a>(&'a self, default: &'a Value) -> &'a Value {
+        self.numeric_costs.as_ref().unwrap_or(default)
+    }
 }
 fn threshold() -> Value {
     json!(12)
@@ -88,6 +95,9 @@ impl GameSpec {
         )?;
         Costs::parse(&self.numeric_costs)?;
         for p in &self.policies {
+            if let Some(costs) = &p.numeric_costs {
+                Costs::parse(costs)?;
+            }
             ensure(
                 ["random", "heuristic", "refresh", "mlp"].contains(&p.kind.as_str()),
                 "unknown native policy",
@@ -350,7 +360,10 @@ impl Actor {
             self.http.join(&game, &command_id()?, viewer).await?;
         }
         let config = Config::parse(&self.spec.actions, &self.spec.rules)?;
-        let costs = Costs::parse(&self.spec.numeric_costs)?;
+        let costs = [
+            Costs::parse(self.spec.policies[0].effective_costs(&self.spec.numeric_costs))?,
+            Costs::parse(self.spec.policies[1].effective_costs(&self.spec.numeric_costs))?,
+        ];
         let budget = Budget::new(12usize << 30);
         let control = Control::new(f64::MAX)?;
         let mut obs = self.http.observe(&game, 1).await?;
@@ -405,7 +418,7 @@ impl Actor {
                 &input,
                 &config,
                 &self.spec.rules,
-                &costs,
+                &costs[(actor - 1) as usize],
                 &mut seat.search,
                 &mut clock,
             )?;

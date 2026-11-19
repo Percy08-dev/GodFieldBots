@@ -116,6 +116,7 @@ mod tests {
             epoch: 0,
             limits: None,
             attack_threshold: json!(12),
+            numeric_costs: None,
         };
         for (logprob, value) in [
             (-0.1f32, 0.1f32),
@@ -196,6 +197,7 @@ mod tests {
             epoch: 0,
             limits: None,
             attack_threshold: json!(12),
+            numeric_costs: None,
         };
         let policies = [policy.clone(), policy];
         let seats = [

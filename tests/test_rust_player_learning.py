@@ -13,6 +13,168 @@ from tests.test_rust_player_config import (
 )
 
 
+def test_local_device_environment_matches_registry_visibility_without_cuda(monkeypatch):
+    import os
+    from types import SimpleNamespace
+
+    from gf_training.rust_player_learning import _configure_device_environment
+    for training, inference, visibility, expected in (
+        ('cpu', 'cpu', None, ''),
+        ('cuda:0', 'cuda:0', None, None),
+        ('cuda:0', 'cpu', '0', '0'),
+        ('cpu', 'cuda:0', '1', '1'),
+    ):
+        monkeypatch.setenv('CUDA_VISIBLE_DEVICES', '')
+        config = SimpleNamespace(training=SimpleNamespace(device=training),
+            model=SimpleNamespace(inference=SimpleNamespace(device=inference), cuda_visible_devices=visibility))
+        assert _configure_device_environment(config) == (training != 'cpu' or inference != 'cpu')
+        assert os.environ.get('CUDA_VISIBLE_DEVICES') == expected
+        assert os.environ['CUBLAS_WORKSPACE_CONFIG'] == ':4096:8'
+
+
+def test_failed_local_close_still_attempts_other_actual_cleanup_boundaries(tmp_path):
+    import asyncio
+    import time
+    from types import SimpleNamespace
+
+    from gf_training.lineage import run_lock
+    from gf_training.rust_player_learning import RustGameOperations
+    calls = []
+    class Server:
+        def __init__(self, name, failed=False):
+            self.name, self.failed = name, failed
+            self.stopped = False
+            self.process = SimpleNamespace(returncode=0)
+            self.drainers = []
+        async def stop(self):
+            calls.append(self.name)
+            if self.failed:
+                raise OSError('server close is uncertain')
+            self.stopped = True
+            return {}
+    class Writer:
+        _sealed = True
+        directory = tmp_path
+        def join(self):
+            calls.append('writer')
+            return {'joined': True}
+    class Runtime:
+        _holds, _active_routes = {}, {}
+        dispatcher = SimpleNamespace(checkpoint_references=dict)
+        def cancel(self, reason):
+            calls.append('cancel')
+        def quiesce(self):
+            calls.append('quiesce')
+        def join(self):
+            calls.append('native')
+            return {'joined': True}
+    # Cleanup-only partial coordinator with I/O doubles; it cannot issue Source,
+    # retirement records, admission or Prepared. Actual lock owner stays live.
+    ops = RustGameOperations.__new__(RustGameOperations)
+    ops.admission = SimpleNamespace(observation={'invocation_id': 'inv', 'run_id': 'run'})
+    ops.registry = SimpleNamespace(pending=None, service=SimpleNamespace(device='cpu', references={}))
+    receipt = {'executed': {'pid': 1, 'start_time': 1}}
+    ops.collector = SimpleNamespace(runtime=Runtime(), server_history=[
+        {'server': Server('first', True), 'runtime_evidence': receipt},
+        {'server': Server('second'), 'runtime_evidence': receipt}],
+        writer_history=[{'writer': Writer(), 'descriptor_sha256': None}])
+    local = SimpleNamespace(learner=SimpleNamespace(synchronize=lambda: calls.append('fence')))
+    with run_lock(tmp_path) as owner:
+        ops._ownership = owner
+        with pytest.raises(OSError, match='uncertain') as failed:
+            asyncio.run(ops.close_local(local, deadline=time.monotonic() + 30))
+        assert calls == ['first', 'second', 'writer', 'quiesce', 'native', 'fence']
+        assert failed.value.cleanup_owner is ops
+        assert ops.host_health['errors'] and not ops.host_health['servers_joined']
+        assert ops.host_health['writers_joined'] and ops.host_health['actors_joined']
+        assert not ops.host_health['buffers_released']
+
+
+@pytest.mark.parametrize('used', [32, 64])
+def test_bounded_component_resume_requires_exact_decision_budget_before_cuda(used):
+    from pathlib import Path
+    from types import SimpleNamespace
+
+    from gf_training.rust_player_learning import RustHpoOperations
+    from tests.test_rust_player_spine import prepare_exec_hpo
+    _, _, loaded = prepare_exec_hpo(Path('unused-no-host'), config_only=True)
+    ops = RustHpoOperations.__new__(RustHpoOperations)
+    ops.config = loaded.config
+    ops.admission = SimpleNamespace(observation={'budget': {'managed_cuda_bytes': 12 * 1024**3}})
+    ops.control = SimpleNamespace(operation={'execution_request': {'mode': 'resume', 'pause_after_update': None}})
+    ops.resume_audit = SimpleNamespace(current={'parent_controls': {'snapshot_pool': [0]}},
+        state={'updates': 1, 'used_decisions': used})
+    if used != 64:
+        with pytest.raises(ContractError, match='bounded component'):
+            ops.component_device_admission()
+    else:
+        result = ops.component_device_admission()
+        assert result['pool_cuda_bytes'] == 15_492_112
+
+
+def test_model3_restore_binds_actual_resume_metadata_before_publication(tmp_path):
+    import json
+
+    from gf_models.arrays import sha256
+    from tests.test_card_instance_learning import learner_for, rollout_for
+    source = learner_for()
+    source.update(rollout_for(source))
+    path = tmp_path / 'saved'
+    source.save(path)
+    held = sha256(path / 'resume.json')
+    resume = json.loads((path / 'resume.json').read_bytes())
+    resume['shuffle_rng']['uinteger'] ^= 1
+    (path / 'resume.json').write_text(canonical(resume) + '\n')
+    target = learner_for()
+    network, optimizer = target.network, target.optimizer
+    with pytest.raises(ContractError):
+        target.restore(path, expected_resume_sha256=held)
+    assert target.network is network and target.optimizer is optimizer and target.steps == 0
+    target.restore(path)  # Otherwise valid metadata and legacy omitted default.
+    assert target.steps == source.steps
+
+
+def test_model3_restore_binds_second_materializing_read_and_matching_restore(tmp_path, monkeypatch):
+    import json
+
+    import numpy as np
+
+    from gf_models import structured_artifacts as artifacts
+    from gf_models.arrays import sha256
+    from tests.test_card_instance_learning import learner_for, rollout_for
+    from tests.test_structured_learning import assert_same_learners
+    source = learner_for()
+    source.update(rollout_for(source))
+    path = tmp_path / 'saved'
+    source.save(path)
+    original_bytes = (path / 'resume.json').read_bytes()
+    held = sha256(path / 'resume.json')
+    target = learner_for()
+    target.restore(path, expected_resume_sha256=held)
+    assert_same_learners(source, target)
+    expected_rng = np.load(path / 'resume-000000.npz', allow_pickle=False)['rng.torch_cpu']
+    np.testing.assert_array_equal(target.torch.get_rng_state().numpy(), expected_rng)
+    actual_read = artifacts.read_json
+    calls = []
+    def mutate_between_reads(location, **kwargs):
+        value = actual_read(location, **kwargs)
+        if location == path / 'resume.json':
+            calls.append(kwargs.get('expected_digest'))
+            if len(calls) == 1:
+                changed = dict(value)
+                changed['shuffle_rng'] = json.loads(json.dumps(value['shuffle_rng']))
+                changed['shuffle_rng']['uinteger'] ^= 1
+                (path / 'resume.json').write_text(canonical(changed) + '\n')
+        return value
+    monkeypatch.setattr(artifacts, 'read_json', mutate_between_reads)
+    network, optimizer, steps = target.network, target.optimizer, target.steps
+    with pytest.raises(ContractError):
+        target.restore(path, expected_resume_sha256=held)
+    assert calls == [held]
+    assert target.network is network and target.optimizer is optimizer and target.steps == steps
+    (path / 'resume.json').write_bytes(original_bytes)
+
+
 def test_normal_effective_input_is_exact_typed_and_actual_provenance(tmp_path):
     from gf_cli import config
 

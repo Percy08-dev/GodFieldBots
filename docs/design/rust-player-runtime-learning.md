@@ -313,3 +313,15 @@ computational status separate from cold eligibility without a hash cycle, querie
 actual full-key settled reports without shutting persistent workers, and separates
 original saved lineage from fresh-process readonly bank ownership. Old operation1
 remains strict control-only compatibility; B production requires operation2.
+
+
+## Mixed-participant cost and inference-only ownership refinements
+
+The [participant-cost contract](rust-player-runtime-participant-costs.md) passes
+preimplementation READY: GameSpec's default remains compatible while each policy
+may declare its own effective costs. B uses each participant's existing settings
+and Journal hash; no global maximum changes baseline admission. Saved-policy
+inference-only retirement in [operation2](rust-player-runtime-operation-v2.md)
+also passes READY: genuine full saved/committed facts precede positive unused
+CPU resume-bank retirement, while actual inference/metadata owners survive through
+last consumer. Neither refinement changes policy math or grants Source by itself.

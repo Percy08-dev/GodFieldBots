@@ -230,7 +230,6 @@ def encode_owned_batch(batch: OwnedHpoBatch, *, owner: object, plan: Any, snapsh
                        selected_locations: tuple[tuple[int, int], ...], selection: Json,
                        budget: ArtifactAdmission, numeric_budget_bytes: int = MAX_BANK_BYTES) -> OwnedNumericBatch:
     started = time.perf_counter()
-    token_seconds = 0.0
     if type(batch) is not OwnedHpoBatch:
         raise ContractError('actual private captured batch required')
     batch.require_owner(owner, plan=plan, snapshot_owner=snapshot_owner)
@@ -246,45 +245,80 @@ def encode_owned_batch(batch: OwnedHpoBatch, *, owner: object, plan: Any, snapsh
         raise ContractError('owned capture and frozen snapshot require SAME invocation Source account')
     if snapshot_owner.generation != batch.generation:
         raise ContractError('capture generation differs from actual frozen snapshot')
+    records = tuple(_CapturedRecord(episode.learner.history,
+        tuple(decision.frame for decision in episode.learner.decisions),
+        tuple(decision.table for decision in episode.learner.decisions),
+        tuple(decision.selection for decision in episode.learner.decisions),
+        actions.action_contract, episode.outcome) for episode in batch.episodes)
+    return _encode_record_data(records, snapshot_owner=snapshot_owner, generation=batch.generation,
+        model=model, training=training, actions=actions, rules=rules,
+        selected_locations=selected_locations, selection=selection, budget=budget,
+        numeric_budget_bytes=numeric_budget_bytes, started=started)
+
+
+def encode_rust_batch(source: Any, *, selected_locations: tuple[tuple[int, int], ...],
+                      selection: Json, numeric_budget_bytes: int = MAX_BANK_BYTES) -> OwnedNumericBatch:
+    """Actual Rust Source -> SAME owned numerical6; no actor9/10 intermediary."""
+    from gf_training.rust_player_source import RustPlayerSource
+    started = time.perf_counter()
+    if type(source) is not RustPlayerSource:
+        raise ContractError('actual private Rust Source required')
+    source.require()
+    registry = source.registry
+    if (not registry.hpo or source.state != 'SEALED'
+            or registry.local.budget is not registry.budget or source.parent._budget is not registry.budget
+            or source.parent.generation != registry.state['updates']
+            or source.parent._learner is not registry.local.learner):
+        raise ContractError('actual same-owner Model4 Source/snapshot/budget required')
+    source.parent.require()  # Inference-only role; NEVER reuses a retired full save ACK.
+    return _encode_record_data(source._records, snapshot_owner=source.parent,
+        generation=registry.state['updates'], model=registry.local.learner.model,
+        training=registry.local.learner.training, actions=registry.config.actions,
+        rules=registry.local.learner._context.rules, selected_locations=selected_locations,
+        selection=selection, budget=registry.budget, numeric_budget_bytes=numeric_budget_bytes, started=started)
+
+
+def _encode_record_data(records: tuple[Any, ...], *, snapshot_owner: Any, generation: int,
+                        model: Any, training: HPOTrainingConfig, actions: Any, rules: Any,
+                        selected_locations: tuple[tuple[int, int], ...], selection: Json,
+                        budget: ArtifactAdmission, numeric_budget_bytes: int, started: float) -> OwnedNumericBatch:
+    """Unchanged token/GAE/array mathematics over validated records DATA only."""
+    token_seconds = 0.0
     validate_model_v4(model, layout=LAYOUT)
     training = hpo_training_config(asdict(training))
     context = _RolloutContext(actions, rules)
     selection = checked_selection(selection)
-    counts = tuple(len(episode.learner.decisions) for episode in batch.episodes)
+    counts = tuple(len(record.frames) for record in records)
     if (tuple(selection['episode_counts']) != counts or selected_locations != selection_locations(selection)
             or not selected_locations):
         raise ContractError('owned endpoint selection differs from actual complete capture')
     integer(numeric_budget_bytes, 1, MAX_BANK_BYTES)
     # Conservative token/Python planning and array temporaries before tokenization.
     temporary = (65536 * (1 + sum(counts)) + sum(
-        episode.learner.history.boundary.end * 40 * 64
-        + sum(4096 * len(d.table.kinds) + 128 * len(d.table.slots) + 8 * len(d.frame.payload)
-            for d in episode.learner.decisions) for episode in batch.episodes))
+        record.bank.boundary.end * 40 * 64
+        + sum(4096 * len(table.kinds) + 128 * len(table.slots) + 8 * len(frame.payload)
+            for frame, table in zip(record.frames, record.tables, strict=True)) for record in records))
     if temporary > numeric_budget_bytes:
         raise ContractError('owned token temporary envelope exceeds numeric budget before encoding')
     with budget.reserve(temporary):
         episodes = []
-        for episode in batch.episodes:
-            own = episode.learner
-            integer(len(own.decisions), 0, model.temporal.max_decisions)
-            integer(own.history.boundary.end, 0, model.event.max_episode)
+        for record in records:
+            integer(len(record.frames), 0, model.temporal.max_decisions)
+            integer(record.bank.boundary.end, 0, model.event.max_episode)
             frames, tables = [], []
-            for decision in own.decisions:
-                integer(decision.frame.boundary.end - decision.frame.interval_start, 0, model.event.max_interval)
-                integer(len(decision.table.kinds), 1, actions.max_candidates)
-                if any(b-a > model.max_positions for a,b in zip(decision.table.offsets[:-1], decision.table.offsets[1:], strict=True)):
+            for frame, table in zip(record.frames, record.tables, strict=True):
+                integer(frame.boundary.end - frame.interval_start, 0, model.event.max_interval)
+                integer(len(table.kinds), 1, actions.max_candidates)
+                if any(b-a > model.max_positions for a,b in zip(table.offsets[:-1], table.offsets[1:], strict=True)):
                     raise ContractError('owned candidate position capacity exceeded')
                 token_started = time.perf_counter()
-                frames.append(tokenize_frame(decision.frame, own.history,
+                frames.append(tokenize_frame(frame, record.bank,
                     aggregate_window=model.event.aggregate_window, aggregate_recipe=aggregate_recipe(model), layout=LAYOUT))
-                tables.append(tokenize_table(decision.table, decision.frame, model.max_positions,
+                tables.append(tokenize_table(table, frame, model.max_positions,
                     aggregate_window=model.event.aggregate_window, aggregate_recipe=aggregate_recipe(model), layout=LAYOUT))
                 token_seconds += time.perf_counter()-token_started
-            record = _CapturedRecord(own.history, tuple(d.frame for d in own.decisions),
-                tuple(d.table for d in own.decisions), tuple(d.selection for d in own.decisions),
-                actions.action_contract, episode.outcome)
-            reward = 0 if episode.outcome == 'draw' else 1 if episode.outcome['win']['winner'] == own.viewer else -1
-            advantage, target = gae([d.selection.value for d in own.decisions], reward, lam=training.gae_lambda) if frames else (np.empty(0), np.empty(0))
+            reward = 0 if record.outcome == 'draw' else 1 if record.outcome['win']['winner'] == record.bank.actor else -1
+            advantage, target = gae([selection.value for selection in record.selections], reward, lam=training.gae_lambda) if frames else (np.empty(0), np.empty(0))
             episodes.append(SimpleNamespace(records=record, frames=tuple(frames), tables=tuple(tables),
                 advantage=advantage, target=target.astype(np.float32)))
         normalized = normalize_advantages([episodes[e].advantage[p] for e,p in selected_locations])
@@ -304,7 +338,7 @@ def encode_owned_batch(batch: OwnedHpoBatch, *, owner: object, plan: Any, snapsh
             'snapshot_identity': snapshot_owner.identity,
             'architecture_identity': recorded_architecture_identity(model, layout=LAYOUT),
             'action_config_hash': digest(asdict(actions)),
-            'policy_version': next(d.selection.policy_version for e in batch.episodes for d in e.learner.decisions),
+            'policy_version': next(value.policy_version for record in records for value in record.selections),
             'decision_count': len(selected_locations), 'episodes': episode_metadata,
             'training_recipe': asdict(training), 'selection': selection,
             'expected_optimizer_step_delta': optimizer_delta(len(selected_locations), epochs=training.epochs, minibatch_size=training.minibatch_size)}
@@ -323,7 +357,7 @@ def encode_owned_batch(batch: OwnedHpoBatch, *, owner: object, plan: Any, snapsh
             banks = ReadonlyRamBankSet.build(arrays, budget,
                 max_bytes=numeric_budget_bytes-temporary-planned_bytes-metadata_charge)
             output = OwnedNumericBatch(_TOKEN, banks, metadata, model=model, training=training,
-                context=context, budget=budget, generation=batch.generation, metadata_reservation=metadata_reservation)
+                context=context, budget=budget, generation=generation, metadata_reservation=metadata_reservation)
             output.resident_bytes += metadata_charge
             output._numeric_limit = numeric_budget_bytes
             output._snapshot_owner = snapshot_owner

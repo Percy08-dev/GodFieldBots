@@ -14,6 +14,20 @@ def publication(network: Any,checkpoint: str) -> Any:
         'weights':TensorDict({name:value.detach().cpu().clone() for name,value in network.state_dict().items()},batch_size=[])},batch_size=[])
 
 
+def bank_publication(model: Any, binding: Any, banks: Any, checkpoint: str) -> Any:
+    """Inference-only readonly data; actual bank owner stays caller-owned."""
+    import torch
+    from tensordict import NonTensorData, TensorDict
+
+    from gf_common.ram_bank import ReadonlyRamBankSet
+    if type(banks) is not ReadonlyRamBankSet:
+        raise ContractError('actual readonly inference banks required')
+    return TensorDict({'publication':NonTensorData({'command':'PUBLISH','checkpoint':checkpoint,
+        'model':asdict(model),'binding':asdict(binding)}),
+        'weights':TensorDict({name:torch.from_numpy(banks.array(name)) for name in banks.names},
+            batch_size=[])},batch_size=[])
+
+
 def make_registry(*,device: str,cache_entries: int,cache_weight_bytes: int,visibility: str | None = None) -> Any:
     import os
     if device != 'cpu':

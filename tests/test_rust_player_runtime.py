@@ -52,6 +52,43 @@ def test_game_requires_original_absolute_cleanup_deadline(tmp_path):
             owner.join()
 
 
+def test_completed_wave_reports_use_full_issued_keys_and_keep_runtime_alive(tmp_path):
+    with managed(tmp_path, count=2) as (startup, receipt):
+        owner = RustPlayerRuntime(runtime_config())
+        try:
+            keys = []
+            for ordinal in range(2):
+                spec = game_spec(startup, receipt, episode="same-episode")
+                spec["trial"] = f"trial-{ordinal}"
+                key = (spec["run"], spec["trial"], spec["episode"])
+                keys.append(key)
+                owner.start([spec])
+                pending = owner.next_storage(time.monotonic() + 10)
+                assert pending.kind == "pending"
+                with pytest.raises((ValueError, RuntimeError), match="incomplete"):
+                    owner.completed_reports([key])
+                owner.storage_ack(pending)
+                del pending
+                drain(owner, 1)
+                report = owner.completed_reports([key])[0]
+                assert (report["run"], report["trial"], report["episode"]) == key
+                assert report["report"]["storage_accepted"]
+                assert report["report"]["inference_released"]
+                assert not owner._joined
+            reports = owner.completed_reports(list(reversed(keys)))
+            assert [report["trial"] for report in reports] == ["trial-1", "trial-0"]
+            with pytest.raises((ValueError, RuntimeError), match="duplicate"):
+                owner.completed_reports([keys[0], keys[0]])
+            with pytest.raises((ValueError, RuntimeError), match="unissued"):
+                owner.completed_reports([("foreign", "trial-0", "same-episode")])
+            joined = owner.join()
+            assert len(joined["games"]) == 2
+            assert all(set(row) == set(reports[0]["report"]) for row in joined["games"])
+        finally:
+            owner.cancel("completed-report regression cleanup")
+            owner.join()
+
+
 @pytest.mark.parametrize("kind", ["random", "heuristic", "refresh"])
 def test_baseline_capacity_checked_before_native_start(kind):
     episode = json.loads(FIXTURE.read_text())["episodes"][0]

@@ -133,13 +133,24 @@ class RustPlayerInference:
                 "assembly",
             )
         }
-        self.calls = {"next_batch": 0, "submit_results": 0, "failures": 0, "rows": 0}
+        self.calls = {"next_batch": 0, "submit_results": 0, "failures": 0, "rows": 0,
+            "accepted": 0, "expired": 0}
 
     def publish(self, network: Any, checkpoint: str) -> None:
         from gf_models.shared_registry import publication
 
         with serialized_torch(), _preserve_global_rng():
             self.registry.load_policy_weights(publication(network, checkpoint))
+            self.references[checkpoint] = 0
+
+    def publish_banks(self, model: Any, binding: Any, banks: Any, checkpoint: str) -> None:
+        from gf_models.shared_registry import bank_publication
+
+        with serialized_torch(), _preserve_global_rng():
+            self.registry.load_policy_weights(bank_publication(model, binding, banks, checkpoint))
+            if self.device != "cpu":
+                import torch
+                torch.cuda.synchronize(self.device)
             self.references[checkpoint] = 0
 
     def retain(self, checkpoint: str) -> None:

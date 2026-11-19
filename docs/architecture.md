@@ -21,8 +21,11 @@ small-terminal scope. Pure closed normal/HPO6 configuration also passes both ind
 actual new execution is explicitly refused through legacy entries.
 Local numerical/data support, canonical effective-config handoff, actual parent
 borrowers, ordered writer inventory/deferred contexts and strict Simulator cleanup
-also pass independent reviews after five boundary repairs. Actual new Source/
-common-PPO integration, user CLI execution and deployment memory/adoption remain
+also pass independent reviews after five boundary repairs. Private Source/common-PPO/save/restore/cold integration now passes scoped
+independent correctness and conformance after two repair rounds, including actual
+ordinary CPU single-use and current-source Model4 CUDA returned-Parent handoff.
+General CUDA planning, artifact-retention and healthy-empty parity remain required
+before public activation. User CLI execution and deployment memory/adoption remain
 in progress. New runtime/producer/prepared/exit/physical
 identities preserve historical receipts; actual scientific cold Source completion
 and evaluation handoff remain to be connected. A fully integrated new runtime

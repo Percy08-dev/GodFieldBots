@@ -282,22 +282,18 @@ pub(crate) fn local(v: &Value) -> Result<()> {
     Ok(())
 }
 pub(crate) fn operation(v: &Value, mode: &str, session: f64) -> Result<[f64; 5]> {
+    let version2 = v["schema_version"].as_u64() == Some(2);
+    let mut keys = vec![
+        "operation_id", "run_id", "mode", "operation_type", "config_path",
+        "config_sha256", "runtime_binding_sha256", "deadlines",
+        "parent_directory", "expected_context",
+    ];
+    if version2 { keys.push("execution_request"); }
     record(
         v,
-        "rust-player-operation-v1",
-        1,
-        &[
-            "operation_id",
-            "run_id",
-            "mode",
-            "operation_type",
-            "config_path",
-            "config_sha256",
-            "runtime_binding_sha256",
-            "deadlines",
-            "parent_directory",
-            "expected_context",
-        ],
+        if version2 { "rust-player-operation-v2" } else { "rust-player-operation-v1" },
+        if version2 { 2 } else { 1 },
+        &keys,
     )?;
     if v["mode"] != mode {
         return Err(invalid("fixed operation mode mismatch"));
@@ -320,6 +316,20 @@ pub(crate) fn operation(v: &Value, mode: &str, session: f64) -> Result<[f64; 5]>
         || kind == "hpo-train" && mode != "hpo"
     {
         return Err(invalid("unknown fixed host operation"));
+    }
+    if version2 {
+        let execution = &v["execution_request"];
+        if ["ordinary-train", "hpo-train"].contains(&kind) {
+            object(execution, &["mode", "pause_after_update"])?;
+            if !["fresh", "resume"].contains(&text(&execution["mode"])?) {
+                return Err(invalid("explicit fresh/resume execution request required"));
+            }
+            if !execution["pause_after_update"].is_null() {
+                positive(&execution["pause_after_update"])?;
+            }
+        } else if !execution.is_null() {
+            return Err(invalid("non-training execution request must be null"));
+        }
     }
     if v["run_id"].is_null() || v["parent_directory"].is_null() {
         if kind != "campaign-continue"
@@ -344,6 +354,37 @@ pub(crate) fn operation(v: &Value, mode: &str, session: f64) -> Result<[f64; 5]>
         }
     }
     deadlines(&v["deadlines"], session)
+}
+
+#[cfg(test)]
+mod operation_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn operation2_request_is_explicit_and_operation1_remains_closed() {
+        let bits = |value: f64| format!("{:016x}", value.to_bits());
+        let mut value = json!({"schema_version":2,"kind":"rust-player-operation-v2",
+            "operation_id":"op","run_id":"run","mode":"ordinary","operation_type":"ordinary-train",
+            "config_path":"/tmp/config","config_sha256":"a".repeat(64),
+            "runtime_binding_sha256":"b".repeat(64),"parent_directory":"/tmp/parent",
+            "expected_context":null,"deadlines":{"admission_bits":bits(100.),
+            "execution_bits":bits(110.),"term_bits":bits(120.),"kill_bits":bits(130.),
+            "finish_bits":bits(140.)},"execution_request":{"mode":"fresh","pause_after_update":1}});
+        assert!(operation(&value, "ordinary", 200.).is_ok());
+        for execution in [json!(null), json!({}), json!({"mode":"fresh","pause_after_update":true}),
+            json!({"mode":"resume","pause_after_update":0}),
+            json!({"mode":"infer","pause_after_update":null})] {
+            let mut bad = value.clone();
+            bad["execution_request"] = execution;
+            assert!(operation(&bad, "ordinary", 200.).is_err());
+        }
+        value["schema_version"] = json!(1);
+        value["kind"] = json!("rust-player-operation-v1");
+        assert!(operation(&value, "ordinary", 200.).is_err());
+        value.as_object_mut().unwrap().remove("execution_request");
+        assert!(operation(&value, "ordinary", 200.).is_ok());
+    }
 }
 pub(crate) fn launch(v: &Value) -> Result<f64> {
     record(

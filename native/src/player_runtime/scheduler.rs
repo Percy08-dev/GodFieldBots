@@ -16,7 +16,7 @@ use crate::{
 use pyo3::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     sync::{
         Arc, Condvar, Mutex,
         atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -61,6 +61,7 @@ pub struct RuntimeConfig {
 }
 struct Completion {
     reports: Vec<GameReport>,
+    report_keys: HashMap<(String, String, String), usize>,
     completed: usize,
     errors: Vec<String>,
 }
@@ -73,8 +74,10 @@ struct Shared {
     submitted: AtomicUsize,
 }
 impl Shared {
-    fn finish(&self, report: GameReport) {
+    fn finish(&self, key: (String, String, String), report: GameReport) {
         let mut s = self.done.lock().unwrap();
+        let ordinal = s.reports.len();
+        assert!(s.report_keys.insert(key, ordinal).is_none());
         s.reports.push(report);
         s.completed += 1;
         self.wake.notify_all();
@@ -228,8 +231,9 @@ impl PlayerRuntime {
                                         // C includes the terminal record until same-reservation
                                         // writer acceptance. Queued cancelled games still emit
                                         // explicit outcomes, without acquiring/reusing a live slot.
+                                        let key=(spec.run.clone(),spec.trial.clone(),spec.episode.clone());
                                         let report=game::run(spec,client,dispatcher,storage,cancel).await;
-                                        shared.finish(report);drop(permit);
+                                        shared.finish(key,report);drop(permit);
                                     };
                                     if config.scheduler=="fixed"{tasks.spawn_local(job);}else{tasks.spawn_on(job,&runtime_handle);}
                                 },None=>break,
@@ -310,6 +314,7 @@ impl PlayerRuntime {
             shared: Arc::new(Shared {
                 done: Mutex::new(Completion {
                     reports: vec![],
+                    report_keys: HashMap::new(),
                     completed: 0,
                     errors: vec![],
                 }),
@@ -380,6 +385,26 @@ impl PlayerRuntime {
         })
         .map_err(crate::python_error)
     }
+    fn completed_reports<'py>(&self, py: Python<'py>, keys: Vec<(String, String, String)>)
+        -> PyResult<Bound<'py, pyo3::types::PyBytes>> {
+        let encoded = py.detach(|| -> Result<Vec<u8>> {
+            let unique: HashSet<_> = keys.iter().collect();
+            ensure(unique.len() == keys.len(), "duplicate completed-report key")?;
+            let life = self.life.lock().unwrap();
+            ensure(keys.iter().all(|key| life.episodes.contains(key)),
+                "unissued completed-report key")?;
+            let done = self.shared.done.lock().unwrap();
+            let mut rows = Vec::with_capacity(keys.len());
+            for key in &keys {
+                let ordinal = done.report_keys.get(key)
+                    .ok_or_else(|| error("incomplete completed-report key"))?;
+                rows.push(serde_json::json!({"run":key.0,"trial":key.1,
+                    "episode":key.2,"report":done.reports[*ordinal]}));
+            }
+            serde_json::to_vec(&rows).map_err(|e| error(e.to_string()))
+        }).map_err(crate::python_error)?;
+        Ok(pyo3::types::PyBytes::new(py, &encoded))
+    }
     fn quiesce(&self) {
         let mut life = self.life.lock().unwrap();
         life.accepting = false;
@@ -413,6 +438,7 @@ mod tests {
         let shared = Arc::new(Shared {
             done: Mutex::new(Completion {
                 reports: vec![],
+                report_keys: HashMap::new(),
                 completed: 0,
                 errors: vec![],
             }),

@@ -7,9 +7,9 @@ from __future__ import annotations
 
 import math
 import struct
-from typing import Any
+from typing import Any, cast
 
-from gf_common.domain import ContractError, Json, closed, digest, integer
+from gf_common.domain import ContractError, Json, clone, closed, digest, integer
 
 # Linux UAPI fcntl.h values. Some verified CPython builds omit these constants.
 LINUX_F_ADD_SEALS = 1033
@@ -79,6 +79,29 @@ def require_legacy_player_entry(config: Any) -> None:
         or spec.get("runtime", {}).get("mode") == PLAYER_RUNTIME_MODE
     ):
         raise ContractError("Rust player selection requires an authenticated Rust-supervised entry")
+
+
+def runtime_binding(runtime: Json, producer: Json) -> Json:
+    """Stable metadata only; actual host/control owners grant live authority."""
+    return clone(validate_runtime_binding({"schema_version": 1,
+        "kind": "rust-player-runtime-binding-v1", "runtime": runtime,
+        "producer": producer, "sampling_runtime_sha256": producer.get("sampling_runtime_sha256")}))
+
+
+def validate_runtime_binding(value: Any) -> Json:
+    raw = record(value, "rust-player-runtime-binding-v1",
+        {"runtime", "producer", "sampling_runtime_sha256"})
+    if type(raw["runtime"]) is not dict:
+        raise ContractError("complete materialized runtime declaration required")
+    normalized = player_runtime(raw["runtime"],
+        game_concurrency=cast(int, raw["runtime"].get("game_concurrency")))
+    if normalized != raw["runtime"]:
+        raise ContractError("normalized runtime declaration required")
+    producer = validate_producer(raw["producer"])
+    hex_identity(raw["sampling_runtime_sha256"])
+    if raw["sampling_runtime_sha256"] != producer["sampling_runtime_sha256"]:
+        raise ContractError("runtime binding sampling identity differs from its producer")
+    return raw
 
 
 def text(value: Any) -> str:
@@ -182,9 +205,10 @@ def validate_lock(value: Any) -> Json:
 
 
 def validate_operation(value: Any, *, session_finish: str | None = None) -> Json:
+    version2 = type(value) is dict and type(value.get("schema_version")) is int and value["schema_version"] == 2
     value = record(
         value,
-        "rust-player-operation-v1",
+        "rust-player-operation-v2" if version2 else "rust-player-operation-v1",
         {
             "operation_id",
             "run_id",
@@ -196,7 +220,8 @@ def validate_operation(value: Any, *, session_finish: str | None = None) -> Json
             "deadlines",
             "parent_directory",
             "expected_context",
-        },
+        } | ({"execution_request"} if version2 else set()),
+        2 if version2 else 1,
     )
     for key in ("operation_id", "config_path"):
         text(value[key])
@@ -215,6 +240,16 @@ def validate_operation(value: Any, *, session_finish: str | None = None) -> Json
         or (value["operation_type"] == "hpo-train" and value["mode"] != "hpo")
     ):
         raise ContractError("operation/mode mismatch")
+    if version2:
+        execution = value["execution_request"]
+        if value["operation_type"] in ("ordinary-train", "hpo-train"):
+            closed(execution, {"mode", "pause_after_update"})
+            if execution["mode"] not in ("fresh", "resume"):
+                raise ContractError("explicit fresh/resume execution request required")
+            if execution["pause_after_update"] is not None:
+                integer(execution["pause_after_update"], 1)
+        elif execution is not None:
+            raise ContractError("non-training operation has no training execution request")
     if value["run_id"] is None or value["parent_directory"] is None:
         if value["operation_type"] != "campaign-continue" or any(
             value[key] is not None

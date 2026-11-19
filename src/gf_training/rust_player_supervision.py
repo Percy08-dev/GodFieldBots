@@ -266,6 +266,9 @@ class ColdContinuation(_Capability):
         self._control._require()
         if self._control._cold is not self or self._control._phase == "training":
             raise ContractError("SAME original cold control capability required")
+        if (self._control.operation_sha256 != self._payload["operation_sha256"]
+                or str(self._control.operation_path) != self._payload["operation_path"]):
+            raise ContractError("cold pair differs from actual CURRENT bound operation")
         admission = validate_local_admission(self._payload["admission"])
         prepared, prepared_sha = read_control_record(
             Path(self._payload["prepared_path"]), self._control.root
@@ -391,6 +394,7 @@ class HostControl(_Capability):
             self.operation, actual = read_control_record(self.operation_path, self.root)
             if actual != self.launch["operation_sha256"]:
                 raise ContractError("initial operation original hash mismatch")
+            self._operation_sha256 = actual
             validate_operation(
                 self.operation, session_finish=self.launch["session_deadlines"]["finish_bits"]
             )
@@ -420,6 +424,7 @@ class HostControl(_Capability):
                 or self.operation["deadlines"] != payload["deadlines"]
             ):
                 raise ContractError("cold current operation original differs")
+            self._operation_sha256 = actual
             validate_operation(
                 self.operation, session_finish=self.launch["session_deadlines"]["finish_bits"]
             )
@@ -446,6 +451,14 @@ class HostControl(_Capability):
             or os.getppid() != self._parent_pid
         ):
             raise ContractError("SAME original host control owner required")
+
+    @property
+    def operation_sha256(self) -> str:
+        self._require()
+        value, actual = read_control_record(self.operation_path, self.root)
+        if actual != self._operation_sha256 or value != self.operation:
+            raise ContractError("actual CURRENT bound operation original changed")
+        return actual
 
     def _finish(self) -> float:
         if self._phase == "session":
@@ -614,6 +627,8 @@ class HostControl(_Capability):
         self._parent_borrowers.remove(token)
 
     def bind_operation(self, path: Path) -> None:
+        if self._parent_borrowers:
+            raise ContractError('actual parent mutation borrowers remain live or uncertain')
         value, checksum = read_control_record(path, self.root)
         validate_operation(value, session_finish=self.launch["session_deadlines"]["finish_bits"])
         payload = {
@@ -638,6 +653,7 @@ class HostControl(_Capability):
         ):
             raise ContractError("operation bind acknowledgement differs")
         self.operation, self.operation_path = value, Path(path)
+        self._operation_sha256 = checksum
         self._phase = "training"
         self._stopped = False
         self._admission = None

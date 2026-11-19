@@ -26,7 +26,7 @@ class RustPlayerRuntime:
         self.service = service
         self._holds: dict[tuple[str, str, str], list[str]] = {}
         self._active_routes: dict[tuple[str, str, str], int] = {}
-        self._episode_admission_attempts: set[str] = set()
+        self._game_admission_attempts: set[tuple[str, str, str]] = set()
         self._settled = threading.Condition()
         self._service_thread: threading.Thread | None = None
         self._service_error: str | None = None
@@ -72,7 +72,9 @@ class RustPlayerRuntime:
                     at = time.perf_counter()
                     try:
                         self.service.calls["submit_results"] += 1
-                        self.dispatcher.submit_results(batch["batch_id"], answers)
+                        delivered = self.dispatcher.submit_results(batch["batch_id"], answers)
+                        self.service.calls["accepted"] += delivered
+                        self.service.calls["expired"] += len(answers) - delivered
                     finally:
                         self.service.timings["native_submit"] += time.perf_counter() - at
                 except BaseException as exc:
@@ -113,6 +115,8 @@ class RustPlayerRuntime:
 
         Each game carries cleanup_deadline bounded by the supervised cooperative
         cutoff. HTTP cleanup and terminal storage share that SAME deadline.
+        Optional per-policy numeric_costs overrides the GameSpec default for
+        that acting participant only; production supplies its own model recipe.
         Idle original runtimes remain alive between waves.
         """
         with self._lock:
@@ -177,13 +181,18 @@ class RustPlayerRuntime:
                     target=self._serve, name="gf-player-inference"
                 )
                 self._service_thread.start()
-            self._episode_admission_attempts.update(game["episode"] for game in games)
+            self._game_admission_attempts.update(
+                (game["run"], game["trial"], game["episode"]) for game in games)
             self._native.start(canonical(games).encode())
 
     def episode_admission_attempted(self, episode: str) -> bool:
-        """Management-only dispatch observation, including uncertain starts."""
+        """Compatibility-only text observation; Source uses full context keys."""
         with self._lock:
-            return episode in self._episode_admission_attempts
+            return any(key[2] == episode for key in self._game_admission_attempts)
+
+    def game_admission_attempted(self, run: str, trial: str, episode: str) -> bool:
+        with self._lock:
+            return (run, trial, episode) in self._game_admission_attempts
 
     def next_storage(self, deadline: float) -> Any:
         return self._native.next_storage(deadline)
@@ -214,6 +223,10 @@ class RustPlayerRuntime:
     def wait(self, deadline: float) -> None:
         """Wait for the current submitted wave without ending idle runtimes."""
         self._native.wait(deadline)
+
+    def completed_reports(self, keys: list[tuple[str, str, str]]) -> list[dict[str, Any]]:
+        """Actual full-key settled observations; no worker shutdown or Source authority."""
+        return json.loads(self._native.completed_reports(keys))
 
     def quiesce(self) -> None:
         """Stop new admissions while existing actors and original I/O tasks finish."""

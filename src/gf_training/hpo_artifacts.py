@@ -144,7 +144,8 @@ def restore_learner(learner: HpoLearner, directory: Path) -> None:
 
 def _restore_owned_learner(learner: HpoLearner, *, inference: Any, resume: Any,
                           actor_metadata: Json | None, resume_manifest: Json, generation: int,
-                          budget: Any, actions: ActionConfigV3, local_snapshot: Any = None) -> None:
+                          budget: Any, actions: ActionConfigV3, local_snapshot: Any = None,
+                          restored_policy: Any = None) -> None:
     """Actual owned receiver, with explicit local snapshot or historical Wire7."""
     from gf_models.hpo_owned_inference import load_owned_inference
     from gf_models.sharded_arrays import validate_bundle_metadata
@@ -159,7 +160,20 @@ def _restore_owned_learner(learner: HpoLearner, *, inference: Any, resume: Any,
         raise ContractError('owned restore requires untouched actual owned learner')
     integer(generation, 0, 2**31-1)
     local_metadata = None
-    if local_snapshot is not None:
+    if restored_policy is not None:
+        from gf_training.rust_player_restore import RustRestoredPolicy
+        if (type(restored_policy) is not RustRestoredPolicy or local_snapshot is not None
+                or actor_metadata is not None or inference is not restored_policy.inference
+                or resume is not restored_policy.resume or budget is not restored_policy._budget
+                or generation != restored_policy.generation or learner is not restored_policy._learner):
+            raise ContractError('actual full current-host restored policy/banks required')
+        restored_policy.require()
+        if hashlib.sha256((canonical(resume_manifest) + '\n').encode()).hexdigest() != restored_policy._held['resume.json'].sha256:
+            raise ContractError('restored metadata differs from actual held resume original')
+        local_manifest = restored_policy.manifest
+        local_metadata = {key: value for key, value in local_manifest.items() if key != 'weights'}
+        inference_digest = restored_policy.files['inference.json']
+    elif local_snapshot is not None:
         from gf_training.hpo_owned_snapshot import OwnedModelSnapshot
         if (type(local_snapshot) is not OwnedModelSnapshot or local_snapshot.save_ack is None
                 or inference is not local_snapshot.inference or resume is not local_snapshot.resume

@@ -225,6 +225,34 @@ class _DecodeEnvelope:
         weakref.finalize(array,_keep_decode_alive,self)
 
 
+def _decode_banks_data(directory: Path, bundle: Json, *, model: Any, maximum: int,
+                       budget: Any, scan: Any, partial_banks: list[Any],
+                       decodes: list[Any]) -> ReadonlyRamBankSet:
+    """Unchanged codec/data lifetime; no actor9/import/Source authority issued."""
+    from gf_models.arrays import load_arrays
+    from gf_models.sharded_arrays import validate_bundle_metadata
+    validate_bundle_metadata(bundle,max_decoded_bytes=model.resources.max_owned_bytes)
+    envelope=35*max(((directory/row['file']).lstat().st_size for row in bundle['shards']),default=0)+3*bundle['decoded_bytes']+65536
+    receipt=_DecodeReceipt()
+    decodes.append(receipt)
+    reservation=budget.reserve(envelope)
+    decode=_DecodeEnvelope(reservation,receipt)
+    arrays: dict[str,Any]={}
+    decoded=None
+    for shard in bundle['shards']:
+        sidecar=scan.object(directory/Path(shard['file']).with_suffix('.json'),bundle['files'][Path(shard['file']).with_suffix('.json').name])
+        if sidecar!=shard['metadata']: raise ContractError('cold shard sidecar mismatch')
+        with scan.file(directory/shard['file'],bundle['files'][shard['file']]) as (source,info):
+            decoded=load_arrays(directory/shard['file'],sidecar,_check=scan.check,_on_array=decode.hold,
+                _source=source,_snapshot=tuple(getattr(info,key) for key in ('st_dev','st_ino','st_size','st_mtime_ns','st_ctime_ns')))
+            arrays.update(decoded)
+            decoded=None
+    bankset=ReadonlyRamBankSet.build(arrays,budget,max_bytes=maximum)
+    partial_banks.append(bankset)
+    arrays.clear()
+    return bankset
+
+
 def _owned_update_metadata(update: Json, state: Json, previous: Json, current: Json) -> None:
     from gf_training.hpo_config import finite_number, hpo_training_config
     from gf_training.hpo_lineage import _CLASSIFICATION, HPO_UPDATE_FIELDS, _selection, hpo_spec
@@ -559,28 +587,8 @@ class OwnedColdImport:
         return False
 
     def _decode_bank(self, directory: Path, bundle: Json, *, model: Any, maximum: int) -> ReadonlyRamBankSet:
-        from gf_models.arrays import load_arrays
-        from gf_models.sharded_arrays import validate_bundle_metadata
-        validate_bundle_metadata(bundle,max_decoded_bytes=model.resources.max_owned_bytes)
-        envelope=35*max(((directory/row['file']).lstat().st_size for row in bundle['shards']),default=0)+3*bundle['decoded_bytes']+65536
-        receipt=_DecodeReceipt()
-        self._decodes.append(receipt)
-        reservation=self.budget.reserve(envelope)
-        decode=_DecodeEnvelope(reservation,receipt)
-        arrays: dict[str,Any]={}
-        decoded=None
-        for shard in bundle['shards']:
-            sidecar=self.scan.object(directory/Path(shard['file']).with_suffix('.json'),bundle['files'][Path(shard['file']).with_suffix('.json').name])
-            if sidecar!=shard['metadata']: raise ContractError('cold shard sidecar mismatch')
-            with self.scan.file(directory/shard['file'],bundle['files'][shard['file']]) as (source,info):
-                decoded=load_arrays(directory/shard['file'],sidecar,_check=self.scan.check,_on_array=decode.hold,
-                    _source=source,_snapshot=tuple(getattr(info,key) for key in ('st_dev','st_ino','st_size','st_mtime_ns','st_ctime_ns')))
-                arrays.update(decoded)
-                decoded=None
-        bankset=ReadonlyRamBankSet.build(arrays,self.budget,max_bytes=maximum)
-        self._partial_banks.append(bankset)  # Before any later validation/copy can fail.
-        arrays.clear()  # No decoded dictionary/array survives envelope retirement on success.
-        return bankset
+        return _decode_banks_data(directory,bundle,model=model,maximum=maximum,budget=self.budget,
+            scan=self.scan,partial_banks=self._partial_banks,decodes=self._decodes)
 
     def load(self, *, model: Any, binding: Any, actions: Any, rules: Any, final_only: bool=False) -> None:
         self.require()

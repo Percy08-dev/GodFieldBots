@@ -128,3 +128,32 @@ refusal before mutation, correct restored weights/Adam/RNG/PCG64 and real frozen
 policy retention. CPU cold loading itself creates no GPU context; admitted
 training restore uses its original bounds. Data owner alone grants no new Source
 or final-parent qualification.
+
+
+## Saved inference-policy lifetime (accepted after architecture READY)
+
+Frozen policy cache consumers need inference data, not every prior generation's
+CPU optimizer/RNG resume banks. A concrete RustSavedPolicy is issued from a genuine
+LocalSavedPair/OwnedSaveAck while BOTH banks and the complete ACK are valid, after
+actual same-pair generation commit. Capture immutable saved manifest/hash/commit
+facts and the actual inference-bank owner. Only then may unneeded CPU resume
+backings close positively. Shared metadata/inference leases stay charged once
+through actual last consumer; existing bank/reservation/alias semantics must be
+verified, not inferred from a closed flag or guessed memory estimate.
+
+After retirement of resume backing, never claim the old full-snapshot ACK still
+valid or use that partially retired object as complete restore/save authority.
+Policy.require validates its actual live inference owner, original held saved-file
+hashes/immutable facts and same budget. It exposes inference only, not optimizer/
+RNG state. Existing OwnedModelSnapshot/OwnedSaveAck APIs are unchanged; no fake ACK
+or unassigned snapshot mutation is permitted. Actual current learner GPU Adam
+stays local; resume reopens full saved data through RustRestoredPolicy as above.
+Fresh next-generation export/save/commit remains genuine. No prior artifacts are
+re-saved merely to manufacture ownership. Policy data alone grants no Source.
+
+Tests hold inference consumers across resume-bank retirement, validate same-budget
+last-use charges and original file hashes, reject full restore/ACK misuse after
+retirement, and prove frozen policy values/parameters remain unchanged. Real CPU
+resume bytes become releasable only after save/commit and actual alias retirement;
+GPU allocated/reserved observations remain distinct. No new margin, dependency,
+format, mathematical algorithm or generic resource framework is introduced.

@@ -393,6 +393,117 @@ def _host_fixture(mode, control_fd, launch_fd, phase):
     second = control.operation["operation_id"] == "operation-second"
     prefix = "second-" if second else ""
     parent = Path(control.operation["parent_directory"])
+    if mode == 'hpo-resume':
+        import json
+        import sys
+        import uuid
+        sys.path.insert(0, str(Path(__file__).parents[1]))
+        from gf_cli.config import load_rust_player_effective
+        from gf_training.rust_player_completion import (
+            ColdFinalizedRustInvocation,
+            ColdFinalizedRustParent,
+        )
+        from gf_training.rust_player_learning import finalize_cold, run_hpo
+        loaded = load_rust_player_effective(Path(control.operation['config_path']),
+            expected_sha256=control.operation['config_sha256'])
+        if phase == 'host':
+            run_hpo(control, control.operation, loaded=loaded)
+        else:
+            assert 'torch' not in sys.modules, 'fresh cold must not import/query CUDA'
+            result = finalize_cold(control, control.cold, loaded=loaded)
+            assert 'torch' not in sys.modules, 'full cold data audit used Torch/CUDA'
+            paused = type(result) is ColdFinalizedRustInvocation
+            if paused:
+                assert result.completion['state'] == 'paused' and not result.completion['eligible']
+                saved = parent / 'artifacts/000001'
+                facts = {path.name: {'sha256': hashlib.sha256(path.read_bytes()).hexdigest(),
+                    'identity': [getattr(path.stat(), field) for field in ('st_dev', 'st_ino', 'st_size', 'st_mtime_ns', 'st_ctime_ns')]}
+                    for path in saved.iterdir() if path.is_file()}
+                write_control_record(root / 'paused-original-files.json', facts)
+                result.close()
+                control.release_parent()
+                changed = copy.deepcopy(control.operation)
+                changed['operation_id'] = 'hpo-resume-' + uuid.uuid4().hex
+                changed['expected_context']['operation_id'] = changed['operation_id']
+                changed['execution_request'] = {'mode': 'resume', 'pause_after_update': None}
+                path = root / 'operation-resume.json'
+                write_control_record(path, changed)
+                control.bind_operation(path)
+                # Existing finalized cold→training bind uses this actual process
+                # as the next host; the fixed handler reacquires/transfers its
+                # genuine parent before admission, never a JSON lock mapping.
+                run_hpo(control, control.operation, loaded=loaded)
+            else:
+                assert type(result) is ColdFinalizedRustParent
+                result.require()
+                assert result.state['used_decisions'] == 64 and result.state['updates'] == 1
+                assert result.metadata['schema_version'] == 3
+                saved = parent / 'artifacts/000001'
+                expected = json.loads((root / 'paused-original-files.json').read_bytes())
+                actual = {path.name: {'sha256': hashlib.sha256(path.read_bytes()).hexdigest(),
+                    'identity': [getattr(path.stat(), field) for field in ('st_dev', 'st_ino', 'st_size', 'st_mtime_ns', 'st_ctime_ns')]}
+                    for path in saved.iterdir() if path.is_file()}
+                assert actual == expected, 'resume re-saved or mutated unchanged Gprev'
+                result.close()
+                control.release_parent()
+        control.close()
+        return
+    if mode == 'cpu-common':
+        import sys
+        sys.path.insert(0, str(Path(__file__).parents[1]))
+        from gf_cli.config import load_rust_player_effective
+        from gf_training.rust_player_learning import (
+            RustGameOperations,
+            finalize_cold,
+            run_ordinary,
+        )
+        loaded = load_rust_player_effective(Path(control.operation['config_path']),
+            expected_sha256=control.operation['config_sha256'])
+        if phase == 'host':
+            actual_update = RustGameOperations.update_local
+            def checked_update(ops, source, output, *, deadline):
+                from gf_common.domain import ContractError
+                before = ops.registry.local.learner.steps
+                try:
+                    copy.copy(source)
+                except TypeError:
+                    pass
+                else:
+                    raise AssertionError('actual Source authority was copyable')
+                duplicate = output.parent / 'duplicate-numeric'
+                try:
+                    source.persist(duplicate)
+                except ContractError:
+                    pass
+                else:
+                    raise AssertionError('persisted Source allowed duplicate persistence')
+                assert not duplicate.exists() and ops.registry.local.learner.steps == before
+                result = actual_update(ops, source, output, deadline=deadline)
+                after = ops.registry.local.learner.steps
+                try:
+                    source.consume(output)
+                except ContractError:
+                    pass
+                else:
+                    raise AssertionError('actual saved Source allowed duplicate kernel/save')
+                assert ops.registry.local.learner.steps == after and after > before
+                write_control_record(root / ('source-singleuse-' + control.operation['operation_id'] + '.json'),
+                    {'scope': 'actual Source; foreign copy/persist/consume refusal',
+                        'before_steps': before, 'after_steps': after, 'state': source.state,
+                        'foreign_copy_refused': True, 'duplicate_persist_refused': True,
+                        'duplicate_consume_refused': True})
+                return result
+            RustGameOperations.update_local = checked_update
+            try:
+                run_ordinary(control, control.operation, loaded=loaded)
+            finally:
+                RustGameOperations.update_local = actual_update
+        else:
+            result = finalize_cold(control, control.cold, loaded=loaded)
+            result.close()
+            control.release_parent()
+        control.close()
+        return
 
     def competitor_blocked():
         fd = os.open(parent / ".lock", os.O_RDWR)
@@ -496,6 +607,41 @@ def _host_fixture(mode, control_fd, launch_fd, phase):
         write_control_record(path, completion)
         control.cold.acknowledge_finalizer_output(path)
         control.cold.acknowledge_finalizer_output(path)  # exact-pair retry is idempotent
+        if mode == 'normal':
+            from concurrent.futures import ThreadPoolExecutor
+
+            from gf_training.group_pack_pool import PackedArtifactPool
+            from gf_training.rust_player_completion import _ISSUER, ColdFinalizedRustInvocation
+            pool = PackedArtifactPool(max_owned_bytes=128 * 1024**2, deadline=time.monotonic() + 2)
+            data = ColdFinalizedRustInvocation(_ISSUER, control.cold, pool)
+            data._hold_parent(parent)
+            data._require_parent()
+            competitor_blocked()
+            for action in (control.release_parent, control.close, lambda: control.bind_operation(control.operation_path)):
+                try:
+                    action()
+                except ValueError:
+                    pass
+                else:
+                    raise AssertionError('live returned DATA owner permitted release/close/rebind')
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                for action in (data._require_parent, data.close):
+                    try:
+                        executor.submit(action).result()
+                    except ValueError:
+                        pass
+                    else:
+                        raise AssertionError('foreign thread used/closed actual returned DATA owner')
+            data._require_parent()
+            data.close()
+            assert not control._parent_borrowers and pool.budget.used == 0
+            try:
+                data._require_parent()
+            except ValueError:
+                pass
+            else:
+                raise AssertionError('closed returned DATA owner remained usable')
+            competitor_blocked()  # Native still owns SAME OFD until explicit release.
         if mode == "session-expire":
             control.release_parent()
             while time.monotonic() < session_cutoff + 0.12:
@@ -576,6 +722,11 @@ def _host_fixture(mode, control_fd, launch_fd, phase):
             transfer_run_lock(ownership, control)
             assert require_hpo_run_owner(parent, ownership) is ownership
         competitor_blocked()
+        if mode == "cpu-source":
+            import sys
+            sys.path.insert(0, str(Path(__file__).parents[1]))
+            from tests.test_rust_player_spine import run_cpu_source
+            run_cpu_source(control, ownership)
         try:
             control.close()
         except ValueError as error:
@@ -607,7 +758,7 @@ def _host_fixture(mode, control_fd, launch_fd, phase):
             output.mkdir()
             run_cuda_numerical_component(admission, output)
     assert not control._parent_borrowers
-    if mode == "cuda-numeric":
+    if mode in ("cuda-numeric", "cpu-source"):
         control.close()
         return  # actual reap diagnostics only; NEVER Prepared/Source/final-D
     if mode == "lost-transfer-ack":

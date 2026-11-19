@@ -65,7 +65,7 @@ class EpisodeEncodingContext:
     episode_id: str
     actions: ActionConfigV3
     rules: CardInstanceRules
-    numeric_costs: Json
+    numeric_costs: Json  # GameSpec DEFAULT; each policy may explicitly override it.
     runtime_evidence: Json
     policies: tuple[PolicyJournalContext, PolicyJournalContext]
     deadline: float
@@ -326,6 +326,12 @@ class CanonicalEpisodeEncoder:
             return
         self.game = game
         c = self.context
+        for policy in c.policies:
+            effective = policy.native.get("numeric_costs")
+            if effective is None:
+                effective = c.numeric_costs
+            if canonical(effective) != canonical(policy.journal["numeric_costs"]):
+                raise ContractError("per-policy effective numeric costs differ from canonical journal")
         for viewer, policy in enumerate(c.policies, 1):
             self.journals[viewer] = _Journal(
                 Path(c.episode_id),
@@ -826,7 +832,7 @@ class RustPlayerStorage:
         if deferred_contexts and any(episode_encoding_plan(c) != self._context_plans[c.episode_id]
                 for c in contexts):
             raise ValueError("initial context differs from immutable original plan")
-        if deferred_contexts and any(runtime.episode_admission_attempted(c.episode_id) for c in contexts):
+        if deferred_contexts and any(runtime.game_admission_attempted(c.run_id, c.trial, c.episode_id) for c in contexts):
             raise ValueError("original native admission preceded deferred context registration")
         self.committed: set[str] = set()
         self._condition = threading.Condition()
@@ -940,7 +946,7 @@ class RustPlayerStorage:
         group = self.group_for[contexts[0].episode_id]
         if names != set(group.episodes) or any(name in self.encoders for name in names):
             raise ContractError("complete previously unbound group contexts required")
-        if any(self.runtime.episode_admission_attempted(name) for name in names):
+        if any(self.runtime.game_admission_attempted(c.run_id, c.trial, c.episode_id) for c in contexts):
             raise ContractError("actual native admission already attempted before context binding")
         if any(c.run_id != self.run_id or episode_encoding_plan(c) != self._context_plans[c.episode_id]
                 for c in contexts):
@@ -1276,7 +1282,7 @@ class RustPlayerStorage:
             # Adopt every actual nested resource before discarding exception
             # chains. Keep only generic status, never dead private buffer frames.
             _retain_failure(self, error, clear_frames=True)
-            self.cancel(type(error).__name__)
+            self.cancel(type(error).__name__ + ": " + str(error))
         finally:
             self._ready.set()
             if command is not None:

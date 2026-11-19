@@ -260,3 +260,36 @@ full run/trial/episode identities and actual post-handoff reports while persiste
 workers stay alive. A restored-policy data owner preserves original saved lineage
 separately from newly loaded bank identities; it never fabricates a save ACK or
 re-saves unchanged prior generations. Actual implementation remains pending.
+
+
+## Mixed policy costs and saved inference ownership design
+
+Independent architecture READY accepts [per-participant costs](../design/rust-player-runtime-participant-costs.md)
+to preserve existing baseline versus MLP generator admission/provenance in mixed
+games, with old default fallback and raw/Journal meanings intact. Separate READY
+accepts inference-only RustSavedPolicy after real save/commit: it retains actual
+inference ownership and immutable facts while retiring unused CPU optimizer/RNG
+backings, without pretending the partial snapshot still has a complete save ACK.
+No new estimate, margin, mathematical or engine change is approved. Actual mixed
+and lifetime tests/build provenance remain required before implementation acceptance.
+
+## Scoped local Source, PPO and cold-owner acceptance
+
+The accepted operation2, per-policy cost, held-resume and cold/next-host ownership
+refinements are implemented in the private learning composition. Both independent
+correctness/conformance reviews are READY after two repair rounds: actual returned
+parent borrower liveness, control-graph last-use funding, stopped traceback and
+nested constructor FD custody, and exact-D-only bounded component admission.
+Root's fresh125 CPU checks/two pure boundary cases and scoped typing/lint pass.
+Current-source Model4 CUDA pause/resume returns a genuine exact-D Parent, permits
+caller access, then closes/relinquishes actual custody in38.91s; ordinary CPU
+single-use and full audits also have retained scoped evidence. See the verification
+record for exact producers, failures and limits. No learning-quality conclusion.
+
+Before public new-mode activation, generic combined CUDA planning, existing
+artifact-file retention compatibility and healthy all-natural empty-collection
+parity remain mandatory current work. Raw originals and numeric batches retain
+their existing preservation policy. These are unaccepted integration requirements,
+not permanent debt. User CLI/campaign/evaluation, full CUDA two-update/resume and
+process/audit acceptance and the complete approved timing/default protocol remain
+open; no default switch follows from this engineering milestone.

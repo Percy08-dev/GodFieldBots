@@ -457,11 +457,11 @@ with gpu.admit_gpu_job(gpu.JobContext('legacy','operation','training','run',None
             .parent()
             .unwrap();
         for &mode in cases {
-            let ordinary = mode == "ordinary-normal" || mode == "cuda-numeric";
+            let ordinary = ["ordinary-normal", "cuda-numeric", "cpu-source", "cpu-common"].contains(&mode);
             let runtime_mode = if ordinary { "ordinary" } else { "hpo" };
             let root = std::env::temp_dir().join(format!(
-                "task5b-session-{mode}-{}",
-                records::random_id().unwrap()
+                "{}-{mode}-{}",
+                if mode == "cpu-common" { "task5c1b-common" } else { "task5b-session" }, records::random_id().unwrap()
             ));
             records::ensure_private(&root).unwrap();
             let parent = root.join("parent");
@@ -469,7 +469,9 @@ with gpu.admit_gpu_job(gpu.JobContext('legacy','operation','training','run',None
             let namespace_root = root.join("global");
             let now = monotonic().unwrap();
             let bits = |n: f64| format!("{:016x}", n.to_bits());
-            let deadlines = if mode == "cuda-numeric" {
+            let deadlines = if mode == "cpu-common" {
+                json!({"admission_bits":bits(now+480.0),"execution_bits":bits(now+540.0),"term_bits":bits(now+570.0),"kill_bits":bits(now+585.0),"finish_bits":bits(now+600.0)})
+            } else if mode == "cuda-numeric" || mode == "cpu-source" {
                 json!({"admission_bits":bits(now+30.0),"execution_bits":bits(now+80.0),"term_bits":bits(now+90.0),"kill_bits":bits(now+100.0),"finish_bits":bits(now+120.0)})
             } else {
                 json!({"admission_bits":bits(now+1.5),"execution_bits":bits(now+2.0),"term_bits":bits(now+2.5),"kill_bits":bits(now+3.0),"finish_bits":bits(now+5.0)})
@@ -479,12 +481,26 @@ with gpu.admit_gpu_job(gpu.JobContext('legacy','operation','training','run',None
             } else {
                 json!({"campaign_id":"campaign","operation_id":"operation","kind":"training","run_id":"run","evaluation_id":null})
             };
-            let operation_id = if mode == "cuda-numeric" {
-                format!("cuda-numeric-{}", records::random_id().unwrap())
+            let operation_id = if ["cuda-numeric", "cpu-source", "cpu-common"].contains(&mode) {
+                format!("{mode}-{}", records::random_id().unwrap())
             } else {
                 "operation".to_owned()
             };
-            let operation = json!({"schema_version":1,"kind":"rust-player-operation-v1","operation_id":operation_id,"run_id":"run","mode":runtime_mode,"operation_type":if ordinary {"ordinary-train"} else {"hpo-train"},"config_path":root.join("config.json"),"config_sha256":"a".repeat(64),"runtime_binding_sha256":"b".repeat(64),"deadlines":deadlines,"parent_directory":parent,"expected_context":context});
+            let mut operation = json!({"schema_version":1,"kind":"rust-player-operation-v1","operation_id":operation_id,"run_id":"run","mode":runtime_mode,"operation_type":if ordinary {"ordinary-train"} else {"hpo-train"},"config_path":root.join("config.json"),"config_sha256":"a".repeat(64),"runtime_binding_sha256":"b".repeat(64),"deadlines":deadlines,"parent_directory":parent,"expected_context":context});
+            if mode == "cpu-source" || mode == "cpu-common" {
+                let helper = if mode == "cpu-common" { "prepare_cpu_common" } else { "prepare_cpu_source" };
+                let code = format!("import json,sys;from pathlib import Path;from tests.test_rust_player_spine import {helper};print(json.dumps({helper}(Path(sys.argv[1]),Path(sys.argv[2]))))");
+                let output = std::process::Command::new(python()).args(["-c", &code])
+                    .arg(&root).arg(std::env::current_exe().unwrap()).current_dir(repo).output().unwrap();
+                assert!(output.status.success(), "CPU Source setup: {}", String::from_utf8_lossy(&output.stderr));
+                let facts: Value = serde_json::from_slice(&output.stdout).unwrap();
+                operation["config_sha256"] = facts["config_sha256"].clone();
+                operation["runtime_binding_sha256"] = facts["runtime_binding_sha256"].clone();
+                operation["schema_version"] = json!(2);
+                operation["kind"] = json!("rust-player-operation-v2");
+                operation["execution_request"] = json!({"mode":"fresh","pause_after_update":null});
+                if mode == "cpu-common" { operation["config_path"] = json!(parent.join("config.json")); }
+            }
             let operation_path = root.join("operation.json");
             let operation_sha = records::write(&operation_path, &operation, true).unwrap();
             let campaign = std::fs::OpenOptions::new()
@@ -492,20 +508,20 @@ with gpu.admit_gpu_job(gpu.JobContext('legacy','operation','training','run',None
                 .write(true)
                 .create_new(true)
                 .mode(0o600)
-                .open(root.join("campaign.lock"))
+                .open(if mode == "cpu-common" { parent.join(".lock") } else { root.join("campaign.lock") })
                 .unwrap();
             assert_eq!(
                 unsafe { libc::flock(campaign.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
                 0
             );
             let metadata = campaign.metadata().unwrap();
-            let mapping = if ordinary {
+            let mapping = if ordinary && mode != "cpu-common" {
                 drop(campaign);
                 json!([])
             } else {
-                json!([{"lock_kind":"campaign","fd":campaign.into_raw_fd(),"device":metadata.dev(),"inode":metadata.ino()}])
+                json!([{"lock_kind":if mode=="cpu-common"{"parent"}else{"campaign"},"fd":campaign.into_raw_fd(),"device":metadata.dev(),"inode":metadata.ino()}])
             };
-            let launch = json!({"schema_version":1,"kind":"rust-player-launch-v1","supervision_id":records::random_id().unwrap(),"python_executable":python(),"operation_path":operation_path,"operation_sha256":operation_sha,"record_directory":root,"mode":runtime_mode,"session_deadlines":{"finish_bits":bits(now+if mode=="session-expire"{5.3}else if mode=="cuda-numeric"{120.0}else{10.0})},"clock_binding":{"boot_id":records::boot_id().unwrap(),"monotonic_before_bits":bits(now),"monotonic_after_bits":bits(now),"unix_anchor_bits":bits(records::unix_ns().unwrap() as f64/1e9)},"binding":{"python_abi":identity["python_abi"],"extension_sha256":identity["extension_sha256"],"build":build},"locks":mapping});
+            let launch = json!({"schema_version":1,"kind":"rust-player-launch-v1","supervision_id":records::random_id().unwrap(),"python_executable":python(),"operation_path":operation_path,"operation_sha256":operation_sha,"record_directory":root,"mode":runtime_mode,"session_deadlines":{"finish_bits":bits(now+if mode=="session-expire"{5.3}else if mode=="cpu-common"{600.0}else if mode=="cuda-numeric" || mode=="cpu-source"{120.0}else{10.0})},"clock_binding":{"boot_id":records::boot_id().unwrap(),"monotonic_before_bits":bits(now),"monotonic_after_bits":bits(now),"unix_anchor_bits":bits(records::unix_ns().unwrap() as f64/1e9)},"binding":{"python_abi":identity["python_abi"],"extension_sha256":identity["extension_sha256"],"build":build},"locks":mapping});
             let launch_path = root.join("launch.json");
             records::write(&launch_path, &launch, true).unwrap();
             let launch_file = std::fs::File::open(&launch_path).unwrap();
@@ -579,7 +595,8 @@ with gpu.admit_gpu_job(gpu.JobContext('legacy','operation','training','run',None
                     "ordinary-normal",
                     "cold-delay",
                     "two-operation",
-                    "legitimate-stop"
+                    "legitimate-stop",
+                    "cpu-common"
                 ]
                 .contains(&mode),
                 "mode={mode}: {result:?}"
@@ -644,7 +661,8 @@ with gpu.admit_gpu_job(gpu.JobContext('legacy','operation','training','run',None
                             "same-operation",
                             "unfinalized-bind",
                             "session-expire",
-                            "legitimate-stop"
+                            "legitimate-stop",
+                            "cpu-common"
                         ]
                         .contains(&mode)
                     )
@@ -706,6 +724,19 @@ with gpu.admit_gpu_job(gpu.JobContext('legacy','operation','training','run',None
                 );
                 eprintln!("CUDA numerical component artifacts: {}", result.display());
             }
+            if mode == "cpu-source" {
+                assert!(root.join("cpu-source-result.json").exists(), "actual CPU Source component did not finish: {}", root.display());
+                assert!(!root.join("component-prepared.json").exists());
+                assert!(!root.join("cold-started").exists());
+                eprintln!("CPU Source component artifacts: {}", root.display());
+            }
+            if mode == "cpu-common" {
+                let entries = std::fs::read_dir(&root).unwrap().map(|e| e.unwrap().path()).collect::<Vec<_>>();
+                assert_eq!(entries.iter().filter(|p|p.file_name().unwrap().to_string_lossy().starts_with("completion-")).count(),1);
+                assert_eq!(entries.iter().filter(|p|p.file_name().unwrap().to_string_lossy().starts_with("cold-audit-")).count(),1);
+                assert!(root.join("parent/generations/000001.json").exists());
+                eprintln!("COMMON PPO CPU artifacts: {}",root.display());
+            }
         }
     }
     #[test]
@@ -733,6 +764,46 @@ with gpu.admit_gpu_job(gpu.JobContext('legacy','operation','training','run',None
             Ok("1")
         );
         run_host_cases(&["cuda-numeric"]);
+    }
+    #[test]
+    #[ignore = "requires matched release extension and approved 16-game CPU component budget"]
+    fn actual_cpu_native_writer_source_persisted_component() {
+        run_host_cases(&["cpu-source"]);
+    }
+    #[test]
+    #[ignore = "requires matched runtime and approved 600s one-update ordinary CPU scope"]
+    fn actual_common_ppo_one_update_and_independent_cold_cpu_audit() {
+        run_host_cases(&["cpu-common"]);
+    }
+    #[test]
+    #[ignore = "requires Root-approved full Model4 pause/resume component scope and matching runtime"]
+    fn actual_hpo_model4_pause_resume_and_cold_parent_component() {
+        let output = std::process::Command::new(python())
+            .args(["-m", "tests.test_rust_player_spine", "_prepare_hpo_exec"])
+            .arg(std::env::current_exe().unwrap())
+            .current_dir(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap())
+            .status().unwrap();
+        assert!(output.success(), "actual management→exec HPO component failed");
+    }
+    #[test]
+    #[ignore = "private inherited-launch child, only management→exec"]
+    fn actual_hpo_resume_inherited_child() {
+        let fd: i32 = std::env::var("GFB_HPO_COMPONENT_LAUNCH_FD").expect("actual inherited launch FD").parse().unwrap();
+        let launch = session::LaunchOwner::take(fd).unwrap();
+        let root = std::path::PathBuf::from(launch.value["record_directory"].as_str().unwrap());
+        let mut supervisor = session::Supervisor::new(launch).unwrap();
+        supervisor.test_command = Some(vec![python().to_string_lossy().into_owned(),
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().join("tests/test_rust_player_supervisor.py").to_string_lossy().into_owned(),
+            "_host".to_owned(), "hpo-resume".to_owned()]);
+        // REAL default shared GPU namespace; no isolated test namespace override.
+        let result = supervisor.run();
+        assert!(result.is_ok(), "actual HPO component {}: {result:?}", root.display());
+        let paths = std::fs::read_dir(&root).unwrap().map(|e|e.unwrap().path()).collect::<Vec<_>>();
+        for prefix in ["admission-", "exit-", "completion-", "cold-audit-"] {
+            assert_eq!(paths.iter().filter(|p|p.file_name().unwrap().to_string_lossy().starts_with(prefix)).count(),2,"{prefix}");
+        }
+        assert_eq!(paths.iter().filter(|p|p.file_name().unwrap().to_string_lossy().starts_with("parent-metadata-")).count(),1);
+        eprintln!("HPO ACTUAL PAUSE/RESUME COMPONENT ARTIFACTS {}", root.display());
     }
     #[test]
     #[ignore = "requires matched release extension"]
