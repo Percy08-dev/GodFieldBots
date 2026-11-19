@@ -217,3 +217,19 @@ pass. No resource or Source authority follows from parsing: public HPO resource
 validation and all actual new execution still require the forthcoming genuine
 planner, local learning/Source and supervisor CLI composition. Old default classes,
 selectors and record meanings remain. No default/performance/learning claim.
+
+
+## Local learning and Source composition design
+
+The [bounded learning/Source design](../design/rust-player-runtime-learning.md)
+passes independent architecture READY before dependent code. CLI reconstructs
+stable canonical effective-config inputs and passes loaded data into fixed
+training handlers, avoiding training-to-CLI parsing dependency. Real inherited/
+transferred run owners close without unlocking the supervisor OFD. Concrete
+common-PPO operations use local actual snapshots and native/writer witnesses to
+issue new Source authority; no Wire7/actor9/10/GpuJob receipt is synthesized.
+Per-kind versions remain the accepted inventory. Source workspace uses the same
+remaining account after retained owners; no resource coefficient is approved.
+Cold audit stays CPU data work under original authority, then CLI consumes or
+closes the finalized result. Actual implementation, numerical/Source correspondence,
+full CPU/CUDA restore, CLI/campaign and performance acceptance remain open.

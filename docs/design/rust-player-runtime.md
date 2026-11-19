@@ -103,6 +103,9 @@ explicit strict source/receipt readers; do not relabel old receipts as thread jo
 The accepted [learning integration seams](rust-player-runtime-integration.md) pin
 raw field placement, actual producer binding, common-loop deadlines/lock ownership
 and local snapshot publication before the next implementation slice.
+The accepted [local learning/Source composition](rust-player-runtime-learning.md)
+pins canonical configuration handoff, actual parent/local owners, new Source
+issuance, transaction order and CPU cold completion before implementation.
 
 Preserve Journal6 and participant DTO3 when their content/chronology is unchanged:
 these fields attest own-view decision data, not Python actor process existence.
