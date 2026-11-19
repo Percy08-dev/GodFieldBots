@@ -33,6 +33,7 @@ from gf_common.domain import (
     integer,
 )
 from gf_common.preprocessing import PreparationConfig, preparation_config
+from gf_common.rust_player import player_runtime, require_legacy_player_entry
 from gf_common.structured import ActionConfigV2, action_config_v2
 from gf_common.structured_layout import layout_for_contract
 from gf_models.config import (
@@ -84,6 +85,11 @@ class RunConfigV2(RunConfig):
 @dataclass(frozen=True)
 class SharedRunConfigV2(RunConfigV2):
     inference_service: Json = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class RustPlayerRunConfigV2(RunConfigV2):
+    player_runtime: Json = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -178,6 +184,8 @@ class PackedRefreshOpponentsExperimentConfig(GroupPackExperimentConfig):
 
 
 def require_storage_command(config: ExperimentConfig, command: str, *, standalone: bool = True) -> None:
+    if command != 'validate':
+        require_legacy_player_entry(config)
     if getattr(getattr(config,'run',None),'inference_service',None) is not None and command not in ('train','validate') and not (command=='collect' and not standalone):
         raise ContractError('shared serving currently requires owned ordinary PPO training')
     if type(getattr(config, 'model', None)) is ConfiguredNeuralModelV4:
@@ -248,7 +256,9 @@ def _validate_table(name: str, values: Json, *, context: Json | None = None) -> 
         closed(values, set(), set(defaults))
         for key, value in values.items():
             default = defaults[key]
-            if isinstance(default, dict):
+            if name == "run" and key == "player_runtime":
+                continue  # The closed declaration has its own zero-wait semantics.
+            elif isinstance(default, dict):
                 check(value, default)
             elif default is None:
                 if value is not None:
@@ -297,6 +307,10 @@ def _validate_table(name: str, values: Json, *, context: Json | None = None) -> 
         defaults = asdict(CorrectedServerConfigV2() if values.get("simulator_revision") == CORRECTED_SIMULATOR_REVISION else ServerConfigV2())
     elif name == "run" and context.get("actions", {}).get("version") in ("2", "3"):
         defaults = asdict(RunConfigV2())
+        if "player_runtime" in values:
+            if "inference_service" in values:
+                raise ContractError("run.inference_service and run.player_runtime are mutually exclusive")
+            defaults["player_runtime"] = player_runtime(values["player_runtime"],game_concurrency=values.get("concurrency",2))
         if "inference_service" in values:
             from gf_common.shared_inference import shared_runtime
             defaults["inference_service"] = shared_runtime(values["inference_service"],game_concurrency=values.get("concurrency",2))
@@ -426,6 +440,8 @@ def load_config(path: str | Path, overrides: Json | None = None) -> LoadedConfig
         base["actions"] = asdict(ActionConfigV3(action_contract=selected_contract))
         base["server"] = asdict(card_server_cls())
         base["run"] = asdict(RunConfigV2())
+        if "player_runtime" in data.get("run", {}):
+            base["run"]["player_runtime"] = player_runtime(data["run"]["player_runtime"],game_concurrency=data["run"].get("concurrency",2))
         if "inference_service" in data.get("run",{}):
             from gf_common.shared_inference import shared_runtime
             base["run"]["inference_service"] = shared_runtime(data["run"]["inference_service"],game_concurrency=data["run"].get("concurrency",2))
@@ -483,10 +499,11 @@ def load_config(path: str | Path, overrides: Json | None = None) -> LoadedConfig
     if run["admission_seconds"] > run["execution_seconds"] or run["execution_seconds"] + run["finalization_seconds"] > run["wall_seconds"]:
         raise ContractError("run deadlines inconsistent")
     if structured_actions or card_instance_actions:
-        integer(run["concurrency"], 1, 2)
-        integer(run["max_participant_workers"], 1, 4)
+        rust_player = "player_runtime" in run
+        integer(run["concurrency"], 1, 2**32 - 1 if rust_player else 2)
+        integer(run["max_participant_workers"], 1, 2**64 - 1 if rust_player else 4)
         integer(run["global_cuda_budget_bytes"], 1, 12884901888)
-        if run["max_participant_workers"] < 2 * run["concurrency"]:
+        if not rust_player and run["max_participant_workers"] < 2 * run["concurrency"]:
             raise ContractError("participant capacity must cover both players of every concurrent game")
     if (any(effective[name].get("model_id") == "heuristic_refresh" for name in ("model", "opponent"))
             and (not card_instance_actions or card_revision not in (CORRECTED_SIMULATOR_REVISION,SHARED_SIMULATOR_REVISION))):
@@ -567,6 +584,21 @@ def load_config(path: str | Path, overrides: Json | None = None) -> LoadedConfig
             raise ContractError("expected fingerprint/seed mismatch")
     for key in ("bootstrap_samples",):
         integer(effective["evaluation"][key], 1)
+    if "player_runtime" in run:
+        if "storage" not in data:
+            raise ContractError("Rust player requires explicit packed storage")
+        run["player_runtime"] = player_runtime(run["player_runtime"],game_concurrency=run["concurrency"])
+        opponent = models["opponent"]
+        if not ((type(opponent) is ConfiguredNeuralModelV3 and opponent.model_id == "mlp")
+                or (type(opponent) is ModelConfig and opponent.model_id in ("random", "heuristic"))
+                or type(opponent) is RefreshHeuristicConfig):
+            raise ContractError("Rust player opponent must be Model3 MLP, Random, Heuristic or Refresh")
+        if (not card_instance_actions or selected_contract != shared_card_instance_contract()
+                or type(models["model"]) is not ConfiguredNeuralModelV3 or models["model"].model_id != "mlp"
+                or models["model"].checkpoint is not None or type(training) is not PPOTrainingConfig
+                or run["split"] != "train" or preprocessing.backend != "python"
+                or preprocessing.reader != "participant-structured-v2"):
+            raise ContractError("Rust player requires shared-profile fresh Model3 MLP PPO with Python Source reader")
     if "inference_service" in run:
         from gf_common.shared_inference import shared_runtime
         run["inference_service"] = shared_runtime(run["inference_service"],game_concurrency=run["concurrency"])
@@ -597,7 +629,7 @@ def load_config(path: str | Path, overrides: Json | None = None) -> LoadedConfig
         if name == "server" and card_instance_server:
             cls = card_server_cls
         if name == "run" and (structured_actions or card_instance_actions):
-            cls = SharedRunConfigV2 if "inference_service" in effective["run"] else RunConfigV2
+            cls = RustPlayerRunConfigV2 if "player_runtime" in effective["run"] else SharedRunConfigV2 if "inference_service" in effective["run"] else RunConfigV2
         values = effective[name]
         defaults = asdict(cls())
         values = {k: tuple(v) if isinstance(defaults[k], tuple) else v for k, v in values.items()}

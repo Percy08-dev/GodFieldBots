@@ -381,6 +381,8 @@ async def train_hpo_ppo(loaded_run: Any,collector: Any,directory: Path,*,gpu_job
                          progress: ProgressCallback | None = None, diagnostics: bool | None = None,
                          _reuse_precollection: bool = False,
                          _training_execution: tuple[str, str] | None = None) -> HpoRunResult:
+    from gf_common.rust_player import require_legacy_player_entry
+    require_legacy_player_entry(loaded_run.config)
     if _training_execution is not None:
         from gf_training.hpo_training_execution import read_execution_spec
         if (type(_training_execution) is not tuple or len(_training_execution) != 2

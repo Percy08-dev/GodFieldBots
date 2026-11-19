@@ -37,6 +37,48 @@ BUDGET_KEYS = {
     "source_workspace_bytes",
 }
 DEADLINE_KEYS = ("admission_bits", "execution_bits", "term_bits", "kill_bits", "finish_bits")
+PLAYER_RUNTIME_MODE = "rust-player-runtime-v1"
+
+
+def player_runtime(value: Any, *, game_concurrency: int) -> Json:
+    """Normalize the explicit declaration; never grants runtime admission."""
+    raw = closed(
+        value,
+        {
+            "mode",
+            "scheduler",
+            "game_concurrency",
+            "player_worker_threads",
+            "max_batch_size",
+            "formation_wait_ms",
+        },
+    )
+    if raw["mode"] != PLAYER_RUNTIME_MODE or raw["scheduler"] not in ("tokio", "fixed"):
+        raise ContractError("explicit Rust player mode and tokio|fixed scheduler required")
+    integer(game_concurrency, 1)
+    for key in ("game_concurrency", "player_worker_threads", "max_batch_size"):
+        integer(raw[key], 1)
+    if raw["game_concurrency"] != game_concurrency:
+        raise ContractError("Rust player game_concurrency differs from declared concurrency")
+    wait = raw["formation_wait_ms"]
+    try:
+        if type(wait) not in (int, float) or not math.isfinite(wait) or wait < 0:
+            raise ContractError("finite nonnegative Rust player formation wait required")
+        wait = float(wait)
+    except OverflowError as error:
+        raise ContractError("finite nonnegative Rust player formation wait required") from error
+    return dict(raw, formation_wait_ms=wait)
+
+
+def require_legacy_player_entry(config: Any) -> None:
+    """Keep new selection outside every historical numerical execution path."""
+    spec = getattr(config, "hpo_spec", {})
+    if (
+        hasattr(getattr(config, "run", None), "player_runtime")
+        or spec.get("schema_version") == 6
+        or spec.get("runtime", {}).get("mode") == PLAYER_RUNTIME_MODE
+    ):
+        raise ContractError("Rust player selection requires an authenticated Rust-supervised entry")
 
 
 def text(value: Any) -> str:

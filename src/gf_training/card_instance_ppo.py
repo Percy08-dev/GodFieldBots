@@ -12,6 +12,7 @@ from typing import Any, cast
 from gf_common.card_instance import ActionConfigV3
 from gf_common.card_instance_rules import card_instance_rules
 from gf_common.domain import ContractError, Json, digest
+from gf_common.rust_player import require_legacy_player_entry
 from gf_common.structured_layout import CORRECTED_CARD_INSTANCE_LAYOUT as LAYOUT
 from gf_models.config import PPOTrainingConfig, SequencePPOTrainingConfig
 from gf_models.structured_binding import ConfiguredNeuralModelV3, input_binding_game_v3
@@ -82,6 +83,7 @@ class _GameOperations:
         raise AttributeError(name)
 
     def validate_config(self, config: Any) -> ModelConfigV3:
+        require_legacy_player_entry(config)
         _validate_packed_config(config, formal=self.formal is not None)
         from gf_common.shared_inference import serving_config
         shared=serving_config(config)
@@ -346,6 +348,7 @@ class _GameOperations:
 
 async def train_card_instance_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 'fresh',
                                   pause_after_update: int | None = None) -> Json:
+    require_legacy_player_entry(loaded.config)
     _validate_packed_config(loaded.config)
     operations = _GameOperations()
     operations.validate_config(loaded.config)
@@ -357,6 +360,7 @@ async def train_card_instance_ppo(loaded: Any, collector: Any, directory: Path, 
 async def train_formal_card_instance_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 'fresh',
                                          pause_after_update: int | None = None) -> Json:
     """Explicit full-recipe entry, keeping completion revocable through lock exit."""
+    require_legacy_player_entry(loaded.config)
     from gf_training.card_instance_formal import FormalControl
     from gf_training.ppo_run import _run_ppo
     control = FormalControl(loaded)

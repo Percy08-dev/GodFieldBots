@@ -323,6 +323,18 @@ Source/campaign handlers remain absent and refuse before admission. MLP learning
 new strict outer Source/lineage/CLI, actual final-D/evaluation and all required
 performance/default gates remain open.
 
+## Pure configuration slice
+
+Both independent reviews READY; Root accepts the pure closed configuration slice.
+338focusedconfig/HPO/entry checks PASS5.31s, including70new cases; Root fresh70
+PASS0.78s. Ruff/mypy5/format/diff and actual optional-free old help pass. Strict
+six-field declaration, alias/overflow/finite checks, matching-only HPO6 inheritance,
+supported participants/Pack/reader and before-work legacy guards are covered.
+No native dependency, preset, numerical or Source implementation changes occur.
+Ordinary pure validate remains usable. Existing public HPO resource validation6
+intentionally refuses its legacy planner until genuine new-host planning exists;
+actual host/Source/numerical/public supervisor execution remains future work.
+
 ## Required evidence still outstanding
 
 - New outer collection/Source and local-learning integration around accepted

@@ -29,10 +29,13 @@ from gf_common.card_instance import (
 )
 from gf_common.domain import ContractError, Json, canonical, clone, closed, digest, integer
 from gf_common.hpo_resident import resident_runtime
+from gf_common.rust_player import player_runtime
 from gf_common.shared_inference import shared_runtime
 from gf_common.structured_layout import CORRECTED_CARD_INSTANCE_LAYOUT, StructuredLayout
 from gf_common.training_opponents import parse_training_opponents
+from gf_models.config import ModelConfig
 from gf_models.hpo_config import model_config_v4, model_defaults_v4
+from gf_models.refresh_heuristic_config import RefreshHeuristicConfig
 from gf_models.structured_binding import ConfiguredNeuralModelV3, ConfiguredNeuralModelV4
 from gf_models.structured_config import InferenceBindingV2, ModelConfigV4
 from gf_training.hpo_config import (
@@ -185,6 +188,29 @@ class SharedRefreshHPOCampaignConfig(SharedHPOCampaignConfig):
         return digest({'base':super().study_identity,'training_opponents':self.training_opponents})
 
 
+@dataclass(frozen=True, kw_only=True)
+class RustPlayerHPOCampaignConfig(HPOCampaignConfig):
+    runtime: Json
+    origin: str
+    encoder: str
+
+    @property
+    def study_identity(self) -> str:
+        return digest({'recipe': 'hpo-rust-player-study-v1', 'base': super().study_identity,
+            'runtime': player_runtime(self.runtime, game_concurrency=self.operating.game_concurrency),
+            'origin': self.origin, 'encoder': self.encoder})
+
+
+@dataclass(frozen=True, kw_only=True)
+class RustPlayerRefreshHPOCampaignConfig(RustPlayerHPOCampaignConfig):
+    training_opponents: Json
+
+    @property
+    def study_identity(self) -> str:
+        return digest({'base': super().study_identity,
+            'training_opponents': parse_training_opponents(self.training_opponents)})
+
+
 @dataclass(frozen=True)
 class LoadedHPOConfig:
     config: HPOCampaignConfig
@@ -221,14 +247,18 @@ def materialize_hpo_run(loaded_campaign: LoadedHPOConfig, settings: Any, *, lear
     effective=effective_settings(settings.model,settings.training,{},layout=CORRECTED_CARD_INSTANCE_LAYOUT)
     if effective.identity!=settings.identity or canonical(asdict(effective.training))!=canonical(asdict(settings.training)):
         raise ContractError('HPO materialization requires canonical effective training')
-    operating=_operating(asdict(campaign.operating))
+    operating=_operating(asdict(campaign.operating), rust_player=isinstance(campaign, RustPlayerHPOCampaignConfig))
     storage=campaign.storage
     if storage.numeric_root!=storage.parent_root:
         raise ContractError('HPO currently requires numeric_root==parent_root for colocated per-run numeric storage')
     if save_estimate(effective.model)['additional_bytes']>operating.save_budget_bytes:
         raise ContractError('HPO save envelope insufficient before GPU admission')
     proposal=replace(campaign,model=effective.model,training=effective.training)
-    joint_resource_admission(proposal,layout=CORRECTED_CARD_INSTANCE_LAYOUT)
+    rust_player = isinstance(campaign, RustPlayerHPOCampaignConfig)
+    if not rust_player:
+        joint_resource_admission(proposal,layout=CORRECTED_CARD_INSTANCE_LAYOUT)
+    # Rust configuration grants no host/resource authority. Its actual control
+    # owner must admit the one-host lifetimes before any numerical allocation.
     base=loaded_campaign.base.config
     if type(base.model) is not ConfiguredNeuralModelV3 or not isinstance(base.run,RunConfigV2) or type(base.training) is not PPOTrainingConfig:
         raise ContractError('HPO materialization requires the original corrected PPO base')
@@ -243,7 +273,12 @@ def materialize_hpo_run(loaded_campaign: LoadedHPOConfig, settings: Any, *, lear
     if base.training.cleanup_seconds+base.run.report_reserve_seconds>final:
         raise ContractError('HPO original learner cleanup/report reserves exceed finalization')
     execute=wall-final
-    run=replace(base.run,name=run_id,output_dir=storage.parent_root,wall_seconds=wall,
+    base_run = base.run
+    if isinstance(campaign, RustPlayerHPOCampaignConfig) and hasattr(base_run, 'player_runtime'):
+        if player_runtime(base_run.player_runtime, game_concurrency=base_run.concurrency) != campaign.runtime:
+            raise ContractError('HPO6 base player_runtime conflicts with authoritative campaign runtime')
+        base_run = RunConfigV2(**{name: getattr(base_run, name) for name in RunConfigV2.__dataclass_fields__})
+    run=replace(base_run,name=run_id,output_dir=storage.parent_root,wall_seconds=wall,
         execution_seconds=execute,admission_seconds=execute*base.run.admission_seconds/base.run.execution_seconds,
         concurrency=operating.game_concurrency,global_cuda_budget_bytes=operating.managed_cuda_bytes,
         max_participant_workers=operating.max_participant_workers)
@@ -265,7 +300,7 @@ def materialize_hpo_run(loaded_campaign: LoadedHPOConfig, settings: Any, *, lear
         'deadline_inputs':{'run_wall_seconds':wall,'base_wall_seconds':base.run.wall_seconds,
             'base_admission_seconds':base.run.admission_seconds,'base_execution_seconds':base.run.execution_seconds,
             'base_finalization_seconds':final}}
-    if isinstance(campaign, (RefreshOpponentsHPOCampaignConfig, ResidentRefreshHPOCampaignConfig, OwnedRefreshHPOCampaignConfig,SharedRefreshHPOCampaignConfig)):
+    if isinstance(campaign, (RefreshOpponentsHPOCampaignConfig, ResidentRefreshHPOCampaignConfig, OwnedRefreshHPOCampaignConfig,SharedRefreshHPOCampaignConfig,RustPlayerRefreshHPOCampaignConfig)):
         _mixed_collection_games(campaign)
         spec.update(schema_version=2, training_opponents=parse_training_opponents(campaign.training_opponents))
     if isinstance(campaign, ResidentHPOCampaignConfig):
@@ -273,6 +308,9 @@ def materialize_hpo_run(loaded_campaign: LoadedHPOConfig, settings: Any, *, lear
     if isinstance(campaign, OwnedHPOCampaignConfig):
         spec.update(schema_version=5 if isinstance(campaign,SharedHPOCampaignConfig) else 4, origin=campaign.origin, encoder=campaign.encoder)
         preprocessing=preparation_config(asdict(replace(preprocessing,backend='python')))
+    if isinstance(campaign, RustPlayerHPOCampaignConfig):
+        spec.update(schema_version=6, runtime=player_runtime(campaign.runtime, game_concurrency=operating.game_concurrency),
+            origin=campaign.origin, encoder=campaign.encoder)
     config=HPOExperimentConfig(run=run,server=base.server,actions=base.actions,model=model,opponent=base.opponent,
         evaluation=base.evaluation,training=training,preprocessing=preprocessing,storage=pack,hpo_spec=spec)
     raw=clone(asdict(config))
@@ -288,7 +326,7 @@ def _merge(base: Json, override: Any) -> Json:
     return result
 
 
-def _operating(value: Any) -> HPOOperatingConfig:
+def _operating(value: Any, *, rust_player: bool = False) -> HPOOperatingConfig:
     raw = _merge(asdict(HPOOperatingConfig()), value)
     for item in raw.values():
         integer(item, 1, 2**63 - 1)
@@ -297,6 +335,9 @@ def _operating(value: Any) -> HPOOperatingConfig:
     integer(raw["trial_concurrency"], 1, 1)
     integer(raw["resume_latest"], 2, 1024)
     if raw["max_participant_workers"] < 2 * raw["game_concurrency"]:
+        if rust_player:
+            # This capacity belongs only to the unchanged fresh evaluation path.
+            raise ContractError("fresh HPO evaluation capacity must cover both participant roles at operating.game_concurrency")
         raise ContractError("both simultaneous participant roles must be admitted")
     return HPOOperatingConfig(**raw)
 
@@ -348,16 +389,24 @@ def campaign_config(value: Json, *, origin: Path) -> LoadedHPOConfig:
     required = {"schema_version", "kind", "base_experiment", "model_id", "stage", "trial_count",
                 "decision_budget", "learning_seeds", "evaluation_game_seeds", "sampler_seed",
                 "startup_trials", "session_seconds", "run_wall_seconds", "space"}
-    owned = type(value.get("schema_version")) is int and value["schema_version"] in (4,5)
+    rust_player = type(value.get("schema_version")) is int and value["schema_version"] == 6
+    owned = type(value.get("schema_version")) is int and value["schema_version"] in (4,5,6)
     resident = type(value.get("schema_version")) is int and value["schema_version"] in (3,4,5)
-    mixed = value.get("schema_version") == 2 or resident and "training_opponents" in value
-    closed(value, required | ({"training_opponents"} if mixed else set()) | ({"runtime"} if resident else set()) | ({"origin","encoder"} if owned else set()),
+    mixed = value.get("schema_version") == 2 or (resident or rust_player) and "training_opponents" in value
+    closed(value, required | ({"training_opponents"} if mixed else set()) | ({"runtime"} if resident or rust_player else set()) | ({"origin","encoder"} if owned else set()),
         {"model", "training", "inference", "operating", "storage"})
-    integer(value["schema_version"], 1, 5)
+    integer(value["schema_version"], 1, 6)
     if owned and (value["origin"] != "producer-owned-v1" or value["encoder"] != "canonical-python"):
         raise ContractError("owned HPO requires explicit producer origin and canonical Python encoder")
     shared = value["schema_version"] == 5
-    runtime = (shared_runtime(value["runtime"],game_concurrency=value.get("operating",{}).get("game_concurrency",2)) if shared else resident_runtime(value["runtime"])) if resident else None
+    if rust_player and value['model_id'] != 'mlp':
+        raise ContractError('Rust player HPO6 supports Model4 MLP only')
+    runtime: Json | None
+    if rust_player:
+        operating = _operating(value.get('operating', {}), rust_player=True)
+        runtime = player_runtime(value['runtime'], game_concurrency=operating.game_concurrency)
+    else:
+        runtime = (shared_runtime(value["runtime"],game_concurrency=value.get("operating",{}).get("game_concurrency",2)) if shared else resident_runtime(value["runtime"])) if resident else None
     descriptor = parse_training_opponents(value["training_opponents"]) if mixed else None
     if type(value["kind"]) is not str or value["kind"] != "ppo-hpo":
         raise ContractError("explicit ppo-hpo campaign kind required")
@@ -381,13 +430,19 @@ def campaign_config(value: Json, *, origin: Path) -> LoadedHPOConfig:
     inference = InferenceBindingV2(**_merge(asdict(InferenceBindingV2(device="cuda:0")), value.get("inference", {})))
     if inference.device != "cuda:0":
         raise ContractError("HPO neural inference requires GPU")
-    operating = _operating(value.get("operating", {}))
+    if not rust_player:
+        operating = _operating(value.get("operating", {}))
     storage = _storage(value.get("storage", {}), origin)
     base_path = _path(value["base_experiment"], origin)
     # Only after all caller experiment fields pass do we read the legacy base.
     base = load_config(base_path)
     if hasattr(base.config.run,'inference_service'):
         raise ContractError('HPO base must not declare ordinary run.inference_service; campaign runtime is authoritative')
+    if hasattr(base.config.run, 'player_runtime'):
+        if not rust_player:
+            raise ContractError('legacy HPO base must not declare run.player_runtime')
+        if base.config.run.player_runtime != runtime:
+            raise ContractError('HPO6 base player_runtime conflicts with authoritative campaign runtime')
     if (type(base.config.actions) is not ActionConfigV3
             or not is_corrected_contract(base.config.actions.action_contract)
             or type(base.config.model) is not ConfiguredNeuralModelV3
@@ -395,12 +450,18 @@ def campaign_config(value: Json, *, origin: Path) -> LoadedHPOConfig:
             or base.config.server.simulator_revision not in (CORRECTED_SIMULATOR_REVISION,SHARED_SIMULATOR_REVISION)
             or base.config.run.split != "train"):
         raise ContractError("HPO requires a matching corrected model3 training experiment base")
-    if shared and (base.config.actions.action_contract != shared_card_instance_contract() or model.model_id != "mlp" or base.config.preprocessing.backend != "python"):
+    if (shared or rust_player) and (base.config.actions.action_contract != shared_card_instance_contract() or model.model_id != "mlp" or base.config.preprocessing.backend != "python"):
         raise ContractError("shared HPO requires new-profile Python MLP base")
+    if rust_player:
+        opponent = base.config.opponent
+        if not ((type(opponent) is ConfiguredNeuralModelV3 and opponent.model_id == 'mlp')
+                or (type(opponent) is ModelConfig and opponent.model_id in ('random', 'heuristic'))
+                or type(opponent) is RefreshHeuristicConfig):
+            raise ContractError('Rust player HPO6 base opponent must be Model3 MLP, Random, Heuristic or Refresh')
     if (base.config.actions.max_sequence_length > model.max_positions
             or base.config.actions.max_candidates > inference.max_candidates):
         raise ContractError("HPO model/actions capacity mismatch")
-    cls: Any = ((SharedRefreshHPOCampaignConfig if mixed else SharedHPOCampaignConfig) if shared else (OwnedRefreshHPOCampaignConfig if mixed else OwnedHPOCampaignConfig) if owned else
+    cls: Any = ((RustPlayerRefreshHPOCampaignConfig if mixed else RustPlayerHPOCampaignConfig) if rust_player else (SharedRefreshHPOCampaignConfig if mixed else SharedHPOCampaignConfig) if shared else (OwnedRefreshHPOCampaignConfig if mixed else OwnedHPOCampaignConfig) if owned else
         (ResidentRefreshHPOCampaignConfig if mixed else ResidentHPOCampaignConfig) if resident else
         (RefreshOpponentsHPOCampaignConfig if mixed else HPOCampaignConfig))
     config: HPOCampaignConfig = cls(**{name: value[name] for name in (
@@ -408,7 +469,7 @@ def campaign_config(value: Json, *, origin: Path) -> LoadedHPOConfig:
         base_experiment=base_path, base_config_sha256=base.sha256, learning_seeds=learning, evaluation_game_seeds=games,
         session_seconds=session, run_wall_seconds=wall, space=space, model=model, training=recipe,
         inference=inference, operating=operating, storage=storage,
-        **({'training_opponents': descriptor} if mixed else {}), **({'runtime': runtime} if resident else {}),
+        **({'training_opponents': descriptor} if mixed else {}), **({'runtime': runtime} if resident or rust_player else {}),
         **({'origin':value['origin'],'encoder':value['encoder']} if owned else {}))
     if mixed:
         _mixed_collection_games(config)
@@ -425,6 +486,8 @@ def joint_resource_admission(config: HPOCampaignConfig, *, layout: StructuredLay
     conservative reservation, not measured RSS or proof of physical availability.
     Later runtime owners must retain the SAME reservation until actual reap.
     """
+    if isinstance(config, RustPlayerHPOCampaignConfig):
+        raise ContractError('Rust player training admission requires authenticated HostControl; legacy process admission is unavailable')
     if type(config) not in (HPOCampaignConfig, RefreshOpponentsHPOCampaignConfig, ResidentHPOCampaignConfig, ResidentRefreshHPOCampaignConfig, OwnedHPOCampaignConfig, OwnedRefreshHPOCampaignConfig, SharedHPOCampaignConfig, SharedRefreshHPOCampaignConfig):
         raise ContractError("closed HPO campaign required")
     expected_schema = 5 if isinstance(config, SharedHPOCampaignConfig) else 4 if isinstance(config, OwnedHPOCampaignConfig) else 3 if isinstance(config, ResidentHPOCampaignConfig) else 2 if isinstance(config, RefreshOpponentsHPOCampaignConfig) else 1
@@ -453,7 +516,8 @@ def load_hpo_config(path: str | Path) -> LoadedHPOConfig:
     except (UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
         raise ContractError("invalid HPO TOML") from exc
     loaded = campaign_config(value, origin=source.parent)
-    joint_resource_admission(loaded.config, layout=CORRECTED_CARD_INSTANCE_LAYOUT)
+    if not isinstance(loaded.config, RustPlayerHPOCampaignConfig):
+        joint_resource_admission(loaded.config, layout=CORRECTED_CARD_INSTANCE_LAYOUT)
     receipt = {"path": str(source), "sha256": hashlib.sha256(raw).hexdigest(), "kind": "ppo-hpo"}
     return LoadedHPOConfig(loaded.config, loaded.base, loaded.effective, loaded.sha256, (*loaded.inputs, receipt))
 
@@ -475,5 +539,7 @@ def _mixed_collection_games(config: HPOCampaignConfig) -> None:
 
 def require_hpo_runtime_execution(config: HPOCampaignConfig | HPOExperimentConfig) -> None:
     """Validate the explicit HPO execution runtime before any external work."""
+    if isinstance(config, RustPlayerHPOCampaignConfig) or isinstance(config, HPOExperimentConfig) and config.hpo_spec.get('schema_version') == 6:
+        raise ContractError('Rust player selection requires an authenticated Rust-supervised entry')
     from gf_common.hpo_resident import require_hpo_runtime_execution as require_execution
     require_execution(asdict(config) if isinstance(config, HPOCampaignConfig) else config.hpo_spec)

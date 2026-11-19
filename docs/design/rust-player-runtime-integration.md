@@ -33,6 +33,17 @@ HPO6 evaluation explicitly selects the existing fresh runtime and independent
 legacy GPU admission after the original training host has been reaped. The
 existing evaluation eligibility and capacity rules remain applicable there.
 
+The pure configuration slice is implemented and independently READY. Normal
+selection requires explicit Pack storage, fresh Model3 MLP/PPO/train and the
+shared072dabb Python participant reader; existing CPU/CUDA bindings remain.
+Declared participants are initially MLP/Random/Heuristic/Refresh. HPO6 derives
+study identity from the base science fields, reconciles only an exactly matching
+ordinary selector and keeps spec6 authoritative. Legacy process admission is
+explicitly refused for6; its evaluation worker relation retains its old purpose.
+Public ordinary pure validate is available, while new execution and public HPO
+resource validation remain closed until their genuine planner/supervisor route.
+Existing modes/defaults retain their meanings.
+
 ## Original control and lock ownership
 
 The existing common PPO coordinator remains the sole update/commit/schedule

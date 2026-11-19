@@ -203,3 +203,17 @@ agent complete22supervisor/60Python checks pass. Final nativef8671dee, extension
 8f633e9b and supervisor6e53acad are recorded in verification. Old broad-suite and
 16b742 evidence remain historical. Source/local learner/campaign science/user
 CLI and prescribed CPU/CUDA/performance/default acceptance remain outstanding.
+
+
+## Pure new-mode configuration acceptance
+
+Normal run.player_runtime and HPO campaign/spec6 declaration, study identity,
+matching-base materialization and closed legacy entry guards pass independent
+correctness/conformance READY. All six fields are explicit; W differs from legacy
+process/evaluation capacity, unknown/bool/nonfinite values refuse. Initial
+participant support and explicit normal Pack storage are checked before work.
+338focused checks, including70new cases, static/import checks and Root fresh70
+pass. No resource or Source authority follows from parsing: public HPO resource
+validation and all actual new execution still require the forthcoming genuine
+planner, local learning/Source and supervisor CLI composition. Old default classes,
+selectors and record meanings remain. No default/performance/learning claim.

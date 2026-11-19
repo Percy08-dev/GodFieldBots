@@ -17,8 +17,10 @@ The standalone supervisor/host protocol and installed companion pass scoped
 independent reviews after four phase-clock, group-identity, ACK and packaging
 repairs, with actual Linux process/kernel and both namespace-direction checks.
 Targeted retained-bank storage measurements pass only their recorded shaped-bank/
-small-terminal scope. Source/local-learning/user CLI and actual deployment
-memory/adoption remain in progress. New runtime/producer/prepared/exit/physical
+small-terminal scope. Pure closed normal/HPO6 configuration also passes both independent reviews;
+actual new execution is explicitly refused through legacy entries.
+Source/local-learning/user CLI execution and actual deployment memory/adoption
+remain in progress. New runtime/producer/prepared/exit/physical
 identities preserve historical receipts; actual scientific cold Source completion
 and evaluation handoff remain to be connected. A fully integrated new runtime
 and performance/default adoption are unaccepted; required evidence is
