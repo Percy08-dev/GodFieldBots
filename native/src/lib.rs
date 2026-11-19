@@ -16,6 +16,7 @@ pub mod feature;
 pub mod index;
 pub mod journal;
 pub mod json;
+mod python_formatter;
 mod logical_artifacts;
 mod logical_artifacts_bridge;
 mod numeric_io;

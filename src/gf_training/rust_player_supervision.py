@@ -25,22 +25,31 @@ from typing import Any
 from gf_common.domain import ContractError, Json, canonical, clone, closed, digest, integer
 from gf_common.rust_player import (
     BUILD_KEYS,
+    CONTROL_RECORD_LIMIT,
     LINUX_F_GET_SEALS,
     LINUX_REQUIRED_LAUNCH_SEALS,
     deadline_seconds,
     hex_identity,
     text,
+    validate_campaign_bootstrap,
+    validate_campaign_clock,
+    validate_campaign_disposition,
+    validate_campaign_disposition_ack,
+    validate_control_completion,
     validate_exit,
     validate_global_admission,
     validate_global_termination,
     validate_launch,
+    validate_loaded_campaign,
     validate_local_admission,
     validate_operation,
     validate_prepared,
     validate_producer,
+    validate_seed_settings,
+    validate_training_failure,
 )
 
-_LIMIT = 65536
+_LIMIT = CONTROL_RECORD_LIMIT
 _HEADER = {"v", "kind", "supervision_id", "invocation_id", "nonce", "seq"}
 _ISSUER = object()
 
@@ -80,6 +89,8 @@ def read_control_record(path: Path, root: Path) -> tuple[Json, str]:
         value = json.loads(data)
         if type(value) is not dict or data != canonical(value).encode():
             raise ContractError("new protocol requires exact canonical JSON without newline")
+        if value.get("kind") == "rust-player-training-failure-v1" and len(data) > _LIMIT:
+            raise ContractError("whole canonical training failure record exceeds control envelope")
         return value, hashlib.sha256(data).hexdigest()
     finally:
         os.close(fd)
@@ -89,6 +100,8 @@ def write_control_record(path: Path, value: Json) -> str:
     """Only NEW protocol files; never use for existing lineage/checkpoint formats."""
     path = Path(path)
     data = canonical(value).encode()
+    if value.get("kind") == "rust-player-training-failure-v1" and len(data) > _LIMIT:
+        raise ContractError("whole canonical training failure record exceeds control envelope")
     checksum = hashlib.sha256(data).hexdigest()
     if path.exists() or path.is_symlink():
         previous, actual = read_control_record(path, path.parent)
@@ -164,10 +177,14 @@ class _ParentBorrower(_Capability):
         if issuer is not _ISSUER:
             raise ContractError("actual parent borrower registration required")
         self.control, self.file, self.owner = control, file, owner
-        self.fd = file.fileno()
-        info = os.fstat(self.fd)
-        self.identity = info.st_dev, info.st_ino
+        self.fd = -1 if file is None else file.fileno()
+        self.identity = (0, 0)
+        if file is not None:
+            info = os.fstat(self.fd)
+            self.identity = info.st_dev, info.st_ino
         self.authenticated = authenticated
+        self._campaign_directory: Path | None = None
+        self._campaign_raw_close_uncertain = False
 
 
 class HostAdmission(_Capability):
@@ -183,7 +200,7 @@ class HostAdmission(_Capability):
 
     def require(self) -> None:
         self._control._require()
-        if self._control._prepared:
+        if self._control._prepared or self._control._terminal:
             raise ContractError("prepared host admission is sealed")
         if self._control._admission is not self:
             raise ContractError("SAME actual host admission capability required")
@@ -323,7 +340,7 @@ class HostControl(_Capability):
     """Fixed host's sole control owner, bound to original PID and thread."""
 
     def __init__(self, control_fd: int, launch_fd: int, *, phase: str) -> None:
-        if phase not in ("host", "cold"):
+        if phase not in ("host", "cold", "campaign-return"):
             raise ContractError("unknown fixed host phase")
         self.launch = _launch_original(launch_fd)
         self.root = Path(self.launch["record_directory"])
@@ -337,13 +354,17 @@ class HostControl(_Capability):
         self._parent_pid = os.getppid()
         self._admission: HostAdmission | None = None
         self._prepared = False
+        self._terminal = False
         self._cold: ColdContinuation | None = None
         self._closed = False
         self._parent_borrowers: set[_ParentBorrower] = set()
+        self._campaign_borrowers: set[_ParentBorrower] = set()
+        self._campaign_return: Json | None = None
+        self._disposition_ack: Json | None = None
         self._next_sequence = 1
         self._server_sequence = 1
         self._stopped = False
-        self._phase = "cold" if phase == "cold" else "training"
+        self._phase = phase if phase != "host" else "training"
         self._borrowed = {item["lock_kind"]: clone(item) for item in self.launch["locks"]}
         for item in self._borrowed.values():
             os.set_inheritable(item["fd"], False)
@@ -390,6 +411,12 @@ class HostControl(_Capability):
         )
         self.operation_path = Path(self.launch["operation_path"])
         self.operation: Json = {}
+        initial, initial_sha = read_control_record(self.operation_path, self.root)
+        if initial_sha != self.launch['operation_sha256']:
+            raise ContractError('authenticated INITIAL launch operation changed')
+        validate_operation(initial, session_finish=self.launch['session_deadlines']['finish_bits'])
+        self._initial_operation = clone(initial)
+        self._initial_operation_path = self.operation_path
         if phase == "host":
             self.operation, actual = read_control_record(self.operation_path, self.root)
             if actual != self.launch["operation_sha256"]:
@@ -398,7 +425,7 @@ class HostControl(_Capability):
             validate_operation(
                 self.operation, session_finish=self.launch["session_deadlines"]["finish_bits"]
             )
-        if phase == "cold":
+        if phase in ("cold", "campaign-return"):
             payload = self._receive(
                 deadline_seconds(self.launch["session_deadlines"]["finish_bits"])
             )
@@ -413,8 +440,11 @@ class HostControl(_Capability):
                 "locks",
                 "deadlines",
             }
+            if phase == 'campaign-return':
+                keys = (keys - {'prepared_path', 'prepared_sha256'}) | {'failure_path',
+                    'failure_sha256', 'physical_path', 'physical_sha256'}
             closed(payload, _HEADER | keys)
-            if payload["kind"] != "cold" or payload["seq"] != 1:
+            if payload["kind"] != ('cold' if phase == 'cold' else 'campaign_return') or payload["seq"] != 1:
                 raise ContractError("exact cold handoff required")
             self._server_sequence = 2
             self.operation_path = Path(payload["operation_path"])
@@ -431,16 +461,21 @@ class HostControl(_Capability):
             self._borrowed = {item["lock_kind"]: clone(item) for item in payload["locks"]}
             for item in self._borrowed.values():
                 os.set_inheritable(item["fd"], False)
-            self._cold = ColdContinuation(_ISSUER, self, {key: payload[key] for key in keys})
-            self._cold.require_pair()
-            self._send(
-                "cold_ready",
-                1,
-                {
-                    "prepared_sha256": payload["prepared_sha256"],
-                    "exit_sha256": payload["exit_sha256"],
-                },
-            )
+            if phase == 'cold':
+                self._cold = ColdContinuation(_ISSUER, self, {key: payload[key] for key in keys})
+                self._cold.require_pair()
+                self._send('cold_ready', 1, {'prepared_sha256': payload['prepared_sha256'],
+                    'exit_sha256': payload['exit_sha256']})
+            else:
+                self._campaign_return = {key: payload[key] for key in keys}
+                _ = self.campaign_return
+                self._send('campaign_return_ready', 1, {key: payload[key]
+                    for key in ('failure_sha256', 'exit_sha256', 'physical_sha256')})
+                self._next_sequence = 2
+        if phase == 'host' and self._initial_operation['operation_type'] == 'campaign-continue':
+            _ = self.campaign_bootstrap
+            self._phase = 'session'
+
 
     def _require(self) -> None:
         if (
@@ -459,6 +494,240 @@ class HostControl(_Capability):
         if actual != self._operation_sha256 or value != self.operation:
             raise ContractError("actual CURRENT bound operation original changed")
         return actual
+
+    @property
+    def initial_operation(self) -> Json:
+        self._require()
+        value, actual = read_control_record(self._initial_operation_path, self.root)
+        if actual != self.launch['operation_sha256'] or value != self._initial_operation:
+            raise ContractError('authenticated INITIAL launch operation changed')
+        return clone(value)
+
+    @property
+    def campaign_bootstrap(self) -> Json:
+        initial = self.initial_operation
+        if initial['operation_type'] != 'campaign-continue' or initial['mode'] != 'hpo':
+            raise ContractError('authenticated INITIAL campaign purpose required')
+        path = Path(initial['config_path'])
+        value, actual = read_control_record(path, self.root)
+        validate_campaign_bootstrap(value)
+        if actual != initial['config_sha256'] or value['supervision_id'] != self.launch['supervision_id']:
+            raise ContractError('initial campaign bootstrap identity differs')
+        canonical_path = Path(value['campaign_directory']) / 'supervision' / value['supervision_id'] / 'bootstrap.json'
+        if path != canonical_path or self.root != canonical_path.parent:
+            raise ContractError('canonical original campaign bootstrap path required')
+        clock, clock_sha = read_control_record(Path(value['session_clock_path']), self.root)
+        validate_campaign_clock(clock)
+        if (clock_sha != value['session_clock_sha256']
+                or clock['supervision_id'] != self.launch['supervision_id']
+                or clock['hard_session_finish_bits'] != self.launch['session_deadlines']['finish_bits']
+                or any(clock[key] != anchor for key, anchor in self.launch['clock_binding'].items())):
+            raise ContractError('original campaign/session clock binding differs')
+        for name, validate in (('loaded_campaign', validate_loaded_campaign), ('seed_settings', validate_seed_settings)):
+            data, actual = read_control_record(Path(value[name + '_path']), self.root)
+            validate(data)
+            if actual != value[name + '_sha256']:
+                raise ContractError('initial immutable campaign CONFIG DATA changed')
+        item = self._borrowed.get('campaign')
+        info = (Path(value['campaign_directory']) / 'lock').lstat()
+        if item is None or (info.st_dev, info.st_ino) != (item['device'], item['inode']):
+            raise ContractError('actual initial campaign lock identity differs')
+        mapped = os.fstat(item['fd'])
+        if (mapped.st_dev, mapped.st_ino) != (item['device'], item['inode']):
+            raise ContractError('authenticated original campaign descriptor changed')
+        return clone(value)
+
+    @property
+    def campaign_return(self) -> Json:
+        self._require()
+        payload = self._campaign_return
+        if payload is None or self._phase != 'campaign-return':
+            raise ContractError('actual live failed-operation campaign return DATA required')
+        _ = self.campaign_bootstrap
+        admission = validate_local_admission(payload['admission'])
+        if (admission['invocation_id'] == self._envelope['invocation_id']
+                or admission['supervision_id'] != self._envelope['supervision_id']
+                or payload['operation_sha256'] != self.operation_sha256
+                or any(admission[key] != self.operation[key] for key in
+                    ('operation_id', 'run_id', 'config_sha256', 'runtime_binding_sha256', 'deadlines'))):
+            raise ContractError('old failed training/new control identities differ')
+        failure, failure_sha = read_control_record(Path(payload['failure_path']), self.root)
+        validate_training_failure(failure, admission, self.operation_sha256)
+        exit_value, exit_sha = read_control_record(Path(payload['exit_path']), self.root)
+        validate_exit(exit_value, admission)
+        physical_path = Path(payload['physical_path'])
+        namespace = physical_path.parent.parent.parent
+        global_admission, _ = read_control_record(physical_path.parent / 'admission.json', namespace)
+        physical, physical_sha = read_control_record(physical_path, namespace)
+        validate_global_admission(global_admission, admission['global_ticket'])
+        validate_global_termination(physical, global_admission)
+        if (failure_sha != payload['failure_sha256'] or exit_sha != payload['exit_sha256']
+                or physical_sha != payload['physical_sha256'] or physical['exit_record'] != exit_value
+                or global_admission['host_admission'] != admission
+                or exit_value['cooperative'] is not False or exit_value['prepared_sha256'] is not None
+                or exit_value['wait']['signal'] is not None or exit_value['signals']):
+            raise ContractError('failed return original retirement DATA differs')
+        if time.monotonic() >= self._finish():
+            raise TimeoutError('OLD failed operation finish expired')
+        return clone(payload)
+
+    def _borrow_campaign_store(self, owner: Any, directory: Path) -> tuple[Any, _ParentBorrower]:
+        self._require()
+        if self._campaign_borrowers or directory != Path(self.campaign_bootstrap['campaign_directory']):
+            raise ContractError('sole actual campaign store borrower required')
+        mapped = self._borrowed['campaign']
+        self._require_campaign_ofd(mapped['fd'])
+        # Register the concrete actual owner BEFORE dup/wrapping/validation.
+        # A failed constructor must not rely on a traceback/GC to retain its OFD.
+        token = _ParentBorrower(_ISSUER, self, None, owner, authenticated=False)
+        token._campaign_directory = directory
+        token.identity = mapped['device'], mapped['inode']
+        self._campaign_borrowers.add(token)
+        owner._borrower = token
+        try:
+            token.fd = os.dup(mapped['fd'])
+            # The wrapper never owns raw descriptor retirement, including when
+            # wrapping itself raises. Only this registered raw owner may close it.
+            token.file = os.fdopen(token.fd, 'r+b', closefd=False)
+            owner._lock = token.file
+            info = os.fstat(token.fd)
+            if (info.st_dev, info.st_ino) != token.identity:
+                raise ContractError('campaign duplicate differs from original OFD')
+            token.authenticated = True
+            return token.file, token
+        except BaseException as error:
+            try:
+                owner.close()
+            except BaseException as close_error:
+                # The live registration retains BOTH the original actual owner
+                # and raw/wrapped descriptor even if outer exception data clears.
+                vars(error)['cleanup_owner'] = owner
+                raise error from close_error
+            raise
+
+    @staticmethod
+    def _require_campaign_ofd(fd: int) -> None:
+        # Linux fdinfo describes THIS open file description. A separate unlocked
+        # open of the same inode has no FLOCK entry even while native retains its
+        # real alias; inode equality alone cannot detect accidental FD reuse.
+        try:
+            lines = Path(f'/proc/self/fdinfo/{fd}').read_text().splitlines()
+        except OSError as error:
+            raise ContractError('original campaign OFD no longer observable') from error
+        if not any(line.startswith('lock:') and {'FLOCK', 'WRITE'} <= set(line.split()) for line in lines):
+            raise ContractError('original authenticated campaign OFD must retain its exclusive flock')
+
+    def _require_campaign_borrower(self, token: _ParentBorrower, owner: Any) -> None:
+        self._require()
+        if (type(token) is not _ParentBorrower or token not in self._campaign_borrowers
+                or token.control is not self or token.owner is not owner or not token.authenticated
+                or token.file is None or token.file.closed
+                or token.file.fileno() != token.fd):
+            raise ContractError('SAME actual campaign control-store borrower required')
+        if token._campaign_directory != owner.directory:
+            raise ContractError('original campaign borrower pathname changed')
+        current = (owner.directory / 'lock').lstat()
+        if not stat.S_ISREG(current.st_mode) or (current.st_dev, current.st_ino) != token.identity:
+            raise ContractError('original campaign lock pathname changed')
+        self._require_campaign_ofd(token.fd)
+        info = os.fstat(token.fd)
+        mapped = self._borrowed.get('campaign')
+        if mapped is None or (info.st_dev, info.st_ino) != token.identity or token.identity != (mapped['device'], mapped['inode']):
+            raise ContractError('campaign borrowed original descriptor changed')
+
+    def _close_campaign_borrower(self, token: _ParentBorrower, owner: Any) -> None:
+        self._require()
+        if (type(token) is not _ParentBorrower or token not in self._campaign_borrowers
+                or token.control is not self or token.owner is not owner):
+            raise ContractError('SAME actual campaign borrower close required')
+        if token._campaign_raw_close_uncertain:
+            # A failed close may already have retired this FD lifetime. Even a
+            # SAME-number/SAME-inode/SAME-OFD replacement belongs to another
+            # actual owner. No numeric probe/retry can reconstruct our ownership.
+            raise ContractError('uncertain original raw campaign close requires actual host exit')
+        if token.authenticated and token.file is not None and not token.file.closed:
+            self._require_campaign_borrower(token, owner)
+        if token.file is not None:
+            # closefd=False: this is the retained actual wrapper, not retirement
+            # of the raw FD. Retrying its own close remains safe after an error.
+            token.file.close()
+            if not token.file.closed:
+                raise ContractError('campaign wrapper close unconfirmed')
+        if token.fd >= 0:
+            # Known ownership BEFORE the FIRST raw-close attempt follows from
+            # dup + closefd=False. Mark uncertainty BEFORE entering fallible I/O.
+            token._campaign_raw_close_uncertain = True
+            os.close(token.fd)
+            token.fd = -1
+            token._campaign_raw_close_uncertain = False
+        self._campaign_borrowers.remove(token)
+
+    def training_failed(self, admission: HostAdmission, reason: str) -> str:
+        admission.require()
+        if self._prepared or self._terminal or self._phase != 'training':
+            raise ContractError('mutually exclusive actual training terminal arm required')
+        value = dict(schema_version=1, kind='rust-player-training-failure-v1',
+            **self._envelope, operation_sha256=self.operation_sha256,
+            admission_sha256=digest(admission._record), failure_class='application_error', reason=reason)
+        validate_training_failure(value, admission._record, self.operation_sha256)
+        path = self.root / ('failure-' + self._envelope['invocation_id'] + '.json')
+        checksum = write_control_record(path, value)
+        response = self._request('training_failed', {'failure_path': str(path),
+            'failure_sha256': checksum}, 'training_failed_ack', {'failure_sha256'})
+        if response['failure_sha256'] != checksum:
+            raise ContractError('training failure ACK differs')
+        self._terminal = True
+        return checksum
+
+    def campaign_disposition(self, path: Path) -> Json:
+        self._require()
+        if self._disposition_ack is not None:
+            raise ContractError('terminal disposition already acknowledged')
+        bootstrap = self.campaign_bootstrap
+        value, checksum = read_control_record(path, Path(bootstrap['campaign_directory']))
+        validate_campaign_disposition(value)
+        if self._phase == 'campaign-return':
+            _ = self.campaign_return
+        elif self._phase != 'cold' or self.cold._finalized_sha256 is None:
+            raise ContractError('actual failed return or finalized incomplete Cold required')
+        response = self._request('campaign_disposition', {'disposition_path': str(path),
+            'disposition_sha256': checksum}, 'campaign_disposition_ack',
+            {'disposition_sha256', 'ack_path', 'ack_sha256'})
+        ack_path = self.root / ('disposition-ack-' + value['invocation_id'] + '.json')
+        if response['ack_path'] != str(ack_path):
+            raise ContractError('canonical native disposition ACK path differs')
+        ack, actual = read_control_record(ack_path, self.root)
+        validate_campaign_disposition_ack(ack)
+        if (actual != response['ack_sha256'] or response['disposition_sha256'] != checksum
+                or ack['disposition_sha256'] != checksum or ack['evidence_sha256'] != digest(value['evidence'])
+                or ack['control_invocation_id'] != self._envelope['invocation_id']
+                or ack['invocation_id'] != value['invocation_id']
+                or ack['supervision_id'] != self.launch['supervision_id']
+                or ack['operation_sha256'] != self.operation_sha256):
+            raise ContractError('actual native disposition ACK identity differs')
+        self._disposition_ack = clone(ack)
+        return clone(ack)
+
+    def control_complete(self, path: Path) -> str:
+        bootstrap = self.campaign_bootstrap
+        if (self._phase != 'session' or self._admission is not None
+                or 'parent' in self._borrowed or self._parent_borrowers
+                or (self.operation['operation_type'] != 'campaign-continue' and self._disposition_ack is None)):
+            raise ContractError('actual parent-free terminal campaign Session required')
+        value, checksum = read_control_record(path, self.root)
+        validate_control_completion(value)
+        if (value['supervision_id'] != self.launch['supervision_id']
+                or value['operation_sha256'] != self.operation_sha256
+                or value['session_clock_sha256'] != bootstrap['session_clock_sha256']):
+            raise ContractError('terminal control result binding differs')
+        response = self._request('control_complete', {'operation_sha256': self.operation_sha256,
+            'result_path': str(path), 'result_sha256': checksum}, 'control_completed',
+            {'operation_sha256', 'result_path', 'result_sha256'})
+        if any(response[key] != expected for key, expected in {"operation_sha256": self.operation_sha256,
+                "result_path": str(path), "result_sha256": checksum}.items()):
+            raise ContractError('terminal control ACK differs')
+        self._terminal = True
+        return checksum
 
     def _finish(self) -> float:
         if self._phase == "session":
@@ -525,6 +794,8 @@ class HostControl(_Capability):
         self, kind: str, payload: Json, reply: str, keys: set[str], *, fd: int | None = None
     ) -> Json:
         self._require()
+        if self._terminal:
+            raise ContractError("accepted terminal host may only exit")
         sequence = self._next_sequence
         self._next_sequence += 1
         self._send(kind, sequence, payload, fd=fd)
@@ -658,6 +929,9 @@ class HostControl(_Capability):
         self._stopped = False
         self._admission = None
         self._prepared = False
+        self._cold = None
+        self._campaign_return = None
+        self._disposition_ack = None
 
     def admit(self, budget: Json, producer: Json) -> HostAdmission:
         validate_producer(producer)
@@ -715,8 +989,9 @@ class HostControl(_Capability):
     def release_parent(self) -> None:
         if self._parent_borrowers:
             raise ContractError("actual parent mutation borrowers remain live or uncertain")
-        if self.cold._finalized_sha256 is None:
-            raise ContractError("parent release requires acknowledged finalizer output")
+        failure_release = self._phase == 'campaign-return' and self._campaign_return is not None and self._disposition_ack is not None
+        if not failure_release and (self._phase != 'cold' or self.cold._finalized_sha256 is None):
+            raise ContractError('parent release requires acknowledged actual terminal output')
         item = self._borrowed.get("parent")
         if item is None:
             raise ContractError("no inherited actual parent lock")
@@ -734,6 +1009,8 @@ class HostControl(_Capability):
 
     def close(self) -> None:
         self._require()
+        if self._campaign_borrowers:
+            raise ContractError("actual campaign control-store borrower remains live or uncertain")
         if self._parent_borrowers:
             raise ContractError("actual parent mutation borrowers remain live or uncertain")
         self._closed = True

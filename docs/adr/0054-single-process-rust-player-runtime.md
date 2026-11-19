@@ -364,3 +364,34 @@ the existing positive relay wait. Policy/scientific behavior, deadlines and nati
 interfaces are unchanged by the R1 repairs. Matching final integrated execution,
 Source/process acceptance, observation-cost calibration, genuine GPU profiles and
 the full conditional performance/default protocol remain mandatory.
+
+
+## Public-entry control protocol engineering acceptance
+
+The bounded public-entry and campaign-encoding refinements pass independent
+correctness/conformance READY. C1 implements immutable control records, authenticated
+initial/current-purpose dispatch, borrowed campaign OFD custody, cursor CAS and
+control-only completion. A failed training original remains noncooperative with
+no Prepared; a fresh CPU controller follows only positive actual retirement.
+Durable terminal disposition acknowledgment does not grant Source/completion or
+release authority. Parent borrowers must positively close before release/rebind.
+New campaign records use scoped canonical Python JSON without newline; existing
+Store records keep their original bytes and hashes. No generic JSON reader changes.
+
+Two repair rounds close post-terminal packet races, provisional FD custody,
+whole-record reason-envelope accounting, legitimate pending Stop ACK crossing
+and uncertain-close numeric FD reuse. The original three and later two P2s are
+resolved by both reviewers; no third round or advisor escalation is required.
+Root freshly confirms57 Python/3 native terminal checks plus scoped Ruff/mypy.
+Actual fixed CPU controls remain component evidence, with truthful incomplete
+scientific data. Full public routing/campaign/evaluation, two completed operations,
+CUDA2/resume2/full audits/process checks and the complete performance/adoption
+populations remain outstanding.
+
+
+The C1 control protocol is also integrated with the accepted device/retention/
+telemetry foundation. Both independent join reviews are READY. The native
+handshake/failure-return chain and original wait-instant diagnostic are retained
+together; campaign-return CPU startup uses the existing startup phase on both
+ends. Root fresh57 Python and4 pure native checks pass. This source integration
+does not establish new scientific, packaging, CUDA or performance acceptance.

@@ -14,7 +14,16 @@ from gf_training.rust_player_supervision import HostControl
 
 def _dispatch(control: HostControl, phase: str) -> None:
     arguments: tuple[Any, ...]
-    if phase == "cold":
+    campaign = control.initial_operation['operation_type'] == 'campaign-continue'
+    if campaign:
+        _ = control.campaign_bootstrap  # mandatory authenticated original purpose; no directory guess
+        if phase == 'campaign-return':
+            _ = control.campaign_return
+        module_name, function_name = 'gf_cli.rust_player_campaign', 'run_campaign'
+        arguments = (control, control.operation)
+    elif phase == 'campaign-return':
+        raise ContractError('failed return requires authenticated INITIAL campaign purpose')
+    elif phase == "cold":
         module_name, function_name = "gf_training.rust_player_learning", "finalize_cold"
         arguments = (control, control.cold)
     else:
@@ -55,7 +64,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--control-fd", type=int, required=True)
     parser.add_argument("--launch-fd", type=int, required=True)
-    parser.add_argument("--phase", choices=("host", "cold"), required=True)
+    parser.add_argument("--phase", choices=("host", "cold", "campaign-return"), required=True)
     args = parser.parse_args()
     owner = None
     failed = False

@@ -284,14 +284,27 @@ pub(crate) fn local(v: &Value) -> Result<()> {
 pub(crate) fn operation(v: &Value, mode: &str, session: f64) -> Result<[f64; 5]> {
     let version2 = v["schema_version"].as_u64() == Some(2);
     let mut keys = vec![
-        "operation_id", "run_id", "mode", "operation_type", "config_path",
-        "config_sha256", "runtime_binding_sha256", "deadlines",
-        "parent_directory", "expected_context",
+        "operation_id",
+        "run_id",
+        "mode",
+        "operation_type",
+        "config_path",
+        "config_sha256",
+        "runtime_binding_sha256",
+        "deadlines",
+        "parent_directory",
+        "expected_context",
     ];
-    if version2 { keys.push("execution_request"); }
+    if version2 {
+        keys.push("execution_request");
+    }
     record(
         v,
-        if version2 { "rust-player-operation-v2" } else { "rust-player-operation-v1" },
+        if version2 {
+            "rust-player-operation-v2"
+        } else {
+            "rust-player-operation-v1"
+        },
         if version2 { 2 } else { 1 },
         &keys,
     )?;
@@ -372,9 +385,13 @@ mod operation_tests {
             "execution_bits":bits(110.),"term_bits":bits(120.),"kill_bits":bits(130.),
             "finish_bits":bits(140.)},"execution_request":{"mode":"fresh","pause_after_update":1}});
         assert!(operation(&value, "ordinary", 200.).is_ok());
-        for execution in [json!(null), json!({}), json!({"mode":"fresh","pause_after_update":true}),
+        for execution in [
+            json!(null),
+            json!({}),
+            json!({"mode":"fresh","pause_after_update":true}),
             json!({"mode":"resume","pause_after_update":0}),
-            json!({"mode":"infer","pause_after_update":null})] {
+            json!({"mode":"infer","pause_after_update":null}),
+        ] {
             let mut bad = value.clone();
             bad["execution_request"] = execution;
             assert!(operation(&bad, "ordinary", 200.).is_err());
@@ -873,4 +890,167 @@ pub(crate) fn write(path: &Path, value: &Value, immutable: bool) -> Result<Strin
         fs::remove_file(&temporary)?;
     }
     result
+}
+
+// These observations describe protocol terminal arms, never scientific completion.
+pub(crate) fn training_failure(v: &Value, admission: &Value, operation_sha: &str) -> Result<()> {
+    record(
+        v,
+        "rust-player-training-failure-v1",
+        1,
+        &[
+            "supervision_id",
+            "invocation_id",
+            "nonce",
+            "operation_sha256",
+            "admission_sha256",
+            "failure_class",
+            "reason",
+        ],
+    )?;
+    for key in ["supervision_id", "invocation_id", "nonce"] {
+        if v[key] != admission[key] {
+            return Err(invalid("failure actual admission identity differs"));
+        }
+    }
+    if v["operation_sha256"] != operation_sha
+        || v["admission_sha256"] != digest(admission)
+        || v["failure_class"] != "application_error"
+    {
+        return Err(invalid("failure actual operation/admission differs"));
+    }
+    text(&v["reason"])?;
+    if python_bytes(v)?.len() > crate::packet::LIMIT {
+        return Err(invalid(
+            "whole canonical training failure record exceeds control envelope",
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod entry_record_tests {
+    use super::*;
+    use serde_json::json;
+    #[test]
+    fn failure_record_is_exact_and_never_asserts_cleanup() {
+        let admission = json!({"supervision_id":"a".repeat(32), "invocation_id":"b".repeat(32), "nonce":"c".repeat(32)});
+        let value = json!({"schema_version":1,"kind":"rust-player-training-failure-v1",
+            "supervision_id":admission["supervision_id"],"invocation_id":admission["invocation_id"],
+            "nonce":admission["nonce"],"operation_sha256":"d".repeat(64),
+            "admission_sha256":digest(&admission),"failure_class":"application_error","reason":"declared application failure"});
+        training_failure(&value, &admission, &"d".repeat(64)).unwrap();
+        let mut extra = value.clone();
+        extra["cleanup"] = json!(true);
+        assert!(training_failure(&extra, &admission, &"d".repeat(64)).is_err());
+        assert!(training_failure(&value, &admission, &"e".repeat(64)).is_err());
+    }
+}
+
+pub(crate) fn python_bytes(value: &Value) -> Result<Vec<u8>> {
+    use serde::Serialize;
+    let mut bytes = Vec::new();
+    value
+        .serialize(&mut serde_json::Serializer::with_formatter(
+            &mut bytes,
+            crate::python_formatter::PythonFormatter,
+        ))
+        .map_err(|_| invalid("invalid canonical Python campaign JSON"))?;
+    Ok(bytes)
+}
+pub(crate) fn python_digest(value: &Value) -> Result<String> {
+    Ok(bytes_sha(&python_bytes(value)?))
+}
+// Scoped NEW campaign reader; legacy read_owned semantics remain unchanged.
+pub(crate) fn read_campaign_control(path: &Path, root: Option<&Path>) -> Result<(Value, String)> {
+    let (value, sha) = read_owned(path, root)?;
+    if sha != python_digest(&value)? {
+        return Err(invalid(
+            "canonical Python campaign control without newline required",
+        ));
+    }
+    Ok((value, sha))
+}
+pub(crate) fn read_campaign_legacy(
+    directory: &Path,
+    number: u64,
+    name: &str,
+) -> Result<(Value, String)> {
+    if !["failure.json", "tell.intent.json", "tell.receipt.json"].contains(&name) {
+        return Err(invalid(
+            "only three canonical legacy proposal evidence files permitted",
+        ));
+    }
+    let path = directory.join(format!("proposals/{number:06}/{name}"));
+    let (value, sha) = read_owned(&path, Some(directory))?;
+    let mut bytes = python_bytes(&value)?;
+    bytes.push(b'\n');
+    if sha != bytes_sha(&bytes) {
+        return Err(invalid(
+            "canonical Python legacy campaign plus one newline required",
+        ));
+    }
+    resync(&path)?;
+    Ok((value, sha))
+}
+
+#[cfg(test)]
+mod campaign_encoding_tests {
+    use super::*;
+    #[test]
+    fn python_formatter_byte_parity_exponents_negative_zero_unicode_and_integers() {
+        let value: Value = serde_json::from_str(r#"{"z":-0.0,"exponents":[1e-7,1e20,1e-4,1e16],"unicode":"神\\n","integers":[0,-7,18446744073709551615,123456789012345678901234567890]}"#).unwrap();
+        assert_eq!(
+            String::from_utf8(python_bytes(&value).unwrap()).unwrap(),
+            r#"{"exponents":[1e-07,1e+20,0.0001,1e+16],"integers":[0,-7,18446744073709551615,123456789012345678901234567890],"unicode":"神\\n","z":-0.0}"#
+        );
+    }
+    #[test]
+    fn scoped_readers_refuse_wrong_encoding_without_changing_generic_reader() {
+        let root = std::env::temp_dir().join(format!("entry-encoding-{}", random_id().unwrap()));
+        ensure_private(&root).unwrap();
+        let path = root.join("record.json");
+        fs::write(&path, b"{}\n").unwrap();
+        assert!(read_owned(&path, Some(&root)).is_ok());
+        assert!(read_campaign_control(&path, Some(&root)).is_err());
+        ensure_private(&root.join("proposals/000000")).unwrap();
+        let legacy = root.join("proposals/000000/failure.json");
+        fs::write(&legacy, b"{}\n").unwrap();
+        assert!(read_campaign_legacy(&root, 0, "failure.json").is_ok());
+        fs::write(&legacy, b"{}").unwrap();
+        assert!(read_campaign_legacy(&root, 0, "failure.json").is_err());
+        assert!(read_campaign_legacy(&root, 0, "proposal.json").is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod failure_envelope_tests {
+    use super::*;
+    use serde_json::json;
+    #[test]
+    fn whole_failure_record_bound_preserves_unicode_and_escaping() {
+        let admission = json!({"supervision_id":"a".repeat(32),"invocation_id":"b".repeat(32),"nonce":"c".repeat(32)});
+        let mut value = json!({"schema_version":1,"kind":"rust-player-training-failure-v1",
+            "supervision_id":admission["supervision_id"],"invocation_id":admission["invocation_id"],"nonce":admission["nonce"],
+            "operation_sha256":"d".repeat(64),"admission_sha256":digest(&admission),"failure_class":"application_error","reason":"a".repeat(4097)});
+        assert_eq!(python_bytes(&value).unwrap().len(), 4524);
+        training_failure(&value, &admission, &"d".repeat(64)).unwrap();
+        for unit in ["a", "神", "\n", "\\", "\""] {
+            value["reason"] = json!("");
+            let overhead = python_bytes(&value).unwrap().len();
+            let width = python_bytes(&json!(unit)).unwrap().len() - 2;
+            let available = crate::packet::LIMIT - overhead;
+            value["reason"] =
+                json!(unit.repeat(available / width) + &"a".repeat(available % width));
+            assert_eq!(python_bytes(&value).unwrap().len(), crate::packet::LIMIT);
+            training_failure(&value, &admission, &"d".repeat(64)).unwrap();
+            value["reason"] = json!(text(&value["reason"]).unwrap().to_owned() + "a");
+            assert_eq!(
+                python_bytes(&value).unwrap().len(),
+                crate::packet::LIMIT + 1
+            );
+            assert!(training_failure(&value, &admission, &"d".repeat(64)).is_err());
+        }
+    }
 }

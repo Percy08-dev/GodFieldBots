@@ -635,7 +635,7 @@ def test_fixed_bootstrap_passes_real_loaded_configuration_by_keyword(tmp_path, m
         lambda _name: SimpleNamespace(run_ordinary=handler))
     operation = {"operation_type": "ordinary-train", "config_path": str(path),
         "config_sha256": original.sha256}
-    rust_player_host._dispatch(SimpleNamespace(operation=operation), "host")
+    rust_player_host._dispatch(SimpleNamespace(operation=operation, initial_operation=operation), "host")
     assert len(received) == 1 and received[0].config == original.config
     assert received[0].inputs == ({"path": str(path), "sha256": original.sha256},)
 

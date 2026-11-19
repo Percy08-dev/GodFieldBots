@@ -796,3 +796,83 @@ runtime8161c0dbfab53969541038d26267907443f3119dc86b15a592c5a2b49fcfc3ca.
 This static/API matching scope does not certify the later final C1 composition,
 Source, actual CUDA/profile, one-Python process tree or performance. Those complete
 Task6/7/public/clock/all-original audit/evaluation/default gates remain required.
+
+
+## Public-entry control protocol engineering component
+
+C1 passes both independent correctness and architecture-conformance reviews after
+two scoped repairs. This component adds authenticated campaign control/failure
+return, borrowed Store custody, immutable records/cursor CAS, durable terminal
+disposition ACK and separate positive parent release. It does not activate public
+training or issue scientific Source/Parent eligibility.
+
+Original22 genuine CPU control cases pass under their frozen producer; R1 retains
+the four malformed/zero-SCM terminal races and whole65536-byte failure-envelope
+checks. R2 genuine REDs reproduce legitimate pending Stop ACK crossing Prepared
+and same-number/same-OFD reuse after a close side effect. R2 GREEN settles only
+the actual pending ACK then requires EOF; any raw-close uncertainty permanently
+refuses numeric retry and retains actual registration until original host exit.
+R2 current focused crossing, constructor/close lifetime, four race negatives and
+legacy Stop/duplicate/unsolicited checks pass. No full22 repetition was needed.
+
+Current R2 native source is
+`bd1945bc38cdad28b88a5479b3507c849a97b0634aeafc04ab47f4123de25591`,
+Python source `fad7d023822930d64d5153be9bc0ac25387e8f20ac7ed88f47317e43a43ee80a`,
+extension `d419746712dc2e8190d8129064dfe78315ace7b8cc03e90b342e2328b3f5702a`,
+installed companion `f67ee0c10efb0d97d60aa740d7ba6a29bc59a9e5c2925b10086458794093116b`,
+actual private cfg(test) supervisor
+`faf23b2b937e9634e0bb4aef11c8a08f2208eda9a4f9b2abf3d8057baaaf739d`,
+wheel `ae028e08fda1aeb26ba8ff3050ca9cbab5ced9284d70c8c939c1374c90a208e0`.
+The actual admission names the private executable; it is distinct from the
+installed production companion. Historical candidates are not relabeled.
+
+Root fresh PASS: precollected57 selected Python cases (0.40s),3 current native
+terminal checks, Ruff5 source/test files and mypy4 source files. Exact Python
+selection is tests/test_rust_player_entry_protocol.py, test_hpo_storage.py,
+test_rust_player_supervisor.py, hpo_config::historical_model_and_eight_frozen_kernels_remain_exact,
+and rust_player_learning::fixed_bootstrap_passes_real_loaded_configuration_by_keyword;
+CUDA_VISIBLE_DEVICES empty and `-k 'not cuda'` both enforced. Native command uses
+the private release executable with `terminal_ --nocapture --test-threads=1`.
+Root verifies all16 frozen file hashes before documentation-only status updates.
+
+R2 measured supervisor lifetimes total34.339741s, added to prior nominal332.485244s.
+The prior reconstructed intervals are ESTIMATED and post-output exit tails UNKNOWN;
+nominal353.175015s remains within original720s, with no extended grace or renewed
+operation clock. Fixed CPU cases contain no games/PPO/scientific audit or GPU.
+Actual Stop crossing reaches genuine Cold protocol with component-only ineligible
+data. Next-bind proves cursor/bind mechanics then deliberately omits second
+admission/completion; it is not two completed training operations.
+
+NOT RUN here: public application routing/campaign6/two complete scientific
+operations with intervening legacy evaluation, actual evaluation Source/Parent
+import, full Raw/Replay/numeric/saved audit, CUDA2/resume2/process acceptance,
+performance populations and default adoption. These remain mandatory downstream.
+
+
+## Joined C1 and current runtime foundation
+
+Both independent correctness/conformance reviews are READY for the frozen19-file
+join of C1 `33de33e1297eb6668c644218fceb220c65fe5d39` onto
+`d0cec42322db3fb2c991621ae38a663478967572`. Two native conflicts retain the
+complete diagnostic implementation/C1 tests, failed-return handshake argument,
+actual wait-instant retirement event and same physical/failure chain. The new
+campaign-return control host is classified startup/startup; genuine cold audit
+remains cold/cold, using the existing phase vocabulary. Diagnostics remain off
+behind their existing guards, with no new per-action work or authority.
+
+Root fresh PASS: precollected57 CPU Python checks (0.52s), three native terminal
+helpers and one observation-ID helper using the current source-compiled debug
+ELF. Both empty CUDA visibility and not-cuda filter apply to the mixed Python
+selection listed above. Worker offline/locked2-job compile and preservation
+assertions also PASS. Initial worker socket tests failed sandbox EPERM before
+protocol logic; approved retry and final-source checks PASS without a workaround.
+
+Pre-documentation-update inventory is
+`cf80f6c807cb0990a434a05e209fdfe95398b0ffcd6c75981fcceca5ab7805f9`;
+full patch `12ae3b063908aa48f831a8e7edf637dcc7fc1a6b4b0e2eef7c15dfc189239abd`,
+Native pair patch `7fdee41f21d07734802cd20237c6047a9c8c00e582e843ef924920fa839ae18b`.
+All19 frozen hashes match independently. Installed R2 wheel is older and is
+explicitly NOT source-matched to this join. No wheel installation, actual host/
+control/Original/game/GPU/training/evaluation/profile/calibration/full-suite run
+was performed for this mechanical join. Final all-source packaging and all
+remaining public Task6/Task7 conditions stay required.

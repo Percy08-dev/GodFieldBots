@@ -9,12 +9,14 @@ import math
 import struct
 from typing import Any, cast
 
-from gf_common.domain import ContractError, Json, clone, closed, digest, integer
+from gf_common.domain import ContractError, Json, canonical, clone, closed, digest, integer
 
 # Linux UAPI fcntl.h values. Some verified CPython builds omit these constants.
 LINUX_F_ADD_SEALS = 1033
 LINUX_F_GET_SEALS = 1034
 LINUX_REQUIRED_LAUNCH_SEALS = 0x0001 | 0x0002 | 0x0004 | 0x0008
+
+CONTROL_RECORD_LIMIT = 65536
 
 BUILD_KEYS = {
     "version",
@@ -577,3 +579,229 @@ def validate_global_termination(value: Any, admission: Json) -> Json:
     if value["exit_sha256"] != digest(exit_record):
         raise ContractError("physical receipt original exit hash mismatch")
     return value
+
+
+# Campaign records are closed DATA. None constructs a live owner or completion.
+def safe_component(value: Any) -> str:
+    value = text(value)
+    if value in ('.', '..') or any(
+        c not in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-' for c in value
+    ):
+        raise ContractError('safe campaign identity required')
+    return value
+
+
+def _pairs(value: Json, names: tuple[str, ...]) -> None:
+    for name in names:
+        path = text(value[name + '_path'])
+        if not path.startswith('/') or '..' in path.split('/'):
+            raise ContractError('absolute campaign DATA path required')
+        hex_identity(value[name + '_sha256'])
+
+
+def validate_campaign_clock(value: Any) -> Json:
+    raw = record(value, 'rust-player-campaign-clock-v1', {
+        'supervision_id', 'boot_id', 'monotonic_before_bits', 'monotonic_after_bits',
+        'unix_anchor_bits', 'soft_dispatch_finish_bits', 'hard_session_finish_bits',
+        'max_operation_wall_seconds', 'mapping_recipe'})
+    hex_identity(raw['supervision_id'], 32)
+    text(raw['boot_id'])
+    times = {key: deadline_seconds(raw[key]) for key in (
+        'monotonic_before_bits', 'monotonic_after_bits', 'unix_anchor_bits',
+        'soft_dispatch_finish_bits', 'hard_session_finish_bits')}
+    wall = raw['max_operation_wall_seconds']
+    if (type(wall) not in (int, float) or not math.isfinite(wall) or wall <= 0
+            or raw['mapping_recipe'] != 'soft-dispatch-plus-max-operation-wall-v1'
+            or times['monotonic_before_bits'] > times['monotonic_after_bits']
+            or times['soft_dispatch_finish_bits'] <= times['monotonic_after_bits']
+            or deadline_bits(times['soft_dispatch_finish_bits'] + wall) != raw['hard_session_finish_bits']):
+        raise ContractError('original soft-dispatch plus declared TOTAL wall mapping required')
+    return raw
+
+
+def validate_campaign_bootstrap(value: Any) -> Json:
+    raw = record(value, 'rust-player-campaign-bootstrap-v1', {'supervision_id',
+        'campaign_directory', 'mode', 'loaded_campaign_path', 'loaded_campaign_sha256',
+        'seed_settings_path', 'seed_settings_sha256', 'progress', 'session_clock_path',
+        'session_clock_sha256', 'cursor_path'})
+    hex_identity(raw['supervision_id'], 32)
+    _pairs(raw, ('loaded_campaign', 'seed_settings', 'session_clock'))
+    directory = text(raw['campaign_directory'])
+    if not directory.startswith('/') or '..' in directory.split('/'):
+        raise ContractError('absolute campaign directory required')
+    prefix = directory + '/supervision/' + raw['supervision_id']
+    if (raw['mode'] not in ('fresh', 'resume') or raw['progress'] not in ('auto', 'plain', 'off')
+            or raw['loaded_campaign_path'] != prefix + '/loaded-campaign.json'
+            or raw['seed_settings_path'] != prefix + '/seed-settings.json'
+            or raw['session_clock_path'] != prefix + '/session-clock.json'
+            or raw['cursor_path'] != directory + '/supervision/current.json'):
+        raise ContractError('canonical fixed campaign bootstrap required')
+    return raw
+
+
+def validate_loaded_campaign(value: Any) -> Json:
+    raw = record(value, 'rust-player-loaded-campaign-v1', {'campaign_effective',
+        'campaign_sha256', 'base_effective', 'base_sha256', 'inputs'})
+    for key in ('campaign_effective', 'base_effective'):
+        if type(raw[key]) is not dict:
+            raise ContractError('decoded campaign CONFIG DATA required')
+    for key in ('campaign_sha256', 'base_sha256'):
+        hex_identity(raw[key])
+    if (type(raw['inputs']) is not list or any(type(item) is not dict for item in raw['inputs'])
+            or raw['base_sha256'] != digest(raw['base_effective'])
+            or raw['campaign_sha256'] != digest({'campaign': raw['campaign_effective'], 'base': raw['base_sha256']})):
+        raise ContractError('original campaign CONFIG sequence/hash binding differs')
+    return raw  # Application reconstructs the existing pure typed config parsers.
+
+
+def validate_campaign_awaiting(value: Any) -> Json:
+    raw = record(value, 'rust-player-training-awaiting-v1', {'campaign_id',
+        'proposal_no', 'learning_seed', 'run_id', 'run_path', 'config_path',
+        'config_sha256', 'runtime_binding_sha256', 'operation_path', 'operation_sha256',
+        'supervision_id', 'session_clock_sha256', 'created_unix'})
+    safe_component(raw['campaign_id'])
+    safe_component(raw['run_id'])
+    integer(raw['proposal_no'], 0)
+    integer(raw['learning_seed'], 0)
+    hex_identity(raw['supervision_id'], 32)
+    for key in ('config_sha256', 'runtime_binding_sha256', 'operation_sha256', 'session_clock_sha256'):
+        hex_identity(raw[key])
+    _pairs(raw, ('config', 'operation'))
+    text(raw['run_path'])
+    if type(raw['created_unix']) not in (int, float) or not math.isfinite(raw['created_unix']) or raw['created_unix'] < 0:
+        raise ContractError('actual awaiting creation time required')
+    return raw
+
+
+def validate_campaign_cursor(value: Any) -> Json:
+    raw = record(value, 'rust-player-campaign-supervision-v1', {'campaign_id',
+        'supervision_id', 'session_clock_sha256', 'awaiting_path', 'awaiting_sha256',
+        'current_invocation_id', 'phase'})
+    safe_component(raw['campaign_id'])
+    hex_identity(raw['supervision_id'], 32)
+    hex_identity(raw['session_clock_sha256'])
+    if raw['phase'] not in ('control', 'awaiting-host', 'awaiting-cold', 'finalized'):
+        raise ContractError('unknown supervision cursor phase')
+    if (raw['awaiting_path'] is None) != (raw['awaiting_sha256'] is None):
+        raise ContractError('exact awaiting path/hash pair required')
+    if raw['awaiting_path'] is not None:
+        _pairs(raw, ('awaiting',))
+    if raw['current_invocation_id'] is not None:
+        hex_identity(raw['current_invocation_id'], 32)
+        if raw['awaiting_path'] is None:
+            raise ContractError('invocation requires assigned awaiting DATA')
+    if raw['phase'] in ('awaiting-host', 'awaiting-cold') and raw['awaiting_path'] is None:
+        raise ContractError('awaiting phase requires immutable awaiting DATA')
+    return raw
+
+
+def validate_training_failure(value: Any, admission: Json, operation_sha256: str) -> Json:
+    raw = record(value, 'rust-player-training-failure-v1', {'supervision_id',
+        'invocation_id', 'nonce', 'operation_sha256', 'admission_sha256', 'failure_class', 'reason'})
+    validate_local_admission(admission)
+    hex_identity(operation_sha256)
+    if (any(raw[key] != admission[key] for key in ('supervision_id', 'invocation_id', 'nonce'))
+            or raw['operation_sha256'] != operation_sha256
+            or raw['admission_sha256'] != digest(admission)
+            or raw['failure_class'] != 'application_error'):
+        raise ContractError('actual operation/admission application failure required')
+    text(raw['reason'])
+    if len(canonical(raw).encode()) > CONTROL_RECORD_LIMIT:
+        raise ContractError('whole canonical training failure record exceeds control envelope')
+    return raw
+
+
+def validate_control_completion(value: Any) -> Json:
+    raw = record(value, 'rust-player-control-completion-v1', {'supervision_id',
+        'operation_sha256', 'session_clock_sha256', 'status'})
+    hex_identity(raw['supervision_id'], 32)
+    for key in ('operation_sha256', 'session_clock_sha256'):
+        hex_identity(raw[key])
+    if raw['status'] not in ('complete', 'session_boundary', 'no_work'):
+        raise ContractError('unknown terminal control status')
+    return raw
+
+
+def validate_campaign_disposition(value: Any) -> Json:
+    raw = record(value, 'rust-player-campaign-terminal-disposition-v1', {
+        'campaign_id', 'proposal_no', 'proposal_sha256', 'learning_seed', 'supervision_id',
+        'session_clock_sha256', 'awaiting_path', 'awaiting_sha256', 'operation_path',
+        'operation_sha256', 'invocation_id', 'classification', 'evidence',
+        'proposal_failure_path', 'proposal_failure_sha256', 'tell_intent_path',
+        'tell_intent_sha256', 'tell_receipt_path', 'tell_receipt_sha256'})
+    safe_component(raw['campaign_id'])
+    integer(raw['proposal_no'], 0)
+    integer(raw['learning_seed'], 0)
+    for key in ('supervision_id', 'invocation_id'):
+        hex_identity(raw[key], 32)
+    for key in ('proposal_sha256', 'session_clock_sha256'):
+        hex_identity(raw[key])
+    _pairs(raw, ('awaiting', 'operation', 'proposal_failure', 'tell_intent', 'tell_receipt'))
+    variants = {'training_failed': ('failure', 'exit', 'physical'),
+                'healthy_incomplete': ('completion', 'physical')}
+    if raw['classification'] not in variants:
+        raise ContractError('unknown terminal campaign disposition')
+    names = variants[raw['classification']]
+    evidence = closed(raw['evidence'], {name + suffix for name in names for suffix in ('_path', '_sha256')})
+    _pairs(evidence, names)
+    return raw
+
+
+def validate_campaign_disposition_ack(value: Any) -> Json:
+    raw = record(value, 'rust-player-campaign-disposition-ack-v1', {'supervision_id',
+        'invocation_id', 'control_invocation_id', 'operation_sha256',
+        'disposition_sha256', 'evidence_sha256'})
+    for key in ('supervision_id', 'invocation_id', 'control_invocation_id'):
+        hex_identity(raw[key], 32)
+    for key in ('operation_sha256', 'disposition_sha256', 'evidence_sha256'):
+        hex_identity(raw[key])
+    if raw['invocation_id'] == raw['control_invocation_id']:
+        raise ContractError('fresh actual control invocation required')
+    return raw
+
+
+def validate_control_exit(value: Any) -> Json:
+    raw = record(value, 'rust-player-control-exit-v1', {'supervision_id',
+        'operation_sha256', 'control_completion_sha256', 'host_original', 'wait',
+        'descendants', 'descendants_reaped', 'signals'})
+    hex_identity(raw['supervision_id'], 32)
+    for key in ('operation_sha256', 'control_completion_sha256'):
+        hex_identity(raw[key])
+    host = closed(raw['host_original'], {'pid', 'start_ticks', 'pgid'})
+    for entry in host.values():
+        integer(entry, 1)
+    if (host['pid'] != host['pgid'] or raw['descendants_reaped'] is not True
+            or type(raw['descendants']) is not list or raw['signals'] != []):
+        raise ContractError('unforced original control group retirement required')
+    if validate_wait(raw['wait'])['exit_code'] != 0:
+        raise ContractError('control-only original process must exit zero')
+    seen = {host['pid']}
+    for child in raw['descendants']:
+        closed(child, {'pid', 'start_ticks', 'pgid', 'wait'})
+        for key in ('pid', 'start_ticks', 'pgid'):
+            integer(child[key], 1)
+        if (child['pid'] in seen or child['pgid'] != host['pgid']
+                or validate_wait(child['wait'])['exit_code'] != 0):
+            raise ContractError('unforced positively reaped control descendants required')
+        seen.add(child['pid'])
+    return raw
+
+
+
+def validate_seed_settings(value: Any) -> Json:
+    raw = record(value, 'rust-player-seed-settings-v1', {'sources'})
+    if type(raw['sources']) is not list:
+        raise ContractError('decoded seed-settings provenance sequence required')
+    for source in raw['sources']:
+        closed(source, {'path', 'sha256', 'settings', 'origin'})
+        text(source['path'])
+        hex_identity(source['sha256'])
+        settings = closed(source['settings'], {'model', 'training', 'identity'})
+        if type(settings['model']) is not dict or type(settings['training']) is not dict:
+            raise ContractError('decoded effective model/training CONFIG required')
+        hex_identity(settings['identity'])
+        origin = closed(source['origin'], {'campaign_id', 'study_identity', 'proposal_sha256'})
+        text(origin['campaign_id'])
+        text(origin['study_identity'])
+        text(origin['proposal_sha256'])
+    return raw

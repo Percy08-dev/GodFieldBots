@@ -16,6 +16,8 @@ use process::*;
 mod namespace;
 #[path = "gf_player_supervisor/records.rs"]
 mod records;
+#[path = "../python_formatter.rs"]
+mod python_formatter;
 
 #[path = "gf_player_supervisor/packet.rs"]
 mod packet;
@@ -212,7 +214,7 @@ int main(int argc,char**argv) {
         let now = monotonic().unwrap();
         CleanupClock::new(now + 0.1, now + 0.25, now + 1.0).unwrap()
     }
-    static PROCESS_TEST: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    pub(super) static PROCESS_TEST: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     #[test]
     fn original_wait_and_positive_adopted_c_child_reap_are_separate_facts() {
@@ -1042,5 +1044,165 @@ impl PerformanceDiagnostics {
             return Err(invalid("diagnostic phase file replaced"));
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod entry_protocol_tests {
+    use super::*;
+
+    #[test]
+    #[ignore = "private inherited launch for explicitly budgeted CPU entry protocol matrix"]
+    fn entry_protocol_inherited_child() {
+        let _serial = crate::tests::PROCESS_TEST.lock().unwrap();
+        let fd: i32 = std::env::var("GFB_ENTRY_LAUNCH_FD")
+            .unwrap()
+            .parse()
+            .unwrap();
+        let mode = std::env::var("GFB_ENTRY_CASE").unwrap();
+        let launch = session::LaunchOwner::take(fd).unwrap();
+        let root = std::path::PathBuf::from(launch.value["record_directory"].as_str().unwrap());
+        let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap();
+        let mut supervisor = session::Supervisor::new(launch).unwrap();
+        supervisor.test_namespace = Some(root.join("test-namespace"));
+        let terminal_race=std::env::var("GFB_ENTRY_POST_TERMINAL_RACE").is_ok();
+        supervisor.test_terminal_barrier=terminal_race;
+        supervisor.test_command = Some(vec![
+            repo.join(".venv/bin/python").to_string_lossy().into_owned(),
+            repo.join("tests/test_rust_player_entry_protocol.py")
+                .to_string_lossy()
+                .into_owned(),
+            "_host".to_owned(),
+            mode.clone(),
+        ]);
+        let result = supervisor.run();
+        // TEST-ONLY disposal after a hard-cutoff uncertainty. These actual waits
+        // never amend production Retirement/Exit or create a successful receipt.
+        for entry in std::fs::read_dir(&root).unwrap() {
+            let entry = entry.unwrap();
+            if entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with("host-started-")
+            {
+                let pid: i32 = std::fs::read_to_string(entry.path())
+                    .unwrap()
+                    .parse()
+                    .unwrap();
+                let mut status = 0;
+                let waited = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
+                if waited == 0 {
+                    assert_eq!(unsafe { libc::kill(pid, libc::SIGKILL) }, 0);
+                    assert_eq!(unsafe { libc::waitpid(pid, &mut status, 0) }, pid);
+                    eprintln!("FIXTURE-ONLY cleanup original wait pid {pid} status {status}");
+                } else if waited < 0 {
+                    assert_eq!(
+                        std::io::Error::last_os_error().raw_os_error(),
+                        Some(libc::ECHILD)
+                    );
+                }
+            }
+        }
+        let expected = [
+            "no-work",
+            "failure-return",
+            "healthy-incomplete",
+            "settled-control",
+            "lost-disposition-ack",
+        ];
+        assert_eq!(
+            result.is_ok(),
+            !terminal_race && expected.contains(&mode.as_str()),
+            "case {mode}: {result:?}; artifacts {}",
+            root.display()
+        );
+        if terminal_race {
+            assert!(root.join("terminal-eagain.json").is_file(),"actual empty receive barrier missing");
+            assert!(root.join("terminal-observed.json").is_file(),"same original WNOWAIT barrier missing");
+            assert!(root.join("terminal-race-sent.json").is_file(),"actual post-EAGAIN send missing");
+            assert!(!root.join("phase-campaign-return.json").exists(),"corrupt terminal entered fresh control");
+            let forbidden=std::fs::read_dir(&root).unwrap().filter_map(|e|e.ok()).filter(|e| {
+                let name=e.file_name(); let name=name.to_string_lossy();
+                name.starts_with("disposition-ack-") || name.starts_with("control-exit-")
+            }).count();
+            assert_eq!(forbidden,0,"corrupt terminal produced a positive acknowledgment/exit");
+        }
+        let acks = std::fs::read_dir(&root)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                e.file_name()
+                    .to_string_lossy()
+                    .starts_with("disposition-ack-")
+                    && e.path().is_file()
+            })
+            .count();
+        if [
+            "no-work",
+            "unexpected-eof",
+            "report-without-arm",
+            "post-failure-ack",
+            "forced-signal",
+            "forced-cleanup",
+            "old-deadline",
+            "failure-write",
+            "ack-write",
+            "bad-disposition",
+            "bad-terminal",
+            "transfer-before-bind",
+            "corrupt-bootstrap",
+        ]
+        .contains(&mode.as_str())
+        {
+            assert_eq!(
+                acks, 0,
+                "rejected return must not have durable disposition ACK"
+            );
+        }
+        if !terminal_race && [
+            "failure-return",
+            "settled-control",
+            "healthy-incomplete",
+            "ack-loss",
+            "next-bind",
+        ]
+        .contains(&mode.as_str())
+        {
+            assert_eq!(
+                acks, 1,
+                "accepted terminal settlement must have its durable native ACK"
+            );
+        }
+        eprintln!(
+            "ENTRY CASE {mode} RESULT {result:?} ARTIFACTS {}",
+            root.display()
+        );
+    }
+}
+
+#[cfg(test)]
+mod entry_fix1_kernel_tests {
+    use super::*;
+    use std::os::{fd::AsRawFd, unix::fs::MetadataExt};
+    #[test]
+    fn zero_length_control_datagram_with_actual_rights_is_not_terminal_eof() {
+        let _serial=crate::tests::PROCESS_TEST.lock().unwrap();
+        let (mut channel,peer)=packet::Channel::pair(std::process::id(),&"a".repeat(32),&"b".repeat(32),&"c".repeat(32)).unwrap();
+        let path=std::env::temp_dir().join(format!("entry-fix1-rights-{}",records::random_id().unwrap()));
+        let file=std::fs::File::create(&path).unwrap();
+        let info=file.metadata().unwrap();
+        let aliases=|| std::fs::read_dir("/proc/self/fd").unwrap().filter_map(|e|e.ok())
+            .filter_map(|e|std::fs::metadata(e.path()).ok())
+            .filter(|m|m.dev()==info.dev() && m.ino()==info.ino()).count();
+        let original_aliases=aliases();
+        packet::send_raw(peer.as_raw_fd(),b"",&[file.as_raw_fd()]).unwrap();
+        let error=channel.receive().err().expect("zero-byte protocol record must reject");
+        assert_eq!(error.kind(),std::io::ErrorKind::InvalidData,"queued zero-length message was falsely EOF");
+        assert_eq!(aliases(),original_aliases,"malformed zero-message leaked received OwnedFd");
+        std::fs::remove_file(path).unwrap();
+        drop(peer);
+        assert_eq!(channel.receive().err().unwrap().kind(),std::io::ErrorKind::UnexpectedEof);
     }
 }

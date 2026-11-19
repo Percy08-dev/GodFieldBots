@@ -347,6 +347,17 @@ impl Namespace {
         )?;
         Ok(admission)
     }
+    pub fn termination_path(&self) -> Result<PathBuf> {
+        let admission = self
+            .admission
+            .as_ref()
+            .ok_or_else(|| invalid("no original namespace admission"))?;
+        Ok(self
+            .root
+            .join("jobs")
+            .join(text(&admission["ticket"])?)
+            .join("termination.json"))
+    }
     pub fn confirm(&self, exit_record: &Value, actual: &Retirement) -> Result<Value> {
         let a = self
             .admission

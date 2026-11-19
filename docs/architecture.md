@@ -54,6 +54,17 @@ Torch/device access. Whole-host CUDA admission and physical capacity remain
 unaccepted until their separate integration and measurement gates pass.
 
 
+The [public-entry control protocol](design/rust-player-runtime-public-entry.md)
+and scoped [campaign byte encoding](design/rust-player-runtime-campaign-encoding.md)
+pass independent correctness/conformance after two repair rounds. Actual campaign
+Store borrowers retain the supervisor OFD without unlocking it. Failed training
+can return to a distinct CPU control host only after actual original retirement;
+durable FAIL/disposition acknowledgment remains separate from parent release and
+scientific completion. Pending terminal Stop ACKs require strict settlement then
+actual EOF. An uncertain raw close never retries a numeric FD. Fixed control-only
+CPU cases and fresh57 Python/3 native terminal checks pass. Public application
+routing, genuine evaluation import, full CUDA/restart/audit populations and all
+performance/default decisions remain required.
 
 [ADR0053](adr/0053-mlp-shared-batch-inference.md) implements the owner's
 [shared MLP design](design/mlp-shared-batch-inference.md) under Simulator

@@ -153,6 +153,17 @@ impl Channel {
             }
         }
         if length == 0 {
+            // SO_PASSCRED supplies ancillary data for an actual queued empty
+            // datagram. True stream termination has no message/rights/credentials.
+            // All received rights above are already OwnedFds before either arm.
+            if message.msg_controllen != 0
+                || credentials.is_some()
+                || !fds.is_empty()
+                || unknown
+                || message.msg_flags & (libc::MSG_TRUNC | libc::MSG_CTRUNC) != 0
+            {
+                return Err(invalid("zero-length control packet is not terminal EOF"));
+            }
             return Err(io::Error::new(
                 io::ErrorKind::UnexpectedEof,
                 "control EOF requests cleanup",
