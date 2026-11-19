@@ -3847,6 +3847,8 @@ fn gf_native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<player_runtime::batch::PlayerInferenceDispatcher>()?;
     module.add_class::<player_runtime::scheduler::PlayerRuntime>()?;
     module.add_class::<player_runtime::game::storage::StorageBundle>()?;
+    module.add_class::<player_runtime::game::storage::RecordingAccount>()?;
+    module.add_class::<player_runtime::game::storage::RecordingLease>()?;
     module.add_function(wrap_pyfunction!(player_search_v5, module)?)?;
     module.add_function(wrap_pyfunction!(player_select_v5, module)?)?;
     module.add_function(wrap_pyfunction!(player_rng_v5, module)?)?;

@@ -4,7 +4,7 @@ use super::{
     ensure, error,
     game::{
         self, GameReport, GameSpec,
-        storage::{Mailbox, StorageBundle},
+        storage::{Mailbox, RecordingAccount, StorageBundle},
     },
     http,
     requests::wait_duration,
@@ -351,6 +351,9 @@ impl PlayerRuntime {
         self.storage
             .ack(&bundle.record, failure)
             .map_err(crate::python_error)
+    }
+    fn recording_account(&self) -> RecordingAccount {
+        self.storage.account()
     }
     fn storage_bytes(&self) -> usize {
         self.storage.used()

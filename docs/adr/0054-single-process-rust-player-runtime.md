@@ -138,3 +138,14 @@ when old-original close failed; process exit formerly retired it, thread exit
 would not. The new owner must retain every transitional/db handle before fallible
 handoff and report uncertain cleanup honestly. Actual thread/bridge implementation
 and fault verification remain pending.
+
+## Scoped thread storage engineering acceptance
+
+The actual SQLite thread/canonical original encoder and single native recording
+account pass independent engineering correctness/conformance READY after nested
+FD, construction, traceback-buffer and cancel/seal repairs. Final273affected
+checks pass; normal old process-worker behavior is preserved. Explicit workspace
+loan is soft planning, and bounded studies retain their original producer hashes.
+Production/default retained-active-bank calibration and prescribed workloads stay
+open, alongside Source/local-learning/supervisor/CLI integration. This is not
+archive/learning qualification or performance adoption.

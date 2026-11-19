@@ -11,8 +11,9 @@ array-serving/async-dispatcher/transactional-RNG component also passes both revi
 after retirement/timer failure repairs, including actual CUDA row/RNG checks.
 The common live HTTP/game actor and both real A/B schedulers also pass scoped
 correctness/conformance after failed-service custody and Refresh-domain repairs,
-including genuine overlap/natural/Replay/fault smokes. Storage/learning/supervisor/
-CLI and measured adoption remain in progress. New runtime/producer/prepared/exit/completion
+including genuine overlap/natural/Replay/fault smokes. The same-process thread-storage component also passes engineering reviews after
+failure-custody repairs, with real SQLite/J6/Pack and one recording account.
+Source/learning/supervisor/CLI and production memory/adoption remain in progress. New runtime/producer/prepared/exit/completion
 identities, actual original-host reaping and cold continuation will preserve
 historical process receipts and existing evaluation admission. Neither a new
 runtime nor performance/default adoption is accepted yet; required evidence is

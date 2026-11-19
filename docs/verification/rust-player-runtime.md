@@ -192,6 +192,53 @@ and normal entrypoints. Actual game/planned episode mapping, checkpoint retains
 and failed-service holds, original lease/producer settlement and physical consumer/
 Tensor/GPU retirement remain required contracts for those owners.
 
+## Same-process thread storage (engineering component)
+
+Accepted engineering component after independent correctness/conformance READY
+and two scoped fix rounds. The real dedicated SQLite thread and old subprocess
+worker share GroupPackDatabase business operations. Actual DB creation/use/seal/
+close stay on the original owning thread; old framing/PID/allowance semantics are
+unchanged. CanonicalEpisodeEncoder validates actual same-account native bundles
+and emits unchanged Journal6/codec2/Replay content, including zero-Act and real
+failure-prefix facts. It creates no outer Source/learning qualification.
+
+One native RecordingAccount charges native arrays plus separately allocated
+Python canonical/pack/descriptor backings. Bundle adoption/ACK/view aliases do not
+charge the original twice; foreign-runtime bundles reject. Actual last NumPy/
+sliced descriptor views retain their backing charges. No per-record token guard,
+new multiplier or second recording pool exists. The explicit shared Source loan
+is a soft planning reservation, not measured usage or a hard memory limit.
+
+Initial264PythonPASS/197nativePASS13IGNORE evidence precedes repairs. Reviews
+found nested FD-owner propagation, post-start construction ownership, chained
+traceback-buffer refund and cancel/seal ordering gaps. Meaningful fault cases
+resolved them; narrow second review completed Thread.start interruption coverage.
+Final273affectedPythonPASS,25storage cases included; root fresh4constructorPASS
+in1.23s. Both independent final re-reviews READY, all4P2s ADDRESSED, no remaining
+findings. Scoped Ruff/format/mypy and diff checks pass. Native code/build remains
+source `fb6c090ec59f7fdbcfb02ba12a298cdc50fa86cfb8ddf68f66c5aa66dc49ad86`,
+loaded release extension SHA256
+`289cf2a10fb83aa222273c7d0bee2ceb4be2658af7c1e6d9e892b26c01eb6092`;
+Cargo.lock unchangedbb8e9e3c. Final storage Python SHA256
+`29549dc98f538dace5d2a1cb6eb20c54916f5d7f47e881a6dba7260aa57d5d08`.
+
+Bounded pre-repair memory observations remain tied to original storage Python
+SHA7adaeeaa, not relabeled as final repair measurements. Genuine baseline full
+paths trace24–25MB with sampledPSS119–142MB; CPU MLP192 paths trace162MB and
+sampledPSS897–911MB including importedTorch. One validated32768candidate/18slot/
+4096event two-view prototype plus15independent CANONICAL backings traces82.9MB,
+sampledPSS186MB, OS-high-waterRSS535MB and exactrecord peak84.6MB. These are not
+16active banks or16genuine games. The prior120s repeated-validation attempt is
+inconclusive execution-bound evidence, not a capacity failure. Scripts/results
+are temporary `/tmp/task5a-*-study-final.json` with exact producer/script identities.
+
+Production/default memory acceptance stays OPEN: complete the targeted retained-
+ACTIVE-bank/terminal overlap study and actual C4/C2/C16 workload measurements.
+Larger262144event active-bank populations and arbitrary rawAPI histories/strings
+remain unmeasured; no new cap or universal capacity promise follows. Actual
+Source/lineage/learning/supervisor/CLI integration and approved timing protocol
+remain required. No model-quality or performance improvement is claimed.
+
 ## Companion/descendant feasibility
 
 Independent preimplementation architecture supplement READY for concrete installed
@@ -205,8 +252,8 @@ and host reentry still require implementation/verification.
 
 ## Required evidence still outstanding
 
-- Real writer/SQL/collection Source integration around the accepted actor and
-  inference components, with actual same-owner retirement/encoding authority.
+- New outer collection/Source and local-learning integration around accepted
+  actor/inference/thread-storage components, with actual same-owner authority.
 - Single Python process, bounded writer custody and original-handle supervisor/
   same-namespace GPU admission termination, source/producer version checks.
 - Model3/4 actual CUDA continuous2 and pause1/resume2, same-input restore and

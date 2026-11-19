@@ -12,10 +12,7 @@ use sha2::{Digest, Sha256};
 use std::{
     collections::{HashMap, VecDeque},
     io::Write,
-    sync::{
-        Arc, Condvar, Mutex,
-        atomic::{AtomicUsize, Ordering},
-    },
+    sync::{Arc, Condvar, Mutex},
 };
 
 struct Count(usize);
@@ -28,13 +25,121 @@ impl Write for Count {
         Ok(())
     }
 }
+#[derive(Default)]
+struct Ledger {
+    native: usize,
+    external: usize,
+    peak: usize,
+}
+pub struct Account {
+    limit: usize,
+    ledger: Mutex<Ledger>,
+}
+impl Account {
+    fn change(&self, native: bool, old: usize, new: usize) -> Result<()> {
+        let mut s = self.ledger.lock().unwrap();
+        let total = s
+            .native
+            .checked_add(s.external)
+            .and_then(|n| n.checked_sub(old))
+            .and_then(|n| n.checked_add(new))
+            .filter(|n| *n <= self.limit)
+            .ok_or_else(|| Error::resource("recording byte budget exhausted"))?;
+        if native {
+            s.native = s.native - old + new;
+        } else {
+            s.external = s.external - old + new;
+        }
+        s.peak = s.peak.max(total);
+        Ok(())
+    }
+    fn reserve(self: &Arc<Self>, bytes: usize, native: bool) -> Result<Reservation> {
+        self.change(native, 0, bytes)?;
+        Ok(Reservation {
+            bytes,
+            native,
+            account: self.clone(),
+        })
+    }
+}
 pub struct Reservation {
     bytes: usize,
-    used: Arc<AtomicUsize>,
+    native: bool,
+    account: Arc<Account>,
 }
 impl Drop for Reservation {
     fn drop(&mut self) {
-        self.used.fetch_sub(self.bytes, Ordering::AcqRel);
+        // A refund cannot exceed the admitted total; no allocation or callback.
+        self.account.change(self.native, self.bytes, 0).unwrap();
+    }
+}
+#[pyclass(frozen)]
+#[derive(Clone)]
+pub struct RecordingAccount {
+    pub(crate) account: Arc<Account>,
+}
+#[pymethods]
+impl RecordingAccount {
+    #[getter]
+    fn limit(&self) -> usize {
+        self.account.limit
+    }
+    #[getter]
+    fn used(&self) -> usize {
+        let s = self.account.ledger.lock().unwrap();
+        s.native + s.external
+    }
+    #[getter]
+    fn peak(&self) -> usize {
+        self.account.ledger.lock().unwrap().peak
+    }
+    #[getter]
+    fn native_bytes(&self) -> usize {
+        self.account.ledger.lock().unwrap().native
+    }
+    #[getter]
+    fn external_bytes(&self) -> usize {
+        self.account.ledger.lock().unwrap().external
+    }
+    fn same_account(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.account, &other.account)
+    }
+    fn owns(&self, bundle: &StorageBundle) -> bool {
+        Arc::ptr_eq(&self.account, &bundle.record._reservation.account)
+    }
+    fn reserve(&self, bytes: usize) -> PyResult<RecordingLease> {
+        Ok(RecordingLease {
+            lease: Mutex::new(Some(
+                self.account
+                    .reserve(bytes, false)
+                    .map_err(crate::python_error)?,
+            )),
+        })
+    }
+}
+#[pyclass(frozen)]
+pub struct RecordingLease {
+    lease: Mutex<Option<Reservation>>,
+}
+#[pymethods]
+impl RecordingLease {
+    #[getter]
+    fn size(&self) -> usize {
+        self.lease.lock().unwrap().as_ref().map_or(0, |r| r.bytes)
+    }
+    fn resize(&self, bytes: usize) -> PyResult<()> {
+        let mut s = self.lease.lock().unwrap();
+        let r = s
+            .as_mut()
+            .ok_or_else(|| crate::python_error(error("recording lease closed")))?;
+        r.account
+            .change(false, r.bytes, bytes)
+            .map_err(crate::python_error)?;
+        r.bytes = bytes;
+        Ok(())
+    }
+    fn close(&self) {
+        self.lease.lock().unwrap().take();
     }
 }
 pub struct Record {
@@ -91,8 +196,7 @@ pub struct Mailbox {
     state: Mutex<State>,
     wake: Condvar,
     async_wake: tokio::sync::Notify,
-    used: Arc<AtomicUsize>,
-    limit: usize,
+    account: Arc<Account>,
     capacity: usize,
 }
 impl Mailbox {
@@ -110,13 +214,20 @@ impl Mailbox {
             }),
             wake: Condvar::new(),
             async_wake: tokio::sync::Notify::new(),
-            used: Arc::new(AtomicUsize::new(0)),
-            limit,
+            account: Arc::new(Account {
+                limit,
+                ledger: Mutex::new(Ledger::default()),
+            }),
             capacity,
         }))
     }
     pub fn used(&self) -> usize {
-        self.used.load(Ordering::Acquire)
+        self.account.ledger.lock().unwrap().native
+    }
+    pub fn account(&self) -> RecordingAccount {
+        RecordingAccount {
+            account: self.account.clone(),
+        }
     }
     fn notify(&self) {
         self.wake.notify_all();
@@ -136,20 +247,13 @@ impl Mailbox {
         let mut count = Count(0);
         serde_json::to_writer(&mut count, value).map_err(|e| error(e.to_string()))?;
         let bytes = count.0;
-        if self
-            .used
-            .try_update(Ordering::AcqRel, Ordering::Acquire, |used| {
-                used.checked_add(bytes).filter(|n| *n <= self.limit)
-            })
-            .is_err()
-        {
-            let failure = Error::resource("native capture storage byte budget exhausted");
-            self.close(failure.clone());
-            return Err(failure);
-        }
-        let reservation = Reservation {
-            bytes,
-            used: self.used.clone(),
+        let reservation = match self.account.reserve(bytes, true) {
+            Ok(reservation) => reservation,
+            Err(_) => {
+                let failure = Error::resource("native capture storage byte budget exhausted");
+                self.close(failure.clone());
+                return Err(failure);
+            }
         };
         let mut encoded = Vec::with_capacity(bytes);
         serde_json::to_writer(&mut encoded, value).map_err(|e| error(e.to_string()))?;

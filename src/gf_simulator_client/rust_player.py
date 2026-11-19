@@ -192,6 +192,10 @@ class RustPlayerRuntime:
                     for checkpoint in self._holds.pop(key, []):
                         self.service.release(checkpoint)
 
+    def recording_account(self) -> Any:
+        """Return the SAME native recording account, without another pool/charge."""
+        return self._native.recording_account()
+
     def storage_bytes(self) -> int:
         return int(self._native.storage_bytes())
 

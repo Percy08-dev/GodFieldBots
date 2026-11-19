@@ -78,6 +78,43 @@ commit; only one actual ownership chain justifies encoding/Source issuance.
 Encoding/custody acceptance is distinct from commit, WAL checkpoint, collection
 seal and actual thread/resource retirement. Any failure prevents PPO dispatch.
 
+## Workspace policy ruling
+
+Root adopts the scoped advisor recommendation: one explicit caller-provided loan
+from the EXISTING shared Source/metadata budget covers the original storage
+thread's scratch and retained validation-bank lifetime. It is a soft planning
+allowance, not measured use or an enforced physical-RAM cap. Native originals,
+canonical/Pack/staging bytes remain in the one recording account above.
+
+Do not adopt either proposed decode-token formula as a production rejection rule.
+Decode-only measurements overestimate individual decodes by2–4x yet miss DTO/
+Journal/codec overlap, retained banks and duplicate terminal-bank decoding. No
+per-record Python scan or native token-count API is needed for this ruling.
+
+Before production acceptance, measure the complete path through decode, DTO,
+Journal6/columns, terminal processing, Pack/SQLite and seal. Include genuine
+sequences and valid configured maximum candidate/slot/event/string shapes,
+incomplete pairs and worst FEASIBLE retained-bank/transform concurrency. Warm up,
+separate fresh/reused allocator observations and a long sequence; record traced
+peak/retained baseline after retirement, process RSS/PSS and separately charged
+native/recording/tmpfs. Tracemalloc alone omits native/SQLite/compression memory.
+For the configured2GiB loan, document its measured planning range and concurrent
+Source demand; unmeasured means missing evidence, never an invalid workload.
+Engineering component acceptance may state a precise bounded range. Before
+production/default acceptance, add a targeted actual-retained-bank overlap study
+(one long bank near the selected episode limit, feasible other-bank population,
+one real terminal/commit overlap), plus prescribed C4/C2 and actual C16 measures.
+Do not require every unbounded rawAPIhistory/identifier or Cartesian maximum;
+extreme settings retain the owner's accepted OOM risk. A discrepancy requires
+root disposition/allowance review, not an invented margin or silent rejection.
+
+Reject only concrete inability to admit the requested shared-budget loan, an
+existing format/shape limit, failed exact recording reservation, actual processing/
+allocation failure, or a caller grant known below measured necessity. No safety
+multiplier or generic allocation framework is approved. This does not provide a
+hard preallocation guarantee for arbitrary inputs; such a different requirement
+would need its own lifecycle-aware planner/design evidence.
+
 ## Database transitions and failure custody
 
 One narrow database command owner reuses the existing group_pack_db operations.
