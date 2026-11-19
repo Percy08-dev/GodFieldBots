@@ -23,6 +23,12 @@ milestones permit signals; final wait/proof/cold work stays within original fini
 A new operation may bind its own original run milestones only after prior exact
 pair finalization, under the unchanged original session budget. Resume of the
 SAME operation cannot reset its stored deadlines.
+The accepted [repair refinement](rust-player-runtime-supervision-fixes.md) makes
+phase authority explicit: active training keeps those milestones; cold proof uses
+remaining original operation finish; after exact finalization and parent release,
+interoperation control uses unchanged original session finish until a distinct
+operation binds. No previous training TERM shortens cold proof and no fresh
+duration is created.
 
 supervision_id is stable for the original Rust supervisor/session. Each Python
 host gets a fresh invocation_id and private32hex nonce, including cold continuation.
@@ -205,6 +211,12 @@ group signal observations. Positive original-handle wait/subreaper retirement
 remains mandatory; WNOHANG0/EOF/PIDabsence are not exit. Stop/join own telemetry
 child helpers before adopted-child drain; uncertain/outgroup/wait/durable error
 retains quarantine/no continuation. Forced cleanup never qualifies data.
+Observe the original leader nonconsumingly with WNOWAIT; keep its kernel
+identity until all possible group signaling is permanently over. Target/reap
+adopted children excluding that leader, then consume the actual Child.wait and
+confirm final child exhaustion. No group signal after original status consumption
+or ownership loss; normalize SIGCHLD zombie-retention disposition before spawn.
+See the accepted repair refinement for error/deadline handling and required probes.
 
 Global physical termination3 retains {ticket,admission_sha256,context_sha256,
 boot_id,confirmed_unix,exit_sha256,exit_record}, with no fake legacy resources.

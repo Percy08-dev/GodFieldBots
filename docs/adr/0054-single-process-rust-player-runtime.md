@@ -172,3 +172,34 @@ and actual OFD transfer. Local saved banks/ACKs issue new service publications
 without borrowing protocol9 actor authority. Live committed work awaits the
 original host reap and cold audit before final eligibility. Implementation,
 real numerical/Source/restore checks and deployment measurements remain required.
+
+
+## Supervision repair design
+
+Independent initial5b reviews found phase-clock, historical-PGID signal ownership,
+stop-ACK and missing-build-instruction violations before component acceptance.
+The [bounded repair design](../design/rust-player-runtime-supervision-fixes.md)
+passes independent architecture READY. Cold consumes original operation finish;
+finalized/released interoperation control consumes original session finish. Neither
+starts a fresh allowance. Root adopts advisor option B: retain the original
+session leader with WNOWAIT until group signaling is permanently finished, drain
+adopted children with targeted waits, then consume actual Child.wait. A live-member
+snapshot can race with a member leaving its group. This refines the earlier
+consume-original-first wording without changing receipt meaning or dependencies.
+Cost is one zombie during bounded cleanup; no dependency/framework is added.
+Actual WSL6.18 kernel probes, all four corrections and scoped independent
+re-review remain required before implementation acceptance.
+
+
+## Scoped original-host supervisor acceptance
+
+The standalone supervisor, authenticated host/cold protocol, same-namespace
+admission2/termination3 and actual installed companion now pass independent
+correctness and architecture conformance READY. All four initial P2s are
+addressed under the accepted repair: phase-specific original clocks, retained
+leader identity, exactly-once stop ACK and actionable wheel workflow. Root fresh
+fix-only11native/13Python and exact installed/source/artifact identity checks pass;
+agent complete22supervisor/60Python checks pass. Final nativef8671dee, extension
+8f633e9b and supervisor6e53acad are recorded in verification. Old broad-suite and
+16b742 evidence remain historical. Source/local learner/campaign science/user
+CLI and prescribed CPU/CUDA/performance/default acceptance remain outstanding.

@@ -54,8 +54,10 @@ build prerequisite to resolve rather than permission to silently change pins.
 | native/src/player_runtime/ | Pure own-input policy/search/RNG/tokens; game/HTTP actors; batching queues and lifetimes. Depends on existing native DTO/rule/token helpers and Rust crates, never calls upper Python modules from worker threads. |
 | gf_common/rust_player.py | Lazy-free closed configuration, execution/producer/receipt schemas and routing value types. No HTTP/Torch/native imports. |
 | gf_models/rust_player.py | Final-dtype buffer-to-Tensor views, immutable existing shared_registry/score_numeric_row integration and own-generator sampling transaction. No HTTP or management access. |
-| gf_simulator_client/rust_player.py | Native runtime facade, supervisor communication and original process/task cleanup. May expose an orchestration facade to training, as ADR0053's narrow edge does. |
-| gf_training/rust_player.py | Same-process learner and bounded dedicated writer thread; existing capture/journal/group-pack/lineage owners remain authoritative for accepted data and saved generations. |
+| gf_simulator_client/rust_player.py and rust_player_companion.py | Native runtime/task facade and installed companion discovery/sealed launch/exec. Training depends on this client edge; discovery has no training dependency. |
+| gf_training/rust_player_storage.py | Implemented canonical capture encoder and real dedicated SQLite thread with the single recording account. |
+| gf_training/rust_player_supervision.py | Implemented authenticated HostControl/admission/prepared/cold physical capabilities; Source eligibility remains a separate finalizer responsibility. |
+| gf_training/rust_player_learning.py (planned) | Same-process learner/common PPO and new Source/lineage composition; existing numerical math and data owners remain authoritative. |
 | gf_cli | Config composition, external server startup, normal train/HPO training selection and supervisor exec/reentry. |
 | native/src/bin/gf-player-supervisor.rs | Original Python host spawn/wait, bounded termination and durable actual exit evidence; no learning/data authority. |
 
@@ -333,8 +335,12 @@ group/session and retains that original group identity. Existing ManagedServer
 inherits the group and pinned Simulator072dabb starts no OS child processes.
 Closing its stdin requests shutdown; EOF never proves exit. Cooperative host
 cleanup still records actual Simulator wait/shutdown/log outcomes before prepared.
-After original host wait, the supervisor also positively reaps adopted descendants
-until no owned child remains, within existing cleanup/server deadlines. Stop/join
+After nonconsuming original-exit observation, retain the original session leader
+while positively reaping adopted descendants within existing cleanup/server
+deadlines, then consume the actual Child.wait and confirm child exhaustion. This
+accepted [identity refinement](rust-player-runtime-supervision-fixes.md) keeps
+every group signal backed by the unreaped leader; never signal after consuming or
+losing it. Stop/join
 its own telemetry child helpers before this drain so one wait owner cannot consume
 another helper's status. If needed, TERM/KILL only the owned host group and record
 every actual adopted PID/wait status and whether cleanup signaled it. Exit evidence

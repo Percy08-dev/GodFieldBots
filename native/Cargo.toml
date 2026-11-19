@@ -8,6 +8,10 @@ rust-version = "1.99"
 name = "gf_native"
 crate-type = ["cdylib", "rlib"]
 
+[[bin]]
+name = "gf-player-supervisor"
+path = "src/bin/gf-player-supervisor.rs"
+
 [features]
 allocator-mimalloc = ["dep:mimalloc"]
 

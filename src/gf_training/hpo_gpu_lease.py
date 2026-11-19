@@ -266,6 +266,10 @@ class _Lock:
 
 
 def _admission(value: Json, ticket: str) -> None:
+    if type(value.get("schema_version")) is int and value["schema_version"] == 2:
+        from gf_common.rust_player import validate_global_admission
+        validate_global_admission(value, ticket)
+        return
     closed(value, {"schema_version", "kind", "ticket", "context", "boot_id", "owner_pid", "admitted_unix"})
     if type(value["schema_version"]) is not int or value["schema_version"] != 1 or value["kind"] != "hpo-gpu-admission" or value["ticket"] != ticket:
         raise ContractError("mismatched GPU admission record")
@@ -276,7 +280,12 @@ def _admission(value: Json, ticket: str) -> None:
     _time(value["admitted_unix"])
 
 
-def _termination(value: Json, admission: Json) -> TerminationReceipt:
+def _termination(value: Json, admission: Json) -> TerminationReceipt | Json:
+    if type(value.get("schema_version")) is int and value["schema_version"] == 3:
+        from gf_common.rust_player import validate_global_termination
+        return validate_global_termination(value, admission)
+    if admission.get("schema_version") != 1:
+        raise ContractError("legacy physical proof cannot resolve supervised admission")
     shared=type(value.get("schema_version")) is int and value["schema_version"]==2
     closed(value, {"schema_version", "kind", "ticket", "admission_sha256", "context_sha256", "boot_id", "confirmed_unix", "resources"} | ({"services"} if shared else set()))
     if (type(value["schema_version"]) is not int or value["schema_version"] not in (1,2) or value["kind"] != "hpo-gpu-termination"

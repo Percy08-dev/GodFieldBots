@@ -10,8 +10,10 @@ Ordinary Model3 declares the new mode in `run.player_runtime`; HPO campaign6 and
 materialized spec6 use `runtime`. Each is the same closed declaration with
 `mode=rust-player-runtime-v1`, `scheduler=tokio|fixed`, `game_concurrency`,
 `player_worker_threads`, `max_batch_size` and `formation_wait_ms`. Materialize the
-same defaults before hashing, validate positive integral counts and finite
-nonnegative formation wait, and require C to equal normal `run.concurrency` or
+same declaration before hashing. Initial opt-in input supplies all six fields
+explicitly; no provisional best scheduler/W is implied before measurement.
+Validate positive integral counts and finite nonnegative formation wait, and
+require C to equal normal `run.concurrency` or
 HPO `operating.game_concurrency`. There is no W<=C restriction. The old
 `run.inference_service` selector and new declaration are mutually exclusive.
 
@@ -46,6 +48,17 @@ UNIX fields are observations for this mode. All admission, execution, cleanup,
 source, numeric, save and continuation work consumes the original authority.
 A subsequent distinct HPO operation may bind its own declared milestones only
 after the previous operation has finalized, within the original session finish.
+
+The native per-game input must carry an absolute `cleanup_deadline`, derived
+from the authenticated operation cooperative-close cutoff (no later than
+`term_bits`, or an already earlier original cutoff). Both HTTP/replay cleanup and
+terminal storage publication consume that same original cutoff. The component's current
+`monotonic()+cleanup_seconds` calculation at each cleanup phase must be replaced
+before supervised production integration: sequential cleanup phases cannot each
+start a new allowance. Existing HTTP request_seconds still caps an individual
+request within the unchanged absolute cutoff. This is an explicit GameSpec/facade
+interface refinement; update component callers/tests together, without changing
+historical persisted formats or giving new-mode production a fallback grace.
 
 Common coordinator lock entry must distinguish a newly acquired original parent
 lock from a supervisor-borrowed original OFD. The actual authenticated lock_ack

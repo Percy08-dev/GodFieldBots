@@ -105,7 +105,11 @@ production/default acceptance, add a targeted actual-retained-bank overlap study
 (one long bank near the selected episode limit, feasible other-bank population,
 one real terminal/commit overlap), plus prescribed C4/C2 and actual C16 measures.
 Do not require every unbounded rawAPIhistory/identifier or Cartesian maximum;
-extreme settings retain the owner's accepted OOM risk. A discrepancy requires
+extreme settings retain the owner's accepted OOM risk. The v3 measured range is
+recorded in [verification](../verification/rust-player-runtime.md): thirty distinct
+retained banks plus a real small-terminal/commit overlap, without long-own-bank
+terminal or whole-C16 capacity claims. Actual deployment measurements remain open.
+A discrepancy requires
 root disposition/allowance review, not an invented margin or silent rejection.
 
 Reject only concrete inability to admit the requested shared-budget loan, an

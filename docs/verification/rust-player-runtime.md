@@ -241,9 +241,33 @@ Its temporary status/identity records are `/tmp/gfb-retained-bank-study.md` and
 `.json`. This contributes no new capacity evidence; the original calibration
 limits and follow-up measurement requirement remain in force.
 
-Production/default memory acceptance stays OPEN: complete the targeted retained-
-ACTIVE-bank/terminal overlap study and actual C4/C2/C16 workload measurements.
-Larger262144event active-bank populations and arbitrary rawAPI histories/strings
+A separately bounded v3 study now passes its measured retained-bank scope.
+Thirty distinct actual Journal/EventBank graphs hold442368events (262144,65536,
+28x4096), populated by normal incremental validated deltas. They remain alive
+through genuine C1/two8-decision-ceiling games, both terminal views and real
+Pack/SQLite/seal publication; banks retire before the SAME2GiB Source loan closes.
+Fresh/reused cases pass11.006/10.920s. Traced peaks91.530/91.537decimalMB;
+sampled processPSS259.058/273.805MB; exact combined recording peak3.859MB.
+Native/external recording and Source counters return0; residualPSS178.337/
+215.684MB remains distinct allocator/library/observer memory, not a claim of
+physicalRSS release. Actual recording cap is512MiB; no Torch/CUDA was loaded.
+Execution/setup185.32s stays within its8min bound; report writing finishes later.
+
+This uses immutable native16b742c7/extension5177ad83, lockbb8 and unchanged
+storagePython29549dc9; it does not claim a current-tree build after5b edits.
+The long banks are shaped OTHER banks; their own long-terminal decoding/duplicate
+comparison maximum is unmeasured. Genuine terminal banks are smaller; candidate
+cap64, and C2/C4 samples are snapshots only. This is not32genuine participants,
+maxcandidate/fullC16 work, Source qualification or a universal capacity proof.
+ScriptSHA87f759766381007d45c0ac3685adb1274da0c6c4b03aac3fea5d16bc569f2d6c.
+Durable originals, script, raw observations, helper/fixture snapshots and immutable
+wheels are under `runs/rust-player-runtime-v1/memory/retained-v3` in the primary
+checkout; temporary counterparts are `/tmp/gfb-retained-bank-v3.*`.
+
+Production/default memory acceptance stays OPEN for actual C4/C2/C16 workload
+measurements. The targeted retained-bank condition is measured only in the
+explicit v3 range above; no all-maxima promise or new admission guard follows.
+Long-own-terminal/all-maxima populations and arbitrary rawAPI histories/strings
 remain unmeasured; no new cap or universal capacity promise follows. Actual
 Source/lineage/learning/supervisor/CLI integration and approved timing protocol
 remain required. No model-quality or performance improvement is claimed.
@@ -257,14 +281,54 @@ paths in Distribution.files plus executable0755. It is not the actual companion
 wheel. Current ManagedServer inherits its host group and pinned Simulator starts
 no OS child processes; stdinEOF requests shutdown and does not prove exit. Actual
 original-host/adopted-child waits, failure injection, installed companion identity
-and host reentry still require implementation/verification.
+and host reentry were outstanding after that probe; the engineering evidence
+completing this scope follows.
+
+## Original-host supervisor engineering acceptance
+
+Both independent final scoped reviews are READY; Root accepts this component.
+Four originalP2s are resolved: cold/continued-operation clocks use their original
+phase authority, group signals retain the unreaped original leader, stopACK is
+pending exactly once, and missing-companion errors provide tested build/install/
+no-sync launch commands. Actual Child.wait/adopted consumption remains necessary;
+WNOWAIT observation alone is never a successful receipt. Kernel probes run on
+6.18.58.1-microsoft-standard-WSL2, including escaped descendants/SIGCHLDignore/
+ECHILD/TERM→KILL. Cold/session hard cutoffs add no grace and fail uncertain.
+
+Final `cargo test --offline --locked --release --manifest-path native/Cargo.toml
+--bin gf-player-supervisor --quiet -- --include-ignored`:22PASS0ignore48.47s.
+Focused supervisor+legacy scheduling pytest:60PASS1.36s. Root fresh fix-only
+native11PASS0ignore42.01s and supervisorPython13PASS0.12s. Static/format checks,
+current native/extension/companion/source identities, all3wheel hashes and256
+Python files match. Original331Python/197native13ignore results are earlier
+candidate evidence; unchanged actor/storage/math suites were not relabeled as
+fresh repaired-source runs. The final checks cover real ordinary/HPO component
+host pairs and faults, not scientific Source/learner eligibility.
+
+Native source f8671dee9e5cac485b045625decf559c9e036d84bce1ff46ed4060bbb100dc5f;
+loaded extension8f633e9b75b00b429927872e3c013dea01994c7eacc3d0694a0c69dcc55f62b6;
+supervisor6e53acad327a2c5e95f8d8662c4b5019f8ca00c7b62cb4864bc718f3c16c5671;
+lockbb8e9e3c unchanged. Actual runtime/app/native-only wheels and all256 source
+files match; separate clean app-only/native-only environments retain optional-free
+old help and actionable absence refusal. Worktree venv now contains the actual
+runtime wheel. Tested install/launch uses installed `.venv/bin/gf-bots` or
+`uv run --no-sync gf-bots`; automatic uv sync may select the companion-free
+editable dependency. Build helper remains explicit, never runtime compilation.
+
+New control-only records use canonical UTF8 without a trailing newline, leaving
+legacy writers unchanged. Original OFD transfer ACK requires close-only caller
+detach in the forthcoming coordinator; no legacy LOCK_UN alias is reconstructed.
+Prepared/physical exit are not Source eligibility. Fixed internal numerical/
+Source/campaign handlers remain absent and refuse before admission. MLP learning,
+new strict outer Source/lineage/CLI, actual final-D/evaluation and all required
+performance/default gates remain open.
 
 ## Required evidence still outstanding
 
 - New outer collection/Source and local-learning integration around accepted
   actor/inference/thread-storage components, with actual same-owner authority.
-- Single Python process, bounded writer custody and original-handle supervisor/
-  same-namespace GPU admission termination, source/producer version checks.
+- Integrated single-Python learning/process-tree evidence using the accepted
+  writer/supervisor components, and new outer Source/producer version checks.
 - Model3/4 actual CUDA continuous2 and pause1/resume2, same-input restore and
   independent full Original/Replay/numeric audits.
 - Exact approved C8 W sweep, C16 forward/reverse and per-entrance C4/C2 two-pair
