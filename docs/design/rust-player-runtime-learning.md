@@ -161,3 +161,144 @@ evaluation/process-tree acceptance remain6; approved scaling/adoption remains7.
 Supply real internal callable composition, never eligible placeholders. Public
 legacy entry guards remain until CLI supervisor activation; internal validated
 handlers have actual HostAdmission/lock authority. No learning-quality claim.
+
+
+## Parent-borrow lifetime refinement (accepted after architecture READY)
+
+The accepted close-borrower-before-parent-release rule needs an actual local
+HostControl check, not only caller convention. HostControl owns a concrete
+private registration of its active/uncertain parent borrowers. The lineage
+context registers the actual FD/owner lifetime and retires that registration only
+after positive local FD close. release_parent and close refuse while such a
+registration remains. An uncertain close retains a reachable owner/registration
+for honest failure cleanup; no JSON counter or PID-absence claim clears it.
+
+Keep dependency direction lineage→HostControl; supervision does not import
+lineage to inspect a global owner map. Use one narrow private registration/token
+for this actual parent-FD lifetime, not a generic resource registry/callback
+framework. Existing registered RunOwnership identity/path/stat/PID/thread checks
+remain. Old unsupervised contexts retain their original unlock behavior.
+
+For outgoing transfer, disable legacy LOCK_UN once descriptor sending is
+DISPATCHED, since an interrupted ACK may leave a real receiver alias. This is
+uncertainty containment only: authenticated transfer/mutation authority is marked
+only after the exact kernel-authenticated ACK. Dispatch failure cannot claim
+transfer success, advance learning or release supervisor custody; keep reachable
+uncertain ownership and quarantine. Positive local close uses no LOCK_UN and does
+not assert a receiver owns the OFD when no ACK was received. Exact acknowledged
+transfer and normal inherited borrow follow the same registration lifetime.
+
+Verification: actual same-OFD separate-open exclusion through transfer/reentry;
+release_parent/close reject a real live borrower; positive close permits release;
+failed/uncertain FD close and ACK-loss cannot unregister or unlock aliases early;
+wrong/copied/foreign registration cannot grant ownership. No wire/receipt version,
+external dependency, numerical or scientific budget change is introduced.
+
+
+## Pre-seal writer inventory (accepted after architecture READY)
+
+Keep new collection10/11 manifest/report controls inside the same sealed SQLite
+as existing Pack storage; do not introduce external controls that are absent
+from the sealed descriptor. They need actual terminal/logical-retirement results
+and exact raw-member inventory after collection, before final sealing.
+
+Add one data-only inventory request to RustPlayerStorage's existing ordered
+command queue and actual database thread. It runs after prior accepted bundles/
+commits and refuses a complete snapshot until every expected group is committed.
+Return the exact existing raw member-index rows from actual commit/database
+state, without re-encoding candidate data or re-reading all raw payloads. Factor
+existing index access if needed. Ordering/filtering excludes later control files
+and manifest self-hashes; no hash cycle is created. The inventory is immutable
+observational data, never Source or learning authority.
+
+Caller composes actual report/manifest from that inventory and native logical
+retirement, writes both through existing store_control RPC, then seals. The
+actual descriptor therefore binds those controls with the unchanged canonical
+Journal/columns/Replay. All RPC waits consume original deadlines; no new grace.
+Single-thread database affinity, seal/admission fences, error/cancel/quarantine
+and positive-close owner retention remain unchanged. No post-seal mutation.
+
+Inventory object/metadata lifetimes belong to the existing explicit Source
+workspace loan; serialized control bytes use the single exact recording account.
+Share actual rows/backing rather than double charging aliases or keeping another
+full payload. No new coefficient/margin/pool is approved. Tests cover real raw
+index correspondence, ordered outstanding work, partial-pair refusal, control
+persistence followed by actual seal/reopen, cancellation/error and last-use
+retirement. Existing data-only writer remains insufficient for Source issuance;
+new online authority still requires actual native/capture/service owners.
+
+
+## Strict managed-Simulator cleanup (accepted after architecture READY)
+
+The existing Bots ManagedServer legacy stop path gives KILL a fresh mandatory
+one-second reap allowance. Preserve that default for historical callers, but the
+new supervised collector must not start that allowance after its original cutoff.
+Add a concrete constructor opt-in strict_cleanup_deadline=False; when enabled,
+require the finite original absolute cleanup_deadline. Constructor ownership makes
+startup-error/internal stop paths strict too, rather than relying on every caller
+to pass a stop-only keyword. This changes the Bots adapter, never the Simulator.
+
+All EOF/TERM/KILL and log-drain waits consume the remaining original absolute
+cutoff; existing per-phase caps may shorten it, never extend it. Even at expiry,
+an immediate owned KILL/nonblocking status observation may be attempted, followed
+by truthful unconfirmed diagnostics when positive wait/log closure cannot finish.
+Retain the actual ManagedServer/process/task/FD owner for original supervisor
+containment; no PID-absence or timeout creates clean health. Cleanup errors keep
+reachable owners and do not mint Prepared/Source or refund uncertain resources.
+Do not block indefinitely on a live original process or add a fresh reap window.
+Actual internal drainer cancellation contracts may be trusted; OS/filesystem
+blocking limitations remain explicit and the Rust supervisor owns hard containment.
+
+Existing default callers and their recorded overrun behavior remain unchanged.
+New collection always enables the strict path with the authenticated operation's
+cooperative-close bound. Tests cover actual normal cleanup, TERM-ignore/KILL,
+spent-deadline/unconfirmed wait, startup error and cancellation/log-drain ownership,
+and unchanged legacy default behavior. No engine semantics, persisted schema,
+extra process/resource budget or new runtime dependency changes.
+
+
+## Late binding of actual group contexts (accepted after architecture READY)
+
+A collection fixes the full immutable paired-group/episode/policy plan before
+work. Only up to C group servers are alive, and each server runs its two seats
+sequentially as the current collector. Executed process receipts for later groups
+do not exist at writer construction; never start all servers merely to obtain
+receipts, invent placeholders or mutate an already registered context.
+
+Add a narrow deferred_contexts=False constructor opt-in to the actual thread
+writer. Default callers still supply every actual context up front. In deferred
+mode the fixed complete plan is mandatory, and any initial contexts must already
+be genuine; remaining complete group contexts arrive through one existing ordered
+thread RPC after actual server startup and BEFORE that group's native game
+admission. Bind only exact planned episode/run/config/policy identities and actual
+validated executed runtime evidence. Publish the local bound state only after the
+thread's actual ACK; no JSON response grants Source or action authority.
+
+Duplicate, unplanned, changed or already-admitted late binding refuses. An
+unbound group's raw bundle cannot be accepted for encoding; caller ordering and
+the writer boundary must prevent ambiguous pending data/context replacement.
+All waits share original deadlines. Cancellation/ACK uncertainty keeps reachable
+actual owners; no successful seal follows incomplete/missing groups. Seal and
+complete inventory still require every planned context and committed group.
+
+Use the same database thread, single record account and explicit Source-workspace
+lifetimes, without new admission/resource multipliers. Tests cover actual group
+startup/bind/first-seat handoff/second-seat progression at C1, later-group binding,
+exact receipt correspondence, duplicate/late/unplanned/unbound refusal, and
+failure/cancellation ownership plus unchanged eager-context behavior. This is
+metadata/data registration under a fixed plan, not a dynamic policy registry or
+replacement for the new Source issuer.
+
+
+## Scoped support implementation acceptance
+
+Task5c1A support/data owners pass independent correctness and architecture READY
+after five boundary corrections: saved metadata binds its actual ACK before
+state mutation; normalized HPO retains all shared profile/materializer checks;
+Mailbox enforces absolute publication/export/settlement cutoffs; strict drainer
+failure remains failed health; deferred receipts validate before atomic binding.
+The remaining codec/bootstrap/actions guard omissions close in a narrow second
+review without new resource policy. Local numerical CPU controls and one actual
+supervised synthetic CUDA comparison plus post-reap no-Torch saved-state audit
+pass their explicit component scope. No new Source/outer-record/common-PPO/cold
+completion issuer exists yet; task5c1B and user CLI/experiment6/7 remain required.

@@ -14,8 +14,9 @@ import os
 import random
 import threading
 import time
+import weakref
 from collections import deque
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any, Self
 
@@ -25,8 +26,9 @@ from gf_common.artifacts import ArtifactAdmission
 from gf_common.candidate_columns import encode_candidate_columns_v2
 from gf_common.card_instance import ActionConfigV3
 from gf_common.card_instance_rules import CardInstanceRules
+from gf_common.card_instance_runtime import validate_runtime_receipt
 from gf_common.card_instance_validation import act_response, validate_events
-from gf_common.domain import ContractError, Json, canonical, closed, digest, integer
+from gf_common.domain import ContractError, Json, canonical, clone, closed, digest, integer
 from gf_common.group_pack import (
     FORMAT,
     MAX_JSON,
@@ -68,6 +70,20 @@ class EpisodeEncodingContext:
     policies: tuple[PolicyJournalContext, PolicyJournalContext]
     deadline: float
     clock: Json | None = None
+
+
+@dataclass(frozen=True)
+class EpisodeEncodingPlan:
+    """Complete immutable controls digest, excluding the not-yet-created process."""
+
+    episode_id: str
+    controls_sha256: str
+
+
+def episode_encoding_plan(context: EpisodeEncodingContext) -> EpisodeEncodingPlan:
+    controls = asdict(context)
+    del controls["runtime_evidence"]
+    return EpisodeEncodingPlan(context.episode_id, digest(controls))
 
 
 @dataclass(frozen=True)
@@ -660,6 +676,85 @@ class _Command:
     result: Any = None
 
 
+class _WriterWorkspace:
+    """The existing grant shared only by its original writer and inventory."""
+
+    def __init__(self, reservation: Any) -> None:
+        self.reservation = reservation
+        self.writer_live = True
+        self.inventories = 0
+        self.lock = threading.Lock()
+
+    def _retire(self) -> None:
+        if not self.writer_live and not self.inventories and self.reservation is not None:
+            self.reservation.close()
+            self.reservation = None
+
+    def close(self) -> None:
+        with self.lock:
+            self.writer_live = False
+            self._retire()
+
+
+class _InventoryLoan:
+    def __init__(self, workspace: _WriterWorkspace) -> None:
+        self.workspace = workspace
+        self.released = False
+        with workspace.lock:
+            if not workspace.writer_live:
+                raise RuntimeError("writer workspace already retired")
+            workspace.inventories += 1
+
+    def close(self) -> None:
+        with self.workspace.lock:
+            if not self.released:
+                self.workspace.inventories -= 1
+                self.released = True
+            self.workspace._retire()
+
+
+_UNCERTAIN_INVENTORY_LOANS: list[_InventoryLoan] = []
+
+
+def _finalize_inventory(loan: _InventoryLoan) -> None:
+    try:
+        loan.close()
+    except BaseException:  # noqa: BLE001 -- actual grant remains reachable after uncertain close
+        _UNCERTAIN_INVENTORY_LOANS.append(loan)
+
+
+class RustWriterInventory:
+    """Immutable DATA ONLY; rows are borrowed until this snapshot closes.
+
+    Consume/serialize in a bounded scope and drop all row views and temporary
+    dictionaries before close. Independently read-back Source data has its own
+    original shared-account ownership; this snapshot grants no Source authority.
+    """
+
+    def __init__(self, rows: tuple[tuple[str, int, str], ...], workspace: _WriterWorkspace) -> None:
+        self._rows = rows
+        self._loan = _InventoryLoan(workspace)
+        self._closed = False
+        self._finalizer = weakref.finalize(self, _finalize_inventory, self._loan)
+
+    @property
+    def rows(self) -> tuple[tuple[str, int, str], ...]:
+        if self._closed:
+            raise RuntimeError("writer inventory snapshot closed")
+        return self._rows
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._rows = ()
+        self._loan.close()
+        self._closed = True
+        self._finalizer.detach()
+
+    def __reduce__(self) -> Any:
+        raise TypeError("inventory workspace ownership cannot be copied or serialized")
+
+
 class RustPlayerStorage:
     """A real dedicated SQLite thread, with explicit source-workspace ownership.
 
@@ -682,6 +777,8 @@ class RustPlayerStorage:
         workspace_bytes: int,
         deadline: float,
         cleanup_deadline: float,
+        deferred_contexts: bool = False,
+        context_plans: tuple[EpisodeEncodingPlan, ...] = (),
     ) -> None:
         if len({c.episode_id for c in contexts}) != len(contexts):
             raise ValueError("duplicate planned storage episode")
@@ -689,11 +786,23 @@ class RustPlayerStorage:
         if (
             not groups
             or len(set(planned)) != len(planned)
-            or set(planned) != {c.episode_id for c in contexts}
+            or (not {c.episode_id for c in contexts}.issubset(planned) if deferred_contexts
+                else set(planned) != {c.episode_id for c in contexts})
             or len({g.group_id for g in groups}) != len(groups)
             or any(c.run_id != run_id for c in contexts)
         ):
             raise ValueError("storage groups/context differ from original plan")
+        if type(deferred_contexts) is not bool:
+            raise ValueError("explicit deferred-context mode required")
+        if deferred_contexts:
+            if (any(type(plan) is not EpisodeEncodingPlan for plan in context_plans)
+                    or len(context_plans) != len(planned)
+                    or {plan.episode_id for plan in context_plans} != set(planned)):
+                raise ValueError("complete immutable episode context plans required")
+        elif context_plans:
+            raise ValueError("context plans require explicit deferred mode")
+        self.deferred_contexts = deferred_contexts
+        self._context_plans = {plan.episode_id: plan for plan in context_plans}
         self.runtime, self.directory, self.run_id = runtime, directory, run_id
         self.settings, self.deadline, self.cleanup_deadline = settings, deadline, cleanup_deadline
         self.budget = RecordingBudget(runtime.recording_account(), deadline)
@@ -709,6 +818,16 @@ class RustPlayerStorage:
             )
             for c in contexts
         }
+        if deferred_contexts and any(
+            {episode for episode in group.episodes if episode in self.encoders}
+            not in (set(), set(group.episodes)) for group in groups
+        ):
+            raise ValueError("initial deferred contexts must bind complete planned groups")
+        if deferred_contexts and any(episode_encoding_plan(c) != self._context_plans[c.episode_id]
+                for c in contexts):
+            raise ValueError("initial context differs from immutable original plan")
+        if deferred_contexts and any(runtime.episode_admission_attempted(c.episode_id) for c in contexts):
+            raise ValueError("original native admission preceded deferred context registration")
         self.committed: set[str] = set()
         self._condition = threading.Condition()
         self._queue: deque[_Command] = deque()
@@ -799,6 +918,48 @@ class RustPlayerStorage:
             raise ValueError("invalid control bytes")
         self._rpc("control", (name, data))
 
+    def inventory(self) -> RustWriterInventory:
+        """Ordered raw-member index; partial groups cannot issue a snapshot."""
+        value = self._rpc("inventory")
+        if value is None:
+            raise ContractError("complete committed groups required for writer inventory")
+        return value
+
+    def bind_contexts(self, contexts: tuple[EpisodeEncodingContext, ...]) -> None:
+        """Bind one actual complete group before any original native admission."""
+        if not self.deferred_contexts:
+            raise ContractError("late contexts require explicit deferred mode")
+        self._rpc("contexts", contexts)
+
+    def _bind_contexts(self, contexts: tuple[EpisodeEncodingContext, ...]) -> None:
+        if type(contexts) is not tuple or not contexts or any(type(c) is not EpisodeEncodingContext for c in contexts):
+            raise ContractError("actual immutable episode contexts required")
+        names = {c.episode_id for c in contexts}
+        if len(names) != len(contexts) or any(name not in self.group_for for name in names):
+            raise ContractError("duplicate or unplanned episode context")
+        group = self.group_for[contexts[0].episode_id]
+        if names != set(group.episodes) or any(name in self.encoders for name in names):
+            raise ContractError("complete previously unbound group contexts required")
+        if any(self.runtime.episode_admission_attempted(name) for name in names):
+            raise ContractError("actual native admission already attempted before context binding")
+        if any(c.run_id != self.run_id or episode_encoding_plan(c) != self._context_plans[c.episode_id]
+                for c in contexts):
+            raise ContractError("actual group context differs from original controls/policy plan")
+        staged: dict[str, CanonicalEpisodeEncoder] = {}
+        for context in contexts:
+            # Own immutable controls, not caller-mutated receipt/policy dicts.
+            policies = tuple(PolicyJournalContext(clone(p.native), clone(p.journal))
+                for p in context.policies)
+            context = replace(context, numeric_costs=clone(context.numeric_costs),
+                runtime_evidence=clone(context.runtime_evidence), clock=clone(context.clock),
+                policies=(policies[0], policies[1]))
+            receipt = validate_runtime_receipt(context.runtime_evidence, require_executed=True)
+            if receipt["action_contract"] != asdict(context.actions.action_contract):
+                raise ContractError("executed receipt differs from planned participant profile")
+            staged[context.episode_id] = CanonicalEpisodeEncoder(
+                context, self.sinks[group.group_id])
+        self.encoders.update(staged)
+
     def seal(self) -> CollectionLocator:
         return self._rpc("seal")
 
@@ -855,7 +1016,7 @@ class RustPlayerStorage:
 
     def _commit(self, group: StorageGroup) -> None:
         if group.group_id in self.committed or any(
-            self.encoders[e].terminal is None for e in group.episodes
+            e not in self.encoders or self.encoders[e].terminal is None for e in group.episodes
         ):
             return
         sink = self.sinks[group.group_id]
@@ -1023,7 +1184,7 @@ class RustPlayerStorage:
         self.thread_identity = threading.get_ident()
         command = None
         try:
-            self._workspace_lease = self.workspace.reserve(self.workspace_bytes)
+            self._workspace_lease = _WriterWorkspace(self.workspace.reserve(self.workspace_bytes))
             self.directory.mkdir(parents=True, exist_ok=False)
             self._database = GroupPackDatabase(max_owned_bytes=self.workspace_bytes)
             values = asdict(self.settings) | {
@@ -1069,8 +1230,24 @@ class RustPlayerStorage:
                     del data
                     command.accepted = True
                     command.done.set()
+                elif command.kind == "contexts":
+                    self._bind_contexts(command.value)
+                    command.accepted = True
+                    command.done.set()
+                elif command.kind == "inventory":
+                    if len(self.committed) == len(self.groups):
+                        assert self._database is not None and self._database.db is not None
+                        rows = tuple(self._database.db.execute(
+                            "SELECT name,length,sha256 FROM members ORDER BY name"
+                        ))
+                        command.result = RustWriterInventory(rows, self._workspace_lease)
+                        del rows
+                    # An incomplete observational request is refused without
+                    # corrupting the actual still-writing partial pair.
+                    command.accepted = True
+                    command.done.set()
                 elif command.kind == "seal":
-                    if len(self.committed) != len(self.groups) or any(
+                    if len(self.encoders) != len(self.group_for) or len(self.committed) != len(self.groups) or any(
                         encoder.pending is not None for encoder in self.encoders.values()
                     ):
                         raise ValueError("cannot seal incomplete original groups")

@@ -109,24 +109,41 @@ def _path(value: Any) -> None:
 
 def hpo_spec(state: Json) -> Json:
     """Parse the sole immutable spec; this grants no live or original authority."""
+    if state.get("run_variant") == "hpo-ppo-owned-rust-player-v1":
+        raise ContractError("Rust player has its own closed Source/lineage reader")
+    return _checked_hpo_spec(state)
+
+
+def rust_player_hpo_spec(config: Json) -> Json:
+    """Data-only spec6 validation; never grants legacy Source authority."""
+    return _checked_hpo_spec({"effective_config": config,
+        "run_variant": "hpo-ppo-owned-rust-player-v1",
+        "hpo_spec_sha256": digest(config.get("hpo_spec"))})
+
+
+def _checked_hpo_spec(state: Json) -> Json:
     config = state.get("effective_config")
     if type(config) is not dict:
         raise ContractError("HPO effective config required")
     from gf_common.training_opponents import training_opponents
     mixed = training_opponents(config)
+    rust_player = state.get('run_variant') == 'hpo-ppo-owned-rust-player-v1'
     resident = is_resident(state)
-    owned = state.get("run_variant") in ('hpo-ppo-owned-v1','hpo-ppo-owned-shared-v1')
+    owned = rust_player or state.get("run_variant") in ('hpo-ppo-owned-v1','hpo-ppo-owned-shared-v1')
     spec = closed(config.get("hpo_spec"), {"schema_version", "kind", "decision_budget", "training_recipe",
         "effective_settings_sha256", "base_config_sha256", "campaign_config_sha256", "study_identity",
-        "operating", "storage", "selection_version", "deadline_version", "deadline_inputs"} | ({"training_opponents"} if mixed is not None else set()) | ({"runtime"} if resident else set()) | ({"origin","encoder"} if owned else set()))
-    expected_schema = 5 if state.get('run_variant')=='hpo-ppo-owned-shared-v1' else 4 if owned else 3 if resident else 2 if mixed is not None else 1
+        "operating", "storage", "selection_version", "deadline_version", "deadline_inputs"} | ({"training_opponents"} if mixed is not None else set()) | ({"runtime"} if resident or rust_player else set()) | ({"origin","encoder"} if owned else set()))
+    expected_schema = 6 if rust_player else 5 if state.get('run_variant')=='hpo-ppo-owned-shared-v1' else 4 if owned else 3 if resident else 2 if mixed is not None else 1
     integer(spec["schema_version"], expected_schema, expected_schema)
-    if expected_schema==5:
+    if expected_schema in (5, 6):
         from gf_common.card_instance import shared_card_instance_contract
         if (action_config_v3(config['actions']).action_contract!=shared_card_instance_contract()
                 or config['model'].get('model_id')!='mlp' or config['model'].get('inference',{}).get('device')!='cuda:0'
                 or config['preprocessing'].get('backend')!='python'):
             raise ContractError('shared HPO requires the adopted-profile Python CUDA MLP contract')
+    if rust_player:
+        from gf_common.rust_player import player_runtime
+        player_runtime(spec["runtime"], game_concurrency=spec["operating"]["game_concurrency"])
     if resident:
         from gf_common.shared_inference import runtime_for_spec
         runtime_for_spec(spec)

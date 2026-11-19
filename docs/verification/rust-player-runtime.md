@@ -335,6 +335,53 @@ Ordinary pure validate remains usable. Existing public HPO resource validation6
 intentionally refuses its legacy planner until genuine new-host planning exists;
 actual host/Source/numerical/public supervisor execution remains future work.
 
+## Local numerical and data support acceptance
+
+Task5c1A independent correctness/conformance READY; all5initialP2s close across
+two scoped rounds. Actual parent FD borrowers close only after ACK/positive FD
+closure, data-only originals use the same descriptor/pool, writer inventory and
+deferred real contexts obey the fixed plan before native admission, and strict
+Simulator cleanup consumes original bounds. New context evidence is validated
+before complete-group ACK. Absolute Mailbox fast paths now reject expired
+publication/export/successful settlement while keeping actual consumer leases.
+Normalized HPO shares profile/materializer constraints and existing12GiB codec/
+positive bootstrap bounds;10001-update/32GiB STORAGE remains valid. Actual saved
+resume metadata binds its ACK hash before RNG/state application; cancelled drains
+retain failed health. These changes introduce no new learning/Source authority.
+
+Original793b component evidence:422CPU+oldcompatPASS56.50s with2explicitCUDA
+name deselections;22non-CUDA supervisorPASS48.68s/1separateCUDA filtered. Exactly
+one admitted ordinary CUDA component,2GiB device/1GiB Source/120s original finish,
+compares synthetic3decision Model3/4 current-vs-local named weights/Adam/CPU+CUDA
+RNG/PCG64/update/save/restore exactly4.67s. Fresh CPU process AFTER actual original
+host reap audits both pairs with Torch import forbidden. One admission, zero
+Prepared/Source/final-D receipts. Earlier import-path failure had zero admission/
+GPU use and remains setup failure. Durable actual session, arrays, audit, logs and
+hash manifest: primary `runs/rust-player-runtime-v1/components/cuda-local-numerics-A`.
+
+Torch allocator peak allocated73455616B/reserved75497472B; pre-exit residual
+allocated67108864B/reserved75497472B is not a zero-GPU or physical-total claim.
+Actual host exit remains physical retirement. Managed Source peak61181500B→0
+is reservation/planning, not PSS. Private test supervisor13eccd99 differs from
+installed793b-source companionb00f0417; both actual identities are recorded.
+No learning-quality/capacity/performance claim follows from synthetic controls.
+
+Repaired-source final evidence:257CPUcompatPASS12.07s/24deselect;18actual runtime/
+storage/last-view checksPASS2.29s/81deselect;7native deadline checksPASS0.06s.
+Second config-only round7boundaryPASS0.25s+192legacyconfigPASS1.37s. Scoped Ruff/
+mypy/diff checks pass. Root fresh31fix1PASS2.04s/32deselect,7nativePASS0.06s,
+7fix2PASS0.23s/39deselect; actual installed/source/file/wheel identities match.
+Earlier422/22/CUDA are historical793b evidence, not fresh post-repair claims.
+
+Current native76d940a6e9761a39537511687507ffb36bbfd76de43a69580fc1de7f2412deb0;
+extensionfc7e08f9e8f5db6f444e7fc71c79f1b98a581477234269fd9ef909138ce10dc7;
+companion7a9fd3b43da69357846b41917ebdc248673b81b06c112b7bd903d3d372f5a676;
+runtime wheel1dabdb036932e6f3cde098eec7339207db58a90b187527f66790f306cfb02f93.
+Lockbb8 unchanged. R2 changes CLI Python only; numerical code/inner schemas stay.
+Actual native→new Source/PERSISTED batch→common PPO/saved commit/G1/cold completion,
+outer record issuers, actual CLI/full CUDA resume/evaluation and scaling remain
+required. No Source qualification is inferred from the data-only owners.
+
 ## Required evidence still outstanding
 
 - New outer collection/Source and local-learning integration around accepted

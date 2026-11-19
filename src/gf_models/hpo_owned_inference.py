@@ -32,7 +32,18 @@ def _validate_owned_inference(banks: ReadonlyRamBankSet, metadata: Any, *, model
     if (type(banks) is not ReadonlyRamBankSet or set(banks.names) != set(expected)
             or canonical(metadata['arrays']) != canonical(descriptors)):
         raise ContractError('actor9 requires exact inference-only backing/layout')
-    inference = metadata['inference']
+    return _validate_inference_content(banks, metadata['inference'], model=model,
+        binding=binding, actions=actions, rules=rules)
+
+
+def _validate_inference_content(banks: ReadonlyRamBankSet, inference: Any, *, model: Any,
+                                binding: Any, actions: Any, rules: Any) -> Any:
+    """Unchanged checkpoint/tensor validation, independent of online capture authority."""
+    from gf_common.domain import digest
+    context = _game_context_v4(actions.action_contract, rules, digest(asdict(actions)))
+    expected = parameter_shapes(model, **context.options)
+    if type(banks) is not ReadonlyRamBankSet or set(banks.names) != set(expected):
+        raise ContractError('exact inference-only backing/layout required')
     expected_keys = {'schema_version', 'kind', 'model', 'architecture_identity', 'producer', 'action_config_hash'} | set(context.classification()) | set(context.semantics(model))
     closed(inference, expected_keys)
     if (inference['schema_version'] != context.schema or inference['kind'] != 'structured-inference'
@@ -53,6 +64,18 @@ def load_owned_inference(banks: ReadonlyRamBankSet, metadata: Any, *, model: Any
                          binding: Any, actions: Any, rules: Any) -> Any:
     context, arrays = _validate_owned_inference(banks, metadata, model=model,
         binding=binding, actions=actions, rules=rules)
+    return _load_validated_inference(context, arrays, model=model, binding=binding)
+
+
+def load_owned_inference_content(banks: ReadonlyRamBankSet, inference: Any, *, model: Any,
+                                 binding: Any, actions: Any, rules: Any) -> Any:
+    """Data-only local import; this grants no actor9 or collection authority."""
+    context, arrays = _validate_inference_content(banks, inference, model=model,
+        binding=binding, actions=actions, rules=rules)
+    return _load_validated_inference(context, arrays, model=model, binding=binding)
+
+
+def _load_validated_inference(context: Any, arrays: Any, *, model: Any, binding: Any) -> Any:
     network = make_network(model, 0, binding, **context.options)
     context.bind(network, fresh=True)
     restore_weights(network, arrays)

@@ -26,6 +26,7 @@ class RustPlayerRuntime:
         self.service = service
         self._holds: dict[tuple[str, str, str], list[str]] = {}
         self._active_routes: dict[tuple[str, str, str], int] = {}
+        self._episode_admission_attempts: set[str] = set()
         self._settled = threading.Condition()
         self._service_thread: threading.Thread | None = None
         self._service_error: str | None = None
@@ -108,7 +109,12 @@ class RustPlayerRuntime:
                 self._native.cancel("inference service failed")
 
     def start(self, games: list[dict[str, Any]]) -> None:
-        """Admit a precomputed wave; idle original runtimes remain alive between waves."""
+        """Admit a precomputed wave under its original absolute deadlines.
+
+        Each game carries cleanup_deadline bounded by the supervised cooperative
+        cutoff. HTTP cleanup and terminal storage share that SAME deadline.
+        Idle original runtimes remain alive between waves.
+        """
         with self._lock:
             if self._joined or self._joining or self._quiesced:
                 raise ContractError("native runtime admission closed")
@@ -171,7 +177,13 @@ class RustPlayerRuntime:
                     target=self._serve, name="gf-player-inference"
                 )
                 self._service_thread.start()
+            self._episode_admission_attempts.update(game["episode"] for game in games)
             self._native.start(canonical(games).encode())
+
+    def episode_admission_attempted(self, episode: str) -> bool:
+        """Management-only dispatch observation, including uncertain starts."""
+        with self._lock:
+            return episode in self._episode_admission_attempts
 
     def next_storage(self, deadline: float) -> Any:
         return self._native.next_storage(deadline)

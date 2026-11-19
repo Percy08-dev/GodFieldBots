@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import importlib
 import sys
+from pathlib import Path
 from typing import Any
 
 from gf_common.domain import ContractError
@@ -35,7 +36,19 @@ def _dispatch(control: HostControl, phase: str) -> None:
         raise ContractError(
             "required Rust-player learner/finalizer handler is unavailable"
         ) from error
-    handler(*arguments)
+    if module_name == "gf_training.rust_player_learning":
+        from gf_cli.config import load_rust_player_effective
+
+        operation = control.operation
+        loaded = load_rust_player_effective(
+            Path(operation["config_path"]), expected_sha256=operation["config_sha256"]
+        )
+        result = handler(*arguments, loaded=loaded)
+        if phase == "cold":
+            result.close()
+            control.release_parent()
+    else:
+        handler(*arguments)
 
 
 def main() -> int:

@@ -407,6 +407,53 @@ def _host_fixture(mode, control_fd, launch_fd, phase):
 
     if phase == "cold":
         competitor_blocked()
+        from gf_training.lineage import borrow_run_lock, require_hpo_run_owner
+        with borrow_run_lock(parent, control) as ownership:
+            assert require_hpo_run_owner(parent, ownership) is ownership
+            competitor_blocked()
+            for action in (control.release_parent, control.close):
+                try:
+                    action()
+                except ValueError as error:
+                    assert "borrower" in str(error)
+                else:
+                    raise AssertionError("actual live borrower permitted parent/control release")
+            borrower = next(iter(control._parent_borrowers))
+            try:
+                copy.copy(borrower)
+            except TypeError:
+                pass
+            else:
+                raise AssertionError("actual borrower registration was copyable")
+            try:
+                control._close_parent_borrower(borrower, object())
+            except ValueError:
+                pass
+            else:
+                raise AssertionError("foreign owner retired actual borrower")
+            actual_close = borrower.file.close
+
+            def failed_close():
+                raise OSError("injected original FD close uncertainty")
+
+            borrower.file.close = failed_close
+            try:
+                control._close_parent_borrower(borrower, ownership)
+            except OSError:
+                assert borrower in control._parent_borrowers
+                competitor_blocked()
+                try:
+                    control.release_parent()
+                except ValueError as error:
+                    assert "borrower" in str(error)
+                else:
+                    raise AssertionError("uncertain FD close released parent")
+            else:
+                raise AssertionError("injected original close failure was ignored")
+            finally:
+                borrower.file.close = actual_close
+        assert not control._parent_borrowers
+        competitor_blocked()
         if mode == "cold-fail":
             os._exit(11)
         if mode in ("cold-delay", "cold-expire"):
@@ -501,10 +548,72 @@ def _host_fixture(mode, control_fd, launch_fd, phase):
         else:
             control.close()
             return
-    fd = os.open(parent / ".lock", os.O_RDWR | os.O_CREAT, 0o600)
-    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    control.transfer_lock("parent", fd)
-    os.close(fd)  # authenticated close-only detach, not LOCK_UN
+    from gf_training.lineage import require_hpo_run_owner, run_lock, transfer_run_lock
+    with run_lock(parent) as ownership:
+        if mode == "lost-transfer-ack":
+            actual_transfer = control.transfer_lock
+
+            def lost_transfer_ack(kind, descriptor):
+                actual_transfer(kind, descriptor)
+                raise OSError("injected lost transfer acknowledgement")
+
+            control.transfer_lock = lost_transfer_ack
+            try:
+                transfer_run_lock(ownership, control)
+            except OSError:
+                competitor_blocked()
+                try:
+                    require_hpo_run_owner(parent, ownership)
+                except ValueError as error:
+                    assert "authenticated" in str(error)
+                else:
+                    raise AssertionError("uncertain transfer granted mutation authority")
+            else:
+                raise AssertionError("lost transfer ACK was ignored")
+            finally:
+                control.transfer_lock = actual_transfer
+        else:
+            transfer_run_lock(ownership, control)
+            assert require_hpo_run_owner(parent, ownership) is ownership
+        competitor_blocked()
+        try:
+            control.close()
+        except ValueError as error:
+            assert "borrower" in str(error)
+        else:
+            raise AssertionError("control closed while original transferred borrower remained")
+        if mode == "cuda-numeric":
+            import sys
+
+            sys.path.insert(0, str(Path(__file__).parents[1]))
+            os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+            os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
+            import torch
+
+            from gf_models.rust_player import sampling_runtime_identity
+            from tests.test_rust_player_learning import run_cuda_numerical_component
+
+            assert not torch.cuda.is_initialized()
+            companion = SimpleNamespace(manifest={
+                "executable_sha256": hashlib.sha256(
+                    Path(f"/proc/{os.getppid()}/exe").read_bytes()).hexdigest()})
+            producer = runtime_producer(companion,
+                sampling_runtime_sha256=sampling_runtime_identity())
+            budget = {"managed_ram_bytes": 1024**3, "managed_cuda_bytes": 2 * 1024**3,
+                "game_concurrency": 1, "player_worker_threads": 1, "max_batch_size": 1,
+                "storage_bytes": 1, "source_workspace_bytes": 1024**3}
+            admission = control.admit(budget, producer)
+            output = root / "cuda-numerical-component"
+            output.mkdir()
+            run_cuda_numerical_component(admission, output)
+    assert not control._parent_borrowers
+    if mode == "cuda-numeric":
+        control.close()
+        return  # actual reap diagnostics only; NEVER Prepared/Source/final-D
+    if mode == "lost-transfer-ack":
+        competitor_blocked()
+        # No admission, learning or Prepared follows uncertain transfer.
+        os._exit(7)
     competitor_blocked()
     companion = SimpleNamespace(
         manifest={

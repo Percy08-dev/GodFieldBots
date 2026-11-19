@@ -156,6 +156,7 @@ struct Entry {
     record: Arc<Record>,
     answer: Arc<StorageAnswer>,
     exported: bool,
+    deadline: f64,
 }
 #[derive(Default)]
 struct StorageAnswer {
@@ -176,6 +177,9 @@ impl StorageAnswer {
             tokio::pin!(wake);
             wake.as_mut().enable();
             if let Some(r) = self.result.lock().unwrap().as_ref() {
+                if r.is_ok() && monotonic() >= deadline {
+                    return Err(Error::Deadline);
+                }
                 return r.clone();
             }
             if monotonic() >= deadline {
@@ -242,11 +246,18 @@ impl Mailbox {
         release_key: Option<(String, String, String)>,
         deadline: f64,
     ) -> Result<()> {
+        super::super::requests::wait_duration(deadline)?;
+        if monotonic() >= deadline {
+            return Err(Error::Deadline);
+        }
         // Encoding workspace is temporary actor state. Count first, reserve exact
         // retained bytes before allocation; one lease follows every exported view.
         let mut count = Count(0);
         serde_json::to_writer(&mut count, value).map_err(|e| error(e.to_string()))?;
         let bytes = count.0;
+        if monotonic() >= deadline {
+            return Err(Error::Deadline);
+        }
         let reservation = match self.account.reserve(bytes, true) {
             Ok(reservation) => reservation,
             Err(_) => {
@@ -255,8 +266,14 @@ impl Mailbox {
                 return Err(failure);
             }
         };
+        if monotonic() >= deadline {
+            return Err(Error::Deadline);
+        }
         let mut encoded = Vec::with_capacity(bytes);
         serde_json::to_writer(&mut encoded, value).map_err(|e| error(e.to_string()))?;
+        if monotonic() >= deadline {
+            return Err(Error::Deadline);
+        }
         let transport_sha256 = format!("{:x}", Sha256::digest(&encoded));
         let answer = Arc::new(StorageAnswer::default());
         let mut owned = Some((Array1::from_vec(encoded), reservation));
@@ -268,6 +285,9 @@ impl Mailbox {
                 let mut s = self.state.lock().unwrap();
                 if let Some(e) = &s.closed {
                     return Err(e.clone());
+                }
+                if monotonic() >= deadline {
+                    return Err(Error::Deadline);
                 }
                 if s.entries.len() < self.capacity {
                     let id = s.next;
@@ -289,6 +309,7 @@ impl Mailbox {
                             record,
                             answer: answer.clone(),
                             exported: false,
+                            deadline,
                         },
                     );
                     s.queue.push_back(id);
@@ -310,6 +331,14 @@ impl Mailbox {
         loop {
             if let Some(e) = &s.closed {
                 return Err(e.clone());
+            }
+            if monotonic() >= deadline {
+                return Err(Error::Deadline);
+            }
+            if let Some(id) = s.queue.front() {
+                if monotonic() >= s.entries[id].deadline {
+                    return Err(Error::Deadline);
+                }
             }
             if let Some(id) = s.queue.pop_front() {
                 let entry = s.entries.get_mut(&id).unwrap();
@@ -336,7 +365,13 @@ impl Mailbox {
             entry.exported && Arc::ptr_eq(&entry.record, record),
             "storage acknowledgement requires same immutable reservation",
         )?;
+        let expired = failure.is_none() && monotonic() >= entry.deadline;
         let entry = s.entries.remove(&record.id).unwrap();
+        if expired {
+            entry.answer.finish(Err(Error::Deadline));
+            self.notify();
+            return Err(Error::Deadline);
+        }
         if let Some(failure) = failure {
             let e = error(format!("writer failed: {failure}"));
             entry.answer.finish(Err(e.clone()));
@@ -403,5 +438,190 @@ impl StorageBundle {
         let array = unsafe { PyArray1::borrow_from_array(&record.array, slf.into_any()) };
         array.call_method1("setflags", (false,))?;
         Ok(array)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
+
+    struct Probe {
+        calls: AtomicUsize,
+        delayed_call: usize,
+    }
+    impl Serialize for Probe {
+        fn serialize<S: serde::Serializer>(
+            &self,
+            serializer: S,
+        ) -> std::result::Result<S::Ok, S::Error> {
+            let call = self.calls.fetch_add(1, Ordering::SeqCst) + 1;
+            if call == self.delayed_call {
+                std::thread::sleep(Duration::from_millis(30));
+            }
+            serializer.serialize_u8(1)
+        }
+    }
+    fn run(future: impl std::future::Future<Output = ()>) {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(future);
+    }
+    #[test]
+    fn expired_publication_never_counts_encodes_or_enqueues() {
+        let mailbox = Mailbox::new(1024, 1).unwrap();
+        let probe = Probe {
+            calls: AtomicUsize::new(0),
+            delayed_call: 0,
+        };
+        run(async {
+            assert!(matches!(
+                mailbox
+                    .publish("terminal", "e", "g", &probe, None, monotonic() - 1.)
+                    .await,
+                Err(Error::Deadline)
+            ));
+        });
+        assert_eq!(probe.calls.load(Ordering::SeqCst), 0);
+        assert!(mailbox.state.lock().unwrap().entries.is_empty());
+        assert_eq!(mailbox.used(), 0);
+    }
+    #[test]
+    fn count_and_encode_cannot_spend_then_renew_publication_cutoff() {
+        for delayed_call in [1, 2] {
+            let mailbox = Mailbox::new(1024, 1).unwrap();
+            let probe = Probe {
+                calls: AtomicUsize::new(0),
+                delayed_call,
+            };
+            run(async {
+                assert!(matches!(
+                    mailbox
+                        .publish("terminal", "e", "g", &probe, None, monotonic() + 0.01)
+                        .await,
+                    Err(Error::Deadline)
+                ));
+            });
+            assert_eq!(probe.calls.load(Ordering::SeqCst), delayed_call);
+            assert!(mailbox.state.lock().unwrap().entries.is_empty());
+            assert_eq!(mailbox.used(), 0);
+        }
+    }
+    #[test]
+    fn ready_success_after_original_cutoff_is_not_successful_settlement() {
+        let answer = StorageAnswer::default();
+        answer.finish(Ok(()));
+        run(async {
+            assert!(matches!(
+                answer.wait(monotonic() - 1.).await,
+                Err(Error::Deadline)
+            ));
+        });
+    }
+    #[test]
+    fn late_ack_refuses_success_but_actual_consumer_retains_original_reservation() {
+        let mailbox = Mailbox::new(1024, 1).unwrap();
+        let consumer = mailbox.clone();
+        let thread = std::thread::spawn(move || {
+            let record = consumer.next(monotonic() + 1.).unwrap();
+            std::thread::sleep(Duration::from_millis(30));
+            assert!(matches!(consumer.ack(&record, None), Err(Error::Deadline)));
+            record
+        });
+        run(async {
+            assert!(matches!(
+                mailbox
+                    .publish("terminal", "e", "g", &1, None, monotonic() + 0.01)
+                    .await,
+                Err(Error::Deadline)
+            ));
+        });
+        let held = thread.join().unwrap();
+        mailbox.close(Error::Deadline);
+        assert!(mailbox.used() > 0);
+        drop(held);
+        assert_eq!(mailbox.used(), 0);
+    }
+    #[test]
+    fn timely_original_ack_still_succeeds() {
+        let mailbox = Mailbox::new(1024, 1).unwrap();
+        let consumer = mailbox.clone();
+        let thread = std::thread::spawn(move || {
+            let record = consumer.next(monotonic() + 1.).unwrap();
+            consumer.ack(&record, None).unwrap();
+        });
+        run(async {
+            mailbox
+                .publish("pending", "e", "g", &1, None, monotonic() + 1.)
+                .await
+                .unwrap();
+        });
+        thread.join().unwrap();
+        assert_eq!(mailbox.used(), 0);
+    }
+    #[test]
+    fn queued_original_cannot_export_under_expired_consumer_or_original_cutoff() {
+        let mailbox = Mailbox::new(1024, 1).unwrap();
+        let producer = mailbox.clone();
+        let thread = std::thread::spawn(move || {
+            run(async {
+                assert!(matches!(
+                    producer
+                        .publish("terminal", "e", "g", &1, None, monotonic() + 0.05)
+                        .await,
+                    Err(Error::Deadline)
+                ));
+            });
+        });
+        let observation_deadline = monotonic() + 1.;
+        while mailbox.state.lock().unwrap().entries.is_empty() {
+            assert!(monotonic() < observation_deadline);
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(matches!(
+            mailbox.next(monotonic() - 1.),
+            Err(Error::Deadline)
+        ));
+        assert!(
+            !mailbox
+                .state
+                .lock()
+                .unwrap()
+                .entries
+                .values()
+                .next()
+                .unwrap()
+                .exported
+        );
+        thread.join().unwrap();
+        assert!(matches!(
+            mailbox.next(monotonic() + 1.),
+            Err(Error::Deadline)
+        ));
+        assert!(
+            !mailbox
+                .state
+                .lock()
+                .unwrap()
+                .entries
+                .values()
+                .next()
+                .unwrap()
+                .exported
+        );
+        mailbox.close(Error::Deadline);
+        assert_eq!(mailbox.used(), 0);
+    }
+    #[test]
+    fn ready_failure_keeps_its_failure_identity_after_cutoff() {
+        let answer = StorageAnswer::default();
+        answer.finish(Err(Error::resource("actual recording failure")));
+        run(async {
+            let failure = answer.wait(monotonic() - 1.).await.unwrap_err();
+            assert!(failure.to_string().contains("actual recording failure"));
+        });
     }
 }

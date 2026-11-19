@@ -283,8 +283,7 @@ def materialize_hpo_run(loaded_campaign: LoadedHPOConfig, settings: Any, *, lear
         concurrency=operating.game_concurrency,global_cuda_budget_bytes=operating.managed_cuda_bytes,
         max_participant_workers=operating.max_participant_workers)
     source_mib=min(base.preprocessing.memory_budget_mib,operating.source_budget_bytes//1024**2)
-    if source_mib>12*1024:
-        raise ContractError('HPO current original snapshot codec supports at most12GiB; select a narrower base preprocessing envelope')
+    _validate_hpo_source_codec(source_mib)
     preprocessing=preparation_config(asdict(replace(base.preprocessing,memory_budget_mib=source_mib)))
     training=replace(base.training,device='cuda:0',seeds=(learning_seed,),max_updates=operating.max_updates,
         max_owned_bytes=storage.destination_capacity_bytes,admission_reservation_bytes=storage.admission_reservation_bytes)
@@ -324,6 +323,91 @@ def _merge(base: Json, override: Any) -> Json:
     for key, value in override.items():
         result[key] = _merge(base[key], value) if type(base[key]) is dict else value
     return result
+
+
+def _validate_hpo_source_codec(source_mib: int) -> None:
+    if source_mib > 12 * 1024:
+        raise ContractError('HPO current original snapshot codec supports at most12GiB; select a narrower base preprocessing envelope')
+
+
+def normalized_rust_player_hpo(effective: Json, *, inputs: tuple[Json, ...]) -> LoadedConfig:
+    """Reconstruct complete spec6 settings without a synthetic base/campaign."""
+    from gf_cli.config import (
+        CorrectedServerConfigV2,
+        EvaluationConfig,
+        _validate_evaluation_controls,
+        _validate_run_controls,
+        _validate_rust_player_profile,
+        _validate_server_controls,
+        _validate_table,
+    )
+    from gf_common.card_instance import action_config_v3
+    from gf_common.preprocessing import preparation_config
+    from gf_models.config import model_config
+    from gf_models.structured_binding import configured_model_v4
+    from gf_training.hpo_lineage import _run_projection, _runtime_training, rust_player_hpo_spec
+
+    closed(effective, {"schema_version", "kind", "run", "server", "actions", "model",
+        "opponent", "evaluation", "training", "preprocessing", "storage", "hpo_spec"})
+    if effective["schema_version"] != 1 or effective["kind"] != "experiment":
+        raise ContractError("complete materialized HPO experiment required")
+    spec = rust_player_hpo_spec(effective)
+    _operating(spec["operating"], rust_player=True)
+    storage = closed(spec["storage"], set(HPOStorageConfig.__dataclass_fields__))
+    for name in ("parent_root", "numeric_root", "optuna_path", "windows_c_root", "originals_root"):
+        if storage[name] is not None and not Path(storage[name]).is_absolute():
+            raise ContractError("normalized HPO paths must remain absolute")
+    actions = action_config_v3(effective["actions"])
+    model = configured_model_v4(effective["model"], layout=CORRECTED_CARD_INSTANCE_LAYOUT)
+    if model.model_id != "mlp" or model.checkpoint is not None:
+        raise ContractError("Rust player requires fresh configured Model4 MLP")
+    training = _runtime_training(effective["training"], spec)
+    _run_projection(effective, spec, training)
+    for name in ("run", "server", "evaluation", "opponent"):
+        _validate_table(name, effective[name], context=effective)
+    run = closed(effective["run"], set(RunConfigV2.__dataclass_fields__))
+    run = {**run, "seeds": tuple(run["seeds"]), "sampling_seeds": tuple(run["sampling_seeds"])}
+    settings = effective_settings(model.architecture(layout=CORRECTED_CARD_INSTANCE_LAYOUT),
+        hpo_training_config(spec["training_recipe"]), {},
+        layout=CORRECTED_CARD_INSTANCE_LAYOUT)
+    if settings.identity != spec["effective_settings_sha256"]:
+        raise ContractError("normalized HPO effective model/training identity differs")
+    opponent = (model_config(effective["opponent"], layout=CORRECTED_CARD_INSTANCE_LAYOUT)
+        if effective["opponent"].get("version") == "3"
+            or effective["opponent"].get("model_id") == "heuristic_refresh"
+        else model_config(effective["opponent"]))
+    preprocessing = preparation_config(effective["preprocessing"])
+    _validate_hpo_source_codec(preprocessing.memory_budget_mib)
+    _validate_evaluation_controls(effective["evaluation"])
+    _validate_run_controls(effective["run"], hpo=True)
+    _validate_server_controls(effective["server"], effective["run"],
+        revision=actions.action_contract.simulator_revision)
+    _validate_rust_player_profile(run=effective["run"], server=effective["server"],
+        actions=actions, model=model, opponent=opponent, training=training,
+        preprocessing=preprocessing, hpo=True)
+    try:
+        if str(uuid.UUID(run["name"])) != run["name"]:
+            raise ValueError
+    except (ValueError, TypeError, AttributeError) as error:
+        raise ContractError("materialized HPO run requires its canonical run UUID") from error
+    if (storage["numeric_root"] != storage["parent_root"]
+            or run["output_dir"] != storage["parent_root"]
+            or storage["originals_root"] is not None
+                and effective["storage"]["db_root"] != storage["originals_root"]):
+        raise ContractError("materialized HPO storage/run projection differs from its spec")
+    if (effective["storage"]["budget_mib"] * 1024**2 > spec["operating"]["collector_budget_bytes"]
+            or preprocessing.memory_budget_mib * 1024**2 > spec["operating"]["source_budget_bytes"]):
+        raise ContractError("materialized HPO collector/Source projection exceeds its spec")
+    from gf_training.hpo_artifacts import save_estimate
+    if save_estimate(settings.model)["additional_bytes"] > spec["operating"]["save_budget_bytes"]:
+        raise ContractError("materialized HPO save envelope insufficient")
+    config = HPOExperimentConfig(run=RunConfigV2(**run),
+        server=CorrectedServerConfigV2(**effective["server"]), actions=actions, model=model,
+        opponent=opponent,
+        evaluation=EvaluationConfig(**effective["evaluation"]), training=training,
+        preprocessing=preprocessing,
+        storage=GroupPackStorageConfig(**effective["storage"]), hpo_spec=clone(spec))
+    return LoadedConfig(config, clone(asdict(config)), digest(asdict(config)), inputs)
 
 
 def _operating(value: Any, *, rust_player: bool = False) -> HPOOperatingConfig:

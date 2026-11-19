@@ -457,7 +457,7 @@ with gpu.admit_gpu_job(gpu.JobContext('legacy','operation','training','run',None
             .parent()
             .unwrap();
         for &mode in cases {
-            let ordinary = mode == "ordinary-normal";
+            let ordinary = mode == "ordinary-normal" || mode == "cuda-numeric";
             let runtime_mode = if ordinary { "ordinary" } else { "hpo" };
             let root = std::env::temp_dir().join(format!(
                 "task5b-session-{mode}-{}",
@@ -469,13 +469,22 @@ with gpu.admit_gpu_job(gpu.JobContext('legacy','operation','training','run',None
             let namespace_root = root.join("global");
             let now = monotonic().unwrap();
             let bits = |n: f64| format!("{:016x}", n.to_bits());
-            let deadlines = json!({"admission_bits":bits(now+1.5),"execution_bits":bits(now+2.0),"term_bits":bits(now+2.5),"kill_bits":bits(now+3.0),"finish_bits":bits(now+5.0)});
+            let deadlines = if mode == "cuda-numeric" {
+                json!({"admission_bits":bits(now+30.0),"execution_bits":bits(now+80.0),"term_bits":bits(now+90.0),"kill_bits":bits(now+100.0),"finish_bits":bits(now+120.0)})
+            } else {
+                json!({"admission_bits":bits(now+1.5),"execution_bits":bits(now+2.0),"term_bits":bits(now+2.5),"kill_bits":bits(now+3.0),"finish_bits":bits(now+5.0)})
+            };
             let context = if ordinary {
                 Value::Null
             } else {
                 json!({"campaign_id":"campaign","operation_id":"operation","kind":"training","run_id":"run","evaluation_id":null})
             };
-            let operation = json!({"schema_version":1,"kind":"rust-player-operation-v1","operation_id":"operation","run_id":"run","mode":runtime_mode,"operation_type":if ordinary {"ordinary-train"} else {"hpo-train"},"config_path":root.join("config.json"),"config_sha256":"a".repeat(64),"runtime_binding_sha256":"b".repeat(64),"deadlines":deadlines,"parent_directory":parent,"expected_context":context});
+            let operation_id = if mode == "cuda-numeric" {
+                format!("cuda-numeric-{}", records::random_id().unwrap())
+            } else {
+                "operation".to_owned()
+            };
+            let operation = json!({"schema_version":1,"kind":"rust-player-operation-v1","operation_id":operation_id,"run_id":"run","mode":runtime_mode,"operation_type":if ordinary {"ordinary-train"} else {"hpo-train"},"config_path":root.join("config.json"),"config_sha256":"a".repeat(64),"runtime_binding_sha256":"b".repeat(64),"deadlines":deadlines,"parent_directory":parent,"expected_context":context});
             let operation_path = root.join("operation.json");
             let operation_sha = records::write(&operation_path, &operation, true).unwrap();
             let campaign = std::fs::OpenOptions::new()
@@ -496,7 +505,7 @@ with gpu.admit_gpu_job(gpu.JobContext('legacy','operation','training','run',None
             } else {
                 json!([{"lock_kind":"campaign","fd":campaign.into_raw_fd(),"device":metadata.dev(),"inode":metadata.ino()}])
             };
-            let launch = json!({"schema_version":1,"kind":"rust-player-launch-v1","supervision_id":records::random_id().unwrap(),"python_executable":python(),"operation_path":operation_path,"operation_sha256":operation_sha,"record_directory":root,"mode":runtime_mode,"session_deadlines":{"finish_bits":bits(now+if mode=="session-expire"{5.3}else{10.0})},"clock_binding":{"boot_id":records::boot_id().unwrap(),"monotonic_before_bits":bits(now),"monotonic_after_bits":bits(now),"unix_anchor_bits":bits(records::unix_ns().unwrap() as f64/1e9)},"binding":{"python_abi":identity["python_abi"],"extension_sha256":identity["extension_sha256"],"build":build},"locks":mapping});
+            let launch = json!({"schema_version":1,"kind":"rust-player-launch-v1","supervision_id":records::random_id().unwrap(),"python_executable":python(),"operation_path":operation_path,"operation_sha256":operation_sha,"record_directory":root,"mode":runtime_mode,"session_deadlines":{"finish_bits":bits(now+if mode=="session-expire"{5.3}else if mode=="cuda-numeric"{120.0}else{10.0})},"clock_binding":{"boot_id":records::boot_id().unwrap(),"monotonic_before_bits":bits(now),"monotonic_after_bits":bits(now),"unix_anchor_bits":bits(records::unix_ns().unwrap() as f64/1e9)},"binding":{"python_abi":identity["python_abi"],"extension_sha256":identity["extension_sha256"],"build":build},"locks":mapping});
             let launch_path = root.join("launch.json");
             records::write(&launch_path, &launch, true).unwrap();
             let launch_file = std::fs::File::open(&launch_path).unwrap();
@@ -586,9 +595,21 @@ with gpu.admit_gpu_job(gpu.JobContext('legacy','operation','training','run',None
                         .then_some(p)
                 })
                 .collect::<Vec<_>>();
-            if mode == "handshake-exit" {
+            if mode == "handshake-exit" || mode == "lost-transfer-ack" {
                 assert!(exits.is_empty());
                 assert!(!namespace_root.exists());
+                if mode == "lost-transfer-ack" {
+                    assert!(!root.join("component-prepared.json").exists());
+                    assert!(!root.join("component-finalizer-output.json").exists());
+                    assert!(!root.join("cold-started").exists());
+                    assert!(!std::fs::read_dir(&root).unwrap().any(|entry| {
+                        entry
+                            .unwrap()
+                            .file_name()
+                            .to_string_lossy()
+                            .starts_with("admission-")
+                    }));
+                }
             } else if mode == "exit-write-fail" {
                 assert!(exits.is_empty());
                 assert!(namespace::Namespace::private_test(&namespace_root).is_err());
@@ -669,6 +690,22 @@ with gpu.admit_gpu_job(gpu.JobContext('legacy','operation','training','run',None
                 ]
                 .contains(&mode)
             );
+            if mode == "cuda-numeric" {
+                let result = root.join("cuda-numerical-component/result.json");
+                assert!(
+                    result.exists(),
+                    "actual CUDA numerical component did not finish"
+                );
+                let output = std::process::Command::new(python())
+                    .args(["-c", "import sys;from pathlib import Path;from tests.test_rust_player_learning import audit_cuda_saved_pairs_cpu;audit_cuda_saved_pairs_cpu(Path(sys.argv[1]))"])
+                    .arg(&result).current_dir(repo).env("CUDA_VISIBLE_DEVICES", "").output().unwrap();
+                assert!(
+                    output.status.success(),
+                    "fresh CPU-only audit failed: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+                eprintln!("CUDA numerical component artifacts: {}", result.display());
+            }
         }
     }
     #[test]
@@ -678,6 +715,7 @@ with gpu.admit_gpu_job(gpu.JobContext('legacy','operation','training','run',None
             "ordinary-normal",
             "normal",
             "exit-before-prepare",
+            "lost-transfer-ack",
             "wrong-nonce",
             "control-eof-kill",
             "prepared-nonzero",
@@ -686,6 +724,15 @@ with gpu.admit_gpu_job(gpu.JobContext('legacy','operation','training','run',None
             "exit-write-fail",
             "handshake-exit",
         ]);
+    }
+    #[test]
+    #[ignore = "requires Root's explicit CUDA numerical component budget"]
+    fn local_cuda_numerical_component_and_fresh_cpu_saved_state_audit() {
+        assert_eq!(
+            std::env::var("GFB_RUN_RUST_PLAYER_CUDA_NUMERIC").as_deref(),
+            Ok("1")
+        );
+        run_host_cases(&["cuda-numeric"]);
     }
     #[test]
     #[ignore = "requires matched release extension"]

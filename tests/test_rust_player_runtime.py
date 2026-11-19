@@ -39,6 +39,19 @@ def test_runtime_cancel_wakes_storage_and_joins_original_threads():
     assert report["player_threads"] == 1
 
 
+def test_game_requires_original_absolute_cleanup_deadline(tmp_path):
+    with managed(tmp_path) as (startup, receipt):
+        owner = RustPlayerRuntime(runtime_config())
+        try:
+            game = game_spec(startup, receipt)
+            owner.start([game])
+            records = drain(owner, 1)
+            assert records[-1]["data"]["report"]["end_kind"] == "truncated"
+        finally:
+            owner.cancel("test cleanup")
+            owner.join()
+
+
 @pytest.mark.parametrize("kind", ["random", "heuristic", "refresh"])
 def test_baseline_capacity_checked_before_native_start(kind):
     episode = json.loads(FIXTURE.read_text())["episodes"][0]
@@ -58,7 +71,7 @@ def test_baseline_capacity_checked_before_native_start(kind):
                     "policies": [{"kind": kind, "seed": 17}, {"kind": kind, "seed": 18}],
                     "max_decisions": 5,
                     "deadline": time.monotonic() + 10,
-                    "cleanup_seconds": 2,
+                    "cleanup_deadline": time.monotonic() + 12,
                 }
             ]
         )
@@ -128,7 +141,7 @@ def game_spec(startup, receipt, *, episode="planned", deadline=None, kind="heuri
         "policies": [{"kind": kind, "seed": 17}, {"kind": kind, "seed": 18}],
         "max_decisions": 8,
         "deadline": deadline or time.monotonic() + 30,
-        "cleanup_seconds": 5.0,
+        "cleanup_deadline": (deadline or time.monotonic() + 30) + 5.0,
         "runtime_evidence": receipt,
     }
 
@@ -177,8 +190,8 @@ def test_pinned_simulator_two_games_four_participants(scheduler, workers, tmp_pa
     from gf_simulator_client.card_instance_runtime import CardInstanceRuntimeEvidence
     from gf_simulator_client.process import ManagedServer
 
-    simulator = Path("/tmp/gfb-shared-simulator-072dabb")
-    binary = simulator / "target/release/gf-test-server"
+    simulator = Path("/tmp/gf-issue72-shared-inference")
+    binary = Path("/tmp/gfb-shared-simulator-072dabb/target/release/gf-test-server")
     if not binary.exists():
         pytest.skip("approved external Simulator release unavailable")
     assert_source_match()
@@ -249,8 +262,8 @@ def managed(tmp_path, *, count=1):
     from gf_simulator_client.card_instance_runtime import CardInstanceRuntimeEvidence
     from gf_simulator_client.process import ManagedServer
 
-    simulator = Path("/tmp/gfb-shared-simulator-072dabb")
-    binary = simulator / "target/release/gf-test-server"
+    simulator = Path("/tmp/gf-issue72-shared-inference")
+    binary = Path("/tmp/gfb-shared-simulator-072dabb/target/release/gf-test-server")
     if not binary.exists():
         pytest.skip("approved external Simulator release unavailable")
     loop = asyncio.new_event_loop()

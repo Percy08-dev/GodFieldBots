@@ -233,3 +233,16 @@ remaining account after retained owners; no resource coefficient is approved.
 Cold audit stays CPU data work under original authority, then CLI consumes or
 closes the finalized result. Actual implementation, numerical/Source correspondence,
 full CPU/CUDA restore, CLI/campaign and performance acceptance remain open.
+
+
+## Local numerical and data support acceptance
+
+Task5c1A passes both independent reviews after five corrections and a narrow
+second config-boundary review. Actual local saved pairs, parent OFD ownership,
+canonical typed handoff, data-only J6/Replay factoring/originals, ordered inventory/
+deferred actual contexts and strict Simulator cleanup are implemented. The actual
+one-invocation CUDA numerical component compares Model3/4 saved state exactly and
+retains its793b source; later validation repairs/current76d9 source are not silently
+relabelled as that run. No numerical kernel/checkpoint format changed. Source B,
+common-PPO/new outer issuers, cold qualification, public CLI/campaign and full
+CPU/CUDA/performance/default gates remain unimplemented/unaccepted downstream.

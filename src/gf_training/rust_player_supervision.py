@@ -156,6 +156,20 @@ class _Capability:
         raise TypeError("supervised live capabilities cannot be serialized")
 
 
+class _ParentBorrower(_Capability):
+    """One original local FD lifetime; not a receipt or transfer success."""
+
+    def __init__(self, issuer: object, control: Any, file: Any, owner: Any,
+                 *, authenticated: bool) -> None:
+        if issuer is not _ISSUER:
+            raise ContractError("actual parent borrower registration required")
+        self.control, self.file, self.owner = control, file, owner
+        self.fd = file.fileno()
+        info = os.fstat(self.fd)
+        self.identity = info.st_dev, info.st_ino
+        self.authenticated = authenticated
+
+
 class HostAdmission(_Capability):
     def __init__(self, issuer: object, control: HostControl, record: Json, path: Path) -> None:
         if issuer is not _ISSUER:
@@ -322,6 +336,7 @@ class HostControl(_Capability):
         self._prepared = False
         self._cold: ColdContinuation | None = None
         self._closed = False
+        self._parent_borrowers: set[_ParentBorrower] = set()
         self._next_sequence = 1
         self._server_sequence = 1
         self._stopped = False
@@ -549,6 +564,55 @@ class HostControl(_Capability):
             raise ContractError("actual lock acknowledgement differs")
         return {key: response[key] for key in ("lock_kind", "device", "inode")}
 
+    def _register_parent_borrower(self, file: Any, owner: Any, *, inherited: bool) -> _ParentBorrower:
+        self._require()
+        info = os.fstat(file.fileno())
+        path = Path(self.operation["parent_directory"]) / ".lock"
+        original = path.lstat()
+        if (not stat.S_ISREG(info.st_mode) or not stat.S_ISREG(original.st_mode)
+                or (info.st_dev, info.st_ino) != (original.st_dev, original.st_ino)
+                or any(item.owner is owner for item in self._parent_borrowers)):
+            raise ContractError("original parent borrower FD/path required")
+        if inherited:
+            mapped = self._borrowed.get("parent")
+            if mapped is None or (mapped["device"], mapped["inode"]) != (info.st_dev, info.st_ino):
+                raise ContractError("authenticated inherited parent mapping required")
+            held = os.fstat(mapped["fd"])
+            if (held.st_dev, held.st_ino) != (info.st_dev, info.st_ino):
+                raise ContractError("original inherited parent descriptor changed")
+        token = _ParentBorrower(_ISSUER, self, file, owner, authenticated=inherited)
+        self._parent_borrowers.add(token)
+        return token
+
+    def _require_parent_borrower(self, token: _ParentBorrower, owner: Any) -> None:
+        self._require()
+        if (type(token) is not _ParentBorrower or token not in self._parent_borrowers
+                or token.control is not self or token.owner is not owner
+                or not token.authenticated or token.file.closed or token.file.fileno() != token.fd):
+            raise ContractError("original authenticated parent mutation borrower required")
+        info = os.fstat(token.fd)
+        if (info.st_dev, info.st_ino) != token.identity:
+            raise ContractError("original parent borrower descriptor changed")
+
+    def _confirm_parent_borrower(self, token: _ParentBorrower, owner: Any) -> None:
+        self._require()
+        if token not in self._parent_borrowers or token.control is not self or token.owner is not owner:
+            raise ContractError("SAME original transfer borrower required")
+        token.authenticated = True
+        self._require_parent_borrower(token, owner)
+
+    def _close_parent_borrower(self, token: _ParentBorrower, owner: Any) -> None:
+        self._require()
+        if (type(token) is not _ParentBorrower or token not in self._parent_borrowers
+                or token.control is not self or token.owner is not owner):
+            raise ContractError("SAME actual parent borrower close required")
+        # The original high-level FD owner closes itself. A raised/uncertain close
+        # retains both registration and actual owner; never close a guessed FD.
+        token.file.close()
+        if not token.file.closed:
+            raise ContractError("original parent borrower close unconfirmed")
+        self._parent_borrowers.remove(token)
+
     def bind_operation(self, path: Path) -> None:
         value, checksum = read_control_record(path, self.root)
         validate_operation(value, session_finish=self.launch["session_deadlines"]["finish_bits"])
@@ -633,6 +697,8 @@ class HostControl(_Capability):
         return self._cold
 
     def release_parent(self) -> None:
+        if self._parent_borrowers:
+            raise ContractError("actual parent mutation borrowers remain live or uncertain")
         if self.cold._finalized_sha256 is None:
             raise ContractError("parent release requires acknowledged finalizer output")
         item = self._borrowed.get("parent")
@@ -652,6 +718,8 @@ class HostControl(_Capability):
 
     def close(self) -> None:
         self._require()
+        if self._parent_borrowers:
+            raise ContractError("actual parent mutation borrowers remain live or uncertain")
         self._closed = True
         self._socket.close()  # EOF requests cleanup; this never claims process exit.
         for item in self._borrowed.values():

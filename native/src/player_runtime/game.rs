@@ -14,7 +14,7 @@ use super::{
     search::{self, Costs, Table},
 };
 use crate::{
-    budget::{Budget, Control, monotonic},
+    budget::{Budget, Control},
     error::{Error, Result},
     json::{Value, ValueExt},
     structured_journal::card_instance,
@@ -64,7 +64,7 @@ pub struct GameSpec {
     pub policies: [PolicySpec; 2],
     pub max_decisions: usize,
     pub deadline: f64,
-    pub cleanup_seconds: f64,
+    pub cleanup_deadline: f64,
     #[serde(default)]
     pub runtime_evidence: Value,
     #[serde(default)]
@@ -81,7 +81,11 @@ impl GameSpec {
             "invalid game routing/budget",
         )?;
         super::requests::wait_duration(self.deadline)?;
-        super::requests::checked_duration(self.cleanup_seconds)?;
+        super::requests::wait_duration(self.cleanup_deadline)?;
+        ensure(
+            self.cleanup_deadline >= self.deadline,
+            "game cleanup deadline must cover execution deadline",
+        )?;
         Costs::parse(&self.numeric_costs)?;
         for p in &self.policies {
             ensure(
@@ -524,7 +528,7 @@ impl Actor {
         Ok(())
     }
     async fn cleanup(&mut self, dispatcher: &Arc<Dispatcher>) {
-        self.http.deadline = monotonic() + self.spec.cleanup_seconds;
+        self.http.deadline = self.spec.cleanup_deadline;
         let Some(game) = self.game.clone() else {
             self.report.inference_released = true;
             return;
@@ -708,7 +712,7 @@ pub async fn run(
         replays: &actor.replays,
         banks: [(&actor.seats[0]).into(), (&actor.seats[1]).into()],
     };
-    let deadline = monotonic() + actor.spec.cleanup_seconds;
+    let deadline = actor.spec.cleanup_deadline;
     // Cancellation/failure still reports the explicit final diagnostics through
     // the seam if it remains open; no manufactured archive success.
     match storage

@@ -57,7 +57,7 @@ build prerequisite to resolve rather than permission to silently change pins.
 | gf_simulator_client/rust_player.py and rust_player_companion.py | Native runtime/task facade and installed companion discovery/sealed launch/exec. Training depends on this client edge; discovery has no training dependency. |
 | gf_training/rust_player_storage.py | Implemented canonical capture encoder and real dedicated SQLite thread with the single recording account. |
 | gf_training/rust_player_supervision.py | Implemented authenticated HostControl/admission/prepared/cold physical capabilities; Source eligibility remains a separate finalizer responsibility. |
-| gf_training/rust_player_learning.py (planned) | Same-process learner/common PPO and new Source/lineage composition; existing numerical math and data owners remain authoritative. |
+| gf_training/rust_player_learning.py | Implemented local numerical/saved-pair support; actual common-PPO/new Source operation composition remains forthcoming. Existing numerical math and data owners remain authoritative. |
 | gf_cli | Config composition, external server startup, normal train/HPO training selection and supervisor exec/reentry. |
 | native/src/bin/gf-player-supervisor.rs | Original Python host spawn/wait, bounded termination and durable actual exit evidence; no learning/data authority. |
 

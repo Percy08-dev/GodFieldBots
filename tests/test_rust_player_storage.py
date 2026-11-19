@@ -242,8 +242,8 @@ def test_actual_native_originals_encode_journal6_and_both_replay_views(tmp_path,
     )
     from tests.test_rust_player_runtime import assert_source_match, game_spec, runtime_config
 
-    simulator = Path("/tmp/gfb-shared-simulator-072dabb")
-    binary = simulator / "target/release/gf-test-server"
+    simulator = Path("/tmp/gf-issue72-shared-inference")
+    binary = Path("/tmp/gfb-shared-simulator-072dabb/target/release/gf-test-server")
     if not binary.exists():
         pytest.skip("approved external Simulator release unavailable")
     assert_source_match()
@@ -324,14 +324,19 @@ def test_actual_native_originals_encode_journal6_and_both_replay_views(tmp_path,
     asyncio.run(run())
 
 
-def test_real_storage_thread_stages_partial_pair_and_seals_originals(tmp_path, monkeypatch):
+@pytest.mark.parametrize("deferred", [False, True])
+def test_real_storage_thread_stages_partial_pair_and_seals_originals(tmp_path, monkeypatch, deferred):
     import json
 
     from gf_simulator_client.rust_player import RustPlayerRuntime
     from gf_training import group_pack_worker as database_module
     from gf_training.group_pack_resources import StorageBudget
     from gf_training.group_pack_source import PackedOriginals
-    from gf_training.rust_player_storage import RustPlayerStorage, StorageGroup
+    from gf_training.rust_player_storage import (
+        RustPlayerStorage,
+        StorageGroup,
+        episode_encoding_plan,
+    )
     from tests.test_rust_player_runtime import (
         assert_source_match,
         game_spec,
@@ -368,14 +373,20 @@ def test_real_storage_thread_stages_partial_pair_and_seals_originals(tmp_path, m
                 runtime,
                 tmp_path / "collection",
                 run_id="run",
-                contexts=contexts,
+                contexts=() if deferred else contexts,
                 groups=(StorageGroup("pair", ("pair-0", "pair-1"), {"paired": True}),),
                 settings=settings,
                 workspace=workspace,
                 workspace_bytes=256 * MIB,
                 deadline=time.monotonic() + 30,
                 cleanup_deadline=time.monotonic() + 40,
+                deferred_contexts=deferred,
+                context_plans=tuple(episode_encoding_plan(c) for c in contexts) if deferred else (),
             )
+            if deferred:
+                assert writer.encoders == {}
+                writer.bind_contexts(contexts)
+                assert set(writer.encoders) == {"pair-0", "pair-1"}
             for ordinal, spec in enumerate((first, second)):
                 runtime.start([spec])
                 while True:
@@ -394,6 +405,17 @@ def test_real_storage_thread_stages_partial_pair_and_seals_originals(tmp_path, m
                     with sqlite3.connect(tmp_path / "collection/collection.sqlite3") as db:
                         assert db.execute("select count(*) from groups").fetchone() == (0,)
                     db.close()
+                    with pytest.raises(ValueError, match="complete"):
+                        writer.inventory()
+            inventory = writer.inventory()
+            rows = inventory.rows
+            assert rows and type(rows) is tuple
+            with sqlite3.connect(tmp_path / "collection/collection.sqlite3") as db:
+                assert rows == tuple(db.execute(
+                    "SELECT name,length,sha256 FROM members ORDER BY name"
+                ))
+            db.close()
+            assert not any(name in ("manifest.json", "report.json") for name, _, _ in rows)
             writer.store_control("manifest.json", b'{"diagnostic_component":true}')
             locator = writer.seal()
             report = writer.join()
@@ -403,6 +425,9 @@ def test_real_storage_thread_stages_partial_pair_and_seals_originals(tmp_path, m
                 and create_threads[0] != threading.get_ident()
             )
             assert runtime.join()["joined"]
+            assert workspace.used == 256 * MIB
+            del rows
+            inventory.close()
             assert workspace.used == 0
             pending = writer.take_pending_owner()
             pending.recheck()

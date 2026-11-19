@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import math
 import os
 import tomllib
@@ -27,6 +28,7 @@ from gf_common.domain import (
     ActionConfig,
     ContractError,
     Json,
+    canonical,
     clone,
     closed,
     digest,
@@ -479,25 +481,25 @@ def load_config(path: str | Path, overrides: Json | None = None) -> LoadedConfig
     if data.get("training", {}).get("algorithm") == "ppo":
         base["training"] = asdict(SequencePPOTrainingConfig() if data.get("model", {}).get("model_id") in ("gru", "transformer") and data.get("model", {}).get("version", "1") == "1" else PPOTrainingConfig())
     effective = _merge(base, data)
+    return _normalized_config(effective, data=data, inputs=tuple(inputs))
+
+
+def _normalized_config(effective: Json, *, data: Json, inputs: tuple[Json, ...]) -> LoadedConfig:
+    """Existing normalized validation/construction shared with supervised input."""
+    structured_actions = effective["actions"].get("version") == "2"
+    card_instance_actions = effective["actions"].get("version") == "3"
+    card_instance_server = effective["server"].get("gameplay_api") == "v2"
+    card_server_cls: type[ServerConfigV2] = ServerConfigV2
+    card_revision = CARD_INSTANCE_SIMULATOR_REVISION
+    if card_instance_actions:
+        selected_contract = parse_card_instance_contract(effective["actions"]["action_contract"])
+        card_revision = selected_contract.simulator_revision
+        if card_revision in (CORRECTED_SIMULATOR_REVISION, SHARED_SIMULATOR_REVISION):
+            card_server_cls = CorrectedServerConfigV2
     for name in _TABLES:
         _validate_table(name, effective[name], context=effective)
     run = effective["run"]
-    if run["split"] not in ("train", "validation", "test"):
-        raise ContractError("invalid split")
-    if not run["name"].strip() or any(c in run["name"] for c in "/\\"):
-        raise ContractError("invalid run name")
-    for seed in run["seeds"]:
-        try:
-            if str(uuid.UUID(seed)) != seed:
-                raise ValueError
-        except ValueError as exc:
-            raise ContractError("seeds must be canonical UUIDs") from exc
-    for key in ("pairs_per_seed", "concurrency", "max_decisions"):
-        integer(run[key], 1, 2**32 - 1)
-    for seed in run["sampling_seeds"]:
-        integer(seed)
-    if run["admission_seconds"] > run["execution_seconds"] or run["execution_seconds"] + run["finalization_seconds"] > run["wall_seconds"]:
-        raise ContractError("run deadlines inconsistent")
+    _validate_run_controls(run)
     if structured_actions or card_instance_actions:
         rust_player = "player_runtime" in run
         integer(run["concurrency"], 1, 2**32 - 1 if rust_player else 2)
@@ -563,42 +565,16 @@ def load_config(path: str | Path, overrides: Json | None = None) -> LoadedConfig
         if set(actions["exchange_allocations"]) - {"balanced", "hp", "mp", "money"} or set(actions["targets"]) - {"self", "opponent"}:
             raise ContractError("unknown allocation or target")
     server = effective["server"]
-    if run["report_reserve_seconds"] + server["cleanup_reserve_seconds"] >= run["finalization_seconds"]:
-        raise ContractError("cleanup/report reserves must fit inside finalization allowance")
-    integer(server["transport_retries"], 0, 2)
-    if server["simulator_revision"] != (card_revision if card_instance_actions else SIMULATOR_REVISION):
-        raise ContractError("unsupported simulator contract revision")
-    if not server["fixed_seed_experiment"]:
-        raise ContractError("repeated server requires explicit fixed_seed_experiment")
-    if server["external_url"] is not None:
-        from urllib.parse import urlsplit
-        parts = urlsplit(server["external_url"])
-        if parts.scheme not in ("http", "https") or not parts.hostname or parts.username or parts.password or parts.query or parts.fragment:
-            raise ContractError("invalid external URL")
-        if len(set(run["seeds"])) != 1 or not server["expected_fingerprint"]:
-            raise ContractError("external server requires one seed and explicit expected fingerprint")
-    if server["expected_fingerprint"] is not None:
-        import hashlib as _hashlib
-        expected = "v1-" + _hashlib.sha256(b"godfield-test-server-seed-fingerprint-v1" + uuid.UUID(run["seeds"][0]).bytes).hexdigest()
-        if server["expected_fingerprint"] != expected or len(set(run["seeds"])) != 1:
-            raise ContractError("expected fingerprint/seed mismatch")
-    for key in ("bootstrap_samples",):
-        integer(effective["evaluation"][key], 1)
+    _validate_server_controls(server, run, revision=card_revision if card_instance_actions else SIMULATOR_REVISION)
+    _validate_evaluation_controls(effective["evaluation"])
     if "player_runtime" in run:
         if "storage" not in data:
             raise ContractError("Rust player requires explicit packed storage")
+        if not card_instance_actions:
+            raise ContractError("Rust player requires corrected actions3")
         run["player_runtime"] = player_runtime(run["player_runtime"],game_concurrency=run["concurrency"])
-        opponent = models["opponent"]
-        if not ((type(opponent) is ConfiguredNeuralModelV3 and opponent.model_id == "mlp")
-                or (type(opponent) is ModelConfig and opponent.model_id in ("random", "heuristic"))
-                or type(opponent) is RefreshHeuristicConfig):
-            raise ContractError("Rust player opponent must be Model3 MLP, Random, Heuristic or Refresh")
-        if (not card_instance_actions or selected_contract != shared_card_instance_contract()
-                or type(models["model"]) is not ConfiguredNeuralModelV3 or models["model"].model_id != "mlp"
-                or models["model"].checkpoint is not None or type(training) is not PPOTrainingConfig
-                or run["split"] != "train" or preprocessing.backend != "python"
-                or preprocessing.reader != "participant-structured-v2"):
-            raise ContractError("Rust player requires shared-profile fresh Model3 MLP PPO with Python Source reader")
+        _validate_rust_player_profile(run=run, server=server, actions=actions_v3,
+            model=models["model"], opponent=models["opponent"], training=training, preprocessing=preprocessing)
     if "inference_service" in run:
         from gf_common.shared_inference import shared_runtime
         run["inference_service"] = shared_runtime(run["inference_service"],game_concurrency=run["concurrency"])
@@ -648,3 +624,113 @@ def load_config(path: str | Path, overrides: Json | None = None) -> LoadedConfig
     else:
         config = RefreshOpponentsExperimentConfig(**converted, training_opponents=mixed) if mixed is not None else ExperimentConfig(**converted)
     return LoadedConfig(config, clone(asdict(config)), digest(asdict(config)), tuple(inputs))
+
+
+
+def _validate_evaluation_controls(evaluation: Json) -> None:
+    integer(evaluation["bootstrap_samples"], 1)
+
+
+def _validate_run_controls(run: Json, *, hpo: bool = False) -> None:
+    if run["split"] not in ("train", "validation", "test"):
+        raise ContractError("invalid split")
+    if not run["name"].strip() or any(c in run["name"] for c in "/\\"):
+        raise ContractError("invalid run name")
+    for seed in run["seeds"]:
+        try:
+            if str(uuid.UUID(seed)) != seed:
+                raise ValueError
+        except ValueError as exc:
+            raise ContractError("seeds must be canonical UUIDs") from exc
+    for key in ("pairs_per_seed", "concurrency", "max_decisions"):
+        integer(run[key], 1, 2**63 - 1 if hpo and key == "concurrency" else 2**32 - 1)
+    for seed in run["sampling_seeds"]:
+        integer(seed)
+    if run["admission_seconds"] > run["execution_seconds"] or run["execution_seconds"] + run["finalization_seconds"] > run["wall_seconds"]:
+        raise ContractError("run deadlines inconsistent")
+
+
+def _validate_server_controls(server: Json, run: Json, *, revision: str) -> None:
+    if run["report_reserve_seconds"] + server["cleanup_reserve_seconds"] >= run["finalization_seconds"]:
+        raise ContractError("cleanup/report reserves must fit inside finalization allowance")
+    integer(server["transport_retries"], 0, 2)
+    if server["simulator_revision"] != revision:
+        raise ContractError("unsupported simulator contract revision")
+    if not server["fixed_seed_experiment"]:
+        raise ContractError("repeated server requires explicit fixed_seed_experiment")
+    if server["external_url"] is not None:
+        from urllib.parse import urlsplit
+        parts = urlsplit(server["external_url"])
+        if parts.scheme not in ("http", "https") or not parts.hostname or parts.username or parts.password or parts.query or parts.fragment:
+            raise ContractError("invalid external URL")
+        if len(set(run["seeds"])) != 1 or not server["expected_fingerprint"]:
+            raise ContractError("external server requires one seed and explicit expected fingerprint")
+    if server["expected_fingerprint"] is not None:
+        import hashlib as _hashlib
+        expected = "v1-" + _hashlib.sha256(b"godfield-test-server-seed-fingerprint-v1" + uuid.UUID(run["seeds"][0]).bytes).hexdigest()
+        if server["expected_fingerprint"] != expected or len(set(run["seeds"])) != 1:
+            raise ContractError("expected fingerprint/seed mismatch")
+
+
+def _validate_rust_player_profile(*, run: Json, server: Json, actions: Any,
+                                  model: Any, opponent: Any, training: Any,
+                                  preprocessing: Any, hpo: bool = False) -> None:
+    expected_model = ConfiguredNeuralModelV4 if hpo else ConfiguredNeuralModelV3
+    if not ((type(opponent) is ConfiguredNeuralModelV3 and opponent.model_id == "mlp")
+            or (type(opponent) is ModelConfig and opponent.model_id in ("random", "heuristic"))
+            or type(opponent) is RefreshHeuristicConfig):
+        raise ContractError("Rust player opponent must be Model3 MLP, Random, Heuristic or Refresh")
+    if (type(actions) is not ActionConfigV3 or actions.action_contract != shared_card_instance_contract()
+            or server.get("gameplay_api") != "v2" or server["external_url"] is not None
+            or type(model) is not expected_model or model.model_id != "mlp"
+            or model.checkpoint is not None or type(training) is not PPOTrainingConfig
+            or run["split"] != "train" or preprocessing.backend != "python"
+            or preprocessing.reader != "participant-structured-v2"):
+        raise ContractError("Rust player requires shared-profile fresh MLP PPO with Python Source reader")
+    for participant in (model, opponent):
+        if (isinstance(participant, (ConfiguredNeuralModelV3, ConfiguredNeuralModelV4))
+                and (actions.max_sequence_length > participant.max_positions
+                    or actions.max_candidates > participant.inference.max_candidates)):
+            raise ContractError("Rust player actions exceed configured model capacity")
+
+
+def load_rust_player_effective(path: Path, *, expected_sha256: str) -> LoadedConfig:
+    """Read the exact canonical document used by this supervised invocation.
+
+    Upstream TOML receipts are diagnostic provenance elsewhere. This input owns
+    neither independent campaign verification nor resource/learning authority.
+    """
+    source = path.absolute()
+    raw = source.read_bytes()
+    try:
+        effective = json.loads(raw)
+        encoded = canonical(effective).encode()
+    except (ValueError, UnicodeDecodeError) as error:
+        raise ContractError("invalid canonical effective configuration") from error
+    if (type(effective) is not dict or raw != encoded
+            or hashlib.sha256(raw).hexdigest() != expected_sha256):
+        raise ContractError("effective configuration bytes/hash must be exact canonical JSON")
+    inputs = ({"path": str(source), "sha256": expected_sha256},)
+    spec = effective.get("hpo_spec")
+    if "hpo_spec" in effective and (
+            type(spec) is not dict or type(spec.get("schema_version")) is not int
+            or spec["schema_version"] != 6):
+        raise ContractError("explicit supported Rust player HPO spec6 required")
+    if spec is not None:
+        from gf_cli.hpo_config import normalized_rust_player_hpo
+        loaded = normalized_rust_player_hpo(effective, inputs=inputs)
+    else:
+        closed(effective, {"schema_version", "kind", *_TABLES, "storage"}, {"training_opponents"})
+        try:
+            loaded = _normalized_config(effective, data=effective, inputs=inputs)
+        except (KeyError, TypeError) as error:
+            raise ContractError("complete normalized effective settings required") from error
+        if not isinstance(loaded.config.run, RustPlayerRunConfigV2):
+            raise ContractError("explicit Rust player effective input required")
+    if canonical(asdict(loaded.config)) != canonical(effective):
+        raise ContractError("complete normalized effective settings required without defaults")
+    for table, key in _PATHS:
+        value = effective[table].get(key)
+        if value is not None and not Path(value).is_absolute():
+            raise ContractError("effective configuration paths must remain absolute")
+    return loaded
