@@ -187,10 +187,11 @@ class ForwardProfile:
                 self.profiler.start()
                 self.record['start_monotonic_ns'] = time.monotonic_ns()
             elif ordinal == 3:
-                self.profiler.stop()
+                profiler = self.profiler
+                profiler.stop()
+                self.profiler = None  # Successful stop must not be retried after export failure.
                 self.record['end_monotonic_ns'] = time.monotonic_ns()
-                self._export()
-                self.profiler = None
+                self._export(profiler)
                 self.record['complete'] = True
                 self.finished = True
             self.status.publish(dict(self.record), done=self.finished)
@@ -203,7 +204,7 @@ class ForwardProfile:
             if self.record is not None and threading.get_native_id() == self.record['worker_tid']:
                 self._cleanup()
 
-    def _export(self) -> None:
+    def _export(self, profiler: Any) -> None:
         name = f'forward-{os.getpid()}-{uuid.uuid4().hex}.trace.json'
         directory_fd = os.open(self.directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
         self._directory_fd = directory_fd
@@ -213,7 +214,7 @@ class ForwardProfile:
             self._trace_fd = fd
             original = os.fstat(fd)
             # Export retains the ORIGINAL open description even if the public name changes.
-            self.profiler.export_chrome_trace(f'/proc/self/fd/{fd}')
+            profiler.export_chrome_trace(f'/proc/self/fd/{fd}', use_python_export=True)
             os.fsync(fd)
             current = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
             if (not stat.S_ISREG(current.st_mode)
@@ -229,6 +230,8 @@ class ForwardProfile:
                 raise OSError('profile trace pathname replaced during hash')
             assert self.record is not None
             self.record.update(trace_path=name, trace_sha256=hasher.hexdigest(), trace_bytes=size)
+            if size == 0:
+                raise ValueError('profile trace export is empty')
         finally:
             close_error = None
             if self._trace_fd is not None:

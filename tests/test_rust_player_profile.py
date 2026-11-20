@@ -12,7 +12,7 @@ class Profiler:
         self.events.append(('start', threading.get_native_id()))
     def stop(self):
         self.events.append(('stop', threading.get_native_id()))
-    def export_chrome_trace(self, path):
+    def export_chrome_trace(self, path, *, use_python_export=False):
         with open(path, 'w') as f:
             f.write('{"traceEvents":[]}')
 
@@ -82,8 +82,8 @@ def test_diagnostic_status_failure_cannot_escape_successful_forward(tmp_path):
 def test_trace_replacement_cannot_qualify_export(tmp_path):
     status = ProfileStatus.local(); status.begin({'phase': 'collection'})
     class Replacing(Profiler):
-        def export_chrome_trace(self, path):
-            super().export_chrome_trace(path)
+        def export_chrome_trace(self, path, *, use_python_export=False):
+            super().export_chrome_trace(path, use_python_export=use_python_export)
             name = next(tmp_path.glob('*.trace.json'))
             name.unlink()
             name.symlink_to('/dev/null')
@@ -203,3 +203,79 @@ def test_fix1_t2_logical_profile_end_survives_native_snapshot_failure(tmp_path, 
         assert [event[0] for event in profiler.events] == ['start', 'stop']
     finally:
         d.close()
+
+
+def test_real_cpu_trace_export_keeps_actual_annotations_on_original_fd(tmp_path):
+    import hashlib
+    import json
+    import os
+
+    import torch
+
+    assert os.environ.get('CUDA_VISIBLE_DEVICES') == ''
+    assert not torch.cuda.is_initialized()
+    status = ProfileStatus.local()
+    status.begin({'phase': 'collection', 'batch_id': 'actual-cpu'})
+    callback = ForwardProfile(tmp_path, 'actual-cpu', status, role='native-inference',
+        profiler_factory=lambda: torch.profiler.profile(activities=[torch.profiler.ProfilerActivity.CPU]),
+        torch_version=torch.__version__)
+    callback.after_forward(scored_rows=1, boundary='native-post-row-forward')
+    for _ in range(2):
+        with torch.profiler.record_function('gfb-profile-owned-fd-forward'):
+            torch.ones(2).add(1)
+        callback.after_forward(scored_rows=1, boundary='native-post-row-forward')
+    result = status.read()['result']
+    assert result['complete'] and not result['errors']
+    trace = tmp_path / result['trace_path']
+    raw = trace.read_bytes()
+    assert result['trace_bytes'] == len(raw) > 0
+    assert result['trace_sha256'] == hashlib.sha256(raw).hexdigest()
+    events = json.loads(raw)['traceEvents']
+    assert sum(event.get('name') == 'gfb-profile-owned-fd-forward'
+        and event.get('cat') == 'user_annotation' for event in events) == 2
+    assert result['scored_rows'] == [1, 1, 1] and result['callbacks_seen'] == 3
+    assert callback._trace_fd is None and callback._directory_fd is None
+    assert not torch.cuda.is_initialized()
+
+
+def test_empty_export_keeps_original_file_evidence_and_is_incomplete(tmp_path):
+    import hashlib
+
+    class EmptyExport(Profiler):
+        def export_chrome_trace(self, path, *, use_python_export=False):
+            pass
+
+    status = ProfileStatus.local()
+    status.begin({'phase': 'collection'})
+    profiler = EmptyExport()
+    callback = ForwardProfile(tmp_path, 'empty-export', status, role='native-inference',
+        profiler_factory=lambda: profiler, torch_version='test')
+    for _ in range(4):
+        callback.after_forward(scored_rows=1, boundary='native-post-row-forward')
+    result = status.read()['result']
+    assert not result['complete'] and result['errors']
+    assert result['callbacks_seen'] == 3 and result['scored_rows'] == [1, 1, 1]
+    assert result['trace_bytes'] == 0
+    assert result['trace_sha256'] == hashlib.sha256(b'').hexdigest()
+    assert (tmp_path / result['trace_path']).read_bytes() == b''
+    assert [event[0] for event in profiler.events] == ['start', 'stop']
+    assert callback._trace_fd is None and callback._directory_fd is None
+
+
+def test_export_failure_does_not_stop_successfully_stopped_profiler_again(tmp_path):
+    class FailedExport(Profiler):
+        def export_chrome_trace(self, path, *, use_python_export=False):
+            raise OSError('export failed after actual stop')
+
+    status = ProfileStatus.local()
+    status.begin({'phase': 'collection'})
+    profiler = FailedExport()
+    callback = ForwardProfile(tmp_path, 'failed-export', status, role='native-inference',
+        profiler_factory=lambda: profiler, torch_version='test')
+    for _ in range(4):
+        callback.after_forward(scored_rows=1, boundary='native-post-row-forward')
+    result = status.read()['result']
+    assert not result['complete'] and result['errors']
+    assert result['callbacks_seen'] == 3 and result['trace_sha256'] is None
+    assert [event[0] for event in profiler.events] == ['start', 'stop']
+    assert callback._trace_fd is None and callback._directory_fd is None
