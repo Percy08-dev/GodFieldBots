@@ -18,6 +18,7 @@ from gf_cli.hpo_campaign import (
     CampaignStudy,
     Proposal,
     _checked,
+    campaign_requests,
     canonical_control,
     encode_settings,
     import_settings,
@@ -151,9 +152,10 @@ def next_seed_operation(store: CampaignStore, proposal: Proposal, learning_seeds
     return None
 
 
-def _storage_boundary(store: CampaignStore, loaded: LoadedHPOConfig, *, operation_id: str) -> None:
+def _storage_boundary(store: CampaignStore, loaded: LoadedHPOConfig, *, operation_id: str,
+                      _deadline: float = float('inf')) -> None:
     facts = check_storage(loaded.config.storage, campaign_dir=store.directory, originals_root=_originals(loaded),
-        deadline=time.monotonic() + loaded.config.run_wall_seconds)
+        deadline=min(_deadline, time.monotonic() + loaded.config.run_wall_seconds))
     store.put('storage-observations/' + operation_id + '.json', facts)
 
 
@@ -254,19 +256,7 @@ async def run_campaign(loaded: LoadedHPOConfig, directory: Path, *, mode: str,
                 imports = tuple(effective_settings(model_config_v4(row['settings']['model'], layout=LAYOUT),
                     hpo_training_config(row['settings']['training']), {}, layout=LAYOUT) for row in preserved_imports)
             study = CampaignStudy(store, loaded, campaign)
-            control = canonical_control(loaded.config)
-            in_space = encode_settings(loaded.config, control) is not None
-            requests: list[tuple[int | None, str, Any]] = []
-            if not in_space:
-                requests.append((None, 'outside-control', control))
-            for slot in range(loaded.config.trial_count):
-                if in_space and slot == 0:
-                    requests.append((slot, 'control', control))
-                else:
-                    imported_index = slot - (1 if in_space else 0)
-                    requests.append((slot, 'seed', imports[imported_index]) if imported_index < len(imports) else (slot, 'sample', None))
-            if len(imports) > loaded.config.trial_count - (1 if in_space else 0):
-                raise ContractError('stage imports exceed declared attempted in-space slots')
+            requests = campaign_requests(loaded.config, imports)
             stop = 'complete'
             completed = failed = 0
             boundary: Json = {'phase': 'before-proposal'}
@@ -569,6 +559,11 @@ def main(argv: list[str] | None = None) -> int:
             if args.command == 'validate':
                 result = validate(loaded)
             elif args.command == 'run':
+                if loaded.config.schema_version == 6:
+                    from gf_cli.rust_player_campaign import exec_campaign
+                    exec_campaign(loaded, args.campaign_dir.resolve(), mode=args.mode,
+                        seed_paths=tuple(path.resolve() for path in args.seed_settings), progress=args.progress)
+                    raise ContractError('fixed campaign supervisor exec unexpectedly returned')
                 result = asyncio.run(run_campaign(loaded, args.campaign_dir.resolve(), mode=args.mode,
                     seed_paths=tuple(path.resolve() for path in args.seed_settings),progress=args.progress))
             else:

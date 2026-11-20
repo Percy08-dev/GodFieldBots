@@ -108,7 +108,7 @@ def _dispatch(control: HostControl, phase: str) -> str | None:
                 raise
             return output
     else:
-        handler(*arguments)
+        return handler(*arguments)
     return None
 
 

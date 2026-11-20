@@ -1096,3 +1096,47 @@ This is bounded correctness evidence before final integration. The standalone
 Model4 case was quarantined after its first collection and before numeric output
 when the source quota could not admit codec scratch. That failure and the
 separate controlled diagnosis are preserved in the same component family.
+
+
+## Public HPO controller and evaluation wiring
+
+The Fresh evaluator passed both code reviews after its receiving-account
+repair and joined in `67f75c660c63289b95238fec7d888a4d99a64497`. Root verified
+163 precollected CPU cases and 31 existing pure role and linkage controls.
+The configuration charge begins before full imported-history validation.
+Model metadata and bindings use the same receiving phase and positively
+retire before the independent sequential saved-evaluation verifier.
+
+The final public controller passed both independent reviews after the
+pre-cursor interruption repair. Root checked 60 precollected final CPU
+cases after 142 covering checks on the original candidate. The fixed entry
+uses actual scoped control and Store APIs and returns from each training
+host after Prepared. Genuine no-work, successive training and Fresh
+evaluation and successful-history resume remain runtime requirements.
+
+## Measured Model4 Source and Cold diagnostics
+
+At 2 GiB configured Source, actual 32-game Model4 training refused a
+328,614,493-byte numeric codec request while 1,861,907,296 bytes were charged.
+The reviewed codec repair uses supported narrower shards when needed. Its
+real retry saved two shards, then snapshot export requested 520,242,624 bytes
+while 1,973,595,622 were charged. The original 2 GiB cases remain failed and
+are retained with actual physical termination.
+
+Before formal measurements, the matched effective Model4 Source declaration
+was set to 2,560 MiB through preprocessing and operating fields. Measured
+needed capacity was 2,493,838,246 bytes. The unchanged legacy C16 24 GiB RAM
+planner estimates 25,504,779,952 bytes for the matched configuration. RAM,
+CUDA, recording, workloads, order and thresholds are unchanged. The rejected
+3 GiB preflight and final declaration are recorded in the primary protocol at
+`model4-source-allocation-clarification.md`, SHA
+`f242ab077e72220db8faf1e228edc2da6ffc541dad2ef2a952e8aeecfd9a4803`.
+
+The actual 2.5 GiB Model4 case reached two committed updates, 628 used
+decisions and 24 Adam steps. Its original training host retired cooperatively
+with exit 0 and descendants confirmed reaped. Cold reconstruction was refused
+because it received the live 512 MiB numeric cap. The first recorded update
+requires 583,721,519 bytes by existing read estimates. An external CPU probe
+used the same reader on the exact archive with actual unused Source capacity
+and decoded 331 endpoints. The earlier failed parent stays unqualified.
+Fresh complete Cold validation under the corrected allowance remains required.

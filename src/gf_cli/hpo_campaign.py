@@ -72,6 +72,24 @@ def canonical_control(config: HPOCampaignConfig) -> EffectiveSettings:
     return effective_settings(model_defaults_v4(config.model_id), HPOTrainingConfig(), {}, layout=LAYOUT)
 
 
+def campaign_requests(config: HPOCampaignConfig, imports: tuple[Any, ...]) -> tuple[tuple[int | None, str, Any], ...]:
+    """The existing canonical-control/import/sample order, shared across runtimes."""
+    control = canonical_control(config)
+    in_space = encode_settings(config, control) is not None
+    requests: list[tuple[int | None, str, Any]] = []
+    if not in_space:
+        requests.append((None, 'outside-control', control))
+    for slot in range(config.trial_count):
+        if in_space and slot == 0:
+            requests.append((slot, 'control', control))
+        else:
+            imported_index = slot - (1 if in_space else 0)
+            requests.append((slot, 'seed', imports[imported_index]) if imported_index < len(imports) else (slot, 'sample', None))
+    if len(imports) > config.trial_count - (1 if in_space else 0):
+        raise ContractError('stage imports exceed declared attempted in-space slots')
+    return tuple(requests)
+
+
 def _resource_data(config: HPOCampaignConfig, settings: EffectiveSettings,
                    *, _loaded: LoadedHPOConfig | None = None) -> Json:
     if config.schema_version == 6:
@@ -286,7 +304,8 @@ class Proposal:
 
 
 class CampaignStudy:
-    def __init__(self, store: CampaignStore, loaded: LoadedHPOConfig, manifest: Json) -> None:
+    def __init__(self, store: CampaignStore, loaded: LoadedHPOConfig, manifest: Json,
+                 *, _control: Any = None) -> None:
         _checked(manifest, 'hpo-campaign', _CAMPAIGN_KEYS)
         actual, self.manifest_sha = store.get('campaign.json')
         if (canonical(actual) != canonical(manifest) or manifest['loaded_config_sha256'] != loaded.sha256
@@ -298,7 +317,24 @@ class CampaignStudy:
                 or manifest['conditions_sha256'] != digest(manifest['conditions']) or manifest['optuna_version'] != OPTUNA_VERSION):
             raise ContractError('campaign configuration/conditions/owner identity changed')
         self.store, self.loaded, self.manifest = store, loaded, actual
+        self._control = _control
         self.name = 'gf-hpo-' + manifest['campaign_id'] + '-' + manifest['study_identity']
+
+    def _verification_context(self, deadline: float) -> tuple[float, Json]:
+        if self.loaded.config.schema_version != 6:
+            return deadline, {}
+        from gf_common.rust_player import deadline_seconds
+        from gf_training.rust_player_supervision import HostControl
+        control = self._control
+        if type(control) is not HostControl or self.store._control is not control:
+            raise ContractError('actual current borrowed campaign control required for verified history/score')
+        control._require(); self.store._require()
+        _ = control.campaign_bootstrap
+        cutoff = min(deadline, time.monotonic() + self.loaded.config.run_wall_seconds,
+            deadline_seconds(control.launch['session_deadlines']['finish_bits']))
+        if cutoff <= time.monotonic():
+            raise TimeoutError('original campaign hard finish reached before independent verification')
+        return cutoff, {'control': control}
 
     @contextmanager
     def study(self, number: int) -> Iterator[Any]:
@@ -354,8 +390,9 @@ class CampaignStudy:
                 from gf_cli.hpo_evaluation import verify_trial_evaluation
                 intent = self._known_trials(study)[trial.number]
                 proposal = self._proposal(intent['proposal_no'], intent)
+                deadline, options = self._verification_context(time.monotonic() + self.loaded.config.run_wall_seconds)
                 _, actual_value, actual_sha = verify_trial_evaluation(self.store, self.loaded, self.manifest, proposal,
-                    deadline=time.monotonic() + self.loaded.config.run_wall_seconds)
+                    deadline=deadline, **options)
                 receipt = trial.user_attrs.get('hpo_evaluation_receipt_sha256')
                 if type(receipt) is not str or receipt != actual_sha or trial.value != actual_value:
                     raise ContractError('completed sampler history lacks verified evaluation identity')
@@ -665,7 +702,9 @@ class CampaignStudy:
         actual = self._proposal(proposal.number, intent)
         if actual != proposal:
             raise ContractError('completion requires the exact durable proposal')
-        _, score, evaluation_sha = verify_trial_evaluation(self.store, self.loaded, self.manifest, proposal, deadline=deadline)
+        deadline, options = self._verification_context(deadline)
+        _, score, evaluation_sha = verify_trial_evaluation(self.store, self.loaded, self.manifest, proposal,
+            deadline=deadline, **options)
         if type(score) not in (int, float) or not math.isfinite(score) or not 0 <= score <= 1:
             raise ContractError('verified evaluation objective must be finite win/draw/loss mean')
         value = _record('hpo-tell', proposal_sha256=proposal.sha256, trial_number=proposal.trial_number,

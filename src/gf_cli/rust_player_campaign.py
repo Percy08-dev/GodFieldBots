@@ -1,7 +1,6 @@
-"""Canonical campaign CONFIG/bootstrap factories, without a campaign controller.
+"""Fixed supervised campaign application and canonical bootstrap factories.
 
-Public HPO execution remains guarded until the real continuation/evaluation
-application is integrated. Decoded snapshots never reconstruct live owners.
+Decoded historical records are DATA; actual current owners perform every audit.
 """
 from __future__ import annotations
 
@@ -152,8 +151,25 @@ def _store_mapping(store: Any) -> Json:
     return {'lock_kind': 'campaign', 'fd': fd, 'device': actual.st_dev, 'inode': actual.st_ino}
 
 
-def _resume_history(store: Any, loaded: LoadedHPOConfig, conditions: Json,
-                    parent_scope: ExitStack) -> tuple[Json, list[Json], str | None]:
+def _seed_candidate(store: Any, campaign: Json, number: int, seed: int, *, awaiting: Json | None = None) -> Json:
+    """Structural receipt DATA only; never substitutes for the full owned audit."""
+    from gf_training.rust_player_evaluation import validate_seed_training
+    try:
+        intent, intent_sha = store.get(f'proposals/{number:06}/intent.json')
+        proposal, proposal_sha = store.get(f'proposals/{number:06}/proposal.json')
+        receipt, _ = store.get(f'proposals/{number:06}/seeds/{seed}/training.json')
+    except FileNotFoundError as error:
+        raise ContractError('historical awaiting lacks a complete closed seed candidate') from error
+    validate_seed_training(receipt)
+    if (intent['campaign_id'] != campaign['campaign_id'] or intent['proposal_no'] != number
+            or proposal['intent_sha256'] != intent_sha or receipt['proposal_sha256'] != proposal_sha
+            or receipt['training_seed'] != seed or awaiting is not None
+            and any(receipt[key] != awaiting[key] for key in ('run_path', 'run_id', 'config_sha256', 'runtime_binding_sha256'))):
+        raise ContractError('structural closed seed/awaiting/proposal candidate differs')
+    return receipt
+
+
+def _resume_history(store: Any, loaded: LoadedHPOConfig, conditions: Json) -> tuple[Json, list[Json], str | None]:
     from gf_cli.hpo_campaign import CampaignStudy
     from gf_common.rust_player import (
         validate_campaign_awaiting,
@@ -161,7 +177,6 @@ def _resume_history(store: Any, loaded: LoadedHPOConfig, conditions: Json,
         validate_campaign_clock,
         validate_campaign_cursor,
     )
-    from gf_training.lineage import require_hpo_run_owner, run_lock
     campaign, _ = store.get('campaign.json')
     CampaignStudy(store, loaded, campaign)  # Existing closed CONFIG/study binding, no Optuna operation.
     sources = campaign['conditions'].get('initial_settings', [])
@@ -186,39 +201,42 @@ def _resume_history(store: Any, loaded: LoadedHPOConfig, conditions: Json,
                 or load_campaign_snapshot(snapshot).sha256 != loaded.sha256):
             raise ContractError('original immutable campaign CONFIG differs')
         load_seed_snapshot(seed, loaded.config, study_identity=campaign['study_identity'])
-    settled: dict[str, str] = {}
-    parent_owners: dict[Path, Any] = {}
+    # Structural candidates only. Actual old parent/Source/namespace verification
+    # belongs to the authenticated new CPU controller, before its cursor CAS.
+    candidates: dict[str, str] = {}
     for name in store.records():
         parts = name.split('/')
-        if name.startswith('proposals/') and name.endswith(('/training.json', '/evaluation.json')):
-            raise ContractError('successful history requires the C2b full Source/seed application; foundation is unsupported')
+        if len(parts) == 5 and parts[0] == 'proposals' and parts[2] == 'seeds' and parts[4] == 'training.json':
+            _seed_candidate(store, campaign, int(parts[1]), int(parts[3]))
         if name.endswith(('/training.intent.json', '/evaluation.intent.json')):
-            raise ContractError('legacy or unclosed seed intent cannot be resumed by the campaign foundation')
+            receipt = name.removesuffix('.intent.json') + '.json'
+            if not store.exists(receipt):
+                raise ContractError('interrupted seed intent has no closed receipt candidate')
         if len(parts) != 4 or parts[0] != 'supervision' or parts[2] != 'awaiting':
             continue
         awaiting, awaiting_sha = store.get(name)
         validate_campaign_awaiting(awaiting)
-        # The actual verifier rederives the ID from the original operation. Here
-        # the immutable awaiting basename is the canonical lookup, never closure.
-        operation_id = Path(parts[3]).stem
-        terminal = '/'.join((parts[0], parts[1], 'terminal', operation_id + '.json'))
-        if not store.exists(terminal):
-            raise ContractError('unclosed/orphan awaiting lacks already-native-ACK terminal evidence')
-        parent = Path(awaiting['run_path'])
-        if parent != Path(loaded.config.storage.parent_root) / awaiting['run_id']:
-            raise ContractError('historical awaiting parent leaves actual configured root')
-        if parent not in parent_owners:
-            parent_owners[parent] = parent_scope.enter_context(run_lock(parent))
-        owner = parent_owners[parent]
-        require_hpo_run_owner(parent, owner)
-        disposition, _ack = store.read_acknowledged_supervision_disposition(terminal)
-        if (disposition['campaign_id'] != campaign['campaign_id']
-                or disposition['awaiting_path'] != str(store.directory / name)
-                or disposition['awaiting_sha256'] != awaiting_sha):
-            raise ContractError('already acknowledged failure/awaiting binding differs')
-        settled[str(store.directory / name)] = awaiting_sha
+        if awaiting['campaign_id'] != campaign['campaign_id'] or awaiting['supervision_id'] != parts[1]:
+            raise ContractError('foreign structural awaiting campaign/session')
+        terminal = '/'.join((parts[0], parts[1], 'terminal', parts[3]))
+        if store.exists(terminal):
+            from gf_common.rust_player import (
+                validate_campaign_disposition,
+                validate_campaign_disposition_ack,
+            )
+            disposition, disposition_sha = store.get(terminal)
+            validate_campaign_disposition(disposition)
+            ack, _ = store.get('/'.join((parts[0], parts[1], 'disposition-ack-' + disposition['invocation_id'] + '.json')))
+            validate_campaign_disposition_ack(ack)
+            if (disposition['awaiting_path'] != str(store.directory / name)
+                    or disposition['awaiting_sha256'] != awaiting_sha or ack['disposition_sha256'] != disposition_sha
+                    or ack['operation_sha256'] != awaiting['operation_sha256']):
+                raise ContractError('structural terminal ACK candidate differs')
+        else:
+            _seed_candidate(store, campaign, awaiting['proposal_no'], awaiting['learning_seed'], awaiting=awaiting)
+        candidates[str(store.directory / name)] = awaiting_sha
     if (cursor is not None and cursor['awaiting_path'] is not None
-            and settled.get(cursor['awaiting_path']) != cursor['awaiting_sha256']):
+            and candidates.get(cursor['awaiting_path']) != cursor['awaiting_sha256']):
         raise ContractError('current awaiting is unresolved/mismatched')
     return campaign, sources, cursor_sha
 
@@ -237,6 +255,7 @@ class PreparedCampaign:
     _launch_json: str | None = field(default=None, init=False, repr=False)
     _factory_companion: Any = field(default=None, init=False, repr=False)
     _companion_json: str | None = field(default=None, init=False, repr=False)
+    _resume_cursor_sha: str | None = field(default=None, init=False, repr=False)
 
     def require(self) -> None:
         from gf_cli.rust_player_entry import _boot_id
@@ -276,6 +295,10 @@ class PreparedCampaign:
                 or load_campaign_snapshot(snapshot).sha256 != self.loaded.sha256):
             raise ContractError('pinned campaign CONFIG changed before exec')
         campaign, _ = self.store.get('campaign.json')
+        if self.bootstrap['mode'] == 'resume':
+            actual_sha = self.store.get('supervision/current.json')[1] if self.store.exists('supervision/current.json') else None
+            if actual_sha != self._resume_cursor_sha:
+                raise ContractError('original resume cursor changed before exec')
         load_seed_snapshot(seeds, self.loaded.config, study_identity=campaign['study_identity'])
         if time.monotonic() >= deadline_seconds(session['hard_session_finish_bits']):
             raise ContractError('original campaign hard deadline expired before exec')
@@ -321,7 +344,7 @@ def prepare_campaign(loaded: LoadedHPOConfig, directory: Path, *, mode: str,
     binding = _capture_clock()  # Original SESSION anchor, before actual store ownership/publication.
     session = campaign_session_clock(loaded, supervision_id=supervision_id, clock_binding=binding)
     with CampaignStore(Path(directory).absolute(), mode=mode,
-            max_owned_bytes=loaded.config.operating.parent_budget_bytes) as store, ExitStack() as history_parents:
+            max_owned_bytes=loaded.config.operating.parent_budget_bytes) as store:
         if mode == 'fresh':
             conditions['initial_settings'] = sources
             if 'producer_identity' in conditions:
@@ -331,7 +354,7 @@ def prepare_campaign(loaded: LoadedHPOConfig, directory: Path, *, mode: str,
             campaign = initialize_campaign(store, loaded, conditions)
             previous_cursor_sha = None
         else:
-            campaign, sources, previous_cursor_sha = _resume_history(store, loaded, conditions, history_parents)
+            campaign, sources, previous_cursor_sha = _resume_history(store, loaded, conditions)
         seed_snapshot = {'schema_version': 1, 'kind': 'rust-player-seed-settings-v1', 'sources': sources}
         load_seed_snapshot(seed_snapshot, loaded.config, study_identity=campaign['study_identity'])
         relative = 'supervision/' + supervision_id + '/'
@@ -351,13 +374,11 @@ def prepare_campaign(loaded: LoadedHPOConfig, directory: Path, *, mode: str,
             bootstrap_path=root / 'bootstrap.json', bootstrap_sha256=bootstrap_sha, runtime_binding_sha256=digest(bound))
         operation_path = root / 'operation-initial.json'
         operation_sha = store.put(relative + 'operation-initial.json', operation)
-        store.update_supervision_cursor({'schema_version': 1, 'kind': 'rust-player-campaign-supervision-v1',
-            'campaign_id': campaign['campaign_id'], 'supervision_id': supervision_id, 'session_clock_sha256': clock_sha,
-            'awaiting_path': None, 'awaiting_sha256': None, 'current_invocation_id': None, 'phase': 'control'},
-            expected_sha256=previous_cursor_sha)
-        # Historical parent custody spans its last consumer, the cursor CAS.
-        # No parent descriptor is inherited by this initial CPU-control launch.
-        history_parents.close()
+        if mode == 'fresh':
+            store.update_supervision_cursor({'schema_version': 1, 'kind': 'rust-player-campaign-supervision-v1',
+                'campaign_id': campaign['campaign_id'], 'supervision_id': supervision_id, 'session_clock_sha256': clock_sha,
+                'awaiting_path': None, 'awaiting_sha256': None, 'current_invocation_id': None, 'phase': 'control'},
+                expected_sha256=previous_cursor_sha)
         launch = {'schema_version': 1, 'kind': 'rust-player-launch-v1', 'supervision_id': supervision_id,
             'python_executable': str(Path(sys.executable).absolute()), 'operation_path': str(operation_path),
             'operation_sha256': operation_sha, 'record_directory': str(root), 'mode': 'hpo',
@@ -368,6 +389,7 @@ def prepare_campaign(loaded: LoadedHPOConfig, directory: Path, *, mode: str,
         object.__setattr__(prepared, '_launch_json', canonical(launch))
         object.__setattr__(prepared, '_factory_companion', companion)
         object.__setattr__(prepared, '_companion_json', canonical(companion.manifest))
+        object.__setattr__(prepared, '_resume_cursor_sha', previous_cursor_sha)
         prepared.require()
         yield prepared
 
@@ -745,3 +767,324 @@ def complete_campaign_control(control: Any, store: Any, study: Any, *, status: s
     path = control.root / f'control-completion-{control._envelope["invocation_id"]}.json'
     store.put(str(path.relative_to(store.directory)), body)
     return control.control_complete(path)  # Existing actual permitted protocol arms only.
+
+
+def _audit_deadline(loaded: LoadedHPOConfig, hard_finish: float) -> float:
+    return min(time.monotonic() + loaded.config.run_wall_seconds, hard_finish)
+
+
+def _audit_terminal_history(store: Any, name: str, awaiting: Json, *, parent_root: Path) -> Json:
+    from gf_training.lineage import run_lock
+    parent = parent_root / awaiting['run_id']
+    if Path(awaiting['run_path']) != parent:
+        raise ContractError('historical terminal parent lies outside actual configured namespace')
+    with run_lock(parent):
+        disposition, _ = store.read_acknowledged_supervision_disposition(name)
+        return disposition
+
+
+def _verify_closed_tells(control: Any, store: Any, study: Any, *, failed_proposals: set[int], hard_finish: float) -> None:
+    from gf_cli.hpo_campaign import _TELL_KEYS, _checked
+    from gf_cli.hpo_evaluation import verify_trial_evaluation
+    for name in store.records():
+        parts = name.split('/')
+        if len(parts) != 3 or parts[0] != 'proposals' or parts[2] not in ('tell.intent.json', 'tell.receipt.json'):
+            continue
+        root = '/'.join(parts[:2])
+        if not store.exists(root + '/tell.receipt.json') or not store.exists(root + '/tell.intent.json'):
+            raise ContractError('partial historical tell cannot be reconciled as closed')
+        if parts[2] == 'tell.receipt.json':
+            continue  # The same exact pair is verified once through its intent.
+        number = int(parts[1])
+        intent, _ = study._intent(number)
+        proposal = study._proposal(number, intent)
+        tell, _ = store.get(name)
+        receipt, _ = store.get(root + '/tell.receipt.json')
+        _checked(tell, 'hpo-tell', _TELL_KEYS)
+        if (receipt != tell or tell['proposal_sha256'] != proposal.sha256 or tell['trial_number'] != proposal.trial_number
+                or canonical(tell['params']) != canonical(proposal.params)
+                or canonical(tell['distributions']) != canonical(proposal.distributions)):
+            raise ContractError('historical closed tell differs from exact actual proposal')
+        if tell['state'] == 'COMPLETE':
+            _, score, checksum = verify_trial_evaluation(store, study.loaded, study.manifest, proposal,
+                deadline=_audit_deadline(study.loaded, hard_finish), control=control)
+            if tell['value'] != score or tell['evaluation_receipt_sha256'] != checksum or tell['reason'] is not None:
+                raise ContractError('historical closed objective differs from independent actual evaluation')
+        elif tell['state'] == 'FAIL':
+            if tell['value'] is not None or tell['evaluation_receipt_sha256'] is not None:
+                raise ContractError('failed historical tell cannot contain an objective')
+            if number not in failed_proposals:
+                duplicate, _ = store.get(root + '/duplicate.json') if store.exists(root + '/duplicate.json') else ({}, '')
+                _checked(duplicate, 'hpo-effective-duplicate', {'proposal_sha256', 'original_proposal_sha256'})
+                if duplicate.get('proposal_sha256') != proposal.sha256 or tell['reason'] != 'effective-duplicate':
+                    raise ContractError('failed historical proposal lacks acknowledged terminal or exact duplicate')
+                originals = []
+                for other in store.records():
+                    if other.startswith('proposals/') and other.endswith('/proposal.json') and other < root + '/proposal.json':
+                        previous, previous_sha = store.get(other)
+                        if previous_sha == duplicate['original_proposal_sha256']:
+                            originals.append(previous)
+                if len(originals) != 1 or originals[0]['effective_settings_sha256'] != proposal.settings.identity:
+                    raise ContractError('failed duplicate lacks the original identical effective settings')
+        else:
+            raise ContractError('unknown historical tell state')
+
+
+def _verify_campaign_history(control: Any, store: Any, study: Any, *, hard_finish: float) -> None:
+    """Full current-owner audits before cursor replacement or another Optuna ask."""
+    from gf_cli.rust_player_evaluation import (
+        verify_rust_evaluation_history,
+        verify_rust_training_history,
+    )
+    from gf_common.rust_player import validate_campaign_awaiting
+    from gf_training.hpo_gpu_lease import _GLOBAL_ROOT, require_resolved_namespace
+    from gf_training.rust_player_supervision import read_control_record
+    _campaign_context(control, store, study)
+    loaded, campaign = study.loaded, study.manifest
+    checked: set[tuple[int, int]] = set()
+    failed_proposals: set[int] = set()
+    closed: dict[str, str] = {}
+    for name in store.records():
+        parts = name.split('/')
+        if len(parts) != 4 or parts[0] != 'supervision' or parts[2] != 'awaiting':
+            continue
+        awaiting, checksum = store.get(name)
+        validate_campaign_awaiting(awaiting)
+        if awaiting['campaign_id'] != campaign['campaign_id'] or awaiting['supervision_id'] != parts[1]:
+            raise ContractError('historical awaiting belongs to another campaign/session')
+        terminal = '/'.join((parts[0], parts[1], 'terminal', parts[3]))
+        if store.exists(terminal):
+            disposition = _audit_terminal_history(store, terminal, awaiting,
+                parent_root=Path(loaded.config.storage.parent_root))
+            if (disposition['awaiting_path'] != str(store.directory / name)
+                    or disposition['awaiting_sha256'] != checksum):
+                raise ContractError('acknowledged terminal does not close the exact awaiting')
+            failed_proposals.add(awaiting['proposal_no'])
+        else:
+            number, seed = awaiting['proposal_no'], awaiting['learning_seed']
+            intent, _ = study._intent(number)
+            proposal = study._proposal(number, intent)
+            candidate = _seed_candidate(store, campaign, number, seed, awaiting=awaiting)
+            training = verify_rust_training_history(store, loaded, campaign, proposal, seed, control=control,
+                deadline=_audit_deadline(loaded, hard_finish))
+            if training != candidate:
+                raise ContractError('full historical seed differs from structural candidate')
+            # The full reader binds physical/admission/Source; additionally ensure
+            # THIS awaiting is its actual operation, not another same-run record.
+            physical, _ = store.get(f'proposals/{number:06}/seeds/{seed}/training-gpu-termination.json')
+            admission, _ = read_control_record(_GLOBAL_ROOT / 'jobs' / physical['ticket'] / 'admission.json', _GLOBAL_ROOT)
+            if (admission['host_admission']['operation_id'] + '.json' != parts[3]
+                    or physical['exit_record']['supervision_id'] != parts[1]):
+                raise ContractError('historical successful awaiting differs from actual admitted operation')
+            checked.add((number, seed))
+        closed[str(store.directory / name)] = checksum
+    cursor = store.get('supervision/current.json')[0] if store.exists('supervision/current.json') else None
+    if cursor is not None and cursor['awaiting_path'] is not None and closed.get(cursor['awaiting_path']) != cursor['awaiting_sha256']:
+        raise ContractError('historical current cursor remains unresolved')
+    for name in store.records():
+        parts = name.split('/')
+        if len(parts) != 5 or parts[0] != 'proposals' or parts[2] != 'seeds':
+            continue
+        number, seed = int(parts[1]), int(parts[3])
+        folder = '/'.join(parts[:4])
+        if parts[4] in ('training.intent.json', 'evaluation.intent.json'):
+            if not store.exists(folder + '/' + parts[4].removesuffix('.intent.json') + '.json'):
+                raise ContractError('interrupted historical operation cannot be retried')
+        elif parts[4] in ('training.json', 'evaluation.json'):
+            intent, _ = study._intent(number)
+            proposal = study._proposal(number, intent)
+            if (number, seed) not in checked:
+                # A successful seed without an actual awaiting cannot be imported.
+                raise ContractError('closed seed lacks a fully verified original awaiting')
+            if parts[4] == 'evaluation.json':
+                verify_rust_evaluation_history(store, loaded, campaign, proposal, seed, control=control,
+                    deadline=_audit_deadline(loaded, hard_finish))
+        elif parts[4] in ('source-validation.json', 'training-gpu-termination.json') and not store.exists(folder + '/training.json'):
+            raise ContractError('partial closed training cannot be retried')
+    _verify_closed_tells(control, store, study, failed_proposals=failed_proposals, hard_finish=hard_finish)
+    if store.exists('study.intent.json'):
+        with study.study(0) as optuna_study:
+            study._history(optuna_study)
+    require_resolved_namespace()  # Existing exclusive lock/scan; no dummy job.
+
+
+def _control_cursor(store: Any, campaign: Json, session: Json, bootstrap: Json) -> Json:
+    return {'schema_version': 1, 'kind': 'rust-player-campaign-supervision-v1',
+        'campaign_id': campaign['campaign_id'], 'supervision_id': session['supervision_id'],
+        'session_clock_sha256': bootstrap['session_clock_sha256'], 'phase': 'control',
+        'awaiting_path': None, 'awaiting_sha256': None, 'current_invocation_id': None}
+
+
+def _adopt_campaign_cursor(control: Any, store: Any, study: Any, *, session: Json, bootstrap: Json,
+                           hard_finish: float) -> None:
+    old_sha = store.get('supervision/current.json')[1] if store.exists('supervision/current.json') else None
+    _verify_campaign_history(control, store, study, hard_finish=hard_finish)
+    store.update_supervision_cursor(_control_cursor(store, study.manifest, session, bootstrap), expected_sha256=old_sha)
+
+
+def _clear_success_cursor(control: Any, store: Any, study: Any, expected: Json, checksum: str) -> None:
+    bootstrap, session, campaign = _campaign_context(control, store, study)
+    if 'parent' in control._borrowed or control._parent_borrowers:
+        raise ContractError('actual positive parent release required before successful cursor advance')
+    actual, actual_sha = store.get('supervision/current.json')
+    if actual != expected or actual_sha != checksum:
+        raise ContractError('successful current cursor changed before release/CAS')
+    store.update_supervision_cursor(_control_cursor(store, campaign, session, bootstrap), expected_sha256=checksum)
+
+
+def _finish_campaign_result(control: Any, store: Any, study: Any, *, status: str) -> str:
+    # A finalized cold Exit already has its genuine protocol completion. Initial
+    # and failed-return arms require the existing explicit control-complete ACK.
+    if control._cold is None or control._cold._finalized_sha256 is None:
+        complete_campaign_control(control, store, study, status=status)
+    return canonical({'schema_version': 1, 'kind': 'hpo-campaign-result', 'campaign_dir': str(store.directory),
+        'campaign_id': study.manifest['campaign_id'], 'study_identity': study.manifest['study_identity'],
+        'status': 'paused' if status == 'session_boundary' else 'complete', 'qualification': 'exploratory-only'})
+
+
+def _drive_campaign(control: Any, store: Any, study: Any, imports: tuple[Any, ...], *,
+                    soft_finish: float, hard_finish: float) -> str | None:
+    import asyncio
+
+    from gf_cli.hpo import _storage_boundary, next_seed_operation
+    from gf_cli.hpo_campaign import campaign_requests
+    from gf_cli.hpo_config import materialize_hpo_run
+    from gf_cli.hpo_evaluation import aggregate_trial_evaluation
+    from gf_cli.rust_player_evaluation import evaluate_rust_seed, verify_rust_training_history
+    loaded, campaign = study.loaded, study.manifest
+    for number, (slot, kind, requested) in enumerate(campaign_requests(loaded.config, imports)):
+        if time.monotonic() >= soft_finish:
+            return _finish_campaign_result(control, store, study, status='session_boundary')
+        proposal = study.propose(number, slot=slot, kind=kind, requested=requested)
+        if proposal is None:
+            continue
+        root = f'proposals/{number:06}'
+        if store.exists(root + '/failure.json'):
+            failure, _ = store.get(root + '/failure.json')
+            study.fail(proposal, failure['reason'])
+            continue
+        if store.exists(root + '/tell.receipt.json'):
+            tell, _ = store.get(root + '/tell.receipt.json')
+            if tell['state'] == 'COMPLETE':
+                study.complete(proposal, deadline=_audit_deadline(loaded, hard_finish))
+            elif tell['state'] == 'FAIL':
+                study.fail(proposal, tell['reason'])
+            else:
+                raise ContractError('unknown actual terminal proposal receipt')
+            continue
+        while (next_operation := next_seed_operation(store, proposal, loaded.config.learning_seeds)) is not None:
+            phase, seed = next_operation
+            if phase == 'incomplete':
+                raise ContractError('interrupted campaign seed has no closed receipt; retry forbidden')
+            if time.monotonic() >= soft_finish:
+                return _finish_campaign_result(control, store, study, status='session_boundary')
+            _storage_boundary(store, loaded, operation_id=uuid.uuid4().hex, _deadline=hard_finish)
+            if phase == 'train':
+                materialized = materialize_hpo_run(loaded, proposal.settings, learning_seed=seed, run_id=str(uuid.uuid4()))
+                dispatch_campaign_training(control, store, study, proposal, learning_seed=seed, materialized=materialized)
+                return None  # Prepared: only Native reap followed by a NEW cold host may continue.
+            training = verify_rust_training_history(store, loaded, campaign, proposal, seed, control=control,
+                deadline=_audit_deadline(loaded, hard_finish))
+            if time.monotonic() >= soft_finish:
+                return _finish_campaign_result(control, store, study, status='session_boundary')
+            asyncio.run(evaluate_rust_seed(store, loaded, campaign, proposal, training, control=control,
+                output=store.directory / 'evaluations' / str(uuid.uuid4()), soft_finish=soft_finish, hard_finish=hard_finish))
+        aggregate = aggregate_trial_evaluation(store, loaded, campaign, proposal,
+            deadline=_audit_deadline(loaded, hard_finish), control=control)
+        store.put(root + '/evaluation.json', aggregate)
+        study.complete(proposal, deadline=_audit_deadline(loaded, hard_finish))
+    return _finish_campaign_result(control, store, study, status='complete')
+
+
+def _continue_cold_campaign(control: Any, store: Any, study: Any, *, soft_finish: float, hard_finish: float) -> None:
+    import asyncio
+
+    from gf_cli.config import load_rust_player_effective
+    from gf_cli.rust_player_evaluation import evaluate_rust_seed, persist_rust_training_receipt
+    from gf_training.rust_player_completion import (
+        ColdFinalizedRustInvocation,
+        ColdFinalizedRustParent,
+    )
+    from gf_training.rust_player_learning import finalize_cold
+    admission, _prepared, _exit = control.cold.require_pair()
+    proposal, awaiting, _path, _checksum, cursor, cursor_sha = _current_awaiting(
+        control, store, study, admission['invocation_id'])
+    loaded = load_rust_player_effective(Path(control.operation['config_path']), expected_sha256=control.operation['config_sha256'])
+    result = finalize_cold(control, control.cold, loaded=loaded)
+    try:
+        if type(result) is ColdFinalizedRustInvocation:
+            settle_incomplete_campaign_training(control, store, study, result)
+            return
+        if type(result) is not ColdFinalizedRustParent:
+            raise ContractError('actual exact-D cold Parent or ineligible invocation required')
+        result.require()
+        training = persist_rust_training_receipt(store, study.loaded, study.manifest, proposal,
+            training_seed=awaiting['learning_seed'], run_id=awaiting['run_id'], directory=Path(awaiting['run_path']),
+            termination=control.cold.physical_termination, deadline=_audit_deadline(study.loaded, hard_finish), completion=result)
+        if time.monotonic() < soft_finish:
+            asyncio.run(evaluate_rust_seed(store, study.loaded, study.manifest, proposal, training, control=control,
+                output=store.directory / 'evaluations' / str(uuid.uuid4()), soft_finish=soft_finish,
+                hard_finish=hard_finish, completion=result))
+        else:
+            result.close()
+            control.release_parent()
+        _clear_success_cursor(control, store, study, cursor, cursor_sha)
+    except BaseException as error:
+        # The evaluator may already own a nested pin/job; retain that original
+        # cleanup owner and the actual Parent without pretending cleanup succeeded.
+        vars(error)['rust_player_campaign_parent'] = result
+        raise
+
+
+def run_campaign(control: Any, operation: Json) -> str | None:
+    """Authenticated fixed CPU controller; one actual operation per host boundary."""
+    from gf_cli.hpo_campaign import CampaignStudy
+    from gf_cli.hpo_storage import CampaignStore
+    from gf_common.rust_player import deadline_seconds
+    from gf_training.rust_player_supervision import HostControl, read_control_record
+    if type(control) is not HostControl:
+        raise ContractError('actual authenticated campaign HostControl required')
+    control._require()
+    if (control.initial_operation['operation_type'] != 'campaign-continue'
+            or canonical(operation) != canonical(control.operation)):
+        raise ContractError('authenticated initial campaign purpose/current bound operation required')
+    bootstrap = control.campaign_bootstrap
+    snapshot, snapshot_sha = read_control_record(Path(bootstrap['loaded_campaign_path']), control.root)
+    if snapshot_sha != bootstrap['loaded_campaign_sha256']:
+        raise ContractError('actual immutable campaign CONFIG snapshot differs')
+    loaded = load_campaign_snapshot(snapshot)
+    store = CampaignStore.borrow(control, max_owned_bytes=loaded.config.operating.parent_budget_bytes)
+    try:
+        campaign, _ = store.get('campaign.json')
+        study = CampaignStudy(store, loaded, campaign, _control=control)
+        _bootstrap, session, _campaign = _campaign_context(control, store, study)
+        seeds, seeds_sha = store.get(str(Path(bootstrap['seed_settings_path']).relative_to(store.directory)))
+        if seeds_sha != bootstrap['seed_settings_sha256']:
+            raise ContractError('actual immutable imported settings snapshot differs')
+        imports = load_seed_snapshot(seeds, loaded.config, study_identity=campaign['study_identity'])
+        soft, hard = (deadline_seconds(session[key]) for key in ('soft_dispatch_finish_bits', 'hard_session_finish_bits'))
+        if control._phase == 'cold':
+            _continue_cold_campaign(control, store, study, soft_finish=soft, hard_finish=hard)
+        elif control._phase == 'campaign-return':
+            settle_failed_campaign_training(control, store, study)
+        elif control._phase == 'session' and control.operation['operation_type'] == 'campaign-continue':
+            _adopt_campaign_cursor(control, store, study, session=session, bootstrap=bootstrap, hard_finish=hard)
+        else:
+            raise ContractError('unknown authenticated campaign controller phase')
+        # Every imported closed operation is reverified before reuse/new ask.
+        if control.operation['operation_type'] != 'campaign-continue':
+            _verify_campaign_history(control, store, study, hard_finish=hard)
+        output = _drive_campaign(control, store, study, imports, soft_finish=soft, hard_finish=hard)
+    except BaseException as error:
+        try:
+            store.close()
+        except BaseException as cleanup:  # noqa: BLE001 -- retain original error and actual borrower on uncertain close
+            vars(error)['rust_player_campaign_store_cleanup_error'] = cleanup
+        vars(error)['rust_player_campaign_store'] = store
+        raise
+    try:
+        store.close()  # Positive borrower close before host control close/stdout.
+    except BaseException as error:
+        vars(error)['rust_player_campaign_store'] = store
+        raise
+    return output

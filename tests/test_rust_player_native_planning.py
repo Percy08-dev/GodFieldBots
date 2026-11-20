@@ -81,14 +81,15 @@ def test_all_required_native6_callers_use_startup_data_without_legacy_admission(
     assert all(config_sha == loaded.sha256 for config_sha, _settings in materialized)
 
 
-def test_public_native_hpo_run_stays_closed_without_a_campaign_handler_stub(tmp_path, monkeypatch, capsys):
+def test_public_native_hpo_run_uses_fixed_factory_with_actual_controller(tmp_path, monkeypatch, capsys):
     from gf_cli import hpo, rust_player_campaign
     loaded = loaded_campaign(tmp_path)
     monkeypatch.setattr(hpo, 'load_hpo_config', lambda path: loaded)
     def forbidden(*args, **kwargs):
-        raise AssertionError('native6 public run reached bootstrap before application is integrated')
+        from gf_common.domain import ContractError
+        raise ContractError('test-only final factory boundary; no actual exec')
     monkeypatch.setattr(rust_player_campaign, 'prepare_campaign', forbidden)
-    assert not hasattr(rust_player_campaign, 'run_campaign')
+    assert callable(rust_player_campaign.run_campaign)
     assert hpo.main(['run', '--config', str(tmp_path / 'unused.toml'), '--mode', 'fresh',
         '--campaign-dir', str(tmp_path / 'campaign')]) == 2
     assert not (tmp_path / 'campaign').exists()

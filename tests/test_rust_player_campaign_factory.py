@@ -257,10 +257,10 @@ def test_campaign_resume_refuses_unclosed_or_success_history_without_mutating_cu
 
 
 @pytest.mark.parametrize('count', [1, 2])
-def test_known_ack_failure_route_uses_existing_reader_under_real_new_parent_custody(tmp_path, monkeypatch, count):
-    """Reader boundary DATA double; does not fabricate a native ACK/Source proof."""
+def test_known_ack_candidate_defers_full_reader_until_new_cpu_parent_custody(tmp_path, monkeypatch, count):
+    """Shape/read-boundary DATA only; no actual native ACK or Source proof."""
     from gf_cli.hpo_storage import CampaignStore
-    from gf_cli.rust_player_campaign import prepare_campaign
+    from gf_cli.rust_player_campaign import _audit_terminal_history, prepare_campaign
     from gf_training.lineage import require_hpo_run_owner, run_lock
     loaded = _factory_loaded(tmp_path, monkeypatch)
     directory, parent = tmp_path / 'campaign', tmp_path / 'old-run'
@@ -281,10 +281,25 @@ def test_known_ack_failure_route_uses_existing_reader_under_real_new_parent_cust
             awaiting = {**awaiting_template, 'operation_path': str(root / f'operation-old-op-{index}.json')}
             sha = store.put(str(path.relative_to(directory)), awaiting)
             terminal = str((root / f'terminal/old-op-{index}.json').relative_to(directory))
-            store.put(terminal, {'scope': 'reader boundary fixture DATA, NOT an actual ACK'})
+            disposition = {'schema_version': 1, 'kind': 'rust-player-campaign-terminal-disposition-v1',
+                **{key: awaiting[key] for key in ('campaign_id', 'proposal_no', 'learning_seed', 'supervision_id',
+                    'session_clock_sha256', 'operation_path', 'operation_sha256')},
+                'proposal_sha256': 'a' * 64, 'awaiting_path': str(path), 'awaiting_sha256': sha,
+                'invocation_id': f'{index + 1:032x}', 'classification': 'healthy_incomplete',
+                'evidence': {'completion_path': str(root / 'completion.json'), 'completion_sha256': 'a' * 64,
+                    'physical_path': str(root / 'physical.json'), 'physical_sha256': 'a' * 64},
+                **{key + '_path': str(directory / (key + '.json')) for key in ('proposal_failure', 'tell_intent', 'tell_receipt')},
+                **dict.fromkeys((key + '_sha256' for key in ('proposal_failure', 'tell_intent', 'tell_receipt')), 'a' * 64)}
+            disposition_sha = store.put(terminal, disposition)
+            store.put(str((root / ('disposition-ack-' + disposition['invocation_id'] + '.json')).relative_to(directory)),
+                {'schema_version': 1, 'kind': 'rust-player-campaign-disposition-ack-v1',
+                    'supervision_id': awaiting['supervision_id'], 'invocation_id': disposition['invocation_id'],
+                    'control_invocation_id': 'f' * 32, 'operation_sha256': awaiting['operation_sha256'],
+                    'disposition_sha256': disposition_sha, 'evidence_sha256': digest(disposition['evidence'])})
             rows[terminal] = (path, sha)
         store.update_supervision_cursor(dict(cursor, phase='awaiting-host', awaiting_path=str(path), awaiting_sha256=sha),
             expected_sha256=cursor_sha)
+        old_cursor = (directory / 'supervision/current.json').read_bytes()
     checked = []
     def verified_reader(store, name):
         store._require()
@@ -293,16 +308,15 @@ def test_known_ack_failure_route_uses_existing_reader_under_real_new_parent_cust
         checked.append(name)
         path, sha = rows[name]
         return {'campaign_id': awaiting['campaign_id'], 'awaiting_path': str(path), 'awaiting_sha256': sha}, {}
-    actual_cursor_update = CampaignStore.update_supervision_cursor
-    def cursor_update(store, value, **kwargs):
-        require_hpo_run_owner(parent)  # Positive custody extends through the LAST metadata mutation.
-        return actual_cursor_update(store, value, **kwargs)
     monkeypatch.setattr(CampaignStore, 'read_acknowledged_supervision_disposition', verified_reader)
-    monkeypatch.setattr(CampaignStore, 'update_supervision_cursor', cursor_update)
     with prepare_campaign(loaded, directory, mode='resume') as resumed:
-        assert checked == list(rows)
+        assert checked == []  # Pre-exec only classifies; no old Source audit here.
+        assert (directory / 'supervision/current.json').read_bytes() == old_cursor
         current, _ = resumed.store.get('supervision/current.json')
-        assert current['phase'] == 'control' and current['awaiting_path'] is None
+        assert current['phase'] == 'awaiting-host' and current['awaiting_path'] == str(path)
+        for terminal in rows:
+            _audit_terminal_history(resumed.store, terminal, awaiting, parent_root=parent.parent)
+        assert checked == list(rows)
         with pytest.raises(ContractError): require_hpo_run_owner(parent)
 
 

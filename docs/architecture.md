@@ -85,8 +85,10 @@ use real trial/control/selected materializations and actual published resources.
 Cold result close, parent release and control close precede stdout. Canonical
 pinned settings reconstruct without rereading original TOMLs; actual Store OFD
 and exact original soft/hard clocks survive sealed launch. Root333 CPU checks and
-scoped lint/typing pass. Public HPO execution remains guarded until full campaign/
-evaluation composition and genuine successful-history validation are implemented.
+scoped lint/typing pass. The explicit schema 6 route now uses the supervised
+controller and existing Fresh evaluation workers. The wiring has passed
+independent code review and bounded CPU checks. Genuine integrated execution,
+resume, resource retirement and performance qualification remain required.
 
 The evaluation DATA bridge has passed independent correctness and design
 conformance. It checks the exact qualified training parent, prepares the
@@ -94,8 +96,8 @@ independent evaluation account and holds original inference FDs and references
 before the training parent closes. Historical import uses a current actual
 owner and independently rechecks the saved Original, Replay, numeric and
 checkpoint chain. After a cleanup error the owners of still-live data keep
-their reservations through positive retirement. The public campaign evaluator
-and genuine combined acceptance remain in progress.
+their reservations through positive retirement. Genuine combined campaign
+acceptance remains in progress.
 
 [ADR0053](adr/0053-mlp-shared-batch-inference.md) implements the owner's
 [shared MLP design](design/mlp-shared-batch-inference.md) under Simulator

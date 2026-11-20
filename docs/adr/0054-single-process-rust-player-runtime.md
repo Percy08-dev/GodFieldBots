@@ -477,3 +477,23 @@ retain their existing pool guards and exact budget boundaries.
 Root precollected and ran 224 CPU DATA and retention checks successfully. The
 bridge has no current production success claim until the public workflow passes
 its original process, CUDA, qualified seed and evaluation checks.
+
+
+## Public supervised HPO composition
+
+The reviewed explicit schema 6 route uses the original Rust supervisor and
+fixed campaign controller. The real Store and parent OFDs pass through the
+existing protocol. The controller preserves the Optuna scheduler and exact
+outcome lineage. The original training process retires before a separately
+admitted Fresh evaluation consumes the retained inputs. Evaluation and parent
+retirement must settle before the next training bind.
+
+Resume preserves the old cursor through exec. An actual borrowed Store owner
+verifies existing operation history and the real current namespace before
+updating the pointer. A preparation interrupted before cursor creation can
+resume after the same checks. Missing pointer alone supplies no authority.
+Existing schema 1–5 command and evaluation defaults remain compatible.
+
+Both independent code reviews are READY after the pre-cursor repair. Genuine
+two-operation campaign, original process, full Cold and CUDA restoration
+evidence remain mandatory for runtime acceptance.
