@@ -1,7 +1,7 @@
-"""Ordinary public launch and CONFIG planning; HPO execution stays guarded.
+"""Ordinary public launch, CONFIG planning and fixed private HPO operations.
 
 Configuration previews are DATA, not admission or a physical-capacity promise.
-Torch/native/process imports belong only to the explicit ordinary preparation.
+Torch/native/process imports belong only to explicit preparation.
 """
 from __future__ import annotations
 
@@ -152,7 +152,8 @@ def _snapshot(loaded: LoadedConfig, ownership: Any, *, fresh: bool) -> LoadedCon
     return snapshot
 
 
-def _resume_origin(loaded: LoadedConfig, ownership: Any, bound: Json) -> tuple[Json, Json]:
+def _resume_origin(loaded: LoadedConfig, ownership: Any, bound: Json, *,
+                   hpo_context: Json | None = None) -> tuple[Json, Json]:
     from gf_common.rust_player import deadline_seconds, hex_identity, validate_operation
     from gf_common.rust_player_clock import validate_operation_clock
     from gf_training.lineage import read_json
@@ -164,7 +165,8 @@ def _resume_origin(loaded: LoadedConfig, ownership: Any, bound: Json) -> tuple[J
     if path.is_symlink():
         raise ContractError('ordinary paused state must be an original owned file')
     state = read_json(path)
-    validate_run(state)
+    hpo = hpo_context is not None
+    validate_run(state, hpo=hpo)
     if (state['status'] != 'paused' or not state['updates']
             or state['config_sha256'] != loaded.sha256
             or canonical(state['effective_config']) != canonical(loaded.effective)
@@ -181,13 +183,20 @@ def _resume_origin(loaded: LoadedConfig, ownership: Any, bound: Json) -> tuple[J
     validate_operation(origin)
     hex_identity(origin['operation_id'], 32)
     if (origin_sha != referenced[0]['operation_sha256'] or origin['schema_version'] != 2
-            or origin['mode'] != 'ordinary' or origin['operation_type'] != 'ordinary-train'
+            or origin['mode'] != ('hpo' if hpo else 'ordinary')
+            or origin['operation_type'] != ('hpo-train' if hpo else 'ordinary-train')
             or origin['execution_request']['mode'] != 'fresh'
             or origin['execution_request'] != referenced[0]['execution_request']
             or origin['run_id'] != state['run_id'] or origin['parent_directory'] != str(parent)
             or origin['config_path'] != str(root / 'effective-config.json')
             or origin['config_sha256'] != loaded.sha256 or origin['runtime_binding_sha256'] != digest(bound)):
         raise ContractError('paused ordinary origin/config/root/operation hash differs')
+    if hpo_context is not None and (origin['run_id'] != hpo_context['run_id']
+            or origin['expected_context']['campaign_id'] != hpo_context['campaign_id']
+            or origin['operation_id'] == hpo_context['operation_id']
+            or any(entry['operation_path'] == str(root / f'operation-{hpo_context["operation_id"]}.json')
+                for entry in state['invocations'].values())):
+        raise ContractError('resume requires same experiment/run and distinct operation context')
     clock, _sha = read_control_record(root / f'clock-{origin["operation_id"]}.json', root)
     now = time.monotonic()
     validate_operation_clock(clock, operation=origin, session_clock_binding=clock['clock_binding'],
@@ -218,6 +227,9 @@ class PreparedOrdinary:
     _companion_json: str | None = field(default=None, init=False, repr=False)
 
     def require(self) -> None:
+        self._require_records([_parent_mapping(self.ownership)])
+
+    def _require_records(self, locks: list[Json]) -> None:
         from gf_cli.config import load_rust_player_effective
         from gf_common.rust_player import deadline_seconds, validate_launch
         from gf_common.rust_player_clock import validate_operation_clock
@@ -227,8 +239,7 @@ class PreparedOrdinary:
         if (self.companion is not self._factory_companion
                 or canonical(self.companion.manifest) != self._companion_json):
             raise ContractError('original discovered companion facts differ')
-        mapping = _parent_mapping(self.ownership)
-        if canonical(self.launch) != self._launch_json or self.launch['locks'] != [mapping]:
+        if canonical(self.launch) != self._launch_json or self.launch['locks'] != locks:
             raise ContractError('launch differs from SAME original parent descriptor')
         validate_launch(self.launch)
         _config(self.loaded)
@@ -336,3 +347,144 @@ def exec_ordinary(loaded: LoadedConfig, directory: Path, *, mode: str,
                   pause_after_update: int | None = None) -> None:
     with prepare_ordinary(loaded, directory, mode=mode, pause_after_update=pause_after_update) as prepared:
         prepared.execute()
+
+
+def _operation_namespace_data(loaded: LoadedConfig, context: Any, directory: Path) -> Json:
+    """Immutable experiment-control DATA, never a campaign/proposal receipt."""
+    from gf_common.rust_player import hex_identity, validate_context
+    from gf_training.hpo_gpu_lease import JobContext
+    if type(context) is not JobContext:
+        raise ContractError('actual training JobContext DATA required')
+    checked = validate_context(asdict(context))
+    hex_identity(context.operation_id, 32)
+    cfg: Any = loaded.config
+    parent = Path(cfg.hpo_spec['storage']['parent_root']) / checked['run_id']
+    if (parent != parent.absolute() or parent.name != cfg.run.name
+            or str(parent.parent) != cfg.run.output_dir
+            or directory == parent or directory.is_relative_to(parent)
+            or parent.is_relative_to(directory)):
+        raise ContractError('same configured HPO parent and separate stable control namespace required')
+    return {'schema_version': 1, 'kind': 'hpo-operation-control-data-v1',
+        'experiment_id': context.campaign_id, 'run_id': context.run_id,
+        'parent_directory': str(parent), 'namespace_directory': str(directory), 'config_sha256': loaded.sha256,
+        'config_inputs': list(loaded.inputs)}
+
+
+def _operation_store_identity(store: Any) -> Json:
+    from gf_cli.rust_player_campaign import _store_mapping
+    mapping = _store_mapping(store)
+    path = store.directory / 'lock'
+    actual = path.lstat()
+    if path.is_symlink() or (actual.st_dev, actual.st_ino) != (mapping['device'], mapping['inode']):
+        raise ContractError('original operation Store lock pathname/descriptor differs')
+    directory = store.directory.lstat()
+    return {'directory_device': directory.st_dev, 'directory_inode': directory.st_ino,
+        'lock_device': actual.st_dev, 'lock_inode': actual.st_ino}
+
+
+@contextmanager
+def _operation_namespace(loaded: LoadedConfig, context: Any, directory: Path, *,
+                         mode: str) -> Iterator[Any]:
+    from gf_cli.hpo_storage import CampaignStore
+    directory = Path(directory).absolute()
+    data = _operation_namespace_data(loaded, context, directory)
+    cfg: Any = loaded.config
+    with CampaignStore(directory, mode=mode,
+            max_owned_bytes=cfg.hpo_spec['operating']['parent_budget_bytes']) as store:
+        data['namespace_identity'] = _operation_store_identity(store)
+        if mode == 'fresh':
+            store.put('operation-control.json', data)
+        elif store.get('operation-control.json')[0] != data:
+            raise ContractError('original experiment namespace/config/inputs differ')
+        yield store
+
+
+@dataclass(frozen=True, eq=False)
+class PreparedHpoOperation(PreparedOrdinary):
+    """Borrowed inspection of the actual standalone HPO Store and parent owners."""
+    store: Any = None
+    _namespace_json: str | None = field(default=None, init=False, repr=False)
+
+    def require(self) -> None:
+        from gf_cli.rust_player_campaign import _store_mapping
+        mapping = _store_mapping(self.store)
+        data = self.store.get('operation-control.json')[0]
+        if (self._namespace_json is None or canonical(data) != self._namespace_json
+                or data['namespace_identity'] != _operation_store_identity(self.store)):
+            raise ContractError('actual unchanged operation namespace required')
+        self._require_records([mapping, _parent_mapping(self.ownership)])
+
+
+@contextmanager
+def prepare_hpo_operation(loaded: LoadedConfig, context: Any, namespace: Path, *, mode: str,
+                          pause_after_update: int | None = None) -> Iterator[PreparedHpoOperation]:
+    """Fixed hpo-train launch owning BOTH actual OFDs inside original clocks."""
+    from gf_cli.rust_player_campaign import _store_mapping
+    from gf_common.domain import integer
+    from gf_common.rust_player import (
+        BUILD_KEYS,
+        runtime_binding,
+        validate_launch,
+        validate_operation,
+    )
+    from gf_common.rust_player_clock import clock_deadlines, operation_clock
+    from gf_models.rust_player import sampling_runtime_identity
+    from gf_simulator_client.rust_player_companion import discover_companion
+    from gf_training.lineage import run_lock
+    from gf_training.native_backend import binary_identity
+    from gf_training.rust_player_supervision import runtime_producer, write_control_record
+    cfg, hpo, p = _config(loaded)
+    if not hpo or cfg.model.model_id != 'mlp' or mode not in ('fresh', 'resume'):
+        raise ContractError('explicit materialized HPO6 MLP fresh/resume factory required')
+    if pause_after_update is not None:
+        integer(pause_after_update, 1)
+    namespace = Path(namespace).absolute()
+    namespace_data = _operation_namespace_data(loaded, context, namespace)
+    parent = Path(namespace_data['parent_directory'])
+    startup_preview(loaded)
+    native = binary_identity()
+    companion = discover_companion(native)
+    producer = runtime_producer(companion, sampling_runtime_sha256=sampling_runtime_identity())
+    bound = runtime_binding(cfg.hpo_spec['runtime'], producer)
+    clock_binding = _capture_clock() if mode == 'fresh' else None
+    fresh_deadlines = clock_deadlines(clock_binding, inputs=_inputs(cfg), post_host_seconds=p) if clock_binding is not None else None
+    with _operation_namespace(loaded, context, namespace, mode=mode) as store, run_lock(parent, create=mode == 'fresh') as ownership:
+        snapshot = _snapshot(loaded, ownership, fresh=mode == 'fresh')
+        root = parent / '.rust-player'
+        if mode == 'resume':
+            origin, old_clock = _resume_origin(snapshot, ownership, bound, hpo_context=asdict(context))
+            deadlines, clock_binding = origin['deadlines'], old_clock['clock_binding']
+        else:
+            deadlines = fresh_deadlines
+        assert clock_binding is not None and deadlines is not None
+        op_id = context.operation_id
+        operation = {'schema_version': 2, 'kind': 'rust-player-operation-v2', 'operation_id': op_id,
+            'run_id': context.run_id, 'mode': 'hpo', 'operation_type': 'hpo-train',
+            'config_path': str(root / 'effective-config.json'), 'config_sha256': snapshot.sha256,
+            'runtime_binding_sha256': digest(bound), 'deadlines': deadlines,
+            'parent_directory': str(parent), 'expected_context': asdict(context),
+            'execution_request': {'mode': mode, 'pause_after_update': pause_after_update}}
+        validate_operation(operation)
+        op_path = root / ('operation-fresh.json' if mode == 'fresh' else f'operation-{op_id}.json')
+        op_sha = write_control_record(op_path, operation)
+        clock = operation_clock(operation, clock_binding=clock_binding, inputs=_inputs(cfg), post_host_seconds=p)
+        clock_path = root / f'clock-{op_id}.json'
+        clock_sha = write_control_record(clock_path, clock)
+        provenance = root / f'inputs-{op_id}.json'
+        write_control_record(provenance, {'inputs': list(loaded.inputs)})
+        launch = {'schema_version': 1, 'kind': 'rust-player-launch-v1', 'supervision_id': uuid.uuid4().hex,
+            'python_executable': str(Path(sys.executable).absolute()), 'operation_path': str(op_path),
+            'operation_sha256': op_sha, 'record_directory': str(root), 'mode': 'hpo',
+            'session_deadlines': {'finish_bits': deadlines['finish_bits']}, 'clock_binding': clock_binding,
+            'binding': {'python_abi': native['python_abi'], 'extension_sha256': native['extension_sha256'],
+                'build': {key: native['build'][key] for key in BUILD_KEYS}},
+            'locks': [_store_mapping(store), _parent_mapping(ownership)]}
+        validate_launch(launch)
+        prepared = PreparedHpoOperation(ownership, snapshot, operation, op_path, clock, clock_path,
+            clock_sha, provenance, bound, launch, companion, store=store)
+        object.__setattr__(prepared, '_launch_json', canonical(launch))
+        object.__setattr__(prepared, '_factory_companion', companion)
+        object.__setattr__(prepared, '_companion_json', canonical(companion.manifest))
+        object.__setattr__(prepared, '_namespace_json', canonical(store.get('operation-control.json')[0]))
+        prepared.require()
+        yield prepared
