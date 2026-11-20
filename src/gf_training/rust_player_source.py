@@ -436,7 +436,8 @@ class RustPlayerSource:
         try:
             self._numeric = encode_rust_batch(self, selected_locations=selected_locations(self.selection),
                 selection=self.selection, numeric_budget_bytes=self.registry.config.hpo_spec['operating']['numeric_budget_bytes'])
-            written = self._numeric.persist(directory)
+            written = self._numeric._persist_within_source_quota(directory,
+                source_remaining_bytes=self.registry.budget.limit - self.registry.budget.used)
             metadata = written['manifest']
             self.numeric_directory, self.numeric_files = directory, written['files']
             for name, expected in self.numeric_files.items():

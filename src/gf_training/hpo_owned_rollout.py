@@ -178,6 +178,26 @@ class OwnedNumericBatch:
         return (selected,old,value,float(self.banks.array(f'e.{episode}.advantage')[position]),
             float(self.banks.array(f'e.{episode}.target')[position]))
 
+    def _persist_within_source_quota(self, directory: Path, *, source_remaining_bytes: int) -> Json:
+        """Choose existing shard grouping before ONE actual Rust Source write."""
+        if self._state != 'SEALED':
+            raise ContractError('numeric persistence is single use')
+        # Source includes its actual live Raw/banks/metadata charges; the numeric
+        # envelope independently includes this batch's resident allocation.
+        remaining = min(source_remaining_bytes, self._numeric_limit - self.resident_bytes)
+        base = 32 * len(self._metadata_bytes) + 65536
+        if 35 * min(MAX_ARRAY_BYTES, self.banks.size) + base <= remaining:
+            return self.persist(directory)
+        shard_bytes = min(MAX_ARRAY_BYTES, (remaining - base) // 35)
+        # These descriptors were validated when the actual banks were sealed.
+        # Planning neither exports views nor copies array bytes.
+        largest = max(item.nbytes for bank in self.banks.banks for item in bank.descriptors)
+        if shard_bytes < max(1, largest):
+            self._state = 'FAILED'
+            raise ContractError('owned numeric persistence cannot fit one array within Source/numeric quotas before codec')
+        # The existing reserve is authoritative if capacity changed meanwhile.
+        return self.persist(directory, shard_bytes=shard_bytes)
+
     def persist(self, directory: Path, *, shard_bytes: int = MAX_ARRAY_BYTES) -> Json:
         if self._state != 'SEALED':
             raise ContractError('numeric persistence is single use')
