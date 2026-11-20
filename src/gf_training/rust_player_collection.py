@@ -8,20 +8,18 @@ from pathlib import Path
 from typing import Any
 
 from gf_common.diverse_actions import NumericCosts
-from gf_common.domain import ContractError, Json, clone, digest, group_health_failures
+from gf_common.domain import ContractError, Json, digest, group_health_failures
 from gf_common.rust_player import deadline_seconds
 from gf_common.schedule import serialize_schedule
 from gf_models.rust_player import serialized_torch
 from gf_models.structured_runtime import own_game_worker_settings_v3
 from gf_simulator_client.card_instance_runtime import CardInstanceRuntimeEvidence
-from gf_simulator_client.process import ManagedServer
 from gf_simulator_client.rust_player import RustPlayerRuntime
-from gf_training.group_pack_resources import remaining
 from gf_training.rust_player_lineage import validate_record_shape
+from gf_training.rust_player_matches import RustMatchPump
 from gf_training.rust_player_registry import RustRunRegistry
 from gf_training.rust_player_source import RustPlayerOriginals
 from gf_training.rust_player_storage import (
-    EpisodeEncodingContext,
     EpisodeEncodingPlan,
     PolicyJournalContext,
     RecordingArtifacts,
@@ -101,8 +99,9 @@ class RustPlayerCollector:
         self.current: RustCollectedBatch | None = None
         self._active_writer: RustPlayerStorage | None = None
         self._inventory: Any = None
-        self._servers: dict[int, ManagedServer] = {}
-        self.server_history: list[Json] = []
+        self._matches = RustMatchPump(self.runtime)
+        self._servers = self._matches.servers
+        self.server_history = self._matches.server_history
         self.writer_history: list[Json] = []
         self._source_control_charge: Any = None
 
@@ -216,44 +215,9 @@ class RustPlayerCollector:
         controls = RecordingArtifacts(RecordingBudget(self.runtime.recording_account(), plan.execution_deadline))
         self._controls, self._inventory = controls, None
         inventory: Any = None
-        accepted, bound_contexts, completed_groups = [], {}, {}
-        current_specs, positions, receipts, startups = {}, {}, {}, {}
-        next_group = 0
         evidence = CardInstanceRuntimeEvidence(Path(self.config.server.binary), Path(self.config.server.source_dir),
             contract=self.config.actions.action_contract)
         evidence.preflight()
-
-        async def admit_group(index: int) -> None:
-            group = plan.groups[index]
-            server = ManagedServer(self.config.server.binary, self.config.server.config, group.seed,
-                len(group.episodes), plan.output / "servers" / group.episodes[0].episode_id,
-                startup_seconds=min(self.config.server.startup_seconds, remaining(plan.execution_deadline)),
-                shutdown_seconds=self.config.server.shutdown_seconds, cleanup_deadline=self.cleanup_deadline,
-                strict_cleanup_deadline=True)
-            self._servers[index] = server
-            history: Json = {'server': server, 'runtime_evidence': None}
-            self.server_history.append(history)
-            startup = await server.start()
-            receipt = evidence.verify_executed(server.process)
-            history['runtime_evidence'] = receipt
-            startups[index], receipts[index], positions[index] = startup, receipt, 0
-            real_contexts = tuple(EpisodeEncodingContext(**contexts[episode.episode_id],
-                runtime_evidence=receipt) for episode in group.episodes)
-            await asyncio.to_thread(writer.bind_contexts, real_contexts)
-            bound_contexts[index] = digest([asdict(context) for context in real_contexts])
-            for episode in group.episodes:
-                value = contexts[episode.episode_id]
-                current_specs[episode.episode_id] = {"episode": episode.episode_id, "run": value["run_id"],
-                    "trial": value["trial"], "actions": asdict(self.config.actions),
-                    "rules": asdict(value["rules"]), "numeric_costs": value["numeric_costs"],
-                    "policies": [policy.native for policy in value["policies"]],
-                    "max_decisions": self.config.run.max_decisions, "deadline": plan.execution_deadline,
-                    "cleanup_deadline": self.cleanup_deadline, "runtime_evidence": receipt,
-                    "server": {"base_url": startup["base_url"],
-                        "expected_fingerprint": startup["test_server_info"]["seed_fingerprint"],
-                        "expected_effective": startup["test_server_config"], "startup_info": startup["test_server_info"],
-                        "request_seconds": self.config.server.request_seconds}}
-            self.runtime.start([current_specs[group.episodes[0].episode_id]])
 
         def store(name: str, value: Json) -> tuple[str, int]:
             controls.json(name, value)
@@ -262,40 +226,14 @@ class RustPlayerCollector:
             return digest(value), len(data)
 
         try:
-            while next_group < min(len(plan.groups), self.declaration["game_concurrency"]):
-                await admit_group(next_group)
-                next_group += 1
-            episode_group = {episode.episode_id: index for index, group in enumerate(plan.groups) for episode in group.episodes}
-            terminal_count = 0
-            total = sum(len(group.episodes) for group in plan.groups)
-            while terminal_count < total:
-                bundle = await asyncio.to_thread(self.runtime.next_storage, plan.execution_deadline)
-                row = {"id": bundle.id, "kind": bundle.kind, "episode": bundle.episode,
-                    "game": bundle.game, "transport_sha256": bundle.transport_sha256, "bytes": bundle.reserved_bytes}
-                await asyncio.to_thread(writer.accept, bundle)
-                await asyncio.to_thread(self.runtime.storage_ack, bundle)
-                accepted.append(row)
-                del bundle
-                if row["kind"] != "terminal":
-                    continue
-                terminal_count += 1
-                index = episode_group[row["episode"]]
-                positions[index] += 1
-                group = plan.groups[index]
-                if positions[index] < len(group.episodes):
-                    self.runtime.start([current_specs[group.episodes[positions[index]].episode_id]])
-                else:
-                    server = self._servers[index]
-                    health = await server.stop()
-                    completed_groups[index] = {"runtime_evidence": receipts[index],
-                        "startup": startups[index], "expected_effective": server.expected, "process": clone(health)}
-                    if next_group < len(plan.groups):
-                        await admit_group(next_group)
-                        next_group += 1
-            await asyncio.to_thread(self.runtime.wait, plan.execution_deadline)
-            keys = [(self.registry.state["run_id"], plan.linkage["batch_id"], episode.episode_id)
-                for group in plan.groups for episode in group.episodes]
-            reports = self.runtime.completed_reports(keys)
+            execution = await self._matches.execute(plan.groups, contexts, writer,
+                server=self.config.server, actions=self.config.actions, max_decisions=self.config.run.max_decisions,
+                output=plan.output, execution_deadline=plan.execution_deadline, cleanup_deadline=self.cleanup_deadline,
+                game_concurrency=self.declaration["game_concurrency"], run_id=self.registry.state["run_id"],
+                batch_id=plan.linkage["batch_id"], evidence=evidence)
+            accepted, bound_contexts, completed_groups = execution.accepted, execution.bound_contexts, execution.completed_groups
+            receipts, keys, reports, total = execution.receipts, execution.keys, execution.reports, execution.total
+            del execution
             if self.runtime._service_error is not None or self.runtime._active_routes or self.runtime._holds:
                 raise ContractError("actual inference consumers remain unsettled")
             if self.runtime.dispatcher.checkpoint_references() or any(self.registry.service.references.values()):
