@@ -19,6 +19,7 @@ class PoolCloseHold:
         self._attempted = False
         self._before = 0
         self.retired = False
+        self._construction_certain = False
 
     def retire(self, owner: object) -> None:
         if owner is not self.owner:
@@ -92,6 +93,7 @@ class PackedArtifactPool:
             error.__dict__['cleanup_owner'] = owner
             raise
         hold.amount = 4096
+        hold._construction_certain = True
         return hold
 
     def require_terminal_close(self) -> None:
@@ -99,6 +101,14 @@ class PackedArtifactPool:
             failure = RuntimeError('actual native executor close hold still owns originals/account')
             failure.__dict__['cleanup_owner'] = self._close_holds[0].owner
             raise failure
+
+    def _require_borrowed_verifier_close(self, hold: PoolCloseHold, owner: object) -> None:
+        """Exempt one positively registered outer hold; never retire/drop it."""
+        if (type(hold) is not PoolCloseHold or hold.pool is not self or hold.owner is not owner
+                or len(self._close_holds) != 1 or self._close_holds[0] is not hold
+                or hold.retired or hold._attempted or not hold._construction_certain
+                or hold.amount != 4096 or self.closed):
+            raise RuntimeError('actual exclusive certain outer verifier hold/owner required')
 
     def check(self) -> None:
         remaining(self.deadline)

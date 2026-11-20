@@ -272,6 +272,14 @@ def validate_retirement_pair(intent: Json, receipt: Json, *, intent_sha256: str)
 
 def _retirement_history(control: Any, state: Json, prepared: Json, intent: Json,
                         pool: Any, loans: list[Any], deadline: float, *, hpo: bool) -> None:
+    return _retirement_history_data(state, prepared, intent, pool, loans, deadline, hpo=hpo,
+        parent_directory=Path(control.operation['parent_directory']), record_root=control.root,
+        session_finish=control.launch['session_deadlines']['finish_bits'])
+
+
+def _retirement_history_data(state: Json, prepared: Json, intent: Json,
+                        pool: Any, loans: list[Any], deadline: float, *, hpo: bool, parent_directory: Path,
+                             record_root: Path, session_finish: str) -> None:
     from gf_common.rust_player import (
         validate_exit,
         validate_local_admission,
@@ -285,15 +293,15 @@ def _retirement_history(control: Any, state: Json, prepared: Json, intent: Json,
     entry = state['invocations'].get(invocation)
     if entry is None:
         raise ContractError('retirement invocation missing from actual history')
-    root = control.root
+    root = record_root
     operation, operation_sha = read_control_record(Path(entry['operation_path']), root)
     admission, admission_sha = read_control_record(Path(entry['admission_path']), root)
-    validate_operation(operation, session_finish=control.launch['session_deadlines']['finish_bits'])
+    validate_operation(operation, session_finish=session_finish)
     validate_local_admission(admission)
     if (operation_sha != entry['operation_sha256'] or admission_sha != entry['admission_sha256']
             or operation['operation_id'] != intent['operation_id'] or admission['operation_id'] != intent['operation_id']
             or admission['invocation_id'] != invocation or operation['run_id'] != state['run_id']
-            or admission['run_id'] != state['run_id'] or operation['parent_directory'] != str(control.operation['parent_directory'])
+            or admission['run_id'] != state['run_id'] or operation['parent_directory'] != str(parent_directory)
             or operation['config_sha256'] != state['config_sha256'] or admission['config_sha256'] != state['config_sha256']
             or operation['runtime_binding_sha256'] != intent['runtime_binding_sha256']
             or admission['runtime_binding_sha256'] != intent['runtime_binding_sha256']
@@ -396,7 +404,7 @@ def _protected_bytes(required: dict[int, set[str]], shared: set[int]) -> int:
         size += sum(_owned_bytes(name, shared) for name in names)
     return size
 
-def _cold_protected_files(control: Any, state: Json, registry: Json, pool: Any,
+def _cold_protected_files(parent_directory: Path, state: Json, registry: Json, pool: Any,
                           loans: list[Any], deadline: float, *, hpo: bool,
                           operating: Json | None) -> dict[int, set[str]]:
     """Fund compact truthful policy DATA, using the existing Source account."""
@@ -407,7 +415,7 @@ def _cold_protected_files(control: Any, state: Json, registry: Json, pool: Any,
     from gf_training.structured_rollout import _owned_bytes
     if hpo and operating is None:
         raise ContractError('cold HPO protection requires loaded operating data')
-    root = Path(control.operation['parent_directory'])
+    root = parent_directory
     if not hpo:
         # Ordinary cadence/reference requirements need only the current pool;
         # historical generations are individually audited below, without a
@@ -467,16 +475,25 @@ def _cold_protected_files(control: Any, state: Json, registry: Json, pool: Any,
 def audit_artifact_files(control: Any, state: Json, prepared: Json, registry: Json,
                         pool: Any, loans: list[Any], deadline: float, *, hpo: bool,
                         operating: Json | None = None) -> None:
+    return audit_artifact_files_data(state, prepared, registry, pool, loans, deadline, hpo=hpo,
+        operating=operating, parent_directory=Path(control.operation['parent_directory']),
+        record_root=control.root, session_finish=control.launch['session_deadlines']['finish_bits'])
+
+
+def audit_artifact_files_data(state: Json, prepared: Json, registry: Json,
+                        pool: Any, loans: list[Any], deadline: float, *, hpo: bool,
+                        operating: Json | None = None, parent_directory: Path,
+                             record_root: Path, session_finish: str) -> None:
     """Audit retained originals and exact retired history under the caller's owner."""
     if set(registry['generations']) != {str(g) for g in range(state['updates'] + 1)}:
         raise ContractError('artifact registry generation inventory differs')
     protection_mark = len(loans)
-    required = _cold_protected_files(control, state, registry, pool, loans, deadline,
+    required = _cold_protected_files(parent_directory, state, registry, pool, loans, deadline,
         hpo=hpo, operating=operating)
     for generation in range(state['updates'] + 1):
         mark = len(loans)
-        _audit_artifact_generation(control, state, prepared, registry, pool, loans, deadline,
-            generation=generation, required=required, hpo=hpo)
+        _audit_artifact_generation(parent_directory, state, prepared, registry, pool, loans, deadline,
+            generation=generation, required=required, hpo=hpo, record_root=record_root, session_finish=session_finish)
         # The helper's decoded graphs have reached last use before refunding
         # their SAME charges. Errors keep both frames and loans for the caller.
         for loan in loans[mark:]:
@@ -488,14 +505,15 @@ def audit_artifact_files(control: Any, state: Json, prepared: Json, registry: Js
     del loans[protection_mark:]
 
 
-def _audit_artifact_generation(control: Any, state: Json, prepared: Json, registry: Json,
+def _audit_artifact_generation(parent_directory: Path, state: Json, prepared: Json, registry: Json,
                                pool: Any, loans: list[Any], deadline: float, *,
-                               generation: int, required: dict[int, set[str]], hpo: bool) -> None:
+                               generation: int, required: dict[int, set[str]], hpo: bool,
+                               record_root: Path, session_finish: str) -> None:
     from gf_models.structured_sealed import basename
     from gf_training.group_pack_source import OriginalFile
     from gf_training.rust_player_completion import _read
     from gf_training.rust_player_lineage import validate_record_shape
-    root = Path(control.operation['parent_directory'])
+    root = parent_directory
     record, _ = _read(root / 'generations' / f'{generation:06}.json', pool.budget, deadline, loans=loans)
     validate_record_shape(record, 'generation', hpo=hpo)
     entry = closed(registry['generations'][str(generation)], {'inference_sha256', 'snapshot_identity', 'files'})
@@ -538,7 +556,8 @@ def _audit_artifact_generation(control: Any, state: Json, prepared: Json, regist
                 or intent['sha256'] != checksum or intent['runtime_binding_sha256'] != state['runtime_binding_sha256']):
             raise ContractError('retirement exact record path/generation/runtime differs')
         history_mark = len(loans)
-        _retirement_history(control, state, prepared, intent, pool, loans, deadline, hpo=hpo)
+        _retirement_history_data(state, prepared, intent, pool, loans, deadline, hpo=hpo,
+            parent_directory=parent_directory, record_root=record_root, session_finish=session_finish)
         for loan in loans[history_mark:]:
             loan.close()
         del loans[history_mark:]

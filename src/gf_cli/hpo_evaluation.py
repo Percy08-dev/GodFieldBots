@@ -572,6 +572,8 @@ def verify_gpu_termination(value: Json, *, campaign_id: str, operation_id: str,
     gpu._admission(admission, ticket)
     gpu._termination(value, admission)
     stored = gpu._termination(gpu._read(directory / 'termination.json'), admission)
+    if not isinstance(stored, gpu.TerminationReceipt) or type(stored) not in (gpu.TerminationReceipt, gpu.SharedTerminationReceipt):
+        raise ContractError('legacy evaluation verifier requires its actual legacy receipt family')
     if canonical(asdict(stored)) != canonical(value):
         raise ContractError('campaign GPU termination differs from the actual fixed namespace receipt')
     context = closed(admission['context'], {'campaign_id', 'operation_id', 'kind', 'run_id', 'evaluation_id'})
@@ -584,7 +586,8 @@ def verify_gpu_termination(value: Json, *, campaign_id: str, operation_id: str,
 def verify_saved_evaluation(directory: Path, loaded: LoadedHPOConfig, linkage: Json, *,
                             deadline: float, extra_owned_bytes: int = 0,
                             _cleanup_observation: _HpoEvaluationCleanupObservation | None = None,
-                            evaluation_runtime: Json | None = None) -> tuple[Json, Json]:
+                            evaluation_runtime: Json | None = None, _pool: Any = None,
+                            _audit_owner: Any = None) -> tuple[Json, Json]:
     """Reopen actual packed members and reconcile BOTH original participant views."""
     from gf_common.group_pack_game import storage_binding
     from gf_common.preprocessing import preparation_config
@@ -595,7 +598,19 @@ def verify_saved_evaluation(directory: Path, loaded: LoadedHPOConfig, linkage: J
     root = Path(loaded.config.storage.originals_root or (
         loaded.base.config.storage.db_root if isinstance(loaded.base.config, GroupPackExperimentConfig) else '/mnt/d/godfield'))
     observation = _cleanup_observation
+    adapter = None
+    if _pool is not None or _audit_owner is not None:
+        from gf_training.rust_player_evaluation import RustCompletedParentAudit
+        if type(_audit_owner) is not RustCompletedParentAudit or _audit_owner.pool is not _pool:
+            raise ContractError('actual SAME completed audit owner/pool required for shared saved verification')
+        _audit_owner.require()
+        _pool._require_borrowed_verifier_close(_audit_owner._pool_hold, _audit_owner)
+        if _pool.budget.limit > min(loaded.config.operating.source_budget_bytes, settings.memory_budget_mib * 1024**2):
+            raise ContractError('actual shared pool exceeds the existing saved-reader bound')
     owner = PackedSourceOwner.__new__(PackedSourceOwner)
+    if _pool is not None:
+        from gf_training.rust_player_evaluation import _BorrowedVerifierRetirement
+        adapter = _BorrowedVerifierRetirement(owner, _audit_owner._pool_hold, _audit_owner)
     if observation is not None:
         if observation._verifier_phase != 'unentered':
             raise ContractError('evaluation verifier observation already consumed')
@@ -603,8 +618,14 @@ def verify_saved_evaluation(directory: Path, loaded: LoadedHPOConfig, linkage: J
     try:
         PackedSourceOwner.__init__(owner, directory, settings, deadline, storage_binding=storage_binding(),
             max_owned_bytes=loaded.config.operating.source_budget_bytes, extra_owned_bytes=extra_owned_bytes,
-            expected_descriptor_root=root / linkage['evaluation_id'])
+            expected_descriptor_root=root / linkage['evaluation_id'], **({} if _pool is None else {'pool': _pool}))
     except BaseException as error:
+        if _pool is not None:
+            from gf_training.rust_player_completion import _FailedRawAudit
+            assert adapter is not None
+            adapter.capture(error)
+            vars(error)['cleanup_owner'] = _FailedRawAudit(adapter, error)
+            raise
         if observation is not None:
             observation._verifier_error = error
             vars(error)['hpo_verifier_cleanup_owner'] = owner
@@ -629,6 +650,12 @@ def verify_saved_evaluation(directory: Path, loaded: LoadedHPOConfig, linkage: J
             raise ContractError('saved original evaluation is not a complete natural panel')
         owner.finalize()
     except BaseException as error:
+        if _pool is not None:
+            from gf_training.rust_player_completion import _FailedRawAudit
+            assert adapter is not None
+            adapter.capture(error)
+            vars(error)['cleanup_owner'] = _FailedRawAudit(adapter, error)
+            raise
         try:
             owner.close()
         except BaseException as cleanup:  # noqa: BLE001 -- keep primary and the SAME original Source.
@@ -640,6 +667,19 @@ def verify_saved_evaluation(directory: Path, loaded: LoadedHPOConfig, linkage: J
             if observation is not None:
                 observation._verifier_phase = 'retired'
         raise
+    if adapter is not None:
+        try:
+            retained = _audit_owner.retain_evaluation_metadata(manifest, proof)
+            # The independent copy is now funded. No old decoded/raw alias may
+            # survive this actual wrapper's positive FD/metadata retirement.
+            del collection, manifest, proof
+            adapter.close()
+            return retained.value['manifest'], retained.value['proof']
+        except BaseException as error:
+            from gf_training.rust_player_completion import _FailedRawAudit
+            adapter.capture(error)
+            vars(error)['cleanup_owner'] = _FailedRawAudit(adapter, error)
+            raise
     try:
         owner.close()
     except BaseException as error:
@@ -707,7 +747,30 @@ def _projection(manifest: Json, parent: Json, source_sha: str, conditions_sha: s
 
 
 def verify_seed_evaluation(store: object, loaded: LoadedHPOConfig, campaign: Json, proposal: object,
-                           seed: int, *, deadline: float) -> tuple[object, str, str]:
+                           seed: int, *, deadline: float, control: Any = None, ownership: Any = None,
+                           pool: Any = None, parent_budget: Any = None) -> tuple[object, str, str]:
+    from gf_cli.hpo_campaign import Proposal
+    from gf_cli.hpo_storage import CampaignStore
+    if type(store) is not CampaignStore or type(proposal) is not Proposal:
+        raise ContractError('actual campaign owner and durable proposal required')
+    if loaded.config.schema_version != 6:
+        return _verify_seed_evaluation_data(store, loaded, campaign, proposal, seed, deadline=deadline)
+    from gf_cli.rust_player_evaluation import open_closed_rust_parent
+    audit = open_closed_rust_parent(store, loaded, campaign, proposal, seed, control=control,
+        ownership=ownership, pool=pool, parent_budget=parent_budget, deadline=deadline)
+    try:
+        result = _verify_seed_evaluation_data(store, loaded, campaign, proposal, seed, deadline=deadline, audit=audit)
+    except BaseException as error:
+        from gf_training.rust_player_completion import _capture_failure_graph
+        audit._failed = True
+        _capture_failure_graph(audit, error)
+        raise
+    audit.close()
+    return result
+
+
+def _verify_seed_evaluation_data(store: object, loaded: LoadedHPOConfig, campaign: Json, proposal: object,
+                           seed: int, *, deadline: float, audit: Any = None) -> tuple[object, str, str]:
     """Reopen every actual parent/original/cleanup link for one closed seed."""
     from gf_cli.hpo_campaign import Proposal
     from gf_cli.hpo_storage import CampaignStore
@@ -726,11 +789,19 @@ def verify_seed_evaluation(store: object, loaded: LoadedHPOConfig, campaign: Jso
         raise ContractError('failed proposal cannot be requalified by success-looking files')
     folder = root + f'/seeds/{seed}'
     training, train_sha = store.get(folder + '/training.json')
-    _receipt(training, 'hpo-seed-training', _TRAINING_RECEIPT_FIELDS)
+    if audit is None:
+        _receipt(training, 'hpo-seed-training', _TRAINING_RECEIPT_FIELDS)
+    else:
+        from gf_training.rust_player_evaluation import validate_seed_training
+        validate_seed_training(training)
     if training['proposal_sha256'] != proposal.sha256 or training['training_seed'] != seed:
         raise ContractError('seed training receipt belongs to another proposal/seed')
-    inspection = inspect_training_parent(Path(training['run_path']), loaded, proposal.settings,
-        training_seed=seed, run_id=training['run_id'], deadline=deadline)
+    if audit is None:
+        inspection = inspect_training_parent(Path(training['run_path']), loaded, proposal.settings,
+            training_seed=seed, run_id=training['run_id'], deadline=deadline)
+    else:
+        audit.require()
+        inspection = ParentInspection(audit.state, (), audit.metadata)
     _parent_conditions(inspection, campaign)
     source, source_sha = store.get(folder + '/source-validation.json')
     if canonical(source) != canonical(inspection.source) or source_sha != training['source_receipt_sha256']:
@@ -740,23 +811,36 @@ def verify_seed_evaluation(store: object, loaded: LoadedHPOConfig, campaign: Jso
         if canonical(training[key]) != canonical(source[key]):
             raise ContractError('training receipt differs from full final-D Source facts')
     termination, term_sha = store.get(folder + '/training-gpu-termination.json')
-    if termination.get('schema_version')!=(2 if loaded.config.schema_version==5 else 1):
-        raise ContractError('training GPU termination version differs from explicit campaign mode')
-    verify_gpu_termination(termination, campaign_id=campaign['campaign_id'], operation_id=training['run_id'],
-        run_id=training['run_id'], evaluation_id=None)
+    if audit is None:
+        if termination.get('schema_version')!=(2 if loaded.config.schema_version==5 else 1):
+            raise ContractError('training GPU termination version differs from explicit campaign mode')
+        verify_gpu_termination(termination, campaign_id=campaign['campaign_id'], operation_id=training['run_id'],
+            run_id=training['run_id'], evaluation_id=None)
+    else:
+        from gf_training.rust_player_evaluation import validate_seed_binding
+        validate_seed_binding(training, source, source_sha256=source_sha, termination_sha256=term_sha)
     if term_sha != training['gpu_termination_sha256']:
         raise ContractError('training receipt does not bind exact actual termination')
     evaluation, eval_sha = store.get(folder + '/evaluation.json')
     _receipt(evaluation, 'hpo-seed-evaluation', _EVALUATION_RECEIPT_FIELDS)
     link = evaluation['linkage']
-    final_reference, final_binding = _final_policy_reference(inspection, source_sha)
+    if audit is None:
+        final_reference, final_binding = _final_policy_reference(inspection, source_sha)
+    else:
+        from gf_common.card_instance_collection import checked_hpo_evaluation_parent
+        from gf_training.rust_player_evaluation import final_policy_binding
+        label, final_binding = final_policy_binding(audit.state, audit.metadata)
+        final_reference = checked_hpo_evaluation_parent({'run_id': training['run_id'], 'run_path': training['run_path'],
+            'training_seed': seed, 'generation': training['generation'], 'generation_sha256': training['generation_sha256'],
+            'inference_sha256': training['inference_sha256'], 'source_receipt_sha256': source_sha, 'policy_label': label})
     if (evaluation['training_receipt_sha256'] != train_sha or evaluation['conditions_sha256'] != campaign['conditions_sha256']
             or evaluation['linkage_sha256'] != digest(link) or link['purpose'] != 'objective'
             or link['conditions_sha256'] != campaign['conditions_sha256']
             or canonical(link['left_parent']) != canonical(final_reference)):
         raise ContractError('seed evaluation differs from exact training/conditions identity')
     manifest, proof = verify_saved_evaluation(Path(evaluation['directory']), loaded, link, deadline=deadline,
-        evaluation_runtime=evaluation_runtime(loaded.config))
+        evaluation_runtime=None if audit is not None else evaluation_runtime(loaded.config),
+        **({} if audit is None else {'_pool': audit.pool, '_audit_owner': audit}))
     check_evaluation_receipt_runtime(evaluation,manifest)
     if canonical(manifest['policy_bindings'].get(final_reference['policy_label'])) != canonical(asdict(final_binding)):
         raise ContractError('original evaluated policy differs from the inspected final-D binding')
@@ -767,16 +851,26 @@ def verify_seed_evaluation(store: object, loaded: LoadedHPOConfig, campaign: Jso
         raise ContractError('seed evaluation original bytes differ from closed receipt')
     reference = {'run_id': training['run_id'], 'token': link['gpu_ticket'], 'generation': training['generation'],
         'inference_sha256': training['inference_sha256'], 'generation_sha256': training['generation_sha256']}
-    # Editable dependency paths must never supply a missing private runtime
-    # implementation from another checkout.
-    retention = owned_runtime_module('gf_training.hpo_retention', ('release_hpo_evaluation',))
-    released = retention.release_hpo_evaluation(Path(training['run_path']), reference,
-        max_owned_bytes=loaded.config.operating.source_budget_bytes, deadline=deadline)
-    journal = Path(training['run_path']) / 'evaluation-reference-receipts' / link['gpu_ticket']
-    from gf_models.arrays import sha256
-    if (released.receipt_sha256 != evaluation['pin_release_sha256']
-            or sha256(journal / 'acquire.receipt.json', deadline) != evaluation['pin_acquire_sha256']):
-        raise ContractError('evaluation pin/release transaction receipt changed')
+    if audit is None:
+        # Editable dependency paths must never supply a missing private runtime
+        # implementation from another checkout.
+        retention = owned_runtime_module('gf_training.hpo_retention', ('release_hpo_evaluation',))
+        released = retention.release_hpo_evaluation(Path(training['run_path']), reference,
+            max_owned_bytes=loaded.config.operating.source_budget_bytes, deadline=deadline)
+        journal = Path(training['run_path']) / 'evaluation-reference-receipts' / link['gpu_ticket']
+        from gf_models.arrays import sha256
+        if (released.receipt_sha256 != evaluation['pin_release_sha256']
+                or sha256(journal / 'acquire.receipt.json', deadline) != evaluation['pin_acquire_sha256']):
+            raise ContractError('evaluation pin/release transaction receipt changed')
+    else:
+        from gf_training.rust_player_evaluation import validate_reference_inventory
+        validate_reference_inventory(audit.ownership, state_sha256=source['state_sha256'], pool=audit.pool,
+            parent_budget=audit.parent_budget, deadline=deadline)
+        journal = Path(training['run_path']) / 'evaluation-reference-receipts' / link['gpu_ticket']
+        acquired = audit.read_data(journal / 'acquire.receipt.json', evaluation['pin_acquire_sha256'], protocol=False)
+        released_data = audit.read_data(journal / 'release.receipt.json', evaluation['pin_release_sha256'], protocol=False)
+        if acquired['binding'] != reference or released_data['binding'] != reference:
+            raise ContractError('closed evaluation reference1 DATA binding differs')
     termination, term_sha = store.get(folder + '/evaluation-gpu-termination.json')
     verify_gpu_termination(termination, campaign_id=campaign['campaign_id'], operation_id=link['evaluation_id'],
         run_id=training['run_id'], evaluation_id=link['evaluation_id'])
@@ -788,6 +882,8 @@ def verify_seed_evaluation(store: object, loaded: LoadedHPOConfig, campaign: Jso
     raw_run = projected['run']
     run = RunIdentity(**{**raw_run, 'games': tuple(GameIdentity(**value) for value in raw_run['games'])})
     games = tuple(GameProjection(**{**value, 'identity': GameIdentity(**value['identity'])}) for value in projected['games'])
+    if audit is not None:
+        audit.require()
     return SeedEvaluationProjection(run, projected['used_decisions'], projected['conditions_sha256'], games), train_sha, eval_sha
 
 
@@ -839,6 +935,10 @@ def persist_training_receipt(store: object, loaded: LoadedHPOConfig, campaign: J
     from gf_common.domain import clone
     from gf_training.hpo_gpu_lease import SharedTerminationReceipt, TerminationReceipt
 
+    if loaded.config.schema_version == 6:
+        from gf_cli.rust_player_evaluation import persist_rust_training_receipt
+        return persist_rust_training_receipt(store, loaded, campaign, proposal, training_seed=training_seed,
+            run_id=run_id, directory=directory, termination=termination, deadline=deadline, completion=completion)
     expected_termination=SharedTerminationReceipt if loaded.config.schema_version==5 else TerminationReceipt
     if type(store) is not CampaignStore or type(proposal) is not Proposal or type(termination) is not expected_termination:
         raise ContractError('actual campaign/proposal/termination outputs required')
@@ -863,11 +963,21 @@ def persist_training_receipt(store: object, loaded: LoadedHPOConfig, campaign: J
 
 
 def verify_training_receipt(store: object, loaded: LoadedHPOConfig, campaign: Json, proposal: object,
-                            training_seed: int, *, deadline: float) -> Json:
+                            training_seed: int, *, deadline: float, control: Any = None, ownership: Any = None,
+                            pool: Any = None, parent_budget: Any = None) -> Json:
     from gf_cli.hpo_campaign import Proposal
     from gf_cli.hpo_storage import CampaignStore
     if type(store) is not CampaignStore or type(proposal) is not Proposal:
         raise ContractError('actual campaign/proposal required')
+    if loaded.config.schema_version == 6:
+        from gf_cli.rust_player_evaluation import open_closed_rust_parent
+        audit = open_closed_rust_parent(store, loaded, campaign, proposal, training_seed,
+            control=control, ownership=ownership, pool=pool, parent_budget=parent_budget, deadline=deadline)
+        try:
+            value, _ = store.get(f'proposals/{proposal.number:06}/seeds/{training_seed}/training.json')
+            return value
+        finally:
+            audit.close()
     folder = f'proposals/{proposal.number:06}/seeds/{training_seed}'
     value, _ = store.get(folder + '/training.json')
     _receipt(value, 'hpo-seed-training', _TRAINING_RECEIPT_FIELDS)

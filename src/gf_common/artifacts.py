@@ -107,6 +107,18 @@ class _PhaseReservation:
         self.phase,self.actual,self.size=phase,actual,size
         self.closed=False
 
+    def shrink(self, size: int) -> None:
+        """Release only a proven-unused portion; growth keeps reserve's semantics."""
+        with self.phase._lock:
+            if self.closed or type(size) is not int or not 0 <= size <= self.size:
+                raise ValueError('open phase reservation permits shrink only')
+            resize = getattr(self.actual, 'resize', None)
+            if not callable(resize):
+                raise TypeError('actual reservation backend does not support shrinking')
+            resize(size)
+            self.phase.used -= self.size - size
+            self.size = size
+
     def close(self) -> None:
         with self.phase._lock:
             if self.closed: return

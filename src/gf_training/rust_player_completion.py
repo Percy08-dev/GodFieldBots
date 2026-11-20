@@ -19,11 +19,101 @@ _ISSUER = object()
 _PARENT_ISSUER = object()
 
 
+def _cleanup_owner_reaches(candidate: Any, owner: Any) -> bool:
+    """Only existing actual cleanup-custody edges can make adoption a back-edge."""
+    pending, visited = [candidate], set()
+    while pending:
+        current = pending.pop()
+        if current is owner:
+            return True
+        if id(current) in visited:
+            continue
+        visited.add(id(current))
+        pending.extend(getattr(current, '_cleanup_children', ()))
+    return False
+
+
+def _capture_failure_graph(owner: Any, error: BaseException, *, exclude: tuple[object, ...] = ()) -> None:
+    """Snapshot this DATA failure's actual owners/frames before outer overwrite."""
+    errors = vars(owner).setdefault('_failure_errors', [])
+    tracebacks = vars(owner).setdefault('_failure_tracebacks', [])
+    seen_errors = {id(failure) for failure in errors}
+    visited: set[int] = set()
+    seen_tracebacks = {id(stopped) for stopped in tracebacks}
+    excluded = {id(owner), *(id(child) for child in exclude)}
+    seen_owners = {id(child) for child in owner._cleanup_children}
+    pending = [error]
+    while pending:
+        failure = pending.pop()
+        if id(failure) in visited:
+            continue
+        visited.add(id(failure))
+        if id(failure) not in seen_errors:
+            seen_errors.add(id(failure))
+            errors.append(failure)
+        # Propagation can prepend traceback frames, attach a cleanup consumer or
+        # change links on this SAME exception after an earlier owner snapshot.
+        stopped = failure.__traceback__
+        if stopped is not None and id(stopped) not in seen_tracebacks:
+            seen_tracebacks.add(id(stopped))
+            tracebacks.append(stopped)
+        nested = vars(failure).get('cleanup_owner')
+        if (nested is not None and id(nested) not in excluded and id(nested) not in seen_owners
+                and not _cleanup_owner_reaches(nested, owner)):
+            seen_owners.add(id(nested))
+            owner._cleanup_children.append(nested)
+        for linked in (failure.__cause__, failure.__context__):
+            if linked is not None:
+                pending.append(linked)
+    vars(error)['cleanup_owner'] = owner
+
+
+def _clear_failure_frames(owner: Any) -> None:
+    """Every captured traceback, including suppressed context, precedes refund."""
+    import sys
+    import traceback
+    from types import FrameType
+    captured = vars(owner).get('_failure_tracebacks', [])
+    # A producer which is still executing cannot positively retire its aliases.
+    active: set[int] = set()
+    frame: FrameType | None
+    for thread_frame in sys._current_frames().values():
+        frame = thread_frame
+        while frame is not None:
+            active.add(id(frame))
+            frame = frame.f_back
+    for stopped in captured:
+        current = stopped
+        while current is not None:
+            if id(current.tb_frame) in active:
+                raise RuntimeError('actual failed DATA producer frames are still executing')
+            current = current.tb_next
+    for stopped in captured:
+        traceback.clear_frames(stopped)
+
+
+def _discard_failure_graph(owner: Any) -> None:
+    # Only after actual consumers and their funders positively retired.
+    vars(owner).get('_failure_errors', []).clear()
+    vars(owner).get('_failure_tracebacks', []).clear()
+    if '_failure_traceback' in vars(owner):
+        owner._failure_traceback = None
+
+
 def _audit_retirement(control: HostControl, state: Json, prepared: Json,
                       pool: PackedArtifactPool, loans: list[Any], deadline: float, *, hpo: bool = False,
                       operating: Json | None = None) -> None:
+    return _audit_retirement_data(state, prepared, pool, loans, deadline, hpo=hpo, operating=operating,
+        parent_directory=Path(control.operation['parent_directory']), record_root=control.root,
+        session_finish=control.launch['session_deadlines']['finish_bits'])
+
+
+def _audit_retirement_data(state: Json, prepared: Json,
+                      pool: PackedArtifactPool, loans: list[Any], deadline: float, *, hpo: bool = False,
+                      operating: Json | None = None, parent_directory: Path,
+                           record_root: Path, session_finish: str) -> None:
     from gf_training.rust_player_supervision import read_control_record
-    close, checksum = read_control_record(Path(prepared['close_ack_path']), control.root)
+    close, checksum = read_control_record(Path(prepared['close_ack_path']), record_root)
     if checksum != prepared['close_ack_sha256']:
         raise ContractError('cold close acknowledgement changed')
     invocation = prepared['invocation_id']
@@ -31,7 +121,7 @@ def _audit_retirement(control: HostControl, state: Json, prepared: Json,
     if health['errors'] or not all(health[name] for name in ('actors_joined', 'service_joined',
             'writers_joined', 'servers_joined', 'buffers_released', 'gpu_fenced')):
         raise ContractError('cold actual host health is incomplete')
-    root = Path(control.operation['parent_directory'])
+    root = parent_directory
     bodies = {}
     for name, key, kind in (
         ('native', 'native_retirement_sha256', 'rust-player-native-retirement-v1'),
@@ -56,8 +146,9 @@ def _audit_retirement(control: HostControl, state: Json, prepared: Json,
     validate_record_shape(registry, 'registry', hpo=hpo)
     if registry['run_id'] != state['run_id'] or registry['runtime_binding_sha256'] != state['runtime_binding_sha256']:
         raise ContractError('cold actual artifact registry identity differs')
-    from gf_training.rust_player_retention import audit_artifact_files
-    audit_artifact_files(control, state, prepared, registry, pool, loans, deadline, hpo=hpo, operating=operating)
+    from gf_training.rust_player_retention import audit_artifact_files_data
+    audit_artifact_files_data(state, prepared, registry, pool, loans, deadline, hpo=hpo,
+        operating=operating, parent_directory=parent_directory, record_root=record_root, session_finish=session_finish)
     for token, entry in registry['service_references'].items():
         if entry['status'] != 'released' or entry['release_sha256'] is None:
             raise ContractError('cold cache reference was not actually released')
@@ -190,6 +281,7 @@ class ColdFinalizedRustParent:
         self._invocation = invocation
         self._ready, self._failed, self._closed = False, False, False
         self._metadata_original: OriginalFile | None = None
+        self._evaluation_exports: list[Any] = []
         self._cleanup_children: list[Any] = []
         self._state = canonical(state).encode()
         self._state_sha256 = completion['state_sha256']
@@ -258,6 +350,15 @@ class ColdFinalizedRustParent:
         self.require()
         return json.loads(self._metadata)
 
+    def evaluation_artifacts(self, binding: Any, label: str, *, evaluation_job: Any,
+                             pool: PackedArtifactPool, parent_budget: Any, pin: str) -> Any:
+        from gf_training.rust_player_evaluation import RustEvaluationData
+        self.require()
+        if self._evaluation_exports:
+            raise ContractError('actual prior evaluation handoff remains pending')
+        return RustEvaluationData.from_parent(self, binding, label, evaluation_job=evaluation_job,
+            pool=pool, parent_budget=parent_budget, pin=pin)
+
     def _close_metadata(self) -> None:
         """Retire this child only; outer invocation owns the enclosing grant."""
         self._ready = False
@@ -270,6 +371,8 @@ class ColdFinalizedRustParent:
 
     def close(self) -> None:
         if not self._closed:
+            if getattr(self, '_evaluation_exports', ()):
+                raise ContractError('actual evaluation DATA handoff/cleanup remains incomplete')
             if hasattr(self._invocation, '_ownership'):
                 self._invocation._require_parent()
             self._close_metadata()
@@ -296,22 +399,47 @@ def _read(path: Path, budget: Any, deadline: float, expected: str | None = None,
 
 
 class _FailedRawAudit:
-    """One stopped raw audit's actual Originals and funded traceback aliases."""
-
+    """One stopped raw DATA graph and every actual chained cleanup consumer."""
     def __init__(self, originals: Any, error: BaseException) -> None:
-        self.originals, self.traceback = originals, error.__traceback__
-        self.nested = vars(error).get('cleanup_owner')
+        self.originals = originals
+        self._cleanup_children: list[Any] = []
         self.closed = False
+        _capture_failure_graph(self, error, exclude=(originals,))
 
     def close(self) -> None:
         if self.closed:
             return
-        import traceback
-        traceback.clear_frames(self.traceback)
-        if self.nested is not None and self.nested is not self.originals:
-            self.nested.close()
-        self.originals.close()
-        self.traceback, self.nested, self.closed = None, None, True
+        try:
+            _clear_failure_frames(self)
+            close_resources(self, [])
+            self.originals.close()
+        except BaseException as error:
+            _capture_failure_graph(self, error, exclude=(self.originals,))
+            raise
+        self.closed = True
+        _discard_failure_graph(self)
+
+
+class _FailedNumericAudit:
+    """Stopped numeric DATA graph and all actual reservation consumers."""
+    def __init__(self, reservation: Any, error: BaseException) -> None:
+        self.reservation = reservation
+        self._cleanup_children: list[Any] = []
+        self.closed = False
+        _capture_failure_graph(self, error, exclude=(reservation,))
+
+    def close(self) -> None:
+        if self.closed:
+            return
+        try:
+            _clear_failure_frames(self)
+            close_resources(self, [])
+            self.reservation.close()
+        except BaseException as error:
+            _capture_failure_graph(self, error, exclude=(self.reservation,))
+            raise
+        self.closed = True
+        _discard_failure_graph(self)
 
 
 def _audit_raw_originals(originals: Any, *, loaded: Any, state: Json, previous: Json,
@@ -440,15 +568,11 @@ def _audit_source_device_plan(update: Json, *, loaded: Any, state: Json, source_
 def _audit_update(cold: Any, ownership: Any, pool: PackedArtifactPool,
                   loaded: Any, state: Json, previous: Json, current: Json,
                   update: Json, deadline: float, *, control_loans: list[Any]) -> Json:
-    from gf_common.card_instance_rules import card_instance_rules
-    from gf_common.group_pack_game import storage_binding
-    from gf_common.structured_layout import CORRECTED_CARD_INSTANCE_LAYOUT as layout
-    from gf_models.structured_artifacts import semantics_v3
-    from gf_models.structured_sealed import basename
-    from gf_training.rust_player_source import RustColdOriginals, RustResumeOriginals
-    from gf_training.structured_rollout import (
-        _source_correspondence,
-        read_game_rollout,
+    from gf_training.rust_player_evaluation import RustCompletedParentAudit
+    from gf_training.rust_player_source import (
+        RustColdOriginals,
+        RustCompletedOriginals,
+        RustResumeOriginals,
     )
 
     hpo = getattr(loaded.config, 'hpo_spec', {}).get('schema_version') == 6
@@ -467,19 +591,44 @@ def _audit_update(cold: Any, ownership: Any, pool: PackedArtifactPool,
     if type(cold) is ColdContinuation:
         originals: Any = RustColdOriginals(cold, ownership, expected, proof['storage']['descriptor_sha256'],
             pool=pool, settings=loaded.config.preprocessing, deadline=deadline)
+        record_root = cold._control.root
+    elif type(cold) is RustCompletedParentAudit:
+        cold.require()
+        if cold.ownership is not ownership or cold.pool is not pool or cold.loaded is not loaded:
+            raise ContractError('actual SAME completed DATA audit/ownership/pool/config required')
+        originals = RustCompletedOriginals(cold, expected, proof['storage']['descriptor_sha256'],
+            settings=loaded.config.preprocessing, deadline=deadline)
+        record_root = cold.record_root
     else:
         from gf_training.rust_player_restore import RustResumeAudit
         if type(cold) is not RustResumeAudit:
             raise ContractError('actual cold or current-host resume audit required')
         originals = RustResumeOriginals(cold, expected, proof['storage']['descriptor_sha256'],
             settings=loaded.config.preprocessing, deadline=deadline)
+        record_root = cold.control.root
+    return _audit_update_data(originals, ownership, pool, loaded, state, previous, current, update,
+        deadline, record_root=record_root, control_loans=control_loans)
+
+
+def _audit_update_data(originals: Any, ownership: Any, pool: PackedArtifactPool, loaded: Any,
+                       state: Json, previous: Json, current: Json, update: Json, deadline: float, *,
+                       record_root: Path, control_loans: list[Any]) -> Json:
+    """Shared readonly Raw/Replay/numeric math, after actual arm discrimination."""
+    from gf_common.card_instance_rules import card_instance_rules
+    from gf_common.group_pack_game import storage_binding
+    from gf_common.structured_layout import CORRECTED_CARD_INSTANCE_LAYOUT as layout
+    from gf_models.structured_artifacts import semantics_v3
+    from gf_models.structured_sealed import basename
+    from gf_training.structured_rollout import _source_correspondence, read_game_rollout
+    hpo = getattr(loaded.config, 'hpo_spec', {}).get('schema_version') == 6
+    proof, generation = update['source_proof'], current['generation']
+    expected = Path(loaded.config.storage.db_root) / state['run_id'] / 'collections' / f'batch-{generation - 1:06}' / 'collection.pending.json'
     count, _collected, episode_digests, source_invocation = _audit_raw_originals(originals, loaded=loaded,
         state=state, previous=previous, update=update, proof=proof,
         generation=generation, hpo=hpo, expected=expected)
     mark = len(control_loans)
-    control = cold._control if type(cold) is ColdContinuation else cold.control
     _audit_source_device_plan(update, loaded=loaded, state=state, source_invocation=source_invocation,
-        record_root=control.root, pool=pool, deadline=deadline, loans=control_loans)
+        record_root=record_root, pool=pool, deadline=deadline, loans=control_loans)
     # The helper returned no borrowed JSON. Failure instead leaves loans with
     # the existing outer owner until its stopped-frame/child cleanup succeeds.
     for loan in control_loans[mark:]:
@@ -526,7 +675,10 @@ def _audit_update(cold: Any, ownership: Any, pool: PackedArtifactPool,
         if len(readback) != count:
             raise ContractError('cold numeric learner count differs')
         del readback
-    finally:
+    except BaseException as error:
+        _FailedNumericAudit(reservation, error)
+        raise
+    else:
         reservation.close()
     return {'generation': generation, 'manifest_sha256': proof['manifest_sha256'],
         'numeric_sha256': update['numeric_sha256'], 'learner_decisions': count,
@@ -672,17 +824,106 @@ def _audit_empty(cold: ColdContinuation, ownership: Any, pool: PackedArtifactPoo
     del loans[mark:]
 
 
+def _audit_committed_data(context: Any, ownership: Any, pool: PackedArtifactPool, loaded: Any,
+                          state: Json, prepared: Json, deadline: float, *,
+                          control_loans: list[Any]) -> tuple[Json, str, str, list[Json]]:
+    """Shared immutable generation/Raw/Replay/numeric audit; grants no Parent."""
+    import hashlib
+    hpo = getattr(loaded.config, 'hpo_spec', {}).get('schema_version') == 6
+    parent = ownership.directory
+    updates: list[Json] = []
+    previous: Any = None
+    parent_sha: Any = None
+    previous_loans: list[Any] = []
+    current = None
+    chain_digest = hashlib.sha256()
+    chain_digest.update(b'[')
+    for generation in range(state['updates'] + 1):
+        mark = len(control_loans)
+        current, checksum = _read(parent / 'generations' / f'{generation:06}.json', pool.budget,
+            deadline, loans=control_loans)
+        current_loans = control_loans[mark:]
+        validate_record_shape(current, 'generation', hpo=hpo)
+        if generation:
+            chain_digest.update(b',')
+        chain_digest.update(canonical(current).encode())
+        if current['generation'] != generation or current['parent_sha256'] != parent_sha or current['run_id'] != state['run_id']:
+            raise ContractError('cold actual generation chain differs')
+        if generation:
+            path = parent / 'updates' / f'{generation:06}.json'
+            # The decoded update/proof graph remains funded for its full
+            # raw/numeric audit; return only compact facts afterward.
+            mark = len(control_loans)
+            update, _ = _read(path, pool.budget, deadline, current['update_sha256'], loans=control_loans)
+            update_loans = control_loans[mark:]
+            facts = _audit_update(context, ownership, pool, loaded, state,
+            previous, current, update, deadline, control_loans=control_loans)
+            updates.append(facts)
+            del update
+            from gf_training.structured_rollout import _owned_bytes
+            update_loans[0].resize(_owned_bytes(facts))
+        previous, parent_sha = current, checksum
+        for loan in previous_loans:
+            loan.close()
+        previous_loans = current_loans
+    chain_digest.update(b']')
+    invocation = state['invocations'][prepared['invocation_id']]
+    marker = invocation.get('empty_collection')
+    if hpo and ((state['stop_reason'] == 'empty_collection') != (marker is not None)):
+        raise ContractError('empty marker must belong to the actual current frozen invocation')
+    if marker is not None:
+        if current is None:
+            raise ContractError('empty collection requires genuine current saved generation')
+        if type(context) is not ColdContinuation:
+            raise ContractError('complete imported parent cannot contain an empty collection marker')
+        _audit_empty(context, ownership, pool, loaded, state, current, marker, deadline, control_loans)
+    expected_batches = {f'batch-{number:06}' for number in range(state['updates'] + int(marker is not None))}
+    collection_root = Path(loaded.config.storage.db_root) / state['run_id'] / 'collections'
+    if collection_root.exists() and {path.name for path in collection_root.iterdir()} != expected_batches:
+        raise ContractError('cold unexpected committed/uncommitted collection inventory')
+    last_source = marker['manifest_sha256'] if marker is not None else (updates[-1]['manifest_sha256'] if updates else None)
+    if (parent_sha != prepared['generation_sha256'] or current is None
+            or digest(current['artifact_files']) != prepared['artifacts_sha256']
+            or last_source != prepared['source_manifest_sha256']):
+        raise ContractError('cold current committed artifacts/source differs')
+    return current, parent_sha, chain_digest.hexdigest(), updates
+
+
+def _audit_saved_data(parent: Path, loaded: Any, state: Json, current: Json, scan: Any) -> Any:
+    """Existing full saved tensor/optimizer/RNG checks under the actual caller scan."""
+    from gf_common.card_instance_rules import card_instance_rules
+    from gf_models.structured_sealed import (
+        inspect_retained_game_artifact_v3,
+        inspect_retained_game_artifact_v4,
+    )
+    hpo = getattr(loaded.config, 'hpo_spec', {}).get('schema_version') == 6
+    target = parent / 'artifacts' / f'{state["updates"]:06}'
+    if hpo:
+        from gf_models.structured_artifacts import adam_recipe
+        recipe = loaded.config.hpo_spec['training_recipe']
+        artifact = inspect_retained_game_artifact_v4(target,
+            expected_inference_digest=current['inference_sha256'], actions=loaded.config.actions,
+            rules=card_instance_rules(), scan=scan, training_recipe=recipe,
+            optimizer_recipe=adam_recipe(recipe['adam_learning_rate'], recipe['adam_beta1'],
+                recipe['adam_beta2'], recipe['adam_epsilon']))
+    else:
+        artifact = inspect_retained_game_artifact_v3(target,
+            expected_inference_digest=current['inference_sha256'], actions=loaded.config.actions,
+            rules=card_instance_rules(), scan=scan)
+    assert artifact.resume is not None
+    if (artifact.files != current['artifact_files'] or artifact.resume['resume_identity'] != state['resume_identity']
+            or artifact.resume['optimizer_steps'] != state['optimizer_steps']
+            or current['optimizer_steps'] != state['optimizer_steps']):
+        raise ContractError('cold FULL saved tensor/state/generation content differs')
+    return artifact
+
+
 def finalize_cold(control: HostControl, cold: ColdContinuation, *, loaded: Any) -> ColdFinalizedRustInvocation | ColdFinalizedRustParent:
     """Actual fixed cold entry; full ordinary data audit, no Torch/CUDA calls."""
     import hashlib
     from types import SimpleNamespace
 
-    from gf_common.card_instance_rules import card_instance_rules
-    from gf_models.structured_sealed import (
-        SealedScan,
-        inspect_retained_game_artifact_v3,
-        inspect_retained_game_artifact_v4,
-    )
+    from gf_models.structured_sealed import SealedScan
     from gf_models.torch_runtime import runtime_metadata
     from gf_training.rust_player_supervision import runtime_producer
 
@@ -722,58 +963,8 @@ def finalize_cold(control: HostControl, cold: ColdContinuation, *, loaded: Any) 
             raise ContractError('cold frozen state/current actual operation/Prepared differs')
         _audit_retirement(control, state, prepared, pool, result._control_loans, deadline, hpo=hpo,
             operating=loaded.config.hpo_spec['operating'] if hpo else None)
-        updates: list[Json] = []
-        previous: Any = None
-        parent_sha: Any = None
-        previous_loans: list[Any] = []
-        current = None
-        chain_digest = hashlib.sha256()
-        chain_digest.update(b'[')
-        for generation in range(state['updates'] + 1):
-            mark = len(result._control_loans)
-            current, checksum = _read(parent / 'generations' / f'{generation:06}.json', pool.budget,
-                deadline, loans=result._control_loans)
-            current_loans = result._control_loans[mark:]
-            validate_record_shape(current, 'generation', hpo=hpo)
-            if generation:
-                chain_digest.update(b',')
-            chain_digest.update(canonical(current).encode())
-            if current['generation'] != generation or current['parent_sha256'] != parent_sha or current['run_id'] != state['run_id']:
-                raise ContractError('cold actual generation chain differs')
-            if generation:
-                path = parent / 'updates' / f'{generation:06}.json'
-                # The decoded update/proof graph remains funded for its full
-                # raw/numeric audit; return only compact facts afterward.
-                mark = len(result._control_loans)
-                update, _ = _read(path, pool.budget, deadline, current['update_sha256'], loans=result._control_loans)
-                update_loans = result._control_loans[mark:]
-                facts = _audit_update(cold, ownership, pool, loaded, state,
-                previous, current, update, deadline, control_loans=result._control_loans)
-                updates.append(facts)
-                del update
-                from gf_training.structured_rollout import _owned_bytes
-                update_loans[0].resize(_owned_bytes(facts))
-            previous, parent_sha = current, checksum
-            for loan in previous_loans:
-                loan.close()
-            previous_loans = current_loans
-        chain_digest.update(b']')
-        marker = invocation.get('empty_collection')
-        if hpo and ((state['stop_reason'] == 'empty_collection') != (marker is not None)):
-            raise ContractError('empty marker must belong to the actual current frozen invocation')
-        if marker is not None:
-            if current is None:
-                raise ContractError('empty collection requires genuine current saved generation')
-            _audit_empty(cold, ownership, pool, loaded, state, current, marker, deadline, result._control_loans)
-        expected_batches = {f'batch-{number:06}' for number in range(state['updates'] + int(marker is not None))}
-        collection_root = Path(loaded.config.storage.db_root) / state['run_id'] / 'collections'
-        if collection_root.exists() and {path.name for path in collection_root.iterdir()} != expected_batches:
-            raise ContractError('cold unexpected committed/uncommitted collection inventory')
-        last_source = marker['manifest_sha256'] if marker is not None else (updates[-1]['manifest_sha256'] if updates else None)
-        if (parent_sha != prepared['generation_sha256'] or current is None
-                or digest(current['artifact_files']) != prepared['artifacts_sha256']
-                or last_source != prepared['source_manifest_sha256']):
-            raise ContractError('cold current committed artifacts/source differs')
+        current, parent_sha, generations_sha, updates = _audit_committed_data(cold, ownership, pool, loaded,
+            state, prepared, deadline, control_loans=result._control_loans)
         # Existing sealed content scanner owns no CUDA API. Its declared
         # remaining workspace is the SAME actual pool grant through return.
         grant = pool.budget.limit - pool.budget.used
@@ -781,23 +972,7 @@ def finalize_cold(control: HostControl, cold: ColdContinuation, *, loaded: Any) 
         scan = SealedScan(max_owned_bytes=grant, deadline=deadline)
         result._scan = scan
         target = parent / 'artifacts' / f'{state["updates"]:06}'
-        if hpo:
-            from gf_models.structured_artifacts import adam_recipe
-            recipe = loaded.config.hpo_spec['training_recipe']
-            artifact = inspect_retained_game_artifact_v4(target,
-                expected_inference_digest=current['inference_sha256'], actions=loaded.config.actions,
-                rules=card_instance_rules(), scan=scan, training_recipe=recipe,
-                optimizer_recipe=adam_recipe(recipe['adam_learning_rate'], recipe['adam_beta1'],
-                    recipe['adam_beta2'], recipe['adam_epsilon']))
-        else:
-            artifact = inspect_retained_game_artifact_v3(target,
-                expected_inference_digest=current['inference_sha256'], actions=loaded.config.actions,
-                rules=card_instance_rules(), scan=scan)
-        assert artifact.resume is not None
-        if (artifact.files != current['artifact_files'] or artifact.resume['resume_identity'] != state['resume_identity']
-                or artifact.resume['optimizer_steps'] != state['optimizer_steps']
-                or current['optimizer_steps'] != state['optimizer_steps']):
-            raise ContractError('cold FULL saved tensor/state/generation content differs')
+        artifact = _audit_saved_data(parent, loaded, state, current, scan)
         for name, checksum in artifact.files.items():
             original = OriginalFile(target / name, deadline)
             result._held.append(original)
@@ -843,7 +1018,7 @@ def finalize_cold(control: HostControl, cold: ColdContinuation, *, loaded: Any) 
         result.completion_path = completion_path
         result.completion_sha256 = completion_sha
         result._validated_state = state
-        result._generation_chain_sha256 = chain_digest.hexdigest()
+        result._generation_chain_sha256 = generations_sha
         result._parent_directory = parent
         if hpo and completion['eligible']:
             qualified = ColdFinalizedRustParent(_PARENT_ISSUER, result)

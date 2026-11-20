@@ -150,10 +150,11 @@ def inspect_rust_game_manifest(owner: object, manifest: Json, actions: ActionCon
     from gf_training.rust_player_lineage import validate_record_shape
     from gf_training.rust_player_source import (
         RustColdOriginals,
+        RustCompletedOriginals,
         RustPlayerOriginals,
         RustResumeOriginals,
     )
-    if type(owner) not in (RustPlayerOriginals, RustColdOriginals, RustResumeOriginals):
+    if type(owner) not in (RustPlayerOriginals, RustColdOriginals, RustResumeOriginals, RustCompletedOriginals):
         raise ContractError('actual Rust writer originals required')
     validate_record_shape(manifest, 'collection', hpo=type(role) is HpoCollectionRole)
     if type(manifest['actor_protocol_version']) is not int or manifest['actor_protocol_version'] != 11:

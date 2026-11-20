@@ -32,6 +32,8 @@ class RustPlayerOriginals:
     own explicit owners in this same account.
     """
 
+    _completed: Any = None
+
     def __init__(self, pending: RustPendingDescriptor, *, pool: PackedArtifactPool,
                  settings: Any, deadline: float) -> None:
         if type(pending) is not RustPendingDescriptor or type(pool) is not PackedArtifactPool:
@@ -91,7 +93,9 @@ class RustPlayerOriginals:
         if self.pending is not None:
             self.pending.recheck()
         else:
-            if self._cold is not None:
+            if self._completed is not None:
+                self._completed.require()
+            elif self._cold is not None:
                 self._cold.require_pair()
             else:
                 self._resume.require()
@@ -263,6 +267,38 @@ class RustResumeOriginals(RustPlayerOriginals):
         self._cleanup_children = []
         self._open_sealed_originals()
 
+
+
+
+class RustCompletedOriginals(RustPlayerOriginals):
+    """Readonly originals for actual current-owned completed DATA audit only."""
+    def __init__(self, audit: Any, path: Path, checksum: str, *, settings: Any, deadline: float) -> None:
+        from gf_training.rust_player_evaluation import RustCompletedParentAudit
+        if type(audit) is not RustCompletedParentAudit:
+            raise ContractError('actual current completed-parent DATA audit owner required')
+        audit.require()
+        if audit._phase != 'AUDITING' or deadline > audit.deadline:
+            raise ContractError('actual bounded completed-parent audit phase required')
+        expected_root = Path(audit.loaded.config.storage.db_root) / audit.state['run_id'] / 'collections'
+        try:
+            number = int(path.parent.name.removeprefix('batch-'))
+        except ValueError as error:
+            raise ContractError('completed original batch ordinal required') from error
+        if (path.parent.parent != expected_root or path.name != 'collection.pending.json'
+                or path.parent.name != f'batch-{number:06}' or not 0 <= number < audit.state['updates']):
+            raise ContractError('completed original descriptor leaves actual committed collection namespace')
+        self.pending = self._cold = self._resume = None
+        self._completed = audit
+        self.pool, self.budget = audit.pool, audit.budget
+        self._descriptor_path, self._descriptor_sha256 = path, checksum
+        self.root, self.settings, self.deadline = path.parent, settings, deadline
+        self.source, self._cold_descriptor = None, None
+        self.files, self._entries, self._reservations = {}, {}, []
+        self._closed = False
+        self._cleanup_children = []
+        self._open_sealed_originals()
+    def __reduce__(self) -> Any:
+        raise TypeError('actual completed-originals DATA custody cannot be copied or serialized')
 
 
 def learner_records(outputs: Any, seats: Json, closures: Json, missing: Any, *, games: int) -> tuple[Any, ...]:

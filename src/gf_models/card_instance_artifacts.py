@@ -111,8 +111,11 @@ class RetainedGameArtifacts:
     @classmethod
     def _for_registry(cls, frozenbindings: dict[str, RuntimePolicyBinding], actions: ActionConfigV3, *,
                      rules: CardInstanceRules, max_owned_bytes: int, preflight_deadline: float,
-                     finalization_deadline: float, _hpo_pool_size: int | None = None) -> RetainedGameArtifacts:
+                     finalization_deadline: float, _hpo_pool_size: int | None = None,
+                     _scan: SealedScan | None = None) -> RetainedGameArtifacts:
         """Own the exact current/pool registry; grants no live run or Source authority."""
+        if _scan is not None and not isinstance(_scan, SealedScan):
+            raise ContractError('actual private SealedScan input required')
         input_binding_game_v3(actions.action_contract, rules)
         if _hpo_pool_size is not None:
             integer(_hpo_pool_size, 1, 2**31 - 1)
@@ -166,7 +169,7 @@ class RetainedGameArtifacts:
         try:
             owner._initialize(tuple(models), actions, rules=rules, max_owned_bytes=max_owned_bytes,
                 preflight_deadline=preflight_deadline, finalization_deadline=finalization_deadline,
-                expected=expected)
+                expected=expected, **({} if _scan is None else {'_scan': _scan}))
             return owner
         except BaseException:
             if hasattr(owner, '_scan'):
@@ -176,20 +179,25 @@ class RetainedGameArtifacts:
     @classmethod
     def for_hpo_registry(cls, frozenbindings: dict[str, RuntimePolicyBinding], actions: ActionConfigV3, *,
                          pool_size: int, rules: CardInstanceRules, max_owned_bytes: int,
-                         preflight_deadline: float, finalization_deadline: float) -> RetainedGameArtifacts:
+                         preflight_deadline: float, finalization_deadline: float,
+                         _scan: SealedScan | None = None) -> RetainedGameArtifacts:
         return cls._for_registry(frozenbindings, actions, rules=rules, max_owned_bytes=max_owned_bytes,
             preflight_deadline=preflight_deadline, finalization_deadline=finalization_deadline,
-            _hpo_pool_size=pool_size)
+            _hpo_pool_size=pool_size, **({} if _scan is None else {'_scan': _scan}))
 
     def _initialize(self, models: tuple[ConfiguredNeuralModelV3 | ConfiguredNeuralModelV4, ...], actions: ActionConfigV3, *,
                     rules: CardInstanceRules, max_owned_bytes: int, preflight_deadline: float,
-                    finalization_deadline: float, expected: dict[str, tuple[str, Json]] | None = None) -> None:
+                    finalization_deadline: float, expected: dict[str, tuple[str, Json]] | None = None,
+                    _scan: SealedScan | None = None) -> None:
         for deadline in (preflight_deadline, finalization_deadline):
             if type(deadline) not in (int, float) or not math.isfinite(deadline) or deadline <= 0:
                 raise ContractError("original finite artifact deadlines required")
         if preflight_deadline > finalization_deadline:
             raise ContractError("artifact preflight exceeds original finalization deadline")
-        self._scan = SealedScan(max_owned_bytes=max_owned_bytes, deadline=preflight_deadline)
+        if _scan is not None and (not isinstance(_scan, SealedScan) or _scan.limit != max_owned_bytes
+                or _scan.deadline != preflight_deadline):
+            raise ContractError('private scan must have the same declared limits/deadline')
+        self._scan = _scan if _scan is not None else SealedScan(max_owned_bytes=max_owned_bytes, deadline=preflight_deadline)
         self._finalization_deadline = finalization_deadline
         self._entries: dict[str, Json] = {}
         self._models: dict[str, str] = {}

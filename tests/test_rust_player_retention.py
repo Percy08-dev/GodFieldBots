@@ -338,6 +338,7 @@ def _artifact_inventory_data(tmp_path, *, hpo=False, deleted_name='weights-000.n
     import time
     from types import SimpleNamespace
 
+    from gf_common.rust_player import deadline_bits
     from gf_training.group_pack_pool import PackedArtifactPool
     from gf_training.rust_player_lineage import record_fields
     root = tmp_path / 'parent'
@@ -382,7 +383,8 @@ def _artifact_inventory_data(tmp_path, *, hpo=False, deleted_name='weights-000.n
                 deletion_receipt={'path': stem + '/receipt.json', 'sha256': hashlib.sha256(payload).hexdigest()})
             deleted_intent = row
     pool = PackedArtifactPool(max_owned_bytes=128 * 1024**2, deadline=time.monotonic() + 30)
-    return SimpleNamespace(operation={'parent_directory': str(root)}), {'run_id': 'run', 'updates': count - 1,
+    return SimpleNamespace(operation={'parent_directory': str(root)}, root=tmp_path / 'protocol',
+        launch={'session_deadlines': {'finish_bits': deadline_bits(time.monotonic() + 60)}}), {'run_id': 'run', 'updates': count - 1,
         'runtime_binding_sha256': 'b' * 64}, registry, pool, deleted_intent
 
 
@@ -396,7 +398,7 @@ def test_cold_inventory_audits_retained_and_exact_retired_files_without_mutating
     # Independently test the filesystem/record reader here. Historical binding
     # is separately exercised below; this DATA stub grants no live capability.
     histories = []
-    monkeypatch.setattr(retention, '_retirement_history', lambda c, s, p, i, *a, **k: histories.append(i['invocation_id']))
+    monkeypatch.setattr(retention, '_retirement_history_data', lambda s, p, i, *a, **k: histories.append(i['invocation_id']))
     row = registry['generations']['1']['files']['weights-000.npz']
     root = Path(control.operation['parent_directory'])
     if mutation == 'deleting': row['status'] = 'deleting'
@@ -602,7 +604,7 @@ def test_cold_requires_applicable_pure_protection_outside_latest_pool(tmp_path, 
         'inference_latest': 2 if case == 'hpo-inference-latest' else 1,
         'inference_periodic_decisions': 100 if case == 'hpo-periodic' else 10000}
     # Isolate protection from separately checked historical DATA validation.
-    monkeypatch.setattr(retention, '_retirement_history', lambda *a, **k: None)
+    monkeypatch.setattr(retention, '_retirement_history_data', lambda *a, **k: None)
     loans = []
     try:
         options = {'operating': operating} if hpo else {}
