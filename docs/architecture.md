@@ -5,6 +5,10 @@
 [ADR0054](adr/0054-single-process-rust-player-runtime.md) accepts the owner's
 [single-process Rust player plan](design/rust-player-runtime-approved-plan.md)
 and the independently reviewed [bounded design](design/rust-player-runtime.md).
+The [ordinary Rust packing path](design/rust-player-checked-candidate-reuse.md)
+reuses validated candidate pairs and cached Pack data within the exact
+synchronous owner. Original verification gates the Source handoff and
+numeric manifest publication.
 The bounded native v5 search/RNG/Random/Heuristic/Refresh core passes independent
 correctness and conformance review after two local parity repairs. Its owned
 array-serving/async-dispatcher/transactional-RNG component also passes both reviews

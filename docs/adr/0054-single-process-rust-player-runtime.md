@@ -530,3 +530,20 @@ logical window. Timings under the profiling recipe remain separate.
 [Verification and results](../verification/rust-player-runtime.md) and
 [explicit CUDA configuration](../design/rust-player-runtime-integration.md)
 record the applicable conditions and scope.
+
+## Verified input reuse in ordinary packing
+
+Packed Journal decoding relies on mandatory selection validation to check the
+entire candidate table against the actor's frame. The ordinary Rust Model3
+Source later converts its immutable, already validated `EpisodeRecords`
+through the canonical token encoder. Its synchronous Pack projection reuses
+verified cached data between full original checks at entry and exit. Newly
+loaded groups and control bytes remain authenticated by the Pack reader.
+
+Numeric packing checks the original Source at entry and again before
+publishing the completed manifest. Elapsed-time and capacity checks govern the
+intermediate work. The learner checks persisted numeric originals before
+optimizer admission. A failed final check leaves the batch without a completion
+manifest. The [implementation design](../design/rust-player-checked-candidate-reuse.md)
+and [verification record](../verification/rust-player-runtime.md#verified-input-reuse-in-ordinary-packing)
+record the contracts and observed results.

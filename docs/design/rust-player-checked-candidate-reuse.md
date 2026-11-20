@@ -19,7 +19,8 @@ from their owner.
 passes its immutable `EpisodeRecords` to private token conversion. Every exact
 frame and table pair was already fully checked in the records constructor.
 Reuse the canonical encoding body, retaining layout and model position-capacity
-rules. The source-bound context takes its records directly from the ordinary Source.
+rules. The source-bound context takes its records directly from the ordinary
+Source.
 The public tokenizer performs full candidate validation on caller-provided
 tables.
 
@@ -40,15 +41,15 @@ stay bound to that Source throughout the call. Internal loop and shard
 callbacks check elapsed time and actual capacity through the existing bounds.
 Run the current full original check immediately before writing the completed
 `rollout.json` manifest, then retain the original existing numeric file
-ownership/rechecks and optimizer admission at the update transition. The completion marker defines the publication boundary. A private
+ownership checks and optimizer admission at the update transition. A private
 before-manifest hook supplies the full check on the ordinary Source path.
 
 ## Verification
 
-Test unchanged public validation and malformed unselected candidates, exact
-same-input tokens and numeric bytes, fewer repeated checks for ordinary
-Pack/rollout, positive boundaries on changed originals and deadline/capacity
-errors, and zero completed manifest when the publication guard fails. Reuse
-the approved live CPU ordinary entry with the matching pinned Simulator and
-an independent readback. Keep HPO/Cold coverage scoped to regressions of
-their existing contracts. Report measured evidence and its limits.
+Both independent reviews accepted `30a8ab1` after the live Pack owner was
+restored to the exact reader type required by the Journal parser. The added
+regression parses a valid Journal through the real owner constructor.
+Forty focused CPU checks cover byte-identical output from identical inputs,
+out-of-view candidates, original replacement, failed final checks, deadline
+expiry and capacity refusal. The [public CPU verification](../verification/rust-player-runtime.md#verified-input-reuse-in-ordinary-packing)
+records the completed training update and independent readback.

@@ -1499,3 +1499,47 @@ failure logs and checked reports in
 `runs/rust-player-runtime-v1/components/model3-parity-validation-followup`.
 Its `followup-evidence.json` is SHA256
 `da0a709143bb36eed5a9196cab0583fa4284f22e4582adc036fcdae2ccfaa39b`.
+
+## Verified input reuse in ordinary packing
+
+`63618fb` removes the duplicate context check in packed Journal parsing.
+`30a8ab1` reuses validated ordinary Source pairs during token conversion,
+cached Pack data during one synchronous inspection, and the same Source owner
+through numeric packing. The existing exact Journal reader type is exercised
+by a real sealed-Pack regression. Independent correctness and conformance
+reviews accepted the final snapshot. Forty focused CPU tests, Ruff on the four
+changed Python files and mypy on the three production files passed. The tests
+compare every emitted byte for identical fixture inputs and exercise refusal
+before the completion manifest on original, deadline and capacity failures.
+
+The public Rust ordinary CPU command used seed 17, Tokio, two concurrent games,
+two player worker threads and maximum inference batch size two with a 1 ms
+formation wait. Both fresh observations use Simulator
+`072dabbca1458c9526897781d2fd64edeeb4f9ca` and the same base config after
+substituting output paths. Each completed 16 natural games and one committed
+update with 230 learner decisions, 436 all-seat decisions and eight Adam steps.
+The original command exited successfully and its original artifacts, Replay,
+numeric output and saved weights/optimizer state passed independent readback.
+The updated training window had at most one sampled Python process.
+
+| Ordinary CPU scope | Before, s | After, s |
+| --- | ---: | ---: |
+| Collection before Source projection | 7.792 | 7.826 |
+| Application collection phase including Source projection and packing | 83.101 | 14.924 |
+| Update | 7.309 | 7.221 |
+| Original command wall | 109.106 | 36.129 |
+
+The earlier observation used `4c723ae` with the measured match-execution
+changes later committed as `dbd9d66`. Its run directory records their file
+hashes. The updated original records clean revision `30a8ab1`. Of 4,696 arrays
+read from the two numeric shards, 4,474 were byte-identical. The remaining 222
+arrays encode frame payloads whose only differing field was `history_end`.
+The manifest also carried each run's policy label and resulting digests. The
+recorded PPO metrics matched exactly. Each timing is one CPU observation at
+concurrency two. GPU and high-concurrency adoption still rely on their scoped
+measurements.
+
+The primary checkout records the commands, pre-fix regression and final test
+logs under `runs/rust-player-runtime-v1/components/all-player-rollout/trusted-candidates-handoff`.
+The archived `ordinary-observations.json` has SHA256
+`3fc47772440261366be00cec4d5bfb8caab13ef7e034fac59c24b7e92cf94aac`.
