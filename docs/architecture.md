@@ -42,6 +42,11 @@ controller imports only qualified final-D parents for separate Fresh evaluation.
 Deployment comparison and entrance recommendations are recorded with the results
 and limitations in [the verification record](verification/rust-player-runtime.md).
 
+[ADR0055](adr/0055-owned-rust-model3-parity-validation.md) keeps frozen-output
+parity as an explicit validation for ordinary Rust Model3. Its live update
+uses the actual single-use Source and performs the existing admission before
+optimizer work. Fresh and resumed CUDA verification cover the owned path.
+
 The standalone std-only Rust [process observer](design/rust-player-runtime-observer.md)
 passes scoped correctness/conformance after original-file and ancestry-binding
 repairs, with19 command-level and14 helper checks. It observes an actual command

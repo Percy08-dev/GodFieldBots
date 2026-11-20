@@ -1445,3 +1445,57 @@ Ruff, in addition to the actual CUDA export and replacement-profile evidence.
 The installed pinned companion handshake and the new documentation links
 pass using this worktree. Engineering and scope reviews are independent of
 the observed operating values.
+
+
+## Ordinary Model3 owned parity follow-up
+
+The design from `feat/rust-model3-parity-validation` was integrated and
+implemented in `f64fa3e3d7c7019feb6bd4bdfbafea6d1c067181`. Its branch
+tip `55cd288` was already an ancestor. The design was the sole local
+difference. [ADR0055](../adr/0055-owned-rust-model3-parity-validation.md)
+records the approved scope and numerical-detection tradeoff.
+
+The normal Source still binds original participant data, Replay, the current
+checkpoint and persisted numeric bytes. Its local same-host update admits the
+owned rollout before optimizer mutation and records `{"status":"not_run"}`
+for the repeated frozen-policy comparison. Same-input tests check exact PPO
+metrics apart from that report, named weights, Adam, shuffle and Torch RNG.
+Explicit numerical mismatch rejection, pre-mutation capacity refusal, the
+eight frozen kernel checks and failure custody passed. Both independent
+reviewers accepted the exact source and tests.
+
+| Fresh ordinary CUDA | Learner decisions / all-seat decisions | Update and save, s | Original command wall, s |
+| --- | ---: | ---: | ---: |
+| Before, `7424937` | 230 / 436 | 21.936 | 126.749 |
+| After, `f64fa3e` | 230 / 436 | 14.822 | 115.214 |
+
+One fresh command per source ran on RTX 5070 Ti with installed Native
+`381ef85a`, Torch 2.14.1+cu132 and Simulator
+`072dabbca1458c9526897781d2fd64edeeb4f9ca`. Both used ordinary Model3, Tokio
+C2/W2/B2, 1 ms formation wait, seed 17 and 16 natural games. The resolved
+configurations matched after substituting the isolated output paths. Both
+commands recorded eight Adam steps, original successful exit and complete
+independent Original, Replay, numeric and saved-pair readback.
+
+The 32.4% shorter update interval and 9.1% shorter command wall are
+single-pair observations. GPU readings immediately before the commands were
+1% and 0% utilization with 13,501 and 13,105 MiB free respectively. The first
+combined CPU check stopped after 34 completion marks and was interrupted with
+exit 130. It overlapped part of the after observation, and its CPU activity
+was not measured. The inferred cleanup node passed in isolation. The later
+same-scope command passed all 100 selected CPU tests with six CUDA cases
+deselected. The original interruption remains archived. Earlier repeated
+deployment gates keep their original scope and decision.
+
+The updated producer also paused after the first 16-game cohort and resumed
+on the same parent and original deadlines. The restore receipt matches
+weights, Adam, CPU and CUDA RNG and PCG64. The resumed cohort used 171 learner
+decisions and brought the total to 16 Adam steps. Both commands passed
+independent readback and each sampled training window contained at most one
+Python process.
+
+The primary checkout stores all case configs, observer records, archived
+failure logs and checked reports in
+`runs/rust-player-runtime-v1/components/model3-parity-validation-followup`.
+Its `followup-evidence.json` is SHA256
+`da0a709143bb36eed5a9196cab0583fa4284f22e4582adc036fcdae2ccfaa39b`.

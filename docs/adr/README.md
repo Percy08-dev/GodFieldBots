@@ -14,6 +14,10 @@
 
 ## 一覧
 
+[0055](0055-owned-rust-model3-parity-validation.md) — Accepted。通常 Rust Model3 の
+所有済み学習入力では、更新前の数値比較を明示検証へ移す。実機で保存・再開を確認済み。
+
+
 追加: [0053](0053-mlp-shared-batch-inference.md) — Accepted design:
 Simulator072dabbの共有推論契約を採用し、MLPの通常PPO/HPOを公式TorchRLへ接続する。
 CPU参加者、共有GPUサービス、checkpointと要求の独立性、実際の終了証明を分離する。
