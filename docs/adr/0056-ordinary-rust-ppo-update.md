@@ -1,6 +1,6 @@
 # 0056: Version the ordinary Rust Model3 PPO update recipe
 
-Status: design accepted, implementation verification in progress.
+Status: accepted and implemented in `696ea4e` and `6851ddf`.
 Date: 2026-11-21. Base: `4912a9f`.
 
 ## Context
@@ -49,6 +49,7 @@ interfaces, capacity limits and assumptions.
 
 ## Verification
 
-Independent preimplementation review accepted the bounded design. The
-[verification record](../verification/ordinary-rust-ppo-update.md) records
-implementation reviews, compatibility checks and platform observations.
+Independent preimplementation, correctness and design-conformance reviews
+accepted the change. The [verification record](../verification/ordinary-rust-ppo-update.md)
+records the matched CUDA width screen, exact fixed-data resume, real 256-game
+pause/resume and three trials per concurrency from 4 to 64.

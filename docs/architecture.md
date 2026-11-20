@@ -56,8 +56,10 @@ Rust Model3 PPO update settings. The saved effective config binds the paired
 collection size, logical batch size, epochs, shuffle order and CUDA group cap.
 The Source and cold audit use that recipe. CUDA groups reuse the Model4 planner
 and packing with Model3 forward and PPO loss. The
-[verification record](verification/ordinary-rust-ppo-update.md) tracks rollout,
-resume, numerics and concurrency evidence.
+[verification record](verification/ordinary-rust-ppo-update.md) records exact
+fixed-data resume, two supervised 256-game cohorts, and 15 verified
+concurrency runs. The Source workspace stays separate from the capped
+saved-state scanner loan.
 
 The standalone std-only Rust [process observer](design/rust-player-runtime-observer.md)
 passes scoped correctness/conformance after original-file and ancestry-binding
