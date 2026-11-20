@@ -1543,3 +1543,43 @@ The primary checkout records the commands, pre-fix regression and final test
 logs under `runs/rust-player-runtime-v1/components/all-player-rollout/trusted-candidates-handoff`.
 The archived `ordinary-observations.json` has SHA256
 `3fc47772440261366be00cec4d5bfb8caab13ef7e034fac59c24b7e92cf94aac`.
+
+### Repeated CPU measurements
+
+Three fresh runs at each clean revision compared `dbd9d66` and `30a8ab1`
+in one isolated checkout with the preceding seed 17, CPU, Tokio C2/W2/B2
+configuration and pinned Simulator. The six configs matched after
+substituting output paths. Runs used Python 3.14.10, NumPy 2.5.4 and Torch
+2.14.1+cu132 with CUDA hidden and profiling off. Each completed 16 natural
+games and one update with 230 learner decisions, 436 all-seat decisions
+and eight Adam steps. PPO metrics matched across all six runs, and each
+passed independent Original, Replay, numerical and saved-state readback.
+
+| Trial | Revision | Collection, s | Between collection and update, s | Update, s | Command wall, s |
+| ---: | --- | ---: | ---: | ---: | ---: |
+| 1 | `dbd9d66` | 7.810 | 78.124 | 7.181 | 109.181 |
+| 2 | `30a8ab1` | 7.820 | 6.966 | 7.185 | 35.998 |
+| 3 | `30a8ab1` | 7.566 | 7.095 | 7.180 | 36.190 |
+| 4 | `dbd9d66` | 7.613 | 78.120 | 7.251 | 108.882 |
+| 5 | `dbd9d66` | 8.050 | 77.943 | 7.153 | 109.117 |
+| 6 | `30a8ab1` | 7.800 | 7.007 | 7.225 | 36.206 |
+| **Median** | `dbd9d66` | 7.810 | 78.120 | 7.181 | 109.117 |
+| **Median** | `30a8ab1` | 7.800 | 7.007 | 7.185 | 36.190 |
+
+The interval between collection and update is the application collection
+phase duration minus the collection stopwatch. It includes Source
+verification, numeric packing and the transition to update. The median
+of that interval decreased by 91.0%. The median command wall through
+original exit decreased by 66.8%. These results cover ordinary CPU runs
+at concurrency two.
+
+The primary checkout stores the six configs, commands, observer records and
+checked reports under the preceding artifact directory in
+`repeated-cpu.bMz92QMU`. An initial setup attempt stopped before the
+workload when the launcher rejected a symlink to the supervisor executable.
+The measured runs used a regular copy of the same executable.
+
+The SHA256 of `summary.json` is
+`591d2b88eb08e856216f74d041049f2ff0ae193fcce6b88a6aa14d54e1b75bca`.
+The SHA256 of `times.csv` is
+`a7d82bf724c3779ba4a9ebc51dfa0ab01373b79a4695d0a88cae56281c6d7c4b`.
