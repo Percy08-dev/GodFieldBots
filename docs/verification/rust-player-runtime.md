@@ -1140,3 +1140,48 @@ requires 583,721,519 bytes by existing read estimates. An external CPU probe
 used the same reader on the exact archive with actual unused Source capacity
 and decoded 331 endpoints. The earlier failed parent stays unqualified.
 Fresh complete Cold validation under the corrected allowance remains required.
+
+## Actual public supervised campaign and resume
+
+At `b400457637b0f9911051f56f61ed904d702cf7d9`, the public schema 6 command
+passed a genuine no-work CPU session and an actual resume from initialization
+before its initial cursor. Each used a real original Store and supervisor,
+recorded positive control exit, and issued no training admission or Prepared.
+The combined 39-file inventory is
+`ef3a2a084ef76bb64f494af0852f2833e6f7e0132b9ce16f1d4d14534fac3ba0` under
+`components/public-campaign-acceptance-prepared/no-work`.
+
+The public two-seed CUDA case completed seeds 17 and 19 in one supervision
+session. Each trained on 16 games to exactly 64 used decisions and four Adam
+steps. Each then ran four actual Fresh evaluation games with two GameSeeds
+and both seats. Cold verification audited the raw originals, Replay, numeric
+and full saved state and issued both actual closed training receipts. The
+actual first training host exited normally before evaluation admission. Its
+original evaluation job physically retired before the second training admission.
+The final study tell is COMPLETE, with its original evaluator receipt verified.
+The outcome concerns lifecycle and receipt correctness for this small panel.
+
+The observer saw a maximum of one Python process during the actual measured
+training spans, over 179 and 230 samples respectively. Evaluation may have
+more worker processes. The second training host also ran the preceding
+control and evaluation stage, so its full process lifetime cannot substitute
+for its actual training span. Scope is bounded by that operation's host
+startup and original host-reaped records. Whole campaign wall was 247.671 s.
+This is functional evidence, outside the comparison population.
+
+An actual subsequent CPU resume audited completed history under the same
+producer and exited 0 with confirmed control retirement. It did not add
+training or evaluation admissions (two of each remain). Whole resume wall
+was 148.914 s, including full history revalidation. The 344-file archive at
+`components/public-campaign-acceptance-prepared/two-seeds` has inventory
+`2bf6abb4ad955877087396f9a1f3478109882153ce7be9a4d2969329245957ef`.
+Actual per-seed audit hashes, process windows, ordered admissions, physical
+record DATA copies and raw observer samples are retained there.
+
+The scoped Cold decoder repair is joined in
+`bdd9a564761c37255f036133d2e16bbdf120b6bc` after that history check. Both
+independent reviewers accepted it, and Root passed 17 CPU cases. The same
+admitted pool funds actual independent decode workspace with its remaining
+capacity. No live training limit or numerical recipe changed. Fresh large
+Model4 Cold, CUDA/ordinary restoration, fault scope and formal comparison
+remain separate acceptance requirements.
