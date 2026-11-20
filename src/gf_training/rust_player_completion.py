@@ -6,8 +6,9 @@ from contextlib import ExitStack
 from pathlib import Path
 from typing import Any
 
-from gf_common.domain import ContractError, Json, canonical, digest
+from gf_common.domain import ContractError, Json, canonical, digest, integer
 from gf_common.rust_player import deadline_seconds
+from gf_models.config import PPOUpdateConfig, ordinary_ppo_update
 from gf_training.group_pack_pool import PackedArtifactPool
 from gf_training.group_pack_resources import close_resources, retain_cleanup
 from gf_training.group_pack_source import OriginalFile
@@ -489,9 +490,16 @@ def _audit_raw_originals(originals: Any, *, loaded: Any, state: Json, previous: 
                     or update['used_decisions'] != count or update['collected_decisions'] != collected
                     or proof['replay_reconciled'] is not True):
                 raise ContractError('cold independently replayed HPO endpoint selection differs')
+        games = role.games if hpo else ordinary_ppo_update(loaded.config.training).collection_games
+        if not hpo and (integer(proof['games'], 1) != games
+                or canonical(proof['closure_counts']) != canonical(closures)
+                or canonical(proof['missing_replays']) != canonical(missing)
+                or canonical(seats) != canonical(manifest['linkage']['learner_seats'])
+                or canonical(update['policy_bindings']) != canonical(manifest['policy_bindings'])):
+            raise ContractError('cold ordinary games, learner seats or policy bindings differ')
         if (canonical(episode_digests) != canonical(proof['episode_digests'])
                 or count != update['accepted_decisions'] or accepted != proof['accepted_decisions']
-                or closures != {'natural': role.games} or missing
+                or closures != {'natural': games} or missing
                 or canonical(originals.files) != canonical(proof['files'])
                 or digest(originals.files) != proof['source_set_sha256']):
             raise ContractError('cold FULL raw/Replay/count/file correspondence differs')
@@ -610,6 +618,18 @@ def _audit_update(cold: Any, ownership: Any, pool: PackedArtifactPool,
         deadline, record_root=record_root, control_loans=control_loans)
 
 
+def _audit_ordinary_update_counts(recipe: PPOUpdateConfig, previous: Json, current: Json,
+                                  update: Json, *, decisions: int) -> None:
+    steps = integer(previous['optimizer_steps']) + recipe.optimizer_step_delta(decisions)
+    cumulative = integer(previous['accepted_decisions']) + decisions
+    if (integer(update['actual_games'], 1) != recipe.collection_games
+            or integer(update['planned_games'], 1) != recipe.collection_games
+            or integer(current['optimizer_steps'], 1) != steps
+            or integer(update['metrics']['optimizer_steps'], 1) != steps
+            or integer(current['accepted_decisions'], 1) != cumulative):
+        raise ContractError('cold ordinary saved games/steps/decisions differ from frozen PPO recipe')
+
+
 def _audit_update_data(originals: Any, ownership: Any, pool: PackedArtifactPool, loaded: Any,
                        state: Json, previous: Json, current: Json, update: Json, deadline: float, *,
                        record_root: Path, control_loans: list[Any]) -> Json:
@@ -626,6 +646,9 @@ def _audit_update_data(originals: Any, ownership: Any, pool: PackedArtifactPool,
     count, _collected, episode_digests, source_invocation = _audit_raw_originals(originals, loaded=loaded,
         state=state, previous=previous, update=update, proof=proof,
         generation=generation, hpo=hpo, expected=expected)
+    if not hpo:
+        _audit_ordinary_update_counts(ordinary_ppo_update(loaded.config.training),
+            previous, current, update, decisions=count)
     mark = len(control_loans)
     _audit_source_device_plan(update, loaded=loaded, state=state, source_invocation=source_invocation,
         record_root=record_root, pool=pool, deadline=deadline, loans=control_loans)
@@ -855,6 +878,9 @@ def _audit_committed_data(context: Any, ownership: Any, pool: PackedArtifactPool
         chain_digest.update(canonical(current).encode())
         if current['generation'] != generation or current['parent_sha256'] != parent_sha or current['run_id'] != state['run_id']:
             raise ContractError('cold actual generation chain differs')
+        if not hpo and generation == 0:
+            integer(current['optimizer_steps'], 0, 0)
+            integer(current['accepted_decisions'], 0, 0)
         if generation:
             path = parent / 'updates' / f'{generation:06}.json'
             # The decoded update/proof graph remains funded for its full
@@ -918,6 +944,7 @@ def _audit_saved_data(parent: Path, loaded: Any, state: Json, current: Json, sca
             rules=card_instance_rules(), scan=scan)
     assert artifact.resume is not None
     if (artifact.files != current['artifact_files'] or artifact.resume['resume_identity'] != state['resume_identity']
+            or (not hpo and current['accepted_decisions'] != state['accepted_decisions'])
             or artifact.resume['optimizer_steps'] != state['optimizer_steps']
             or current['optimizer_steps'] != state['optimizer_steps']):
         raise ContractError('cold FULL saved tensor/state/generation content differs')

@@ -51,6 +51,14 @@ parity as an explicit validation for ordinary Rust Model3. Its live update
 uses the actual single-use Source and performs the existing admission before
 optimizer work. Fresh and resumed CUDA verification cover the owned path.
 
+[ADR0056](adr/0056-ordinary-rust-ppo-update.md) specifies the versioned ordinary
+Rust Model3 PPO update settings. The saved effective config binds the paired
+collection size, logical batch size, epochs, shuffle order and CUDA group cap.
+The Source and cold audit use that recipe. CUDA groups reuse the Model4 planner
+and packing with Model3 forward and PPO loss. The
+[verification record](verification/ordinary-rust-ppo-update.md) tracks rollout,
+resume, numerics and concurrency evidence.
+
 The standalone std-only Rust [process observer](design/rust-player-runtime-observer.md)
 passes scoped correctness/conformance after original-file and ancestry-binding
 repairs, with19 command-level and14 helper checks. It observes an actual command

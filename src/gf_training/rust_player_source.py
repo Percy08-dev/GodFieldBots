@@ -17,6 +17,7 @@ from typing import Any
 
 from gf_common.artifacts import json_bound
 from gf_common.domain import ContractError, Json, canonical, digest
+from gf_models.config import ordinary_ppo_update
 from gf_training.group_pack_pool import OriginalArtifactReader, PackedArtifactPool
 from gf_training.group_pack_resources import close_resources, retain_cleanup
 from gf_training.group_pack_source import OriginalFile, PackedSource
@@ -625,9 +626,10 @@ class RustPlayerSource:
             metrics = local.update_owned(self._numeric) if registry.hpo else local._update_from_source(self)
             from gf_training.group_pack_resources import remaining
             remaining(self.plan.execution_deadline)
-            delta = self._numeric.metadata['expected_optimizer_step_delta'] if registry.hpo else 4 * ((self.decision_count + 127) // 128)
+            delta = (self._numeric.metadata['expected_optimizer_step_delta'] if registry.hpo
+                else ordinary_ppo_update(registry.config.training).optimizer_step_delta(self.decision_count))
             if local.learner.steps != before + delta:
-                raise ContractError('actual local optimizer delta differs from unchanged PPO recipe')
+                raise ContractError('actual local optimizer delta differs from frozen PPO recipe')
             self.state = 'UPDATED'
             pair = local.save(output, **({'save_budget_bytes': registry.config.hpo_spec['operating']['save_budget_bytes']} if registry.hpo else {}))
             pair.require(local)
@@ -642,6 +644,8 @@ class RustPlayerSource:
     def require_saved_result(self, registry: Any, pair: Any, update: Json, policy: Any) -> None:
         self.require()
         pair.require(registry.local)
+        games = (registry.config.hpo_spec['training_recipe']['collection_games'] if registry.hpo
+            else ordinary_ppo_update(registry.config.training).collection_games)
         if (registry is not self.registry or self.state != 'SAVED' or pair is not self.result_pair
                 or policy._pair is not pair or policy._budget is not registry.budget
                 or policy.optimizer_steps != registry.local.learner.steps
@@ -661,8 +665,8 @@ class RustPlayerSource:
                 or canonical(update['policy_bindings']) != canonical(self.manifest['policy_bindings'])
                 or canonical(update['learner_seats']) != canonical(self.plan.linkage['learner_seats'])
                 or update['batch_id'] != self.plan.linkage['batch_id']
-                or update['actual_games'] != (registry.config.hpo_spec['training_recipe']['collection_games'] if registry.hpo else 16)
-                or update['planned_games'] != (registry.config.hpo_spec['training_recipe']['collection_games'] if registry.hpo else 16)
+                or update['actual_games'] != games
+                or update['planned_games'] != games
                 or update['collection_retirement_sha256'] != self.collection.retirement_sha256):
             raise ContractError('actual saved result differs from SAME consumed Source transaction')
 
@@ -767,7 +771,8 @@ class RustEmptyCollection:
                 outputs, accepted, closure, missing = _inspect_collection_content(owner,
                     registry.config.actions, manifest, episodes, specs, _game=True, packed=True)
                 seats = plan.linkage['learner_seats']
-                records = learner_records(outputs, seats, closure, missing, games=role.games)
+                games = role.games if registry.hpo else ordinary_ppo_update(registry.config.training).collection_games
+                records = learner_records(outputs, seats, closure, missing, games=games)
             result.manifest, result._records = manifest, records
             result.accepted_decisions = accepted
             result.closure_counts, result.missing_replays = closure, missing

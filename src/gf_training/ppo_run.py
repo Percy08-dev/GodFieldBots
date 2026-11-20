@@ -37,12 +37,14 @@ from gf_models.config import (
     PPOTrainingConfig,
     SequencePPOTrainingConfig,
     TransformerModelConfig,
+    ordinary_ppo_update,
 )
 from gf_models.torch_runtime import NUMERICS, runtime_metadata
 from gf_training.collection import (
     CollectionPlan,
     FinalizedCollection,
     OnlinePPOContext,
+    ordinary_rust_training_groups,
     training_groups,
 )
 from gf_training.journal import atomic_json
@@ -518,6 +520,7 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
         if formal is not None:
             formal.preflight(loaded)
         model, training = ops.validate_config(config) if ops else config.model, config.training
+        ordinary_games = ordinary_ppo_update(training).collection_games if rust and not hpo else 16
         if not ops and (not isinstance(model, (MLPModelConfig, GRUModelConfig, TransformerModelConfig)) or not isinstance(training, PPOTrainingConfig) or model.checkpoint is not None or config.run.split != 'train'):
             raise ContractError('PPO requires fresh supported model recipe and train split')
         if not ops and isinstance(model, (GRUModelConfig, TransformerModelConfig)) != isinstance(training, SequencePPOTrainingConfig):
@@ -738,10 +741,15 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
                             from gf_training.collection import training_groups_refresh
                             groups = training_groups_refresh(training.seeds[0], generation, learner_label,
                                 tuple(snapshots), rng, actions=config.actions, training_opponents=mixed)
+                        elif hpo:
+                            groups = ops.groups(config,generation,learner_label,tuple(snapshots),rng)
+                        elif rust:
+                            groups = ordinary_rust_training_groups(training.seeds[0], generation, learner_label,
+                                tuple(snapshots), rng, collection_games=ordinary_games)
                         else:
-                            groups = (ops.groups(config,generation,learner_label,tuple(snapshots),rng) if hpo else
-                                      training_groups(training.seeds[0], generation, learner_label, tuple(snapshots), rng, actions_version=3 if game else 2)
-                                      if ops else training_groups(training.seeds[0], generation, learner_label, tuple(snapshots), rng))
+                            groups = (training_groups(training.seeds[0], generation, learner_label, tuple(snapshots),
+                                          rng, actions_version=3 if game else 2) if ops else
+                                      training_groups(training.seeds[0], generation, learner_label, tuple(snapshots), rng))
                         batch_id = f'batch-{generation:06}'
                         linkage = {'parent_run_id': state['run_id'], 'parent_run_path': str(directory), 'batch_id': batch_id,
                                    'collection_generation': generation,
@@ -899,7 +907,7 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
                                   'collection': str(collection.directory.relative_to(directory)), 'collection_manifest_sha256': proof['manifest_sha256'],
                                   'numeric': str(numeric.relative_to(directory)), 'numeric_sha256': numeric_hash,
                                   'accepted_decisions': decision_count, 'source_proof': proof, 'metrics': metrics,
-                                  'planned_games': config.hpo_spec['training_recipe']['collection_games'] if hpo else 16, 'actual_games': proof['games'], 'health': {},
+                                  'planned_games': sum(len(group.episodes) for group in groups), 'actual_games': proof['games'], 'health': {},
                                   'policy_bindings': {key: asdict(value) for key, value in registry.items()},
                                   'learner_seats': linkage['learner_seats'], 'collection_seconds': collection_seconds, 'update_seconds': update_seconds}
                         transition_phase(performance, 'save')

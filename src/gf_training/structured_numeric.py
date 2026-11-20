@@ -11,8 +11,11 @@ This module never mutates process visibility or overrides Adam health checks.
 from __future__ import annotations
 
 import math
+from collections import deque
 from contextlib import nullcontext
 from dataclasses import asdict, dataclass, replace
+from itertools import chain, groupby
+from operator import itemgetter
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +25,7 @@ from gf_common.card_instance import ActionConfigV3
 from gf_common.card_instance_rules import CardInstanceRules
 from gf_common.domain import ContractError, Json, digest, integer
 from gf_models.arrays import MAX_ARRAY_BYTES, sha256
+from gf_models.config import LEGACY_PPO_UPDATE, PPOUpdateConfig
 from gf_models.structured_artifacts import (
     _ArtifactContext,
     _game_context_v3,
@@ -56,6 +60,39 @@ from gf_models.structured_network import make_network
 from gf_models.torch_runtime import torch_runtime
 from gf_training.ppo_math import losses
 from gf_training.structured_rollout import StructuredRollout
+
+
+def _ppo_episode_runs(rollout: StructuredRollout) -> tuple[range, ...]:
+    runs = []
+    start = 0
+    for _, locations in groupby(rollout.locations, itemgetter(0)):
+        end = start + sum(1 for _ in locations)
+        runs.append(range(start, end))
+        start = end
+    return tuple(runs)
+
+
+def _ppo_epoch_order(rng: np.random.Generator, decisions: int, episode_runs: tuple[range, ...],
+                     strategy: str) -> list[int]:
+    if strategy == 'all':
+        return rng.permutation(decisions).tolist()
+    episodes = (rng.permutation(len(episode_runs)).tolist()
+        if strategy in ('episode_order', 'episode_interleave') else range(len(episode_runs)))
+    if strategy == 'episode_order':
+        return list(chain.from_iterable(episode_runs[index] for index in episodes))
+    orders = [(rng.permutation(len(run)) + run.start).tolist() for run in
+        (episode_runs[index] for index in episodes)]
+    if strategy == 'within_episode':
+        return list(chain.from_iterable(orders))
+    active = deque(iter(order) for order in orders)
+    interleaved = []
+    while active:
+        episode = active.popleft()
+        index = next(episode, None)
+        if index is not None:
+            interleaved.append(index)
+            active.append(episode)
+    return interleaved
 
 
 @dataclass(frozen=True)
@@ -200,8 +237,9 @@ class Learner:
         finally:
             del self._rust_operation_limit
 
-    def _update_owned_model3(self, rollout: StructuredRollout, *, device_bytes: int | None = None) -> Json:
-        """Actual Source handoff only; one preflight around the frozen kernel."""
+    def _update_owned_model3(self, rollout: StructuredRollout, *, device_bytes: int | None = None,
+                             recipe: PPOUpdateConfig = LEGACY_PPO_UPDATE) -> Json:
+        """Actual Source handoff with one preflight around Model3 optimization."""
         if device_bytes is not None:
             integer(device_bytes, 1, 2**63 - 1)
         if self.model.version != '3' or getattr(self, '_rust_operation_limit', None) is not None:
@@ -209,9 +247,94 @@ class Learner:
         self._rust_operation_limit = _OperationDeviceLimit(device_bytes, rollout)
         try:
             self.admit(rollout)
-            return self.update(rollout)
+            cuda_width = recipe.gpu_microbatch_size if self.binding.device != 'cpu' else 1
+            if (cuda_width == 1 and recipe.minibatch_size == LEGACY_PPO_UPDATE.minibatch_size
+                    and recipe.epochs == LEGACY_PPO_UPDATE.epochs and recipe.shuffle_strategy == 'all'):
+                return self.update(rollout)
+            if self.model.model_id != 'mlp':
+                raise ContractError('configurable ordinary PPO requires Model3 MLP')
+            return self._update_ordinary_model3(rollout, recipe, cuda_width=cuda_width)
         finally:
             del self._rust_operation_limit
+
+    def _packed_model3_loss(self, rollout: StructuredRollout, indices: tuple[int, ...]) -> tuple[Any, Json]:
+        from gf_models.structured_learning import pack_window
+        from gf_training.hpo_update_planning import group_frames
+
+        endpoints = [rollout.endpoint(index) for index in indices]
+        window = pack_window(self.network, group_frames(endpoints, self.model, False),
+            [candidates for _, candidates in endpoints], [rollout.vector(index) for index in indices])
+        logs, values = self.network._learning_forward(window, [1] * len(indices), 1)
+        raw = window.operands
+        return losses(logs, values, raw['mask'], raw['selected'], *raw['vectors'])
+
+    def _scalar_model3_loss(self, rollout: StructuredRollout, index: int) -> tuple[Any, Json]:
+        torch = self.torch
+        frames, candidates = rollout.endpoint(index)
+        logs, value, _ = self.network(frames, candidates,
+            suffix_length=min(len(frames), self.model.temporal.sequence_length))
+        selected, old, _, advantage, target = rollout.vector(index)
+        self.synchronize()
+        mask = torch.ones((1, len(candidates.kinds)), dtype=torch.bool, device=self.binding.device)
+        selected_tensor = torch.tensor([selected], dtype=torch.int64, device=self.binding.device)
+        vectors = [torch.tensor([number], dtype=torch.float32, device=self.binding.device)
+            for number in (old, advantage, target)]
+        return losses(logs[None], value[None], mask, selected_tensor, *vectors)
+
+    def _update_ordinary_model3(self, rollout: StructuredRollout, recipe: PPOUpdateConfig, *, cuda_width: int) -> Json:
+        from gf_training.hpo_update_planning import plan_groups
+
+        torch = self.torch
+        parity = self.parity(rollout)
+        totals: dict[str, float] = {}
+        denominator = 0
+        packed = cuda_width > 1
+        device = self.binding.device
+        gradient_bytes = (sum(parameter.numel() * parameter.element_size()
+            for parameter in self.network.parameters()) if packed else 0)
+        runs = _ppo_episode_runs(rollout) if recipe.shuffle_strategy != 'all' else ()
+        self.network.train()
+        for _ in range(recipe.epochs):
+            order = _ppo_epoch_order(self.shuffle, len(rollout), runs, recipe.shuffle_strategy)
+            for start in range(0, len(order), recipe.minibatch_size):
+                logical = order[start:start + recipe.minibatch_size]
+                self.optimizer.zero_grad(set_to_none=True)
+                if packed:
+                    # After zeroing, the batch needs at most one complete gradient
+                    # set in addition to one group's live graph and inputs.
+                    free_bytes, _ = torch.cuda.mem_get_info(device)
+                    memory = torch.cuda.memory_stats(device)
+                    idle_bytes = memory['reserved_bytes.all.current'] - memory['active_bytes.all.current']
+                    plans = plan_groups(rollout, logical, self.model, self.binding, 1,
+                        variant='microbatch', reservation_bytes=self.binding.managed_budget_bytes,
+                        layout=self.network.layout, device_bytes=self._current_device_limit(None),
+                        mlp_width=cuda_width, packed_device_headroom=free_bytes + idle_bytes - gradient_bytes)
+                    groups = (group.indices for group in plans)
+                else:
+                    groups = ((index,) for index in logical)
+                for indices in groups:
+                    size = len(indices)
+                    loss, measured = (self._packed_model3_loss(rollout, indices) if packed else
+                        self._scalar_model3_loss(rollout, indices[0]))
+                    if not torch.isfinite(loss):
+                        raise ContractError("nonfinite structured PPO loss")
+                    weighted = loss * (size / len(logical)) if packed else loss / len(logical)
+                    weighted.backward()
+                    for name, number in measured.items():
+                        totals[name] = totals.get(name, 0.) + size * number
+                    denominator += size
+                    del loss, weighted
+                norm = torch.nn.utils.clip_grad_norm_(self.network.parameters(), .5, error_if_nonfinite=True)
+                if not torch.isfinite(norm):
+                    raise ContractError("nonfinite structured PPO gradients")
+                self.optimizer.step()
+                self.steps += 1
+        self.synchronize()
+        metrics = {name: value / denominator for name, value in totals.items()}
+        if not all(math.isfinite(value) for value in metrics.values()) or any(not torch.isfinite(parameter).all() for parameter in self.network.parameters()):
+            raise ContractError("nonfinite structured PPO update output")
+        return {**metrics, "optimizer_steps": self.steps, "parity": parity,
+                "sequence_length": self.model.temporal.sequence_length}
 
     def update(self, rollout: StructuredRollout) -> Json:
         torch = self.torch

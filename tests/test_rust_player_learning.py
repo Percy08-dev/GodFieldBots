@@ -53,10 +53,12 @@ def source_handoff_data(local, rollout, monkeypatch):
     """Actual Source factory at isolated Raw handoff seam; no qualified Dataset."""
     from types import SimpleNamespace
 
+    from gf_models.config import PPOTrainingConfig
     from gf_training.rust_player_source import RustEmptyCollection, RustPlayerSource
     parent = SimpleNamespace(generation=0, optimizer_steps=0, _learner=local.learner)
     registry = SimpleNamespace(local=local, hpo=False, failed=False, closed=False,
-        state={'updates': 0, 'optimizer_steps': 0}, current=parent, pending=None)
+        state={'updates': 0, 'optimizer_steps': 0}, current=parent, pending=None,
+        config=SimpleNamespace(training=PPOTrainingConfig()))
     plan = SimpleNamespace(linkage={'collection_generation': 0})
     collection = SimpleNamespace(registry=registry, plan=plan)
     inspection = SimpleNamespace(collection=collection, registry=registry, plan=plan, parent=parent,
@@ -252,8 +254,8 @@ def test_source_consume_dispatches_owned_bridge_after_original_checks_and_admits
     source._episode_digests = source._digests()
     source.registry.directory = tmp_path
     source.registry.budget = StorageBudget(StorageSettings(), time.monotonic()+60)
-    source.registry.config = SimpleNamespace(actions=ACTIONS,
-        preprocessing=SimpleNamespace(max_source_file_mib=64))
+    source.registry.config.actions = ACTIONS
+    source.registry.config.preprocessing = SimpleNamespace(max_source_file_mib=64)
     source.plan.execution_deadline = time.monotonic()+60
     numeric = tmp_path / 'numeric'
     metadata = _write_rollout(numeric, rollout)

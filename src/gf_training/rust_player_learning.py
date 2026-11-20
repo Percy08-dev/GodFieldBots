@@ -202,6 +202,7 @@ class LocalGameLearner(_LocalLearner):
 
     def _update_from_source(self, source: Any) -> Json:
         """In-memory handoff AFTER consume's physical/correspondence checks."""
+        from gf_models.config import ordinary_ppo_update
         from gf_training.rust_player_source import RustPlayerSource
         self.require()
         if type(source) is not RustPlayerSource:
@@ -219,7 +220,8 @@ class LocalGameLearner(_LocalLearner):
             try:
                 with self._device_phase('update') as operation:
                     return self.learner._update_owned_model3(source._rollout,
-                        device_bytes=operation.device_bytes if operation is not None else None)
+                        device_bytes=operation.device_bytes if operation is not None else None,
+                        recipe=ordinary_ppo_update(registry.config.training))
             except BaseException:
                 self._failed = True
                 raise
@@ -387,12 +389,12 @@ class RustGameOperations:
     def validate_config(self, config: Any) -> Any:
         from gf_common.card_instance import ActionConfigV3
         from gf_common.structured_layout import CORRECTED_CARD_INSTANCE_LAYOUT as layout
-        from gf_models.config import PPOTrainingConfig, SequencePPOTrainingConfig
+        from gf_models.config import PPOTrainingConfig, RustPPOTrainingConfig
         from gf_models.structured_binding import ConfiguredNeuralModelV3
         if (config is not self.config or type(config.actions) is not ActionConfigV3
                 or type(config.model) is not ConfiguredNeuralModelV3 or config.model.model_id != 'mlp'
-                or config.model.checkpoint is not None or type(config.training) is not PPOTrainingConfig
-                or isinstance(config.training, SequencePPOTrainingConfig)
+                or config.model.checkpoint is not None
+                or type(config.training) not in (PPOTrainingConfig, RustPPOTrainingConfig)
                 or config.run.split != 'train' or config.preprocessing.backend != 'python'
                 or config.preprocessing.reader != 'participant-structured-v2'
                 or not hasattr(config.run, 'player_runtime')):

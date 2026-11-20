@@ -152,23 +152,49 @@ def _snapshot(loaded: LoadedConfig, ownership: Any, *, fresh: bool) -> LoadedCon
     return snapshot
 
 
-def _resume_origin(loaded: LoadedConfig, ownership: Any, bound: Json, *,
-                   hpo_context: Json | None = None) -> tuple[Json, Json]:
-    from gf_common.rust_player import deadline_seconds, hex_identity, validate_operation
-    from gf_common.rust_player_clock import validate_operation_clock
+def _paused_run(ownership: Any, *, hpo: bool) -> Json:
     from gf_training.lineage import read_json
     from gf_training.rust_player_lineage import validate_run
-    from gf_training.rust_player_supervision import read_control_record
-    cfg: Any = loaded.config
-    parent = ownership.directory
-    path = parent / 'run.json'
+
+    _parent_mapping(ownership)
+    path = ownership.directory / 'run.json'
     if path.is_symlink():
         raise ContractError('ordinary paused state must be an original owned file')
     state = read_json(path)
-    hpo = hpo_context is not None
     validate_run(state, hpo=hpo)
-    if (state['status'] != 'paused' or not state['updates']
-            or state['config_sha256'] != loaded.sha256
+    if state['status'] != 'paused' or not state['updates']:
+        raise ContractError('actual paused ordinary run with a committed update required')
+    return state
+
+
+def _ordinary_resume_snapshot(invocation: LoadedConfig, ownership: Any, state: Json) -> LoadedConfig:
+    from gf_cli.config import load_rust_player_effective
+
+    path = ownership.directory / '.rust-player/effective-config.json'
+    if path.parent.is_symlink() or path.is_symlink():
+        raise ContractError('original ordinary control snapshot must not be a symlink')
+    snapshot = load_rust_player_effective(path, expected_sha256=state['config_sha256'])
+    requested = invocation.effective
+    saved = snapshot.effective
+    if 'ppo_update' not in requested['training']:
+        saved = {**saved, 'training': {key: value for key, value in saved['training'].items()
+            if key != 'ppo_update'}}
+    if canonical(saved) != canonical(requested):
+        raise ContractError('original effective snapshot differs from current configuration')
+    return snapshot
+
+
+def _resume_origin(loaded: LoadedConfig, ownership: Any, bound: Json, *,
+                   hpo_context: Json | None = None, state: Json | None = None) -> tuple[Json, Json]:
+    from gf_common.rust_player import deadline_seconds, hex_identity, validate_operation
+    from gf_common.rust_player_clock import validate_operation_clock
+    from gf_training.rust_player_supervision import read_control_record
+    cfg: Any = loaded.config
+    parent = ownership.directory
+    hpo = hpo_context is not None
+    if state is None:
+        state = _paused_run(ownership, hpo=hpo)
+    if (state['config_sha256'] != loaded.sha256
             or canonical(state['effective_config']) != canonical(loaded.effective)
             or canonical(state['config_inputs']) != canonical(loaded.inputs)
             or state['identity']['player_runtime'] != bound
@@ -285,7 +311,11 @@ def prepare_ordinary(loaded: LoadedConfig, directory: Path, *, mode: str,
     from gf_simulator_client.rust_player_companion import discover_companion
     from gf_training.lineage import run_lock
     from gf_training.native_backend import binary_identity
-    from gf_training.rust_player_supervision import runtime_producer, write_control_record
+    from gf_training.rust_player_supervision import (
+        read_control_record,
+        runtime_producer,
+        write_control_record,
+    )
     cfg, hpo, p = _config(loaded)
     if hpo or mode not in ('fresh', 'resume'):
         raise ContractError('explicit ordinary fresh/resume factory required')
@@ -303,12 +333,18 @@ def prepare_ordinary(loaded: LoadedConfig, directory: Path, *, mode: str,
     clock_binding = _capture_clock() if mode == 'fresh' else None
     fresh_deadlines = clock_deadlines(clock_binding, inputs=_inputs(cfg), post_host_seconds=p) if clock_binding is not None else None
     with run_lock(parent, create=mode == 'fresh') as ownership:
-        snapshot = _snapshot(loaded, ownership, fresh=mode == 'fresh')
         root = parent / '.rust-player'
         if mode == 'resume':
-            origin, old_clock = _resume_origin(snapshot, ownership, bound)
+            state = _paused_run(ownership, hpo=False)
+            snapshot = _ordinary_resume_snapshot(loaded, ownership, state)
+            origin, old_clock = _resume_origin(snapshot, ownership, bound, state=state)
+            original_provenance, _ = read_control_record(root / f'inputs-{origin["operation_id"]}.json', root)
+            if canonical(original_provenance) != canonical({'inputs': original_inputs}):
+                raise ContractError('original ordinary input-file receipts differ')
+            original_inputs = original_provenance['inputs']
             run_id, deadlines, clock_binding = origin['run_id'], origin['deadlines'], old_clock['clock_binding']
         else:
+            snapshot = _snapshot(loaded, ownership, fresh=True)
             run_id, deadlines = str(uuid.uuid4()), fresh_deadlines
         assert clock_binding is not None and deadlines is not None
         operation = {'schema_version': 2, 'kind': 'rust-player-operation-v2', 'operation_id': op_id,

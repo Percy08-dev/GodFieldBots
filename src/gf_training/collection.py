@@ -88,6 +88,28 @@ def training_groups(seed: int, batch: int, learner: str, snapshots: tuple[str, .
         groups.append(EpisodeGroup(game_seed, episodes))
     return tuple(groups)
 
+def ordinary_rust_training_groups(seed: int, batch: int, learner: str, snapshots: tuple[str, ...], rng: object, *, collection_games: int) -> tuple[EpisodeGroup, ...]:
+    """Extend the original paired streams while keeping the formal kernel frozen."""
+    if collection_games == 16:
+        return training_groups(seed, batch, learner, snapshots, rng, actions_version=3)
+
+    import numpy as np
+    assert isinstance(rng, np.random.Generator)
+    groups = []
+    random_label, heuristic_label = baseline_policy_labels(3)
+    baseline_pairs = collection_games // 8
+    opponents = ([random_label] * baseline_pairs + [heuristic_label] * baseline_pairs
+        + [snapshots[int(rng.integers(len(snapshots)))] for _ in range(collection_games // 4)])
+    for pair, opponent in enumerate(opponents):
+        game_seed = str(uuid.uuid5(TRAIN_NAMESPACE, f'ppo-train-v1/{seed}/{batch}/{pair}'))
+        pair_id = f'b{batch:06}-p{pair}'
+        streams = tuple(int(digest({'recipe': 'ppo-policy-stream-v1', 'seed': seed, 'batch': batch, 'pair': pair, 'role': role})[:16], 16) for role in ('learner', 'opponent'))
+        sampling = (streams[0], streams[1])
+        episodes = (EpisodeSpec(pair_id + '-seat0', (learner, opponent), sampling, pair_id, 1),
+                    EpisodeSpec(pair_id + '-seat1', (opponent, learner), (sampling[1], sampling[0]), pair_id, 2))
+        groups.append(EpisodeGroup(game_seed, episodes))
+    return tuple(groups)
+
 
 def validation_groups(seed: int, learner: str, *, actions_version: int = 1) -> tuple[EpisodeGroup, ...]:
     random_label, heuristic_label = baseline_policy_labels(actions_version)

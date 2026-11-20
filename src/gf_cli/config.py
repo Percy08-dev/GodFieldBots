@@ -43,10 +43,12 @@ from gf_models.config import (
     MLPModelConfig,
     ModelConfig,
     PPOTrainingConfig,
+    RustPPOTrainingConfig,
     SequencePPOTrainingConfig,
     TrainingConfig,
     TransformerModelConfig,
     model_config,
+    ppo_update_config,
     training_config,
     validate_capacity,
 )
@@ -275,6 +277,8 @@ def _validate_table(name: str, values: Json, *, context: Json | None = None) -> 
             default = defaults[key]
             if name == "run" and key == "player_runtime":
                 continue  # The closed declaration has its own zero-wait semantics.
+            elif name == "training" and key == "ppo_update":
+                ppo_update_config(value)
             elif isinstance(default, dict):
                 check(value, default)
             elif default is None:
@@ -343,6 +347,8 @@ def _validate_table(name: str, values: Json, *, context: Json | None = None) -> 
         defaults["inference"].update(asdict(GRUModelConfig().inference))
     if name == "training" and "algorithm" not in values:
         defaults.update(asdict(SequencePPOTrainingConfig()))
+    if name == "training" and "ppo_update" in values:
+        defaults["ppo_update"] = {}
     check({key: value for key, value in values.items() if key != 'post_host_seconds'}
         if timed_native_run else values, defaults)
     if timed_native_run:
@@ -535,7 +541,18 @@ def _normalized_config(effective: Json, *, data: Json, inputs: tuple[Json, ...])
     models = {name: model_config(effective[name], layout=layout_for_contract(selected_contract))
               if effective[name].get("version") == "3" or effective[name].get("model_id") == "heuristic_refresh" else model_config(effective[name])
               for name in ("model", "opponent")}
-    training = training_config(effective["training"])
+    training_fields = effective["training"]
+    update = None
+    if "ppo_update" in training_fields:
+        update = ppo_update_config(training_fields["ppo_update"])
+        training_fields = {key: value for key, value in training_fields.items() if key != "ppo_update"}
+    training = training_config(training_fields)
+    if update is not None:
+        if (type(training) is not PPOTrainingConfig or "player_runtime" not in run
+                or type(models["model"]) is not ConfiguredNeuralModelV3):
+            raise ContractError("training.ppo_update requires ordinary Rust Model3 PPO")
+        if "training_opponents" in data and update.collection_games != 16:
+            raise ContractError("mixed-refresh-16-v1 requires collection_games=16")
     preprocessing = preparation_config(effective["preprocessing"])
     if ("training" in data or "training" in data.get("references", {})) and models["model"].model_id not in ("lightgbm", "mlp", "gru", "transformer"):
         raise ContractError("training/model mismatch")
@@ -613,7 +630,7 @@ def _normalized_config(effective: Json, *, data: Json, inputs: tuple[Json, ...])
             converted[name] = models[name]
             continue
         if name == "training":
-            converted[name] = training
+            converted[name] = training if update is None else RustPPOTrainingConfig(**asdict(training), ppo_update=update)
             continue
         if name == "preprocessing":
             converted[name] = preprocessing

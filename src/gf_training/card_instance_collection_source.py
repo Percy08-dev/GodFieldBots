@@ -217,18 +217,27 @@ def _inspect_game_manifest(owner: Any, manifest: Json, actions: ActionConfigV3,
                 or type(manifest.get('elapsed_seconds')) not in (float, int)
                 or not math.isfinite(manifest['elapsed_seconds']) or manifest['elapsed_seconds'] < 0):
             raise ContractError('original final validation projection/cost required')
-    specs = [(group, spec) for group in manifest.get('schedule', []) for spec in group.get('episodes', [])]
+    schedule = manifest.get('schedule', [])
+    games = role.games
+    if _rust and role is PPO_BATCH:
+        from gf_models.config import ppo_update_config
+        training = config.get('training', {})
+        if 'ppo_update' in training:
+            games = ppo_update_config(training['ppo_update'], complete=True).collection_games
+        if len(schedule) != games // 2 or any(len(group.get('episodes', [])) != 2 for group in schedule):
+            raise ContractError('original Rust PPO requires the frozen whole paired schedule')
+    specs = [(group, spec) for group in schedule for spec in group.get('episodes', [])]
     names = [_name(spec.get('episode_id')) for _, spec in specs]
     episodes = manifest.get('episodes')
-    if (len(specs) != role.games or len(set(names)) != role.games or type(episodes) is not list or len(episodes) != role.games
+    if (len(specs) != games or len(set(names)) != games or type(episodes) is not list or len(episodes) != games
             or {row.get('episode_id') for row in episodes} != set(names)
-            or len({row.get('game_id') for row in episodes}) != role.games
+            or len({row.get('game_id') for row in episodes}) != games
             or len(manifest.get('groups', [])) != len(manifest['schedule'])
             or len(manifest.get('runtime_evidence', [])) != len(manifest['schedule'])
             or link['learner_seats'] != {spec['episode_id']: integer(spec.get('learner_viewer'), 1, 2) for _, spec in specs}
             or link['schedule_digest'] != digest(manifest['schedule'])
             or link['policy_registry_digest'] != digest(manifest.get('policy_bindings'))):
-        raise ContractError('whole16 original collection roles/schedule/registry required')
+        raise ContractError('whole original collection roles/schedule/registry required')
     registry = manifest.get('policy_bindings')
     neural = closed(manifest.get('neural_inputs'), {'input_contract', 'policies'})
     if (type(registry) is not dict or set(manifest.get('policies', [])) != set(registry)

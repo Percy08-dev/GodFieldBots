@@ -12,6 +12,7 @@ from gf_common.domain import ContractError, Json, integer
 from gf_common.structured_layout import StructuredLayout
 from gf_models.structured_config import (
     InferenceBindingV2,
+    ModelConfigV3,
     ModelConfigV4,
     parameter_shapes,
     resource_estimate,
@@ -20,7 +21,7 @@ from gf_models.structured_config import (
 OWNED_LEARNER_RECIPE = 'owned-cuda-learner-admission-v1'
 
 
-def learner_group_fixed_bytes(model: ModelConfigV4, binding: InferenceBindingV2, *,
+def learner_group_fixed_bytes(model: ModelConfigV3 | ModelConfigV4, binding: InferenceBindingV2, *,
                               layout: StructuredLayout) -> int:
     """The unchanged logical planner's fixed components, shared with its floor."""
     fixed = resource_estimate(model,binding,decisions=1,interval_events=0,candidates=1,

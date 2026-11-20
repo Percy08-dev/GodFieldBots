@@ -543,6 +543,8 @@ def campaign_config(value: Json, *, origin: Path, _pinned_base: LoadedConfig | N
                 or digest(_pinned_base.effective) != _pinned_base.sha256):
             raise ContractError('explicit unchanged pinned native campaign base required')
         base = _pinned_base
+    if 'ppo_update' in base.effective['training']:
+        raise ContractError('HPO base must not declare ordinary training.ppo_update')
     if hasattr(base.config.run,'inference_service'):
         raise ContractError('HPO base must not declare ordinary run.inference_service; campaign runtime is authoritative')
     if hasattr(base.config.run, 'player_runtime'):

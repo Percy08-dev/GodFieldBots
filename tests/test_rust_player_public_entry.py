@@ -429,3 +429,125 @@ def test_resume_missing_foreign_changed_or_expired_data_refuses_without_new_anch
     with pytest.raises((ContractError, OSError)), rust_player_entry.prepare_ordinary(loaded, parent, mode='resume'):
         raise AssertionError('invalid paused metadata accepted')
     assert json.loads((parent / 'run.json').read_bytes()) == state
+
+
+def test_ordinary_ppo_update_effective_table_roundtrip_and_legacy_shape(tmp_path):
+    from gf_common.domain import digest
+
+    legacy = normal()
+    assert legacy.effective['training'] == {
+        'algorithm': 'ppo', 'device': 'cuda:0', 'seeds': [17], 'max_updates': 2,
+        'max_owned_bytes': 10737418240, 'admission_reservation_bytes': 1073741824,
+        'cleanup_seconds': 30, 'max_log_bytes': 1048576,
+    }
+    loaded = normal(training={'ppo_update': {'minibatch_size': 128, 'gpu_microbatch_size': 128}})
+    table = {
+        'schema_version': 1, 'collection_games': 256, 'minibatch_size': 128, 'epochs': 4,
+        'shuffle_strategy': 'all', 'gpu_microbatch_size': 128,
+    }
+    assert loaded.effective['training'] == legacy.effective['training'] | {'ppo_update': table}
+    assert asdict(loaded.config.training.ppo_update) == table
+    path = tmp_path / 'effective.json'
+    path.write_text(canonical(loaded.effective))
+    assert load_rust_player_effective(path, expected_sha256=loaded.sha256).effective == loaded.effective
+    del loaded.effective['training']['ppo_update']['epochs']
+    path.write_text(canonical(loaded.effective))
+    with pytest.raises(ContractError):
+        load_rust_player_effective(path, expected_sha256=digest(loaded.effective))
+
+
+@pytest.mark.parametrize('field,value', [
+    ('schema_version', 2), ('collection_games', 15), ('collection_games', 0),
+    ('minibatch_size', 0), ('minibatch_size', True), ('epochs', -1),
+    ('gpu_microbatch_size', 0), ('shuffle_strategy', 'episode'), ('extra', 1),
+])
+def test_ordinary_ppo_update_refuses_invalid_settings(field, value):
+    with pytest.raises(ContractError):
+        normal(training={'ppo_update': {field: value}})
+
+
+def test_ordinary_ppo_update_requires_native_model3():
+    with pytest.raises(ContractError):
+        load_config(NORMAL_BASE, {'training': {'ppo_update': {}}})
+
+
+def test_ordinary_resume_restores_recipe_omitted_from_cli(tmp_path):
+    from gf_cli.rust_player_entry import prepare_ordinary
+    from gf_training.rust_player_supervision import read_control_record
+
+    parent = tmp_path / 'parent'
+    initial = normal(training={'ppo_update': {'minibatch_size': 128}})
+    with prepare_ordinary(initial, parent, mode='fresh', pause_after_update=1) as first:
+        _paused_launcher_data(first)
+        clock, operation = first.clock, first.operation
+    with prepare_ordinary(normal(), parent, mode='resume') as resumed:
+        assert resumed.loaded.effective == initial.effective
+        assert resumed.loaded.sha256 == initial.sha256
+        assert resumed.operation['deadlines'] == operation['deadlines']
+        assert resumed.clock['clock_binding'] == clock['clock_binding']
+        record, _ = read_control_record(resumed.provenance_path, parent / '.rust-player')
+        assert record == {'inputs': list(initial.inputs)}
+    with pytest.raises(ContractError), prepare_ordinary(
+            normal(training={'ppo_update': {'minibatch_size': 64}}), parent, mode='resume'):
+        pytest.fail('resume accepted a different explicit update recipe')
+
+
+
+
+def test_ordinary_ppo_update_toml_and_dotted_cli_merge(tmp_path, capsys):
+    import json
+
+    from gf_cli import main
+    from tests.test_rust_player_config import normal_file
+
+    source = normal_file(tmp_path, runtime())
+    source.write_text(source.read_text() + '\n[training.ppo_update]\ncollection_games = 24\nepochs = 2\n')
+    assert main(['validate', '--config', str(source), '--set', 'training.ppo_update.minibatch_size=128',
+        '--set', 'training.ppo_update.shuffle_strategy="episode_interleave"',
+        '--set', 'server.config=' + json.dumps(str(ROOT / 'configs/test-server.toml'))]) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report['effective_config']['training']['ppo_update'] == {
+        'schema_version': 1, 'collection_games': 24, 'minibatch_size': 128, 'epochs': 2,
+        'shuffle_strategy': 'episode_interleave', 'gpu_microbatch_size': 16,
+    }
+
+
+def test_ordinary_resume_refuses_changed_raw_input_with_equal_effective_config(tmp_path):
+    from gf_cli.rust_player_entry import prepare_ordinary
+    from tests.test_rust_player_config import normal_file
+
+    source = normal_file(tmp_path, runtime())
+    override = {'run': {'post_host_seconds': 30.}, 'training': {'ppo_update': {'minibatch_size': 64}}}
+    first_input = load_config(source, override)
+    parent = tmp_path / 'parent'
+    with prepare_ordinary(first_input, parent, mode='fresh', pause_after_update=1) as first:
+        _paused_launcher_data(first)
+    source.write_text(source.read_text() + '\n# Changed raw bytes only\n')
+    changed = load_config(source, override)
+    assert changed.sha256 == first_input.sha256 and changed.inputs != first_input.inputs
+    with pytest.raises(ContractError, match='input-file receipts differ'), prepare_ordinary(
+            changed, parent, mode='resume'):
+        pytest.fail('resume accepted modified input provenance')
+
+
+def test_mixed_refresh_needs_16_ordinary_rust_games(tmp_path):
+    from tests.test_rust_player_config import normal_file
+
+    path = normal_file(tmp_path, runtime())
+    path.write_text(path.read_text() + (
+        '\n[training_opponents]\nversion="1"\npreset="mixed-refresh-16-v1"\n'
+        '[training_opponents.refresh]\nversion="1"\nattack_threshold=12\n'
+    ))
+    with pytest.raises(ContractError, match='mixed-refresh-16-v1'):
+        load_config(path, {'training': {'ppo_update': {}}})
+    loaded = load_config(path, {'training': {'ppo_update': {'collection_games': 16}}})
+    assert loaded.config.training.ppo_update.collection_games == 16
+
+
+def test_hpo_refuses_ordinary_rust_update_table_in_base(tmp_path):
+    from tests.test_rust_player_config import normal_file
+
+    source = normal_file(tmp_path, runtime())
+    source.write_text(source.read_text() + '\n[training.ppo_update]\ncollection_games = 16\n')
+    with pytest.raises(ContractError, match='HPO base must not declare'):
+        campaign_config(campaign_raw() | {'base_experiment': str(source)}, origin=tmp_path)

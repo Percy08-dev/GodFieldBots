@@ -14,6 +14,9 @@
 
 ## 一覧
 
+[0056](0056-ordinary-rust-ppo-update.md) — Accepted。通常 Rust Model3 に版付きの
+PPO 更新設定を追加し、対戦収集、学習、保存後の監査で同じ条件を使う。
+
 [0055](0055-owned-rust-model3-parity-validation.md) — Accepted。通常 Rust Model3 の
 所有済み学習入力では、更新前の数値比較を明示検証へ移す。実機で保存・再開を確認済み。
 

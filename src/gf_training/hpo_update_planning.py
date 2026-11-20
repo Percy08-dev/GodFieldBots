@@ -1,4 +1,4 @@
-"""Pure bounded grouping and lifetime-aware Model4 execution admission."""
+"""Pure bounded grouping and lifetime-aware structured execution admission."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -163,9 +163,10 @@ def _candidate_geometry(candidates: list[Any],model: Any,binding: Any,layout: An
 
 
 def _estimate(endpoints: list[Any],model: Any,binding: Any,tbptt: int,*,layout: Any,
-              shared: bool,staging: FrameStagingPlan | None) -> dict[str,Any]:
-    if not endpoints or len(endpoints)>16:
-        raise UpdateCapacityError('nonempty group of at most16 endpoints required')
+              shared: bool,staging: FrameStagingPlan | None, mlp_width: int = 16) -> dict[str,Any]:
+    width = mlp_width if model.model_id == 'mlp' else 16
+    if not endpoints or len(endpoints) > width:
+        raise UpdateCapacityError(f'nonempty group of at most{width} endpoints required')
     fixed_bytes=learner_group_fixed_bytes(model,binding,layout=layout)
     frames=group_frames(endpoints,model,shared)
     candidate=[tokens for _,tokens in endpoints]
@@ -214,8 +215,10 @@ def _estimate(endpoints: list[Any],model: Any,binding: Any,tbptt: int,*,layout: 
         'tensor_bytes':tensors,'frame_count':len(frames),'streamed':staging is not None}
 
 
-def joint_estimate(endpoints: list[Any],model: Any,binding: Any,tbptt: int,*,layout: Any,shared: bool=False) -> dict[str,Any]:
-    return _estimate(endpoints,model,binding,tbptt,layout=layout,shared=shared,staging=None)
+def joint_estimate(endpoints: list[Any], model: Any, binding: Any, tbptt: int, *,
+                   layout: Any, shared: bool = False, mlp_width: int = 16) -> dict[str, Any]:
+    return _estimate(endpoints, model, binding, tbptt, layout=layout, shared=shared,
+        staging=None, mlp_width=mlp_width)
 
 
 def _within(estimate: dict[str,Any],cap: int,resident: int, *,
@@ -297,11 +300,62 @@ def execution_plan(endpoints: list[Any],model: Any,binding: Any,tbptt: int,*,lay
             maximum=max(1,maximum//2)
 
 
+def _packed_mlp_groups(endpoints: dict[int, Any], model: Any, binding: Any, tbptt: int, *,
+                       layout: Any, resident_bytes: int, reservation_bytes: int, device_bytes: int | None,
+                       width: int, headroom: int | None) -> list[UpdateGroup]:
+    """Check whole padding bins once, subdividing in order on preallocation failure."""
+    accepted: list[UpdateGroup] = []
+
+    def admit(indices: list[int]) -> None:
+        try:
+            estimate = joint_estimate([endpoints[index] for index in indices], model, binding, tbptt,
+                layout=layout, mlp_width=width)
+            plan = ExecutionPlan(None, estimate)
+            admit_execution_plan(plan, model, binding, reservation_bytes=reservation_bytes,
+                resident_bytes=resident_bytes, device_bytes=device_bytes)
+            incremental = estimate['packed_bytes'] + estimate['activation_bytes']
+            if headroom is not None and incremental > headroom:
+                raise UpdateCapacityError('packed MLP group exceeds measured CUDA headroom: '
+                    f'resource=cuda phase=update required={incremental} limit={headroom}')
+        except UpdateCapacityError:
+            if len(indices) == 1:
+                raise
+        else:
+            accepted.append(UpdateGroup(tuple(indices), plan=plan))
+            return
+        midpoint = len(indices) // 2
+        admit(indices[:midpoint])
+        admit(indices[midpoint:])
+
+    lengths = {index: len(tokens.kinds) for index, (_, tokens) in endpoints.items()}
+    current: list[int] = []
+    total = 0
+    for index in sorted(lengths, key=lengths.__getitem__):
+        candidates = lengths[index]
+        if current and (len(current) == width or (len(current) + 1) * candidates > 2 * (total + candidates)):
+            admit(current)
+            current = []
+            total = 0
+        current.append(index)
+        total += candidates
+    if current:
+        admit(current)
+    return accepted
+
+
 def plan_groups(rollout: Any, logical: list[int], model: Any, binding: Any, tbptt: int, *,
-                variant: str, reservation_bytes: int, layout: Any,device_bytes: int | None=None) -> list[UpdateGroup]:
+                variant: str, reservation_bytes: int, layout: Any, device_bytes: int | None = None,
+                mlp_width: int = 16, packed_device_headroom: int | None = None) -> list[UpdateGroup]:
     if variant=='shared-prefix' and model.model_id=='mlp':
         raise ContractError('shared-prefix is sequence-only')
     endpoints={index:rollout.endpoint(index) for index in logical}
+    if packed_device_headroom is not None or mlp_width != 16:
+        if model.model_id != 'mlp' or variant != 'microbatch':
+            raise ContractError('custom packed width and headroom require MLP microbatching')
+        integer(mlp_width, 1)
+        return _packed_mlp_groups(endpoints, model, binding, tbptt, layout=layout,
+            resident_bytes=rollout.resident_bytes, reservation_bytes=reservation_bytes,
+            device_bytes=device_bytes, width=mlp_width, headroom=packed_device_headroom)
     bins: dict[Any,list[int]]={}
     shared_bins: dict[Any,list[int]]={}
     for index in logical:
