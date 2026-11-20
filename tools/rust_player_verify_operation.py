@@ -6,6 +6,7 @@ import hashlib
 import io
 import json
 import math
+import re
 import sys
 import time
 from collections.abc import Callable, Iterable
@@ -21,6 +22,8 @@ from gf_common.performance_metrics import (
     Histogram,
     invert_response_sizes,
 )
+
+_PROCESS_READ_ERROR = re.compile(r'process ([1-9][0-9]*)/(0|[1-9][0-9]*): .+', re.DOTALL)
 
 
 def _number(value: Any) -> float:
@@ -186,7 +189,7 @@ def _pairing(row: Json, *, observation_id: str, boot_id: str, run_id: str,
         raise ContractError('diagnostic run differs')
 
 
-def journal_data(lines: Iterable[bytes]) -> Json:
+def journal_data(lines: Iterable[bytes], *, expected_identity: Json | None = None) -> Json:
     """Project acknowledged participant decisions only; no policy/validation authority."""
     iterator = iter(lines)
     first = next(iterator, None)
@@ -196,6 +199,8 @@ def journal_data(lines: Iterable[bytes]) -> Json:
     if header['kind'] != 'header' or type(header['schema_version']) is not int or header['schema_version'] != 6:
         raise ContractError('participant Journal6 header required')
     integer(header['viewer'], 1, 2)
+    if expected_identity is not None and any(header.get(key) != value for key, value in expected_identity.items()):
+        raise ContractError('participant Journal6 identity differs from authenticated collection/name')
     pending: tuple[int, str] | None = None
     decisions = accepted = total = maximum = 0
     cutoffs: dict[str, int] = {}
@@ -301,14 +306,21 @@ def observer_data(directory: Path, *, scan: Any) -> Json:
     coverage = closed(row['coverage'], {'process_samples', 'pss_sweeps', 'complete_pss_sweeps',
         'partial_pss_sweeps', 'peak_eligible_pss_sweeps', 'observed_processes'})
     for value in coverage.values(): integer(value, 0)
-    processes: dict[tuple[int, int], Json] = {(command['pid'], command['start_ticks']):
-        {'pid': command['pid'], 'start_ticks': command['start_ticks'], 'samples': 0,
-         'first_monotonic_ns': None, 'last_monotonic_ns': None, 'cpu_first': None, 'cpu_last': None,
-         'executable': None, 'argv': None, 'tasks': {}}}
+    if not row['sampling']['enabled'] and (any(coverage.values()) or row['peak_complete_pss_bytes'] is not None):
+        raise ContractError('disabled observer sampling has coverage or a PSS peak')
+    processes: dict[tuple[int, int], Json] = {}
+    if row['sampling']['enabled']:
+        processes[(command['pid'], command['start_ticks'])] = {
+            'pid': command['pid'], 'start_ticks': command['start_ticks'], 'samples': 0,
+            'first_monotonic_ns': None, 'last_monotonic_ns': None, 'cpu_first': None, 'cpu_last': None,
+            'executable': None, 'argv': None, 'tasks': {}}
     samples = 0
     sample_counts: list[Json] = []
     sample_errors: dict[str, int] = {}
-    projection_bytes = _owned_bytes((processes, sample_counts, sample_errors))
+    # Discover precedes process_json: a primary read failure can be the ONLY
+    # retained evidence of an owned identity. It supplies no sampled body data.
+    error_only: dict[tuple[int, int], None] = {}
+    projection_bytes = _owned_bytes((processes, sample_counts, sample_errors, error_only))
     sample_seen: set[int] = set()  # Only objects retained by sample_counts, never transient row IDs.
     def projection_estimate() -> int:
         # This dedup index also has an actual lifetime during streaming. It is
@@ -317,18 +329,33 @@ def observer_data(directory: Path, *, scan: Any) -> Json:
     for sample in _rows(directory / 'process.jsonl', scan, retained_bytes=projection_estimate):
         closed(sample, {'monotonic_ns', 'processes', 'errors'})
         integer(sample['monotonic_ns'], start)
+        if type(sample['errors']) is not list or any(type(error) is not str for error in sample['errors']):
+            raise ContractError('sampled process errors must be a list of strings')
         samples += 1
         old_errors = _owned_bytes(sample_errors)
+        old_error_identities = _owned_bytes(error_only) if sample['errors'] else None
+        missing_process_body = False
         for error in sample['errors']:
             sample_errors[error] = sample_errors.get(error, 0) + 1
+            if error.startswith('process ') and (match := _PROCESS_READ_ERROR.fullmatch(error)):
+                identity = int(match[1]), int(match[2])
+                integer(identity[0], 1, 2**32 - 1)
+                integer(identity[1], 0, 2**64 - 1)
+                missing_process_body = True
+                if identity not in processes:
+                    error_only[identity] = None
+        if old_error_identities is not None:
+            projection_bytes += _owned_bytes(error_only) - old_error_identities
         projection_bytes += _owned_bytes(sample_errors) - old_errors
         old_list = sys.getsizeof(sample_counts)
         sample_counts.append({'monotonic_ns': sample['monotonic_ns'],
             'processes': len(sample['processes']),
             'python_pids': [p['pid'] for p in sample['processes'] if p['executable'] is not None
                 and Path(p['executable']).name.startswith('python')],
-            'executable_coverage_complete': all(p['executable'] is not None for p in sample['processes'])})
+            'executable_coverage_complete': not missing_process_body
+                and all(p['executable'] is not None for p in sample['processes'])})
         projection_bytes += sys.getsizeof(sample_counts) - old_list + _owned_bytes(sample_counts[-1], sample_seen)
+        unresolved_bytes = None
         for proc in sample['processes']:
             closed(proc, {'pid', 'start_ticks', 'ppid', 'state', 'user_ticks', 'system_ticks',
                 'rss_bytes', 'threads', 'executable', 'argv', 'tasks'})
@@ -336,6 +363,10 @@ def observer_data(directory: Path, *, scan: Any) -> Json:
             for count_key in ('user_ticks', 'system_ticks', 'rss_bytes', 'threads'):
                 if proc[count_key] is not None: integer(proc[count_key], 0)
             key = proc['pid'], proc['start_ticks']
+            if key in error_only:
+                if unresolved_bytes is None:
+                    unresolved_bytes = _owned_bytes(error_only)
+                del error_only[key]
             old_process = (_owned_bytes(processes[key]) if key in processes else 0) + sys.getsizeof(processes)
             if key not in processes:
                 projection_bytes += _owned_bytes(key)
@@ -352,6 +383,8 @@ def observer_data(directory: Path, *, scan: Any) -> Json:
                 closed(task, {'tid', 'name'})
                 value['tasks'][str(task['tid'])] = task['name']
             projection_bytes += _owned_bytes(value) + sys.getsizeof(processes) - old_process
+        if unresolved_bytes is not None:
+            projection_bytes += _owned_bytes(error_only) - unresolved_bytes
         # No historical raw row remains when the next bounded decode starts.
         if sample['processes']:
             del proc
@@ -372,7 +405,10 @@ def observer_data(directory: Path, *, scan: Any) -> Json:
         total = 0
         for member in members:
             closed(member, {'pid', 'start_ticks', 'start_monotonic_ns', 'finish_monotonic_ns', 'pss_bytes', 'error'})
-            qualifies = qualifies and (member['pid'], member['start_ticks']) in processes and member['error'] is None
+            identity = member['pid'], member['start_ticks']
+            if identity not in processes and identity not in error_only:
+                raise ContractError('PSS member lacks a discovered process identity')
+            qualifies = qualifies and member['error'] is None
             if member['pss_bytes'] is None: qualifies = False
             else:
                 integer(member['pss_bytes'], 0); total += member['pss_bytes']
@@ -386,7 +422,7 @@ def observer_data(directory: Path, *, scan: Any) -> Json:
         del sweep, members
     actual_coverage = {'process_samples': samples, 'pss_sweeps': sweeps,
         'complete_pss_sweeps': complete, 'partial_pss_sweeps': partial,
-        'peak_eligible_pss_sweeps': eligible, 'observed_processes': len(processes)}
+        'peak_eligible_pss_sweeps': eligible, 'observed_processes': len(processes) + len(error_only)}
     if coverage != actual_coverage or peak != row['peak_complete_pss_bytes']:
         raise ContractError('observer raw coverage/PSS peak differs')
     for value in processes.values():
@@ -406,7 +442,8 @@ def observer_data(directory: Path, *, scan: Any) -> Json:
     already_owned: set[int] = set()
     _owned_bytes(row, already_owned)  # Summary decode already admitted by scan.object.
     new_bytes = _owned_bytes(result, already_owned)
-    scan.charge(new_bytes + _index_bytes(sample_seen) + _index_bytes(already_owned), temporary=True)
+    scan.charge(new_bytes + _index_bytes(sample_seen) + _index_bytes(already_owned)
+        + _owned_bytes(error_only), temporary=True)
     scan.charge(new_bytes)
     return result
 
@@ -691,6 +728,44 @@ def _measurement_updates(audit: Json) -> list[Json]:
         if scope['start_generation'] < row['generation'] <= scope['end_generation']]
 
 
+def _legacy_packed_diagnostics(scan: Any, parent: Path, state: Json, update: Json, *, lane: str) -> Json:
+    """Project bounded DATA from the SAME full-validator scan's actual originals."""
+    from gf_common.group_pack_game import packed_state
+    from gf_training.structured_rollout import _owned_bytes
+    proof = update['source_proof']
+    if (lane not in ('legacy-hpo', 'legacy-ordinary') or not packed_state(state)
+            or lane == 'legacy-hpo' and (state['run_variant'] != 'hpo-ppo-owned-shared-v1'
+                or type(proof['schema_version']) is not int or proof['schema_version'] != 6)):
+        raise ContractError('diagnostic adapter requires validated original packed legacy lane')
+    collection = parent / update['collection']
+    owner = scan.packed_owner(collection)
+    manifest = scan.object(collection / 'manifest.json', update['collection_manifest_sha256'])
+    storage = owner.storage
+    descriptor = owner.artifacts._originals.descriptor_file
+    assert descriptor is not None
+    storage = {**storage, 'descriptor_path': str(descriptor.path)}
+    closures: dict[str, int] = {}
+    journals: Json = {}
+    for episode in manifest['episodes']:
+        closure = episode['end_kind']
+        closures[closure] = closures.get(closure, 0) + 1
+        for viewer in (1, 2):
+            name = f'{episode["episode_id"]}/player-{viewer}.jsonl'
+            if name in journals:
+                raise ContractError('duplicate authenticated legacy episode journal')
+            journals[name] = {'run_id': manifest['run_id'], 'episode_id': episode['episode_id'],
+                'game_id': episode['game_id'], 'viewer': viewer}
+    if len(journals) != 2 * update['actual_games']:
+        raise ContractError('authenticated legacy manifest episode count differs')
+    projected = {'source_proof': {'storage': storage, 'closure_counts': closures,
+        # Shared HPO proof6 contains no all-seat counter. The exact complete
+        # named journals supply it later; learner-only update counts never do.
+        'accepted_decisions': proof.get('accepted_decisions') if lane == 'legacy-ordinary' else None},
+        'journals': journals}
+    scan.charge(_owned_bytes(projected))
+    return projected
+
+
 def _audit_parent(parent: Path, loaded: Any, *, lane: str, observer_directory: Path,
                   deadline: float, limit: int, config_path: Path, ownership: Any) -> tuple[Json, Json]:
     from gf_training.lineage import require_hpo_run_owner
@@ -750,11 +825,14 @@ def _audit_parent(parent: Path, loaded: Any, *, lane: str, observer_directory: P
         for generation, record in enumerate(records[1:], 1):
             update = scan.object(parent / 'updates' / f'{generation:06}.json', record['update_sha256'])
             proof = update['source_proof']
+            if lane.startswith('native-'):
+                diagnostic = {'source_proof': {'storage': proof['storage'], 'closure_counts': proof['closure_counts'],
+                    'accepted_decisions': proof['accepted_decisions']}}
+            else:
+                diagnostic = _legacy_packed_diagnostics(scan, parent, state, update, lane=lane)
             updates.append({key: update[key] for key in ('batch_id', 'actual_games', 'planned_games',
-                'collection_seconds', 'update_seconds')} | {'source_proof': {
-                    'storage': proof['storage'], 'closure_counts': proof['closure_counts'],
-                    'accepted_decisions': proof['accepted_decisions']},
-                'manifest_sha256': update['collection_manifest_sha256']})
+                'collection_seconds', 'update_seconds')} | diagnostic
+                | {'manifest_sha256': update['collection_manifest_sha256']})
             usage = proof.get('service_usage', {})
             updates[-1]['invocation_id'] = usage.get('invocation_id', usage.get('execution'))
             updates[-1]['generation'] = generation
@@ -793,16 +871,33 @@ def _project_collections(audit: Json, *, limit: int, deadline: float, retained: 
                 raise ContractError('actual committed packed database differs')
             if source._controls['manifest.json']['sha256'] != update['manifest_sha256']:
                 raise ContractError('packed original is not the committed collection')
+            journals = update.get('journals')
+            if journals is not None:
+                count = 0
+                for member in source._index['members']:
+                    name = member['name']
+                    if member['kind'] == 'journal':
+                        count += 1
+                        if name not in journals:
+                            raise ContractError('extra or foreign legacy participant journal')
+                    elif name in journals:
+                        raise ContractError('expected legacy participant path is not a typed journal')
+                if count != len(journals):
+                    raise ContractError('missing legacy participant journal')
             for group_id in source._groups:
                 with source.borrow_group(group_id) as loan:
                     for name in loan.names():
-                        if not name.endswith('.jsonl'):
+                        if journals is None:
+                            if not name.endswith('.jsonl'):
+                                continue
+                        elif name not in journals:
                             continue
                         raw = loan.read(name)
                         workspace = 32 * len(raw) + 65536
                         source._budget.acquire(workspace, deadline)
                         try:
-                            row = journal_data(io.BytesIO(raw))
+                            row = (journal_data(io.BytesIO(raw)) if journals is None else
+                                journal_data(io.BytesIO(raw), expected_identity=journals[name]))
                             row['journal'] = name
                             charge = _owned_bytes(row)
                             source._budget.acquire(charge, deadline)
@@ -813,7 +908,8 @@ def _project_collections(audit: Json, *, limit: int, deadline: float, retained: 
                 source.evict_group()  # All loan payloads have reached last use.
                 del loan
             source.recheck()
-            if sum(row['accepted_decisions'] for row in projected) != update['source_proof']['accepted_decisions']:
+            expected_accepted = update['source_proof']['accepted_decisions']
+            if (journals is None or expected_accepted is not None) and sum(row['accepted_decisions'] for row in projected) != expected_accepted:
                 raise ContractError('all-seat acknowledged decisions differ from verified Source')
             result = collection_data(update, projected, ordinal=ordinal)
         finally:
@@ -823,6 +919,24 @@ def _project_collections(audit: Json, *, limit: int, deadline: float, retained: 
             del source
         results.append(result)
     return results
+
+
+def _legacy_broker_pretransition(row: Json, sequence: list[Json], *, lane: str,
+                                 current_invocation: str | None) -> bool:
+    """Exact DIAGNOSTIC_BEGIN crossing of adjacent ORIGINAL host phases only."""
+    if (lane not in ('legacy-hpo', 'legacy-ordinary') or row['owner']['role'] != 'legacy-shared-broker'
+            or current_invocation is None or row['scope']['invocation_id'] != current_invocation):
+        return False
+    for index in range(1, len(sequence)):
+        earlier, later = sequence[index-1], sequence[index]
+        if (later['scope'] != row['scope'] or earlier['scope']['invocation_id'] not in (None, current_invocation)
+                or any(earlier['scope'][key] != row['scope'][key]
+                    for key in ('run_id', 'batch_id', 'phase', 'operation_id'))):
+            continue
+        if (earlier['start_monotonic_ns'] <= row['start_monotonic_ns'] <= earlier['end_monotonic_ns']
+                <= later['start_monotonic_ns'] <= row['end_monotonic_ns'] <= later['end_monotonic_ns']):
+            return True
+    return False
 
 
 def _telemetry(directory: Path | None, *, observer: Json, audit: Json, observation_id: str,
@@ -940,6 +1054,17 @@ def _telemetry(directory: Path | None, *, observer: Json, audit: Json, observati
                 'start_monotonic_ns': start['monotonic_ns'], 'end_monotonic_ns': row['monotonic_ns'],
                 'seconds': (row['monotonic_ns'] - start['monotonic_ns']) / 1e9})
     if pending: errors.append('phase start without original same-owner/scope end')
+    def original_host(row: Json) -> bool:
+        return (startup_owner is not None and row['owner']['role'] == 'host'
+            and (row['owner']['pid'], row['owner']['start_ticks']) == startup_owner)
+    # Include ALL this original host's closed phases, not a collection-only
+    # subset that could conceal an intervening phase or an unclosed boundary.
+    host_sequence = sorted((row for row in phases if original_host(row)),
+        key=lambda row: (row['start_monotonic_ns'], row['end_monotonic_ns']))
+    if (sum(original_host(row) and row['event'] in ('phase_start', 'phase_end') for row in events) != 2 * len(host_sequence)
+            or any(host_sequence[index-1]['end_monotonic_ns'] > host_sequence[index]['start_monotonic_ns']
+                for index in range(1, len(host_sequence)))):
+        host_sequence = []
     collection_coverage = []
     for batch in current_updates:
         selected = [row for row in metrics if row['scope']['phase'] == 'collection'
@@ -951,8 +1076,10 @@ def _telemetry(directory: Path | None, *, observer: Json, audit: Json, observati
         if not selected or not host_phases:
             errors.append('missing collection diagnostics:' + batch['batch_id'])
         for row in selected:
-            if host_phases and not any(phase['start_monotonic_ns'] <= row['start_monotonic_ns']
-                    <= row['end_monotonic_ns'] <= phase['end_monotonic_ns'] for phase in host_phases):
+            if (host_phases and not any(phase['start_monotonic_ns'] <= row['start_monotonic_ns']
+                    <= row['end_monotonic_ns'] <= phase['end_monotonic_ns'] for phase in host_phases)
+                    and not _legacy_broker_pretransition(row, host_sequence, lane=audit.get('lane', ''),
+                        current_invocation=measurement_scope['invocation_id'] if measurement_scope is not None else None)):
                 errors.append('collection metric interval outside host phase:' + batch['batch_id'])
         native = audit.get('lane', 'native').startswith('native')
         runtime_role = 'native-runtime' if native else 'legacy-coordinator'

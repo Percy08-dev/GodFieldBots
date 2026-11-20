@@ -142,7 +142,7 @@ def test_observer_requires_actual_success_and_exact_original_wait_wall(tmp_path)
         'sampling': {'enabled': False, 'cpu_interval_ns': 100000000, 'pss_interval_ns': 1000000000},
         'peak_complete_pss_bytes': None,
         'coverage': {'process_samples': 0, 'pss_sweeps': 0, 'complete_pss_sweeps': 0,
-            'partial_pss_sweeps': 0, 'peak_eligible_pss_sweeps': 0, 'observed_processes': 1},
+            'partial_pss_sweeps': 0, 'peak_eligible_pss_sweeps': 0, 'observed_processes': 0},
         'errors': [], 'limitations': ['sampling misses short processes']}
     path = tmp_path / 'summary.json'
     (tmp_path / 'process.jsonl').write_bytes(b'')
@@ -152,6 +152,8 @@ def test_observer_requires_actual_success_and_exact_original_wait_wall(tmp_path)
     result = observer_data(tmp_path, scan=scan)
     assert result['wall_seconds'] == 2e-7
     assert result['peak_complete_pss_bytes'] is None
+    assert result['command'] == row['command']
+    assert result['processes'] == result['sample_counts'] == []
     row['command_wait']['exit_code'] = 143
     path.write_text(json.dumps(row))
     with pytest.raises(ContractError):
@@ -160,6 +162,223 @@ def test_observer_requires_actual_success_and_exact_original_wait_wall(tmp_path)
     path.write_text(json.dumps(row))
     with pytest.raises(ContractError):
         observer_data(tmp_path, scan=SealedScan(max_owned_bytes=10**7, deadline=time.monotonic()+10))
+
+
+def test_actual_legacy_off_observer_preserves_command_without_sampled_processes():
+    import time
+    from pathlib import Path
+
+    from gf_models.structured_sealed import SealedScan
+    from tools.rust_player_verify_operation import observer_data
+    directory = Path('/home/percy/develop/GodFieldBots/runs/rust-player-runtime-v1/populations/b603e16/calibration-c8/calibration-c8-01-legacy-off/observer')
+    if not directory.is_dir():
+        pytest.skip('authorized completed calibration observer archive unavailable')
+    result = observer_data(directory, scan=SealedScan(max_owned_bytes=8 * 1024**2, deadline=time.monotonic()+10))
+    assert result['command']['pid'] == 1099619
+    assert result['command']['start_ticks'] == 6891123
+    assert result['command_wait'] == {'exit_code': 0, 'signal': None, 'observed': True}
+    assert result['wall_seconds'] == 46.847840633
+    assert result['sampling']['enabled'] is False
+    assert not any(result['coverage'].values())
+    assert result['processes'] == result['sample_counts'] == []
+    assert result['peak_complete_pss_bytes'] is None
+
+
+@pytest.mark.parametrize('fault', ['original-projection', 'process-coverage', 'pss-coverage', 'peak',
+    'raw-process', 'raw-pss', 'raw-process-matching', 'raw-pss-matching'])
+def test_disabled_observer_rejects_contradictory_sampling_evidence(tmp_path, fault):
+    import time
+
+    from gf_models.structured_sealed import SealedScan
+    from tools.rust_player_verify_operation import observer_data
+    # Start with the completed producer's real off record shape; mutate only
+    # local DATA files, never the original archive.
+    row = {'schema_version': 1, 'kind': 'rust-player-process-observation-v1',
+        'command': {'argv': ['python'], 'pid': 5, 'start_ticks': 2,
+            'start_monotonic_ns': 100, 'finish_monotonic_ns': 300, 'wall_ns': 200},
+        'clock': {'name': 'CLOCK_MONOTONIC', 'boot_id': 'boot', 'hz': 100, 'page_bytes': 4096, 'kernel': 'test'},
+        'observer': {'pid': 1, 'start_monotonic_ns': 90, 'finish_monotonic_ns': 310, 'user_ticks': 0, 'system_ticks': 0},
+        'command_wait': {'exit_code': 0, 'signal': None, 'observed': True},
+        'sampling': {'enabled': False, 'cpu_interval_ns': 100000000, 'pss_interval_ns': 1000000000},
+        'peak_complete_pss_bytes': None,
+        'coverage': dict.fromkeys(('process_samples', 'pss_sweeps', 'complete_pss_sweeps',
+            'partial_pss_sweeps', 'peak_eligible_pss_sweeps', 'observed_processes'), 0),
+        'errors': [], 'limitations': []}
+    process = b''
+    pss = b''
+    if fault == 'original-projection': row['coverage']['observed_processes'] = 1
+    elif fault == 'process-coverage': row['coverage']['process_samples'] = 1
+    elif fault == 'pss-coverage': row['coverage']['pss_sweeps'] = 1
+    elif fault == 'peak': row['peak_complete_pss_bytes'] = 0
+    elif fault in ('raw-process', 'raw-process-matching'):
+        process = b'{"monotonic_ns":100,"processes":[],"errors":[]}\n'
+        if fault.endswith('matching'):
+            row['coverage'].update(process_samples=1, observed_processes=1)
+    elif fault in ('raw-pss', 'raw-pss-matching'):
+        pss = b'{"start_monotonic_ns":100,"finish_monotonic_ns":200,"complete":true,"total_pss_bytes":0,"processes":[],"errors":[]}\n'
+        if fault.endswith('matching'):
+            row['coverage'].update(pss_sweeps=1, complete_pss_sweeps=1, observed_processes=1)
+    (tmp_path / 'summary.json').write_text(json.dumps(row))
+    (tmp_path / 'process.jsonl').write_bytes(process)
+    (tmp_path / 'pss.jsonl').write_bytes(pss)
+    with pytest.raises(ContractError):
+        observer_data(tmp_path, scan=SealedScan(max_owned_bytes=10**7, deadline=time.monotonic()+10))
+
+
+def error_observer_data(tmp_path, errors, *, observed=2, pss_member=None, samples=None, limit=8 * 1024**2):
+    import time
+
+    from gf_models.structured_sealed import SealedScan
+    from tools.rust_player_verify_operation import observer_data
+    if samples is None:
+        samples = [{'monotonic_ns': 100, 'processes': [], 'errors': errors}]
+    summary = {'schema_version': 1, 'kind': 'rust-player-process-observation-v1',
+        'command': {'argv': ['python'], 'pid': 5, 'start_ticks': 2,
+            'start_monotonic_ns': 100, 'finish_monotonic_ns': 300, 'wall_ns': 200},
+        'clock': {'name': 'CLOCK_MONOTONIC', 'boot_id': 'boot', 'hz': 100, 'page_bytes': 4096, 'kernel': 'test'},
+        'observer': {'pid': 1, 'start_monotonic_ns': 90, 'finish_monotonic_ns': 310, 'user_ticks': 0, 'system_ticks': 0},
+        'command_wait': {'exit_code': 0, 'signal': None, 'observed': True},
+        'sampling': {'enabled': True, 'cpu_interval_ns': 100000000, 'pss_interval_ns': 1000000000},
+        'peak_complete_pss_bytes': None,
+        'coverage': {'process_samples': len(samples), 'pss_sweeps': 0, 'complete_pss_sweeps': 0,
+            'partial_pss_sweeps': 0, 'peak_eligible_pss_sweeps': 0, 'observed_processes': observed},
+        'errors': [], 'limitations': []}
+    (tmp_path / 'process.jsonl').write_text(''.join(json.dumps(sample)+'\n' for sample in samples))
+    pss = b''
+    if pss_member is not None:
+        member = {'pid': pss_member[0], 'start_ticks': pss_member[1],
+            'start_monotonic_ns': 150, 'finish_monotonic_ns': 160, 'pss_bytes': 4096, 'error': None}
+        pss = (json.dumps({'start_monotonic_ns': 150, 'finish_monotonic_ns': 160,
+            'complete': True, 'total_pss_bytes': 4096, 'processes': [member], 'errors': []})+'\n').encode()
+        summary['coverage'].update(pss_sweeps=1, complete_pss_sweeps=1)
+        if observed == 2:
+            summary['coverage']['peak_eligible_pss_sweeps'] = 1
+            summary['peak_complete_pss_bytes'] = 4096
+    (tmp_path / 'summary.json').write_text(json.dumps(summary))
+    (tmp_path / 'pss.jsonl').write_bytes(pss)
+    return observer_data(tmp_path, scan=SealedScan(max_owned_bytes=limit, deadline=time.monotonic()+10))
+
+
+def test_primary_process_error_counts_discovery_without_inventing_body_metrics(tmp_path):
+    error = 'process 6/3: No such file or directory (os error 2)'
+    result = error_observer_data(tmp_path, [error, error])
+    assert result['coverage']['observed_processes'] == 2
+    assert [row['pid'] for row in result['processes']] == [5]
+    assert result['sample_errors'] == {error: 2}
+    assert result['processes'][0]['sampled_cpu_ticks'] is None
+    assert result['sample_counts'][0]['processes'] == 0
+
+
+@pytest.mark.parametrize('error', ['process 06/3: missing', 'process 0/3: missing',
+    'process 6/03: missing', 'process -6/3: missing', 'process 6/-3: missing',
+    'process 6/3 executable: missing', 'process 6/3 argv: missing', 'process 6/3 tasks: missing',
+    'prefix process 6/3: missing', 'process 6/3: '])
+def test_only_exact_canonical_primary_process_errors_support_discovered_identity(tmp_path, error):
+    with pytest.raises(ContractError):
+        error_observer_data(tmp_path, [error])
+
+
+@pytest.mark.parametrize('errors', [None, 'read failed', [1], [None], [{'error': 'read failed'}]])
+def test_sampled_process_errors_must_be_a_list_of_strings(tmp_path, errors):
+    with pytest.raises(ContractError):
+        error_observer_data(tmp_path, errors, observed=1)
+
+
+@pytest.mark.parametrize('error', [f'process {2**32}/3: unavailable', f'process 6/{2**64}: unavailable'])
+def test_primary_error_identity_must_fit_rust_pid_and_tick_domains(tmp_path, error):
+    with pytest.raises(ContractError):
+        error_observer_data(tmp_path, [error])
+
+
+def test_primary_error_identity_accepts_canonical_rust_integer_boundaries(tmp_path):
+    error = f'process {2**32-1}/{2**64-1}: unavailable'
+    result = error_observer_data(tmp_path, [error])
+    assert result['coverage']['observed_processes'] == 2
+    assert result['sample_errors'] == {error: 1}
+
+
+def test_pss_membership_can_use_primary_discovery_error_but_not_unsupported_identity(tmp_path):
+    result = error_observer_data(tmp_path, ['process 6/3: identity unavailable after reads'], pss_member=(6, 3))
+    assert result['peak_complete_pss_bytes'] == 4096
+    assert [row['pid'] for row in result['processes']] == [5]
+    # A fabricated noneligible summary must not hide unsupported PSS membership.
+    with pytest.raises(ContractError):
+        error_observer_data(tmp_path, [], observed=1, pss_member=(6, 3))
+
+
+def test_process_error_then_body_counts_identity_once_and_keeps_missing_fields_missing(tmp_path):
+    primary = 'process 6/3: identity unavailable after reads'
+    optional = ['process 6/3 executable: unavailable', 'process 6/3 argv: unavailable',
+        'process 6/3 tasks: unavailable']
+    proc = {'pid': 6, 'start_ticks': 3, 'ppid': 5, 'state': 'S', 'user_ticks': 2,
+        'system_ticks': 3, 'rss_bytes': 4096, 'threads': 1, 'executable': None, 'argv': None, 'tasks': None}
+    samples = [{'monotonic_ns': 100, 'processes': [], 'errors': [primary]},
+        {'monotonic_ns': 200, 'processes': [proc], 'errors': optional}]
+    result = error_observer_data(tmp_path, [], samples=samples)
+    assert result['coverage']['observed_processes'] == 2
+    body = next(row for row in result['processes'] if row['pid'] == 6)
+    assert body['samples'] == 1 and body['first_monotonic_ns'] == 200
+    assert body['executable'] is None and body['argv'] is None and body['tasks'] == {}
+    assert result['sample_errors'] == dict.fromkeys([primary, *optional], 1)
+
+
+@pytest.mark.parametrize('previous_body', [False, True])
+def test_primary_read_failure_makes_this_sample_executable_coverage_incomplete(tmp_path, previous_body):
+    root = {'pid': 5, 'start_ticks': 2, 'ppid': 1, 'state': 'S', 'user_ticks': 2,
+        'system_ticks': 3, 'rss_bytes': 4096, 'threads': 1, 'executable': '/usr/bin/python3',
+        'argv': ['python3'], 'tasks': []}
+    missing = {**root, 'pid': 6, 'start_ticks': 3, 'ppid': 5}
+    samples = [{'monotonic_ns': 100, 'processes': [root, missing] if previous_body else [root], 'errors': []},
+        {'monotonic_ns': 200, 'processes': [root], 'errors': ['process 6/3: identity unavailable after reads']}]
+    result = error_observer_data(tmp_path, [], samples=samples)
+    assert result['coverage']['observed_processes'] == 2
+    assert result['sample_counts'][0]['executable_coverage_complete'] is True
+    current = result['sample_counts'][1]
+    assert current['python_pids'] == [5] and current['processes'] == 1
+    assert current['executable_coverage_complete'] is False
+    assert result['peak_complete_pss_bytes'] is None
+
+
+def test_optional_task_read_error_does_not_hide_an_actual_executable_label(tmp_path):
+    root = {'pid': 5, 'start_ticks': 2, 'ppid': 1, 'state': 'S', 'user_ticks': 2,
+        'system_ticks': 3, 'rss_bytes': 4096, 'threads': 1, 'executable': '/usr/bin/python3',
+        'argv': ['python3'], 'tasks': None}
+    samples = [{'monotonic_ns': 100, 'processes': [root], 'errors': ['process 5/2 tasks: unavailable']}]
+    result = error_observer_data(tmp_path, [], samples=samples, observed=1)
+    assert result['sample_counts'][0]['executable_coverage_complete'] is True
+
+
+def test_error_only_identity_index_and_output_stay_within_existing_stream_budget(tmp_path):
+    samples = [{'monotonic_ns': 100, 'processes': [],
+        'errors': [f'process {1000+i}/{i}: unavailable']} for i in range(256)]
+    result = error_observer_data(tmp_path, [], samples=samples, observed=257)
+    assert result['coverage']['observed_processes'] == 257
+    assert [row['pid'] for row in result['processes']] == [5]
+    assert len(result['sample_errors']) == 256
+    with pytest.raises(ContractError, match='reservation'):
+        error_observer_data(tmp_path, [], samples=samples, observed=257, limit=256 * 1024)
+
+
+def test_actual_legacy_on_observer_includes_process_identities_from_read_failures():
+    import time
+    from pathlib import Path
+
+    from gf_models.structured_sealed import SealedScan
+    from tools.rust_player_verify_operation import observer_data
+    directory = Path('/home/percy/develop/GodFieldBots/runs/rust-player-runtime-v1/populations/b603e16/calibration-c8/calibration-c8-02-legacy-on/observer')
+    if not directory.is_dir():
+        pytest.skip('authorized completed calibration observer archive unavailable')
+    result = observer_data(directory, scan=SealedScan(max_owned_bytes=16 * 1024**2, deadline=time.monotonic()+30))
+    assert result['command']['pid'] == 1103489
+    assert result['command']['start_ticks'] == 6903775
+    assert result['wall_seconds'] == 48.272404905
+    assert result['coverage'] == {'process_samples': 439, 'pss_sweeps': 44,
+        'complete_pss_sweeps': 39, 'partial_pss_sweeps': 5,
+        'peak_eligible_pss_sweeps': 38, 'observed_processes': 51}
+    assert len(result['processes']) == 49
+    assert result['peak_complete_pss_bytes'] == 9406769152
+    assert result['sample_errors']['process 1104318/6905060: No such file or directory (os error 2)'] == 1
+    assert result['sample_errors']['process 1104811/6905987: No such file or directory (os error 2)'] == 1
 
 
 def test_config_must_be_the_actual_observed_argument(tmp_path):
@@ -293,6 +512,176 @@ def test_legacy_full_validator_seam_receives_same_actual_owned_scan(tmp_path, mo
             deadline=deadline, limit=cap, config_path=config_path, ownership=owner)
     assert result['status'] == 'incomplete'
     assert len(scans) == 1 and scans[0]._closed
+
+
+def packed_legacy_projection_fixture(tmp_path, monkeypatch, *, lane='legacy-hpo', fault=None, http_log=False):
+    """Real SQLite/descriptor/scan owners; only the full lane validator is isolated."""
+    import hashlib
+    import os
+    import re
+    import time
+    from pathlib import Path
+
+    from gf_cli.config import load_config
+    from gf_cli.hpo_config import campaign_config, materialize_hpo_run
+    from gf_common.domain import canonical
+    from gf_common.group_pack import FORMAT, PackMember, canonical_json, encode_pack, unpack_raw
+    from gf_common.group_pack_game import storage_binding
+    from gf_common.structured_layout import CORRECTED_CARD_INSTANCE_LAYOUT as layout
+    from gf_training import card_instance_source, group_pack_db, hpo_source
+    from gf_training.hpo_config import effective_settings
+    from gf_training.lineage import require_hpo_run_owner, run_lock
+    from tests.test_rust_player_config import NORMAL_BASE, ROOT, RUN_ID, campaign_raw
+    from tools import rust_player_verify_operation as tool
+    parents = tmp_path / 'parents'; parent = parents / RUN_ID
+    parent.mkdir(parents=True)
+    if lane == 'legacy-hpo':
+        raw = campaign_raw()
+        raw.update(schema_version=5, runtime={'mode': 'shared-mlp-v1'})
+        raw['storage'].update(parent_root=str(parents), numeric_root=str(parents), originals_root=str(tmp_path / 'db'))
+        campaign = campaign_config(raw, origin=ROOT)
+        selected = effective_settings(campaign.config.model, campaign.config.training, {}, layout=layout)
+        loaded = materialize_hpo_run(campaign, selected, learning_seed=17, run_id=RUN_ID)
+    else:
+        text = re.sub(r'"(\.\.?/[^"\n]+)"',
+            lambda match: json.dumps(str((NORMAL_BASE.parent / match[1]).resolve())), NORMAL_BASE.read_text())
+        text = re.sub(r'^db_root = .*$', 'db_root = '+json.dumps(str(tmp_path / 'db')), text, flags=re.MULTILINE)
+        text = re.sub(r'^output_dir = .*$', 'output_dir = '+json.dumps(str(parents)), text, flags=re.MULTILINE)
+        text = text.replace('[run]\n', '[run]\ninference_service = {mode = "shared-mlp-v1"}\n')
+        text = text.replace('[storage]\n', '[storage]\ndb_root = '+json.dumps(str(tmp_path / 'db'))+'\n')
+        normal_path = tmp_path / 'ordinary.toml'; normal_path.write_text(text)
+        loaded = load_config(normal_path)
+    manifest = {'run_id': 'actual-collection-id', 'episodes': [
+        {'episode_id': 'first', 'game_id': 'game-first', 'end_kind': 'natural'},
+        {'episode_id': 'second', 'game_id': 'game-second', 'end_kind': 'natural'}]}
+    members = []
+    for episode in manifest['episodes']:
+        for viewer in (1, 2):
+            header = {'kind': 'header', 'schema_version': 6, 'viewer': viewer,
+                'run_id': manifest['run_id'], 'episode_id': episode['episode_id'], 'game_id': episode['game_id']}
+            name = f'{episode["episode_id"]}/player-{viewer}.jsonl'
+            if fault == 'missing' and name == 'first/player-2.jsonl': continue
+            if fault == 'foreign' and name == 'first/player-2.jsonl': name = 'foreign/player-2.jsonl'
+            if name == 'first/player-2.jsonl':
+                for field in ('viewer', 'run_id', 'episode_id', 'game_id'):
+                    if fault == field: header[field] = 1 if field == 'viewer' else 'foreign'
+            command = f'{episode["episode_id"]}-{viewer}'
+            rows = [header, {'kind': 'decision', 'decision': 0, 'command': {'command_id': command},
+                'table': {'count': 3}, 'search_report': {'cutoff_reasons': []}},
+                {'kind': 'acknowledgement', 'decision': 0, 'response': {'command_id': command}}]
+            member_kind = 'http-log' if fault == 'mislabeled' and name == 'first/player-2.jsonl' else 'journal'
+            members.append(PackMember(member_kind, name, b''.join(canonical_json(row)+b'\n' for row in rows)))
+    if fault == 'extra': members.append(PackMember('journal', 'first/extra.jsonl', members[0].data))
+    if http_log or fault == 'http-is-journal':
+        members.append(PackMember('journal' if fault == 'http-is-journal' else 'http-log',
+            'server-b000000-p0-seat0/http/http.jsonl', b'{"kind":"http","method":"POST","path":"/v2/events"}\n'))
+    physical = Path(loaded.config.storage.db_root) / RUN_ID / 'collections/batch-000000'
+    physical.mkdir(parents=True)
+    path = physical / 'collection.sqlite3'
+    fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_EXCL, 0o600)
+    deadline = time.monotonic()+30
+    db = group_pack_db.new_database(path, manifest['run_id'], deadline, fd)
+    try:
+        pack = encode_pack(tuple(members))
+        group_pack_db.submit_group(db, manifest['run_id'], 'group', pack, raw_bytes=len(unpack_raw(pack)),
+            record={}, episodes=[{'episode_id': row['episode_id'], 'game_id': row['game_id'], 'record': {}}
+                for row in manifest['episodes']], max_pack_bytes=256 * 1024**2)
+        manifest_bytes = canonical_json(manifest)+b'\n'
+        group_pack_db.store_control(db, 'manifest.json', manifest_bytes)
+        seal = group_pack_db.seal_transaction(db, manifest['run_id'], max_owned_bytes=256 * 1024**2)
+        controls = group_pack_db.logical_index(db, manifest['run_id'])['controls']
+        group_pack_db.finish_wal(db)
+    finally:
+        db.close(); os.close(fd)
+    descriptor = {'schema_version': 1, 'format': FORMAT, 'run_id': manifest['run_id'],
+        'seal_id': seal['seal_id'], 'database': path.name, 'database_bytes': path.stat().st_size,
+        'database_sha256': hashlib.sha256(path.read_bytes()).hexdigest(), 'controls': controls, 'publication': 'published'}
+    descriptor_path = physical / 'collection.published.json'
+    descriptor_path.write_bytes(canonical_json(descriptor))
+    collection = parent / 'collections/batch-000000'; collection.mkdir(parents=True)
+    (collection / 'collection.locator.json').write_bytes(canonical_json({'schema_version': 1,
+        'format': 'sqlite-group-pack-locator-v1', 'descriptor': str(descriptor_path),
+        'descriptor_sha256': hashlib.sha256(descriptor_path.read_bytes()).hexdigest()}))
+    proof = {'schema_version': 6, 'service_usage': {'execution': 'unit-execution'}}
+    if lane == 'legacy-ordinary': proof.update(schema_version=3, accepted_decisions=4)
+    update = {'batch_id': 'batch-000000', 'collection': 'collections/batch-000000',
+        'actual_games': 2, 'planned_games': 2, 'collection_seconds': 2., 'update_seconds': 1.,
+        'collection_manifest_sha256': hashlib.sha256(manifest_bytes).hexdigest(),
+        'source_proof': proof, 'accepted_decisions': 1}
+    update_path = parent / 'updates/000001.json'; update_path.parent.mkdir()
+    update_path.write_text(canonical(update))
+    state = {'schema_version': 5 if lane == 'legacy-hpo' else 4,
+        'run_variant': 'hpo-ppo-owned-shared-v1' if lane == 'legacy-hpo' else 'unit-ordinary-data',
+        'model_version': '4' if lane == 'legacy-hpo' else '3', 'storage_binding': storage_binding(),
+        'status': 'incomplete', 'run_id': RUN_ID, 'updates': 1, 'optimizer_steps': 1,
+        'config_sha256': loaded.sha256, 'effective_config': loaded.effective, 'config_inputs': list(loaded.inputs),
+        'generation_sha256': '1' * 64, 'identity': {'code': {'revision': 'unit-data-only'}},
+        'invocations': [{'shared_service': {'finished': True, 'start_generation': 0, 'end_generation': 1,
+            'job_id': 'unit-ticket', 'execution': 'unit-execution'}}]}
+    (parent / 'run.json').write_text(canonical(state))
+    observer = tmp_path / 'observer'; observer.mkdir()
+    config_path = tmp_path / 'original.toml'
+    (observer / 'command.stdout.log').write_text(canonical({'run_dir': str(parent), 'status': 'incomplete',
+        'updates': 1, 'generation_sha256': state['generation_sha256']})+'\n')
+    monkeypatch.setattr(tool, 'observer_data', lambda *a, **k: {'command': {'argv': ['python', '--config', str(config_path)]}})
+    monkeypatch.setattr(tool, '_legacy_hpo_binding', lambda *a, **k: {'ticket': 'unit-ticket'})
+    scans = []
+    def validated(directory, *, _scan, **kwargs):
+        require_hpo_run_owner(directory)
+        _scan.configure_packed(state)
+        _scan.packed_owner(collection)
+        scans.append(_scan)
+        return state, [{}, {'update_sha256': hashlib.sha256(update_path.read_bytes()).hexdigest()}]
+    monkeypatch.setattr(hpo_source if lane == 'legacy-hpo' else card_instance_source,
+        'validate_hpo_parent' if lane == 'legacy-hpo' else 'validate_game_parent', validated)
+    with run_lock(parent) as owner:
+        result, _ = tool._audit_parent(parent, loaded, lane=lane, observer_directory=observer,
+            deadline=deadline, limit=512 * 1024**2, config_path=config_path, ownership=owner)
+    assert len(scans) == 1 and scans[0]._closed
+    assert len(scans[0]._packed_owners) == 1
+    original = next(iter(scans[0]._packed_owners.values()))
+    assert original.pool is scans[0]._packed_pool and original._closed
+    assert original.pool.closed and original.pool.budget.used == 0
+    return result, deadline
+
+
+@pytest.mark.parametrize('lane', ['legacy-hpo', 'legacy-ordinary'])
+@pytest.mark.parametrize('http_log', [False, True])
+def test_legacy_packed_projection_uses_authenticated_owner_and_named_all_seat_journals(tmp_path, monkeypatch, lane, http_log):
+    from tools import rust_player_verify_operation as tool
+    audit, deadline = packed_legacy_projection_fixture(tmp_path, monkeypatch, lane=lane, http_log=http_log)
+    update = audit['updates'][0]
+    assert update['source_proof']['storage']['descriptor_path'].endswith('collection.published.json')
+    assert update['source_proof']['closure_counts'] == {'natural': 2}
+    assert set(update['journals']) == {'first/player-1.jsonl', 'first/player-2.jsonl',
+        'second/player-1.jsonl', 'second/player-2.jsonl'}
+    result = tool._project_collections(audit, limit=512 * 1024**2, deadline=deadline, retained=audit, native=False)
+    assert result[0]['accepted_decisions'] == 4  # update.accepted_decisions=1 is learner-only.
+    assert result[0]['natural_games'] == 2 and result[0]['decisions_per_second'] == 2.
+
+
+@pytest.mark.parametrize('fault', ['missing', 'extra', 'foreign', 'viewer', 'run_id', 'episode_id', 'game_id',
+    'mislabeled', 'http-is-journal'])
+def test_legacy_named_journal_completeness_and_identity_refuse(tmp_path, monkeypatch, fault):
+    from tools import rust_player_verify_operation as tool
+    audit, deadline = packed_legacy_projection_fixture(tmp_path, monkeypatch, fault=fault)
+    with pytest.raises(ContractError):
+        tool._project_collections(audit, limit=512 * 1024**2, deadline=deadline, retained=audit, native=False)
+
+
+@pytest.mark.parametrize('accepted', [4, 3, None])
+def test_native_projector_retains_original_all_seat_count_requirement(tmp_path, monkeypatch, accepted):
+    from tools import rust_player_verify_operation as tool
+    audit, deadline = packed_legacy_projection_fixture(tmp_path, monkeypatch)
+    update = audit['updates'][0]
+    del update['journals']  # Native diagnostic DATA takes its original proof path.
+    update['source_proof']['accepted_decisions'] = accepted
+    if accepted == 4:
+        assert tool._project_collections(audit, limit=512 * 1024**2,
+            deadline=deadline, retained=audit, native=True)[0]['accepted_decisions'] == 4
+    else:
+        with pytest.raises(ContractError, match='all-seat'):
+            tool._project_collections(audit, limit=512 * 1024**2, deadline=deadline, retained=audit, native=True)
 
 
 def test_profile_relative_original_trace_is_hash_checked_without_gpu_time_inference(tmp_path):
@@ -474,7 +863,8 @@ def hpo_binding_fixture(tmp_path, monkeypatch, *, fault=None):
     for path, row in paths.items(): path.parent.mkdir(parents=True, exist_ok=True); path.write_text(json.dumps(row))
     stdout = {'operation_context': dict(context), 'gpu_termination': dict(termination)}
     observer = {'command': {'pid': 5, 'start_ticks': 2, 'argv': ['/original/python', '/original/launcher.py',
-        '--experiment-id', 'experiment', '--mode', 'fresh']}, 'clock': {'boot_id': 'boot'}}
+        '--experiment-id', 'experiment', '--mode', 'fresh']}, 'clock': {'boot_id': 'boot'},
+        'sampling': {'enabled': False}, 'processes': []}
     if fault == 'copied': observer['command']['pid'] = 6
     elif fault == 'boot': observer['clock']['boot_id'] = 'other'
     elif fault == 'context': stdout['operation_context']['operation_id'] = '0' * 32
@@ -558,6 +948,104 @@ def test_legacy_mandatory_metrics_allow_unsupported_pyo3_and_broker_failure_coun
         'event_page': True, 'inference_roundtrip': True, 'actual_batch': True, 'pyo3': None}
     assert all(row['pyo3_calls'] is None for row in result['metrics'])
     assert result['collection_coverage'][0]['host_phase_seconds'] == [2e-7]
+
+
+def broker_transition_telemetry(tmp_path, *, earlier_invocation=None, lane='legacy-ordinary', fault=None):
+    runtime = metric(); runtime['owner']['role'] = 'legacy-coordinator'
+    runtime['start_monotonic_ns'] = 120
+    runtime['counters'] = dict.fromkeys(runtime['counters'])
+    runtime['counters'].update(event_page_successes=0, event_page_failures=0, event_transport_attempts=0,
+        inference_successes=0)
+    broker = metric(); broker['owner'].update(role='legacy-shared-broker', pid=6, start_ticks=3)
+    broker['start_monotonic_ns'] = 90
+    broker['counters'] = dict.fromkeys(broker['counters'])
+    broker['counters'].update(inference_issued=0, inference_successes=0, inference_failures=0)
+    broker['histograms'] = dict.fromkeys(broker['histograms'])
+    broker['batch_rows'] = {'method': 'complete-response-size-inversion-v1', 'request_size_counts': {},
+        'batch_size_counts': {}, 'issued_requests': 0, 'completed_responses': 0,
+        'quiescent_start': True, 'quiescent_end': True, 'failures': 0}
+    scope = runtime['scope']
+    if lane.startswith('legacy-'):
+        scope['operation_id'] = None
+    broker['scope'] = dict(scope)
+    early = scope | {'invocation_id': earlier_invocation}
+    late = dict(scope)
+    first_end, next_start = 100, 110
+    if fault == 'role': broker['owner']['role'] = 'legacy-gpu-worker'
+    elif fault == 'early-operation': early['operation_id'] = 'foreign'
+    elif fault == 'late-operation': late['operation_id'] = 'foreign'
+    elif fault == 'early-invocation': early['invocation_id'] = 'foreign'
+    elif fault == 'late-invocation': late['invocation_id'] = 'foreign'
+    elif fault == 'early-phase': early.update(phase='update', batch_id=None)
+    elif fault == 'start-gap': broker['start_monotonic_ns'] = 105
+    elif fault == 'end-gap': broker['end_monotonic_ns'] = 105
+    elif fault == 'start-before': broker['start_monotonic_ns'] = 49
+    elif fault == 'end-after': broker['end_monotonic_ns'] = 251
+    elif fault == 'exact-boundaries':
+        broker.update(start_monotonic_ns=100, end_monotonic_ns=110)
+    elif fault == 'contained-with-overlap': broker['start_monotonic_ns'] = 120
+    elif fault == 'overlap': first_end = 115; early['invocation_id'] = None
+    rows = [runtime, broker]
+    if fault != 'missing-early':
+        rows += [phase(early, at=50), phase(early, event='phase_end', at=first_end)]
+    if fault != 'missing-late':
+        rows += [phase(late, at=next_start), phase(late, event='phase_end', at=250)]
+    if fault in ('intervening', 'unclosed-intervening'):
+        idle = scope | {'phase': 'idle', 'batch_id': None}
+        rows.append(phase(idle, at=101))
+        if fault == 'intervening': rows.append(phase(idle, event='phase_end', at=109))
+    if fault in ('enclosing-third', 'contained-with-overlap'):
+        idle = scope | {'phase': 'idle', 'batch_id': None}
+        rows += [phase(idle, at=40), phase(idle, event='phase_end', at=240)]
+    if fault in ('foreign-host', 'phase-role'):
+        for row in rows[2:]:
+            row['owner'].update({'pid': 6, 'start_ticks': 3} if fault == 'foreign-host' else {'role': 'legacy-coordinator'})
+        idle = scope | {'phase': 'idle', 'batch_id': None}
+        rows += [phase(idle, at=10), phase(idle, event='phase_end', at=20)]
+    return telemetry_fixture(tmp_path, rows, lane=lane,
+        updates=[{'batch_id': scope['batch_id'], 'invocation_id': 'inv', 'collection_seconds': 1.}])
+
+
+@pytest.mark.parametrize('lane', ['legacy-hpo', 'legacy-ordinary'])
+@pytest.mark.parametrize('earlier_invocation', [None, 'inv'])
+def test_legacy_broker_exact_pretransition_first_and_later_scopes(tmp_path, lane, earlier_invocation):
+    result = broker_transition_telemetry(tmp_path, lane=lane, earlier_invocation=earlier_invocation)
+    assert result['complete'], result['errors']
+    expected = [1.4e-7] if earlier_invocation is None else [5e-8, 1.4e-7]
+    assert result['collection_coverage'][0]['host_phase_seconds'] == expected
+    assert len(result['phases']) == 2  # No merged/synthetic phase interval.
+
+
+@pytest.mark.parametrize('earlier_invocation', [None, 'inv'])
+def test_legacy_broker_transition_uses_exact_inclusive_clock_boundaries(tmp_path, earlier_invocation):
+    assert broker_transition_telemetry(tmp_path, earlier_invocation=earlier_invocation,
+        fault='exact-boundaries')['complete']
+
+
+@pytest.mark.parametrize('fault', ['role', 'early-operation', 'late-operation', 'early-phase',
+    'missing-early', 'missing-late', 'intervening', 'unclosed-intervening', 'foreign-host', 'phase-role',
+    'start-gap', 'end-gap', 'start-before', 'end-after', 'overlap', 'enclosing-third'])
+def test_legacy_broker_transition_refuses_unproved_window_without_tolerance(tmp_path, fault):
+    result = broker_transition_telemetry(tmp_path, earlier_invocation='inv', fault=fault)
+    assert not result['complete']
+    assert 'collection metric interval outside host phase:batch-000000' in result['errors']
+
+
+@pytest.mark.parametrize('fault', ['early-invocation', 'late-invocation'])
+def test_legacy_broker_transition_does_not_adopt_foreign_invocation(tmp_path, fault):
+    with pytest.raises(ContractError):
+        broker_transition_telemetry(tmp_path, earlier_invocation='inv', fault=fault)
+
+
+def test_native_lane_keeps_original_single_phase_containment(tmp_path):
+    result = broker_transition_telemetry(tmp_path, earlier_invocation='inv', lane='native-ordinary')
+    assert not result['complete']
+    assert 'collection metric interval outside host phase:batch-000000' in result['errors']
+
+
+def test_single_bound_metric_does_not_use_or_require_transition_fallback(tmp_path):
+    result = broker_transition_telemetry(tmp_path, earlier_invocation='inv', fault='contained-with-overlap')
+    assert result['complete'], result['errors']
 
 
 
