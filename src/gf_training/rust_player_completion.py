@@ -204,6 +204,15 @@ class ColdFinalizedRustInvocation:
         self._parent_close_error: BaseException | None = None
         self._failure_traceback: Any = None
 
+    def _open_saved_scan(self, deadline: float) -> Any:
+        from gf_models.structured_sealed import MAX_SEALED_SCAN_BYTES, SealedScan
+
+        # The checkpoint scanner has its own capacity within the shared Source.
+        grant = min(self.pool.budget.limit - self.pool.budget.used, MAX_SEALED_SCAN_BYTES)
+        self._workspace = self.pool.budget.reserve(grant)
+        self._scan = SealedScan(max_owned_bytes=grant, deadline=deadline)
+        return self._scan
+
     def _hold_parent(self, directory: Path) -> Any:
         self.cold.require_pair()
         self._parent_directory = directory
@@ -956,7 +965,6 @@ def finalize_cold(control: HostControl, cold: ColdContinuation, *, loaded: Any) 
     import hashlib
     from types import SimpleNamespace
 
-    from gf_models.structured_sealed import SealedScan
     from gf_models.torch_runtime import runtime_metadata
     from gf_training.rust_player_supervision import runtime_producer
 
@@ -998,12 +1006,7 @@ def finalize_cold(control: HostControl, cold: ColdContinuation, *, loaded: Any) 
             operating=loaded.config.hpo_spec['operating'] if hpo else None)
         current, parent_sha, generations_sha, updates = _audit_committed_data(cold, ownership, pool, loaded,
             state, prepared, deadline, control_loans=result._control_loans)
-        # Existing sealed content scanner owns no CUDA API. Its declared
-        # remaining workspace is the SAME actual pool grant through return.
-        grant = pool.budget.limit - pool.budget.used
-        result._workspace = pool.budget.reserve(grant)
-        scan = SealedScan(max_owned_bytes=grant, deadline=deadline)
-        result._scan = scan
+        scan = result._open_saved_scan(deadline)
         target = parent / 'artifacts' / f'{state["updates"]:06}'
         artifact = _audit_saved_data(parent, loaded, state, current, scan)
         for name, checksum in artifact.files.items():

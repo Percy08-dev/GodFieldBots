@@ -768,11 +768,12 @@ def _legacy_packed_diagnostics(scan: Any, parent: Path, state: Json, update: Jso
 
 def _audit_parent(parent: Path, loaded: Any, *, lane: str, observer_directory: Path,
                   deadline: float, limit: int, config_path: Path, ownership: Any) -> tuple[Json, Json]:
+    from gf_models.structured_sealed import MAX_SEALED_SCAN_BYTES
     from gf_training.lineage import require_hpo_run_owner
     from gf_training.structured_lineage import _ChainScan
     from gf_training.structured_rollout import _owned_bytes
     require_hpo_run_owner(parent, ownership)
-    with _ChainScan(directory=parent, max_owned_bytes=limit, deadline=deadline) as scan:
+    with _ChainScan(directory=parent, max_owned_bytes=min(limit, MAX_SEALED_SCAN_BYTES), deadline=deadline) as scan:
         scan.charge(_owned_bytes(loaded))
         observer = observer_data(observer_directory, scan=scan)
         check_observed_config(config_path, argv=observer['command']['argv'])
@@ -1131,7 +1132,7 @@ def _verify_owned(*, config_path: Path, parent: Path, observer_directory: Path,
                   telemetry_directory: Path | None, observation_id: str, lane: str,
                   run_id: str | None, learning_seed: int | None, loaded: Any,
                   limit: int, deadline: float, started: float, seconds: float, ownership: Any) -> Json:
-    from gf_models.structured_sealed import SealedScan
+    from gf_models.structured_sealed import MAX_SEALED_SCAN_BYTES, SealedScan
     from gf_training.lineage import require_hpo_run_owner
     from gf_training.structured_rollout import _owned_bytes
     audit, observer = _audit_parent(parent, loaded, lane=lane, observer_directory=observer_directory,
@@ -1148,7 +1149,7 @@ def _verify_owned(*, config_path: Path, parent: Path, observer_directory: Path,
     # have left scope before this separate reader interval under the SAME cap.
     collections = _project_collections(audit, limit=limit, deadline=deadline,
         retained=(loaded, audit, observer), native=lane.startswith('native-'))
-    scan = SealedScan(max_owned_bytes=limit, deadline=deadline)
+    scan = SealedScan(max_owned_bytes=min(limit, MAX_SEALED_SCAN_BYTES), deadline=deadline)
     scan.charge(_owned_bytes((loaded, audit, observer, collections)))
     telemetry = _telemetry(telemetry_directory, observer=observer, audit=audit,
         observation_id=observation_id, scan=scan)

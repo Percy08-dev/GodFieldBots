@@ -56,6 +56,8 @@ from gf_models.structured_config import (
     recorded_token_signature,
 )
 
+MAX_SEALED_SCAN_BYTES = 12 * 1024**3
+
 SEMANTIC_KEYS = {'input_recipe', 'generator_version', 'policy_input_version', 'end_projection_version', 'reward_policy_version',
                  'reviewed_spec_hashes', 'simulator_revision', 'catalog', 'token_signature', 'numeric_transform', 'runtime', 'numerics'}
 CLASSIFICATION = {'action_contract', 'purpose', 'synthetic_capacity'}
@@ -91,7 +93,7 @@ def _identity(value: os.stat_result) -> tuple[int, ...]:
 class SealedScan:
     """One cumulative metadata + bounded shard/scratch admission and snapshot owner."""
     def __init__(self, *, max_owned_bytes: int, deadline: float) -> None:
-        integer(max_owned_bytes, 1, 12 * 1024**3)
+        integer(max_owned_bytes, 1, MAX_SEALED_SCAN_BYTES)
         self.limit, self.deadline, self.retained, self.peak = max_owned_bytes, deadline, 0, 0
         self.files: dict[Path, tuple[tuple[int, ...], str]] = {}
         self.inventories: dict[Path, tuple[str, ...]] = {}

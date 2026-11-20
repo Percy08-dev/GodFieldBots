@@ -1183,3 +1183,54 @@ def test_native_resume_refuses_wrong_current_invocation_even_with_current_batch(
             lane='native-ordinary', updates=[{'batch_id': 'batch-000000', 'invocation_id': 'new',
                 'generation': 2, 'collection_seconds': 1.}], measurement_scope={
                     'invocation_id': 'new', 'operation_id': 'op', 'start_generation': 1, 'end_generation': 2})
+
+
+def test_verifier_preserves_pack_budget_above_sealed_scan_limit(tmp_path, monkeypatch):
+    import time
+
+    from gf_training.lineage import run_lock
+    from tests.test_rust_player_public_entry import normal
+    from tools import rust_player_verify_operation as tool
+
+    source = 16 * 1024**3
+    scan_limit = 12 * 1024**3
+    config_path = tmp_path / 'original.toml'
+    loaded = normal(preprocessing={'memory_budget_mib': 16 * 1024})
+    parent = tmp_path / 'parent'
+    observer_dir = tmp_path / 'observer'
+    observer_dir.mkdir()
+    state = {'status': 'paused', 'run_id': 'run', 'updates': 0, 'optimizer_steps': 0,
+        'config_sha256': loaded.sha256, 'effective_config': loaded.effective,
+        'generation_sha256': '1' * 64, 'identity': {'code': {'revision': 'unit-data-only'}}}
+    receipt = {'current': True, 'completion_sha256': 'complete', 'audit_sha256': 'audit', 'eligible': False,
+        'clock_sha256': 'clock', 'committed_update': 0, 'invocation_history': ['invocation'],
+        'invocation_id': 'invocation', 'operation_id': 'operation', 'mode': 'fresh'}
+    stdout = {'run_dir': str(parent), 'status': state['status'], 'updates': 0,
+        'generation_sha256': state['generation_sha256'], 'rust_player': {
+            **{key: receipt[key] for key in ('completion_sha256', 'audit_sha256', 'eligible')},
+            'operation_clock_sha256': receipt['clock_sha256']}}
+    (observer_dir / 'command.stdout.log').write_text(json.dumps(stdout) + '\n')
+    observed = []
+    def observe(directory, *, scan):
+        assert directory == observer_dir
+        observed.append(scan.limit)
+        return {'command': {'argv': ['python', '--config', str(config_path)]}}
+    def project(_audit, *, limit, **_kwargs):
+        observed.append(limit)
+        return []
+    def telemetry(_directory, *, scan, **_kwargs):
+        observed.append(scan.limit)
+        return {}
+    monkeypatch.setattr(tool, 'observer_data', observe)
+    monkeypatch.setattr(tool, '_native_chain', lambda *args: ([{}], [receipt]))
+    monkeypatch.setattr(tool, '_project_collections', project)
+    monkeypatch.setattr(tool, '_telemetry', telemetry)
+    started = time.monotonic()
+    with run_lock(parent, create=True) as owner:
+        (parent / 'run.json').write_text(json.dumps(state) + '\n')
+        result = tool._verify_owned(config_path=config_path, parent=parent, observer_directory=observer_dir,
+            telemetry_directory=None, observation_id='obs', lane='native-ordinary', run_id=None,
+            learning_seed=None, loaded=loaded, limit=source, started=started,
+            seconds=30, deadline=started + 30, ownership=owner)
+    assert result['external_audit']['source_limit_bytes'] == source
+    assert observed == [scan_limit, source, scan_limit]

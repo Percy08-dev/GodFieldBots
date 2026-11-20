@@ -735,3 +735,33 @@ def test_ordinary_saved_policy_respects_existing_bank_codec_bound_with_larger_so
     policy.close()
     pool.close()
     assert pool.budget.used == 0
+
+
+@pytest.mark.parametrize('source_gib,scan_gib', [(8, 8), (16, 12)])
+def test_cold_saved_scan_borrows_only_its_supported_share_of_source(source_gib, scan_gib):
+    import time
+
+    from gf_training.group_pack_pool import PackedArtifactPool
+    from gf_training.rust_player_completion import ColdFinalizedRustInvocation
+
+    deadline = time.monotonic() + 30
+    gib = 1024**3
+    pool = PackedArtifactPool(max_owned_bytes=source_gib * gib, deadline=deadline)
+    # The saved scanning boundary consumes no supervision authority.
+    owner = ColdFinalizedRustInvocation.__new__(ColdFinalizedRustInvocation)
+    owner.pool = pool
+    retained = pool.budget.reserve(4096)
+    before = pool.budget.used
+    expected = min(scan_gib * gib, source_gib * gib - before)
+    try:
+        scan = owner._open_saved_scan(deadline)
+        assert pool.budget.limit == source_gib * gib
+        assert owner._scan is scan and scan.limit == expected
+        assert owner._workspace.size == expected
+        assert pool.budget.used == before + expected
+    finally:
+        workspace = getattr(owner, '_workspace', None)
+        if workspace is not None:
+            workspace.close()
+        retained.close()
+        pool.close()

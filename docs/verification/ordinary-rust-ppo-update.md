@@ -97,3 +97,14 @@ and 4,928 all-seat decisions. Retained managed Source charges reached
 separate from observed process memory. The revised common experiment
 configuration uses a 16 GiB Source workspace, an 8 GiB storage budget, a
 24 GiB managed host budget and a 12 GiB managed CUDA budget.
+
+With the 16 GiB Source budget, revision `696ea4e` saved the first real
+C16 cohort and its 160 Adam steps. Cold completion passed the full
+original, Replay and numeric readback, then passed the unspent Source
+grant of 16,999,555,680 bytes to a checkpoint reader whose accepted ceiling
+is 12 GiB. A read-only replay of the cold code reproduced the constructor
+failure on the exact records. With the scanner grant capped at 12 GiB,
+the same diagnostic read the saved pair and its 160 steps, with an
+estimated scan peak of 324,827,313 bytes. The production repair applies the
+scanner ceiling at the caller, keeping the Source allowance for collection
+auditing. The original failed supervised attempts remain in the evidence.
