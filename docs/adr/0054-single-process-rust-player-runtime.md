@@ -453,3 +453,27 @@ only, with no fake handler. Successful-history validation and the actual C2b/
 campaign/evaluation composition are mandatory before HPO activation. No installed
 source match, real host/GPU/Source acceptance, experiment quality or default
 adoption is inferred. All actual Task6/Task7 gates remain outstanding.
+
+
+## Supervised evaluation data custody
+
+Independent correctness and architecture conformance are READY for the DATA
+bridge joined in `0bfffaa64c9b2ecb1480573ae11969bb6c6f0156`. A live qualified
+Parent can export original inference FDs and an artifact reference to an
+independently owned evaluation account before Native releases the original
+parent. The new provider and metadata phase is included in the receiving
+Source budget. A current real campaign and parent owner can reopen complete
+historical DATA for independent Original, Replay, numeric and saved-state
+revalidation. Archived receipts cannot furnish live training authority.
+
+The reviewed repairs enforce distinct accounts on a live transfer and preserve
+all cause and context frames and actual nested owners until closure. Repeated
+capture revisits newly added frames and ownership links. A candidate cleanup
+owner may not be adopted when it already owns the capturing owner through the
+existing cleanup chain. The advisor-backed check preserves existing custody
+while allowing positive retry. The borrowed verifier and shrink supplements
+retain their existing pool guards and exact budget boundaries.
+
+Root precollected and ran 224 CPU DATA and retention checks successfully. The
+bridge has no current production success claim until the public workflow passes
+its original process, CUDA, qualified seed and evaluation checks.

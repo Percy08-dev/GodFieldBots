@@ -408,6 +408,22 @@ def _scan(lock: _Lock, *, allow_missing_current: bool = False) -> dict[str, tupl
     return jobs
 
 
+def require_resolved_namespace() -> None:
+    """Check existing admission resolution under its actual lock, without a job.
+
+    Operator restart/release retains the scan's existing admission meaning; this
+    does not issue or replace any independent physical-termination evidence.
+    """
+    lock = _Lock()
+    try:
+        jobs = _scan(lock)
+        unresolved = [ticket for ticket, (_record, resolved) in jobs.items() if not resolved]
+        if unresolved:
+            raise RecoveryRequired('RECOVERY_REQUIRED: ' + ','.join(sorted(unresolved)))
+    finally:
+        lock.close()
+
+
 class _AuditedLedger(ReservationLedger):
     _MAX_GLOBAL_CUDA_BYTES = 2**63 - 1
     _MAX_WORKERS = 2**63 - 1

@@ -653,6 +653,7 @@ class RustGameOperations:
         self.finalized_collection = collection
 
     async def collect(self, plan: Any, registry: Any) -> Any:
+        from gf_training.rust_player_registry import RustSavedPolicy
         if registry is not self.registry:
             raise ContractError('actual current native collection registry required')
         collection = await self.collector.collect(plan, registry)
@@ -666,7 +667,8 @@ class RustGameOperations:
             'static_context_absent': self.collector._source_control_charge is None,
             'pool_base': self.pool._base_charge,
             'inference_bank_data_bytes': sum(policy.inference.size for policy in self.registry.policies.values()),
-            'saved_metadata_bytes': sum(charge.size for policy in self.registry.policies.values() for charge in policy._charges)}
+            'saved_metadata_bytes': sum(charge.size for policy in self.registry.policies.values()
+                if type(policy) is RustSavedPolicy for charge in policy._charges)}
         self.writer.write(directory / f'accounting-{plan.linkage["batch_id"]}.json', accounting,
             deadline=plan.execution_deadline, immutable=True)
         if self._is_hpo:
@@ -1009,9 +1011,61 @@ def run_ordinary(control: Any, operation: Json, *, loaded: Any) -> Json:
     return _run_local(control, operation, loaded=loaded, hpo=False)
 
 
-def run_hpo(control: Any, operation: Json, *, loaded: Any) -> Json:
+def run_hpo(control: Any, operation: Json, *, loaded: Any,
+            _campaign_parent_scope: Any = None, _campaign_owner: Any = None,
+            _campaign_admitted: Any = None) -> Json:
     """Fixed internal Model4 entry under actual global HPO admission."""
-    return _run_local(control, operation, loaded=loaded, hpo=True)
+    return _run_local(control, operation, loaded=loaded, hpo=True,
+        _campaign_parent_scope=_campaign_parent_scope, _campaign_owner=_campaign_owner,
+        _campaign_admitted=_campaign_admitted)
+
+
+@contextmanager
+def _consumed_campaign_parent(scope: Any, owner: Any, parent: Path) -> Iterator[Any]:
+    """Consume the actual entered ExitStack, not a nullcontext around its owner."""
+    from contextlib import ExitStack
+
+    from gf_training.lineage import require_hpo_run_owner
+    if type(scope) is not ExitStack:
+        raise ContractError('actual entered campaign parent ExitStack required')
+    with scope:
+        actual = require_hpo_run_owner(parent, owner)
+        if actual.directory != parent:
+            raise ContractError('campaign parent differs from current operation')
+        yield actual
+
+
+def _clean_application_error(error: BaseException, writer: Any, health: Json) -> bool:
+    """Necessary local facts only; this grants no Native return/retirement proof."""
+    import sys
+
+    from gf_training.group_pack_resources import CleanupError
+    from gf_training.hpo_gpu_lease import AdmissionBusy, RecoveryRequired
+    if (writer is None or writer.failed or writer._uncertain_closes
+            or not all(health.get(key) is True for key in ('actors_joined', 'service_joined', 'writers_joined',
+                'servers_joined', 'buffers_released', 'gpu_fenced'))):
+        return False
+    # Actual training already imported pinned Torch. Classification itself must
+    # never import/initialize it in a cold or pure CPU metadata caller.
+    torch_module = sys.modules.get('torch')
+    accelerator_errors = (() if torch_module is None else
+        (torch_module._C.AcceleratorError, torch_module._C.OutOfMemoryError))
+    pending, seen = [error], set()
+    while pending:
+        current = pending.pop()
+        if id(current) in seen: continue
+        seen.add(id(current))
+        if not isinstance(current, Exception) or isinstance(current,
+                (ContractError, OSError, MemoryError, BufferError, CleanupError, AdmissionBusy, RecoveryRequired)):
+            return False
+        if isinstance(current, accelerator_errors):
+            return False
+        if any(getattr(current, key, None) is not None for key in ('cleanup_owner', 'source_cleanup_owner',
+                'source_cleanup_error', 'learner_cleanup_owner', 'shared_cleanup_owner',
+                '_hpo_storage_uncertain', '_owned_storage_writer')):
+            return False
+        pending.extend(item for item in (current.__cause__, current.__context__) if item is not None)
+    return True
 
 
 def _configure_device_environment(config: Any) -> bool:
@@ -1026,7 +1080,9 @@ def _configure_device_environment(config: Any) -> bool:
     return gpu
 
 
-def _run_local(control: Any, operation: Json, *, loaded: Any, hpo: bool) -> Json:
+def _run_local(control: Any, operation: Json, *, loaded: Any, hpo: bool,
+               _campaign_parent_scope: Any = None, _campaign_owner: Any = None,
+               _campaign_admitted: Any = None) -> Json:
     from gf_simulator_client.performance_diagnostics import host_diagnostics, transition_phase
     performance = host_diagnostics()
     transition_phase(performance, 'startup', run_id=operation.get('run_id'),
@@ -1066,31 +1122,78 @@ def _run_local(control: Any, operation: Json, *, loaded: Any, hpo: bool) -> Json
     request = operation['execution_request']
     parent = Path(operation['parent_directory'])
     inherited = 'parent' in control._borrowed
-    if not inherited and (control._phase != 'training' or control._cold is None or control._cold._finalized_sha256 is None):
-        raise ContractError('actual finalized bind is required for outgoing parent acquisition')
-    scope = nullcontext(None) if inherited else run_lock(parent)
+    campaign_mode = any(value is not None for value in (_campaign_parent_scope, _campaign_owner, _campaign_admitted))
+    scope: Any
+    if campaign_mode:
+        if (not hpo or inherited or control._phase != 'training'
+                or control.initial_operation['operation_type'] != 'campaign-continue'
+                or _campaign_parent_scope is None or _campaign_owner is None or not callable(_campaign_admitted)):
+            raise ContractError('actual bound campaign/entered parent/admission notification required')
+        _ = control.campaign_bootstrap
+        scope = _consumed_campaign_parent(_campaign_parent_scope, _campaign_owner, parent)
+    else:
+        if not inherited and (control._phase != 'training' or control._cold is None or control._cold._finalized_sha256 is None):
+            raise ContractError('actual finalized bind is required for outgoing parent acquisition')
+        scope = nullcontext(None) if inherited else run_lock(parent)
     ops: Any = None
+    admission: Any = None
+    admitted_sequence: int | None = None
+    application_error: BaseException | None = None
+    application_clean = False
+    prepare_attempted = cleanup_attempted = False
     try:
         with scope as outgoing:
             if outgoing is not None:
                 transfer_run_lock(outgoing, control)
             admission = control.admit(budget, producer)
+            if campaign_mode:
+                admission.require()
+                _campaign_admitted(admission)  # Actual ACK only; callback cannot create admission.
+            admitted_sequence = control._next_sequence
             ops = RustHpoOperations(control, loaded, admission) if hpo else RustGameOperations(control, loaded, admission)
             ops._outgoing_owner = outgoing
-            report = asyncio.run(_run_ppo(loaded, ops.collect, parent,
-                mode=request['mode'], pause_after_update=request['pause_after_update'], _game_ops=ops))
+            try:
+                report = asyncio.run(_run_ppo(loaded, ops.collect, parent,
+                    mode=request['mode'], pause_after_update=request['pause_after_update'], _game_ops=ops))
+            except BaseException as error:
+                application_error = error
+                application_clean = _clean_application_error(error, ops.writer, getattr(ops, 'host_health', {}))
+                raise
         # The outgoing ACK-owned context has now positively closed WITHOUT
         # LOCK_UN; native custody survives through Prepared/physical exit.
+        prepare_attempted = True
         prepared = ops.prepare()
         return {**report, 'computational_status': report['status'],
             'status': 'awaiting-supervised-finalization', 'prepared_sha256': prepared.sha256}
     except BaseException as error:
+        primary = application_error if application_error is not None else error
+        if primary is not error:
+            vars(primary)['rust_player_parent_scope_cleanup_error'] = error
+            application_clean = False
         if ops is not None:
-            ops._failure_traceback = error.__traceback__
-            vars(error).setdefault('cleanup_owner', ops)
-        raise
+            ops._failure_traceback = primary.__traceback__
+            cleanup_attempted = True
+            try:
+                ops.close_control_resources()
+            except BaseException as cleanup:  # noqa: BLE001 -- retain the initiating error and actual cleanup owner
+                vars(primary)['rust_player_control_cleanup_error'] = cleanup
+                application_clean = False
+            vars(primary).setdefault('cleanup_owner', ops)
+        if (campaign_mode and application_error is error and application_clean and not prepare_attempted
+                and cleanup_attempted and admission is not None and not control._prepared and not control._terminal
+                and not control._closed and control._phase == 'training' and not control._parent_borrowers
+                and control._next_sequence == admitted_sequence and not ops.writer.failed and not ops.writer._uncertain_closes):
+            try:
+                admission.require()
+                checksum = control.training_failed(admission, 'Training application error; no Source or retirement qualification')
+                vars(primary)['rust_player_training_failure_sha256'] = checksum
+            except BaseException as report_error:  # noqa: BLE001 -- unknown ACK cannot replace/retry the original error
+                vars(primary)['rust_player_failure_report_error'] = report_error
+        if primary is error:
+            raise
+        raise primary
     finally:
-        if ops is not None:
+        if ops is not None and not cleanup_attempted:
             ops.close_control_resources()
 
 

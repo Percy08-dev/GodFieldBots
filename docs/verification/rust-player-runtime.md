@@ -982,3 +982,117 @@ including hash-verified R2 actual private executable and original wheel filename
 These copies are DATA, not Original FDs or current authority. Earlier candidates
 remain historical. C2a review/source evidence is separately preserved under
 `components/public-factory-5baa086`, manifest258ab5540262a0450dfdcf62b6b42317ccf3d1e65c7ce5cdcdc130bbf59d3b00.
+
+## Installed-wheel ordinary CLI CPU smoke
+
+At `55cd288507dd0cdcf98ed237f356006d32abd23f`, the installed `gf-bots train`
+command completed one timed Rust Model3 CPU update. Its actual original host
+issued Prepared, exited normally with descendants reaped and no signals, and
+returned through the independent Cold audit. The audit checked 16 games, 230
+learner decisions, eight optimizer steps and the full saved inference/resume
+pair. The original observer Child exited 0. In 1,358 process samples, the
+maximum observed simultaneous Python process count was one. This is sampled
+process evidence. Wall time was 139.024 seconds and peak complete sampled PSS
+was 903,681,024 bytes (136 peak-eligible PSS sweeps). This was a functional CPU
+smoke rather than part of the CUDA comparison.
+
+The exact command, effective config, original receipts, phase records, raw
+observer samples, rebuilt Simulator binary and runtime wheel are retained at
+`runs/rust-player-runtime-v1/components/public-ordinary-cpu-55cd` in the main
+checkout. The 129-file inventory SHA256 is
+`f25f3366d4ec9f2459c8986d855cd9f97c1911c342d83a2ed40f12ae52d08672`.
+The cold audit hash is
+`e73e9a0e1362e2f6f9ec49d5196425124d20f32e96f0bbe3291e6527fb0d24c9`,
+and restored Simulator 072dabb matches the original ELF and spec hashes.
+The new wheel `0822624f78ecd5163cf3b0f1baa580530f8f63104c6c838fa8f7682965e84b3e`
+contains source `381ef85a15c2843f6e6b56847226a8fd65391182914dd0f175fe95dbcb177944`,
+extension `cf084cc9b5c6d32dce197cdd3f90cead18e2d5523be285c1b0d873913282372a`
+and supervisor `96f064a2e52f4621fc4616b948e6147e2fd1115e1868addb2018def1bf3e9b02`.
+
+The CPU result does not qualify CUDA training, resume, HPO evaluation or
+performance. At the time of the GPU capacity check, NVML reported 85% GPU
+utilization and 1,477 MiB free of 16,303 MiB. The formal comparison has not run.
+
+
+## Evaluation DATA bridge review and acceptance
+
+Both independent final reviewers are READY for the combined repair. The bridge
+rejects reuse of the retiring parent's pool or budget during live handoff,
+tracks cause and context through unwind and recapture, and rejects ownership
+back-edges without losing independent cleanup consumers. R3 produced 12
+reproductions before the fix and passed all 12 afterward, plus 87 related
+checks and the separately selected uncertain-FD control. Root ran 224
+precollected CPU DATA and retention cases successfully in 4.50 seconds with
+CUDA hidden. Static and eight formal kernel pin checks passed in the frozen
+implementation review. No genuine evaluation, historical Source or seed2
+qualification is established by these component checks.
+
+The original evaluation branch milestone is
+`c7c3c80454b3ab1d28b5e36305540dd691b10750`; main feature join is
+`0bfffaa64c9b2ecb1480573ae11969bb6c6f0156`. Final reviewed inventory SHA256 is
+`023848f26221a5fb490d3882f4377522a505eda68305d0d729eea3cae4608b67`.
+The combined repair SHA256 is
+`f7bfca1c0f8e63f554b152e6e8f76cee04aed489b80bd0fa06b197e5419f712e`.
+
+## Fixed scheduler and launcher integration checks
+
+At `c60be4c12e32236559ff1a0e869119f7f43f4052`, the public ordinary Model3 CPU
+command also completed with the Fixed scheduler, C2/B2 and W2. The matched
+wheel and pinned Simulator from the previous smoke were reused. The actual
+original host exited cooperatively with code 0, all descendants reaped and
+no signal. Its Cold audit validated 16 games, 230 learner decisions, eight
+optimizer steps and the full current saved pair. All result receipt hashes
+matched. The observer recorded 139.254 seconds, peak complete PSS 929,482,752
+bytes and at most one simultaneous Python in 1,361 process samples. The two
+CPU runs had different concurrency. They provide functional coverage only.
+
+The 129-file run inventory at `components/public-fixed-cpu-c60be4c` has hash
+`50189538c9738be6fc7bbc6d0e50a986816c0e58abf3c25f2c7af4a95b80974c`.
+Cold audit hash is
+`12426a1824ae75e69294d4f2c4ef2eeed8eca00838e52d9d94499a6c934fac32`.
+Runtime producer is
+`b85eb862260e7d1c7064927b5638d73b00e6449f15b69835eb2d9eaf9314a748`.
+The initial config-only check rejected inconsistent declared concurrency.
+It is preserved with the corrected config and proof of the single actual run.
+
+The fixed HPO learning-operation launcher passed both independent reviews and
+180 fresh CPU cases with the current companion. Its isolated milestone is
+`a7cc0251fabaafbd5c8bdac775fb518405d27a80`, joined in
+`c60be4c12e32236559ff1a0e869119f7f43f4052`. The verifier tool, actual HPO
+execution and final CUDA acceptance remain in progress.
+
+## Campaign training and terminal foundation
+
+Both independent reviewers accepted the training and terminal foundation with
+its R1 repairs. Root ran 188 precollected CPU cases with six excluded CUDA
+cases. The actual parent scope is consumed before Prepared. A current admitted
+invocation is published before learner or Source construction. The failure arm
+excludes typed resource, accelerator and uncertain cleanup failures. Terminal
+settlement retains the original cause and orders ACK, positive borrower close,
+parent release and cursor update. The public campaign controller and genuine
+integration verification are still required.
+
+The public Fixed CPU pause at update two produced actual deletion receipts for
+five generation-one payload files under the original acknowledged parent. Resume
+verified unchanged saved weights, Adam, CPU RNG and PCG64 at step 16 and finished
+its next collection. It then failed before publishing new accounting or starting
+an update. Its original process exited 1 without signal and its descendants were
+reaped. The archive at `components/public-pruned-resume-cpu-c60be4c` has 285
+files and inventory
+`ea1470875145436a276bedb1cc41aa1d2d09b05eb1b016946c27cceb19848cdd`.
+The post-collection diagnostic incorrectly read a fresh-save field from actual
+restored policy objects. R1 counts only dedicated save-policy reservations.
+Restored metadata remains in the existing shared Source charge. The actual
+failed parent stays ineligible. A fresh positive pruned-resume pair is required.
+
+The earlier frozen `c60be4c` source completed a bounded ordinary Model3 CUDA
+continuous-two-update case. Its actual original exit and independent Cold audit
+passed for 32 games, 401 learner decisions, 16 optimizer steps and the saved
+CUDA RNG vector. The original measured wall was 236.015 seconds, with maximum
+one Python in the recorded process samples. Artifacts are under
+`components/cuda-restore-c60be4c/model3-continuous`, inventory
+`2eca670e02a4d0f1bc5b6b06e1409ce43a0acdc69a9b691cf4eba4c77c88f746`.
+This is bounded correctness evidence before final integration. The standalone
+Model4 case was quarantined after its first collection and before numeric output
+when the source quota could not admit codec scratch. That failure and the
+separate controlled diagnosis are preserved in the same component family.

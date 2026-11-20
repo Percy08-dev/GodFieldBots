@@ -376,3 +376,372 @@ def exec_campaign(loaded: LoadedHPOConfig, directory: Path, *, mode: str,
                   seed_paths: tuple[Path, ...] = (), progress: str = 'auto') -> None:
     with prepare_campaign(loaded, directory, mode=mode, seed_paths=seed_paths, progress=progress) as prepared:
         prepared.execute()
+
+
+def _publish_campaign_training(store: Any, owner: Any, *, materialized: Any, context: Json,
+                                proposal_no: int, learning_seed: int, session: Json,
+                                clock_binding: Json, runtime_binding_sha256: str) -> Json:
+    """Publish CONFIG DATA under actual caller custody; this grants no admission."""
+    from gf_cli.rust_player_entry import _inputs, _snapshot
+    from gf_common.rust_player import (
+        safe_component,
+        validate_campaign_awaiting,
+        validate_campaign_clock,
+        validate_campaign_cursor,
+        validate_context,
+        validate_operation,
+    )
+    from gf_common.rust_player_clock import clock_deadlines, operation_clock
+    from gf_training.lineage import require_hpo_run_owner
+    store._require()
+    require_hpo_run_owner(owner.directory, owner)
+    validate_context(context); validate_campaign_clock(session)
+    operation_id = safe_component(context['operation_id'])
+    parent = Path(materialized.config.run.output_dir) / materialized.config.run.name
+    if owner.directory != parent or context['run_id'] != materialized.config.run.name:
+        raise ContractError('actual training parent/materialized CONFIG differs')
+    relative = 'supervision/' + session['supervision_id'] + '/'
+    root = store.directory / relative
+    actual_session, session_sha = store.get(relative + 'session-clock.json')
+    cursor, cursor_sha = store.get('supervision/current.json')
+    validate_campaign_cursor(cursor)
+    if (actual_session != session or cursor['campaign_id'] != context['campaign_id']
+            or cursor['supervision_id'] != session['supervision_id'] or cursor['session_clock_sha256'] != session_sha
+            or cursor['phase'] != 'control' or cursor['awaiting_path'] is not None or cursor['current_invocation_id'] is not None):
+        raise ContractError('exact current parent-free campaign cursor/session required')
+    deadlines = clock_deadlines(clock_binding, inputs=_inputs(materialized.config),
+        post_host_seconds=materialized.config.run.post_host_seconds)
+    operation = {'schema_version': 2, 'kind': 'rust-player-operation-v2', 'operation_id': operation_id,
+        'run_id': context['run_id'], 'mode': 'hpo', 'operation_type': 'hpo-train',
+        'config_path': str(parent / '.rust-player/effective-config.json'), 'config_sha256': materialized.sha256,
+        'runtime_binding_sha256': runtime_binding_sha256, 'deadlines': deadlines,
+        'parent_directory': str(parent), 'expected_context': context,
+        'execution_request': {'mode': 'fresh', 'pause_after_update': None}}
+    validate_operation(operation, session_finish=session['hard_session_finish_bits'])
+    snapshot = _snapshot(materialized, owner, fresh=True)
+    snapshot_config: Any = snapshot.config
+    operation_path = root / f'operation-{operation_id}.json'
+    operation_sha = store.put(relative + operation_path.name, operation)
+    clock = operation_clock(operation, clock_binding=clock_binding, inputs=_inputs(snapshot_config),
+        post_host_seconds=snapshot_config.run.post_host_seconds)
+    store.put(relative + f'clock-{operation_id}.json', clock)
+    awaiting = {'schema_version': 1, 'kind': 'rust-player-training-awaiting-v1',
+        'campaign_id': context['campaign_id'], 'proposal_no': proposal_no, 'learning_seed': learning_seed,
+        'run_id': context['run_id'], 'run_path': str(parent), 'config_path': operation['config_path'],
+        'config_sha256': snapshot.sha256, 'runtime_binding_sha256': runtime_binding_sha256,
+        'operation_path': str(operation_path), 'operation_sha256': operation_sha,
+        'supervision_id': session['supervision_id'], 'session_clock_sha256': session_sha, 'created_unix': time.time()}
+    validate_campaign_awaiting(awaiting)
+    awaiting_path = root / 'awaiting' / f'{operation_id}.json'
+    awaiting_sha = store.put(relative + f'awaiting/{operation_id}.json', awaiting)
+    awaiting_cursor = {**cursor, 'phase': 'awaiting-host', 'awaiting_path': str(awaiting_path),
+        'awaiting_sha256': awaiting_sha, 'current_invocation_id': None}
+    awaiting_cursor_sha = store.update_supervision_cursor(awaiting_cursor, expected_sha256=cursor_sha)
+    return {'loaded': snapshot, 'operation': operation, 'operation_path': operation_path, 'operation_sha256': operation_sha,
+        'clock': clock, 'awaiting': awaiting, 'awaiting_path': awaiting_path, 'awaiting_sha256': awaiting_sha,
+        'cursor': awaiting_cursor, 'cursor_sha256': awaiting_cursor_sha}
+
+
+def _campaign_context(control: Any, store: Any, study: Any) -> tuple[Json, Json, Json]:
+    from gf_cli.hpo_campaign import CampaignStudy
+    from gf_cli.hpo_storage import CampaignStore
+    from gf_common.rust_player import validate_campaign_clock
+    from gf_training.rust_player_supervision import HostControl
+    if type(control) is not HostControl or type(store) is not CampaignStore or type(study) is not CampaignStudy:
+        raise ContractError('actual campaign HostControl/borrowed Store/study required')
+    control._require(); store._require()
+    bootstrap = control.campaign_bootstrap
+    if (store._control is not control or store.directory != Path(bootstrap['campaign_directory'])
+            or study.store is not store):
+        raise ContractError('actual SAME borrowed campaign owner/study required')
+    relative = 'supervision/' + control.launch['supervision_id'] + '/'
+    session, session_sha = store.get(relative + 'session-clock.json')
+    validate_campaign_clock(session)
+    campaign, campaign_sha = store.get('campaign.json')
+    if (session_sha != bootstrap['session_clock_sha256'] or session['supervision_id'] != control.launch['supervision_id']
+            or session['hard_session_finish_bits'] != control.launch['session_deadlines']['finish_bits']
+            or campaign_sha != study.manifest_sha or canonical(campaign) != canonical(study.manifest)):
+        raise ContractError('actual current campaign/session/proposal namespace differs')
+    return bootstrap, session, campaign
+
+
+def _durable_proposal(study: Any, proposal: Any) -> Any:
+    from gf_cli.hpo_campaign import Proposal
+    if type(proposal) is not Proposal:
+        raise ContractError('exact durable campaign proposal required')
+    intent, _ = study._intent(proposal.number)
+    actual = study._proposal(proposal.number, intent)
+    if actual != proposal:
+        raise ContractError('proposal differs from SAME durable configuration/resources')
+    return actual
+
+
+def _admission_cursor(control: Any, store: Any, packet: Json, admission: Any) -> None:
+    from gf_training.rust_player_supervision import HostAdmission
+    if type(admission) is not HostAdmission:
+        raise ContractError('actual current HostAdmission ACK required')
+    admission.require()
+    observation = admission.observation
+    actual, checksum = store.get('supervision/current.json')
+    if (admission._control is not control or control._admission is not admission
+            or actual != packet['cursor'] or checksum != packet['cursor_sha256']
+            or any(observation[key] != packet['operation'][key] for key in
+                ('operation_id', 'run_id', 'config_sha256', 'runtime_binding_sha256'))
+            or observation['context'] != packet['operation']['expected_context']):
+        raise ContractError('actual admission differs from exact awaiting/current cursor')
+    store.update_supervision_cursor({**actual, 'phase': 'awaiting-cold',
+        'current_invocation_id': observation['invocation_id']}, expected_sha256=checksum)
+
+
+def dispatch_campaign_training(control: Any, store: Any, study: Any, proposal: Any,
+                               *, learning_seed: int, materialized: Any) -> Json:
+    """One real bind→OFD transfer→admit→cursor CAS→existing training, no controller."""
+    import hashlib
+    from types import SimpleNamespace
+
+    from gf_cli.hpo_config import materialize_hpo_run
+    from gf_cli.rust_player_entry import _capture_clock
+    from gf_common.rust_player import deadline_seconds, runtime_binding
+    from gf_models.rust_player import sampling_runtime_identity
+    from gf_training.hpo_gpu_lease import require_resolved_namespace
+    from gf_training.lineage import run_lock
+    from gf_training.rust_player_learning import run_hpo
+    from gf_training.rust_player_supervision import runtime_producer
+    _bootstrap, session, campaign = _campaign_context(control, store, study)
+    actual = _durable_proposal(study, proposal)
+    if control._phase != 'session' or 'parent' in control._borrowed or control._parent_borrowers:
+        raise ContractError('actual parent-free campaign Session required before bind')
+    expected = materialize_hpo_run(study.loaded, actual.settings, learning_seed=learning_seed,
+        run_id=materialized.config.run.name)
+    if expected.sha256 != materialized.sha256 or canonical(expected.effective) != canonical(materialized.effective):
+        raise ContractError('actual proposal/materialized training CONFIG differs')
+    require_resolved_namespace()
+    if time.monotonic() >= deadline_seconds(session['soft_dispatch_finish_bits']):
+        raise TimeoutError('original soft campaign dispatch boundary reached')
+    companion = SimpleNamespace(manifest={'executable_sha256': hashlib.sha256(
+        Path(f'/proc/{control._parent_pid}/exe').read_bytes()).hexdigest()})
+    bound = runtime_binding(materialized.config.hpo_spec['runtime'], runtime_producer(companion,
+        sampling_runtime_sha256=sampling_runtime_identity()))
+    binding = _capture_clock()
+    parent = Path(materialized.config.run.output_dir) / materialized.config.run.name
+    scope = ExitStack()
+    try:
+        owner = scope.enter_context(run_lock(parent, create=True))
+        context = {'campaign_id': campaign['campaign_id'], 'operation_id': uuid.uuid4().hex,
+            'kind': 'training', 'run_id': materialized.config.run.name, 'evaluation_id': None}
+        packet = _publish_campaign_training(store, owner, materialized=materialized, context=context,
+            proposal_no=actual.number, learning_seed=learning_seed, session=session,
+            clock_binding=binding, runtime_binding_sha256=digest(bound))
+        if time.monotonic() >= deadline_seconds(session['soft_dispatch_finish_bits']):
+            raise TimeoutError('original soft boundary crossed before actual bind; awaiting remains interrupted')
+        control.bind_operation(packet['operation_path'])  # MUST precede SAME-OFD transfer inside run_hpo.
+        if control.operation_sha256 != packet['operation_sha256']:
+            raise ContractError('actual bound operation ACK differs from published training')
+        return run_hpo(control, control.operation, loaded=packet['loaded'],
+            _campaign_parent_scope=scope, _campaign_owner=owner,
+            _campaign_admitted=lambda admission: _admission_cursor(control, store, packet, admission))
+    except BaseException as error:
+        try:
+            scope.close()
+        except BaseException as cleanup:  # noqa: BLE001 -- preserve original error and actual entered scope
+            vars(error)['rust_player_dispatch_scope_cleanup_error'] = cleanup
+        raise
+    finally:
+        scope.close()
+
+
+def _terminal_records(store: Any, study: Any, proposal: Any, *, owner: Any,
+                      awaiting: Json, awaiting_path: Path, awaiting_sha256: str,
+                      operation_id: str, invocation_id: str, classification: str,
+                      evidence: Json, reason: str) -> Path:
+    """Existing FAIL/disposition DATA only; Native ACK remains separate authority."""
+    from gf_cli.hpo_campaign import _TELL_KEYS, _checked
+    from gf_common.rust_player import (
+        safe_component,
+        validate_campaign_awaiting,
+        validate_campaign_disposition,
+    )
+    from gf_training.lineage import require_hpo_run_owner
+    store._require()
+    require_hpo_run_owner(Path(awaiting['run_path']), owner)
+    validate_campaign_awaiting(awaiting)
+    actual = _durable_proposal(study, proposal)
+    operation_id = safe_component(operation_id)
+    root = store.directory / 'supervision' / awaiting['supervision_id']
+    relative = str(awaiting_path.relative_to(store.directory))
+    row, checksum = store.get(relative)
+    if (row != awaiting or checksum != awaiting_sha256 or awaiting_path != root / 'awaiting' / f'{operation_id}.json'
+            or awaiting['proposal_no'] != actual.number or awaiting['campaign_id'] != study.manifest['campaign_id']):
+        raise ContractError('actual terminal awaiting/proposal/parent differs')
+    proposal_root = f'proposals/{actual.number:06}'
+    failure_path = store.directory / proposal_root / 'failure.json'
+    failure_sha = store.put(proposal_root + '/failure.json', {'schema_version': 1, 'kind': 'hpo-proposal-failure',
+        'proposal_sha256': actual.sha256, 'reason': reason, 'boundary': 'training'})
+    study.fail(actual, reason)  # Existing exact durable Optuna FAIL/value=None transaction.
+    intent, intent_sha = store.get(proposal_root + '/tell.intent.json')
+    receipt, receipt_sha = store.get(proposal_root + '/tell.receipt.json')
+    for value in (intent, receipt):
+        _checked(value, 'hpo-tell', _TELL_KEYS)
+        if (value['proposal_sha256'] != actual.sha256 or value['state'] != 'FAIL' or value['value'] is not None
+                or value['evaluation_receipt_sha256'] is not None or value['reason'] != reason):
+            raise ContractError('actual terminal FAIL tell differs')
+    if intent != receipt:
+        raise ContractError('actual durable FAIL tell intent/receipt differs')
+    disposition = {'schema_version': 1, 'kind': 'rust-player-campaign-terminal-disposition-v1',
+        'campaign_id': awaiting['campaign_id'], 'proposal_no': actual.number, 'proposal_sha256': actual.sha256,
+        'learning_seed': awaiting['learning_seed'], 'supervision_id': awaiting['supervision_id'],
+        'session_clock_sha256': awaiting['session_clock_sha256'], 'awaiting_path': str(awaiting_path),
+        'awaiting_sha256': awaiting_sha256, 'operation_path': awaiting['operation_path'],
+        'operation_sha256': awaiting['operation_sha256'], 'invocation_id': invocation_id,
+        'classification': classification, 'evidence': evidence, 'proposal_failure_path': str(failure_path),
+        'proposal_failure_sha256': failure_sha, 'tell_intent_path': str(store.directory / proposal_root / 'tell.intent.json'),
+        'tell_intent_sha256': intent_sha, 'tell_receipt_path': str(store.directory / proposal_root / 'tell.receipt.json'),
+        'tell_receipt_sha256': receipt_sha}
+    validate_campaign_disposition(disposition)
+    path = root / 'terminal' / f'{operation_id}.json'
+    store.put(str(path.relative_to(store.directory)), disposition)
+    return path
+
+
+def _finish_terminal(control: Any, store: Any, *, disposition_path: Path, retire_owner: Any,
+                      cursor: Json, cursor_sha256: str) -> Json:
+    """Caller has actual authority; retirement/release never follows an unknown ACK."""
+    try:
+        current, current_sha = store.get('supervision/current.json')
+        if current != cursor or current_sha != cursor_sha256:
+            raise ContractError('terminal cursor changed before actual native disposition')
+        ack = control.campaign_disposition(disposition_path)
+        retire_owner.close()
+        control.release_parent()
+        current, current_sha = store.get('supervision/current.json')
+        if current != cursor or current_sha != cursor_sha256:
+            raise ContractError('terminal cursor changed before acknowledged release')
+        updated = {**current, 'phase': 'control', 'awaiting_path': None,
+            'awaiting_sha256': None, 'current_invocation_id': None}
+        store.update_supervision_cursor(updated, expected_sha256=current_sha)
+        return ack
+    except BaseException as error:
+        vars(error)['rust_player_terminal_owner'] = retire_owner
+        raise
+
+
+def _current_awaiting(control: Any, store: Any, study: Any,
+                      invocation_id: str) -> tuple[Any, Json, Path, str, Json, str]:
+    from gf_common.rust_player import validate_campaign_awaiting, validate_campaign_cursor
+    _bootstrap, session, campaign = _campaign_context(control, store, study)
+    operation = control.operation
+    root = store.directory / 'supervision' / session['supervision_id']
+    path = root / 'awaiting' / (operation['operation_id'] + '.json')
+    awaiting, awaiting_sha = store.get(str(path.relative_to(store.directory)))
+    validate_campaign_awaiting(awaiting)
+    cursor, cursor_sha = store.get('supervision/current.json')
+    validate_campaign_cursor(cursor)
+    if (cursor['phase'] != 'awaiting-cold' or cursor['awaiting_path'] != str(path)
+            or cursor['awaiting_sha256'] != awaiting_sha or cursor['current_invocation_id'] != invocation_id
+            or cursor['campaign_id'] != campaign['campaign_id'] or cursor['supervision_id'] != session['supervision_id']
+            or cursor['session_clock_sha256'] != awaiting['session_clock_sha256']
+            or awaiting['session_clock_sha256'] != _bootstrap['session_clock_sha256']
+            or awaiting['campaign_id'] != campaign['campaign_id'] or awaiting['supervision_id'] != session['supervision_id']
+            or awaiting['operation_sha256'] != control.operation_sha256 or awaiting['operation_path'] != str(control.operation_path)
+            or awaiting['run_path'] != operation['parent_directory']
+            or any(awaiting[key] != operation[key] for key in ('run_id', 'config_path', 'config_sha256', 'runtime_binding_sha256'))
+            or operation['expected_context']['campaign_id'] != campaign['campaign_id']):
+        raise ContractError('actual current terminal awaiting/operation/session/parent differs')
+    intent, _ = study._intent(awaiting['proposal_no'])
+    proposal = study._proposal(awaiting['proposal_no'], intent)
+    if awaiting['learning_seed'] not in study.loaded.config.learning_seeds:
+        raise ContractError('actual terminal learning seed differs')
+    return proposal, awaiting, path, awaiting_sha, cursor, cursor_sha
+
+
+def settle_failed_campaign_training(control: Any, store: Any, study: Any) -> Json:
+    """Only genuine Native campaign-return; report contents grant no retirement."""
+    from gf_training.hpo_gpu_lease import require_resolved_namespace
+    from gf_training.lineage import borrow_run_lock
+    from gf_training.rust_player_supervision import read_control_record
+    _campaign_context(control, store, study)
+    payload = control.campaign_return  # Actual current failure/Exit/physical pair and OLD cutoff.
+    proposal, awaiting, path, checksum, cursor, cursor_sha = _current_awaiting(
+        control, store, study, payload['admission']['invocation_id'])
+    require_resolved_namespace()
+    scope = ExitStack()
+    try:
+        owner = scope.enter_context(borrow_run_lock(Path(awaiting['run_path']), control))
+        failure, failure_sha = read_control_record(Path(payload['failure_path']), control.root)
+        if failure_sha != payload['failure_sha256']:
+            raise ContractError('actual failed return diagnostic original differs')
+        evidence = {key + suffix: payload[key + suffix]
+            for key in ('failure', 'exit', 'physical') for suffix in ('_path', '_sha256')}
+        disposition = _terminal_records(store, study, proposal, owner=owner, awaiting=awaiting,
+            awaiting_path=path, awaiting_sha256=checksum, operation_id=control.operation['operation_id'],
+            invocation_id=payload['admission']['invocation_id'], classification='training_failed',
+            evidence=evidence, reason=failure['reason'])
+        return _finish_terminal(control, store, disposition_path=disposition, retire_owner=scope,
+            cursor=cursor, cursor_sha256=cursor_sha)
+    except BaseException as error:
+        # Keep the original borrower and all scopes reachable; no unknown ACK retry.
+        vars(error)['rust_player_terminal_scope'] = scope
+        raise
+
+
+def _incomplete_evidence(control: Any, result: Any) -> tuple[Json, Json]:
+    from gf_training.hpo_gpu_lease import _GLOBAL_ROOT
+    from gf_training.rust_player_completion import ColdFinalizedRustInvocation
+    from gf_training.rust_player_supervision import read_control_record
+    if type(result) is not ColdFinalizedRustInvocation:
+        raise ContractError('actual generic finalized incomplete invocation required')
+    result._require_parent()
+    if (result.cold is not control.cold or result.cold._finalized_sha256 != result.completion_sha256
+            or result.completion['state'] not in ('paused', 'incomplete') or result.completion['eligible'] is not False):
+        raise ContractError('actual acknowledged ineligible incomplete Cold required')
+    admission, _prepared, _exit = result.cold.require_pair()
+    physical = result.cold.physical_termination.global_observation()
+    physical_path = _GLOBAL_ROOT / 'jobs' / admission['global_ticket'] / 'termination.json'
+    actual, physical_sha = read_control_record(physical_path, _GLOBAL_ROOT)
+    if actual != physical:
+        raise ContractError('actual incomplete original physical record differs')
+    # Compact protocol DATA is copied; no validated-state/Source graph escapes
+    # into result.close after the ACK.
+    return clone(admission), {'completion_path': str(result.completion_path),
+        'completion_sha256': str(result.completion_sha256), 'physical_path': str(physical_path),
+        'physical_sha256': physical_sha}
+
+
+def settle_incomplete_campaign_training(control: Any, store: Any, study: Any, result: Any) -> Json:
+    from gf_training.hpo_gpu_lease import require_resolved_namespace
+    from gf_training.lineage import require_hpo_run_owner
+    try:
+        _campaign_context(control, store, study)
+        admission, evidence = _incomplete_evidence(control, result)
+        proposal, awaiting, path, checksum, cursor, cursor_sha = _current_awaiting(
+            control, store, study, admission['invocation_id'])
+        require_resolved_namespace()
+        owner = require_hpo_run_owner(Path(awaiting['run_path']), result._ownership)
+        disposition = _terminal_records(store, study, proposal, owner=owner, awaiting=awaiting,
+            awaiting_path=path, awaiting_sha256=checksum, operation_id=control.operation['operation_id'],
+            invocation_id=admission['invocation_id'], classification='healthy_incomplete', evidence=evidence,
+            reason='Training stopped incomplete under original limits')
+        return _finish_terminal(control, store, disposition_path=disposition, retire_owner=result,
+            cursor=cursor, cursor_sha256=cursor_sha)
+    except BaseException as error:
+        vars(error)['rust_player_terminal_result_owner'] = result
+        raise
+
+
+def complete_campaign_control(control: Any, store: Any, study: Any, *, status: str) -> str:
+    from gf_common.rust_player import validate_campaign_cursor, validate_control_completion
+    bootstrap, _session, campaign = _campaign_context(control, store, study)
+    cursor, _sha = store.get('supervision/current.json')
+    validate_campaign_cursor(cursor)
+    if (cursor['campaign_id'] != campaign['campaign_id'] or cursor['phase'] != 'control'
+            or cursor['awaiting_path'] is not None or cursor['current_invocation_id'] is not None
+            or cursor['supervision_id'] != control.launch['supervision_id']
+            or cursor['session_clock_sha256'] != bootstrap['session_clock_sha256']):
+        raise ContractError('actual parent-free settled campaign cursor required')
+    body = {'schema_version': 1, 'kind': 'rust-player-control-completion-v1',
+        'supervision_id': control.launch['supervision_id'], 'operation_sha256': control.operation_sha256,
+        'session_clock_sha256': bootstrap['session_clock_sha256'], 'status': status}
+    validate_control_completion(body)
+    path = control.root / f'control-completion-{control._envelope["invocation_id"]}.json'
+    store.put(str(path.relative_to(store.directory)), body)
+    return control.control_complete(path)  # Existing actual permitted protocol arms only.

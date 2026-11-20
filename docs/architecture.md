@@ -87,7 +87,15 @@ pinned settings reconstruct without rereading original TOMLs; actual Store OFD
 and exact original soft/hard clocks survive sealed launch. Root333 CPU checks and
 scoped lint/typing pass. Public HPO execution remains guarded until full campaign/
 evaluation composition and genuine successful-history validation are implemented.
-No actual host/GPU/source qualification or performance claim follows here.
+
+The evaluation DATA bridge has passed independent correctness and design
+conformance. It checks the exact qualified training parent, prepares the
+independent evaluation account and holds original inference FDs and references
+before the training parent closes. Historical import uses a current actual
+owner and independently rechecks the saved Original, Replay, numeric and
+checkpoint chain. After a cleanup error the owners of still-live data keep
+their reservations through positive retirement. The public campaign evaluator
+and genuine combined acceptance remain in progress.
 
 [ADR0053](adr/0053-mlp-shared-batch-inference.md) implements the owner's
 [shared MLP design](design/mlp-shared-batch-inference.md) under Simulator
