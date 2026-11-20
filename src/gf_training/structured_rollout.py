@@ -120,6 +120,11 @@ class _RolloutContext:
         if canonical(raw) != canonical(self.classification()):
             raise ContractError('rollout4 game classification mismatch')
 
+    def tokenize_tables(self, index: int, record: EpisodeRecords, model: Any) -> tuple[CandidateTokens, ...]:
+        return tuple(tokenize_table(table, frame, model.max_positions, aggregate_window=model.event.aggregate_window,
+            aggregate_recipe=aggregate_recipe(model), layout=self.layout)
+            for frame, table in zip(record.frames, record.tables, strict=True))
+
 
 def _record_binding(contract: Any, purpose: str, synthetic: bool) -> Json:
     if type(contract) is CardInstanceContract:
@@ -255,9 +260,10 @@ class StructuredRollout:
                 raise ContractError("rollout episode event cap exceeded")
             frame_tokens = tuple(tokenize_frame(frame, record.bank, aggregate_window=model.event.aggregate_window,
                                                 aggregate_recipe=aggregate_recipe(model), layout=self.layout) for frame in record.frames)
-            candidates = tuple(tokenize_table(table, frame, model.max_positions, aggregate_window=model.event.aggregate_window,
+            candidates = (_context.tokenize_tables(episode_index, record, model) if _context is not None else
+                tuple(tokenize_table(table, frame, model.max_positions, aggregate_window=model.event.aggregate_window,
                                               aggregate_recipe=aggregate_recipe(model), layout=self.layout)
-                               for frame, table in zip(record.frames, record.tables, strict=True))
+                               for frame, table in zip(record.frames, record.tables, strict=True)))
             for selection in record.selections:
                 labels.add(selection.policy_version)
             if record.end_kind == "natural" and record.frames:
@@ -425,7 +431,8 @@ def _legacy_table_contract(table: CandidateTable) -> ActionContract:
 def _write_rollout(directory: Path, rollout: StructuredRollout, *, shard_bytes: int = MAX_ARRAY_BYTES,
                    extra_owned_bytes: int = 0, max_owned_bytes: int | None = None,
                    check: Callable[[], None] | None = None,
-                   reserve: Callable[[int], None] = lambda _: None, _hpo: Json | None = None) -> Json:
+                   reserve: Callable[[int], None] = lambda _: None, _hpo: Json | None = None,
+                   _before_manifest: Callable[[], None] | None = None) -> Json:
     poll = check or (lambda: None)
     context = rollout._context
     if (rollout.model.version == '4') != (_hpo is not None):
@@ -459,7 +466,7 @@ def _write_rollout(directory: Path, rollout: StructuredRollout, *, shard_bytes: 
         policy_version=rollout.policy_version, decision_count=len(rollout), episodes=episodes,
         planned=planned, resident_bytes=rollout.resident_bytes, planning_bytes=planning_bytes,
         planned_bytes=planned_bytes, shard_bytes=shard_bytes, admit=admit, poll=poll, check=check,
-        _context=context, _hpo=_hpo)
+        _context=context, _hpo=_hpo, _before_manifest=_before_manifest)
 
 
 def _plan_rollout_arrays(rollout: Any, *, shard_bytes: int, admit: Callable[[int], None],
@@ -542,7 +549,7 @@ def _publish_payload(directory: Path, *, model: Any, classification: Json, decla
                      resident_bytes: int, planning_bytes: int, planned_bytes: int, shard_bytes: int,
                      admit: Callable[[int], None], poll: Callable[[], None],
                      check: Callable[[], None] | None, _context: _RolloutContext | None = None,
-                     _hpo: Json | None = None) -> Json:
+                     _hpo: Json | None = None, _before_manifest: Callable[[], None] | None = None) -> Json:
     """Publish one admitted raw payload; callers own validation and input leases.
 
     This private seam neither authorizes Source nor constructs/retokenizes it.
@@ -568,6 +575,9 @@ def _publish_payload(directory: Path, *, model: Any, classification: Json, decla
     if json_bytes(manifest, limit=MAX_MANIFEST_BYTES) != metadata_bytes:
         raise ContractError("actual complete manifest differs from admitted size plan")
     poll()
+    if _before_manifest is not None:
+        _before_manifest()
+        poll()  # Full original checking may itself consume the remaining deadline.
     write_owned_json(directory / "rollout.json", manifest)
     poll()
     return manifest

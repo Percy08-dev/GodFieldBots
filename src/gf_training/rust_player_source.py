@@ -9,6 +9,8 @@ from __future__ import annotations
 import fnmatch
 import json
 import sys
+from collections.abc import Iterator
+from contextlib import contextmanager, nullcontext
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -19,6 +21,7 @@ from gf_training.group_pack_pool import OriginalArtifactReader, PackedArtifactPo
 from gf_training.group_pack_resources import close_resources, retain_cleanup
 from gf_training.group_pack_source import OriginalFile, PackedSource
 from gf_training.rust_player_storage import RustPendingDescriptor
+from gf_training.structured_rollout import _RolloutContext
 from gf_training.structured_source import _json
 
 _SOURCE_ISSUER = object()
@@ -33,6 +36,7 @@ class RustPlayerOriginals:
     """
 
     _completed: Any = None
+    _inspection: Any = None
 
     def __init__(self, pending: RustPendingDescriptor, *, pool: PackedArtifactPool,
                  settings: Any, deadline: float) -> None:
@@ -90,6 +94,16 @@ class RustPlayerOriginals:
     def check(self) -> None:
         if self._closed or self.source is None:
             raise ContractError("Rust original data owner is closed")
+        if self._inspection is not None:
+            from gf_training.group_pack_resources import remaining
+            remaining(self.deadline)
+            self.source._live()
+            return
+        self._check_full()
+
+    def _check_full(self) -> None:
+        if self._closed or self.source is None:
+            raise ContractError("Rust original data owner is closed")
         if self.pending is not None:
             self.pending.recheck()
         else:
@@ -101,6 +115,22 @@ class RustPlayerOriginals:
                 self._resume.require()
             self._cold_descriptor.recheck()
         self.source.recheck()
+
+    @contextmanager
+    def _ordinary_inspection(self, inspection: RustEmptyCollection) -> Iterator[None]:
+        """Borrow this exact live owner only for its synchronous projection."""
+        if (type(self) is not RustPlayerOriginals or type(inspection) is not RustEmptyCollection
+                or self._inspection is not None or inspection.registry.hpo
+                or inspection.registry.pending is not inspection or inspection.state != 'INSPECTING'
+                or inspection.originals is not self or inspection.collection.originals is not self
+                or inspection.collection.pending is not self.pending):
+            raise ContractError('actual ordinary inspection and SAME pending originals required')
+        self._check_full()
+        self._inspection = inspection
+        try:
+            yield
+        finally:
+            self._inspection = None
 
     def charge(self, size: int) -> None:
         self._reservations.append(self.budget.reserve(size))
@@ -172,7 +202,7 @@ class RustPlayerOriginals:
         self._remember(name)
 
     def finalize(self) -> None:
-        self.check()
+        self._check_full()  # Never reuse a cached check at the records-return boundary.
 
     def validate_index(self, manifest: Json) -> None:
         assert self.source is not None
@@ -308,6 +338,42 @@ def learner_records(outputs: Any, seats: Json, closures: Json, missing: Any, *, 
     return tuple(item.records for item in outputs if item.viewer == seats[item.episode_id])
 
 
+class _OrdinarySourceContext(_RolloutContext):
+    """Private conversion of the established Source's exact immutable pairs."""
+    _records: tuple[Any, ...]
+    _deadline: float
+
+    def __init__(self, source: RustPlayerSource) -> None:
+        if (type(source) is not RustPlayerSource or source.registry.hpo
+                or source.registry.failed or source.registry.closed or source.state != 'SEALED'
+                or source.registry.pending is not source or source.registry.current is not source.parent
+                or source.registry.state['updates'] != source.parent.generation
+                or source.parent.generation != source.plan.linkage['collection_generation']
+                or source.registry.local.learner.model.version != '3'):
+            raise ContractError('actual current ordinary Model3 Source required for conversion')
+        source._packing_deadline()
+        super().__init__(source.registry.config.actions, source.registry.local.learner._context.rules)
+        object.__setattr__(self, '_records', source._records)
+        object.__setattr__(self, '_deadline', source.plan.execution_deadline)
+
+    def tokenize_tables(self, index: int, record: Any, model: Any) -> tuple[Any, ...]:
+        from gf_common.domain import integer
+        from gf_common.structured_tokens import _encode_candidate_tokens
+        from gf_models.structured_config import aggregate_recipe
+        from gf_training.group_pack_resources import remaining
+        if not 0 <= index < len(self._records) or self._records[index] is not record:
+            raise ContractError('conversion requires the SAME validated Source record')
+        integer(model.max_positions, 1, 128)
+        result = []
+        for frame, table in zip(record.frames, record.tables, strict=True):
+            remaining(self._deadline)
+            if frame.layout is not self.layout or table.layout is not self.layout or table.frame_hash != frame.frame_hash:
+                raise ContractError('ordinary Source table/frame binding differs')
+            result.append(_encode_candidate_tokens(table, frame.frame_hash, model.max_positions,
+                aggregate_window=model.event.aggregate_window, aggregate_recipe=aggregate_recipe(model), layout=self.layout))
+        return tuple(result)
+
+
 class RustPlayerSource:
     """Private same-host projection of actual native capture and sealed originals."""
 
@@ -367,13 +433,17 @@ class RustPlayerSource:
         if self.registry.state['updates'] != self.parent.generation or self.parent.generation != self.plan.linkage['collection_generation']:
             raise ContractError('actual Source generation differs from current parent')
 
+    def _packing_deadline(self) -> None:
+        from gf_training.group_pack_resources import remaining
+        remaining(self.plan.execution_deadline)
+
     def persist(self, directory: Path) -> Json:
         from gf_models.arrays import sha256
         from gf_training.structured_rollout import (
+            StructuredRollout,
             _owned_bytes,
             _predicted_token_bytes,
             _write_rollout,
-            game_rollout,
         )
         self.require()
         if self.state != 'SEALED':
@@ -389,14 +459,16 @@ class RustPlayerSource:
         self._charges.append(planning)
         try:
             local = self.registry.local
-            self._rollout = game_rollout(self._records, local.learner.model,
-                actions=self.registry.config.actions, rules=local.learner._context.rules)
+            self._rollout = StructuredRollout(self._records, local.learner.model,
+                digest(asdict(self.registry.config.actions)), action_contract=self.registry.config.actions.action_contract,
+                purpose='qualified_game', synthetic_capacity=False, _context=_OrdinarySourceContext(self))
             seen: set[int] = set()
             _owned_bytes(self._records, seen)
             token_charge.resize(_owned_bytes((self._rollout.model, self._rollout.episodes,
                 self._rollout.locations, self._rollout.action_config_hash, self._rollout.policy_version,
                 self._rollout.input_binding), seen))
-            metadata = _write_rollout(directory, self._rollout, check=self.require,
+            metadata = _write_rollout(directory, self._rollout, check=self._packing_deadline,
+                _before_manifest=self.require,
                 max_owned_bytes=local.learner.model.resources.max_owned_bytes,
                 reserve=lambda size: planning.resize(max(0, size - self._rollout.resident_bytes)))
             self.numeric_directory = directory
@@ -679,22 +751,23 @@ class RustEmptyCollection:
             result._pool_hold = registry.pool.hold_close(result)
             owner = collection.open()
             result.originals = owner
-            manifest = collection.manifest
-            actual = registry.admission.observation
-            if (digest(manifest) != collection.manifest_sha256
-                    or manifest['runtime_binding_sha256'] != registry.state['runtime_binding_sha256']
-                    or manifest['player_producer'] != actual['producer']
-                    or digest(manifest['capture_authority']) != collection.capture_sha256
-                    or digest(manifest['logical_retirement']) != collection.retirement_sha256):
-                raise ContractError('actual collection identity/runtime/capture differs')
-            _check_collection_parent(manifest, registry.state, plan)
-            role = hpo_batch_role(registry.config.hpo_spec['training_recipe']['collection_games']) if registry.hpo else PPO_BATCH
-            episodes, specs = inspect_rust_game_manifest(owner, manifest, registry.config.actions,
-                registry.config.run.split, role=role)
-            outputs, accepted, closure, missing = _inspect_collection_content(owner,
-                registry.config.actions, manifest, episodes, specs, _game=True, packed=True)
-            seats = plan.linkage['learner_seats']
-            records = learner_records(outputs, seats, closure, missing, games=role.games)
+            with owner._ordinary_inspection(result) if not registry.hpo else nullcontext():
+                manifest = collection.manifest
+                actual = registry.admission.observation
+                if (digest(manifest) != collection.manifest_sha256
+                        or manifest['runtime_binding_sha256'] != registry.state['runtime_binding_sha256']
+                        or manifest['player_producer'] != actual['producer']
+                        or digest(manifest['capture_authority']) != collection.capture_sha256
+                        or digest(manifest['logical_retirement']) != collection.retirement_sha256):
+                    raise ContractError('actual collection identity/runtime/capture differs')
+                _check_collection_parent(manifest, registry.state, plan)
+                role = hpo_batch_role(registry.config.hpo_spec['training_recipe']['collection_games']) if registry.hpo else PPO_BATCH
+                episodes, specs = inspect_rust_game_manifest(owner, manifest, registry.config.actions,
+                    registry.config.run.split, role=role)
+                outputs, accepted, closure, missing = _inspect_collection_content(owner,
+                    registry.config.actions, manifest, episodes, specs, _game=True, packed=True)
+                seats = plan.linkage['learner_seats']
+                records = learner_records(outputs, seats, closure, missing, games=role.games)
             result.manifest, result._records = manifest, records
             result.accepted_decisions = accepted
             result.closure_counts, result.missing_replays = closure, missing
