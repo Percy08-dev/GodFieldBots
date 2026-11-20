@@ -13,6 +13,41 @@ accepted records in `docs/adr/`. Check the simulator's current normative specs
 when changing its integration. Record the revision and schema versions used;
 do not silently reinterpret an older dataset using current semantics.
 
+## Engineering efficiency and resource discipline
+
+- Trust documented library guarantees, type invariants, and
+  established internal contracts. Do not duplicate validation
+  already owned by another layer. Validate untrusted inputs,
+  integration assumptions, and actual failure boundaries.
+
+- Defensive checks, resource limits, and safety margins must
+  address a concrete failure mode or documented requirement.
+  Do not introduce speculative guards or unexplained margins.
+  Consider both the benefit and runtime cost of safeguards.
+
+- Resource accounting must distinguish measured and estimated
+  usage, private and shared allocations, steady-state and peak
+  demand, and actual concurrent lifetimes. Do not double-count
+  shared resources or reject valid workloads solely because
+  of an unnecessarily pessimistic estimate.
+
+- Treat efficiency as a requirement for performance-sensitive
+  paths. Consider algorithmic cost, batching, allocations,
+  data movement, concurrency, and end-to-end throughput.
+  Prefer evidence-based optimization over speculative
+  defensive complexity.
+
+- Use `$bots-performance` when implementing or reviewing
+  performance-sensitive changes, investigating bottlenecks,
+  changing worker concurrency, or designing/reviewing resource
+  guards. Root must include the relevant performance objectives
+  in delegated work.
+
+- The skill does not override architecture review, simulator
+  contracts, information boundaries, correctness requirements,
+  or required verification. Performance work must report
+  measured results or explicitly identify missing evidence.
+
 ## Agent roles and routing
 
 Use these custom agents for delegated work. Root owns requirements, design,
@@ -20,12 +55,12 @@ coordination, project configuration, design documentation, and final acceptance.
 
 | Role | Model / effort | Responsibility |
 | --- | --- | --- |
-| root | `gpt-6.1-sol` / `xhigh` | Design, decomposition, decisions, integration |
-| `bot_implementer` | `gpt-6.1-sol` / `high` | Python implementation, relevant tests, fixes |
-| `bot_reviewer` | `gpt-6.1-sol` / `xhigh` | Independent correctness and learning/evaluation review |
-| `bot_architecture_reviewer` | `gpt-6.1-sol` / `xhigh` | Independent design and implementation-conformance review |
+| root | `gpt-6.2-sol` / `xhigh` | Design, decomposition, decisions, integration |
+| `bot_implementer` | `gpt-6.2-sol` / `high` | Python implementation, relevant tests, fixes |
+| `bot_reviewer` | `gpt-6.2-sol` / `xhigh` | Independent correctness and learning/evaluation review |
+| `bot_architecture_reviewer` | `gpt-6.2-sol` / `xhigh` | Independent design and implementation-conformance review |
 | `bot_verifier` | `gpt-6-luna` / `high` | Bounded investigation, specified checks, evidence summaries |
-| `bot_advisor` | `gpt-6-astra` / `high` | Difficult decisions and unresolved disagreements |
+| `bot_advisor` | `gpt-6.2-astra` / `high` | Difficult decisions and unresolved disagreements |
 
 Definitions live in `.codex/agents/`; the TOML `name` is the routing identifier.
 Select it with the spawn tool's `agent_type` field. `task_name` only labels a
@@ -43,10 +78,10 @@ files. These are role instructions, not separate sandbox permissions; child
 agents inherit the parent's permissions.
 
 Prefer Standard speed. Do not enable Fast solely to accelerate routine work.
-The generic child default is Sol / high; custom definitions set both model and
-effort explicitly. Reuse relevant task threads for fixes, but do not use the
-implementer's thread for independent review. Pass a bounded brief rather than
-the entire chat or raw logs whenever the runtime supports it.
+The generic child default is `gpt-6.2-sol` / `high`. Custom definitions set both
+model and effort explicitly. Reuse relevant task threads for fixes, but do not
+use the implementer's thread for independent review. Pass a bounded brief rather
+than the entire chat or raw logs whenever the runtime supports it.
 
 ## Architecture gate: first implementation included
 

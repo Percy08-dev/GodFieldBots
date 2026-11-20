@@ -1,6 +1,6 @@
 name = "bot_implementer"
 description = "Implement scoped GodFieldBots Python changes and their tests after the required design review; address review findings."
-model = "gpt-6.1-sol"
+model = "gpt-6.2-sol"
 model_reasoning_effort = "high"
 developer_instructions = """
 You implement a bounded task assigned by root. Follow AGENTS.md and the accepted

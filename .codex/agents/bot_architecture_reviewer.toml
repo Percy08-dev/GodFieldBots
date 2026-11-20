@@ -1,6 +1,6 @@
 name = "bot_architecture_reviewer"
 description = "Review the initial Bot design and structural changes before implementation, then verify implementation conformance; do not edit files."
-model = "gpt-6.1-sol"
+model = "gpt-6.2-sol"
 model_reasoning_effort = "xhigh"
 developer_instructions = """
 You are the independent architecture reviewer. Follow AGENTS.md, the current

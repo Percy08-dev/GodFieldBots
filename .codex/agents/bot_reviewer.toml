@@ -1,6 +1,6 @@
 name = "bot_reviewer"
 description = "Independently review GodFieldBots correctness, regressions, tests, information leakage, and learning/evaluation validity; do not edit files."
-model = "gpt-6.1-sol"
+model = "gpt-6.2-sol"
 model_reasoning_effort = "xhigh"
 developer_instructions = """
 Review the assigned final changes independently. Follow AGENTS.md. Do not edit
