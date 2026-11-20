@@ -547,12 +547,10 @@ class RustPlayerSource:
             if canonical(json.loads(self._numeric_originals['rollout.json'].read(
                     registry.config.preprocessing.max_source_file_mib * 1024**2))) != self._numeric_metadata:
                 raise ContractError('actual persisted numeric metadata changed')
-        if not registry.hpo:
-            self._rollout.require_learning()
         before = local.learner.steps
         self.state = 'UPDATING'  # Failures are terminal; no retry resets Adam/RNG.
         try:
-            metrics = local.update_owned(self._numeric) if registry.hpo else local.update(self._rollout)
+            metrics = local.update_owned(self._numeric) if registry.hpo else local._update_from_source(self)
             from gf_training.group_pack_resources import remaining
             remaining(self.plan.execution_deadline)
             delta = self._numeric.metadata['expected_optimizer_step_delta'] if registry.hpo else 4 * ((self.decision_count + 127) // 128)

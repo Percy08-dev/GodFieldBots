@@ -60,7 +60,8 @@ from gf_training.structured_rollout import StructuredRollout
 
 @dataclass(frozen=True)
 class _OperationDeviceLimit:
-    device_bytes: int
+    device_bytes: int | None
+    owned_rollout: StructuredRollout | None = None
 
 
 class Learner:
@@ -118,6 +119,9 @@ class Learner:
                 raise ContractError('actual endpoint plus position storage exceeds operation device allowance')
 
     def parity(self, rollout: StructuredRollout, *, _device_bytes: int | None = None) -> Json:
+        current = getattr(self, '_rust_operation_limit', None)
+        if current is not None and current.owned_rollout is not None and current.owned_rollout is rollout:
+            return {'status': 'not_run'}
         _device_bytes = self._current_device_limit(_device_bytes)
         if _device_bytes is not None:
             # Refuse before RNG capture/reference construction; do not perform
@@ -192,6 +196,19 @@ class Learner:
             raise ContractError('non-nested Model3 operation device limit required')
         self._rust_operation_limit = _OperationDeviceLimit(device_bytes)
         try:
+            return self.update(rollout)
+        finally:
+            del self._rust_operation_limit
+
+    def _update_owned_model3(self, rollout: StructuredRollout, *, device_bytes: int | None = None) -> Json:
+        """Actual Source handoff only; one preflight around the frozen kernel."""
+        if device_bytes is not None:
+            integer(device_bytes, 1, 2**63 - 1)
+        if self.model.version != '3' or getattr(self, '_rust_operation_limit', None) is not None:
+            raise ContractError('non-nested owned Model3 operation required')
+        self._rust_operation_limit = _OperationDeviceLimit(device_bytes, rollout)
+        try:
+            self.admit(rollout)
             return self.update(rollout)
         finally:
             del self._rust_operation_limit

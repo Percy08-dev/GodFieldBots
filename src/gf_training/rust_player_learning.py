@@ -200,6 +200,30 @@ class LocalGameLearner(_LocalLearner):
                 self._failed = True
                 raise
 
+    def _update_from_source(self, source: Any) -> Json:
+        """In-memory handoff AFTER consume's physical/correspondence checks."""
+        from gf_training.rust_player_source import RustPlayerSource
+        self.require()
+        if type(source) is not RustPlayerSource:
+            raise ContractError('actual updating ordinary Rust Source required')
+        registry, parent = source.registry, source.parent
+        if (source.state != 'UPDATING' or registry.hpo or registry.failed or registry.closed
+                or registry.local is not self or registry.pending is not source or registry.current is not parent
+                or source.collection.registry is not registry or source.collection.plan is not source.plan
+                or registry.state['updates'] != parent.generation
+                or parent.generation != source.plan.linkage['collection_generation']
+                or parent._learner is not self.learner or parent.optimizer_steps != self.learner.steps
+                or registry.state['optimizer_steps'] != self.learner.steps):
+            raise ContractError('same current ordinary Source/local generation required')
+        with serialized_torch():
+            try:
+                with self._device_phase('update') as operation:
+                    return self.learner._update_owned_model3(source._rollout,
+                        device_bytes=operation.device_bytes if operation is not None else None)
+            except BaseException:
+                self._failed = True
+                raise
+
     def save(self, directory: Path, **options: Any) -> LocalSavedPair:
         self.require()
         directory = directory.absolute()

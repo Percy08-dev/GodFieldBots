@@ -49,6 +49,241 @@ def test_model3_operation_limit_refuses_before_parity_and_preserves_binding(monk
     assert asdict(learner.binding) == original
 
 
+def source_handoff_data(local, rollout, monkeypatch):
+    """Actual Source factory at isolated Raw handoff seam; no qualified Dataset."""
+    from types import SimpleNamespace
+
+    from gf_training.rust_player_source import RustEmptyCollection, RustPlayerSource
+    parent = SimpleNamespace(generation=0, optimizer_steps=0, _learner=local.learner)
+    registry = SimpleNamespace(local=local, hpo=False, failed=False, closed=False,
+        state={'updates': 0, 'optimizer_steps': 0}, current=parent, pending=None)
+    plan = SimpleNamespace(linkage={'collection_generation': 0})
+    collection = SimpleNamespace(registry=registry, plan=plan)
+    inspection = SimpleNamespace(collection=collection, registry=registry, plan=plan, parent=parent,
+        originals=None, manifest={}, _records=(), accepted_decisions=len(rollout),
+        closure_counts={'natural': 16}, missing_replays=[])
+    monkeypatch.setattr(RustEmptyCollection, '_inspect', classmethod(lambda cls, actual: inspection))
+    source = RustPlayerSource.project(collection)
+    source.state, source._rollout = 'UPDATING', rollout
+    return source
+
+
+def test_owned_model3_kernel_matches_full_update_rng_adam_and_preflights_once(monkeypatch):
+    import torch
+
+    from tests.test_card_instance_learning import learner_for, rollout_for
+    from tests.test_structured_learning import assert_same_learners
+    owned, legacy = learner_for(), learner_for()
+    rollout = rollout_for(owned)
+    before = torch.get_rng_state().clone()
+    expected = legacy.update(rollout)
+    expected_rng = torch.get_rng_state().clone()
+    torch.set_rng_state(before)
+    actual_admit = owned.admit
+    calls = []
+    def admit(actual, **kwargs):
+        assert actual is rollout and owned.steps == 0 and not owned.optimizer.state
+        calls.append(actual)
+        return actual_admit(actual, **kwargs)
+    monkeypatch.setattr(owned, 'admit', admit)
+    monkeypatch.setattr(owned, '_parity', lambda *a, **k: pytest.fail('trusted source repeated numerical parity'))
+    actual = owned._update_owned_model3(rollout)
+    assert calls == [rollout]
+    assert actual['parity'] == {'status': 'not_run'}
+    assert {key: value for key, value in actual.items() if key != 'parity'} == {
+        key: value for key, value in expected.items() if key != 'parity'}
+    assert torch.equal(torch.get_rng_state(), expected_rng)
+    assert_same_learners(owned, legacy)
+    assert getattr(owned, '_rust_operation_limit', None) is None
+
+
+def test_actual_source_private_dispatch_uses_its_own_rollout_without_rehash(monkeypatch):
+    from gf_training.rust_player_learning import LocalGameLearner
+    from tests.test_card_instance_learning import ACTIONS, RESUME, RULES, learner_for, rollout_for
+    template = learner_for()
+    local = LocalGameLearner(template.model, 17, template.binding, RESUME, actions=ACTIONS, rules=RULES)
+    rollout = rollout_for(local.learner)
+    source = source_handoff_data(local, rollout, monkeypatch)
+    monkeypatch.setattr(source, 'require', lambda: pytest.fail('handoff repeated physical Source checks'))
+    monkeypatch.setattr(local.learner, '_parity', lambda *a, **k: pytest.fail('handoff repeated numerical parity'))
+    assert local._update_from_source(source)['parity'] == {'status': 'not_run'}
+    assert local.learner.steps == 4
+
+
+@pytest.mark.parametrize('fault', ['phase', 'pending', 'current', 'local', 'hpo', 'failed',
+    'closed', 'generation', 'plan-generation', 'steps', 'state-steps', 'parent-learner',
+    'collection-registry', 'collection-plan', 'foreign'])
+def test_source_private_dispatch_refuses_wrong_live_binding_before_mutation(monkeypatch, fault):
+    from gf_training.rust_player_learning import LocalGameLearner
+    from tests.test_card_instance_learning import ACTIONS, RESUME, RULES, learner_for, rollout_for
+    template = learner_for()
+    local = LocalGameLearner(template.model, 17, template.binding, RESUME, actions=ACTIONS, rules=RULES)
+    rollout = rollout_for(local.learner)
+    source = source_handoff_data(local, rollout, monkeypatch)
+    if fault == 'phase': source.state = 'PERSISTED'
+    elif fault == 'pending': source.registry.pending = object()
+    elif fault == 'current': source.registry.current = object()
+    elif fault == 'local': source.registry.local = object()
+    elif fault == 'hpo': source.registry.hpo = True
+    elif fault == 'failed': source.registry.failed = True
+    elif fault == 'closed': source.registry.closed = True
+    elif fault == 'generation': source.registry.state['updates'] = 1
+    elif fault == 'plan-generation': source.plan.linkage['collection_generation'] = 1
+    elif fault == 'steps': source.parent.optimizer_steps = 1
+    elif fault == 'state-steps': source.registry.state['optimizer_steps'] = 1
+    elif fault == 'parent-learner': source.parent._learner = object()
+    elif fault == 'collection-registry': source.collection.registry = object()
+    elif fault == 'collection-plan': source.collection.plan = object()
+    elif fault == 'foreign': source = {'state': 'UPDATING'}
+    before = canonical(local.learner.shuffle.bit_generator.state)
+    with pytest.raises(ContractError):
+        local._update_from_source(source)
+    assert local.learner.steps == 0 and not local.learner.optimizer.state
+    assert canonical(local.learner.shuffle.bit_generator.state) == before
+
+
+def test_legacy_device_scope_none_cannot_match_an_omitted_owned_rollout(monkeypatch):
+    from tests.test_card_instance_learning import learner_for
+    learner = learner_for()
+    def refuse(actual, **kwargs):
+        assert actual is None
+        raise ContractError('invalid rollout still admitted before frozen loop')
+    monkeypatch.setattr(learner, 'admit', refuse)
+    with pytest.raises(ContractError, match='invalid rollout still admitted'):
+        learner.update_with_device_limit(None, device_bytes=10**9)
+    assert learner.steps == 0 and not learner.optimizer.state
+    assert getattr(learner, '_rust_operation_limit', None) is None
+
+
+@pytest.mark.parametrize('fault', ['classification', 'natural', 'actions', 'capacity'])
+def test_owned_model3_preflight_refuses_before_rng_adam_or_parameters_change(monkeypatch, fault):
+    import torch
+
+    from tests.test_card_instance_learning import learner_for, rollout_for
+    learner = learner_for()
+    rollout = rollout_for(learner)
+    if fault == 'classification': rollout.input_binding['synthetic_capacity'] = True
+    elif fault == 'natural': rollout.eligible = False
+    elif fault == 'actions': rollout.action_config_hash = '0' * 64
+    parameters = {name: value.clone() for name, value in learner.network.state_dict().items()}
+    rng = torch.get_rng_state().clone()
+    shuffle = canonical(learner.shuffle.bit_generator.state)
+    monkeypatch.setattr(learner, '_parity', lambda *a, **k: pytest.fail('owned numerical parity was called'))
+    with pytest.raises(ContractError):
+        learner._update_owned_model3(rollout, device_bytes=1 if fault == 'capacity' else None)
+    assert learner.steps == 0 and not learner.optimizer.state
+    assert torch.equal(torch.get_rng_state(), rng)
+    assert canonical(learner.shuffle.bit_generator.state) == shuffle
+    for name, value in learner.network.state_dict().items():
+        torch.testing.assert_close(value, parameters[name], rtol=0, atol=0)
+    assert getattr(learner, '_rust_operation_limit', None) is None
+
+
+def test_owned_model3_scope_is_exact_nonnested_and_cleared_after_exception(monkeypatch):
+    from tests.test_card_instance_learning import learner_for, rollout_for
+    learner = learner_for()
+    rollout, foreign = rollout_for(learner), rollout_for(learner)
+    explicit = []
+    def full(actual, **kwargs):
+        explicit.append(actual)
+        return {'full': True}
+    monkeypatch.setattr(learner, '_parity', full)
+    def failure(actual):
+        assert learner.parity(actual) == {'status': 'not_run'}
+        assert learner.parity(foreign) == {'full': True}
+        with pytest.raises(ContractError, match='non-nested'):
+            learner._update_owned_model3(actual)
+        with pytest.raises(ContractError, match='non-nested'):
+            learner.update_with_device_limit(actual, device_bytes=10**9)
+        raise ValueError('stopped numerical call')
+    monkeypatch.setattr(learner, 'update', failure)
+    with pytest.raises(ValueError, match='stopped numerical'):
+        learner._update_owned_model3(rollout)
+    assert getattr(learner, '_rust_operation_limit', None) is None
+    assert learner.parity(rollout) == {'full': True}
+    assert explicit == [foreign, rollout]
+
+
+def test_source_bridge_failure_preserves_actual_device_hold_and_clears_numeric_scope(monkeypatch):
+    from dataclasses import replace
+
+    from gf_models.rust_player_device import CudaCheckpointProfile, RustPlayerDeviceAccount
+    from gf_training.rust_player_learning import LocalGameLearner
+    from tests.test_card_instance_learning import ACTIONS, RESUME, RULES, learner_for, rollout_for
+    template = learner_for()
+    profile = CudaCheckpointProfile(template.model, replace(template.binding, device='cuda:0'), layout=template.network.layout)
+    account = RustPlayerDeviceAccount(global_bytes=8 * 1024**3, learner_device='cpu', serving_device='cuda:0',
+        learner_profile=profile, admitted_profiles=(profile,))
+    local = LocalGameLearner(template.model, 17, template.binding, RESUME, actions=ACTIONS, rules=RULES,
+        device_account=account)
+    rollout = rollout_for(local.learner)
+    source = source_handoff_data(local, rollout, monkeypatch)
+    def fail(actual):
+        assert local.learner._rust_operation_limit.owned_rollout is actual
+        assert local.learner._rust_operation_limit.device_bytes is None
+        raise ValueError('owned numerical failure')
+    monkeypatch.setattr(local.learner, 'update', fail)
+    with pytest.raises(ValueError, match='owned numerical failure'):
+        local._update_from_source(source)
+    hold = account._active
+    assert hold.state == 'FAILED_HELD' and hold.owner is local and local._failed
+    assert getattr(local.learner, '_rust_operation_limit', None) is None
+    local.retire_device_failure()
+    assert hold.state == 'FAILED_RETIRED' and account._poisoned
+
+
+def test_source_consume_dispatches_owned_bridge_after_original_checks_and_admits_once(tmp_path, monkeypatch):
+    import time
+    from types import SimpleNamespace
+
+    from gf_common.group_pack import StorageSettings
+    from gf_models.arrays import sha256
+    from gf_training.group_pack_resources import StorageBudget
+    from gf_training.group_pack_source import OriginalFile
+    from gf_training.rust_player_learning import LocalGameLearner
+    from gf_training.structured_rollout import _write_rollout
+    from tests.test_card_instance_learning import ACTIONS, RESUME, RULES, learner_for, rollout_for
+    template = learner_for()
+    local = LocalGameLearner(template.model, 17, template.binding, RESUME, actions=ACTIONS, rules=RULES)
+    rollout = rollout_for(local.learner)
+    source = source_handoff_data(local, rollout, monkeypatch)
+    source.state = 'PERSISTED'
+    source._records = tuple(episode.records for episode in rollout.episodes)
+    source._episode_digests = source._digests()
+    source.registry.directory = tmp_path
+    source.registry.budget = StorageBudget(StorageSettings(), time.monotonic()+60)
+    source.registry.config = SimpleNamespace(actions=ACTIONS,
+        preprocessing=SimpleNamespace(max_source_file_mib=64))
+    source.plan.execution_deadline = time.monotonic()+60
+    numeric = tmp_path / 'numeric'
+    metadata = _write_rollout(numeric, rollout)
+    source.numeric_files = {**metadata['data']['files'], 'rollout.json': sha256(numeric / 'rollout.json')}
+    source._numeric_metadata = canonical(metadata)
+    source._numeric_originals = {name: OriginalFile(numeric / name, source.plan.execution_deadline)
+        for name in source.numeric_files}
+    requirements = []
+    def source_guard():
+        requirements.append(source.state)
+        assert source.state == 'PERSISTED'  # Bridge must not repeat physical require at UPDATING.
+    monkeypatch.setattr(source, 'require', source_guard)
+    actual_learning = rollout.require_learning
+    admissions = []
+    def learning():
+        admissions.append(source.state)
+        return actual_learning()
+    monkeypatch.setattr(rollout, 'require_learning', learning)
+    monkeypatch.setattr(local.learner, '_parity', lambda *a, **k: pytest.fail('source consume repeated parity'))
+    try:
+        metrics, pair = source.consume(tmp_path / 'artifacts/000001')
+        assert source.state == 'SAVED' and local.learner.steps == 4
+        assert metrics['parity'] == {'status': 'not_run'}
+        assert requirements == ['PERSISTED'] and admissions == ['UPDATING']
+        pair.require(local)
+        assert source.registry.budget.used == 0
+    finally:
+        for original in source._numeric_originals.values(): original.close()
+
+
 def test_model4_legacy_restore_digest_keyword_refuses_before_any_mutation(tmp_path):
     from tests.test_hpo_numeric import learner_for
     learner = learner_for()
