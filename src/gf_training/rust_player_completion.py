@@ -652,6 +652,12 @@ def _audit_update_data(originals: Any, ownership: Any, pool: PackedArtifactPool,
                 raise ContractError('cold numeric original checksum differs')
         finally:
             original.close()
+    if hpo:
+        # Raw has positively retired; reconstruction shares the SAME Source
+        # with retained controls/Originals, rather than the live bank envelope.
+        numeric_workspace = pool.budget.limit - pool.budget.used
+        if numeric_workspace <= 0:
+            raise ContractError('cold numeric audit has no remaining Source workspace')
     reservation = pool.budget.reserve(0)
     try:
         readback: Any
@@ -664,7 +670,7 @@ def _audit_update_data(originals: Any, ownership: Any, pool: PackedArtifactPool,
                 hpo_training_config(loaded.config.hpo_spec['training_recipe']), actions=loaded.config.actions,
                 rules=card_instance_rules(), expected_selection=proof['selection'],
                 expected_correspondence=correspondence, expected_snapshot_identity=proof['snapshot_identity'],
-                storage_binding=storage_binding(), numeric_budget_bytes=loaded.config.hpo_spec['operating']['numeric_budget_bytes'],
+                storage_binding=storage_binding(), numeric_budget_bytes=numeric_workspace,
                 max_owned_bytes=pool.budget.limit, reserve=reservation.resize)
         else:
             readback = read_game_rollout(numeric, update['numeric_sha256'], model,
