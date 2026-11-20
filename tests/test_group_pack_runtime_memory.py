@@ -9,7 +9,8 @@ from gf_common.group_pack import StorageSettings
 from tests.test_card_instance_baseline_runtime import ACTIONS, receipt, writer
 
 
-def test_memory_journal_matches_file_bytes_and_logical_evidence(tmp_path):
+def test_memory_journal_matches_file_bytes_and_logical_evidence(tmp_path, monkeypatch):
+    from gf_common.structured import CandidateTable
     from gf_training.card_instance_journal import read_card_instance_journal
     from gf_training.group_pack_memory import MemoryCardInstanceJournal, MemoryGroupArtifacts
     from gf_training.group_pack_resources import StorageBudget
@@ -30,8 +31,17 @@ def test_memory_journal_matches_file_bytes_and_logical_evidence(tmp_path):
     assert snapshot.read("episode/player-1.jsonl") == physical.final_path.read_bytes()
     for path in folder.glob("*.columns"):
         assert snapshot.read("episode/" + path.name) == path.read_bytes()
+    validate = CandidateTable.validate
+    validated = []
+
+    def capture(table, original_frame):
+        validated.append((table.table_hash, original_frame.frame_hash))
+        validate(table, original_frame)
+
+    monkeypatch.setattr(CandidateTable, "validate", capture)
     parsed = read_card_instance_journal(memory.final_path, actions=ACTIONS,
         artifacts=snapshot, artifact_prefix="episode")
+    assert validated == [(generated.table.table_hash, frame.frame_hash)]
     old = read_card_instance_journal(physical.final_path, actions=ACTIONS)
     assert parsed.records == old.records
     assert parsed.decisions[0].generated.table == old.decisions[0].generated.table
@@ -43,6 +53,51 @@ def test_memory_journal_matches_file_bytes_and_logical_evidence(tmp_path):
     assert budget.used > 0
     snapshot.close()
     sink.close()
+    assert budget.used == 0
+
+
+def test_logical_journal_rejects_unselected_candidate_outside_own_view(tmp_path):
+    import json
+    from dataclasses import replace
+
+    from gf_common.candidate_columns import encode_candidate_columns_v2
+    from gf_common.domain import ContractError, canonical, digest
+    from gf_training.card_instance_journal import read_card_instance_journal
+    from gf_training.group_pack_memory import MemoryGroupArtifacts
+    from gf_training.group_pack_resources import StorageBudget
+
+    folder = tmp_path / "episode"
+    folder.mkdir()
+    physical, frame, delta, generated, selected, command = writer(folder)
+    physical.begin_frame(frame, delta, generated, selected, command, {})
+    physical.finish("cancelled", None)
+    table = generated.table
+    # Keep the selected action intact: full-table validation must catch another row.
+    index = next(index for index in range(len(table.kinds)) if index != selected.index
+                 and table.offsets[index + 1] - table.offsets[index] == 1)
+    slots = list(table.slots)
+    slots[table.offsets[index]] = 17
+    changed = tuple(slots)
+    malformed = replace(table, slots=changed, table_hash=digest(table._content() | {"slots": changed}))
+    rows = [json.loads(line) for line in physical.final_path.read_bytes().splitlines()]
+    decision = next(row for row in rows if row["kind"] == "decision")
+    payload, descriptor = encode_candidate_columns_v2(malformed, decision["table"]["file"],
+        layout=table.layout, max_positions=physical.caps["max_positions"])
+    decision["table"] = descriptor
+    decision["selection"]["table_hash"] = malformed.table_hash
+    decision["search_report"]["table_hash"] = malformed.table_hash
+    budget = StorageBudget(StorageSettings(), time.monotonic() + 30)
+    sink = MemoryGroupArtifacts(budget)
+    sink.write("episode/player-1.jsonl", "".join(canonical(row) + "\n" for row in rows).encode())
+    sink.write("episode/" + descriptor["file"], payload)
+    snapshot = sink.snapshot()
+    try:
+        with pytest.raises(ContractError, match="candidate slot not in original own view"):
+            read_card_instance_journal(physical.final_path, actions=ACTIONS,
+                artifacts=snapshot, artifact_prefix="episode")
+    finally:
+        snapshot.close()
+        sink.close()
     assert budget.used == 0
 
 
