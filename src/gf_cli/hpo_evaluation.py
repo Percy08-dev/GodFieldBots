@@ -888,7 +888,7 @@ def _verify_seed_evaluation_data(store: object, loaded: LoadedHPOConfig, campaig
 
 
 def aggregate_trial_evaluation(store: object, loaded: LoadedHPOConfig, campaign: Json, proposal: object,
-                               *, deadline: float) -> Json:
+                               *, deadline: float, control: Any = None) -> Json:
     from gf_cli.hpo_campaign import Proposal
     from gf_cli.hpo_storage import CampaignStore
     from gf_evaluation.hpo import EvaluationPlan, SeedEvaluationProjection, aggregate_evaluation
@@ -898,7 +898,12 @@ def aggregate_trial_evaluation(store: object, loaded: LoadedHPOConfig, campaign:
     training_hashes = []
     evaluation_hashes = []
     for seed in loaded.config.learning_seeds:
-        projected, training_sha, evaluation_sha = verify_seed_evaluation(store, loaded, campaign, proposal, seed, deadline=deadline)
+        if loaded.config.schema_version == 6:
+            from gf_cli.rust_player_evaluation import verify_rust_evaluation_history
+            projected, training_sha, evaluation_sha = verify_rust_evaluation_history(
+                store, loaded, campaign, proposal, seed, control=control, deadline=deadline)
+        else:
+            projected, training_sha, evaluation_sha = verify_seed_evaluation(store, loaded, campaign, proposal, seed, deadline=deadline)
         if type(projected) is not SeedEvaluationProjection:
             raise ContractError('actual checked seed projection required')
         projections.append(projected)
@@ -913,7 +918,7 @@ def aggregate_trial_evaluation(store: object, loaded: LoadedHPOConfig, campaign:
 
 
 def verify_trial_evaluation(store: object, loaded: LoadedHPOConfig, campaign: Json, proposal: object, *,
-                            deadline: float) -> tuple[Json, float, str]:
+                            deadline: float, control: Any = None) -> tuple[Json, float, str]:
     from gf_cli.hpo_campaign import Proposal
     from gf_cli.hpo_storage import CampaignStore
     if type(store) is not CampaignStore or type(proposal) is not Proposal:
@@ -921,7 +926,8 @@ def verify_trial_evaluation(store: object, loaded: LoadedHPOConfig, campaign: Js
     aggregate, aggregate_sha = store.get(f'proposals/{proposal.number:06}/evaluation.json')
     _receipt(aggregate, 'hpo-evaluation', {'proposal_sha256', 'training_receipts', 'evaluation_receipts',
         'value', 'projection_sha256', 'label'})
-    expected = aggregate_trial_evaluation(store, loaded, campaign, proposal, deadline=deadline)
+    expected = aggregate_trial_evaluation(store, loaded, campaign, proposal, deadline=deadline,
+        **({} if control is None else {'control': control}))
     if canonical(aggregate) != canonical(expected):
         raise ContractError('aggregate differs from complete independently verified Source/originals')
     return aggregate, float(expected['value']), aggregate_sha
@@ -975,9 +981,13 @@ def verify_training_receipt(store: object, loaded: LoadedHPOConfig, campaign: Js
             control=control, ownership=ownership, pool=pool, parent_budget=parent_budget, deadline=deadline)
         try:
             value, _ = store.get(f'proposals/{proposal.number:06}/seeds/{training_seed}/training.json')
-            return value
-        finally:
-            audit.close()
+        except BaseException as error:
+            from gf_training.rust_player_completion import _capture_failure_graph
+            audit._failed = True
+            _capture_failure_graph(audit, error)
+            raise
+        audit.close()
+        return value
     folder = f'proposals/{proposal.number:06}/seeds/{training_seed}'
     value, _ = store.get(folder + '/training.json')
     _receipt(value, 'hpo-seed-training', _TRAINING_RECEIPT_FIELDS)

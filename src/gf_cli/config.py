@@ -195,17 +195,22 @@ class PackedRefreshOpponentsExperimentConfig(GroupPackExperimentConfig):
     training_opponents: Json
 
 
+def _require_hpo_model4_storage(config: ExperimentConfig, command: str, *, standalone: bool) -> None:
+    from gf_cli.hpo_config import HPOExperimentConfig
+    if (type(config) is not HPOExperimentConfig or type(config.model) is not ConfiguredNeuralModelV4
+            or command not in ('collect', 'evaluate') or standalone):
+        raise ContractError('HPO Model4 storage requires its concrete owned collector')
+    if config.run.split != ('validation' if command == 'evaluate' else 'train'):
+        raise ContractError('HPO collector role differs from its exact runtime split')
+
+
 def require_storage_command(config: ExperimentConfig, command: str, *, standalone: bool = True) -> None:
     if command != 'validate':
         require_legacy_player_entry(config)
     if getattr(getattr(config,'run',None),'inference_service',None) is not None and command not in ('train','validate') and not (command=='collect' and not standalone):
         raise ContractError('shared serving currently requires owned ordinary PPO training')
     if type(getattr(config, 'model', None)) is ConfiguredNeuralModelV4:
-        from gf_cli.hpo_config import HPOExperimentConfig
-        if type(config) is not HPOExperimentConfig or command not in ('collect','evaluate') or standalone:
-            raise ContractError('HPO Model4 storage requires its concrete owned collector')
-        if config.run.split!=('validation' if command=='evaluate' else 'train'):
-            raise ContractError('HPO collector role differs from its exact runtime split')
+        _require_hpo_model4_storage(config, command, standalone=standalone)
         return
     if not isinstance(config, GroupPackExperimentConfig):
         return

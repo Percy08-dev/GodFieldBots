@@ -831,6 +831,7 @@ class RustEvaluationData:
         self.originals: _RetainedInferenceFiles | None = None
         self.scan: _FundedEvaluationScan | None = None
         self.reference: Any = None
+        self.release_reference: Any = None
         self._closed, self._exposed, self._failed = False, False, False
         self._handoff_state = 'PREPARING'
         self._reference_started = False
@@ -1027,7 +1028,7 @@ class RustEvaluationData:
                 actual = ownership
                 if actual is None:
                     actual = (self.ownership if not self._exposed else scope.enter_context(run_lock(self.directory)))
-                _reference_transition(actual, self.binding, 'release', state_sha256=self.state_sha256,
+                self.release_reference = _reference_transition(actual, self.binding, 'release', state_sha256=self.state_sha256,
                     pool=self.pool, parent_budget=self.parent_budget, deadline=self.deadline,
                     acquisition_sha256=self.reference.receipt_sha256)
             self.reference = None

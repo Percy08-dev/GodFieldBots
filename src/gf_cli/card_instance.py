@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import math
 import stat
 import time
@@ -275,6 +276,7 @@ async def _run_corrected(loaded: LoadedConfig, command: str,
                          _final_validation_context: Any = None,
                          _hpo_evaluation_job: Any = None,
                          _hpo_evaluation_cleanup: Any = None,
+                         _rust_evaluation_data: Any = None,
                          resident_pool: Any = None, progress: Any = None, _owned_collection: Any = None) -> tuple[Path, Any] | PackedRunResult:
     config = loaded.config
     from gf_cli.hpo_config import HPOExperimentConfig
@@ -294,7 +296,12 @@ async def _run_corrected(loaded: LoadedConfig, command: str,
     elif _hpo_evaluation_job is not None:
         raise ContractError('evaluation job cannot authorize a training/final collection')
     assert isinstance(config.actions, ActionConfigV3)
-    require_storage_command(config, command, standalone=collection is None and owned_ledger is None)
+    if _rust_evaluation_data is None:
+        require_storage_command(config, command, standalone=collection is None and owned_ledger is None)
+    else:
+        if command != 'evaluate' or eval_plan is None:
+            raise ContractError('Rust evaluation DATA cannot authorize another collector role')
+        _require_rust_evaluation_storage(loaded, eval_plan, _hpo_evaluation_job, artifact_inputs, _rust_evaluation_data)
     if config.server.external_url is not None or config.server.source_dir is None:
         raise ContractError("corrected baseline collection requires locally managed verified source/binary evidence")
     started = time.monotonic() if started is None else started
@@ -873,6 +880,35 @@ def hpo_artifact_budget(loaded: LoadedConfig,bindings: dict[str,RuntimePolicyBin
     return result
 
 
+def _require_rust_evaluation_storage(loaded: LoadedConfig, plan: Any, job: Any,
+                                     artifacts: Any, data: Any) -> None:
+    from gf_cli.config import _require_hpo_model4_storage
+    from gf_cli.hpo_config import HPOExperimentConfig
+    from gf_cli.hpo_evaluation import HpoEvaluationPlan
+    from gf_models.card_instance_artifacts import RetainedGameArtifacts
+    from gf_training.hpo_gpu_lease import GpuJob
+    from gf_training.rust_player_evaluation import RustEvaluationData, final_policy_binding
+    if (type(data) is not RustEvaluationData or type(plan) is not HpoEvaluationPlan or type(job) is not GpuJob
+            or type(artifacts) is not RetainedGameArtifacts or data.job is not job or data.provider is not artifacts):
+        raise ContractError('actual SAME Rust evaluation DATA/provider/Fresh plan/job required')
+    plan.require(loaded, gpu_job=job)
+    data.require()
+    config = loaded.config
+    if (type(config) is not HPOExperimentConfig or config.hpo_spec['schema_version'] != 6
+            or getattr(config.run, 'inference_service', None) is not None):
+        raise ContractError('explicit schema6 Fresh validation storage required')
+    _require_hpo_model4_storage(config, 'evaluate', standalone=False)
+    state, metadata = json.loads(data._state), json.loads(data._metadata)
+    label, binding = final_policy_binding(state, metadata)
+    parent = plan.linkage['left_parent']
+    if (plan.bindings.get(label) != binding or parent['policy_label'] != label
+            or parent['run_path'] != str(data.directory) or parent['source_receipt_sha256'] != hashlib.sha256(data._metadata + b'\n').hexdigest()
+            or parent['training_seed'] != state['seed'] or data.binding['token'] != job.ticket
+            or any(parent[name] != data.binding[name] for name in
+                ('run_id', 'generation', 'inference_sha256', 'generation_sha256'))):
+        raise ContractError('Rust evaluation DATA differs from exact frozen Fresh request')
+
+
 def _require_hpo_evaluation_retirement(plan: HpoEvaluationPlan,gpu_job: GpuJob,
                                         ledger: ReservationLedger, *, resident_pool: Any = None) -> None:
     """Post-admission cleanup checks never reopen or extend the admission window."""
@@ -897,7 +933,8 @@ def _require_hpo_evaluation_retirement(plan: HpoEvaluationPlan,gpu_job: GpuJob,
 
 async def collect_hpo_evaluation(loaded: LoadedConfig, plan: HpoEvaluationPlan, *, gpu_job: GpuJob,
                                artifact_inputs: RetainedGameArtifacts,
-                               _cleanup_observation: _HpoEvaluationCleanupObservation, progress: Any = None) -> PackedRunResult:
+                               _cleanup_observation: _HpoEvaluationCleanupObservation, progress: Any = None,
+                               _rust_evaluation_data: Any = None) -> PackedRunResult:
     from gf_cli.hpo_evaluation import _HpoEvaluationCleanupObservation
     if type(_cleanup_observation) is not _HpoEvaluationCleanupObservation:
         raise ContractError('actual invocation-bound evaluation cleanup observation required')
@@ -907,7 +944,8 @@ async def collect_hpo_evaluation(loaded: LoadedConfig, plan: HpoEvaluationPlan, 
     observe(progress, {'phase':'evaluate'})
     try:
         result = await _collect_hpo_evaluation(loaded, plan, gpu_job=gpu_job,
-            artifact_inputs=artifact_inputs, _cleanup_observation=observation,**({} if progress is None else {'progress':progress}))
+            artifact_inputs=artifact_inputs, _cleanup_observation=observation,
+            **({} if _rust_evaluation_data is None else {'_rust_evaluation_data': _rust_evaluation_data}),**({} if progress is None else {'progress':progress}))
     except BaseException as error:
         observation._core_error, observation._core_phase = error, 'failed'
         raise
@@ -923,7 +961,8 @@ def _require_hpo_evaluation_policy(binding: RuntimePolicyBinding) -> None:
 
 async def _collect_hpo_evaluation(loaded: LoadedConfig,plan: HpoEvaluationPlan,*,gpu_job: GpuJob,
                                    artifact_inputs: RetainedGameArtifacts,
-                                   _cleanup_observation: _HpoEvaluationCleanupObservation, progress: Any = None) -> PackedRunResult:
+                                   _cleanup_observation: _HpoEvaluationCleanupObservation, progress: Any = None,
+                                   _rust_evaluation_data: Any = None) -> PackedRunResult:
     """Borrow the outer evaluator's exact custody owner through the one collector."""
     from gf_cli.hpo_config import HPOExperimentConfig
     from gf_cli.hpo_evaluation import HpoEvaluationPlan, ResidentHpoEvaluationPlan
@@ -940,7 +979,10 @@ async def _collect_hpo_evaluation(loaded: LoadedConfig,plan: HpoEvaluationPlan,*
         raise ContractError('evaluation requires concrete corrected packed HPO validation runtime')
     if canonical(loaded.effective)!=canonical(asdict(config)) or loaded.sha256!=digest(loaded.effective):
         raise ContractError('evaluation caller changed its effective configuration')
-    require_storage_command(config,'evaluate',standalone=False)
+    if _rust_evaluation_data is None:
+        require_storage_command(config,'evaluate',standalone=False)
+    else:
+        _require_rust_evaluation_storage(loaded, plan, gpu_job, artifact_inputs, _rust_evaluation_data)
     _require_actions(loaded)
     op=config.hpo_spec['operating']
     ledger=gpu_job.ledger
@@ -979,6 +1021,7 @@ async def _collect_hpo_evaluation(loaded: LoadedConfig,plan: HpoEvaluationPlan,*
             artifact_inputs=artifact_inputs,runtime_evidence=evidence,resource_admission=max(admissions,key=lambda row:row['peak_cuda_bytes']),
             collection=plan,owned_ledger=ledger,_hpo_evaluation_job=gpu_job,
             _hpo_evaluation_cleanup=_cleanup_observation,progress=progress,
+            **({} if _rust_evaluation_data is None else {'_rust_evaluation_data': _rust_evaluation_data}),
             **({} if resident_runtime is None else {'resident_pool':resident_runtime.pool}))
     finally:
         from gf_common.hpo_progress import observe
