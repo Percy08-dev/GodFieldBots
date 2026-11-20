@@ -497,3 +497,36 @@ Existing schema 1–5 command and evaluation defaults remain compatible.
 Both independent code reviews are READY after the pre-cursor repair. Genuine
 two-operation campaign, original process, full Cold and CUDA restoration
 evidence remain mandatory for runtime acceptance.
+
+## Physical verification and opt-in delivery
+
+The public Model3 and schema 6 Model4 paths passed bounded same-process
+learning, save, CUDA restore and independent Original, Replay, numerical and
+saved-state checks. The actual two-seed campaign also exercised the existing
+Fresh evaluator after its original training host was reaped and passed
+completed-history resume. Both A/B modes preserve the scoped information and
+ownership boundaries above.
+
+The measured 24-command comparison selected Tokio W2, using the approved
+3% speed band and the lower measured peak PSS at C16. The actual selected
+runtime passed CUDA pause and same-clock resume at both deployment entrances.
+HPO retains explicit opt-in because the whole invocation exceeded the approved
+wall increase in both pairs. Ordinary's two raw pairs met the thresholds and
+its observation uncertainty remains material at the narrower measured margin.
+Both entrances therefore retain explicit selection.
+
+A post-exit tool validates original observer coverage and authenticated typed
+legacy journals. Its legacy broker validation recognizes only the measured
+sequence around the original host's invocation-bind transition. The verifier
+projects DATA and supplies no new execution or eligibility authority. The
+24 primary and 12 calibration observations retain the original producer and
+independent audits. Source identity, clocks and stored compatibility stay
+attached to each original parent.
+
+After five empty Kineto exports, the profiled route uses the supported
+synchronous Torch Python serializer through the original retained FD.
+The five fixed replacements captured actual CUDA activities in the original
+logical window. Timings under the profiling recipe remain separate.
+[Verification and results](../verification/rust-player-runtime.md) and
+[explicit CUDA configuration](../design/rust-player-runtime-integration.md)
+record the applicable conditions and scope.

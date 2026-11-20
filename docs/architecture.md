@@ -27,26 +27,29 @@ independent correctness and conformance after two repair rounds, including actua
 ordinary CPU single-use and current-source Model4 CUDA returned-Parent handoff.
 The generic same-host CUDA account also passes scoped independent correctness
 and conformance after actual Source-funding, exception-chain cleanup and historical
-path-containment repairs. It estimates managed phase demand; actual CUDA capacity
-and the complete learning/resume measurements remain Task6/7. The artifact-retention and healthy-empty DATA/ownership component also passes
+path-containment repairs. It estimates managed phase demand. Actual CUDA
+and process memory observations cover the recorded workloads. The
+artifact-retention and healthy-empty DATA/ownership component also passes
 scoped independent correctness/conformance after historical completion-schema
-and protected-inventory repairs. Genuine pruned-checkpoint resume remains Task6;
-source review proves a healthy zero-frame engine cohort unreachable under the
-current paired/repeated-seed contract, with its explicit revisit condition in
-[the verification proof](design/rust-player-runtime-empty-feasibility.md). User CLI execution and deployment memory/adoption remain
-in progress. New runtime/producer/prepared/exit/physical
-identities preserve historical receipts; actual scientific cold Source completion
-and evaluation handoff remain to be connected. A fully integrated new runtime
-and performance/default adoption are unaccepted; required evidence is
-tracked in [the verification record](verification/rust-player-runtime.md).
+and protected-inventory repairs. The public CPU pruned-checkpoint case
+resumes to a third committed update after actual old payload retirement.
+Source review establishes that a healthy zero-frame engine cohort is
+unreachable under the current paired/repeated-seed contract, with its revisit
+condition in [the verification proof](design/rust-player-runtime-empty-feasibility.md).
+The public Model3 and schema 6 Model4 routes pass bounded learning, save, resume
+and independent Original, Replay, numeric and saved-state audits. The HPO
+controller imports only qualified final-D parents for separate Fresh evaluation.
+Deployment comparison and entrance recommendations are recorded with the results
+and limitations in [the verification record](verification/rust-player-runtime.md).
 
 The standalone std-only Rust [process observer](design/rust-player-runtime-observer.md)
 passes scoped correctness/conformance after original-file and ancestry-binding
 repairs, with19 command-level and14 helper checks. It observes an actual command
 without a Python controller or Source/termination authority. Application telemetry also passes scoped independent correctness/conformance
 after diagnostic processing isolation, terminal profile-window, closed scope and
-relay-observation ordering repairs. Actual merged measurement, overhead
-calibration and the approved comparison/adoption protocol remain open.
+relay-observation ordering repairs. The verification record includes the
+matched physical comparison, observation calibration and the per-entrance
+opt-in decision.
 
 The pure [native MLP row storage estimate](design/rust-player-runtime-native-cuda.md)
 also passes scoped correctness/conformance and57 CPU checks. It compiles immutable
@@ -63,9 +66,9 @@ can return to a distinct CPU control host only after actual original retirement;
 durable FAIL/disposition acknowledgment remains separate from parent release and
 scientific completion. Pending terminal Stop ACKs require strict settlement then
 actual EOF. An uncertain raw close never retries a numeric FD. Fixed control-only
-CPU cases and fresh57 Python/3 native terminal checks pass. Public application
-HPO application routing, genuine evaluation import, full CUDA/restart/audit
-populations and all performance/default decisions remain required.
+CPU cases and fresh57 Python/3 native terminal checks pass. The subsequent
+public HPO composition and supervised CUDA runs exercise those boundaries with
+the actual original processes and retained receipts.
 
 The [explicit post-host clock and launch factory](design/rust-player-runtime-public-clock.md)
 passes independent correctness/conformance after one repair round. New native-only
@@ -87,8 +90,9 @@ pinned settings reconstruct without rereading original TOMLs; actual Store OFD
 and exact original soft/hard clocks survive sealed launch. Root333 CPU checks and
 scoped lint/typing pass. The explicit schema 6 route now uses the supervised
 controller and existing Fresh evaluation workers. The wiring has passed
-independent code review and bounded CPU checks. Genuine integrated execution,
-resume, resource retirement and performance qualification remain required.
+independent code review and bounded CPU checks.
+Actual small two-seed public execution and completed-history resume verify
+the training and evaluation admission order.
 
 The evaluation DATA bridge has passed independent correctness and design
 conformance. It checks the exact qualified training parent, prepares the
@@ -96,8 +100,8 @@ independent evaluation account and holds original inference FDs and references
 before the training parent closes. Historical import uses a current actual
 owner and independently rechecks the saved Original, Replay, numeric and
 checkpoint chain. After a cleanup error the owners of still-live data keep
-their reservations through positive retirement. Genuine combined campaign
-acceptance remains in progress.
+their reservations through positive retirement. The bounded public campaign
+verifies this path across two successful seeds and their separate evaluation jobs.
 
 [ADR0053](adr/0053-mlp-shared-batch-inference.md) implements the owner's
 [shared MLP design](design/mlp-shared-batch-inference.md) under Simulator

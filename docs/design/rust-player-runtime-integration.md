@@ -1,8 +1,8 @@
 # Rust player learning integration seams
 
-Status: accepted bounded integration refinement for ADR0054 after independent
-architecture READY. Implementation conformance remains pending. The main design,
-record inventory, storage and supervision contracts remain authoritative.
+This integration refinement for ADR0054 passed independent architecture
+and implementation review. The main design, record inventory, storage and
+supervision contracts define the checked boundaries.
 
 ## Configuration and identity
 
@@ -40,9 +40,9 @@ Declared participants are initially MLP/Random/Heuristic/Refresh. HPO6 derives
 study identity from the base science fields, reconciles only an exactly matching
 ordinary selector and keeps spec6 authoritative. Legacy process admission is
 explicitly refused for6; its evaluation worker relation retains its old purpose.
-Public ordinary pure validate is available, while new execution and public HPO
-resource validation remain closed until their genuine planner/supervisor route.
-Existing modes/defaults retain their meanings.
+The public ordinary and HPO routes validate their selected configurations
+and execute through the verified supervisor. Existing modes and defaults
+retain their meanings.
 
 ## Original control and lock ownership
 
@@ -118,3 +118,53 @@ numerical owners on identical CPU/CUDA input, named weights/Adam/CPU+CUDA RNG/
 PCG64/control state. Then run the approved real Model3/4 continuous2 and
 pause1/resume2 originals/Replay/numeric/saved-state/process-tree checks and timing
 matrix. Component tests do not close the learning or deployment evidence gates.
+
+## Explicit CUDA MLP configuration
+
+Build and install the runtime wheel from this checkout. The wheel binds the
+release supervisor to the Native extension. The installed CLI or
+`uv run --no-sync gf-bots` preserves that installation.
+
+```bash
+uv run --no-sync python tools/build_rust_player_wheel.py --python .venv/bin/python --out dist/rust-player-runtime
+uv pip install --python .venv/bin/python --reinstall-package godfieldbots-native dist/rust-player-runtime/godfieldbots_native-*.whl
+```
+
+For ordinary Model3, copy
+`configs/experiments/mlp-shared-inference-smoke.toml`. Keep its existing CUDA
+MLP binding, Python participant reader and pinned external Simulator. Supply
+explicit Pack `[storage]` with `budget_mib = 2048` and your output paths.
+Add `post_host_seconds = 30` to its existing `[run]` timer declaration.
+Replace `[run.inference_service]` with the following `[run.player_runtime]` declaration.
+
+```toml
+[run.player_runtime]
+mode = "rust-player-runtime-v1"
+scheduler = "tokio"
+game_concurrency = 2
+player_worker_threads = 2
+max_batch_size = 2
+formation_wait_ms = 1.0
+```
+
+Keep `game_concurrency` equal to `run.concurrency` and
+`execution_seconds < wall_seconds - post_host_seconds`. Launch with
+`.venv/bin/gf-bots train --config FILE --run-dir PARENT --mode fresh`.
+Resume a paused parent using `--mode resume` with the original config,
+producer, boot and absolute deadlines.
+
+For HPO Model4, copy `configs/hpo/mlp-shared-inference-scaling.toml` and
+use `schema_version = 6`. Under `[runtime]`, declare the same six fields
+as above with C4/B4, W2 and Tokio. Match `operating.game_concurrency = 4`,
+keep its 4 GiB collector and recording budget, and declare
+`operating.post_host_seconds = 30` and
+`operating.source_budget_bytes = 2684354560`. Match the Source capacity
+with `memory_budget_mib = 2560` under `[preprocessing]` in a copy of its
+base experiment. Point `base_experiment` to that copy. Keep the existing
+evaluation configuration for Fresh.
+Check the configuration with `.venv/bin/gf-bots hpo validate --config FILE`.
+Launch with `.venv/bin/gf-bots hpo run --config FILE --campaign-dir CAMPAIGN --mode fresh`.
+
+Tokio W2 is the measured candidate for both explicit routes. The
+[verification record](../verification/rust-player-runtime.md) describes the
+paired gates and why both entrances retain explicit selection.

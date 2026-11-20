@@ -1185,3 +1185,263 @@ admitted pool funds actual independent decode workspace with its remaining
 capacity. No live training limit or numerical recipe changed. Fresh large
 Model4 Cold, CUDA/ordinary restoration, fault scope and formal comparison
 remain separate acceptance requirements.
+
+## Final-source CUDA restoration and fault acceptance
+
+All six observed functional invocations used Bots
+`b603e1610a45ed9ac2420cb9a6468662d689ee91`, the matching installed
+`381ef85a` native build and the pinned Simulator `072dabbc`. Model4 used
+Fixed C4/W2/B4 with 2,560 MiB Source. Model3 used Fixed C2/W2/B2 with
+the actual ordinary 16-game preset. Each pair reused its exact configuration,
+source build, original clock bits and original absolute deadlines.
+
+| Lane | Invocation | Natural games | All-seat decisions | Adam steps at exit | Whole wall, s | Peak complete PSS, bytes | Samples witnessing its one training Python |
+| --- | --- | --- | --- | ---: | ---: | ---: | ---: |
+| Model4 | Continuous | 32 + 32 | 652 + 567 | 24 | 133.743 | 2,553,847,808 | 937 |
+| Model4 | Pause | 32 | 652 | 12 | 77.186 | 2,515,604,480 | 545 |
+| Model4 | Resume | 32 | 567 | 24 | 104.018 | 2,501,997,568 | 665 |
+| Model3 | Continuous | 16 + 16 | 436 + 323 | 16 | 365.424 | 2,500,593,664 | 3309 |
+| Model3 | Pause | 16 | 436 | 8 | 218.066 | 2,478,065,664 | 1976 |
+| Model3 | Resume | 16 | 323 | 16 | 121.552 | 2,464,660,480 | 988 |
+
+Every original host retired cooperatively with exit 0, confirmed descendants
+reaped and no signals. Model4 has three independently checked physical GPU
+namespace termination receipts. The original-command observer supplied positive
+Child.wait and sampled a maximum of one Python in each original training span.
+The independent verifier checked the committed Original, Replay and numeric
+audit chain, full current saved pairs, and current-operation telemetry. Each
+resume matched named weights and Adam, CPU and CUDA generator state, and PCG64
+at its saved update boundary. Model4's two committed updates use 628 decisions
+at a configured D10000 and remain healthy incomplete and ineligible for HPO
+evaluation. The actual runs and verification data are in
+`components/final-source-cuda-b603e16`. Shared GPU load varied in these
+functional cases. The formal timing populations supply the comparison evidence.
+
+The fresh CPU pruned-checkpoint case under the same source persisted five
+generation-one payload deletions with actual receipts and kept its
+`inference.json`. It paused at two updates and resumed to three updates and
+24 Adam steps, with full saved-state and independent readback. The observer
+measured 224.206 s and 127.456 s. The readback spans both original receipts and
+reports the resumed generation's 16 actual natural games and 257 all-seat
+decisions. The earlier failure remains preserved in its own parent.
+Evidence is in `components/public-pruned-resume-repaired`.
+
+The final focused matrix passed 41 CPU cases (16.10 s), 13 current Rust
+kernel/namespace cases (41.23 s), and two explicit CUDA checks (2.18 s).
+CPU coverage includes both A/B schedulers at W1/W2, repeat command identity,
+delayed ACK, queue ownership and actual storage failure injection. The CUDA
+nodes verify actual response cancellation and initialized RNG preservation.
+The installed public ordinary route additionally recorded actual SIGKILL of the
+original training host, reaped the known descendants and issued no Cold or
+completion. The case-specific HPO fault harness injected a typed AcceleratorError
+after a successful CUDA row under actual public admission. It retained the
+failed original and complete physical retirement, issued zero evaluation or
+completion receipts and recorded zero objective values in SQLite. Optuna retains
+the unresolved RUNNING trial rather than publishing success.
+
+The same public CLI refused a missing companion inventory and a tampered
+executable from isolated installed-wheel test environments before acquiring a
+parent. The app-only wheel's old help commands worked with just its base
+dependencies. Offline package resolution could not find NumPy, so the basic
+environment reused its exact installed dependencies as copies and validated
+that optional modules were absent. The successful case and failed setup log
+are preserved together under `components/final-fault-b603e16`.
+
+Independent correctness and architecture reviewers accepted the frozen merged
+production code. The correctness reviewer separately inspected all six original
+observations, clock/restore and failure artifacts and accepted the functional
+gate. Neither read-only review is a substitute for the measured results above.
+
+## Physical comparison and entrance decisions
+
+All 24 primary and 12 calibration commands used the frozen Bots
+`b603e1610a45ed9ac2420cb9a6468662d689ee91` producer, installed Native
+`381ef85a`, matching companion `96f064a2`, Simulator
+`072dabbca1458c9526897781d2fd64edeeb4f9ca` and Simulator binary
+`76aff19c2f720a572bfe422d9b1e089a1467f253038cda66de3d8c35180d0f7d`.
+The RTX 5070 Ti observations, boot identity, exact command, configurations,
+physical waits, sampling coverage and independent readbacks are archived for
+every case under the primary checkout's
+`runs/rust-player-runtime-v1/populations/b603e16`. The observer binary hash is
+`49194927a495ee85dc4f6e3d0a7e2d666cb495707f6710d5b91b11bcbf562882`.
+All primary commands and audits passed. Each Model4 command kept its bounded
+D10000 lineage healthy incomplete at two updates.
+
+Model4 used width 192, seed 17, four epochs, minibatch 128, 32 games per update
+and formation wait 1 ms. The declared managed limits were RAM 24 GiB and CUDA
+12 GiB. The primary C8 runs used 4 GiB recording and primary C16 used
+5 GiB. Both separate calibration blocks used their predeclared 5 GiB. Both
+shared HPO and native used 2,560 MiB Source. C4 follows the existing 4 GiB
+recording preset, and matched ordinary C2 follows the existing 2 GiB capacity,
+width 128 and 16 games per update. The recording clarification was fixed
+before deploying or profiling either entrance.
+
+### C8 scaling
+
+| In order | First collection games/s | Second collection games/s | Combined games/s | Original wall, s | Peak PSS, decimal GB |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Legacy before | 0.934 | 1.320 | 1.094 | 78.259 | 9.495 |
+| Tokio W1 | 2.830 | 3.642 | 3.185 | 85.497 | 2.563 |
+| Fixed W1 | 2.886 | 3.559 | 3.187 | 84.562 | 2.555 |
+| Tokio W2 | 3.039 | 3.426 | 3.221 | 85.640 | 2.551 |
+| Fixed W2 | 2.772 | 3.477 | 3.085 | 86.124 | 2.563 |
+| Tokio W4 | 2.937 | 3.490 | 3.190 | 84.513 | 2.585 |
+| Fixed W4 | 3.311 | 3.987 | 3.618 | 79.662 | 2.587 |
+| Tokio W8 | 2.977 | 3.606 | 3.261 | 84.396 | 2.599 |
+| Fixed W8 | 2.865 | 3.606 | 3.193 | 85.235 | 2.602 |
+| Legacy after | 0.907 | 1.306 | 1.070 | 80.276 | 9.492 |
+
+Tokio W2 has the lowest peak PSS among its cases within 3% of its fastest
+collection. Fixed W4 has the highest Fixed rate with the next rate outside
+the 3% band.
+
+### C16 scaling
+
+| In order | First collection games/s | Second collection games/s | Combined games/s | Original wall, s | Peak PSS, decimal GB |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Legacy before | 0.953 | 1.343 | 1.115 | 79.527 | 14.560 |
+| Tokio W2 | 2.736 | 3.643 | 3.125 | 86.069 | 2.598 |
+| Fixed W4 | 2.947 | 3.576 | 3.231 | 84.181 | 2.603 |
+| Fixed W4 | 3.020 | 3.584 | 3.278 | 83.763 | 2.604 |
+| Tokio W2 | 2.975 | 3.629 | 3.270 | 83.811 | 2.596 |
+| Legacy after | 0.994 | 1.332 | 1.139 | 78.422 | 14.568 |
+
+Each scheduler's rank uses 128 actual natural games divided by the sum of
+its four collection intervals. Tokio W2 measures 3.195545 games/s with
+maximum complete peak PSS 2,597,924,864 bytes. Fixed W4 measures 3.254220
+games/s with maximum complete peak PSS 2,604,149,760 bytes. Both fall in the
+prescribed 3% band. Tokio W2 is the fixed deployment candidate under the lower
+measured PSS tie-break.
+
+The exact reports retain both collection ordinals, all-seat accepted
+decisions/s, search candidate sizes and cutoff reasons, effective batch
+histograms, event-page and inference round-trip p95/p99 bounds, PyO3 calls,
+host stage timing, native ingress and writer FIFO or legacy RPC queue
+occupancy and waits. The process observer and derived report preserve sampled
+CPU ticks and actual thread observations per process, with role labels where
+observed. Shared host roles lack per-thread CPU attribution. Complete PSS
+peaks are physical process sweep observations and remain separate from planned
+resource grants. See `primary-by-update.json`, `verified-primary-manifest.json`
+and `selector-results.json` in the archive.
+
+### Paired deployment gates
+
+| Entrance | Pair | Collection rate, new/old | Original wall change | Peak PSS old → new, decimal GB | Raw 3% and PSS criteria |
+| --- | ---: | ---: | ---: | ---: | --- |
+| HPO C4/B4 | 1 | 2.927× | +8.079% | 6.940 → 2.532 | Fail wall |
+| HPO C4/B4 | 2 | 2.929× | +9.038% | 6.953 → 2.539 | Fail wall |
+| Ordinary C2/B2 | 1 | 7.764× | +1.488% | 5.627 → 2.496 | Pass |
+| Ordinary C2/B2 | 2 | 8.219× | +2.451% | 5.632 → 2.496 | Pass |
+
+The actual selected Tokio W2 route passed its additional CUDA pause and
+same-clock resume checks at both deployment entrances. They restored exact
+named weights, Adam, CPU and CUDA RNG and PCG64 state, then audited the last
+update using the existing original and numeric rules. These cases remain in
+`components/final-selected-tokio-b603e16` alongside the continuously run
+deployment candidates and preserve separate functional evidence.
+
+### Observation cost
+
+| Calibration | Method | Collection rate on/off change | Whole wall on/off change |
+| --- | --- | ---: | ---: |
+| C8 | Legacy | −1.689% | +3.041% |
+| C8 | Tokio W4 | +1.399% | −0.067% |
+| C8 | Fixed W4 | +5.655% | −1.063% |
+| C16 | Legacy | +0.763% | +2.618% |
+| C16 | Tokio W2 | −2.113% | +1.064% |
+| C16 | Fixed W4 | +0.148% | +0.040% |
+
+Before the primary runs, GPU-device readings were 4–25% at C8, 16–26% at
+C16, 16–20% at deployment C4 and 17–23% at deployment C2. Corresponding
+free-memory ranges were 7,750–13,135 MiB, 10,600–10,812 MiB, 10,631–10,702
+MiB and 10,570–10,701 MiB. These are actual pre-command observations on the
+same shared card. The original archive retains the conditions of every run.
+
+Every calibration invocation audited 32 natural games and 652 all-seat
+acknowledgements. The matched one-update estimates combine instrumentation
+effects and run variability. The observed legacy whole-wall changes exceed
+the ordinary pairs' 1.51 and 0.55 percentage-point margins. These Model4
+calibrations leave the observation impact at the closely passing Model3
+margin unresolved. Raw timings remain as measured.
+
+Keep both entrances explicit opt-in. HPO exceeds the approved wall increase
+in both deployment pairs. Ordinary's measured pairs meet the raw thresholds,
+with unresolved observation bias at the acceptance margin. Existing presets
+and historical parent bindings retain their recorded execution modes.
+See the [explicit configuration](../design/rust-player-runtime-integration.md).
+
+The post-exit verifier repairs followed actual observer and old-layout
+failures. It reads both enabled and disabled sampling from their original
+records, retains unknown executable coverage, projects only the exact named
+typed participant journals from validated legacy packs, and recognizes the
+actual shared coordinator's invocation-bind transition from adjacent closed
+original-host phases. All 36 original measurements were independently
+re-audited without a timing rerun. The final nonoverlap tightening was also
+rechecked against all ten exact legacy enabled records. Their complete
+telemetry was unchanged. Earlier failed readbacks remain in the archive.
+
+## CUDA activity profiles
+
+The initial five original profile commands exited normally. Their three-callback
+profile receipts marked empty files as complete. Those receipts and empty
+original traces remain under `populations/b603e16/profile-*`. A CPU-only
+probe reproduced the default Kineto export failure on the retained file FD.
+The pinned supported Python exporter wrote a valid trace through that same FD.
+A separate CUDA worker probe then exported 20,965 actual bytes with correlated
+GEMM and HtoD/DtoH events. The raw probe and hashes are under
+`components/profile-export-probe-b603e16`.
+
+The reviewed repair in `f6c8e458a81d4c909eb9c66f289d42b8fc8f0b57` uses the
+synchronous Python serializer through the original retained file FD. Success
+requires actual nonempty bytes and positive custody retirement. The original
+forward boundaries and activity set remain in force. The bounded replacement
+protocol applies one run per demonstrably empty condition and preserves all
+primary and calibration data. Its clarification is archived as
+`protocol/profile-export-repair-clarification.md` with SHA256
+`1d7a31d11856d9731cff19902e86a71494780fa4e4509515c05a340afbe2e3cf`.
+
+All five replacement commands and independent Original, Replay, numeric and
+saved-state readbacks passed. Each trace hash/size matches its actual profile
+receipt. Every recorded kernel and copy used in the projection correlated to
+the actual scoped worker's CUDA runtime or driver event. The parser assigns
+forward kernels using the two actual worker annotation intervals and records
+copies by physical direction.
+
+| Profile in order | Scored rows in callbacks 1/2/3 | HtoD, µs | Tagged forward kernels, µs | All DtoH, µs | DtoH outside forward, µs |
+| --- | --- | ---: | ---: | ---: | ---: |
+| Model4 C16 legacy | 1 / 8 / 4 | 98.586 | 5385.206 | 68.259 | 38.211 |
+| Model4 C16 Tokio W2 | 1 / 1 / 1 | 18.879 | 920.583 | 15.008 | 8.384 |
+| Model4 C16 Fixed W4 | 1 / 1 / 1 | 26.754 | 1094.959 | 12.352 | 7.936 |
+| Model3 C2 legacy | 1 / 1 / 1 | 15.424 | 983.003 | 15.137 | 9.921 |
+| Model3 C2 Tokio W2 | 1 / 1 / 1 | 14.878 | 989.308 | 12.032 | 7.904 |
+
+The rows show sums of actual device-event durations within the declared
+post-forward-1 to post-forward-3 window. The input/forward portions cover
+callbacks 2 and 3, while the output portions cover callbacks 1 and 2.
+Outside-forward DtoH includes sampling and result return. The archived
+projection records other copy directions, bytes, counts, individual forward
+windows and every trace's identity. These sparse scopes differ by actual
+boundary and row count. The totals cannot be applied as whole-run wall
+time, GPU utilization or matched per-batch latency.
+
+Actual profile evidence is under `populations/f6c8e45`. The combined data
+and raw links are in `profile-c16-gpu-events.json` and
+`profile-ordinary-gpu-events.json`. Their SHA256 hashes are
+`6b364dd25ffc8ad85400a52a53ff6ae674e119262f13d57173184e997bbe63a9` and
+`0af7614b32ce3839f0d436729341f6acb1c06c3e0fdaec55f6ebc22e3c251582`
+respectively. The tightened legacy-host observer check independently
+reproduces both legacy profile telemetry reports unchanged.
+
+The primary checkout's `runs/rust-player-runtime-v1/final-evidence-index.json`
+indexes the 41 accepted primary, calibration and replacement-profile
+records with hash-bound configs, reports and original observer summaries.
+It also indexes the five actual trace files, selection and independent
+telemetry confirmations. Its SHA256 is
+`70cd3df12fd0cd0145e60ae040f520b3772bef1ddfa21a6d679e310b87a7e930`.
+
+The final integrated verifier passed 108 scoped CPU cases, Ruff, mypy and
+diff checks. The integrated exporter passed its 15 scoped CPU cases and
+Ruff, in addition to the actual CUDA export and replacement-profile evidence.
+The installed pinned companion handshake and the new documentation links
+pass using this worktree. Engineering and scope reviews are independent of
+the observed operating values.
