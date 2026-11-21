@@ -36,7 +36,7 @@ def _failed_operation_source_data(*, hpo=False):
     source._numeric, source._numeric_originals = None, {}
     source._proof_json = source._numeric_metadata = ''
     source._episode_digests, source.numeric_files = (), {}
-    source.collection = SimpleNamespace(require=lambda *args: None, close=lambda: None)
+    source.collection = SimpleNamespace(require=lambda *args: None, close=lambda: None, pack_verification=None)
     source._charges = [pool.budget.reserve(4096)]
     registry = SimpleNamespace(local=local, pending=source, hpo=hpo)
     source.registry = registry

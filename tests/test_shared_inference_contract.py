@@ -39,10 +39,11 @@ def test_shared_runtime_receipt_pins_source_dirty_status_and_new_inventory():
 
     from gf_common.card_instance_runtime import validate_runtime_receipt
     from gf_simulator_client.card_instance_runtime import CardInstanceRuntimeEvidence
-    root = Path('/tmp/gfb-shared-simulator-072dabb')
-    if not root.exists():
-        pytest.skip('reviewed Simulator clone unavailable')
-    owner = CardInstanceRuntimeEvidence(root/'target/release/gf-test-server',root,
+    source = Path('/tmp/gf-issue72-shared-inference')
+    binary = Path('/tmp/gfb-shared-simulator-072dabb/target/release/gf-test-server')
+    if not source.exists() or not binary.exists():
+        pytest.skip('reviewed Simulator source or binary unavailable')
+    owner = CardInstanceRuntimeEvidence(binary, source,
         contract=card_instance.shared_card_instance_contract())
     receipt = owner.preflight()
     assert receipt['schema_version'] == 2
