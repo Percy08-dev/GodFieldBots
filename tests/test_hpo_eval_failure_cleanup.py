@@ -60,6 +60,7 @@ def install_component_execution(monkeypatch, *, cpu_processes=True):
             server.stopped = False
             server.health = {'exit_code': None, 'shutdown': None, 'log_error': None}
             server.cleanup_deadline = time.monotonic() + 10
+            server.strict_cleanup_deadline = False
             server.shutdown_seconds = 5
             self._managed_server = server
             await server.stop()
