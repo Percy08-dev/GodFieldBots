@@ -222,3 +222,39 @@ with CUDA enabled. Ruff, scoped mypy across 11 source files, and
 `graph-collection.MMtWST/product-check/refresh-final/`, within the run tree
 linked from the [follow-up plan](../superpowers/plans/2026-11-21-rust-cuda-inference-performance.md).
 That plan records the queue timings, Graph shape experiment and trade-offs.
+
+## Prepared CPU sampling from the grouped CUDA path
+
+The production grouped path now passes the completed CPU FP32 probability
+slice directly to Torch multinomial. Torch enforces the weight contract.
+The scalar route keeps its conversion and validation. Each draw creates and
+seeds or restores the same participant-local generator. Rust commits only
+the accepted original full batch and keeps the state bytes opaque.
+
+The focused tests compare sample indices and generator bytes through repeated
+restore, verify invalid weights and runtime/state errors, and check global RNG
+isolation. The combined inference and batch inference files passed 108 tests
+with CUDA enabled on the final Python source. The runtime and wheel were
+unchanged.
+
+The [performance record](../superpowers/plans/2026-11-21-rust-cuda-inference-performance.md#cpu抽選とeager形状別の比較)
+contains the two alternating 256-game comparisons of the grouped CPU
+optimization, the Tokio sampler prototype and the existing route. Across
+the paired trial journals, the acknowledged actions and selected FP32
+log probabilities and values matched. The isolated Rust sampler matched all
+7,924 captured output rows and their 5,056-byte successor RNG states. The
+deferred dispatcher prototype additionally matched every one of 1,769 states
+re-exported by actual actors during two successive 32-game updates of both
+ordinary PPO and HPO. The Rust sampler prototype depended on a private Torch
+state format and used an experimental settlement boundary. The production
+route keeps the existing Torch sampler and checkpoint lifecycle.
+
+The final-source A/B used the source-matched native wheel and confirmed
+256 simultaneous games in all four trials. Model3 collection was 49.50 →
+49.06 seconds and Model4 was 54.20 → 53.13 seconds. Actions and selected
+FP32 scores matched across the final pairs. Model4's response p95 and Torch
+peak reservation increased in that pair. Both final-source routes then
+completed two successive 32-game updates, with three distinct checkpoints,
+positive Graph replay in each collection, and standard validation of
+sealed originals and saved update artifacts. The results are retained in
+`runs/cuda-sampling.vtoWD3/`.

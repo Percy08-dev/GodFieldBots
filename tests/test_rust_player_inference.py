@@ -415,6 +415,63 @@ def test_native_provisional_sampling_matches_original_and_rejects_bad_state_with
         assert torch.equal(before, torch.get_rng_state())
 
 
+def test_prepared_cpu_sampling_preserves_torch_selection_and_state():
+    import torch
+
+    from gf_models.rust_player import _sample_prepared_cpu, sampling_runtime_identity
+
+    before = torch.get_rng_state().clone()
+    generator = torch.Generator(device="cpu").manual_seed(17)
+    output = torch.tensor([[float("nan"), 0.13, 0.0, 0.31, 0.56, -1.0]], dtype=torch.float32)
+    weights = output[0, 1:5]
+    state = None
+    runtime = sampling_runtime_identity()
+    for _ in range(5):
+        expected = int(torch.multinomial(weights, 1, generator=generator).item())
+        sample, state = _sample_prepared_cpu(
+            weights, state=state, seed=17 if state is None else 99, runtime=runtime
+        )
+        assert sample == expected
+        assert state == generator.get_state().numpy().tobytes()
+    assert torch.equal(before, torch.get_rng_state())
+
+
+@pytest.mark.parametrize("weights", [[-0.1, 1.0], [float("nan"), 1.0], [float("inf"), 1.0], [0.0, 0.0]])
+def test_prepared_cpu_sampling_rejects_invalid_weights_without_global_rng(weights):
+    import torch
+
+    from gf_common.domain import ContractError
+    from gf_models.rust_player import _sample_prepared_cpu, sampling_runtime_identity
+
+    before = torch.get_rng_state().clone()
+    with pytest.raises(ContractError, match="invalid own sampling probabilities"):
+        _sample_prepared_cpu(
+            torch.tensor(weights, dtype=torch.float32),
+            state=None,
+            seed=17,
+            runtime=sampling_runtime_identity(),
+        )
+    assert torch.equal(before, torch.get_rng_state())
+
+
+def test_prepared_cpu_sampling_keeps_state_and_runtime_errors_without_global_rng():
+    import torch
+
+    from gf_common.domain import ContractError
+    from gf_models.rust_player import _sample_prepared_cpu, sampling_runtime_identity
+
+    before = torch.get_rng_state().clone()
+    runtime = sampling_runtime_identity()
+    weights = torch.tensor([0.2, 0.8], dtype=torch.float32)
+    for state, tag, message in (
+        (b"bad-state", runtime, "invalid native participant Torch state"),
+        (None, "foreign-runtime", "native participant Torch sampling runtime mismatch"),
+    ):
+        with pytest.raises(ContractError, match=message):
+            _sample_prepared_cpu(weights, state=state, seed=17, runtime=tag)
+    assert torch.equal(before, torch.get_rng_state())
+
+
 def inference_service():
     from gf_common.structured_layout import CORRECTED_CARD_INSTANCE_LAYOUT as layout
     from gf_models.rust_player import RustPlayerInference, serialized_torch

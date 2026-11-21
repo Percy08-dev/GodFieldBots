@@ -63,9 +63,7 @@ def tensor_views(arrays: dict[str, np.ndarray], *, device: str) -> dict[str, Any
     }
 
 
-def provisional_sample(
-    probabilities: Any, *, state: bytes | None, seed: int, runtime: str
-) -> tuple[int, bytes]:
+def _participant_sampling_generator(*, state: bytes | None, seed: int, runtime: str) -> Any:
     import torch
 
     if runtime != sampling_runtime_identity():
@@ -80,6 +78,15 @@ def provisional_sample(
             generator.set_state(torch.from_numpy(np.frombuffer(state, dtype=np.uint8).copy()))
         except (RuntimeError, TypeError, ValueError) as exc:
             raise ContractError("invalid native participant Torch state") from exc
+    return generator
+
+
+def provisional_sample(
+    probabilities: Any, *, state: bytes | None, seed: int, runtime: str
+) -> tuple[int, bytes]:
+    import torch
+
+    generator = _participant_sampling_generator(state=state, seed=seed, runtime=runtime)
     values = probabilities.detach().to("cpu", dtype=torch.float32, non_blocking=False).reshape(-1)
     if (
         not bool(torch.isfinite(values).all())
@@ -89,6 +96,21 @@ def provisional_sample(
         raise ContractError("invalid own sampling probabilities")
     sample = int(torch.multinomial(values, 1, generator=generator).item())
     return sample, generator.get_state().numpy().tobytes()
+
+
+def _sample_prepared_cpu(
+    probabilities: Any, *, state: bytes | None, seed: int, runtime: str
+) -> tuple[int, bytes]:
+    """Sample one FP32 row from the grouped path's completed CPU transfer."""
+    import torch
+
+    generator = _participant_sampling_generator(state=state, seed=seed, runtime=runtime)
+    # Torch validates finite, nonnegative weights with a nonzero sum.
+    try:
+        selected = torch.multinomial(probabilities, 1, generator=generator)
+    except RuntimeError as exc:
+        raise ContractError("invalid own sampling probabilities") from exc
+    return int(selected.item()), generator.get_state().numpy().tobytes()
 
 
 class RustPlayerInference:
@@ -638,8 +660,12 @@ class RustPlayerInference:
                 raise ContractError("nonfinite shared MLP output")
             at = time.perf_counter()
             try:
-                sample, next_state = provisional_sample(output[index, size:size + n],
-                    state=row["rng_state"], seed=row["sampling_seed"], runtime=self.runtime)
+                sample, next_state = _sample_prepared_cpu(
+                    output[index, size:size + n],
+                    state=row["rng_state"],
+                    seed=row["sampling_seed"],
+                    runtime=self.runtime,
+                )
             finally:
                 self.timings["sampling"] += time.perf_counter() - at
             at = time.perf_counter()
