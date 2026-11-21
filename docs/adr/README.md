@@ -14,6 +14,31 @@
 
 ## 一覧
 
+[0057](0057-rust-ppo-training-data.md) — Accepted。Model3・Model4 の Rust 対戦経路で
+学習配列と GAE を構築し、通常監査では封印済み Pack を SHA-256 で照合する。
+同一入力、保存・再開、Model4 評価への引き継ぎと実機比較を確認済み。
+
+[0056](0056-ordinary-rust-ppo-update.md) — Accepted。通常 Rust Model3 に版付きの
+PPO 更新設定を追加し、対戦収集、学習、保存後の監査で同じ条件を使う。
+
+[0055](0055-owned-rust-model3-parity-validation.md) — Accepted。通常 Rust Model3 の
+所有済み学習入力では、更新前の数値比較を明示検証へ移す。実機で保存・再開を確認済み。
+
+
+追加: [0053](0053-mlp-shared-batch-inference.md) — Accepted design:
+Simulator072dabbの共有推論契約を採用し、MLPの通常PPO/HPOを公式TorchRLへ接続する。
+CPU参加者、共有GPUサービス、checkpointと要求の独立性、実際の終了証明を分離する。
+事前設計レビューREADY。実装・契約テスト・384試合の実測による受入は進行中。
+
+追加: [0052](0052-owned-learner-device-allowance.md) — 通常のproducer-owned CUDA学習で、
+論理的な更新上限と、常駐参加者を考慮した実際のGPU予約を別に扱う。
+
+追加: [0051](0051-resident-actor-cuda-admission.md) — 常駐HPO学習に限り、推論参加者のCUDA予約を
+単一意思決定の形状から計算。モデル種別ごとの時系列状態とcacheを実際の台帳へ反映する。
+
+追加: [0050](0050-resident-training-cache-accounting.md) — 常駐HPO学習poolのモデル形状別cache容量と
+並行BEGIN・逐次SYNCの予約を実行時ledgerに反映する。共有推論の仕様判断とlearnerのRAM/CUDA計算は別途。
+
 追加: [0049](0049-configurable-hpo-game-concurrency.md) — Accepted, implemented and verified:
 HPOの試合並列数とworker枠を設定可能にし、元のledger/config容量を
 常駐workerと終了記録のPython/Rust検証へ伝える。既定2/4・同時trial1・

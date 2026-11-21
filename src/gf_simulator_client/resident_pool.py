@@ -26,7 +26,7 @@ class _ExchangeSetup:
         self.owned_cache_identity: str | None = None
         request = payload['request']
         policy_options = payload.get('payload', {}).get('policy_options')
-        if owner.pool.owned_snapshots and request['command'] in ('BEGIN', 'SYNC') and policy_options is not None:
+        if owner.pool.owned_snapshots and not owner.pool.shared and request['command'] in ('BEGIN', 'SYNC') and policy_options is not None:
             checkpoint = policy_options.get('expected_manifest_digest')
             if checkpoint is not None:
                 self.snapshot = owner.pool.owned_snapshot(checkpoint)
@@ -62,7 +62,10 @@ class _ExchangeSetup:
             if not self.authorized:
                 return self._abort_result
             assert self.owner.process.stdin is not None and self.owner.process.stdout is not None
-            write_frame(self.owner.process.stdin,self.payload)
+            if self.owner._profile_io:
+                from gf_simulator_client.framing import write_frame_profiled
+                self.owner._last_io_write=write_frame_profiled(self.owner.process.stdin,self.payload)
+            else:write_frame(self.owner.process.stdin,self.payload)
             leases = []
             if self.snapshot is not None:
                 assert self.owner.owned_channel is not None
@@ -169,6 +172,7 @@ class ResidentPhysicalWorker(StructuredParticipantWorker):
     """One actual Popen/ledger owner and one explicitly tracked framed-I/O executor."""
     def __init__(self, pool: ResidentParticipantPool, viewer: int) -> None:
         self.pool, self.viewer = pool, viewer
+        self._profile_io=pool.profile_io
         self.closed, self.initialized = False, False
         self.health = {}
         self.io_thread = self._close_task = None
@@ -185,7 +189,12 @@ class ResidentPhysicalWorker(StructuredParticipantWorker):
         self.owned_channel = self._owned_inherited = None
         arguments = [sys.executable, '-E', '-m', 'gf_simulator_client.resident_bootstrap', str(viewer)]
         pass_fds: tuple[int, ...] = ()
-        if pool.owned_snapshots:
+        self.shared_endpoint=None
+        if pool.shared:
+            self.shared_endpoint,fd=pool.service.acquire_endpoint(self)
+            pass_fds=(fd,)
+            arguments.extend(('--shared',str(fd)))
+        elif pool.owned_snapshots:
             from gf_common.ram_bank import RamBankChannel
             self.owned_channel, self._owned_inherited = RamBankChannel.pair()
             fd, invocation = self._owned_inherited.inherited_endpoint()
@@ -194,7 +203,8 @@ class ResidentPhysicalWorker(StructuredParticipantWorker):
         try:
             self._spawn(pool.ledger, pool.resident_bytes, arguments,
                 {'PATH': os.defpath, 'LANG': 'C.UTF-8', 'LC_ALL': 'C.UTF-8', 'PYTHONHASHSEED': '0',
-                    'OPENBLAS_NUM_THREADS': '1', 'OMP_NUM_THREADS': '1', 'MKL_NUM_THREADS': '1'},
+                    'OPENBLAS_NUM_THREADS': '1', 'OMP_NUM_THREADS': '1', 'MKL_NUM_THREADS': '1',
+                    **({'GF_BOTS_PERFORMANCE_TIMING': '1'} if pool.shared and pool.service.diagnostics is not None else {})},
                 **({'pass_fds': pass_fds} if pass_fds else {}))
             if self.owned_channel is not None:
                 self.owned_channel.bind_child(self.process)
@@ -215,6 +225,11 @@ class ResidentPhysicalWorker(StructuredParticipantWorker):
         request_deadline = min(operation_deadline,time.monotonic()+timeout)
         if timeout<=0 or time.monotonic()>=request_deadline:
             raise TimeoutError('resident original operation deadline expired before I/O')
+        routing=None
+        if self.pool.shared and payload['request']['command']=='SELECT' and self.loan is not None and self.loan.model_id=='mlp':
+            routing=self.pool.service.authorize(self.shared_endpoint,self,game=self.loan.game,participant=self.viewer,
+                revision=payload['payload']['frame']['revision'],checkpoint=payload['request']['checkpoint_sha256'],deadline=request_deadline)
+            payload={**payload,'shared_request':routing,'shared_deadline':request_deadline}
         setup = _ExchangeSetup(self,payload,request_deadline)
         self._setups.add(setup)
         try:
@@ -233,8 +248,17 @@ class ResidentPhysicalWorker(StructuredParticipantWorker):
             if type(response) is not dict or 'worker_error' in response:
                 raise ContractError(f'resident worker error: {response}')
             self._pending_diagnostic = pool_diagnostic(response.pop('_diagnostic',None))
+            if routing is not None:
+                self.pool.service.complete(self.shared_endpoint,routing,completed=True)
+                routing=None
             return response
         except BaseException as error:
+            if routing is not None:
+                try:
+                    self.pool.service.complete(self.shared_endpoint,routing,completed=False)
+                    routing=None
+                except BaseException as cleanup:  # noqa: BLE001 - preserve original failure and continue actor reap.
+                    error.add_note('shared request invalidation unconfirmed: '+type(cleanup).__name__)
             setup.abort()  # Always before waiting on original Future/executor shutdown.
             self.pool.custody.fail()
             cleanup_deadline = min(self.pool.deadline,time.monotonic()+2.)
@@ -299,6 +323,7 @@ class ResidentPhysicalWorker(StructuredParticipantWorker):
 
     async def _close_owned(self, timeout: float, started: float) -> None:
         if (self.lease.released and getattr(self.lease,'_proof',None) is not None and not self._operations and not self._setups
+                and self.lease.key not in self.pool.ledger._resident_begin_imports
                 and self.process is getattr(self.lease,'_process',object())
                 and (self.process is None or self.process.poll() is not None)):
             self.executor.shutdown(wait=False,cancel_futures=False)
@@ -325,7 +350,12 @@ class ResidentPhysicalWorker(StructuredParticipantWorker):
             self.owned_channel.close()
             assert self._owned_inherited is not None
             self._owned_inherited.close()
+        if self.lease.key in self.pool.ledger._resident_begin_imports:
+            self.pool.custody.retire_failed_begin_import(self.lease)
         self.executor.shutdown(wait=False, cancel_futures=False)
+        if self.pool.shared and self.shared_endpoint is not None and self.process.poll() is not None:
+            self.pool.service.release_endpoint(self.shared_endpoint,self)
+            self.shared_endpoint=None
         if close_error is not None:
             raise close_error
 
@@ -333,8 +363,15 @@ class ResidentPhysicalWorker(StructuredParticipantWorker):
 class ResidentParticipantPool:
     def __init__(self, custody: Any, *, resident_bytes: int, deadline: float,
                  acquire_cache: Any = None, release_cache: Any = None, progress: ProgressCallback | None = None,
-                 owned_snapshots: bool = False) -> None:
+                 owned_snapshots: bool = False, begin_import_bytes: int = 0, shared: bool = False, profile_io: bool = False) -> None:
         integer(resident_bytes, 0, custody.ledger.global_cuda_bytes)
+        integer(begin_import_bytes, 0, custody.ledger.global_cuda_bytes)
+        if begin_import_bytes and custody.evaluation_scope is not None:
+            raise ContractError('BEGIN import admission is training-only')
+        self.begin_import_bytes = begin_import_bytes
+        self.shared=shared
+        self.profile_io=profile_io
+        self.service: Any=None
         self.custody, self.ledger = custody, custody.ledger
         self.progress = progress
         if type(owned_snapshots) is not bool:
@@ -456,6 +493,11 @@ class ResidentParticipantPool:
                     self.release_cache(owner, None)
 
     def retire_collection(self) -> Any:
+        if self.shared:
+            self.service.quiesce()
+            data=self.service.telemetry
+            self.custody.service_quiescence={'service_id':self.service.service_id,'pending':0,
+                'publications':data['publications'],'requests':data['requests']}
         self.authority = self.custody.retire_collection(self.admission)
         return self.authority
 
@@ -505,7 +547,10 @@ class ResidentParticipantWorker(CardInstanceParticipantWorker):
         if kwargs.get('ledger') is not pool.ledger:
             raise ContractError('resident logical participant requires SAME ledger')
         self.pool, self.viewer = pool, viewer
+        self._performance_shared = pool.shared
+        self.game=kwargs.pop("game",None)
         self._completed = False
+        self._begin_import_request: Json | None = None
         super().__init__(*args, **kwargs)
         self.binding_value = RuntimePolicyBinding(self.model_id, self.initial.get('policy_options'))
 
@@ -532,6 +577,9 @@ class ResidentParticipantWorker(CardInstanceParticipantWorker):
                 else:
                     pending_identity = None
             request = self.pool.custody.episode_request(self.lease, 'SELECT' if self.initialized else 'BEGIN')
+            if request['command'] == 'BEGIN' and self.pool.begin_import_bytes:
+                self.pool.custody.reserve_begin_import(self.lease, request, self.pool.begin_import_bytes)
+                self._begin_import_request = request
             response = await self.owner.exchange({'request': request, 'payload': payload}, timeout=self.timeout)
             result = self.pool.custody.acknowledge_episode(self.lease, response)
             if not self.initialized and pending_identity is not None:
@@ -545,6 +593,9 @@ class ResidentParticipantWorker(CardInstanceParticipantWorker):
         await super()._initialize_owned()
         # The complete existing protocol3 ready/model/binding/timing validation
         # has returned. A matching outer BEGIN alone cannot publish load facts.
+        if self._begin_import_request is not None:
+            self.pool.custody.retire_begin_import(self.lease, self._begin_import_request)
+            self._begin_import_request = None
         self.owner.observe_diagnostic()
 
     async def _select_frame_owned(self, frame: Any, delta: Any) -> Any:
@@ -552,6 +603,7 @@ class ResidentParticipantWorker(CardInstanceParticipantWorker):
         # Original candidate/selection/policy/timing validation and reservation
         # reply retirement precede diagnostic publication as well.
         self.owner.observe_diagnostic()
+        if self._profile_io:self.last_timings.update({**getattr(self.owner,"_last_io_write",{}),**getattr(self.owner,"_last_io_read",{})})
         return result
 
     def mark_completed(self) -> None:

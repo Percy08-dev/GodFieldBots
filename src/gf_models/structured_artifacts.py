@@ -551,9 +551,11 @@ def _validate_resume_invariants(manifest: Json, model: Any, binding: Any, resume
 def _read_resume(directory: Path, model: Any, binding: InferenceBindingV2,
                 resume_identity: str, *, action_contract: Any,
                 purpose: str, synthetic_capacity: bool, _context: _ArtifactContext | None = None,
-                _optimizer_recipe: Json | None = None, _resume_metadata: Json | None = None) -> tuple[Json, dict[str, Any]]:
+                _optimizer_recipe: Json | None = None, _resume_metadata: Json | None = None,
+                expected_resume_sha256: str | None = None) -> tuple[Json, dict[str, Any]]:
     context = _context or _ArtifactContext(action_contract, purpose, synthetic_capacity)
     manifest = read_json(directory / "resume.json",
+                         expected_digest=expected_resume_sha256,
                          max_owned_bytes=min(model.resources.max_owned_bytes, binding.managed_budget_bytes))
     _validate_resume_header(manifest,model,resume_identity,context=context,
         _optimizer_recipe=_optimizer_recipe,_resume_metadata=_resume_metadata)
@@ -651,7 +653,8 @@ def _validate_resume_arrays(manifest: Json, arrays: Any, model: Any, binding: An
 def _restore_resume(directory: Path, network: Any, optimizer: Any, shuffle: Any,
                    model: Any, binding: InferenceBindingV2, resume_identity: str, *,
                    action_contract: Any, purpose: str, synthetic_capacity: bool, _context: _ArtifactContext | None = None,
-                   _optimizer_recipe: Json | None = None, _resume_metadata: Json | None = None) -> int:
+                   _optimizer_recipe: Json | None = None, _resume_metadata: Json | None = None,
+                   expected_resume_sha256: str | None = None) -> int:
     context = _context or _ArtifactContext(action_contract, purpose, synthetic_capacity)
     context.classification()
     if context.schema >= 4:
@@ -661,7 +664,8 @@ def _restore_resume(directory: Path, network: Any, optimizer: Any, shuffle: Any,
     validate_save_context(network, model, binding, optimizer, _optimizer_recipe=_optimizer_recipe, **context.options)
     manifest, arrays = _read_resume(directory, model, binding, resume_identity, action_contract=action_contract,
                                    purpose=purpose, synthetic_capacity=synthetic_capacity, _context=context,
-                                   _optimizer_recipe=_optimizer_recipe, _resume_metadata=_resume_metadata)
+                                   _optimizer_recipe=_optimizer_recipe, _resume_metadata=_resume_metadata,
+                                   expected_resume_sha256=expected_resume_sha256)
     return _apply_resume_state(network, optimizer, shuffle, model, binding, manifest, arrays, context=context)
 
 

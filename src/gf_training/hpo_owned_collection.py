@@ -46,7 +46,7 @@ class OwnedFinalizedCollection:
     def proof(self, numeric: Any) -> Json:
         from gf_common.domain import digest
         selection=numeric.metadata['selection']
-        return {'schema_version':5,'origin':'producer-owned-v1','encoder':'canonical-python',
+        proof={'schema_version':5,'origin':'producer-owned-v1','encoder':'canonical-python',
             'manifest_sha256':self.manifest_sha256,'games':len(self.batch.episodes),
             'generation':self.batch.generation,'batch_id':self.plan.linkage['batch_id'],
             'selection':selection,'selection_sha256':digest(selection),'replay_reconciled':False,
@@ -54,6 +54,11 @@ class OwnedFinalizedCollection:
             'expected_optimizer_step_delta':numeric.training.epochs*((numeric.used_decisions+numeric.training.minibatch_size-1)//numeric.training.minibatch_size),
             'context_costs':{'context_decisions':numeric.training.epochs*sum(position+1 for _,position in selected_locations(selection)),
                 'suffix_decisions':numeric.training.epochs*sum(min(position+1,numeric.training.tbptt_length) for _,position in selected_locations(selection))}}
+        controller=getattr(self._attachment.registry.operations,'shared_controller',None)
+        if controller is not None:
+            proof.update(schema_version=6,service_usage=clone(controller.collection_usage))
+        return proof
+
 
 
 class _OwnedCollection:
@@ -128,7 +133,7 @@ class _OwnedCollection:
         if (type(publication) is not GroupPackCollectionPublication or publication.collection is not self.collection
                 or self.publication is not None or self.writer is None
                 or self.writer.returncode!=0 or not self.writer._sealed
-                or manifest.get('schema_version')!=8):
+                or manifest.get('schema_version')!=(9 if self.registry.state['run_variant']=='hpo-ppo-owned-shared-v1' else 8)):
             raise ContractError('owned publication requires actual completed original writer')
         self.publication=publication
         charge=64*json_bound(manifest)+65536

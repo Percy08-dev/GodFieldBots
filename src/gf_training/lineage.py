@@ -47,7 +47,7 @@ class RunOwnership:
     token: str
 
 
-@dataclass(frozen=True)
+@dataclass
 class _HeldRunOwner:
     """Observation of the ONE real run_lock context; not another lock/owner."""
     ownership: RunOwnership
@@ -57,6 +57,9 @@ class _HeldRunOwner:
     directory_identity: tuple[int,int]
     pid: int
     thread: int
+    unlock_on_close: bool = True
+    control: Any = None
+    borrower: Any = None
 
 
 _HELD_RUN_OWNERS: dict[Path,_HeldRunOwner] = {}
@@ -90,6 +93,8 @@ def require_hpo_run_owner(directory: Path,ownership: RunOwnership | None = None)
             raise ContractError('HPO parent lock/path differs from original held owner')
     except OSError as error:
         raise ContractError('HPO parent lock is no longer held by its original context') from error
+    if held.control is not None:
+        held.control._require_parent_borrower(held.borrower, held.ownership)
     return held.ownership
 
 
@@ -115,10 +120,88 @@ def run_lock(directory: Path, *, create: bool = False) -> Iterator[RunOwnership]
             _HELD_RUN_OWNERS[directory]=observed
             yield ownership
         finally:
+            if observed is not None and observed.control is not None:
+                observed.control._close_parent_borrower(observed.borrower, observed.ownership)
             if observed is not None and _HELD_RUN_OWNERS.get(directory) is observed:
                 _HELD_RUN_OWNERS.pop(directory)
             _OWNED_LOCKS.pop(directory, None)
-            fcntl.flock(lock, fcntl.LOCK_UN)
+            if observed is None or observed.unlock_on_close:
+                fcntl.flock(lock, fcntl.LOCK_UN)
+
+
+def transfer_run_lock(ownership: RunOwnership, control: Any) -> Json:
+    """Transfer the SAME flock OFD and detach only through authenticated ACK."""
+    from gf_training.rust_player_supervision import HostControl
+
+    if type(control) is not HostControl:
+        raise ContractError("authenticated original host control required")
+    control._require()
+    require_hpo_run_owner(ownership.directory, ownership)
+    held = _HELD_RUN_OWNERS[ownership.directory]
+    if not held.unlock_on_close or held.control is not None:
+        raise ContractError("parent lock transfer is single use")
+    # Once sending is attempted, an uncertain control failure may already have
+    # delivered SCM_RIGHTS. Never unlock that shared OFD during error unwinding.
+    held.borrower = control._register_parent_borrower(held.file, ownership, inherited=False)
+    held.control = control
+    held.unlock_on_close = False
+    ack = control.transfer_lock("parent", held.descriptor)
+    control._confirm_parent_borrower(held.borrower, ownership)
+    return ack
+
+
+@contextmanager
+def borrow_run_lock(directory: Path, control: Any) -> Iterator[RunOwnership]:
+    """Register a genuine inherited supervisor OFD; closing NEVER unlocks it."""
+    from gf_training.rust_player_supervision import HostControl
+
+    if type(control) is not HostControl:
+        raise ContractError("authenticated inherited parent control required")
+    control._require()
+    directory = Path(os.path.abspath(directory))
+    if directory in _HELD_RUN_OWNERS:
+        raise ContractError("parent already has a local mutation owner")
+    item = control._borrowed.get("parent")
+    if item is None or Path(control.operation["parent_directory"]) != directory:
+        raise ContractError("original inherited parent mapping required")
+    descriptor = item["fd"]
+    original = os.fstat(descriptor)
+    current = (directory / ".lock").lstat()
+    parent = directory.lstat()
+    identity = original.st_dev, original.st_ino
+    if (identity != (item["device"], item["inode"])
+            or identity != (current.st_dev, current.st_ino)
+            or not stat.S_ISREG(original.st_mode) or not stat.S_ISREG(current.st_mode)
+            or not stat.S_ISDIR(parent.st_mode)):
+        raise ContractError("inherited lock differs from actual parent pathname")
+    # A separate open is a competing OFD. An unlocked descriptor/forged equal
+    # receipt must not silently acquire ownership while being registered.
+    probe = os.open(directory / ".lock", os.O_RDWR | os.O_NOFOLLOW)
+    try:
+        try:
+            fcntl.flock(probe, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            pass
+        else:
+            raise ContractError("inherited parent descriptor has no actual exclusive lock")
+    finally:
+        os.close(probe)
+    with os.fdopen(os.dup(descriptor), "a") as lock:
+        ownership = RunOwnership(directory, uuid.uuid4().hex)
+        held = _HeldRunOwner(ownership, lock, lock.fileno(), identity,
+            (parent.st_dev, parent.st_ino), os.getpid(), threading.get_ident(),
+            unlock_on_close=False, control=control)
+        held.borrower = control._register_parent_borrower(lock, ownership, inherited=True)
+        _OWNED_LOCKS[directory] = ownership.token
+        _HELD_RUN_OWNERS[directory] = held
+        try:
+            require_hpo_run_owner(directory, ownership)
+            yield ownership
+        finally:
+            control._close_parent_borrower(held.borrower, ownership)
+            if _HELD_RUN_OWNERS.get(directory) is held:
+                del _HELD_RUN_OWNERS[directory]
+                _OWNED_LOCKS.pop(directory, None)
 
 
 def immutable_json(path: Path, value: Any) -> str:

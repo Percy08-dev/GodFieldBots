@@ -16,12 +16,14 @@ pub mod feature;
 pub mod index;
 pub mod journal;
 pub mod json;
+mod python_formatter;
 mod logical_artifacts;
 mod logical_artifacts_bridge;
 mod numeric_io;
 pub mod parallel;
 pub mod pipeline;
 pub mod projection;
+pub mod player_runtime;
 pub mod retirement;
 pub mod session;
 pub mod source;
@@ -3826,8 +3828,34 @@ fn build_info() -> Vec<(&'static str, &'static str)> {
     ]
 }
 
+#[pyfunction]
+fn player_search_v5<'py>(py: Python<'py>, encoded: &[u8]) -> PyResult<Bound<'py, PyBytes>> {
+    let result = py.detach(|| player_runtime::search_diagnostic(encoded)).map_err(python_error)?;
+    Ok(PyBytes::new(py, &result))
+}
+#[pyfunction]
+fn player_select_v5<'py>(py: Python<'py>, encoded: &[u8]) -> PyResult<Bound<'py, PyBytes>> {
+    let result = py.detach(|| player_runtime::select_diagnostic(encoded)).map_err(python_error)?;
+    Ok(PyBytes::new(py, &result))
+}
+#[pyfunction]
+fn player_rng_v5<'py>(py: Python<'py>, encoded: &[u8]) -> PyResult<Bound<'py, PyBytes>> {
+    let result = py.detach(|| player_runtime::rng_diagnostic(encoded)).map_err(python_error)?;
+    Ok(PyBytes::new(py, &result))
+}
 #[pymodule]
 fn gf_native(module: &Bound<'_, PyModule>) -> PyResult<()> {
+    module.add_class::<player_runtime::batch::PlayerInferenceDispatcher>()?;
+    module.add_class::<player_runtime::scheduler::PlayerRuntime>()?;
+    module.add_class::<player_runtime::game::storage::StorageBundle>()?;
+    module.add_class::<player_runtime::game::storage::RecordingAccount>()?;
+    module.add_class::<player_runtime::game::storage::RecordingLease>()?;
+    module.add_class::<player_runtime::training::PlayerPpoEpisode>()?;
+    module.add_class::<player_runtime::training::PlayerPpoBatch>()?;
+    module.add_function(wrap_pyfunction!(player_runtime::training::build_player_ppo_batch, module)?)?;
+    module.add_function(wrap_pyfunction!(player_search_v5, module)?)?;
+    module.add_function(wrap_pyfunction!(player_select_v5, module)?)?;
+    module.add_function(wrap_pyfunction!(player_rng_v5, module)?)?;
     module.add_function(wrap_pyfunction!(canonical_json, module)?)?;
     module.add_function(wrap_pyfunction!(feature_names, module)?)?;
     module.add_function(wrap_pyfunction!(validate_input, module)?)?;

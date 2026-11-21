@@ -72,6 +72,34 @@ def canonical_control(config: HPOCampaignConfig) -> EffectiveSettings:
     return effective_settings(model_defaults_v4(config.model_id), HPOTrainingConfig(), {}, layout=LAYOUT)
 
 
+def campaign_requests(config: HPOCampaignConfig, imports: tuple[Any, ...]) -> tuple[tuple[int | None, str, Any], ...]:
+    """The existing canonical-control/import/sample order, shared across runtimes."""
+    control = canonical_control(config)
+    in_space = encode_settings(config, control) is not None
+    requests: list[tuple[int | None, str, Any]] = []
+    if not in_space:
+        requests.append((None, 'outside-control', control))
+    for slot in range(config.trial_count):
+        if in_space and slot == 0:
+            requests.append((slot, 'control', control))
+        else:
+            imported_index = slot - (1 if in_space else 0)
+            requests.append((slot, 'seed', imports[imported_index]) if imported_index < len(imports) else (slot, 'sample', None))
+    if len(imports) > config.trial_count - (1 if in_space else 0):
+        raise ContractError('stage imports exceed declared attempted in-space slots')
+    return tuple(requests)
+
+
+def _resource_data(config: HPOCampaignConfig, settings: EffectiveSettings,
+                   *, _loaded: LoadedHPOConfig | None = None) -> Json:
+    if config.schema_version == 6:
+        from gf_cli.rust_player_entry import campaign_startup_preview
+        if _loaded is None or _loaded.config is not config:
+            raise ContractError('actual loaded native6 campaign CONFIG required for preview')
+        return campaign_startup_preview(_loaded, settings=settings)
+    return joint_resource_admission(replace(config, model=settings.model, training=settings.training), layout=LAYOUT)
+
+
 def scientific_study_identity(loaded: LoadedHPOConfig, conditions: Json) -> str:
     return digest({'recipe': 'hpo-study-identity-v1', 'config_identity': loaded.config.study_identity,
         'conditions_sha256': digest(conditions), 'canonical_control': canonical_control(loaded.config).identity,
@@ -86,7 +114,9 @@ def initialize_campaign(store: CampaignStore, loaded: LoadedHPOConfig, condition
         raise ContractError('campaign differs from its actual loaded effective configuration')
     control = canonical_control(loaded.config)
     # The required existing-recipe contrast must fit before any proposal executes.
-    joint_resource_admission(replace(loaded.config, model=control.model, training=control.training), layout=LAYOUT)
+    if loaded.config.schema_version == 6:
+        _resource_data(loaded.config, effective_settings(loaded.config.model, loaded.config.training, {}, layout=LAYOUT), _loaded=loaded)
+    _resource_data(loaded.config, control, _loaded=loaded)
     condition_hash = digest(conditions)
     identity = scientific_study_identity(loaded, conditions)
     manifest = _record('hpo-campaign', campaign_id=str(uuid.uuid4()), loaded_config_sha256=loaded.sha256,
@@ -162,7 +192,8 @@ def encode_settings(config: HPOCampaignConfig, settings: EffectiveSettings) -> J
     return walk(0, dict(config.space.control_values), {})
 
 
-def import_settings(paths: tuple[Path, ...], config: HPOCampaignConfig, *, study_identity: str) -> tuple[EffectiveSettings, ...]:
+def import_settings(paths: tuple[Path, ...], config: HPOCampaignConfig, *, study_identity: str,
+                    _loaded: LoadedHPOConfig | None = None) -> tuple[EffectiveSettings, ...]:
     """Import configuration only; no old state, objective or history authority."""
     result = []
     identities = set()
@@ -190,7 +221,7 @@ def import_settings(paths: tuple[Path, ...], config: HPOCampaignConfig, *, study
             raise ContractError('settings seed identity mismatch or effective duplicate')
         if encode_settings(config, settings) is None:
             raise ContractError('imported configuration is outside new declared search space')
-        joint_resource_admission(replace(config, model=settings.model, training=settings.training), layout=LAYOUT)
+        _resource_data(config, settings, _loaded=_loaded)
         identities.add(settings.identity)
         result.append(settings)
     return tuple(result)
@@ -273,7 +304,8 @@ class Proposal:
 
 
 class CampaignStudy:
-    def __init__(self, store: CampaignStore, loaded: LoadedHPOConfig, manifest: Json) -> None:
+    def __init__(self, store: CampaignStore, loaded: LoadedHPOConfig, manifest: Json,
+                 *, _control: Any = None) -> None:
         _checked(manifest, 'hpo-campaign', _CAMPAIGN_KEYS)
         actual, self.manifest_sha = store.get('campaign.json')
         if (canonical(actual) != canonical(manifest) or manifest['loaded_config_sha256'] != loaded.sha256
@@ -285,7 +317,24 @@ class CampaignStudy:
                 or manifest['conditions_sha256'] != digest(manifest['conditions']) or manifest['optuna_version'] != OPTUNA_VERSION):
             raise ContractError('campaign configuration/conditions/owner identity changed')
         self.store, self.loaded, self.manifest = store, loaded, actual
+        self._control = _control
         self.name = 'gf-hpo-' + manifest['campaign_id'] + '-' + manifest['study_identity']
+
+    def _verification_context(self, deadline: float) -> tuple[float, Json]:
+        if self.loaded.config.schema_version != 6:
+            return deadline, {}
+        from gf_common.rust_player import deadline_seconds
+        from gf_training.rust_player_supervision import HostControl
+        control = self._control
+        if type(control) is not HostControl or self.store._control is not control:
+            raise ContractError('actual current borrowed campaign control required for verified history/score')
+        control._require(); self.store._require()
+        _ = control.campaign_bootstrap
+        cutoff = min(deadline, time.monotonic() + self.loaded.config.run_wall_seconds,
+            deadline_seconds(control.launch['session_deadlines']['finish_bits']))
+        if cutoff <= time.monotonic():
+            raise TimeoutError('original campaign hard finish reached before independent verification')
+        return cutoff, {'control': control}
 
     @contextmanager
     def study(self, number: int) -> Iterator[Any]:
@@ -341,8 +390,9 @@ class CampaignStudy:
                 from gf_cli.hpo_evaluation import verify_trial_evaluation
                 intent = self._known_trials(study)[trial.number]
                 proposal = self._proposal(intent['proposal_no'], intent)
+                deadline, options = self._verification_context(time.monotonic() + self.loaded.config.run_wall_seconds)
                 _, actual_value, actual_sha = verify_trial_evaluation(self.store, self.loaded, self.manifest, proposal,
-                    deadline=time.monotonic() + self.loaded.config.run_wall_seconds)
+                    deadline=deadline, **options)
                 receipt = trial.user_attrs.get('hpo_evaluation_receipt_sha256')
                 if type(receipt) is not str or receipt != actual_sha or trial.value != actual_value:
                     raise ContractError('completed sampler history lacks verified evaluation identity')
@@ -519,6 +569,9 @@ class CampaignStudy:
 
     def propose(self, number: int, *, slot: int | None, kind: str,
                 requested: EffectiveSettings | None = None) -> Proposal | None:
+        requested_admission = None
+        if self.loaded.config.schema_version == 6 and requested is not None:
+            requested_admission = _resource_data(self.loaded.config, requested, _loaded=self.loaded)
         root = self._root(number)
         if not self.store.exists(root + '/intent.json'):
             self.begin(number, slot=slot, kind=kind, requested=requested)
@@ -603,7 +656,10 @@ class CampaignStudy:
             else:
                 assert requested is not None
                 params, distributions, settings = {}, {}, requested
-            admission = joint_resource_admission(replace(self.loaded.config, model=settings.model, training=settings.training), layout=LAYOUT)
+            # Scientific identity deliberately excludes operational resources.
+            # Only the exact outside-control settings object can reuse its plan.
+            admission = (requested_admission if requested_admission is not None and settings is requested else
+                _resource_data(self.loaded.config, settings, _loaded=self.loaded))
             value = _record('hpo-proposal', intent_sha256=intent_sha, trial_number=number_in_study,
                 raw_params=params, distributions=distributions, effective_model=asdict(settings.model),
                 effective_training=asdict(settings.training), effective_settings_sha256=settings.identity,
@@ -646,7 +702,9 @@ class CampaignStudy:
         actual = self._proposal(proposal.number, intent)
         if actual != proposal:
             raise ContractError('completion requires the exact durable proposal')
-        _, score, evaluation_sha = verify_trial_evaluation(self.store, self.loaded, self.manifest, proposal, deadline=deadline)
+        deadline, options = self._verification_context(deadline)
+        _, score, evaluation_sha = verify_trial_evaluation(self.store, self.loaded, self.manifest, proposal,
+            deadline=deadline, **options)
         if type(score) not in (int, float) or not math.isfinite(score) or not 0 <= score <= 1:
             raise ContractError('verified evaluation objective must be finite win/draw/loss mean')
         value = _record('hpo-tell', proposal_sha256=proposal.sha256, trial_number=proposal.trial_number,

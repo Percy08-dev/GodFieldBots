@@ -51,7 +51,8 @@ def hpo_losses(logprobs: Any, values: Any, mask: Any, selected: Any, old: Any,
 class HpoLearner(Learner):
     def __init__(self, model: ModelConfigV4, training: HPOTrainingConfig, seed: int,
                  binding: InferenceBindingV2, resume_identity: str, *, actions: ActionConfigV3,
-                 rules: CardInstanceRules) -> None:
+                 rules: CardInstanceRules, _owned_device_admission: Json | None = None,
+                 _same_host_device_bytes: int | None = None) -> None:
         if type(actions) is not ActionConfigV3 or type(training) is not HPOTrainingConfig:
             raise ContractError("closed HPO actions/training recipe required")
         training = hpo_training_config(asdict(training))
@@ -69,6 +70,23 @@ class HpoLearner(Learner):
         self.model, self.training, self.binding = model, training, binding
         self.resume_identity = resume_identity
         configured_envelope=resource_estimate(model, binding, suffix_decisions=training.tbptt_length, **self._options)["total_bytes"]
+        device_bytes = None
+        if _same_host_device_bytes is not None:
+            from gf_models.learner_cuda import learner_cuda_minima
+            integer(_same_host_device_bytes, 1, 2**63 - 1)
+            if _owned_device_admission is not None or binding.device != 'cuda:0':
+                raise ContractError('distinct same-host CUDA initialization route required')
+            if learner_cuda_minima(model, binding, **self._options)['phases']['initialize'] > _same_host_device_bytes:
+                raise ContractError('same-host CUDA initialization exceeds device allowance')
+        if _owned_device_admission is not None:
+            from gf_models.learner_cuda import owned_learner_cuda_admission
+            expected = owned_learner_cuda_admission(model,binding,
+                logical_bytes=configured_envelope,global_cuda_bytes=_owned_device_admission['global_cuda_bytes'],
+                pool_cuda_bytes=_owned_device_admission['pool_cuda_bytes'],
+                overlap_scratch_bytes=_owned_device_admission['overlap_scratch_bytes'],**self._options)
+            if canonical(expected)!=canonical(_owned_device_admission):
+                raise ContractError('owned learner device admission differs from checked constructor')
+            device_bytes = expected['device_bytes']
         self.torch = torch_runtime(binding.device)
         self.torch.random.default_generator.manual_seed(seed)
         if binding.device != "cpu":
@@ -81,6 +99,7 @@ class HpoLearner(Learner):
         self._last_update_execution: str | None=None
         self._training_execution: Any = None
         self._training_reservation_bytes: int = configured_envelope
+        self._training_device_bytes: int | None = device_bytes
         self._owned_snapshot: Any = None
         self._owned_generation = 0
         self._owned_failed = False
@@ -94,7 +113,7 @@ class HpoLearner(Learner):
     def _suffix_length(self, decisions: int) -> int:
         return min(decisions, self.training.tbptt_length)
 
-    def admit(self, rollout: StructuredRollout) -> None:
+    def admit(self, rollout: StructuredRollout, *, _device_bytes: int | None = None) -> None:
         if type(rollout) is not HpoRollout or type(rollout.model) is not ModelConfigV4:
             raise ContractError("HPO learner requires exact numeric5 component")
         self._context.bind(self.network)
@@ -105,6 +124,8 @@ class HpoLearner(Learner):
                 or rollout.action_config_hash != self.action_config_hash
                 or canonical(asdict(rollout.training)) != canonical(asdict(self.training))):
             raise ContractError("HPO rollout model/actions/training recipe mismatch")
+        if _device_bytes is not None:
+            integer(_device_bytes, 1, 2**63 - 1)
         # Whole ORIGINAL parity also needs unselected endpoints. Admit them all
         # before input packing, shuffle advancement or optimizer mutation.
         for episode in rollout.episodes:
@@ -115,24 +136,33 @@ class HpoLearner(Learner):
                     candidates=len(candidates.kinds), suffix_decisions=self._suffix_length(len(frames)), **self._options)["total_bytes"]
                 if rollout.resident_bytes + size > min(self.model.resources.max_owned_bytes, self.binding.managed_budget_bytes):
                     raise ContractError("complete rollout plus endpoint exceeds learner reservation")
+                positions = 4 * self.model.temporal.max_decisions * self.model.temporal.hidden_size
+                if _device_bytes is not None and size + positions > _device_bytes:
+                    raise ContractError('HPO endpoint exceeds operation device allowance')
 
-    def update(self, rollout: StructuredRollout) -> Json:
+    def update(self, rollout: StructuredRollout, *, _device_bytes: int | None = None) -> Json:
+        if _device_bytes is not None:
+            self.admit(rollout, _device_bytes=_device_bytes)
         self._last_update_execution=None
         self._owned_legacy=True
         self._owned_snapshot=None
         started = time.perf_counter()
         parity_started = time.perf_counter()
-        parity = self.parity(rollout)
+        parity = self.parity(rollout) if _device_bytes is None else self.parity(rollout, _device_bytes=_device_bytes)
         self._last_parity_seconds = time.perf_counter() - parity_started
         assert type(rollout) is HpoRollout
-        return self._update_numeric(rollout, parity, started, self.network)
+        return self._update_numeric(rollout, parity, started, self.network, _device_bytes=_device_bytes)
 
-    def update_owned(self, rollout: Any) -> Json:
+    def update_owned(self, rollout: Any, *, _device_bytes: int | None = None) -> Json:
         self._last_update_execution=None
         from gf_training.hpo_owned_rollout import OwnedNumericBatch
+        from gf_training.rust_ppo_rollout import _RustTrainingRollout
+        device_bytes = self._training_device_bytes if _device_bytes is None else _device_bytes
+        if device_bytes is not None:
+            integer(device_bytes, 1, 2**63 - 1)
         if self._owned_legacy:
             raise ContractError('legacy update/restore cannot enter producer-owned numerical route')
-        if type(rollout) is not OwnedNumericBatch or getattr(self, '_owned_failed', False):
+        if type(rollout) not in (OwnedNumericBatch, _RustTrainingRollout) or getattr(self, '_owned_failed', False):
             raise ContractError('owned learner is terminal or batch owner invalid')
         if rollout._budget is not self._owned_source_budget:
             raise ContractError('owned learner and batch require SAME invocation Source account')
@@ -156,9 +186,16 @@ class HpoLearner(Learner):
         snapshot_owner = rollout._snapshot_owner
         if snapshot_owner is not None and getattr(snapshot_owner, '_learner', None) is not self:
             raise ContractError('owned batch frozen snapshot differs from actual learner')
+        singletons_checked = device_bytes is not None or type(rollout) is _RustTrainingRollout
+        if singletons_checked:
+            self._validate_singleton_capacity(rollout, _device_bytes=device_bytes)
         rollout._begin_update()
         try:
-            result = self._update_numeric(rollout, {'status': 'not_run'}, time.perf_counter(), self.network._forward_owned)
+            if not singletons_checked:
+                result = self._update_numeric(rollout, {'status': 'not_run'}, time.perf_counter(), self.network._forward_owned)
+            else:
+                result = self._update_numeric(rollout, {'status': 'not_run'}, time.perf_counter(), self.network._forward_owned,
+                    _singletons_checked=True, _device_bytes=device_bytes)
             rollout._state = 'UPDATED'
             self._owned_generation = getattr(self, '_owned_generation', 0) + 1
             self._owned_snapshot = None
@@ -168,9 +205,11 @@ class HpoLearner(Learner):
             self._owned_failed = True
             raise
 
-    def _update_numeric(self, rollout: Any, parity: Json, started: float, forward: Any) -> Json:
+    def _update_numeric(self, rollout: Any, parity: Json, started: float, forward: Any, *,
+                        _singletons_checked: bool = False, _device_bytes: int | None = None) -> Json:
         self._last_update_execution=None
         from gf_training.hpo_training_execution import TrainingExecutionSpec
+        from gf_training.rust_ppo_rollout import _RustTrainingRollout
         spec = getattr(self, '_training_execution', None)
         if spec is None:
             spec=TrainingExecutionSpec(variant='microbatch' if self.model.model_id=='mlp' else 'shared-prefix')
@@ -180,7 +219,10 @@ class HpoLearner(Learner):
             if spec.variant == 'shared-prefix' and self.model.model_id == 'mlp':
                 raise ContractError('shared-prefix is sequence-only')
             if spec.variant != 'baseline':
-                return self._update_experimental(rollout, parity, started, forward, spec)
+                if _singletons_checked:
+                    return self._update_experimental(rollout, parity, started, forward, spec,
+                        _singletons_checked=True, _device_bytes=_device_bytes)
+                return self._update_experimental(rollout, parity, started, forward, spec, _device_bytes=_device_bytes)
         torch, recipe = self.torch, self.training
         totals: dict[str, float] = {}
         denominator = 0
@@ -195,14 +237,22 @@ class HpoLearner(Learner):
                 for index in logical:
                     frames, candidates = rollout.endpoint(index)
                     suffix = self._suffix_length(len(frames))
-                    logs, value, _ = forward(frames, candidates, suffix_length=suffix)
-                    selected, old, _, advantage, target = rollout.vector(index)
-                    self.synchronize()
-                    mask = torch.ones((1, len(candidates.kinds)), dtype=torch.bool, device=self.binding.device)
-                    selected_tensor = torch.tensor([selected], dtype=torch.int64, device=self.binding.device)
-                    vectors = [torch.tensor([number], dtype=torch.float32, device=self.binding.device)
-                        for number in (old, advantage, target)]
-                    loss, measured = hpo_losses(logs[None], value[None], mask, selected_tensor, *vectors, training=recipe)
+                    if type(rollout) is _RustTrainingRollout:
+                        window = rollout.pack(self.network, (index,))
+                        logs, value = self.network._learning_serial(window, frames, candidates, suffix)
+                        raw = window.operands
+                        self.synchronize()
+                        loss, measured = hpo_losses(logs, value, raw['mask'], raw['selected'], *raw['vectors'], training=recipe)
+                        del window, raw
+                    else:
+                        logs, value, _ = forward(frames, candidates, suffix_length=suffix)
+                        selected, old, _, advantage, target = rollout.vector(index)
+                        self.synchronize()
+                        mask = torch.ones((1, len(candidates.kinds)), dtype=torch.bool, device=self.binding.device)
+                        selected_tensor = torch.tensor([selected], dtype=torch.int64, device=self.binding.device)
+                        vectors = [torch.tensor([number], dtype=torch.float32, device=self.binding.device)
+                            for number in (old, advantage, target)]
+                        loss, measured = hpo_losses(logs[None], value[None], mask, selected_tensor, *vectors, training=recipe)
                     if not torch.isfinite(loss):
                         raise ContractError("nonfinite HPO PPO loss")
                     (loss / len(logical)).backward()
@@ -230,16 +280,33 @@ class HpoLearner(Learner):
             "endpoint_evaluations": denominator, "context_decisions": context_decisions,
             "suffix_decisions": suffix_decisions, "update_seconds": time.perf_counter() - started}
 
-    def _update_experimental(self, rollout: Any, parity: Json, started: float, forward: Any, spec: Any) -> Json:
+    def _validate_singleton_capacity(self, rollout: Any, *, _device_bytes: int | None = None) -> None:
+        from gf_training.hpo_update_planning import admit_group, execution_plan
+        from gf_training.rust_ppo_rollout import _RustTrainingRollout
+
+        native = type(rollout) is _RustTrainingRollout
+        variant = getattr(getattr(self, '_training_execution', None), 'variant', 'microbatch')
+        staged = self.binding.device != 'cpu' and variant == 'microbatch'
+        device_bytes = self._training_device_bytes if _device_bytes is None else _device_bytes
+        for index in range(len(rollout)):
+            plan = execution_plan([rollout.endpoint(index)],self.model,self.binding,self.training.tbptt_length,
+                layout=self.network.layout,reservation_bytes=self._training_reservation_bytes,
+                resident_bytes=rollout.resident_bytes,
+                device_bytes=device_bytes)
+            if native:
+                if plan.staging is not None and not staged:
+                    admit_group(rollout, (index,), self.model, self.binding, self.training.tbptt_length,
+                        layout=self.network.layout, reservation_bytes=self._training_reservation_bytes,
+                        device_bytes=device_bytes)
+                rollout.require_singleton_packing(index, plan.staging if staged else None)
+
+    def _update_experimental(self, rollout: Any, parity: Json, started: float, forward: Any, spec: Any, *,
+                            _singletons_checked: bool = False, _device_bytes: int | None = None) -> Json:
         from gf_training.hpo_update_execution import METRICS, execution_groups, group_forward
-        from gf_training.hpo_update_planning import execution_plan
         # Validate singleton capacity BEFORE shuffle, gradients or optimizer
         # mutation. Group planning only refines capacity, never runtime failure.
-        if spec.variant in ('microbatch','shared-prefix'):
-            for index in range(len(rollout)):
-                execution_plan([rollout.endpoint(index)],self.model,self.binding,self.training.tbptt_length,
-                    layout=self.network.layout,reservation_bytes=self._training_reservation_bytes,
-                    resident_bytes=rollout.resident_bytes)
+        if spec.variant in ('microbatch','shared-prefix') and not _singletons_checked:
+            self._validate_singleton_capacity(rollout, _device_bytes=_device_bytes)
         torch, recipe = self.torch, self.training
         totals = torch.zeros(5,dtype=torch.float64,device=self.binding.device)
         denominator = context_decisions = suffix_decisions = 0
@@ -250,10 +317,11 @@ class HpoLearner(Learner):
             order = self.shuffle.permutation(len(rollout)).tolist()
             for start in range(0,len(order),recipe.minibatch_size):
                 logical = order[start:start+recipe.minibatch_size]
-                groups = execution_groups(self,rollout,logical,spec)
+                groups = execution_groups(self,rollout,logical,spec, _device_bytes=_device_bytes)
                 self.optimizer.zero_grad(set_to_none=True)
                 for group in groups:
-                    loss,measured,window,extra,encoded,copies = group_forward(self,rollout,group,spec,forward)
+                    loss,measured,window,extra,encoded,copies = group_forward(self,rollout,group,spec,forward,
+                        _device_bytes=_device_bytes)
                     # Finite real endpoint losses were checked before reduction.
                     (loss.mean()*(len(group.indices)/len(logical))).backward()
                     totals += measured.to(torch.float64).sum(0)
@@ -300,7 +368,9 @@ class HpoLearner(Learner):
         from gf_training.hpo_artifacts import save_learner
         return save_learner(self, directory, code_revision=code_revision, shard_bytes=shard_bytes,save_budget_bytes=save_budget_bytes)
 
-    def restore(self, directory: Path) -> None:
+    def restore(self, directory: Path, *, expected_resume_sha256: str | None = None) -> None:
+        if expected_resume_sha256 is not None:
+            raise ContractError('Model4 digest-bound restore requires the local held-policy/restore_snapshot route')
         self._owned_legacy=True
         self._owned_snapshot=None
         from gf_training.hpo_artifacts import restore_learner

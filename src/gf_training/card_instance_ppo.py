@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import time
+import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import asdict, replace
@@ -11,6 +12,7 @@ from typing import Any, cast
 from gf_common.card_instance import ActionConfigV3
 from gf_common.card_instance_rules import card_instance_rules
 from gf_common.domain import ContractError, Json, digest
+from gf_common.rust_player import require_legacy_player_entry
 from gf_common.structured_layout import CORRECTED_CARD_INSTANCE_LAYOUT as LAYOUT
 from gf_models.config import PPOTrainingConfig, SequencePPOTrainingConfig
 from gf_models.structured_binding import ConfiguredNeuralModelV3, input_binding_game_v3
@@ -72,6 +74,8 @@ class _GameOperations:
         self.runtime: Any = None
         self.native: Any = None
         self.finalized_collection: Any = None
+        self.shared_controller: Any = None
+        self.shared_config: Any = None
 
     def __getattr__(self, name: str) -> Any:
         if name in {'cap', 'saved_deadline', 'execution', 'decorate_identity'}:
@@ -79,7 +83,14 @@ class _GameOperations:
         raise AttributeError(name)
 
     def validate_config(self, config: Any) -> ModelConfigV3:
+        require_legacy_player_entry(config)
         _validate_packed_config(config, formal=self.formal is not None)
+        from gf_common.shared_inference import serving_config
+        shared=serving_config(config)
+        if shared is not None:
+            if self.formal is not None:raise ContractError('shared serving is not supported by formal workflows')
+            self.registry_schema=4
+            self.shared_config=config
         if (type(config.actions) is not ActionConfigV3 or type(config.model) is not ConfiguredNeuralModelV3
                 or config.model.checkpoint is not None or type(config.training) is not PPOTrainingConfig
                 or isinstance(config.training, SequencePPOTrainingConfig) or config.run.split != 'train'
@@ -116,22 +127,36 @@ class _GameOperations:
         if config.server.external_url is not None or config.server.source_dir is None:
             raise ContractError('corrected PPO requires locally owned approved runtime source')
         from gf_simulator_client.card_instance_runtime import CardInstanceRuntimeEvidence
-        self.runtime = CardInstanceRuntimeEvidence(Path(config.server.binary), Path(config.server.source_dir), deadline=deadline)
+        self.runtime = CardInstanceRuntimeEvidence(Path(config.server.binary), Path(config.server.source_dir), contract=config.actions.action_contract, deadline=deadline)
         self.runtime.preflight()
+        if self.shared_config is not None:
+            from gf_common.shared_inference import serving_config
+            from gf_models.shared_admission import shared_service_estimate
+            from gf_models.structured_runtime import learner_process_bytes
+            runtime=serving_config(config)
+            assert runtime is not None
+            service=shared_service_estimate(model,config.model.inference,runtime,layout=LAYOUT,game_concurrency=config.run.concurrency)
+            learner=learner_process_bytes(model,replace(config.model.inference,device=config.training.device),layout=LAYOUT)
+            if (2*config.run.concurrency>config.run.max_participant_workers
+                    or learner+service['cuda_bytes']>config.run.global_cuda_budget_bytes):
+                raise ContractError('shared learner and service exceed planned CUDA/worker budget')
+            return
         admit_planned_game_training_v3(config.actions, model, config.model.inference,
             replace(config.model.inference, device=config.training.device), rules=card_instance_rules(),
             game_concurrency=config.run.concurrency, global_cuda_bytes=config.run.global_cuda_budget_bytes,
             max_workers=config.run.max_participant_workers)
 
     def integration_identity(self, config: Any, deadline: float) -> Json:
-        from gf_common.card_instance import CORRECTED_REVIEWED_SPEC_HASHES
+        from gf_common.card_instance import reviewed_specs
         from gf_models.arrays import sha256
         from gf_simulator_client.card_instance_runtime import CardInstanceRuntimeEvidence
-        runtime = self.runtime or CardInstanceRuntimeEvidence(Path(config.server.binary), Path(config.server.source_dir), deadline=deadline)
+        runtime = self.runtime or CardInstanceRuntimeEvidence(Path(config.server.binary), Path(config.server.source_dir), contract=config.actions.action_contract, deadline=deadline)
         receipt = runtime.preflight()
-        return {'binary_sha256': receipt['binary']['sha256'], 'server_config_sha256': sha256(Path(config.server.config), deadline),
+        result={'binary_sha256': receipt['binary']['sha256'], 'server_config_sha256': sha256(Path(config.server.config), deadline),
             'declared_simulator_revision': config.server.simulator_revision, 'binary_build_revision': None,
-            'source_revision': receipt['source']['revision'], 'source_spec_sha256': dict(CORRECTED_REVIEWED_SPEC_HASHES)}
+            'source_revision': receipt['source']['revision'], 'source_spec_sha256': reviewed_specs(config.actions.action_contract)}
+        if receipt['schema_version']==2:result['source_dirty']=receipt['source']['dirty']
+        return result
 
     def initialize_state(self, state: Json, config: Any) -> None:
         state.update(schema_version=3, model_id=config.model.model_id, model_version='3', input_recipe=LAYOUT.input_recipe,
@@ -224,6 +249,29 @@ class _GameOperations:
             deadline=deadline, extra_owned_bytes=extra_owned_bytes)
 
     def validate_owned_collection(self, plan: Any, ledger: Any, *, config: Any, deadline: float) -> None:
+        if self.shared_config is not None and self.shared_controller is None:
+            from gf_common.shared_inference import serving_config
+            from gf_models.shared_admission import shared_service_estimate
+            from gf_simulator_client.shared_service import SharedInferenceService
+            from gf_training.shared_serving import SharedServingController
+            runtime=serving_config(config)
+            assert runtime is not None and self.state is not None
+            estimate=shared_service_estimate(config.model.architecture(layout=LAYOUT),config.model.inference,runtime,layout=LAYOUT,game_concurrency=config.run.concurrency)
+            service=SharedInferenceService(ledger,runtime,execution=uuid.uuid4().hex,
+                directory=self.ownership.directory,slots=2*config.run.concurrency,estimate=estimate,
+                visibility=config.model.cuda_visible_devices,deadline=plan.wall_deadline-config.run.report_reserve_seconds,
+                execution_deadline=plan.execution_deadline,run_id=self.state["run_id"],config_sha256=self.state["config_sha256"])
+            self.shared_controller=SharedServingController(self,config,self.state,service)
+            service.controller=self.shared_controller
+        if self.shared_controller is not None:
+            from gf_common.card_instance_rules import card_instance_rules
+            from gf_models.card_instance_artifacts import RetainedGameArtifacts
+            artifacts=RetainedGameArtifacts.for_registry(plan.bindings,config.actions,rules=card_instance_rules(),
+                max_owned_bytes=structured_ppo.cap(config),preflight_deadline=deadline,finalization_deadline=deadline)
+            try:self.shared_controller.ensure(plan.bindings,artifacts)
+            finally:artifacts.release()
+            assert self.state is not None
+            self.persist_control(self.ownership.directory/'run.json',self.state,config,deadline=deadline)
         validate_owned_collection(plan, ledger, max_owned_bytes=structured_ppo.cap(config), deadline=deadline)
 
     def binding(self, directory: Path, generation: int, config: Any, deadline: float) -> Any:
@@ -300,6 +348,7 @@ class _GameOperations:
 
 async def train_card_instance_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 'fresh',
                                   pause_after_update: int | None = None) -> Json:
+    require_legacy_player_entry(loaded.config)
     _validate_packed_config(loaded.config)
     operations = _GameOperations()
     operations.validate_config(loaded.config)
@@ -311,6 +360,7 @@ async def train_card_instance_ppo(loaded: Any, collector: Any, directory: Path, 
 async def train_formal_card_instance_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 'fresh',
                                          pause_after_update: int | None = None) -> Json:
     """Explicit full-recipe entry, keeping completion revocable through lock exit."""
+    require_legacy_player_entry(loaded.config)
     from gf_training.card_instance_formal import FormalControl
     from gf_training.ppo_run import _run_ppo
     control = FormalControl(loaded)

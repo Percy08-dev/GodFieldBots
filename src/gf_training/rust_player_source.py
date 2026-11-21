@@ -1,0 +1,941 @@
+"""Actual retained Rust-writer originals and canonical data correspondence.
+
+Opening data never grants collection, update, actor or final-parent authority.
+The online issuer must additionally own the actual native/service/plan lifetime.
+"""
+
+from __future__ import annotations
+
+import fnmatch
+import json
+import sys
+from collections.abc import Iterator
+from contextlib import contextmanager, nullcontext
+from dataclasses import asdict
+from pathlib import Path
+from typing import Any
+
+from gf_common.artifacts import json_bound
+from gf_common.domain import ContractError, Json, canonical, digest
+from gf_common.rust_ppo_source import source_encoder, source_mode
+from gf_models.config import ordinary_ppo_update
+from gf_training.group_pack_pool import OriginalArtifactReader, PackedArtifactPool
+from gf_training.group_pack_resources import close_resources, retain_cleanup
+from gf_training.group_pack_source import OriginalFile, PackedSource
+from gf_training.rust_player_storage import RustPendingDescriptor
+from gf_training.structured_rollout import _RolloutContext
+from gf_training.structured_source import _json
+
+_SOURCE_ISSUER = object()
+
+
+class RustPlayerOriginals:
+    """Borrow SAME pending-descriptor custody; share the actual Source account.
+
+    Decoded records/metadata returned here are borrowed until close. A caller
+    retires all such views before closing; canonical numeric banks have their
+    own explicit owners in this same account.
+    """
+
+    _completed: Any = None
+    _inspection: Any = None
+
+    def __init__(self, pending: RustPendingDescriptor, *, pool: PackedArtifactPool,
+                 settings: Any, deadline: float) -> None:
+        if type(pending) is not RustPendingDescriptor or type(pool) is not PackedArtifactPool:
+            raise ContractError("actual Rust pending descriptor and shared original pool required")
+        pending.recheck()
+        self.pending: Any = pending
+        self.pool, self.budget = pool, pool.budget
+        self._cold: Any = None
+        self._resume: Any = None
+        self._cold_descriptor: Any = None
+        self._descriptor_path, self._descriptor_sha256 = pending.path, pending.descriptor_sha256
+        self.root, self.settings, self.deadline = pending.directory, settings, deadline
+        self.source: PackedSource | None = None
+        self.files: Json = {}
+        self._entries: Json = {}
+        self._reservations: list[Any] = []
+        self._closed = False
+        self._cleanup_children: list[Any] = []
+        try:
+            self.source = PackedSource(self._descriptor_path, deadline=deadline,
+                max_owned_bytes=pool.budget.limit, pool=pool, _allow_pending=True)
+            original = self.source._originals
+            if (original.descriptor_file.sha256 != self._descriptor_sha256
+                    or original.descriptor_file.path != self._descriptor_path):
+                raise ContractError("reopened originals differ from SAME retained writer descriptor")
+            self._entries = {row["name"]: row for row in
+                (*self.source._index["members"], *self.source._index["controls"])}
+            self.charge(sys.getsizeof(self._entries))
+            self.reader = OriginalArtifactReader(self.source, self.read, self.charge, self.root)
+            self.finalize()
+        except BaseException as error:
+            retain_cleanup(self, error)
+            raise
+
+    def _open_sealed_originals(self) -> None:
+        """File I/O only, after each constructor's actual authority checks."""
+        try:
+            self._cold_descriptor = OriginalFile(self._descriptor_path, self.deadline)
+            if self._cold_descriptor.sha256 != self._descriptor_sha256:
+                raise ContractError('actual retained descriptor differs from prior Source proof')
+            self.source = PackedSource(self._descriptor_path, deadline=self.deadline,
+                max_owned_bytes=self.pool.budget.limit, pool=self.pool, _allow_pending=True)
+            if self.source._originals.descriptor_file.sha256 != self._descriptor_sha256:
+                raise ContractError('actual retained descriptor changed during original opening')
+            self._entries = {row['name']: row for row in
+                (*self.source._index['members'], *self.source._index['controls'])}
+            self.charge(sys.getsizeof(self._entries))
+            self.reader = OriginalArtifactReader(self.source, self.read, self.charge, self.root)
+            self.finalize()
+        except BaseException as error:
+            retain_cleanup(self, error)
+            raise
+
+    def check(self) -> None:
+        if self._closed or self.source is None:
+            raise ContractError("Rust original data owner is closed")
+        if self._inspection is not None:
+            from gf_training.group_pack_resources import remaining
+            remaining(self.deadline)
+            self.source._live()
+            return
+        self._check_full()
+
+    def _check_full(self) -> None:
+        if self._closed or self.source is None:
+            raise ContractError("Rust original data owner is closed")
+        if self.pending is not None:
+            self.pending.recheck()
+        else:
+            if self._completed is not None:
+                self._completed.require()
+            elif self._cold is not None:
+                self._cold.require_pair()
+            else:
+                self._resume.require()
+            self._cold_descriptor.recheck()
+        self.source.recheck()
+
+    @contextmanager
+    def _ordinary_inspection(self, inspection: RustEmptyCollection) -> Iterator[None]:
+        """Borrow this exact live owner only for its synchronous projection."""
+        if (type(self) is not RustPlayerOriginals or type(inspection) is not RustEmptyCollection
+                or self._inspection is not None or inspection.registry.hpo
+                or inspection.registry.pending is not inspection or inspection.state != 'INSPECTING'
+                or inspection.originals is not self or inspection.collection.originals is not self
+                or inspection.collection.pending is not self.pending):
+            raise ContractError('actual ordinary inspection and SAME pending originals required')
+        self._check_full()
+        self._inspection = inspection
+        try:
+            yield
+        finally:
+            self._inspection = None
+
+    def charge(self, size: int) -> None:
+        self._reservations.append(self.budget.reserve(size))
+
+    def _name(self, path: Path) -> str:
+        try:
+            name = path.absolute().relative_to(self.root).as_posix()
+        except ValueError as error:
+            raise ContractError("original logical member belongs to another collection") from error
+        if name not in self._entries:
+            raise ContractError("unregistered original logical member")
+        return name
+
+    def member_identity(self, name: str) -> Json:
+        self.check()
+        row = self._entries[name]
+        assert self.source is not None
+        original = self.source._originals
+        return {"recipe": "rust-player-packed-member-v1",
+            "descriptor_sha256": self._descriptor_sha256,
+            "database_sha256": original.descriptor["database_sha256"],
+            "name": name, "length": row.get("length", row.get("bytes")),
+            "sha256": row["sha256"]}
+
+    def _remember(self, name: str) -> None:
+        if name not in self.files:
+            identity = self.member_identity(name)
+            self.charge(32 * json_bound(identity) + 65536)
+            self.files[name] = {"sha256": identity["sha256"],
+                "bytes": identity["length"], "identity": identity}
+
+    def read(self, path: Path) -> bytes:
+        self.check()
+        name = self._name(path)
+        assert self.source is not None
+        row = self._entries[name]
+        if row.get("length", row.get("bytes")) > self.settings.max_source_file_mib * 1024**2:
+            raise ContractError("bounded original logical file required")
+        raw = self.source.read(name)
+        self._remember(name)
+        return raw
+
+    def object(self, path: Path) -> Json:
+        name = self._name(path)
+        row = self._entries[name]
+        self.charge(32 * row.get("length", row.get("bytes")) + 65536)
+        return _json(self.read(path))
+
+    def contains(self, path: Path) -> bool:
+        self.check()
+        return path.absolute().is_relative_to(self.root) and path.relative_to(self.root).as_posix() in self._entries
+
+    def inventory(self, pattern: str) -> tuple[str, ...]:
+        self.check()
+        return tuple(name for name in sorted(self._entries)
+            if pattern == "**/*" or fnmatch.fnmatchcase(name, pattern))
+
+    def remember_inventory_entry(self, name: str, size: int, checksum: str) -> None:
+        self.check()
+        row = self._entries.get(name)
+        if row is None or row.get("length", row.get("bytes")) != size or row["sha256"] != checksum:
+            raise ContractError("inventory differs from actual sealed original index")
+        self._remember(name)
+
+    def remember(self, path: Path, identity: Json, checksum: str) -> None:
+        name = self._name(path)
+        if canonical(identity) != canonical(self.member_identity(name)) or self._entries[name]["sha256"] != checksum:
+            raise ContractError("logical member identity differs from actual original")
+        self._remember(name)
+
+    def finalize(self) -> None:
+        self._check_full()  # Never reuse a cached check at the records-return boundary.
+
+    def validate_index(self, manifest: Json) -> None:
+        assert self.source is not None
+        index = self.source._index
+        groups = {row['group_id']: row for row in index['groups']}
+        episodes = {row['episode_id']: row for row in index['episodes']}
+        results = {row['episode_id']: row for row in manifest['episodes']}
+        if (set(groups) != {group['episodes'][0]['episode_id'] for group in manifest['schedule']}
+                or set(episodes) != set(results)):
+            raise ContractError('actual Rust writer index differs from complete plan')
+        membership = {}
+        for group in manifest['schedule']:
+            names = [row['episode_id'] for row in group['episodes']]
+            gid = names[0]
+            # Rust storage fixes these data-only group controls before admission;
+            # actual executed process health is sealed separately after stop.
+            if groups[gid]['record'] != {'seed': group['seed'], 'episode_ids': names}:
+                raise ContractError('actual Rust writer group controls differ from plan')
+            for name in names:
+                row, result = episodes[name], results[name]
+                terminal = self.object(self.root / name / 'native-terminal.json')['report']
+                if (row['group_id'] != gid or row['game_id'] != result['game_id']
+                        or row['record'] != terminal or terminal['episode'] != name
+                        or terminal['game'] != result['game_id']
+                        or terminal['end_kind'] != result['end_kind']
+                        or terminal['error'] != result['failure']
+                        or terminal['outcome'] != result['outcome']):
+                    raise ContractError('actual Rust writer episode differs from final report')
+                membership[name] = gid
+        if any(row['group_id'] != membership[row['name'].split('/')[0]] for row in index['members']):
+            raise ContractError('actual Rust writer member belongs to another group')
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        if getattr(self, '_cleanup_children', None):
+            close_resources(self, [])
+        if self.source is not None:
+            self.source.close()
+        if self._cold_descriptor is not None:
+            self._cold_descriptor.close()
+        self._entries.clear()
+        self.files.clear()
+        for reservation in self._reservations:
+            reservation.close()
+        self._reservations.clear()
+        self._closed = True
+
+
+class RustColdOriginals(RustPlayerOriginals):
+    """Cold DATA reader from actual handoff/lock/held files; never online Source."""
+
+    def __init__(self, cold: Any, ownership: Any, path: Path, checksum: str, *,
+                 pool: PackedArtifactPool, settings: Any, deadline: float) -> None:
+        from gf_training.lineage import require_hpo_run_owner
+        from gf_training.rust_player_supervision import ColdContinuation
+        if type(cold) is not ColdContinuation or type(pool) is not PackedArtifactPool:
+            raise ContractError('actual cold continuation and SAME original pool required')
+        cold.require_pair()
+        require_hpo_run_owner(ownership.directory, ownership)
+        if ownership.directory != Path(cold._control.operation['parent_directory']):
+            raise ContractError('actual cold parent mutation owner differs')
+        self.pending, self._cold = None, cold
+        self._resume = None
+        self.pool, self.budget = pool, pool.budget
+        self._descriptor_path, self._descriptor_sha256 = path, checksum
+        self.root, self.settings, self.deadline = path.parent, settings, deadline
+        self.source, self._cold_descriptor = None, None
+        self.files, self._entries, self._reservations = {}, {}, []
+        self._closed = False
+        self._cleanup_children = []
+        self._open_sealed_originals()
+
+
+
+class RustResumeOriginals(RustPlayerOriginals):
+    """Current-host resume DATA arm; never a recreated Cold/Pending capability."""
+
+    def __init__(self, audit: Any, path: Path, checksum: str, *, settings: Any, deadline: float) -> None:
+        from gf_training.rust_player_restore import RustResumeAudit
+        if type(audit) is not RustResumeAudit:
+            raise ContractError('actual current-host resume audit required')
+        audit.require()
+        self.pending = self._cold = None
+        self._resume = audit
+        self.pool, self.budget = audit.pool, audit.pool.budget
+        self._descriptor_path, self._descriptor_sha256 = path, checksum
+        self.root, self.settings, self.deadline = path.parent, settings, deadline
+        self.source, self._cold_descriptor = None, None
+        self.files, self._entries, self._reservations = {}, {}, []
+        self._closed = False
+        self._cleanup_children = []
+        self._open_sealed_originals()
+
+
+
+
+class RustCompletedOriginals(RustPlayerOriginals):
+    """Readonly originals for actual current-owned completed DATA audit only."""
+    def __init__(self, audit: Any, path: Path, checksum: str, *, settings: Any, deadline: float) -> None:
+        from gf_training.rust_player_evaluation import RustCompletedParentAudit
+        if type(audit) is not RustCompletedParentAudit:
+            raise ContractError('actual current completed-parent DATA audit owner required')
+        audit.require()
+        if audit._phase != 'AUDITING' or deadline > audit.deadline:
+            raise ContractError('actual bounded completed-parent audit phase required')
+        expected_root = Path(audit.loaded.config.storage.db_root) / audit.state['run_id'] / 'collections'
+        try:
+            number = int(path.parent.name.removeprefix('batch-'))
+        except ValueError as error:
+            raise ContractError('completed original batch ordinal required') from error
+        if (path.parent.parent != expected_root or path.name != 'collection.pending.json'
+                or path.parent.name != f'batch-{number:06}' or not 0 <= number < audit.state['updates']):
+            raise ContractError('completed original descriptor leaves actual committed collection namespace')
+        self.pending = self._cold = self._resume = None
+        self._completed = audit
+        self.pool, self.budget = audit.pool, audit.budget
+        self._descriptor_path, self._descriptor_sha256 = path, checksum
+        self.root, self.settings, self.deadline = path.parent, settings, deadline
+        self.source, self._cold_descriptor = None, None
+        self.files, self._entries, self._reservations = {}, {}, []
+        self._closed = False
+        self._cleanup_children = []
+        self._open_sealed_originals()
+    def __reduce__(self) -> Any:
+        raise TypeError('actual completed-originals DATA custody cannot be copied or serialized')
+
+
+def learner_records(outputs: Any, seats: Json, closures: Json, missing: Any, *, games: int) -> tuple[Any, ...]:
+    """Pure own-seat selection after full Raw/Replay; never outcome filtering."""
+    if missing or closures != {'natural': games}:
+        raise ContractError('actual complete natural curriculum required')
+    return tuple(item.records for item in outputs if item.viewer == seats[item.episode_id])
+
+
+class _OrdinarySourceContext(_RolloutContext):
+    """Private conversion of the established Source's exact immutable pairs."""
+    _records: tuple[Any, ...]
+    _deadline: float
+
+    def __init__(self, source: RustPlayerSource) -> None:
+        if (type(source) is not RustPlayerSource or source.registry.hpo
+                or source.registry.failed or source.registry.closed or source.state != 'SEALED'
+                or source.registry.pending is not source or source.registry.current is not source.parent
+                or source.registry.state['updates'] != source.parent.generation
+                or source.parent.generation != source.plan.linkage['collection_generation']
+                or source.registry.local.learner.model.version != '3'):
+            raise ContractError('actual current ordinary Model3 Source required for conversion')
+        source._packing_deadline()
+        super().__init__(source.registry.config.actions, source.registry.local.learner._context.rules)
+        object.__setattr__(self, '_records', source._records)
+        object.__setattr__(self, '_deadline', source.plan.execution_deadline)
+
+    def tokenize_tables(self, index: int, record: Any, model: Any) -> tuple[Any, ...]:
+        from gf_common.domain import integer
+        from gf_common.structured_tokens import _encode_candidate_tokens
+        from gf_models.structured_config import aggregate_recipe
+        from gf_training.group_pack_resources import remaining
+        if not 0 <= index < len(self._records) or self._records[index] is not record:
+            raise ContractError('conversion requires the SAME validated Source record')
+        integer(model.max_positions, 1, 128)
+        result = []
+        for frame, table in zip(record.frames, record.tables, strict=True):
+            remaining(self._deadline)
+            if frame.layout is not self.layout or table.layout is not self.layout or table.frame_hash != frame.frame_hash:
+                raise ContractError('ordinary Source table/frame binding differs')
+            result.append(_encode_candidate_tokens(table, frame.frame_hash, model.max_positions,
+                aggregate_window=model.event.aggregate_window, aggregate_recipe=aggregate_recipe(model), layout=self.layout))
+        return tuple(result)
+
+
+class RustPlayerSource:
+    """Private same-host projection of actual native capture and sealed originals."""
+
+    collection: Any
+    registry: Any
+    plan: Any
+    parent: Any
+    state: str
+    _rollout: Any
+    _records: Any
+    _charges: list[Any]
+    _numeric_originals: dict[str, OriginalFile]
+    _parent_lease: Any
+    _pool_hold: Any
+    originals: RustPlayerOriginals | None
+    manifest: Any
+    accepted_decisions: int
+    closure_counts: Json
+    missing_replays: list[str]
+    _numeric: Any
+    _inspection: RustEmptyCollection
+    selection: Json
+
+    def __init__(self, issuer: object = None) -> None:
+        if issuer is not _SOURCE_ISSUER:
+            raise ContractError('actual native/writer Source issuer required')
+
+    def __reduce__(self) -> Any:
+        raise TypeError('actual same-host Source authority cannot be serialized')
+
+    @classmethod
+    def project(cls, collection: Any) -> RustPlayerSource | RustEmptyCollection:
+        inspection = RustEmptyCollection._inspect(collection)
+        if inspection.registry.hpo and inspection.collected_decisions == 0:
+            return inspection
+        result = cls(_SOURCE_ISSUER)
+        result._inspection = inspection
+        result.collection, result.registry, result.plan = inspection.collection, inspection.registry, inspection.plan
+        result.parent, result.originals = inspection.parent, inspection.originals
+        result.manifest, result._records = inspection.manifest, inspection._records
+        result.accepted_decisions = inspection.accepted_decisions
+        result.closure_counts, result.missing_replays = inspection.closure_counts, inspection.missing_replays
+        result.state, result._rollout, result._numeric = 'SEALED', None, None
+        result._charges, result._numeric_originals = [], {}
+        if inspection.registry.hpo:
+            result.selection = inspection.selection
+        result.registry.pending = result
+        return result
+
+    def require(self) -> None:
+        from gf_training.group_pack_resources import remaining
+        remaining(self.plan.execution_deadline)
+        self.collection.require(self.registry, self.plan)
+        self.parent.require()
+        if self.registry.pending is not self or self.registry.current is not self.parent or self.state in ('FAILED', 'CLOSED'):
+            raise ContractError('actual current single-use Rust Source required')
+        if self.registry.state['updates'] != self.parent.generation or self.parent.generation != self.plan.linkage['collection_generation']:
+            raise ContractError('actual Source generation differs from current parent')
+
+    def _packing_deadline(self) -> None:
+        from gf_training.group_pack_resources import remaining
+        remaining(self.plan.execution_deadline)
+
+    def persist(self, directory: Path) -> Json:
+        from gf_models.arrays import sha256
+        from gf_training.structured_rollout import (
+            StructuredRollout,
+            _owned_bytes,
+            _predicted_token_bytes,
+            _write_rollout,
+        )
+        self.require()
+        if self.state != 'SEALED':
+            raise ContractError('actual Source numeric persistence is single use')
+        if self.collection.pack_verification is not None:
+            return self._persist_native(directory)
+        if self.registry.hpo:
+            return self._persist_hpo(directory)
+        budget = self.registry.budget
+        # Originals already fund the parsed graphs. Only new token/rollout and
+        # planning owners are admitted here, sharing that same Source account.
+        token_charge = budget.reserve(_predicted_token_bytes(self._records))
+        self._charges.append(token_charge)
+        planning = budget.reserve(0)
+        self._charges.append(planning)
+        try:
+            local = self.registry.local
+            self._rollout = StructuredRollout(self._records, local.learner.model,
+                digest(asdict(self.registry.config.actions)), action_contract=self.registry.config.actions.action_contract,
+                purpose='qualified_game', synthetic_capacity=False, _context=_OrdinarySourceContext(self))
+            seen: set[int] = set()
+            _owned_bytes(self._records, seen)
+            token_charge.resize(_owned_bytes((self._rollout.model, self._rollout.episodes,
+                self._rollout.locations, self._rollout.action_config_hash, self._rollout.policy_version,
+                self._rollout.input_binding), seen))
+            metadata = _write_rollout(directory, self._rollout, check=self._packing_deadline,
+                _before_manifest=self.require,
+                max_owned_bytes=local.learner.model.resources.max_owned_bytes,
+                reserve=lambda size: planning.resize(max(0, size - self._rollout.resident_bytes)))
+            self.numeric_directory = directory
+            self.numeric_files = {'rollout.json': sha256(directory / 'rollout.json'), **metadata['data']['files']}
+            for name, expected in self.numeric_files.items():
+                original = OriginalFile(directory / name, self.plan.execution_deadline)
+                self._numeric_originals[name] = original
+                if original.sha256 != expected:
+                    raise ContractError('actual numeric publication differs from completed writer')
+            self._numeric_metadata = canonical(metadata)
+            self._charges.append(budget.reserve(32 * len(self._numeric_metadata.encode()) + 65536))
+            self._episode_digests = self._digests()
+            self._proof_json = self._build_proof()
+            self.state = 'PERSISTED'
+            return metadata
+        except BaseException as error:
+            self.state = 'FAILED'
+            vars(error)['cleanup_owner'] = self
+            raise
+        finally:
+            if self.state == 'PERSISTED':
+                planning.close()
+
+    @property
+    def decision_count(self) -> int:
+        if self.registry.hpo:
+            return self.selection['used_decisions']
+        return self.collected_decisions
+
+    @property
+    def collected_decisions(self) -> int:
+        if self.collection.pack_verification is not None:
+            return self._inspection.collected_decisions
+        return sum(len(record.frames) for record in self._records)
+
+    def _persist_native(self, directory: Path) -> Json:
+        from gf_training.rust_ppo_rollout import _RustTrainingRollout
+        try:
+            self._numeric = _RustTrainingRollout(self)
+            if not self.registry.hpo:
+                self._rollout = self._numeric
+            metadata, self.numeric_files = self._numeric.persist(directory)
+            self.numeric_directory = directory
+            for name, expected in self.numeric_files.items():
+                original = OriginalFile(directory / name, self.plan.execution_deadline)
+                self._numeric_originals[name] = original
+                if original.sha256 != expected:
+                    raise ContractError('actual native numeric publication checksum differs')
+            self._numeric_metadata = canonical(metadata)
+            self._charges.append(self.registry.budget.reserve(32 * len(self._numeric_metadata.encode()) + 65536))
+            self._episode_digests = self._digests()
+            self._proof_json = self._build_proof()
+            self.state = 'PERSISTED'
+            return metadata
+        except BaseException as error:
+            self.state = 'FAILED'
+            vars(error)['cleanup_owner'] = self
+            raise
+
+    def _persist_hpo(self, directory: Path) -> Json:
+        from gf_common.hpo import selected_locations
+        from gf_training.hpo_owned_rollout import encode_rust_batch
+        try:
+            self._numeric = encode_rust_batch(self, selected_locations=selected_locations(self.selection),
+                selection=self.selection, numeric_budget_bytes=self.registry.config.hpo_spec['operating']['numeric_budget_bytes'])
+            written = self._numeric._persist_within_source_quota(directory,
+                source_remaining_bytes=self.registry.budget.limit - self.registry.budget.used)
+            metadata = written['manifest']
+            self.numeric_directory, self.numeric_files = directory, written['files']
+            for name, expected in self.numeric_files.items():
+                original = OriginalFile(directory / name, self.plan.execution_deadline)
+                self._numeric_originals[name] = original
+                if original.sha256 != expected:
+                    raise ContractError('actual owned numeric6 publication checksum differs')
+            self._numeric_metadata = canonical(metadata)
+            self._charges.append(self.registry.budget.reserve(32 * len(self._numeric_metadata.encode()) + 65536))
+            self._episode_digests = self._digests()
+            self._proof_json = self._build_proof()
+            self.state = 'PERSISTED'
+            return metadata
+        except BaseException as error:
+            self.state = 'FAILED'
+            vars(error)['cleanup_owner'] = self
+            raise
+
+    def _digests(self) -> tuple[str, ...]:
+        from gf_training.structured_rollout import _episode_correspondence_digest
+        if self.collection.pack_verification is not None:
+            return tuple(episode.facts['episode_digest'] for episode in self.collection.training)
+        return tuple(_episode_correspondence_digest(record) for record in self._records)
+
+    def _build_proof(self) -> str:
+        from gf_common.artifacts import json_bound
+        from gf_models.structured_binding import input_binding_game_v3
+        from gf_training.rust_player_lineage import validate_record_shape
+        owner, collection, registry = self.originals, self.collection, self.registry
+        actual = registry.admission.observation
+        mode = source_mode(registry.state['effective_config'])
+        if mode is not None:
+            storage = collection.pack_verification
+            assert storage is not None
+            files = self._inspection._training_files
+        else:
+            assert owner is not None and owner.source is not None
+            original = owner.source._originals
+            storage = original.descriptor | {'logical_sha256': original.validated['seal']['logical_sha256']}
+            files = owner.files
+        correspondence = {'recipe': 'rust-player-source-numeric-v1',
+            'manifest_sha256': collection.manifest_sha256, 'episode_digests': self._episode_digests,
+            'snapshot_identity': self.parent.identity, 'numeric_files': self.numeric_files}
+        proof = {'schema_version': 4, 'kind': 'rust-player-source-proof-v1',
+            **input_binding_game_v3(registry.config.actions.action_contract, registry.local.learner._context.rules),
+            'qualified': False, 'parent_qualification': 'not_performed', 'run_id': registry.state['run_id'],
+            'generation': registry.state['updates'], 'batch_id': self.plan.linkage['batch_id'],
+            'manifest_sha256': collection.manifest_sha256, 'source_set_sha256': digest(files),
+            'files': files, 'games': len(self.manifest['episodes']),
+            'accepted_decisions': self.accepted_decisions, 'closure_counts': self.closure_counts,
+            'missing_replays': self.missing_replays, 'runtime_binding_sha256': registry.state['runtime_binding_sha256'],
+            'player_producer': actual['producer'], 'capture_authority_sha256': collection.capture_sha256,
+            'collection_retirement_sha256': collection.retirement_sha256,
+            'writer_retirement': {'schema_version': 1, 'kind': 'rust-player-writer-retirement-v1',
+                'run_id': registry.state['run_id'], 'batch_id': self.plan.linkage['batch_id'],
+                'descriptor_sha256': collection.pending.descriptor_sha256,
+                'writer_thread_identity': collection.writer.thread_identity, 'writer_joined': True,
+                'cleanup_errors': list(collection.writer.cleanup_errors)},
+            'storage': {'format': 'sqlite-group-pack-v1', 'descriptor_path': str(collection.pending.path),
+                'descriptor_sha256': collection.pending.descriptor_sha256,
+                'database_sha256': storage['database_sha256'], 'seal_id': storage['seal_id'],
+                'logical_sha256': storage['logical_sha256']},
+            'snapshot_identity': self.parent.identity, 'episode_digests': self._episode_digests,
+            'source_correspondence': digest(correspondence), 'service_usage': self.manifest['service_usage']}
+        if registry.hpo:
+            from gf_common.hpo import selected_locations
+            training = registry.local.learner.training
+            locations = selected_locations(self.selection)
+            proof.update(schema_version=7, kind='rust-player-hpo-source-proof-v1',
+                origin='producer-owned-v1', encoder=source_encoder(registry.state['effective_config']), selection=self.selection,
+                selection_sha256=digest(self.selection), replay_reconciled=True,
+                expected_optimizer_step_delta=self._numeric.metadata['expected_optimizer_step_delta'],
+                context_costs={'context_decisions': training.epochs * sum(position + 1 for _, position in locations),
+                    'suffix_decisions': training.epochs * sum(min(position + 1, training.tbptt_length) for _, position in locations)})
+        if mode is not None:
+            proof.update(schema_version=8 if registry.hpo else 5, ppo_source=mode,
+                pack_verification=collection.pack_verification, training_episodes=self.manifest['training_episodes'])
+        validate_record_shape(proof, 'proof', hpo=registry.hpo)
+        self._charges.append(registry.budget.reserve(32 * json_bound(proof) + 65536))
+        return canonical(proof)
+
+    @property
+    def proof(self) -> Json:
+        """Borrowed metadata, valid only until this actual Source closes."""
+        self.require()
+        if self.state not in ('PERSISTED', 'UPDATED', 'SAVED'):
+            raise ContractError('actual completed numeric persistence required')
+        return json.loads(self._proof_json)
+
+    def consume(self, output: Path) -> tuple[Json, Any]:
+        """Consume the same privately owned rollout once, then actual local save."""
+        self.require()
+        if self.state != 'PERSISTED':
+            raise ContractError('actual persisted Source is single use')
+        self.state = 'VALIDATING'
+        try:
+            return self._consume(output)
+        except BaseException as error:
+            self.state, self.registry.failed = 'FAILED', True
+            vars(error)['cleanup_owner'] = self
+            raise
+
+    def _consume(self, output: Path) -> tuple[Json, Any]:
+        registry, local = self.registry, self.registry.local
+        numeric = self._numeric if registry.hpo else self._rollout
+        if (local.learner.steps != self.parent.optimizer_steps
+                or local.learner.model != numeric.model
+                or numeric.action_config_hash != digest(asdict(registry.config.actions))
+                or self._digests() != self._episode_digests
+                or output != registry.directory / 'artifacts' / f'{registry.state["updates"] + 1:06}'):
+            raise ContractError('actual unchanged single-use persisted Source/local generation required')
+        # OriginalFile.hash uses two alternating 64KiB read buffers at assignment.
+        with registry.budget.reserve(128 * 1024):
+            for name, original in self._numeric_originals.items():
+                original.recheck()
+                if original.hash() != self.numeric_files[name]:
+                    raise ContractError('actual persisted numeric original hash changed')
+                original.recheck()
+            if canonical(json.loads(self._numeric_originals['rollout.json'].read(
+                    registry.config.preprocessing.max_source_file_mib * 1024**2))) != self._numeric_metadata:
+                raise ContractError('actual persisted numeric metadata changed')
+        if self.collection.pack_verification is not None:
+            self.require()  # Recheck the same held Pack after the numeric read interval.
+        before = local.learner.steps
+        self.state = 'UPDATING'  # Failures are terminal; no retry resets Adam/RNG.
+        try:
+            metrics = local.update_owned(self._numeric) if registry.hpo else local._update_from_source(self)
+            from gf_training.group_pack_resources import remaining
+            remaining(self.plan.execution_deadline)
+            delta = (self._numeric.metadata['expected_optimizer_step_delta'] if registry.hpo
+                else ordinary_ppo_update(registry.config.training).optimizer_step_delta(self.decision_count))
+            if local.learner.steps != before + delta:
+                raise ContractError('actual local optimizer delta differs from frozen PPO recipe')
+            self.state = 'UPDATED'
+            pair = local.save(output, **({'save_budget_bytes': registry.config.hpo_spec['operating']['save_budget_bytes']} if registry.hpo else {}))
+            pair.require(local)
+            self.result_pair, self.metrics = pair, canonical(metrics)
+            self.state = 'SAVED'
+            return metrics, pair
+        except BaseException as error:
+            self.state, registry.failed = 'FAILED', True
+            vars(error)['cleanup_owner'] = self
+            raise
+
+    def require_saved_result(self, registry: Any, pair: Any, update: Json, policy: Any) -> None:
+        self.require()
+        pair.require(registry.local)
+        games = (registry.config.hpo_spec['training_recipe']['collection_games'] if registry.hpo
+            else ordinary_ppo_update(registry.config.training).collection_games)
+        if (registry is not self.registry or self.state != 'SAVED' or pair is not self.result_pair
+                or policy._pair is not pair or policy._budget is not registry.budget
+                or policy.optimizer_steps != registry.local.learner.steps
+                or policy.generation != registry.state['updates'] + 1
+                or update['run_id'] != registry.state['run_id']
+                or update['generation'] != policy.generation
+                or update['parent_sha256'] != self.parent.generation_sha256
+                or update['parent_snapshot_identity'] != self.parent.identity
+                or update['result_snapshot_identity'] != policy.identity
+                or update['accepted_decisions'] != self.decision_count
+                or canonical(update['numeric_files']) != canonical(self.numeric_files)
+                or update['numeric_sha256'] != self.numeric_files['rollout.json']
+                or update['collection_manifest_sha256'] != self.collection.manifest_sha256
+                or canonical(update['source_proof']) != self._proof_json
+                or canonical(update['metrics']) != self.metrics
+                or update['runtime_binding_sha256'] != registry.state['runtime_binding_sha256']
+                or canonical(update['policy_bindings']) != canonical(self.manifest['policy_bindings'])
+                or canonical(update['learner_seats']) != canonical(self.plan.linkage['learner_seats'])
+                or update['batch_id'] != self.plan.linkage['batch_id']
+                or update['actual_games'] != games
+                or update['planned_games'] != games
+                or update['collection_retirement_sha256'] != self.collection.retirement_sha256):
+            raise ContractError('actual saved result differs from SAME consumed Source transaction')
+
+    def commit_completed(self, policy: Any) -> None:
+        if self.state != 'SAVED' or policy._pair is not self.result_pair:
+            raise ContractError('actual generation completion differs from SAME saved result')
+        policy.require()
+        self.state = 'COMMITTED'
+
+    def close(self) -> None:
+        if self.state == 'CLOSED':
+            return
+        registry = getattr(self, 'registry', None)
+        local = getattr(registry, 'local', None)
+        account = getattr(local, 'device_account', None)
+        operation = account._active if account is not None else None
+        if operation is not None and operation.state == 'FAILED_HELD':
+            # The numerical hold can still own copied rollout/token/raw aliases.
+            # Keep this SAME actual Source grant and owner until positive device
+            # retirement; poison alone does not fund retained CPU graphs.
+            raise BufferError('actual failed operation still owns Source aliases/funding')
+        self._rollout, self._records, self.manifest = None, (), None
+        if self._numeric is not None:
+            self._numeric.close()
+            self._numeric.require_retired()
+            self._numeric = None
+        self._proof_json = self._numeric_metadata = ''
+        self._episode_digests = ()
+        for original in self._numeric_originals.values():
+            original.close()
+        self._numeric_originals.clear()
+        self._inspection.close()
+        for charge in self._charges:
+            charge.close()
+        self._charges.clear()
+        if self.registry.pending is self:
+            self.registry.pending = None
+        self.state = 'CLOSED'
+
+
+class RustEmptyCollection:
+    """Actual all-natural zero-selection DATA owner; no numeric/update authority."""
+    collection: Any
+    registry: Any
+    plan: Any
+    parent: Any
+    state: str
+    _cleanup_children: list[Any]
+    _parent_lease: Any
+    _pool_hold: Any
+    _records: Any
+    originals: RustPlayerOriginals | None
+    manifest: Any
+    accepted_decisions: int
+    closure_counts: Json
+    missing_replays: list[str]
+    selection: Json
+    _training_files: Json
+    _files_charge: Any = None
+
+    def __init__(self, issuer: object) -> None:
+        if issuer is not _SOURCE_ISSUER:
+            raise ContractError('actual inspected all-natural collection required')
+
+    @classmethod
+    def _inspect(cls, collection: Any) -> Any:
+        from gf_common.card_instance_collection import PPO_BATCH, hpo_batch_role
+        from gf_training.card_instance_collection_source import inspect_rust_game_manifest
+        from gf_training.card_instance_source import _check_collection_parent
+        from gf_training.rust_player_collection import RustCollectedBatch
+        from gf_training.structured_source import _inspect_collection_content
+        if type(collection) is not RustCollectedBatch:
+            raise ContractError('actual same-host native/writer collection required')
+        registry, plan = collection.registry, collection.plan
+        collection.require(registry, plan)
+        if registry.pending is not None:
+            raise ContractError('actual unused Source transaction required')
+        result = cls(_SOURCE_ISSUER)
+        result.collection, result.registry, result.plan = collection, registry, plan
+        result.parent = registry.current
+        result.state = 'INSPECTING'
+        registry.pending = result  # Retain actual partially acquired owner on error.
+        result._cleanup_children = []
+        result._parent_lease = result._pool_hold = None
+        result._records, result.manifest = (), None
+        result.originals = None
+        try:
+            result._parent_lease = result.parent.retain(result)
+            result._pool_hold = registry.pool.hold_close(result)
+            if collection.pack_verification is not None:
+                result._inspect_native()
+                result.state = 'SEALED'
+                return result
+            owner = collection.open()
+            result.originals = owner
+            with owner._ordinary_inspection(result) if not registry.hpo else nullcontext():
+                manifest = collection.manifest
+                actual = registry.admission.observation
+                if (digest(manifest) != collection.manifest_sha256
+                        or manifest['runtime_binding_sha256'] != registry.state['runtime_binding_sha256']
+                        or manifest['player_producer'] != actual['producer']
+                        or digest(manifest['capture_authority']) != collection.capture_sha256
+                        or digest(manifest['logical_retirement']) != collection.retirement_sha256):
+                    raise ContractError('actual collection identity/runtime/capture differs')
+                _check_collection_parent(manifest, registry.state, plan)
+                role = hpo_batch_role(registry.config.hpo_spec['training_recipe']['collection_games']) if registry.hpo else PPO_BATCH
+                episodes, specs = inspect_rust_game_manifest(owner, manifest, registry.config.actions,
+                    registry.config.run.split, role=role)
+                outputs, accepted, closure, missing = _inspect_collection_content(owner,
+                    registry.config.actions, manifest, episodes, specs, _game=True, packed=True)
+                seats = plan.linkage['learner_seats']
+                games = role.games if registry.hpo else ordinary_ppo_update(registry.config.training).collection_games
+                records = learner_records(outputs, seats, closure, missing, games=games)
+            result.manifest, result._records = manifest, records
+            result.accepted_decisions = accepted
+            result.closure_counts, result.missing_replays = closure, missing
+            if registry.hpo:
+                from gf_training.hpo_collection import selection_for_counts
+                result.selection = selection_for_counts(tuple(len(record.frames) for record in records),
+                    learning_seed=registry.state['seed'], batch=registry.state['updates'],
+                    decision_budget=registry.config.hpo_spec['decision_budget'], used_before=registry.state['used_decisions'])
+            result.state = 'SEALED'
+            return result
+        except BaseException as error:
+            result.state = 'FAILED'
+            retain_cleanup(result, error)
+            raise
+
+    def _inspect_native(self) -> None:
+        from gf_training.card_instance_source import _check_collection_parent
+        from gf_training.hpo_collection import selection_for_counts
+
+        collection, registry, plan = self.collection, self.registry, self.plan
+        manifest = collection.manifest
+        actual = registry.admission.observation
+        if (source_mode(registry.state['effective_config']) is None
+                or digest(manifest) != collection.manifest_sha256
+                or manifest['runtime_binding_sha256'] != registry.state['runtime_binding_sha256']
+                or manifest['player_producer'] != actual['producer']
+                or digest(manifest['capture_authority']) != collection.capture_sha256
+                or digest(manifest['logical_retirement']) != collection.retirement_sha256
+                or manifest['status'] != 'complete'):
+            raise ContractError('actual native training collection identity/runtime/capture differs')
+        _check_collection_parent(manifest, registry.state, plan)
+        self.manifest = manifest
+        self.accepted_decisions = sum(episode['decisions'] for episode in manifest['episodes'])
+        self.closure_counts, self.missing_replays = {'natural': len(collection.training)}, []
+        if registry.hpo:
+            self.selection = selection_for_counts(tuple(len(episode.rows) for episode in collection.training),
+                learning_seed=registry.state['seed'], batch=registry.state['updates'],
+                decision_budget=registry.config.hpo_spec['decision_budget'], used_before=registry.state['used_decisions'])
+        with collection.pending.view() as view:
+            descriptor_controls = json.loads(bytes(view))['controls']
+        controls = {row['name']: (row['bytes'], row['sha256']) for row in descriptor_controls}
+        filed = {row['path']: (row['bytes'], row['sha256']) for row in manifest['files']}
+        for name, pair in filed.items():
+            if name in controls and controls[name] != pair:
+                raise ContractError('sealed writer control differs from actual manifest inventory')
+        if set(controls) - set(filed) != {'manifest.json', 'report.json'}:
+            raise ContractError('sealed writer control inventory differs from manifest')
+        if controls['report.json'][1] != manifest['report_sha256']:
+            raise ContractError('sealed report SHA differs from actual manifest')
+        self._files_charge = registry.budget.reserve(1024 * (len(filed) + len(controls)))
+        storage = collection.pack_verification
+        assert storage is not None
+        files = {}
+        for name, (size, expected) in (filed | controls).items():
+            identity = {'recipe': 'rust-player-packed-member-v1', 'name': name, 'length': size,
+                'sha256': expected, 'descriptor_sha256': storage['descriptor_sha256'],
+                'database_sha256': storage['database_sha256']}
+            files[name] = {'bytes': size, 'sha256': expected, 'identity': identity}
+        self._training_files = files
+
+    @property
+    def collected_decisions(self) -> int:
+        if self.collection.pack_verification is not None:
+            return sum(len(episode.rows) for episode in self.collection.training)
+        return sum(len(record.frames) for record in self._records)
+
+    @property
+    def decision_count(self) -> int:
+        return 0
+
+    def require(self) -> None:
+        self.collection.require(self.registry, self.plan)
+        self.parent.require()
+        pending = self.registry.pending
+        if (self.state not in ('SEALED', 'INSPECTING') or self.registry.current is not self.parent
+                or pending is not self and getattr(pending, '_inspection', None) is not self):
+            raise ContractError('actual same-batch collected DATA owner required')
+
+    def empty_marker(self) -> Json:
+        self.require()
+        if not self.registry.hpo or self.collected_decisions or self.selection['used_decisions']:
+            raise ContractError('actual zero learner collection required')
+        pending = self.collection.pending
+        pending.recheck()
+        result = {'batch_id': self.plan.linkage['batch_id'],
+            'collection_generation': self.parent.generation,
+            'manifest_path': str(pending.directory / 'manifest.json'),
+            'manifest_sha256': self.collection.manifest_sha256,
+            'descriptor_path': str(pending.path), 'descriptor_sha256': pending.descriptor_sha256,
+            'learner_decisions': 0}
+        if self.collection.pack_verification is not None:
+            result.update(ppo_source=source_mode(self.registry.state['effective_config']),
+                pack_verification=self.collection.pack_verification, snapshot_identity=self.parent.identity,
+                training_episodes=self.manifest['training_episodes'], policy_bindings=self.manifest['policy_bindings'],
+                schedule=self.manifest['schedule'], service_usage=self.manifest['service_usage'])
+        return result
+
+    def close(self) -> None:
+        if self.state == 'CLOSED':
+            return
+        self._records, self.manifest = (), None
+        if self._files_charge is not None:
+            self._training_files = {}
+            self._files_charge.close()
+            self._files_charge = None
+        close_resources(self, [self.collection])
+        if self._parent_lease is not None:
+            self._parent_lease.close(self)
+        if self._pool_hold is not None:
+            self._pool_hold.retire(self)
+        if self.registry.pending is self:
+            self.registry.pending = None
+        self.state = 'CLOSED'
+
+    def __reduce__(self) -> Any:
+        raise TypeError('actual empty collection cannot be copied/serialized')

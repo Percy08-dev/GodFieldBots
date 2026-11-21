@@ -506,7 +506,6 @@ def _inspect_component_collection(owner: _SourceOwner, actions: Any,
     packed = type(owner) is PackedSourceOwner
     if packed and not _game:
         raise ContractError('packed original owner requires corrected game Source')
-    settings, deadline = owner.settings, owner.deadline
     manifest_name = 'manifest.json'
     if _game_pending is not None:
         from gf_common.card_instance_collection import FINAL_VALIDATION
@@ -518,19 +517,41 @@ def _inspect_component_collection(owner: _SourceOwner, actions: Any,
     if not _game and _game_role is not None:
         raise ContractError('corrected role cannot cross the engineering Source boundary')
     if _game:
-        from gf_common.candidate_columns import validate_descriptor_v2
         from gf_common.card_instance_collection import PPO_BATCH
-        from gf_common.card_instance_rules import card_instance_rules
-        from gf_common.card_instance_validation import reconcile_replay as game_reconcile
-        from gf_common.card_instance_validation import replay_closure as game_closure
         from gf_training.card_instance_collection_source import inspect_game_manifest
-        from gf_training.card_instance_journal import read_card_instance_journal
-        from gf_training.card_instance_source import _game_header
-        from gf_training.structured_rollout import game_episode_records
         episodes, specs = inspect_game_manifest(owner, manifest, actions, expected_split,
             role=PPO_BATCH if _game_role is None else _game_role, _pending=_game_pending)
     else:
         episodes, specs = _manifest(manifest, actions, expected_split)
+    outputs, accepted_count, closure_counts, missing_replays = _inspect_collection_content(
+        owner, actions, manifest, episodes, specs, _game=_game, packed=packed)
+    from gf_common.card_instance_rules import card_instance_rules
+    from gf_models.structured_binding import input_binding_game_v3
+    proof = {'schema_version': 1, 'kind': 'card-instance-original-source-proof' if _game else 'structured-component-source-proof',
+             **(input_binding_game_v3(actions.action_contract, card_instance_rules()) if _game else input_binding(actions.action_contract, 'component', False)), 'qualified': False,
+             'parent_qualification': 'not_performed', 'manifest_sha256': owner.files[manifest_name]['sha256'],
+             'source_set_sha256': digest(owner.files), 'files': owner.files, 'games': len(specs),
+             'accepted_decisions': accepted_count, 'closure_counts': closure_counts, 'missing_replays': missing_replays}
+    if packed:
+        from gf_common.group_pack_game import PROOF_KIND
+        proof.update(schema_version=2, kind=PROOF_KIND, storage=cast(PackedSourceOwner, owner).storage, custody=cast(PackedSourceOwner, owner).custody)
+    return ComponentCollection(owner.root, tuple(outputs), canonical(manifest).encode(), canonical(proof).encode())
+
+
+def _inspect_collection_content(owner: Any, actions: Any, manifest: Json,
+                                episodes: Json, specs: Any, *, _game: bool,
+                                packed: bool) -> tuple[list[ComponentEpisode], int, Json, list[str]]:
+    """Data-only Journal/candidate/Replay correspondence, no Source/proof issuance."""
+    if _game:
+        from gf_common.candidate_columns import validate_descriptor_v2
+        from gf_common.card_instance_rules import card_instance_rules
+        from gf_common.card_instance_validation import reconcile_replay as game_reconcile
+        from gf_common.card_instance_validation import replay_closure as game_closure
+        from gf_training.card_instance_journal import read_card_instance_journal
+        from gf_training.card_instance_source import _game_header
+        from gf_training.structured_rollout import game_episode_records
+    from gf_training.group_pack_game_source import PackedSourceOwner
+    settings, deadline = owner.settings, owner.deadline
     report = owner.object(owner.root / 'report.json')
     if (type(report.get('schema_version')) is not int or report['schema_version'] != 1
             or type(report.get('planned_games')) is not int or type(report.get('natural_denominator')) is not int
@@ -674,16 +695,7 @@ def _inspect_component_collection(owner: _SourceOwner, actions: Any,
     if referenced != all_columns:
         raise ContractError('missing/extra original candidate sidecars')
     owner.finalize()
-    from gf_models.structured_binding import input_binding_game_v3
-    proof = {'schema_version': 1, 'kind': 'card-instance-original-source-proof' if _game else 'structured-component-source-proof',
-             **(input_binding_game_v3(actions.action_contract, card_instance_rules()) if _game else input_binding(actions.action_contract, 'component', False)), 'qualified': False,
-             'parent_qualification': 'not_performed', 'manifest_sha256': owner.files[manifest_name]['sha256'],
-             'source_set_sha256': digest(owner.files), 'files': owner.files, 'games': len(specs),
-             'accepted_decisions': accepted_count, 'closure_counts': closure_counts, 'missing_replays': missing_replays}
-    if packed:
-        from gf_common.group_pack_game import PROOF_KIND
-        proof.update(schema_version=2, kind=PROOF_KIND, storage=cast(PackedSourceOwner, owner).storage, custody=cast(PackedSourceOwner, owner).custody)
-    return ComponentCollection(owner.root, tuple(outputs), canonical(manifest).encode(), canonical(proof).encode())
+    return outputs, accepted_count, closure_counts, missing_replays
 
 
 def component_episode_records(collection: ComponentCollection, *, learner_seats: dict[str, int]) -> tuple[EpisodeRecords, ...]:

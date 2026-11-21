@@ -59,6 +59,12 @@ class GroupPackWriter:
         self.settings = settings
         self.run_id = run_id
         self.deadline = deadline
+        from gf_common.performance_metrics import StorageMetrics
+        from gf_simulator_client.performance_diagnostics import host_diagnostics
+        self._performance = host_diagnostics()
+        self._performance_queue: Any = (StorageMetrics(scope=self._performance.current_scope or self._performance.scope(phase='idle'),
+            start_ns=time.monotonic_ns(), model='legacy-parent-rpc') if self._performance is not None else None)
+        self._performance_local: Any = threading.local() if self._performance is not None else None
         self._lock = threading.Lock()
         self._cleanup_lock = threading.Lock()
         self._joint_budget = budget
@@ -102,6 +108,7 @@ class GroupPackWriter:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,
                 bufsize=0,
+                env=_writer_environment(),
             )
             assert self._process.stdin is not None and self._process.stdout is not None
             os.set_blocking(self._process.stdin.fileno(), False)
@@ -157,6 +164,10 @@ class GroupPackWriter:
         try:
             if self._stopped or self._poisoned or self._sealed or self._closing:
                 raise RuntimeError("Writer no longer admits operations")
+            ticket = getattr(self._performance_local, 'ticket', None)
+            if ticket is not None:
+                with self._pending:
+                    self._performance_queue.dispatch(ticket, time.monotonic_ns())
             yield
         finally:
             self._lock.release()
@@ -175,13 +186,23 @@ class GroupPackWriter:
             self._pending_count += 1
         queued_acquired = False
         acquired = False
+        performance_queue = self._performance_queue
+        ticket = performance_queue.attempt(time.monotonic_ns()) if performance_queue is not None else None
         try:
             self._queue.acquire(queued, self.deadline, wait=True)
             queued_acquired = True
             self._budget.acquire(charged, self.deadline, wait=True)
             acquired = True
+            if ticket is not None:
+                with self._pending:
+                    performance_queue.admit(ticket, time.monotonic_ns(), queued)
+                self._performance_local.ticket = ticket
             yield
         finally:
+            if ticket is not None:
+                with self._pending:
+                    performance_queue.fail(ticket, time.monotonic_ns())
+                self._performance_local.ticket = None
             try:
                 # Retain admission until the SAME child is confirmed reaped.
                 if self._poisoned and self._process is not None and self._process.poll() is None:
@@ -578,6 +599,14 @@ class GroupPackWriter:
             self._stopped = True
             self._cleanup_physical()
             self._release_base()
+            if self._performance_queue is not None:
+                if self._poisoned:
+                    self._performance_queue.metrics.error('writer_failed')
+                if self._pending_count:
+                    self._performance_queue.metrics.error('pending_admission_observations_at_close')
+                assert self._performance is not None
+                self._performance.metrics(self._performance_queue.metrics, role='writer')
+                self._performance_queue = None
         except BaseException as error:
             retain_cleanup(self, error)
             raise
@@ -621,3 +650,8 @@ class PendingDescriptorOwner:
         if first is not None:
             retain_cleanup(self, first)
             raise first
+
+
+def _writer_environment() -> dict[str, str]:
+    from gf_simulator_client.performance_diagnostics import external_environment
+    return external_environment(os.environ)

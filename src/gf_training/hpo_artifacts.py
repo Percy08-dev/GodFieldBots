@@ -1,6 +1,7 @@
 """Recipe-aware resume5 ownership; shared safe model/shard/Adam/RNG mechanics."""
 from __future__ import annotations
 
+import hashlib
 import math
 from dataclasses import asdict
 from pathlib import Path
@@ -8,7 +9,7 @@ from typing import TYPE_CHECKING, Any
 
 from gf_common.card_instance import ActionConfigV3
 from gf_common.card_instance_rules import CardInstanceRules
-from gf_common.domain import ContractError, Json, closed, digest, integer
+from gf_common.domain import ContractError, Json, canonical, closed, digest, integer
 from gf_models.arrays import MAX_ARRAY_BYTES, sha256
 from gf_models.structured_artifacts import (
     _game_context_v4,
@@ -142,9 +143,10 @@ def restore_learner(learner: HpoLearner, directory: Path) -> None:
 
 
 def _restore_owned_learner(learner: HpoLearner, *, inference: Any, resume: Any,
-                          actor_metadata: Json, resume_manifest: Json, generation: int,
-                          budget: Any, actions: ActionConfigV3) -> None:
-    """Private Wire7 import receiver; validates/stages without legacy file I/O."""
+                          actor_metadata: Json | None, resume_manifest: Json, generation: int,
+                          budget: Any, actions: ActionConfigV3, local_snapshot: Any = None,
+                          restored_policy: Any = None) -> None:
+    """Actual owned receiver, with explicit local snapshot or historical Wire7."""
     from gf_models.hpo_owned_inference import load_owned_inference
     from gf_models.sharded_arrays import validate_bundle_metadata
     from gf_models.structured_artifacts import (
@@ -157,10 +159,41 @@ def _restore_owned_learner(learner: HpoLearner, *, inference: Any, resume: Any,
             or learner._owned_snapshot is not None or learner.steps != 0):
         raise ContractError('owned restore requires untouched actual owned learner')
     integer(generation, 0, 2**31-1)
+    local_metadata = None
+    if restored_policy is not None:
+        from gf_training.rust_player_restore import RustRestoredPolicy
+        if (type(restored_policy) is not RustRestoredPolicy or local_snapshot is not None
+                or actor_metadata is not None or inference is not restored_policy.inference
+                or resume is not restored_policy.resume or budget is not restored_policy._budget
+                or generation != restored_policy.generation or learner is not restored_policy._learner):
+            raise ContractError('actual full current-host restored policy/banks required')
+        restored_policy.require()
+        if hashlib.sha256((canonical(resume_manifest) + '\n').encode()).hexdigest() != restored_policy._held['resume.json'].sha256:
+            raise ContractError('restored metadata differs from actual held resume original')
+        local_manifest = restored_policy.manifest
+        local_metadata = {key: value for key, value in local_manifest.items() if key != 'weights'}
+        inference_digest = restored_policy.files['inference.json']
+    elif local_snapshot is not None:
+        from gf_training.hpo_owned_snapshot import OwnedModelSnapshot
+        if (type(local_snapshot) is not OwnedModelSnapshot or local_snapshot.save_ack is None
+                or inference is not local_snapshot.inference or resume is not local_snapshot.resume
+                or budget is not local_snapshot._budget or generation != local_snapshot.generation
+                or actor_metadata is not None):
+            raise ContractError('actual local saved snapshot/banks/Source account required')
+        local_snapshot.save_ack.require(local_snapshot)
+        if hashlib.sha256((canonical(resume_manifest) + '\n').encode()).hexdigest() != local_snapshot.save_ack.files['resume.json']:
+            raise ContractError('local restore metadata differs from actual saved resume')
+        local_manifest = local_snapshot.inference_manifest
+        local_metadata = {key: value for key, value in local_manifest.items() if key != 'weights'}
+        inference_digest = local_snapshot.save_ack.files['inference.json']
+    else:
+        if actor_metadata is None:
+            raise ContractError('historical owned restore requires actual actor9 metadata')
+        inference_digest = actor_metadata['inference_digest']
     options=_recipe_options(learner.training)
     context=learner._context
     _validate_resume_manifest(resume_manifest,learner.model,learner.binding,learner.resume_identity,
-        context=context,expected_inference_digest=actor_metadata['inference_digest'],**options)
+        context=context,expected_inference_digest=inference_digest,**options)
     arrays={name:resume.array(name) for name in resume.names}
     validate_bundle_metadata(resume_manifest['state'],max_decoded_bytes=learner.model.resources.max_owned_bytes)
     _validate_resume_arrays(resume_manifest,arrays,learner.model,learner.binding,context=context)
@@ -169,8 +202,13 @@ def _restore_owned_learner(learner: HpoLearner, *, inference: Any, resume: Any,
     staged=resource_estimate(learner.model,learner.binding,suffix_decisions=learner.training.tbptt_length,**learner._options)['total_bytes']
     if existing+staged > min(learner.model.resources.max_owned_bytes,learner.binding.managed_budget_bytes):
         raise ContractError('staged resume5 plus live learner exceeds managed reservation')
-    network=load_owned_inference(inference,actor_metadata,model=learner.model,binding=learner.binding,
-        actions=actions,rules=context.rules)
+    if local_metadata is not None:
+        from gf_models.hpo_owned_inference import load_owned_inference_content
+        network=load_owned_inference_content(inference,local_metadata,model=learner.model,
+            binding=learner.binding,actions=actions,rules=context.rules)
+    else:
+        network=load_owned_inference(inference,actor_metadata,model=learner.model,binding=learner.binding,
+            actions=actions,rules=context.rules)
     optimizer=learner._optimizer(network)
     import numpy as np
     shuffle=np.random.Generator(np.random.PCG64(0))

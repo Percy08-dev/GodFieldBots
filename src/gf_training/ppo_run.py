@@ -37,12 +37,14 @@ from gf_models.config import (
     PPOTrainingConfig,
     SequencePPOTrainingConfig,
     TransformerModelConfig,
+    ordinary_ppo_update,
 )
 from gf_models.torch_runtime import NUMERICS, runtime_metadata
 from gf_training.collection import (
     CollectionPlan,
     FinalizedCollection,
     OnlinePPOContext,
+    ordinary_rust_training_groups,
     training_groups,
 )
 from gf_training.journal import atomic_json
@@ -453,6 +455,13 @@ async def train_ppo(loaded: Any, collector: Collector, directory: Path, *, mode:
 async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 'fresh',
                    pause_after_update: int | None = None, _structured_component: bool = False,
                    _structured_ops: Any = None, _game_ops: Any = None) -> Json:
+    from gf_simulator_client.performance_diagnostics import (
+        finish_phase,
+        host_diagnostics,
+        transition_phase,
+    )
+    performance = host_diagnostics()
+    transition_phase(performance, 'startup')
     operation_started = time.monotonic()
     operation_unix = time.time()
     operation_monotonic_after = time.monotonic()
@@ -462,16 +471,27 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
     game = _game_ops is not None
     hpo = False
     owned = False
+    rust = False
     if game:
         from gf_training import structured_ppo
         from gf_training.card_instance_ppo import _GameOperations
         from gf_training.hpo_owned_run import _OwnedHpoOperations
         from gf_training.hpo_ppo import _HpoOperations
+        from gf_training.rust_player_learning import RustGameOperations, RustHpoOperations
+        rust = type(_game_ops) in (RustGameOperations, RustHpoOperations)
         owned=type(_game_ops) is _OwnedHpoOperations
-        hpo=type(_game_ops) in (_HpoOperations,_OwnedHpoOperations)
-        if type(_game_ops) not in (_GameOperations,_HpoOperations,_OwnedHpoOperations) or _structured_component or _structured_ops is not None:
+        hpo=type(_game_ops) in (_HpoOperations,_OwnedHpoOperations,RustHpoOperations)
+        if type(_game_ops) not in (_GameOperations,_HpoOperations,_OwnedHpoOperations,RustGameOperations,RustHpoOperations) or _structured_component or _structured_ops is not None:
             raise ContractError("closed corrected game operations required")
         ops = _game_ops
+        if rust and performance is not None:
+            actual_performance_owner = ops.admission.observation
+            transition_phase(performance, 'startup', run_id=actual_performance_owner['run_id'],
+                operation_id=actual_performance_owner['operation_id'], invocation_id=actual_performance_owner['invocation_id'])
+        if rust:
+            request = ops.control.operation['execution_request']
+            if request != {'mode': mode, 'pause_after_update': pause_after_update}:
+                raise ContractError('common PPO invocation differs from authenticated operation2 request')
     if _structured_ops is not None and not _structured_component:
         raise ContractError('private native operations require structured component composition')
     if _structured_component:
@@ -492,7 +512,7 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
             ops = _structured_ops if _structured_ops is not None else structured_ppo
     with (ops.owned_invocation() if owned else nullcontext()):
         def measure_owned(deadline: float) -> int:
-            if game and (state['schema_version'] == 4 or hpo and 'storage_binding' in state):
+            if game and (rust or state['schema_version'] == 4 or hpo and 'storage_binding' in state):
                 return owned_bytes(directory, deadline, external_roots=ops.external_roots(state))
             return owned_bytes(directory, deadline)
 
@@ -500,6 +520,7 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
         if formal is not None:
             formal.preflight(loaded)
         model, training = ops.validate_config(config) if ops else config.model, config.training
+        ordinary_games = ordinary_ppo_update(training).collection_games if rust and not hpo else 16
         if not ops and (not isinstance(model, (MLPModelConfig, GRUModelConfig, TransformerModelConfig)) or not isinstance(training, PPOTrainingConfig) or model.checkpoint is not None or config.run.split != 'train'):
             raise ContractError('PPO requires fresh supported model recipe and train split')
         if not ops and isinstance(model, (GRUModelConfig, TransformerModelConfig)) != isinstance(training, SequencePPOTrainingConfig):
@@ -513,14 +534,18 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
         if mode == 'fresh' and pause_after_update is not None and (type(pause_after_update) is not int or not 0 < pause_after_update <= training.max_updates):
             raise ContractError('invalid absolute pause target')
         preprocessing_options: Json = {'model_id': model.model_id} if isinstance(model, (GRUModelConfig, TransformerModelConfig)) else {}
-        preprocessing = ((ops.preprocessing_identity(config, deadline=operation_started + config.run.execution_seconds) if ops else preprocessing_identity(config.preprocessing, deadline=operation_started + config.run.execution_seconds, **preprocessing_options))
+        initial_execution = ops.deadlines()['execution_bits'] if rust else operation_started + config.run.execution_seconds
+        preprocessing = ((ops.preprocessing_identity(config, deadline=initial_execution) if ops else preprocessing_identity(config.preprocessing, deadline=initial_execution, **preprocessing_options))
                          if mode == 'fresh' else None)
         directory = directory.resolve()
         if game and mode == "fresh":
-            ops.preflight(config, deadline=operation_started + config.run.execution_seconds)
-        with run_lock(directory, create=mode == 'fresh') as ownership, ExitStack() as cold_scope:
+            ops.preflight(config, deadline=initial_execution)
+        with (ops.run_scope(directory, mode=mode) if rust else run_lock(directory, create=mode == 'fresh')) as ownership, ExitStack() as cold_scope:
             initial_scan = None
-            if owned and mode == 'resume':
+            if rust and mode == 'resume':
+                initial_state, cold_records = ops.read_cold(ownership, config, deadline=initial_execution)
+                identity_deadline = initial_execution
+            elif owned and mode == 'resume':
                 initial_state, cold_records=ops.read_cold(ownership,config,deadline=operation_started+config.run.execution_seconds)
                 cold_scope.push(ops.cold_import._scope_exit)
                 identity_deadline=operation_started+ops.saved_deadline(initial_state)-operation_unix
@@ -530,7 +555,7 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
                 identity_deadline = operation_started + ops.saved_deadline(initial_state) - operation_unix
                 del initial_state
             else:
-                identity_deadline = operation_started + config.run.execution_seconds if mode == 'fresh' else operation_started + read_json(directory / 'run.json')['execution_deadline_unix'] - operation_unix
+                identity_deadline = initial_execution if rust or mode == 'fresh' else operation_started + read_json(directory / 'run.json')['execution_deadline_unix'] - operation_unix
             if preprocessing is None:
                 preprocessing = (ops.preprocessing_identity(config, deadline=identity_deadline) if ops else preprocessing_identity(config.preprocessing, deadline=identity_deadline, **preprocessing_options))
             identity = source_identity(identity_deadline)
@@ -546,7 +571,7 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
             if mode == 'fresh':
                 for name in ('generations', 'updates', 'artifacts', 'collections', 'numeric'):
                     (directory / name).mkdir()
-                state = {'schema_version': 1, 'algorithm': 'ppo', 'run_id': config.run.name if hpo else str(uuid.uuid4()), 'status': 'running',
+                state = {'schema_version': 1, 'algorithm': 'ppo', 'run_id': ops.control.operation['run_id'] if rust else config.run.name if hpo else str(uuid.uuid4()), 'status': 'running',
                          'config_sha256': loaded.sha256, 'effective_config': loaded.effective, 'config_inputs': list(loaded.inputs), 'identity': identity,
                          'seed': training.seeds[0], 'device': training.device, 'created_unix': now, 'last_unix': now,
                          'wall_deadline_unix': now + config.run.wall_seconds,
@@ -556,10 +581,15 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
                          'collection_seconds': 0., 'update_seconds': 0., 'invocations': [], 'completed_updates': None}
                 if ops:
                     ops.initialize_state(state, config)
+                if rust:
+                    bounds = ops.deadlines()
+                    state.update(wall_deadline_unix=now + bounds['term_bits'] - operation_started,
+                        admission_deadline_unix=now + bounds['admission_bits'] - operation_started,
+                        execution_deadline_unix=now + bounds['execution_bits'] - operation_started)
                 if ops:
-                    ops.persist_control(directory / 'artifact-registry.json', ({'schema_version':ops.registry_schema,'generations':{},'evaluation_references':{}}
-                        | ({'cache_references':{}} if ops.registry_schema in (5,6) else {}) if hpo else
-                        {'schema_version': 3 if game else 2, 'generations': {}}), config, deadline=identity_deadline)
+                    ops.persist_control(directory / 'artifact-registry.json', ops.initial_registry(state) if rust else ({'schema_version':ops.registry_schema,'generations':{},'evaluation_references':{}}
+                        | ({'cache_references':{}} if ops.registry_schema in (5,6,7) else {}) | ({'service_references':{}} if ops.registry_schema==7 else {}) if hpo else
+                        ({'schema_version': ops.registry_schema if game else 2, 'generations': {}} | ({'service_references':{}} if game and ops.registry_schema==4 else {}))), config, deadline=identity_deadline)
                     ops.persist_control(directory / 'run.json', state, config, deadline=identity_deadline)
                 else:
                     atomic_json(directory / 'artifact-registry.json', {})
@@ -567,7 +597,7 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
                 rng = np.random.Generator(np.random.PCG64(training.seeds[0]))
                 pool = [0]
             else:
-                state, records = ((initial_state,cold_records) if owned else ops.validate_parent(directory, config, identity_deadline,
+                state, records = ((initial_state,cold_records) if owned or rust else ops.validate_parent(directory, config, identity_deadline,
                     extra_owned_bytes=initial_scan.retained if initial_scan is not None else 0)
                     if ops else validate_chain(directory, require_complete=False, deadline=identity_deadline))
                 if initial_scan is not None:
@@ -578,7 +608,7 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
                     raise ContractError('resume code/runtime/config/device mismatch')
                 if ops and canonical(state['execution']) != canonical(ops.execution(config)):
                     raise ContractError('resume execution binding differs from current Config')
-                if now < state['last_unix'] or now >= state['wall_deadline_unix'] or now >= state['execution_deadline_unix']:
+                if not rust and (now < state['last_unix'] or now >= state['wall_deadline_unix'] or now >= state['execution_deadline_unix']):
                     raise ContractError('resume clock rollback or original deadline expired')
                 controls = records[-1]['parent_controls']
                 rng = np.random.Generator(np.random.PCG64())
@@ -592,7 +622,19 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
             wall = ((invocation_started + state['wall_deadline_unix']) - now) if formal is not None else invocation_started + remaining
             execution = invocation_started + state['execution_deadline_unix'] - now
             admission = invocation_started + state['admission_deadline_unix'] - now
+            if rust:
+                bounds = ops.deadlines()
+                wall, execution, admission = (bounds[key] for key in ('term_bits', 'execution_bits', 'admission_bits'))
+                ops.enter_invocation(state, mode, invocation_started)
             # Even initialization and source-identity work consume the original clock.
+            shared_invocation: Json | None=None
+            if game:
+                from gf_common.shared_inference import serving_config
+                if serving_config(config) is not None:
+                    from gf_training.shared_inventory import new_invocation
+                    shared_invocation={'mode':mode,'elapsed_seconds':0.,'child_health':{},
+                        'shared_service':new_invocation(state['updates'])}
+                    state['invocations'].append(shared_invocation)
             state['status'] = 'running'
             if hpo: state['stop_reason']=None
             if ops:
@@ -619,21 +661,31 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
                 child = LearningProcess(directory, training.max_log_bytes)
             error: BaseException | None = None
             final_status = 'complete'
+            proof: Any = None
+            update: Any = None
+            acknowledgement: Any = None
+            metrics: Any = None
             def check_clock(*, scope: str = 'invocation') -> float:
+                if rust:
+                    state['last_unix'] = max(state['last_unix'], time.time())
+                    return state['last_unix']
                 checked = _checked_wall_clock(clock_anchor, scope=scope)
                 state['last_unix'] = max(state['last_unix'], checked)
                 return state['last_unix']
             try:
                 _validate_clock_anchor(*clock_anchor)
-                if owned: await ops.start_owned(child)
-                else: await child.start()
+                if not rust:
+                    if owned: await ops.start_owned(child)
+                    else: await child.start()
                 request = {'command': 'initialize', 'model': asdict(model), 'seed': training.seeds[0], 'device': training.device,
                            'output': str(checkpoint_path(directory, 0)), 'action_hash': digest(asdict(config.actions))}
                 if isinstance(training, SequencePPOTrainingConfig):
                     request['sequence_length'] = training.sequence_length
                 if mode == 'resume':
                     request['restore'] = str(checkpoint_path(directory, state['updates']))
-                initial = (await ops.initialize_owned(child,training.seeds[0],checkpoint_path(directory,0),deadline=execution) if owned else
+                initial = (ops.initialize_local(child,checkpoint_path(directory,0),deadline=execution) if rust and mode == 'fresh' else
+                    ops.restore_initial(child, state, deadline=execution) if rust else
+                    await ops.initialize_owned(child,training.seeds[0],checkpoint_path(directory,0),deadline=execution) if owned else
                     await child.initialize(training.seeds[0], checkpoint_path(directory, 0),
                     restore=checkpoint_path(directory, state['updates']) if mode == 'resume' else None, deadline=execution)
                     if ops else await child.request(request, execution))
@@ -689,10 +741,15 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
                             from gf_training.collection import training_groups_refresh
                             groups = training_groups_refresh(training.seeds[0], generation, learner_label,
                                 tuple(snapshots), rng, actions=config.actions, training_opponents=mixed)
+                        elif hpo:
+                            groups = ops.groups(config,generation,learner_label,tuple(snapshots),rng)
+                        elif rust:
+                            groups = ordinary_rust_training_groups(training.seeds[0], generation, learner_label,
+                                tuple(snapshots), rng, collection_games=ordinary_games)
                         else:
-                            groups = (ops.groups(config,generation,learner_label,tuple(snapshots),rng) if hpo else
-                                      training_groups(training.seeds[0], generation, learner_label, tuple(snapshots), rng, actions_version=3 if game else 2)
-                                      if ops else training_groups(training.seeds[0], generation, learner_label, tuple(snapshots), rng))
+                            groups = (training_groups(training.seeds[0], generation, learner_label, tuple(snapshots),
+                                          rng, actions_version=3 if game else 2) if ops else
+                                      training_groups(training.seeds[0], generation, learner_label, tuple(snapshots), rng))
                         batch_id = f'batch-{generation:06}'
                         linkage = {'parent_run_id': state['run_id'], 'parent_run_path': str(directory), 'batch_id': batch_id,
                                    'collection_generation': generation,
@@ -700,27 +757,34 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
                         if game:
                             linkage = ops.linkage(state, directory, generation, groups, registry)
                         if hpo: ops.phase('collect', transient_games=0, transient_learner_decisions=None, transient_total_game_actions=0)
+                        transition_phase(performance, 'collection', run_id=state['run_id'], batch_id=batch_id)
                         collection_started = time.monotonic()
                         plan = CollectionPlan(groups, registry, directory / 'collections' / batch_id, linkage, execution, wall)
                         if ops:
                             assert ledger is not None
-                            with ops.precollection_scope(plan, ledger, config=config, deadline=execution) if hpo else nullcontext():
+                            with ops.precollection_scope(plan, ledger, config=config, deadline=execution) if hpo and not rust else nullcontext():
                                 ops.validate_owned_collection(plan, ledger, config=config, deadline=execution)
+                                if getattr(ops, 'shared_controller', None) is not None:
+                                    ops.shared_controller.begin_collection(plan)
+                                    transition_phase(performance, 'collection', run_id=state['run_id'],
+                                        invocation_id=ops.shared_controller.service.execution, batch_id=batch_id)
                                 collection = await collector(plan, ledger)
                             if hpo and getattr(ops, 'resident_runtime', None) is not None:
                                 ops.resident_runtime.pool.authority.require(ledger)
-                            elif ledger.workers or ledger.updating:
+                            elif not rust and (ledger.workers or ledger.updating):
                                 raise ContractError('structured collection returned unreaped participants or active update')
                         else:
                             collection = await collector(plan)
                         if collection.directory.resolve() != (directory / 'collections' / batch_id).resolve() or collection.report.get('comparison_valid') is not True:
                             raise ContractError('collection callback did not finalize requested original batch')
                         if game:
+                            if getattr(ops,'shared_controller',None) is not None:
+                                ops.shared_controller.finish_collection(plan)
                             ops.accept_collection(collection, config)
                         check_clock()
                         from gf_common.schedule import serialize_schedule
                         collection_scan = None
-                        if owned:
+                        if owned or rust:
                             collection_manifest=collection.manifest
                         elif ops:
                             collection_manifest, collection_scan = ops.read_control(collection.directory / 'manifest.json', config, deadline=execution)
@@ -738,7 +802,19 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
                         numeric = directory / 'numeric' / batch_id
                         numeric_files = None
                         with ExitStack() as source_scope:
-                            if owned:
+                            if rust:
+                                decision_count, proof, numeric_files, issued_projection = generation_scope.enter_context(
+                                    ops.project(collection, plan, numeric, config, execution))
+                                def retire_rust_source_aliases() -> None:
+                                    nonlocal proof, update, collection_manifest, numeric_files, acknowledgement, metrics
+                                    proof = update = collection_manifest = None
+                                    numeric_files = acknowledgement = metrics = None
+                                generation_scope.callback(retire_rust_source_aliases)
+                                if hpo and decision_count == 0:
+                                    ops.stop_reason = 'empty_collection'
+                                    final_status = 'incomplete'
+                                    break
+                            elif owned:
                                 decision_count,proof,numeric_files,issued_projection=generation_scope.enter_context(
                                     ops.project_owned(collection,plan,numeric,config,execution))
                                 if decision_count==0:
@@ -787,15 +863,17 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
                                     decision_count = len(decisions)
                                     del decisions
                             if owned: assert numeric_files is not None
-                            numeric_hash = numeric_files['rollout.json'] if owned and numeric_files is not None else sha256(numeric / 'rollout.json', execution)
+                            numeric_hash = numeric_files['rollout.json'] if (owned or rust) and numeric_files is not None else sha256(numeric / 'rollout.json', execution)
                             if measure_owned(execution) > training.max_owned_bytes or time.monotonic() >= execution:
                                 raise RuntimeError('PPO collection/encoding exceeded execution/storage limits')
                             next_generation = generation + 1
                             await asyncio.sleep(0)  # Serve pending cancellation before optimizer side effects.
                             if hpo: ops.phase('update', transient_learner_decisions=decision_count)
+                            transition_phase(performance, 'update')
                             update_started = time.monotonic()
                             if ops:
-                                acknowledgement = (await ops.update_owned(issued_projection,checkpoint_path(directory,next_generation),deadline=execution) if owned else
+                                acknowledgement = (ops.update_local(issued_projection,checkpoint_path(directory,next_generation),deadline=execution) if rust else
+                                    await ops.update_owned(issued_projection,checkpoint_path(directory,next_generation),deadline=execution) if owned else
                                     await child.update(issued_projection, checkpoint_path(directory, next_generation), deadline=execution) if game else
                                     await child.update(numeric, numeric_hash, learner_label,
                                     checkpoint_path(directory, next_generation), deadline=execution))
@@ -829,22 +907,33 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
                                   'collection': str(collection.directory.relative_to(directory)), 'collection_manifest_sha256': proof['manifest_sha256'],
                                   'numeric': str(numeric.relative_to(directory)), 'numeric_sha256': numeric_hash,
                                   'accepted_decisions': decision_count, 'source_proof': proof, 'metrics': metrics,
-                                  'planned_games': config.hpo_spec['training_recipe']['collection_games'] if hpo else 16, 'actual_games': proof['games'], 'health': {},
+                                  'planned_games': sum(len(group.episodes) for group in groups), 'actual_games': proof['games'], 'health': {},
                                   'policy_bindings': {key: asdict(value) for key, value in registry.items()},
                                   'learner_seats': linkage['learner_seats'], 'collection_seconds': collection_seconds, 'update_seconds': update_seconds}
+                        transition_phase(performance, 'save')
                         if ops:
                             if game:
                                 ops.update_record(update, state, numeric_files)
+                                if shared_invocation is not None:
+                                    update['service_usage']=proof['service_usage']
+                                    update['schema_version']=7 if hpo else 5
                             else:
                                 update.update(schema_version=2, model_id=state['model_id'], model_version='2', input_recipe=state['input_recipe'],
                                               action_contract=state['action_contract'], purpose='component', synthetic_capacity=False,
                                               numeric_files=numeric_files)
                             committed_record = ops.commit(directory, state, config, generation=next_generation, update=update,
                                 controls=ops.controls(rng,pool,next_generation) if hpo else _controls(rng, pool, next_generation), acknowledgement=acknowledgement, deadline=execution)
+                            if rust:
+                                # No borrowed proof/manifest/row alias escapes its
+                                # Source planning loan after the committed write.
+                                generation_scope.close()
                             if hpo and getattr(ops, 'resident_runtime', None) is not None:
                                 generation_scope.close()  # Retire original Source/control/registry snapshots BEFORE pins.
                                 ops.phase('sync')
                                 await ops.resident_runtime.after_commit(next_generation, committed_record)
+                            if not hpo and getattr(ops,'shared_controller',None) is not None:
+                                generation_scope.close()
+                                ops.shared_controller.after_commit(next_generation)
                             ops.retain(directory, next_generation, config, execution)
                         else:
                             commit_generation(directory, state, generation=next_generation, update=update, controls=_controls(rng, pool, next_generation), deadline=execution)
@@ -858,9 +947,10 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
             except BaseException as failure:  # noqa: BLE001 - persist failure after owned cleanup
                 error = failure
             finally:
+                transition_phase(performance, 'retirement')
                 if hpo: ops.phase('cleanup')
                 try:
-                    if hpo:
+                    if hpo and not rust:
                         ops.close_precollection()
                     if hpo and getattr(ops, 'resident_runtime', None) is not None:
                         await ops.resident_runtime.close()
@@ -868,18 +958,30 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
                     error = error or failure
                     state['cleanup_failure'] = str(failure)
                 try:
-                    if owned: await ops.close_owned_child(child,min(wall,time.monotonic()+training.cleanup_seconds))
-                    else: await child.close(min(wall, time.monotonic() + training.cleanup_seconds))
-                except BaseException as failure:  # noqa: BLE001 - persist failure after owned cleanup
+                    if not hpo and getattr(ops,'shared_controller',None) is not None:
+                        ops.shared_controller.close()
+                except BaseException as failure:  # noqa: BLE001 - service failure never skips independent learner reap.
+                    if error is not None:error.add_note('shared service cleanup: '+str(failure))
                     error = error or failure
                     state['cleanup_failure'] = str(failure)
+                    if getattr(ops,'shared_controller',None) is not None:
+                        vars(error)['shared_cleanup_owner']=ops.shared_controller
+                try:
+                    if rust: await ops.close_local(child, deadline=wall, error=error)
+                    elif owned: await ops.close_owned_child(child,min(wall,time.monotonic()+training.cleanup_seconds))
+                    else: await child.close(min(wall, time.monotonic() + training.cleanup_seconds))
+                except BaseException as failure:  # noqa: BLE001 - persist failure after owned cleanup
+                    if error is not None:error.add_note('learner cleanup: '+str(failure))
+                    error = error or failure
+                    state['cleanup_failure'] = str(failure)
+                    vars(error)['learner_cleanup_owner']=child
             if game:
                 try:
                     ops.close_batch()
                 except BaseException as cleanup_error:  # noqa: BLE001 -- persist cleanup failure before release.
                     error = error or cleanup_error
                     state['cleanup_failure'] = str(cleanup_error)
-            if set(child.health) - {'exit_code', 'stderr_bytes'} or child.health.get('exit_code') != 0:
+            if not rust and (set(child.health) - {'exit_code', 'stderr_bytes'} or child.health.get('exit_code') != 0):
                 error = error or RuntimeError('PPO learner cleanup health failed')
             try:
                 check_clock(scope='cleanup')
@@ -888,7 +990,13 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
                     error = clock_failure
                 else:
                     error.add_note('PPO cleanup clock observation: ' + str(clock_failure))
-            state['invocations'].append({'mode': mode, 'elapsed_seconds': time.monotonic() - invocation_started, 'child_health': child.health})
+            finish_phase(performance)
+            invocation_end = ({'mode':mode, 'elapsed_seconds':time.monotonic()-invocation_started,
+                'host_health':ops.host_health} if rust else
+                {'mode':mode,'elapsed_seconds':time.monotonic()-invocation_started,'child_health':child.health})
+            if rust: ops.finish_invocation(state, invocation_end)
+            elif shared_invocation is None:state['invocations'].append(invocation_end)
+            else:shared_invocation.update(invocation_end)
             state['elapsed_seconds'] = state['last_unix'] - state['created_unix']
             try:
                 storage_bytes = measure_owned(wall)
@@ -898,18 +1006,27 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
             state['artifact_bytes'] = storage_bytes
             state['peak_coordinator_memory_bytes'] = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024
             state['coordinator_memory_scope'] = 'process lifetime peak RSS, distinct from learner child metrics'
+            if rust:
+                state['coordinator_memory_scope'] = 'same-host process lifetime peak RSS including learner/service; not managed Source accounting'
             state['timing_scope'] = 'pre-final-write snapshot; original wall includes paused time'
             if owned and error is None and final_status=='complete':
                 try: ops.prepare_completion(state)
                 except BaseException as preparation:  # noqa: BLE001 - original preparation failure joins actual cleanup
                     error=preparation
-            if hpo:
+            if hpo and not rust:
                 try:
                     ops.finish_cleanup(error)
                 except BaseException as cleanup:  # noqa: BLE001 -- preserve original failure after actual cleanup.
                     if error is not None: error.add_note('HPO final cleanup: '+str(cleanup))
                     error=error or cleanup
                     state['cleanup_failure']=str(cleanup)
+            if shared_invocation is not None:
+                try:
+                    from gf_training.shared_inventory import finish_invocation
+                    finish_invocation(ops,state,shared_invocation['shared_service'],error=error)
+                except BaseException as cleanup:  # noqa: BLE001 - missing proof invalidates this invocation.
+                    if error is not None:error.add_note('shared invocation finalization: '+str(cleanup))
+                    error=error or cleanup
             if error is not None or time.monotonic() >= wall or storage_bytes is None or storage_bytes > training.max_owned_bytes:
                 state.update(status='failed', failure=type(error).__name__ if error else 'LimitOverrun', quarantine=True)
             else:
@@ -954,6 +1071,8 @@ async def _run_ppo(loaded: Any, collector: Any, directory: Path, *, mode: str = 
                 raise error
             if state['status'] == 'failed':
                 raise RuntimeError('PPO run failed original limits')
+            if rust:
+                ops.freeze_state(state, deadline=wall)
             return {'run_dir': str(directory), 'status': state['status'], 'updates': state['updates'], 'accepted_decisions': state['accepted_decisions'],
                     'elapsed_seconds': time.time() - state['created_unix'], 'generation_sha256': state['generation_sha256'],
                     **({'used_decisions':state['used_decisions'],'collected_decisions':state['collected_decisions'],

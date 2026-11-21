@@ -12,5 +12,10 @@ dependencies = ["numpy==2.5.4"]
 [tool.maturin]
 bindings = "pyo3"
 module-name = "gf_native"
+targets = [{ name = "gf_native", kind = "cdylib" }]
 features = ["pyo3/extension-module"]
-include = ["assets/structured-token-recipe-v1.json", "assets/structured-token-recipe-public-exact-v2.json"]
+include = [
+  "assets/structured-token-recipe-v1.json",
+  "assets/structured-token-recipe-public-exact-v2.json",
+  { path = "gf_native_runtime/**/*", format = "wheel" },
+]

@@ -11,6 +11,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Self
 
+from gf_common.artifacts import budget_refusal
 from gf_common.artifacts import json_bound as json_bound  # noqa: PLC0414 -- compatibility pure re-export.
 from gf_common.group_pack import MAX_JSON, Json, StorageSettings, canonical_json, parse_json
 from gf_common.group_pack import SOURCE_BASE as SOURCE_BASE  # noqa: PLC0414 -- compatibility pure re-export.
@@ -33,19 +34,27 @@ def remaining(deadline: float) -> float:
 
 
 class ByteBudget:
-    def __init__(self, limit: int, *, base: int = 0) -> None:
-        if type(limit) is not int or limit < base:
+    def __init__(self, limit: int, *, base: int = 0, name: str = 'storage',
+                 phase: str = 'storage') -> None:
+        if type(limit) is not int:
             raise ValueError("storage budget cannot admit base reservation")
+        if limit < base:
+            raise ValueError(budget_refusal('storage budget cannot admit base reservation',
+                name=name,phase=phase,used=0,request=base,limit=limit))
         self.limit = limit
+        self.name,self.phase=name,phase
         self.used = base
         self.peak = base
         self._condition = threading.Condition()
         self._stopped = False
 
     def acquire(self, size: int, deadline: float, *, wait: bool = False) -> None:
-        if type(size) is not int or size < 0 or size > self.limit:
+        if type(size) is not int or size < 0:
             raise ValueError("reservation exceeds capacity")
         with self._condition:
+            if size > self.limit:
+                raise ValueError(budget_refusal('reservation exceeds capacity',
+                    name=self.name,phase=self.phase,used=self.used,request=size,limit=self.limit))
             while True:
                 remaining(deadline)
                 if self._stopped:
@@ -55,7 +64,8 @@ class ByteBudget:
                     self.peak = max(self.used, self.peak)
                     return
                 if not wait:
-                    raise ValueError("storage budget exhausted")
+                    raise ValueError(budget_refusal('storage budget exhausted',
+                        name=self.name,phase=self.phase,used=self.used,request=size,limit=self.limit))
                 self._condition.wait(remaining(deadline))
 
     def release(self, size: int) -> None:
@@ -74,8 +84,9 @@ class ByteBudget:
 class StorageBudget(ByteBudget):
     """One thread-safe account for live Python, Writer and measured RAM bytes."""
 
-    def __init__(self, settings: StorageSettings, deadline: float) -> None:
-        super().__init__(settings.budget_bytes)
+    def __init__(self, settings: StorageSettings, deadline: float, *, name: str = 'storage',
+                 phase: str = 'storage') -> None:
+        super().__init__(settings.budget_bytes,name=name,phase=phase)
         self.settings, self.deadline = settings, deadline
         self.ram_bytes = 0
 
@@ -98,7 +109,8 @@ class StorageBudget(ByteBudget):
             self._condition.notify_all()
             if self.used > self.limit:
                 self._stopped = True
-                raise ValueError("storage budget exceeded by RAM files")
+                raise ValueError(budget_refusal('storage budget exceeded by RAM files',
+                    name=self.name,phase=self.phase,used=self.used,request=size,limit=self.limit))
 
 
 class StorageReservation:
@@ -133,8 +145,10 @@ class StorageReservation:
 class BorrowedBudget(ByteBudget):
     """Local bookkeeping backed by the SAME account; stop never stops its lender."""
 
-    def __init__(self, parent: StorageBudget, *, base: int = 0, limit: int | None = None) -> None:
-        super().__init__(parent.limit if limit is None else min(limit, parent.limit))
+    def __init__(self, parent: StorageBudget, *, base: int = 0, limit: int | None = None,
+                 name: str = 'borrowed-storage', phase: str | None = None) -> None:
+        super().__init__(parent.limit if limit is None else min(limit, parent.limit),
+                         name=name,phase=parent.phase if phase is None else phase)
         self.parent = parent
         # The shared condition releases the SAME lock while waiting. A local
         # lock held across parent admission would prevent another borrower
@@ -144,13 +158,17 @@ class BorrowedBudget(ByteBudget):
 
     def acquire(self, size: int, deadline: float, *, wait: bool = False) -> None:
         with self._condition:
-            if type(size) is not int or size < 0 or size > self.limit:
+            if type(size) is not int or size < 0:
                 raise ValueError("reservation exceeds borrowed capacity")
+            if size > self.limit:
+                raise ValueError(budget_refusal('reservation exceeds borrowed capacity',
+                    name=self.name,phase=self.phase,used=self.used,request=size,limit=self.limit))
             while self.used + size > self.limit:
                 if self._stopped:
                     raise RuntimeError("storage admission stopped")
                 if not wait:
-                    raise ValueError("borrowed storage budget exhausted")
+                    raise ValueError(budget_refusal('borrowed storage budget exhausted',
+                        name=self.name,phase=self.phase,used=self.used,request=size,limit=self.limit))
                 self._condition.wait(remaining(deadline))
             if self._stopped:
                 raise RuntimeError("storage admission stopped")

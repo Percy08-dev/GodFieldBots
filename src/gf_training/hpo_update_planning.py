@@ -1,12 +1,14 @@
-"""Pure bounded grouping and lifetime-aware Model4 execution admission."""
+"""Pure bounded grouping and lifetime-aware structured execution admission."""
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from math import prod
 from typing import Any
 
-from gf_common.domain import ContractError
-from gf_models.structured_config import dimensions, resource_estimate
+from gf_common.domain import ContractError, integer
+from gf_models.learner_cuda import learner_group_fixed_bytes, learner_group_metadata_bytes
+from gf_models.structured_config import dimensions
 from gf_models.structured_learning import (
     FrameStagingPlan,
     LearningCapacityError,
@@ -17,6 +19,7 @@ from gf_models.structured_learning import (
 )
 
 UpdateCapacityError=LearningCapacityError
+_NativePackFit = Callable[[tuple[int, ...], FrameStagingPlan | None], bool]
 
 
 @dataclass(frozen=True)
@@ -162,11 +165,11 @@ def _candidate_geometry(candidates: list[Any],model: Any,binding: Any,layout: An
 
 
 def _estimate(endpoints: list[Any],model: Any,binding: Any,tbptt: int,*,layout: Any,
-              shared: bool,staging: FrameStagingPlan | None) -> dict[str,Any]:
-    if not endpoints or len(endpoints)>16:
-        raise UpdateCapacityError('nonempty group of at most16 endpoints required')
-    fixed=resource_estimate(model,binding,decisions=1,interval_events=0,candidates=1,suffix_decisions=1,layout=layout)
-    fixed_bytes=fixed['parameter_optimizer_cpu_reference_bytes']+fixed['context_workspace_bytes']
+              shared: bool,staging: FrameStagingPlan | None, mlp_width: int = 16) -> dict[str,Any]:
+    width = mlp_width if model.model_id == 'mlp' else 16
+    if not endpoints or len(endpoints) > width:
+        raise UpdateCapacityError(f'nonempty group of at most{width} endpoints required')
+    fixed_bytes=learner_group_fixed_bytes(model,binding,layout=layout)
     frames=group_frames(endpoints,model,shared)
     candidate=[tokens for _,tokens in endpoints]
     tensors,temporal=_temporal_geometry(endpoints,model,tbptt,shared)
@@ -206,7 +209,7 @@ def _estimate(endpoints: list[Any],model: Any,binding: Any,tbptt: int,*,layout: 
                     prefix_packed=max(prefix_packed,packed)
     activation=4*(retained_activation+candidate_activation+temporal+max(prefix_peak,temporary_peak))
     packed_bytes=4*(retained_packed+prefix_packed)
-    metadata=65536+len(frames)*512+len(endpoints)*1024
+    metadata=learner_group_metadata_bytes(len(frames),len(endpoints))
     return {'fixed_bytes':fixed_bytes,'activation_bytes':activation,'packed_bytes':packed_bytes,
         'retained_input_bytes':retained_packed,'prefix_temporary_bytes':prefix_packed,
         'retained_frame_activation_bytes':4*retained_activation,
@@ -214,27 +217,45 @@ def _estimate(endpoints: list[Any],model: Any,binding: Any,tbptt: int,*,layout: 
         'tensor_bytes':tensors,'frame_count':len(frames),'streamed':staging is not None}
 
 
-def joint_estimate(endpoints: list[Any],model: Any,binding: Any,tbptt: int,*,layout: Any,shared: bool=False) -> dict[str,Any]:
-    return _estimate(endpoints,model,binding,tbptt,layout=layout,shared=shared,staging=None)
+def joint_estimate(endpoints: list[Any], model: Any, binding: Any, tbptt: int, *,
+                   layout: Any, shared: bool = False, mlp_width: int = 16) -> dict[str, Any]:
+    return _estimate(endpoints, model, binding, tbptt, layout=layout, shared=shared,
+        staging=None, mlp_width=mlp_width)
 
 
-def _within(estimate: dict[str,Any],cap: int,resident: int) -> None:
+def _within(estimate: dict[str,Any],cap: int,resident: int, *,
+            device_bytes: int | None = None, position_bytes: int = 0) -> None:
     if estimate['total_bytes']+resident>cap:
         raise UpdateCapacityError('retained graph/input capacity exceeds SAME learner reservation')
+    if device_bytes is not None:
+        integer(device_bytes,1,2**63-1)
+        if estimate['total_bytes']+position_bytes>device_bytes:
+            raise UpdateCapacityError('group exceeds owned learner device allowance: '
+                f'resource=cuda phase=update required={estimate["total_bytes"]+position_bytes} limit={device_bytes}')
 
 
-def admit_group(rollout: Any,indices: Any,model: Any,binding: Any,tbptt: int,*,layout: Any,reservation_bytes: int,shared: bool=False) -> dict[str,Any]:
+def admit_execution_plan(plan: ExecutionPlan,model: Any,binding: Any,*,reservation_bytes: int,
+                         resident_bytes: int,device_bytes: int | None = None) -> None:
+    """Last allocation boundary uses both original logical and independent device caps."""
+    _within(plan.estimate,min(reservation_bytes,model.resources.max_owned_bytes,binding.managed_budget_bytes),
+        resident_bytes,device_bytes=device_bytes,
+        position_bytes=4*model.temporal.max_decisions*model.temporal.hidden_size)
+
+
+def admit_group(rollout: Any,indices: Any,model: Any,binding: Any,tbptt: int,*,layout: Any,reservation_bytes: int,shared: bool=False,device_bytes: int | None=None) -> dict[str,Any]:
     estimate=joint_estimate([rollout.endpoint(index) for index in indices],model,binding,tbptt,layout=layout,shared=shared)
-    _within(estimate,min(reservation_bytes,model.resources.max_owned_bytes,binding.managed_budget_bytes),rollout.resident_bytes)
+    admit_execution_plan(ExecutionPlan(None,estimate),model,binding,reservation_bytes=reservation_bytes,
+        resident_bytes=rollout.resident_bytes,device_bytes=device_bytes)
     return estimate
 
 
 def execution_plan(endpoints: list[Any],model: Any,binding: Any,tbptt: int,*,layout: Any,
-                   reservation_bytes: int,resident_bytes: int,shared: bool=False) -> ExecutionPlan:
+                   reservation_bytes: int,resident_bytes: int,shared: bool=False,device_bytes: int | None=None) -> ExecutionPlan:
     cap=min(reservation_bytes,model.resources.max_owned_bytes,binding.managed_budget_bytes)
+    positions=4*model.temporal.max_decisions*model.temporal.hidden_size
     try:
         estimate=joint_estimate(endpoints,model,binding,tbptt,layout=layout,shared=shared)
-        _within(estimate,cap,resident_bytes)
+        _within(estimate,cap,resident_bytes,device_bytes=device_bytes,position_bytes=positions)
         return ExecutionPlan(None,estimate)
     except UpdateCapacityError:
         pass  # Pure preallocation capacity refinement; no operation has run.
@@ -273,7 +294,7 @@ def execution_plan(endpoints: list[Any],model: Any,binding: Any,tbptt: int,*,lay
         staging=FrameStagingPlan(chunks(sorted(prefixes),maximum),chunks(suffix_indices,maximum))
         estimate=_estimate(endpoints,model,binding,tbptt,layout=layout,shared=shared,staging=staging)
         try:
-            _within(estimate,cap,resident_bytes)
+            _within(estimate,cap,resident_bytes,device_bytes=device_bytes,position_bytes=positions)
             return ExecutionPlan(staging,estimate)
         except UpdateCapacityError:
             if maximum==1:
@@ -281,11 +302,68 @@ def execution_plan(endpoints: list[Any],model: Any,binding: Any,tbptt: int,*,lay
             maximum=max(1,maximum//2)
 
 
+def _packed_mlp_groups(endpoints: dict[int, Any], model: Any, binding: Any, tbptt: int, *,
+                       layout: Any, resident_bytes: int, reservation_bytes: int, device_bytes: int | None,
+                       width: int, headroom: int | None, native_pack_fits: _NativePackFit | None) -> list[UpdateGroup]:
+    """Check whole padding bins once, subdividing in order on preallocation failure."""
+    accepted: list[UpdateGroup] = []
+
+    def admit(indices: list[int]) -> None:
+        try:
+            estimate = joint_estimate([endpoints[index] for index in indices], model, binding, tbptt,
+                layout=layout, mlp_width=width)
+            plan = ExecutionPlan(None, estimate)
+            admit_execution_plan(plan, model, binding, reservation_bytes=reservation_bytes,
+                resident_bytes=resident_bytes, device_bytes=device_bytes)
+            incremental = estimate['packed_bytes'] + estimate['activation_bytes']
+            if headroom is not None and incremental > headroom:
+                raise UpdateCapacityError('packed MLP group exceeds measured CUDA headroom: '
+                    f'resource=cuda phase=update required={incremental} limit={headroom}')
+            if native_pack_fits is not None and not native_pack_fits(tuple(indices), None):
+                raise UpdateCapacityError('native PPO padding exceeds storage/numeric reservation')
+        except UpdateCapacityError:
+            if len(indices) == 1:
+                raise
+        else:
+            accepted.append(UpdateGroup(tuple(indices), plan=plan))
+            return
+        midpoint = len(indices) // 2
+        admit(indices[:midpoint])
+        admit(indices[midpoint:])
+
+    lengths = {index: len(tokens.kinds) for index, (_, tokens) in endpoints.items()}
+    current: list[int] = []
+    total = 0
+    for index in sorted(lengths, key=lengths.__getitem__):
+        candidates = lengths[index]
+        if current and (len(current) == width or (len(current) + 1) * candidates > 2 * (total + candidates)):
+            admit(current)
+            current = []
+            total = 0
+        current.append(index)
+        total += candidates
+    if current:
+        admit(current)
+    return accepted
+
+
 def plan_groups(rollout: Any, logical: list[int], model: Any, binding: Any, tbptt: int, *,
-                variant: str, reservation_bytes: int, layout: Any) -> list[UpdateGroup]:
+                variant: str, reservation_bytes: int, layout: Any, device_bytes: int | None = None,
+                mlp_width: int = 16, packed_device_headroom: int | None = None,
+                _native_pack_fits: _NativePackFit | None = None) -> list[UpdateGroup]:
     if variant=='shared-prefix' and model.model_id=='mlp':
         raise ContractError('shared-prefix is sequence-only')
+    if _native_pack_fits is not None and model.model_id != 'mlp':
+        raise ContractError('native PPO padding requires MLP endpoints')
     endpoints={index:rollout.endpoint(index) for index in logical}
+    if packed_device_headroom is not None or mlp_width != 16:
+        if model.model_id != 'mlp' or variant != 'microbatch':
+            raise ContractError('custom packed width and headroom require MLP microbatching')
+        integer(mlp_width, 1)
+        return _packed_mlp_groups(endpoints, model, binding, tbptt, layout=layout,
+            resident_bytes=rollout.resident_bytes, reservation_bytes=reservation_bytes,
+            device_bytes=device_bytes, width=mlp_width, headroom=packed_device_headroom,
+            native_pack_fits=_native_pack_fits)
     bins: dict[Any,list[int]]={}
     shared_bins: dict[Any,list[int]]={}
     for index in logical:
@@ -299,7 +377,7 @@ def plan_groups(rollout: Any, logical: list[int], model: Any, binding: Any, tbpt
     accepted: list[UpdateGroup]=[]
     def planned(indices: list[int],shared: bool) -> UpdateGroup:
         plan=execution_plan([endpoints[i] for i in indices],model,binding,tbptt,layout=layout,
-            reservation_bytes=reservation_bytes,resident_bytes=rollout.resident_bytes,shared=shared)
+            reservation_bytes=reservation_bytes,resident_bytes=rollout.resident_bytes,shared=shared,device_bytes=device_bytes)
         return UpdateGroup(tuple(indices),shared,plan)
     def emit(indices: list[int], shared: bool) -> None:
         current: list[int]=[]
@@ -310,7 +388,7 @@ def plan_groups(rollout: Any, logical: list[int], model: Any, binding: Any, tbpt
             if fits:
                 try:
                     execution_plan([endpoints[i] for i in trial],model,binding,tbptt,layout=layout,
-                        reservation_bytes=reservation_bytes,resident_bytes=rollout.resident_bytes,shared=shared)
+                        reservation_bytes=reservation_bytes,resident_bytes=rollout.resident_bytes,shared=shared,device_bytes=device_bytes)
                 except UpdateCapacityError:
                     fits=False
             if not fits:
@@ -333,4 +411,23 @@ def plan_groups(rollout: Any, logical: list[int], model: Any, binding: Any, tbpt
                 bins.setdefault((0,length),[]).append(index)
     for indices in bins.values():
         emit(indices,False)
-    return accepted
+    if _native_pack_fits is None:
+        return accepted
+
+    native_fit = _native_pack_fits
+    refined: list[UpdateGroup] = []
+
+    def refine(group: UpdateGroup) -> None:
+        assert group.plan is not None
+        if native_fit(group.indices, group.plan.staging):
+            refined.append(group)
+            return
+        if len(group.indices) == 1:
+            raise UpdateCapacityError('native PPO padding exceeds storage/numeric reservation')
+        midpoint = len(group.indices) // 2
+        refine(planned(list(group.indices[:midpoint]), False))
+        refine(planned(list(group.indices[midpoint:]), False))
+
+    for group in accepted:
+        refine(group)
+    return refined

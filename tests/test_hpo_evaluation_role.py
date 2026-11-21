@@ -169,8 +169,10 @@ def actual_metadata(tmp_path):
         runtimes = [receipt() for _ in schedule]
         for index, runtime in enumerate(runtimes):
             runtime["executed"].update(pid=123 + index, start_time=1 + index)
+        worker_cap = 4  # Historical two-game, two-seat HPO evaluation capacity.
         manifest = hpo_evaluation_collection_metadata(actions=ACTIONS,
-            config={"run": {"split": "validation"}, "actions": asdict(ACTIONS)},
+            config={"run": {"split": "validation", "max_participant_workers": worker_cap},
+                "hpo_spec": {"operating": {"max_participant_workers": worker_cap}}, "actions": asdict(ACTIONS)},
             runtime_evidence=runtimes, schedule=schedule,
             inventory=[{"path": "opaque.txt", "sha256": sha256(directory / "opaque.txt"), "bytes": (directory / "opaque.txt").stat().st_size}],
             policies=list(registry), bots_revision="fixture", policy_bindings=registry,

@@ -114,9 +114,18 @@ class AttestedClient:
         self.retries = retries
         self.request_seconds = request_seconds
         self.deadline = deadline
+        from gf_common.performance_metrics import PhaseMetrics
+        from gf_simulator_client.performance_diagnostics import host_diagnostics
+        self._performance = host_diagnostics()
+        self.performance_metrics = (PhaseMetrics(scope=self._performance.current_scope or self._performance.scope(phase="idle"),
+            start_ns=time.monotonic_ns(), counters=("event_page_successes", "event_page_failures", "event_transport_attempts"),
+            histograms=("event_page",)) if self._performance is not None else None)
 
     async def close(self) -> None:
         await self.http.aclose()
+        if self._performance is not None and self.performance_metrics is not None:
+            self._performance.metrics(self.performance_metrics, role="legacy-coordinator")
+            self.performance_metrics = None
 
     async def attest(self) -> Json:
         if self.poisoned:
@@ -166,6 +175,8 @@ class AttestedClient:
                 if time.monotonic() >= self.deadline:
                     raise TimeoutError("request deadline")
                 async with asyncio.timeout(min(self.request_seconds, max(0.0, self.deadline - time.monotonic()))):
+                    if self.performance_metrics is not None and "/events/" in path:
+                        self.performance_metrics.increment("event_transport_attempts")
                     response = await self.http.request(method, path, json=body)
             except (httpx.TransportError, TimeoutError) as exc:
                 self.needs_reattest = True
@@ -252,18 +263,28 @@ class AttestedClient:
         cursor = after
         while True:
             query = urlencode({"limit": 1024, **({"after": cursor} if cursor is not None else {})})
-            value = await self._request("GET", f"/{self._gameplay_api}/games/{game}/events/{viewer}?{query}")
-            if self.contract is None:
-                closed(value, {"events", "next_cursor", "has_more"})
-                validate_events(value["events"])
+            diagnostic_start = time.monotonic_ns() if self.performance_metrics is not None else None
+            try:
+                value = await self._request("GET", f"/{self._gameplay_api}/games/{game}/events/{viewer}?{query}")
+                if self.contract is None:
+                    closed(value, {"events", "next_cursor", "has_more"})
+                    validate_events(value["events"])
+                else:
+                    card_v2.event_feed(value)
+                if type(value["has_more"]) is not bool or value["next_cursor"] is not None and not isinstance(value["next_cursor"], str):
+                    raise ContractError("invalid event pagination")
+                accumulated.extend(value["events"])
+                next_cursor = value["next_cursor"]
+                if value["has_more"] and (next_cursor is None or next_cursor == cursor):
+                    raise ContractError("event pagination made no progress")
+            except BaseException:
+                if self.performance_metrics is not None:
+                    self.performance_metrics.increment("event_page_failures")
+                raise
             else:
-                card_v2.event_feed(value)
-            if type(value["has_more"]) is not bool or value["next_cursor"] is not None and not isinstance(value["next_cursor"], str):
-                raise ContractError("invalid event pagination")
-            accumulated.extend(value["events"])
-            next_cursor = value["next_cursor"]
-            if value["has_more"] and (next_cursor is None or next_cursor == cursor):
-                raise ContractError("event pagination made no progress")
+                if self.performance_metrics is not None and diagnostic_start is not None:
+                    self.performance_metrics.increment("event_page_successes")
+                    self.performance_metrics.interval("event_page", diagnostic_start, time.monotonic_ns())
             cursor = next_cursor
             if not value["has_more"]:
                 return accumulated, cursor

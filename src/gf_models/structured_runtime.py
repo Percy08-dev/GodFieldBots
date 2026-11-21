@@ -3,11 +3,12 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from itertools import pairwise
+from math import prod
 
 from gf_common.card_instance import ActionConfigV3
 from gf_common.card_instance_rules import CardInstanceRules
 from gf_common.diverse_actions import NumericCosts
-from gf_common.domain import ContractError, Json, RuntimePolicyBinding, integer
+from gf_common.domain import ContractError, Json, RuntimePolicyBinding, canonical, integer
 from gf_common.structured import ActionConfigV2
 from gf_common.structured_layout import LEGACY_LAYOUT, StructuredLayout, layout_for_contract
 from gf_models.structured_binding import (
@@ -25,6 +26,7 @@ from gf_models.structured_config import (
     dimensions,
     model_config_v2,
     model_config_v3,
+    parameter_shapes,
     resource_estimate,
 )
 
@@ -196,6 +198,52 @@ def admit_hpo_game_workers(actions: ActionConfigV3,roles: tuple[RuntimePolicyBin
         global_cuda_bytes=global_cuda_bytes,max_workers=max_workers,learner_cuda_bytes=learner_cuda_bytes)
 
 
+def admit_hpo_resident_game_workers(actions: ActionConfigV3,
+                                    roles: tuple[RuntimePolicyBinding,RuntimePolicyBinding], *,
+                                    rules: CardInstanceRules, model: ModelConfigV4,
+                                    inference: InferenceBindingV2, worker_cuda_bytes: int,
+                                    begin_import_bytes: int, game_concurrency: int,
+                                    global_cuda_bytes: int, max_workers: int,
+                                    learner_cuda_bytes: int) -> Json:
+    """Validate real roles, charging the SAME training pool including parked caches.
+
+    Amounts come from the owning runtime pool, so explicit experimental buffers
+    survive admission. A baseline in the current game cannot retire that pool's
+    other cached neural identities or its next concurrent BEGIN allowance.
+    """
+    integer(game_concurrency,1,2**63-1)
+    integer(max_workers,1,2**63-1)
+    integer(global_cuda_bytes,1,2**63-1)
+    integer(learner_cuda_bytes,0,global_cuda_bytes)
+    integer(worker_cuda_bytes,0,global_cuda_bytes)
+    integer(begin_import_bytes,0,global_cuda_bytes)
+    if type(model) is not ModelConfigV4 or type(roles) is not tuple or len(roles)!=2:
+        raise ContractError('homogeneous resident HPO admission requires both actual Model4 roles')
+    for role in roles:
+        if (type(role) is not RuntimePolicyBinding or role.model_id != 'heuristic_refresh'
+                and role.policy_options is not None and role.policy_options.get('version')!='4'):
+            raise ContractError('HPO runtime admits exact model4 or canonical baseline roles')
+        # Keep all original syntax, action/model capacities and NumericCosts
+        # validation; only the old returned device quantity is superseded.
+        own_game_worker_settings_v3(role.model_id,actions,role.policy_options,rules=rules)
+        if role.model_id in ('mlp','gru','transformer'):
+            options = role.policy_options
+            if (options is None or canonical(options['model']) != canonical(asdict(model))
+                    or canonical(options['inference']) != canonical(asdict(inference))):
+                raise ContractError('resident HPO training requires homogeneous model/inference roles')
+    workers = 2 * game_concurrency
+    resident, imports = workers * worker_cuda_bytes, workers * begin_import_bytes
+    peak = learner_cuda_bytes + resident + imports
+    if workers>max_workers or peak>global_cuda_bytes:
+        raise ContractError('joint resident HPO game workers exceed managed budget: '
+            f'resource=cuda phase=collection required={peak} limit={global_cuda_bytes} '
+            f'learner={learner_cuda_bytes} workers={resident} begin_staging={imports}')
+    return {'recipe':'hpo-resident-actor-envelope-v3','game_concurrency':game_concurrency,
+        'workers':workers,'worker_resident_bytes':resident,'begin_import_bytes':imports,
+        'decision_temporary_bytes':0,'learner_cuda_bytes':learner_cuda_bytes,
+        'peak_cuda_bytes':peak,'global_cuda_bytes':global_cuda_bytes,'max_workers':max_workers}
+
+
 def admit_hpo_training(actions: ActionConfigV3,model: ModelConfigV4,inference: InferenceBindingV2,
                         tbptt_length: int,operating: Json,*,rules: CardInstanceRules) -> Json:
     """Action-bound runtime entry to the shared pure HPO admission calculation."""
@@ -204,7 +252,7 @@ def admit_hpo_training(actions: ActionConfigV3,model: ModelConfigV4,inference: I
         layout=layout_for_contract(actions.action_contract))
 
 
-def hpo_training_admission(model: ModelConfigV4,inference: InferenceBindingV2,tbptt_length: int,
+def _hpo_training_components(model: ModelConfigV4,inference: InferenceBindingV2,tbptt_length: int,
                             operating: Json,*,layout: StructuredLayout) -> Json:
     """One conservative phase calculation for both CLI and actual runtime.
 
@@ -233,11 +281,32 @@ def hpo_training_admission(model: ModelConfigV4,inference: InferenceBindingV2,tb
             +operating['numeric_budget_bytes']+operating['save_budget_bytes']}
     peak_ram=max(phases.values())
     peak_cuda=learner+total
-    if peak_ram>operating['managed_ram_bytes']: raise ContractError('joint HPO RAM demand exceeds managed budget')
-    if peak_cuda>operating['managed_cuda_bytes']: raise ContractError('joint HPO CUDA demand exceeds managed budget')
     return {'recipe':'hpo-joint-process-envelope-v1','workers':workers,'learner_bytes':learner,'worker_bytes':total,
         'ram_phases':phases,'peak_ram_bytes':peak_ram,'peak_cuda_bytes':peak_cuda,
         'managed_ram_bytes':operating['managed_ram_bytes'],'managed_cuda_bytes':operating['managed_cuda_bytes']}
+
+
+def hpo_training_admission(model: ModelConfigV4,inference: InferenceBindingV2,tbptt_length: int,
+                            operating: Json,*,layout: StructuredLayout) -> Json:
+    """Original fresh-training quantities and refusal order remain authoritative."""
+    base = _hpo_training_components(model,inference,tbptt_length,operating,layout=layout)
+    phases, peak_ram, peak_cuda = base['ram_phases'], base['peak_ram_bytes'], base['peak_cuda_bytes']
+    learner, total = base['learner_bytes'], base['worker_bytes']
+    if peak_ram>operating['managed_ram_bytes']:
+        phase = max(phases, key=phases.__getitem__)
+        collecting = phase == 'collection'
+        raise ContractError('joint HPO RAM demand exceeds managed budget: '
+            f'resource=ram phase={phase} required={peak_ram} limit={operating["managed_ram_bytes"]} '
+            f'learner={learner} workers={total if collecting else 0} parent={operating["parent_budget_bytes"]} '
+            f'collector={operating["collector_budget_bytes"] if collecting else 0} '
+            f'source={0 if collecting else operating["source_budget_bytes"]} '
+            f'numeric={0 if collecting else operating["numeric_budget_bytes"]} '
+            f'save={operating["save_budget_bytes"] if phase == "save" else 0}')
+    if peak_cuda>operating['managed_cuda_bytes']:
+        raise ContractError('joint HPO CUDA demand exceeds managed budget: '
+            f'resource=cuda phase=collection required={peak_cuda} limit={operating["managed_cuda_bytes"]} '
+            f'learner={learner} workers={total}')
+    return base
 
 
 def admit_planned_game_training_v3(actions: ActionConfigV3, model: ModelConfigV3,
@@ -266,34 +335,85 @@ def admit_planned_game_training_v3(actions: ActionConfigV3, model: ModelConfigV3
         'peak_cuda_bytes': peak, 'global_cuda_bytes': global_cuda_bytes, 'max_workers': max_workers}
 
 
-def hpo_resident_training_admission(model: ModelConfigV4, inference: InferenceBindingV2,
+def _hpo_resident_training_components(model: ModelConfigV4, inference: InferenceBindingV2,
                                      tbptt_length: int, operating: Json, runtime: Json, *,
                                      layout: StructuredLayout) -> Json:
-    """Retain physical residency through Source/update/save and stage full SYNC.
+    """Normal homogeneous actors: original host/learner, actor-specific CUDA.
 
-    Cache weights, context/activation/allocator envelopes and old+new transfer
-    copies are charged independently. This remains soft managed admission.
+    The configured cache limit also retains the uncalibrated construction/restore
+    allowance per concurrent BEGIN, or for one owner in the serial SYNC loop.
+    These are soft legacy reservation units, not measured physical CUDA bytes.
     """
     from gf_common.hpo_resident import resident_runtime
     limits = resident_runtime(runtime)
-    # Validate shape/config and base phase ownership with the same formulas.
-    # The expanded phases below then make the resident refusal independently.
-    base = hpo_training_admission(model, inference, tbptt_length, operating, layout=layout)
+    from gf_models.actor_cuda import actor_cuda_estimate
+    # Keep every original intrinsic tensor/managed guard, but enforce the final
+    # resident device total rather than the obsolete learner-like actor gate.
+    base = _hpo_training_components(model, inference, tbptt_length, operating, layout=layout)
     workers = base['workers']
-    cache = workers * limits['cache_weight_bytes']
-    resident = base['worker_bytes'] + cache
-    staging = workers * limits['cache_weight_bytes']
+    weights = 4 * sum(prod(shape) for shape in parameter_shapes(model, layout=layout).values())
+    positions = 4 * model.temporal.max_decisions * model.temporal.hidden_size
+    cached = min(limits['cache_entries'], limits['cache_weight_bytes'] // weights)
+    if cached < 1:
+        raise ContractError('resident cache cannot admit one network: resource=cache-weight '
+            f'phase=resident-load required={weights} limit={limits["cache_weight_bytes"]}')
+    cache = workers * (cached - 1) * weights
+    position_cache = workers * cached * positions
+    host_resident = base['worker_bytes'] + cache + position_cache
+    actor = actor_cuda_estimate(model, inference, layout=layout)
+    device_cache = workers * (cached - 1) * (weights + positions) if inference.device == 'cuda:0' else 0
+    resident = workers * actor['cuda_bytes'] + device_cache
+    staging = limits['cache_weight_bytes']
+    begin_staging = workers * staging
     fixed = operating['parent_budget_bytes'] + base['learner_bytes']
     phases = {
-        'collection': fixed + resident + operating['collector_budget_bytes'],
-        'update': fixed + resident + operating['source_budget_bytes'] + operating['numeric_budget_bytes'],
-        'save': fixed + resident + operating['source_budget_bytes'] + operating['numeric_budget_bytes'] + operating['save_budget_bytes'],
-        'sync': fixed + resident + staging,
+        'collection': fixed + host_resident + operating['collector_budget_bytes'] + begin_staging,
+        'update': fixed + host_resident + operating['source_budget_bytes'] + operating['numeric_budget_bytes'],
+        'save': fixed + host_resident + operating['source_budget_bytes'] + operating['numeric_budget_bytes'] + operating['save_budget_bytes'],
+        'sync': fixed + host_resident + staging,
     }
-    cuda = base['learner_bytes'] + resident + staging
+    cuda_phases = {phase: base['learner_bytes'] + resident + scratch
+        for phase, scratch in (('collection', begin_staging), ('update', 0), ('save', 0), ('sync', staging))}
+    cuda = max(cuda_phases.values())
     ram = max(phases.values())
-    if ram > operating['managed_ram_bytes'] or cuda > operating['managed_cuda_bytes']:
-        raise ContractError('joint resident HPO residency/transition exceeds managed budget')
-    return {**base, 'recipe': 'hpo-resident-process-envelope-v1', 'worker_bytes': resident,
-        'cache_weight_bytes': cache, 'staging_bytes': staging, 'ram_phases': phases,
+    return {**base, 'recipe': 'hpo-resident-actor-envelope-v3', 'worker_bytes': resident,
+        'worker_host_bytes': host_resident, 'worker_active_host_bytes': base['worker_bytes'],
+        'worker_active_cuda_bytes': workers * actor['cuda_bytes'], 'worker_cache_cuda_bytes': device_cache,
+        'actor_cuda_estimate': actor,
+        'network_weight_bytes': weights, 'network_position_bytes': positions,
+        'cached_networks_per_worker': cached, 'cache_weight_bytes': cache, 'cache_position_bytes': position_cache,
+        'begin_staging_bytes': begin_staging, 'staging_bytes': staging, 'ram_phases': phases,
+        'cuda_phases': cuda_phases,
         'peak_ram_bytes': ram, 'peak_cuda_bytes': cuda}
+
+
+def hpo_resident_training_admission(model: ModelConfigV4, inference: InferenceBindingV2,
+                                     tbptt_length: int, operating: Json, runtime: Json, *,
+                                     layout: StructuredLayout, owned_cuda: bool = False) -> Json:
+    """Final resident budgets; only explicitly normal owned CUDA gets a separate D."""
+    result = _hpo_resident_training_components(model,inference,tbptt_length,operating,runtime,layout=layout)
+    if owned_cuda and inference.device == 'cuda:0':
+        from gf_models.learner_cuda import owned_learner_cuda_admission
+        admission = owned_learner_cuda_admission(model,inference,layout=layout,
+            logical_bytes=result['learner_bytes'],global_cuda_bytes=operating['managed_cuda_bytes'],
+            pool_cuda_bytes=result['worker_bytes'],
+            overlap_scratch_bytes=max(result['begin_staging_bytes'],result['staging_bytes']))
+        result['owned_learner_admission'] = admission
+        result['learner_device_bytes'] = admission['device_bytes']
+        result['recipe'] = 'hpo-owned-device-envelope-v4'
+        result['ram_admission_scope'] = 'legacy compatibility reservation; not a physical RAM peak'
+        result['cuda_phases'] = {phase:value-result['learner_bytes']+admission['device_bytes']
+            for phase,value in result['cuda_phases'].items()}
+        result['peak_cuda_bytes'] = max(result['cuda_phases'].values())
+    for resource, demands, limit in (('ram', result['ram_phases'], operating['managed_ram_bytes']),
+                                     ('cuda', result['cuda_phases'], operating['managed_cuda_bytes'])):
+        phase = max(demands,key=demands.__getitem__)
+        if demands[phase] > limit:
+            raise ContractError('joint resident HPO residency/transition exceeds managed budget: '
+                f'resource={resource} phase={phase} required={demands[phase]} limit={limit} '
+                f'legacy_learner={result["learner_bytes"]} legacy_workers={result["worker_active_host_bytes"]} '
+                f'worker_host={result["worker_host_bytes"]} actor_cuda={result["worker_active_cuda_bytes"]} '
+                f'extra_cache={result["cache_weight_bytes"]+result["cache_position_bytes"] if resource == "ram" else result["worker_cache_cuda_bytes"]} '
+                f'begin_staging={result["begin_staging_bytes"] if phase == "collection" else 0} '
+                f'sync_staging={result["staging_bytes"] if phase == "sync" else 0}')
+    return result

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import math
 import os
 import tomllib
@@ -14,23 +15,27 @@ from gf_common.action_contract import engineering_contract, parse_action_contrac
 from gf_common.card_instance import (
     CARD_INSTANCE_SIMULATOR_REVISION,
     CORRECTED_SIMULATOR_REVISION,
+    SHARED_SIMULATOR_REVISION,
     ActionConfigV3,
     action_config_v3,
     card_instance_contract,
-    corrected_card_instance_contract,
+    is_corrected_contract,
     parse_card_instance_contract,
+    shared_card_instance_contract,
 )
 from gf_common.domain import (
     SIMULATOR_REVISION,
     ActionConfig,
     ContractError,
     Json,
+    canonical,
     clone,
     closed,
     digest,
     integer,
 )
 from gf_common.preprocessing import PreparationConfig, preparation_config
+from gf_common.rust_player import player_runtime, require_legacy_player_entry
 from gf_common.structured import ActionConfigV2, action_config_v2
 from gf_common.structured_layout import layout_for_contract
 from gf_models.config import (
@@ -38,10 +43,12 @@ from gf_models.config import (
     MLPModelConfig,
     ModelConfig,
     PPOTrainingConfig,
+    RustPPOTrainingConfig,
     SequencePPOTrainingConfig,
     TrainingConfig,
     TransformerModelConfig,
     model_config,
+    ppo_update_config,
     training_config,
     validate_capacity,
 )
@@ -77,6 +84,51 @@ class RunConfig:
 class RunConfigV2(RunConfig):
     global_cuda_budget_bytes: int = 12884901888
     max_participant_workers: int = 4
+
+
+@dataclass(frozen=True)
+class SharedRunConfigV2(RunConfigV2):
+    inference_service: Json = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class RustPlayerRunConfigV2(RunConfigV2):
+    player_runtime: Json = field(default_factory=dict)
+
+
+@dataclass(frozen=True, kw_only=True)
+class RustPlayerPublicRunConfigV2(RustPlayerRunConfigV2):
+    post_host_seconds: float
+
+
+@dataclass(frozen=True, kw_only=True)
+class RustPlayerPublicHpoRunConfigV2(RunConfigV2):
+    post_host_seconds: float
+
+
+@dataclass(frozen=True, kw_only=True)
+class _RustPPODataRun:
+    ppo_source: Json
+
+
+@dataclass(frozen=True)
+class RustPPODataRun(_RustPPODataRun, RustPlayerRunConfigV2):
+    pass
+
+
+@dataclass(frozen=True)
+class RustPPODataPublicRun(_RustPPODataRun, RustPlayerPublicRunConfigV2):
+    pass
+
+
+@dataclass(frozen=True)
+class RustPPODataHpoRun(_RustPPODataRun, RunConfigV2):
+    pass
+
+
+@dataclass(frozen=True)
+class RustPPODataPublicHpoRun(_RustPPODataRun, RustPlayerPublicHpoRunConfigV2):
+    pass
 
 
 @dataclass(frozen=True)
@@ -170,13 +222,22 @@ class PackedRefreshOpponentsExperimentConfig(GroupPackExperimentConfig):
     training_opponents: Json
 
 
+def _require_hpo_model4_storage(config: ExperimentConfig, command: str, *, standalone: bool) -> None:
+    from gf_cli.hpo_config import HPOExperimentConfig
+    if (type(config) is not HPOExperimentConfig or type(config.model) is not ConfiguredNeuralModelV4
+            or command not in ('collect', 'evaluate') or standalone):
+        raise ContractError('HPO Model4 storage requires its concrete owned collector')
+    if config.run.split != ('validation' if command == 'evaluate' else 'train'):
+        raise ContractError('HPO collector role differs from its exact runtime split')
+
+
 def require_storage_command(config: ExperimentConfig, command: str, *, standalone: bool = True) -> None:
+    if command != 'validate':
+        require_legacy_player_entry(config)
+    if getattr(getattr(config,'run',None),'inference_service',None) is not None and command not in ('train','validate') and not (command=='collect' and not standalone):
+        raise ContractError('shared serving currently requires owned ordinary PPO training')
     if type(getattr(config, 'model', None)) is ConfiguredNeuralModelV4:
-        from gf_cli.hpo_config import HPOExperimentConfig
-        if type(config) is not HPOExperimentConfig or command not in ('collect','evaluate') or standalone:
-            raise ContractError('HPO Model4 storage requires its concrete owned collector')
-        if config.run.split!=('validation' if command=='evaluate' else 'train'):
-            raise ContractError('HPO collector role differs from its exact runtime split')
+        _require_hpo_model4_storage(config, command, standalone=standalone)
         return
     if not isinstance(config, GroupPackExperimentConfig):
         return
@@ -239,7 +300,14 @@ def _validate_table(name: str, values: Json, *, context: Json | None = None) -> 
         closed(values, set(), set(defaults))
         for key, value in values.items():
             default = defaults[key]
-            if isinstance(default, dict):
+            if name == "run" and key == "player_runtime":
+                continue  # The closed declaration has its own zero-wait semantics.
+            elif name == 'run' and key == 'ppo_source':
+                from gf_common.rust_ppo_source import validate_source_mode
+                validate_source_mode(value)
+            elif name == "training" and key == "ppo_update":
+                ppo_update_config(value)
+            elif isinstance(default, dict):
                 check(value, default)
             elif default is None:
                 if value is not None:
@@ -271,6 +339,7 @@ def _validate_table(name: str, values: Json, *, context: Json | None = None) -> 
     cls = TransformerModelConfig if name in ("model", "opponent") and values.get("model_id") == "transformer" else GRUModelConfig if name in ("model", "opponent") and values.get("model_id") == "gru" else SequencePPOTrainingConfig if name == "training" and "sequence_length" in values else MLPModelConfig if name in ("model", "opponent") and values.get("model_id") == "mlp" else PPOTrainingConfig if name == "training" and values.get("algorithm") == "ppo" else _TABLES[name]
     # Partial model presets may specify closed structural keys before dispatch.
     defaults = asdict(cls())
+    timed_native_run = False
     structured_model = name in ("model", "opponent") and values.get("version") in ("2", "3")
     if name in ("model", "opponent") and values.get("model_id") == "heuristic_refresh":
         defaults = asdict(RefreshHeuristicConfig())
@@ -288,6 +357,19 @@ def _validate_table(name: str, values: Json, *, context: Json | None = None) -> 
         defaults = asdict(CorrectedServerConfigV2() if values.get("simulator_revision") == CORRECTED_SIMULATOR_REVISION else ServerConfigV2())
     elif name == "run" and context.get("actions", {}).get("version") in ("2", "3"):
         defaults = asdict(RunConfigV2())
+        if "player_runtime" in values:
+            if "inference_service" in values:
+                raise ContractError("run.inference_service and run.player_runtime are mutually exclusive")
+            defaults["player_runtime"] = player_runtime(values["player_runtime"],game_concurrency=values.get("concurrency",2))
+        if 'post_host_seconds' in values and ('player_runtime' in values
+                or context.get('hpo_spec', {}).get('schema_version') == 6):
+            timed_native_run = True
+        if "inference_service" in values:
+            from gf_common.shared_inference import shared_runtime
+            defaults["inference_service"] = shared_runtime(values["inference_service"],game_concurrency=values.get("concurrency",2))
+        if 'ppo_source' in values and ('player_runtime' in values
+                or context.get('hpo_spec', {}).get('schema_version') == 6):
+            defaults['ppo_source'] = {}
     if name in ("model", "opponent") and "model_id" not in values and not structured_model:
         defaults["inference"] = asdict(MLPModelConfig().inference)
         defaults["network"].update(asdict(MLPModelConfig().network))
@@ -296,7 +378,12 @@ def _validate_table(name: str, values: Json, *, context: Json | None = None) -> 
         defaults["inference"].update(asdict(GRUModelConfig().inference))
     if name == "training" and "algorithm" not in values:
         defaults.update(asdict(SequencePPOTrainingConfig()))
-    check(values, defaults)
+    if name == "training" and "ppo_update" in values:
+        defaults["ppo_update"] = {}
+    check({key: value for key, value in values.items() if key != 'post_host_seconds'}
+        if timed_native_run else values, defaults)
+    if timed_native_run:
+        _validate_post_host(asdict(RunConfigV2()) | values)
 
 
 def load_config(path: str | Path, overrides: Json | None = None) -> LoadedConfig:
@@ -409,11 +496,16 @@ def load_config(path: str | Path, overrides: Json | None = None) -> LoadedConfig
         card_revision = selected_contract.simulator_revision
         if data["server"].get("simulator_revision") != card_revision:
             raise ContractError("Gameplay v2 requires the explicit pinned simulator revision")
-        if card_revision == CORRECTED_SIMULATOR_REVISION:
+        if card_revision in (CORRECTED_SIMULATOR_REVISION,SHARED_SIMULATOR_REVISION):
             card_server_cls = CorrectedServerConfigV2
         base["actions"] = asdict(ActionConfigV3(action_contract=selected_contract))
         base["server"] = asdict(card_server_cls())
         base["run"] = asdict(RunConfigV2())
+        if "player_runtime" in data.get("run", {}):
+            base["run"]["player_runtime"] = player_runtime(data["run"]["player_runtime"],game_concurrency=data["run"].get("concurrency",2))
+        if "inference_service" in data.get("run",{}):
+            from gf_common.shared_inference import shared_runtime
+            base["run"]["inference_service"] = shared_runtime(data["run"]["inference_service"],game_concurrency=data["run"].get("concurrency",2))
         for table, key in _PATHS:
             if table in ("server", "run") and base[table].get(key) is not None:
                 base[table][key] = str((source.parent / base[table][key]).resolve())
@@ -426,7 +518,7 @@ def load_config(path: str | Path, overrides: Json | None = None) -> LoadedConfig
         base["actions"] = asdict(ActionConfigV2(action_contract=engineering_contract()))
         base["run"] = asdict(RunConfigV2())
     if (any(data.get(name, {}).get("version") == "3" for name in ("model", "opponent"))
-            and (not card_instance_actions or card_revision != CORRECTED_SIMULATOR_REVISION)):
+            and (not card_instance_actions or card_revision not in (CORRECTED_SIMULATOR_REVISION,SHARED_SIMULATOR_REVISION))):
         raise ContractError("model3 experiment Config requires the corrected card-instance contract")
     for name in ("model", "opponent"):
         if data.get(name, {}).get("model_id") == "heuristic_refresh":
@@ -448,38 +540,50 @@ def load_config(path: str | Path, overrides: Json | None = None) -> LoadedConfig
     if data.get("training", {}).get("algorithm") == "ppo":
         base["training"] = asdict(SequencePPOTrainingConfig() if data.get("model", {}).get("model_id") in ("gru", "transformer") and data.get("model", {}).get("version", "1") == "1" else PPOTrainingConfig())
     effective = _merge(base, data)
+    return _normalized_config(effective, data=data, inputs=tuple(inputs))
+
+
+def _normalized_config(effective: Json, *, data: Json, inputs: tuple[Json, ...]) -> LoadedConfig:
+    """Existing normalized validation/construction shared with supervised input."""
+    structured_actions = effective["actions"].get("version") == "2"
+    card_instance_actions = effective["actions"].get("version") == "3"
+    card_instance_server = effective["server"].get("gameplay_api") == "v2"
+    card_server_cls: type[ServerConfigV2] = ServerConfigV2
+    card_revision = CARD_INSTANCE_SIMULATOR_REVISION
+    if card_instance_actions:
+        selected_contract = parse_card_instance_contract(effective["actions"]["action_contract"])
+        card_revision = selected_contract.simulator_revision
+        if card_revision in (CORRECTED_SIMULATOR_REVISION, SHARED_SIMULATOR_REVISION):
+            card_server_cls = CorrectedServerConfigV2
     for name in _TABLES:
         _validate_table(name, effective[name], context=effective)
     run = effective["run"]
-    if run["split"] not in ("train", "validation", "test"):
-        raise ContractError("invalid split")
-    if not run["name"].strip() or any(c in run["name"] for c in "/\\"):
-        raise ContractError("invalid run name")
-    for seed in run["seeds"]:
-        try:
-            if str(uuid.UUID(seed)) != seed:
-                raise ValueError
-        except ValueError as exc:
-            raise ContractError("seeds must be canonical UUIDs") from exc
-    for key in ("pairs_per_seed", "concurrency", "max_decisions"):
-        integer(run[key], 1, 2**32 - 1)
-    for seed in run["sampling_seeds"]:
-        integer(seed)
-    if run["admission_seconds"] > run["execution_seconds"] or run["execution_seconds"] + run["finalization_seconds"] > run["wall_seconds"]:
-        raise ContractError("run deadlines inconsistent")
+    _validate_run_controls(run)
     if structured_actions or card_instance_actions:
-        integer(run["concurrency"], 1, 2)
-        integer(run["max_participant_workers"], 1, 4)
+        rust_player = "player_runtime" in run
+        integer(run["concurrency"], 1, 2**32 - 1 if rust_player else 2)
+        integer(run["max_participant_workers"], 1, 2**64 - 1 if rust_player else 4)
         integer(run["global_cuda_budget_bytes"], 1, 12884901888)
-        if run["max_participant_workers"] < 2 * run["concurrency"]:
+        if not rust_player and run["max_participant_workers"] < 2 * run["concurrency"]:
             raise ContractError("participant capacity must cover both players of every concurrent game")
     if (any(effective[name].get("model_id") == "heuristic_refresh" for name in ("model", "opponent"))
-            and (not card_instance_actions or card_revision != CORRECTED_SIMULATOR_REVISION)):
+            and (not card_instance_actions or card_revision not in (CORRECTED_SIMULATOR_REVISION,SHARED_SIMULATOR_REVISION))):
         raise ContractError("refresh baseline requires the corrected card-instance layout")
     models = {name: model_config(effective[name], layout=layout_for_contract(selected_contract))
               if effective[name].get("version") == "3" or effective[name].get("model_id") == "heuristic_refresh" else model_config(effective[name])
               for name in ("model", "opponent")}
-    training = training_config(effective["training"])
+    training_fields = effective["training"]
+    update = None
+    if "ppo_update" in training_fields:
+        update = ppo_update_config(training_fields["ppo_update"])
+        training_fields = {key: value for key, value in training_fields.items() if key != "ppo_update"}
+    training = training_config(training_fields)
+    if update is not None:
+        if (type(training) is not PPOTrainingConfig or "player_runtime" not in run
+                or type(models["model"]) is not ConfiguredNeuralModelV3):
+            raise ContractError("training.ppo_update requires ordinary Rust Model3 PPO")
+        if "training_opponents" in data and update.collection_games != 16:
+            raise ContractError("mixed-refresh-16-v1 requires collection_games=16")
     preprocessing = preparation_config(effective["preprocessing"])
     if ("training" in data or "training" in data.get("references", {})) and models["model"].model_id not in ("lightgbm", "mlp", "gru", "transformer"):
         raise ContractError("training/model mismatch")
@@ -493,7 +597,7 @@ def load_config(path: str | Path, overrides: Json | None = None) -> LoadedConfig
     if card_instance_actions:
         actions_v3 = action_config_v3(effective["actions"])
         game_reader = (preprocessing.backend in ("python", "rust") and preprocessing.reader == "participant-structured-v2"
-            and actions_v3.action_contract == corrected_card_instance_contract()
+            and is_corrected_contract(actions_v3.action_contract)
             and (isinstance(models["model"], ConfiguredNeuralModelV3) and isinstance(training, PPOTrainingConfig)
                  or type(models["model"]) is ConfiguredTreeModelV3 and type(training) is TrainingConfig))
         if not game_reader and (preprocessing.backend != "python" or preprocessing.reader != "legacy"):
@@ -531,10 +635,110 @@ def load_config(path: str | Path, overrides: Json | None = None) -> LoadedConfig
         if set(actions["exchange_allocations"]) - {"balanced", "hp", "mp", "money"} or set(actions["targets"]) - {"self", "opponent"}:
             raise ContractError("unknown allocation or target")
     server = effective["server"]
+    _validate_server_controls(server, run, revision=card_revision if card_instance_actions else SIMULATOR_REVISION)
+    _validate_evaluation_controls(effective["evaluation"])
+    if "player_runtime" in run:
+        if "storage" not in data:
+            raise ContractError("Rust player requires explicit packed storage")
+        if not card_instance_actions:
+            raise ContractError("Rust player requires corrected actions3")
+        run["player_runtime"] = player_runtime(run["player_runtime"],game_concurrency=run["concurrency"])
+        _validate_rust_player_profile(run=run, server=server, actions=actions_v3,
+            model=models["model"], opponent=models["opponent"], training=training, preprocessing=preprocessing)
+    if "inference_service" in run:
+        from gf_common.shared_inference import shared_runtime
+        run["inference_service"] = shared_runtime(run["inference_service"],game_concurrency=run["concurrency"])
+        if (not card_instance_actions or selected_contract != shared_card_instance_contract()
+                or type(models["model"]) is not ConfiguredNeuralModelV3 or models["model"].model_id != "mlp"
+                or models["model"].inference.device != "cuda:0" or type(training) is not PPOTrainingConfig
+                or preprocessing.backend != "python" or preprocessing.reader != "participant-structured-v2"):
+            raise ContractError("shared mode requires new-profile Python MLP CUDA PPO")
+    if card_instance_actions and selected_contract == shared_card_instance_contract() and preprocessing.backend != "python":
+        raise ContractError("shared contract profile has no native implementation")
+    converted: dict[str, Any] = {}
+    for name, cls in _TABLES.items():
+        if name in models:
+            converted[name] = models[name]
+            continue
+        if name == "training":
+            converted[name] = training if update is None else RustPPOTrainingConfig(**asdict(training), ppo_update=update)
+            continue
+        if name == "preprocessing":
+            converted[name] = preprocessing
+            continue
+        if name == "actions" and structured_actions:
+            converted[name] = actions_v2
+            continue
+        if name == "actions" and card_instance_actions:
+            converted[name] = actions_v3
+            continue
+        if name == "server" and card_instance_server:
+            cls = card_server_cls
+        if name == "run" and (structured_actions or card_instance_actions):
+            cls = RustPlayerRunConfigV2 if "player_runtime" in effective["run"] else SharedRunConfigV2 if "inference_service" in effective["run"] else RunConfigV2
+            if 'post_host_seconds' in effective['run'] and cls is RustPlayerRunConfigV2:
+                cls = RustPlayerPublicRunConfigV2
+        values = effective[name]
+        defaults = asdict(cls(**({'post_host_seconds': values['post_host_seconds']}
+            if cls is RustPlayerPublicRunConfigV2 else {})))
+        if name == 'run' and 'ppo_source' in values:
+            cls = RustPPODataPublicRun if cls is RustPlayerPublicRunConfigV2 else RustPPODataRun
+        values = {k: tuple(v) if isinstance(defaults.get(k), tuple) else v for k, v in values.items()}
+        converted[name] = cls(**values)
+    mixed = data.get("training_opponents")
+    if mixed is not None and (not card_instance_actions or card_revision not in (CORRECTED_SIMULATOR_REVISION,SHARED_SIMULATOR_REVISION)
+            or type(models["model"]) is not ConfiguredNeuralModelV3 or type(training) is not PPOTrainingConfig):
+        raise ContractError("training_opponents requires corrected ordinary Model3 PPO")
+    if "storage" in data:
+        if (not card_instance_actions or card_revision not in (CORRECTED_SIMULATOR_REVISION,SHARED_SIMULATOR_REVISION)
+                or server["external_url"] is not None):
+            raise ContractError("storage requires corrected actions3 and a locally managed server")
+        config: ExperimentConfig = (PackedRefreshOpponentsExperimentConfig(**converted,
+            storage=GroupPackStorageConfig(**data["storage"]), training_opponents=mixed) if mixed is not None else
+            GroupPackExperimentConfig(**converted, storage=GroupPackStorageConfig(**data["storage"])))
+    else:
+        config = RefreshOpponentsExperimentConfig(**converted, training_opponents=mixed) if mixed is not None else ExperimentConfig(**converted)
+    return LoadedConfig(config, clone(asdict(config)), digest(asdict(config)), tuple(inputs))
+
+
+
+def _validate_evaluation_controls(evaluation: Json) -> None:
+    integer(evaluation["bootstrap_samples"], 1)
+
+
+def _validate_run_controls(run: Json, *, hpo: bool = False) -> None:
+    if run["split"] not in ("train", "validation", "test"):
+        raise ContractError("invalid split")
+    if not run["name"].strip() or any(c in run["name"] for c in "/\\"):
+        raise ContractError("invalid run name")
+    for seed in run["seeds"]:
+        try:
+            if str(uuid.UUID(seed)) != seed:
+                raise ValueError
+        except ValueError as exc:
+            raise ContractError("seeds must be canonical UUIDs") from exc
+    for key in ("pairs_per_seed", "concurrency", "max_decisions"):
+        integer(run[key], 1, 2**63 - 1 if hpo and key == "concurrency" else 2**32 - 1)
+    for seed in run["sampling_seeds"]:
+        integer(seed)
+    if run["admission_seconds"] > run["execution_seconds"] or run["execution_seconds"] + run["finalization_seconds"] > run["wall_seconds"]:
+        raise ContractError("run deadlines inconsistent")
+    if 'post_host_seconds' in run:
+        _validate_post_host(run)
+
+
+def _validate_post_host(run: Json) -> None:
+    p = run['post_host_seconds']
+    if (type(p) not in (int, float) or not 0 < p < run['wall_seconds'] - run['execution_seconds']
+            or not math.isfinite(p)):
+        raise ContractError('post_host_seconds must be explicit, finite and inside the original total tail')
+
+
+def _validate_server_controls(server: Json, run: Json, *, revision: str) -> None:
     if run["report_reserve_seconds"] + server["cleanup_reserve_seconds"] >= run["finalization_seconds"]:
         raise ContractError("cleanup/report reserves must fit inside finalization allowance")
     integer(server["transport_retries"], 0, 2)
-    if server["simulator_revision"] != (card_revision if card_instance_actions else SIMULATOR_REVISION):
+    if server["simulator_revision"] != revision:
         raise ContractError("unsupported simulator contract revision")
     if not server["fixed_seed_experiment"]:
         raise ContractError("repeated server requires explicit fixed_seed_experiment")
@@ -550,44 +754,70 @@ def load_config(path: str | Path, overrides: Json | None = None) -> LoadedConfig
         expected = "v1-" + _hashlib.sha256(b"godfield-test-server-seed-fingerprint-v1" + uuid.UUID(run["seeds"][0]).bytes).hexdigest()
         if server["expected_fingerprint"] != expected or len(set(run["seeds"])) != 1:
             raise ContractError("expected fingerprint/seed mismatch")
-    for key in ("bootstrap_samples",):
-        integer(effective["evaluation"][key], 1)
-    converted: dict[str, Any] = {}
-    for name, cls in _TABLES.items():
-        if name in models:
-            converted[name] = models[name]
-            continue
-        if name == "training":
-            converted[name] = training
-            continue
-        if name == "preprocessing":
-            converted[name] = preprocessing
-            continue
-        if name == "actions" and structured_actions:
-            converted[name] = actions_v2
-            continue
-        if name == "actions" and card_instance_actions:
-            converted[name] = actions_v3
-            continue
-        if name == "server" and card_instance_server:
-            cls = card_server_cls
-        if name == "run" and (structured_actions or card_instance_actions):
-            cls = RunConfigV2
-        values = effective[name]
-        defaults = asdict(cls())
-        values = {k: tuple(v) if isinstance(defaults[k], tuple) else v for k, v in values.items()}
-        converted[name] = cls(**values)
-    mixed = data.get("training_opponents")
-    if mixed is not None and (not card_instance_actions or card_revision != CORRECTED_SIMULATOR_REVISION
-            or type(models["model"]) is not ConfiguredNeuralModelV3 or type(training) is not PPOTrainingConfig):
-        raise ContractError("training_opponents requires corrected ordinary Model3 PPO")
-    if "storage" in data:
-        if (not card_instance_actions or card_revision != CORRECTED_SIMULATOR_REVISION
-                or server["external_url"] is not None):
-            raise ContractError("storage requires corrected actions3 and a locally managed server")
-        config: ExperimentConfig = (PackedRefreshOpponentsExperimentConfig(**converted,
-            storage=GroupPackStorageConfig(**data["storage"]), training_opponents=mixed) if mixed is not None else
-            GroupPackExperimentConfig(**converted, storage=GroupPackStorageConfig(**data["storage"])))
+
+
+def _validate_rust_player_profile(*, run: Json, server: Json, actions: Any,
+                                  model: Any, opponent: Any, training: Any,
+                                  preprocessing: Any, hpo: bool = False) -> None:
+    expected_model = ConfiguredNeuralModelV4 if hpo else ConfiguredNeuralModelV3
+    if not ((type(opponent) is ConfiguredNeuralModelV3 and opponent.model_id == "mlp")
+            or (type(opponent) is ModelConfig and opponent.model_id in ("random", "heuristic"))
+            or type(opponent) is RefreshHeuristicConfig):
+        raise ContractError("Rust player opponent must be Model3 MLP, Random, Heuristic or Refresh")
+    if (type(actions) is not ActionConfigV3 or actions.action_contract != shared_card_instance_contract()
+            or server.get("gameplay_api") != "v2" or server["external_url"] is not None
+            or type(model) is not expected_model or model.model_id != "mlp"
+            or model.checkpoint is not None or type(training) is not PPOTrainingConfig
+            or run["split"] != "train" or preprocessing.backend != "python"
+            or preprocessing.reader != "participant-structured-v2"):
+        raise ContractError("Rust player requires shared-profile fresh MLP PPO with Python Source reader")
+    for participant in (model, opponent):
+        if (isinstance(participant, (ConfiguredNeuralModelV3, ConfiguredNeuralModelV4))
+                and (actions.max_sequence_length > participant.max_positions
+                    or actions.max_candidates > participant.inference.max_candidates)):
+            raise ContractError("Rust player actions exceed configured model capacity")
+
+
+def load_rust_player_effective(path: Path, *, expected_sha256: str) -> LoadedConfig:
+    """Read the exact canonical document used by this supervised invocation.
+
+    Upstream TOML receipts are diagnostic provenance elsewhere. This input owns
+    neither independent campaign verification nor resource/learning authority.
+    """
+    source = path.absolute()
+    raw = source.read_bytes()
+    try:
+        effective = json.loads(raw)
+        encoded = canonical(effective).encode()
+    except (ValueError, UnicodeDecodeError) as error:
+        raise ContractError("invalid canonical effective configuration") from error
+    if (type(effective) is not dict or raw != encoded
+            or hashlib.sha256(raw).hexdigest() != expected_sha256):
+        raise ContractError("effective configuration bytes/hash must be exact canonical JSON")
+    inputs = ({"path": str(source), "sha256": expected_sha256},)
+    spec = effective.get("hpo_spec")
+    if "hpo_spec" in effective and (
+            type(spec) is not dict or type(spec.get("schema_version")) is not int
+            or spec["schema_version"] != 6):
+        raise ContractError("explicit supported Rust player HPO spec6 required")
+    if spec is not None:
+        from gf_cli.hpo_config import normalized_rust_player_hpo
+        try:
+            loaded = normalized_rust_player_hpo(effective, inputs=inputs)
+        except (KeyError, TypeError) as error:
+            raise ContractError('complete normalized HPO effective settings required') from error
     else:
-        config = RefreshOpponentsExperimentConfig(**converted, training_opponents=mixed) if mixed is not None else ExperimentConfig(**converted)
-    return LoadedConfig(config, clone(asdict(config)), digest(asdict(config)), tuple(inputs))
+        closed(effective, {"schema_version", "kind", *_TABLES, "storage"}, {"training_opponents"})
+        try:
+            loaded = _normalized_config(effective, data=effective, inputs=inputs)
+        except (KeyError, TypeError) as error:
+            raise ContractError("complete normalized effective settings required") from error
+        if not isinstance(loaded.config.run, RustPlayerRunConfigV2):
+            raise ContractError("explicit Rust player effective input required")
+    if canonical(asdict(loaded.config)) != canonical(effective):
+        raise ContractError("complete normalized effective settings required without defaults")
+    for table, key in _PATHS:
+        value = effective[table].get(key)
+        if value is not None and not Path(value).is_absolute():
+            raise ContractError("effective configuration paths must remain absolute")
+    return loaded

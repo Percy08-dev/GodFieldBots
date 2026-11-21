@@ -144,8 +144,11 @@ def test_existing_stderr_drain_keeps_raw_bytes_and_limits_after_bad_callback(tmp
 
 
 def test_cli_progress_preserves_final_json_and_flags(tmp_path,monkeypatch,capsys):
+    from types import SimpleNamespace
+
     import gf_cli.hpo as cli
-    monkeypatch.setattr(cli,'load_hpo_config',lambda path: object())
+    loaded = SimpleNamespace(config=SimpleNamespace(schema_version=1))
+    monkeypatch.setattr(cli,'load_hpo_config',lambda path: loaded)
     async def run(loaded,path,**options):
         assert options['progress'] == 'plain'
         return {'status':'complete','exact':'original result'}

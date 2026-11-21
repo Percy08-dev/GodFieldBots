@@ -373,10 +373,15 @@ class PackedSourceOwner(_SourceOwner):
         if self.artifacts is not None:
             self.artifacts.recheck()
 
-    def close(self) -> None:
+    def close(self, *, _audit_hold: Any = None, _audit_owner: Any = None) -> None:
         if self._closed:
             return
-        self.pool.require_terminal_close()
+        if _audit_hold is None and _audit_owner is None:
+            self.pool.require_terminal_close()
+        elif self._owns_pool:
+            raise RuntimeError('only an actual borrowed verifier may exempt its outer hold')
+        else:
+            self.pool._require_borrowed_verifier_close(_audit_hold, _audit_owner)
         if self.artifacts is not None and self.artifacts._loans:
             raise RuntimeError('cannot close a Source with live group loans')
         close_resources(self, [self.artifacts, self.locator])

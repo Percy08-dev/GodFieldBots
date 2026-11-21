@@ -15,7 +15,10 @@ from typing import Any
 
 from gf_cli.config import LoadedConfig, load_config
 from gf_common.action_contract import engineering_contract, require_qualified_contract
-from gf_common.card_instance import ActionConfigV3, corrected_card_instance_contract
+from gf_common.card_instance import (
+    ActionConfigV3,
+    is_corrected_contract,
+)
 from gf_common.domain import (
     CATALOG_META,
     END_PROJECTION_VERSION,
@@ -225,7 +228,7 @@ async def run_experiment(loaded: LoadedConfig, command: str, *, collection: Coll
     from gf_cli.config import require_storage_command
     require_storage_command(config, command, standalone=collection is None and ledger is None)
     if (isinstance(config.actions, ActionConfigV3)
-            and config.actions.action_contract == corrected_card_instance_contract()):
+            and is_corrected_contract(config.actions.action_contract)):
         if collection is not None or ledger is not None:
             raise ContractError("corrected PPO/Source collection integration is not implemented")
         from gf_models.structured_binding import ConfiguredNeuralModelV3
@@ -711,6 +714,14 @@ def main(argv: list[str] | None = None) -> int:
         if args.command in ("train", "train-formal") and args.mode != "fresh" and args.run_dir is None:
             raise ValueError("resume is unsupported without --run-dir; no work performed")
         loaded = load_config(args.config, overrides)
+        if args.command == 'train' and hasattr(loaded.config.run, 'player_runtime'):
+            # The explicit native config parser owns supported MLP/packed shape
+            # checks; its factory requires P and execs this process in place.
+            if args.run_dir is None:
+                raise ValueError('card-instance PPO train requires --run-dir')
+            from gf_cli.rust_player_entry import exec_ordinary
+            exec_ordinary(loaded, args.run_dir, mode=args.mode, pause_after_update=args.pause_after_update)
+            return 0  # A successful fixed exec replaces this interpreter.
         from gf_cli.config import require_storage_command
         require_storage_command(loaded.config, args.command)
         if args.command == "validate":
@@ -723,7 +734,7 @@ def main(argv: list[str] | None = None) -> int:
                 and type(loaded.config.model) is not ConfiguredNeuralModelV3):
             raise ContractError("card-instance PPO requires an explicit NN3 learner")
         if not (isinstance(loaded.config.actions, ActionConfigV3)
-                and loaded.config.actions.action_contract == corrected_card_instance_contract()
+                and is_corrected_contract(loaded.config.actions.action_contract)
                 and (args.command in ("smoke", "collect", "evaluate", "validate-formal-policy")
                      or args.command in ("train", "train-formal") and type(loaded.config.model) is ConfiguredNeuralModelV3)):
             _require_implemented_pipeline(loaded.config.actions)

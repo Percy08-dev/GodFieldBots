@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 import weakref
 from collections.abc import Iterator
@@ -10,7 +11,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-from gf_common.domain import ContractError, Json, digest
+from gf_common.domain import ContractError, Json, canonical, digest
 from gf_common.group_pack import StorageSettings
 from gf_common.structured_layout import CORRECTED_CARD_INSTANCE_LAYOUT as LAYOUT
 from gf_models.structured_config import InferenceBindingV2
@@ -69,6 +70,8 @@ class _OwnedHpoOperations(_HpoOperations):
         self._invocation: _OwnedInvocation | None=None
         self._startup_child: Any=None
         self._startup_start_requested=False
+        self._owned_admission_config: Any=None
+        self._owned_launch_context: str | None=None
 
     @contextmanager
     def owned_invocation(self) -> Iterator[None]:
@@ -122,15 +125,26 @@ class _OwnedHpoOperations(_HpoOperations):
         vars(error)['hpo_gpu_termination']=self.receipt
 
     def validate_config(self, config: Any) -> Any:
-        if (config.hpo_spec.get('schema_version')!=4 or config.hpo_spec.get('origin')!='producer-owned-v1'
+        if (config.hpo_spec.get('schema_version') not in (4,5) or config.hpo_spec.get('origin')!='producer-owned-v1'
                 or config.hpo_spec.get('encoder')!='canonical-python' or config.preprocessing.backend!='python'):
             raise ContractError('owned operations require explicit spec4 canonical Python producer')
-        return super().validate_config(config)
+        model = super().validate_config(config)
+        from gf_training.owned_learner_admission import normal_owned_launch_context
+        context = normal_owned_launch_context(config,self._training_execution)
+        self._owned_admission_config = config
+        self._owned_launch_context = None if context is None else canonical(context)
+        return model
+
+    def decorate_identity(self, identity: Json) -> None:
+        from gf_training.structured_ppo import decorate_identity
+        decorate_identity(identity)
+        if self._owned_launch_context is not None:
+            identity['owned_learner_admission'] = json.loads(self._owned_launch_context)['admission']
 
     def initialize_state(self, state: Json, config: Any) -> None:
         super().initialize_state(state,config)
-        self.registry_schema=6
-        state['run_variant']='hpo-ppo-owned-v1'
+        self.registry_schema=7 if config.hpo_spec['schema_version']==5 else 6
+        state['run_variant']='hpo-ppo-owned-shared-v1' if config.hpo_spec['schema_version']==5 else 'hpo-ppo-owned-v1'
 
     def persist_control(self, path: Path, value: Json, config: Any, *, deadline: float, original: Any=None) -> None:
         if original is not None: raise ContractError('owned control cannot borrow a historical scanner')
@@ -183,13 +197,15 @@ class _OwnedHpoOperations(_HpoOperations):
             parent_budget_bytes=operating['parent_budget_bytes'],writer=self.writer)
         child=HpoOwnedLearningProcess.__new__(HpoOwnedLearningProcess)
         self._startup_child=child
+        from gf_training.owned_learner_admission import issue_owned_learner_launch
+        launch = (None if self._owned_launch_context is None else issue_owned_learner_launch(self,config,state))
         HpoOwnedLearningProcess.__init__(child,directory,config.training.max_log_bytes,config.model.architecture(layout=LAYOUT),
             hpo_training_config(config.hpo_spec['training_recipe']),InferenceBindingV2(**state['execution']['learner']['binding']),
             digest(asdict(config.actions)),state['resume_identity'],actions=config.actions,ledger=self.job.ledger,
             cuda_visible_devices=state['execution']['learner']['cuda_visible_devices'],cleanup_deadline=deadline,
             storage_binding=state.get('storage_binding'),phase_limits={key:operating[key] for key in ('numeric_budget_bytes','save_budget_bytes')},
             budget=self.budget,progress=self.learner_progress,diagnostics=self.diagnostics is not False,
-            _training_execution=self._training_execution)
+            _training_execution=self._training_execution,_owned_learner_launch=launch)
         registry.operations=self
         registry.attach_process(child)
         registry.external_controls=external
@@ -198,7 +214,7 @@ class _OwnedHpoOperations(_HpoOperations):
         self.ledger=self.job.ledger
         self.resident_runtime=ResidentTrainingRuntime.__new__(ResidentTrainingRuntime)
         ResidentTrainingRuntime.__init__(self.resident_runtime,self.job,self.ownership,config,state,deadline=deadline,
-            cleanup_deadline=cleanup_deadline,owned_registry=registry)
+            cleanup_deadline=cleanup_deadline,owned_registry=registry,owned_cuda=launch is not None)
         self.resident_runtime.pool.progress=self.progress
         self.online.resident_runtime=self.resident_runtime
         return child,self.ledger
@@ -299,6 +315,7 @@ class _OwnedHpoOperations(_HpoOperations):
         if registry.capture is None:
             registry.plan=plan
             registry.capture=_OwnedCollection(registry,plan,registry.binding(registry.current.generation)[0])
+        self.resident_runtime.ensure_service(self)
         pool=self.resident_runtime.pool
         if pool.admission is None or pool.admission.plan is not plan: pool.admit(plan)
         self.guard_collection(plan,ledger,resident_phase=pool.admission,deadline=deadline)

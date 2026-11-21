@@ -74,6 +74,12 @@ class GroupPackCollection:
         remaining(deadline)
         if not settings.db_root.is_absolute() or not settings.ram_root.is_absolute():
             raise ValueError("storage roots must be absolute")
+        from gf_common.performance_metrics import PhaseMetrics
+        from gf_simulator_client.performance_diagnostics import host_diagnostics
+        self._performance = host_diagnostics()
+        self._performance_metrics = (PhaseMetrics(scope=self._performance.current_scope or self._performance.scope(phase='idle'),
+            start_ns=time.monotonic_ns(), counters=(), histograms=('collection_storage_serialization_wait',))
+            if self._performance is not None else None)
         self.settings, self.run_id, self.deadline = settings, run_id, deadline
         self.budget = StorageBudget(settings, deadline)
         self.directory, self.ram_root = settings.db_root / run_id, settings.ram_root / run_id
@@ -150,10 +156,15 @@ class GroupPackCollection:
     async def _serialized(self, operation: Callable[..., Any], args: tuple[Any, ...],
                           kwargs: dict[str, Any], *, recovery: bool) -> Any:
         started = time.monotonic()
+        performance_metrics = self._performance_metrics
         try:
             self._check_submission(recovery=recovery, prior=False)
             async with asyncio.timeout_at(self.deadline):
+                diagnostic_start = time.monotonic_ns() if performance_metrics is not None else None
                 await self._operation_lock.acquire()
+            if diagnostic_start is not None:
+                assert performance_metrics is not None
+                performance_metrics.interval('collection_storage_serialization_wait', diagnostic_start, time.monotonic_ns())
             try:
                 self._check_submission(recovery=recovery)
                 self._metric_add("worker_wait_seconds", time.monotonic() - started)
@@ -283,6 +294,10 @@ class GroupPackCollection:
 
     def freeze_storage_metrics(self) -> dict[str, Any]:
         """Declare the exact pre-checkpoint control bytes before inventory closes."""
+        if self._performance_metrics is not None:
+            assert self._performance is not None
+            self._performance.metrics(self._performance_metrics, role='legacy-coordinator')
+            self._performance_metrics = None
         with self._storage_metrics_lock:
             if self._closed:
                 raise RuntimeError("storage metrics owner already retired")

@@ -213,6 +213,49 @@ class PPOTrainingConfig:
     max_log_bytes: int = 1048576
 
 
+
+@dataclass(frozen=True)
+class PPOUpdateConfig:
+    """Effective schema 1 recipe for ordinary supervised Rust Model3."""
+    schema_version: int = 1
+    collection_games: int = 256
+    minibatch_size: int = 64
+    epochs: int = 4
+    shuffle_strategy: str = "all"
+    gpu_microbatch_size: int = 16
+
+    def __post_init__(self) -> None:
+        integer(self.schema_version, 1, 1)
+        integer(self.collection_games, 8)
+        if self.collection_games % 8:
+            raise ContractError("PPO collection_games must be a positive multiple of eight")
+        for width in (self.minibatch_size, self.epochs, self.gpu_microbatch_size):
+            integer(width, 1)
+        if self.shuffle_strategy not in ("all", "episode_order", "within_episode", "episode_interleave"):
+            raise ContractError("unsupported PPO shuffle strategy")
+
+    def optimizer_step_delta(self, decisions: int) -> int:
+        return self.epochs * ((decisions + self.minibatch_size - 1) // self.minibatch_size)
+
+
+LEGACY_PPO_UPDATE = PPOUpdateConfig(collection_games=16, minibatch_size=128, gpu_microbatch_size=1)
+
+
+@dataclass(frozen=True, kw_only=True)
+class RustPPOTrainingConfig(PPOTrainingConfig):
+    ppo_update: PPOUpdateConfig
+
+
+def ppo_update_config(value: Json, *, complete: bool = False) -> PPOUpdateConfig:
+    names = set(PPOUpdateConfig.__dataclass_fields__)
+    closed(value, names if complete else set(), None if complete else names)
+    return PPOUpdateConfig(**value)
+
+
+def ordinary_ppo_update(training: PPOTrainingConfig) -> PPOUpdateConfig:
+    return training.ppo_update if type(training) is RustPPOTrainingConfig else LEGACY_PPO_UPDATE
+
+
 def mlp_model_config(value: Json) -> MLPModelConfig:
     closed(value, set(asdict(MLPModelConfig())))
     encoder = encoder_config(value["encoder"])

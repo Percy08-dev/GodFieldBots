@@ -16,3 +16,6 @@ runs/
 # Native build outputs (source and lockfiles remain tracked)
 native/target/
 *.so
+
+# Runtime-wheel helper staging (generated, not source)
+native/gf_native_runtime/

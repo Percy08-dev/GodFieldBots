@@ -504,7 +504,8 @@ def _read_structured_journal(path: Path, *, deadline: float = float("inf"),
                     expected_frame_hash=frame.frame_hash, max_positions=caps.max_positions,
                     action_contract=action_contract, purpose=purpose, synthetic_capacity=False,
                     layout=_context.layout)
-                table.validate(frame)
+                # selection.validate below checks this same table against the
+                # same frame before issuing a StructuredDecision.
                 logical_inventories.append(LogicalSidecarEvidence(logical_name,
                     column_descriptor["sha256"], size, column_descriptor["frame_hash"], column_descriptor["table_hash"],
                     asdict(table.action_contract), purpose, False))

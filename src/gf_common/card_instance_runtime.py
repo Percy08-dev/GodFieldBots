@@ -9,12 +9,15 @@ from typing import Any
 from gf_common.card_instance import (
     CORRECTED_REVIEWED_SPEC_HASHES,
     CardInstanceContract,
-    corrected_card_instance_contract,
+    is_corrected_contract,
     parse_card_instance_contract,
+    reviewed_specs,
+    shared_card_instance_contract,
 )
 from gf_common.domain import ContractError, Json, closed, digest, integer
 
 APPROVED_BINARY_SHA256 = "76aff19c2f720a572bfe422d9b1e089a1467f253038cda66de3d8c35180d0f7d"
+SHARED_APPROVED_BINARY_SHA256 = "76aff19c2f720a572bfe422d9b1e089a1467f253038cda66de3d8c35180d0f7d"
 APPROVED_CHANGE_SHA256 = "e34b7160f956b6510243077d418a0a96f34f6e271077021641b2fd50a9870346"
 APPROVED_SPEC_FILES = MappingProxyType(dict(CORRECTED_REVIEWED_SPEC_HASHES))
 APPROVED_CHANGE_FILES = MappingProxyType(
@@ -33,7 +36,7 @@ APPROVED_CHANGE_FILES = MappingProxyType(
 
 
 def require_corrected_contract(contract: CardInstanceContract) -> None:
-    if type(contract) is not CardInstanceContract or contract != corrected_card_instance_contract():
+    if type(contract) is not CardInstanceContract or not is_corrected_contract(contract):
         raise ContractError("corrected runtime requires the exact approved contract")
 
 
@@ -75,10 +78,15 @@ def validate_runtime_receipt(raw: Json, *, require_executed: bool = False) -> Js
     from gf_common.domain import clone
 
     closed(raw, {"schema_version", "action_contract", "build", "binary", "source", "executed"})
-    if type(raw["schema_version"]) is not int or raw["schema_version"] != 1:
+    if type(raw["schema_version"]) is not int or raw["schema_version"] not in (1,2):
         raise ContractError("runtime receipt schema required")
     contract = parse_card_instance_contract(raw["action_contract"])
     require_corrected_contract(contract)
+    shared = contract == shared_card_instance_contract()
+    if raw["schema_version"] != (2 if shared else 1):
+        raise ContractError("runtime receipt/profile version mismatch")
+    binary_sha = SHARED_APPROVED_BINARY_SHA256 if shared else APPROVED_BINARY_SHA256
+    spec_files = reviewed_specs(contract)
     build = closed(
         raw["build"],
         {
@@ -90,19 +98,21 @@ def validate_runtime_receipt(raw: Json, *, require_executed: bool = False) -> Js
         },
     )
     if (
-        build["binary_sha256"] != APPROVED_BINARY_SHA256
+        build["binary_sha256"] != binary_sha
         or build["spec_inventory_sha256"] != contract.spec_inventory_sha256
         or build["change_inventory_sha256"] != APPROVED_CHANGE_SHA256
-        or build["spec_files"] != dict(APPROVED_SPEC_FILES)
+        or build["spec_files"] != spec_files
         or build["change_files"] != dict(APPROVED_CHANGE_FILES)
     ):
         raise ContractError("unapproved runtime release tuple/file inventory")
     binary = closed(raw["binary"], {"path", "sha256", "identity"})
-    source = closed(raw["source"], {"path", "revision", "spec_files", "change_files"})
+    source = closed(raw["source"], {"path", "revision", "spec_files", "change_files"} | ({"dirty"} if shared else set()))
+    if shared and source["dirty"] is not False:
+        raise ContractError("shared runtime requires clean pinned source")
     if (
-        binary["sha256"] != APPROVED_BINARY_SHA256
+        binary["sha256"] != binary_sha
         or source["revision"] != contract.simulator_revision
-        or source["spec_files"] != dict(APPROVED_SPEC_FILES)
+        or source["spec_files"] != spec_files
         or source["change_files"] != dict(APPROVED_CHANGE_FILES)
     ):
         raise ContractError("runtime actual code/source differs from approved release")
@@ -119,6 +129,6 @@ def validate_runtime_receipt(raw: Json, *, require_executed: bool = False) -> Js
         integer(executed["pid"], 1)
         integer(executed["start_time"], 1)
         _identity(executed["identity"])
-        if executed["sha256"] != APPROVED_BINARY_SHA256:
+        if executed["sha256"] != binary_sha:
             raise ContractError("actual executed binary differs from approved release")
     return clone(raw)

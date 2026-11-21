@@ -6,6 +6,7 @@ import math
 from collections.abc import Iterator
 from dataclasses import asdict
 from pathlib import Path
+from typing import Any
 
 from gf_common.card_instance import ActionConfigV3
 from gf_common.card_instance_collection import (
@@ -141,6 +142,31 @@ def _evaluation_report_health(manifest: Json, report: Json, games: int) -> None:
 def inspect_game_manifest(owner: _SourceOwner, manifest: Json, actions: ActionConfigV3,
                    expected_split: str | None, *, role: GameCollectionRole = PPO_BATCH,
                    _pending: object = None) -> tuple[Json, list[tuple[Json, Json]]]:
+    return _inspect_game_manifest(owner, manifest, actions, expected_split, role=role, _pending=_pending)
+
+
+def inspect_rust_game_manifest(owner: object, manifest: Json, actions: ActionConfigV3,
+                              expected_split: str | None, *, role: GameCollectionRole = PPO_BATCH) -> tuple[Json, list[tuple[Json, Json]]]:
+    from gf_training.rust_player_lineage import validate_record_shape
+    from gf_training.rust_player_source import (
+        RustColdOriginals,
+        RustCompletedOriginals,
+        RustPlayerOriginals,
+        RustResumeOriginals,
+    )
+    from gf_training.rust_ppo_diagnostics import RustDiagnosticOriginals
+    if type(owner) not in (RustPlayerOriginals, RustColdOriginals, RustResumeOriginals, RustCompletedOriginals,
+            RustDiagnosticOriginals):
+        raise ContractError('actual Rust writer originals required')
+    validate_record_shape(manifest, 'collection', hpo=type(role) is HpoCollectionRole)
+    if type(manifest['actor_protocol_version']) is not int or manifest['actor_protocol_version'] != 11:
+        raise ContractError('actual Rust actor11 collection context required')
+    return _inspect_game_manifest(owner, manifest, actions, expected_split, role=role, _rust=True)
+
+
+def _inspect_game_manifest(owner: Any, manifest: Json, actions: ActionConfigV3,
+                   expected_split: str | None, *, role: GameCollectionRole = PPO_BATCH,
+                   _pending: object = None, _rust: bool = False) -> tuple[Json, list[tuple[Json, Json]]]:
     role = checked_role(role)
     evaluation = type(role) is HpoEvaluationRole
     hpo = type(role) in (HpoCollectionRole, HpoEvaluationRole)
@@ -155,13 +181,17 @@ def inspect_game_manifest(owner: _SourceOwner, manifest: Json, actions: ActionCo
             raise ContractError('actual final-only pending collection owner required')
         control_name = _pending.manifest_name()
     expected = input_binding_game_v3(actions.action_contract, card_instance_rules())
-    owned=hpo and not evaluation and manifest.get('config',{}).get('hpo_spec',{}).get('schema_version')==4
+    owned=hpo and not evaluation and manifest.get('config',{}).get('hpo_spec',{}).get('schema_version') in (4,5)
     resident = (evaluation and 'execution_runtime' in manifest or
-        hpo and not evaluation and manifest.get('config', {}).get('hpo_spec', {}).get('schema_version') in (3,4))
+        hpo and not evaluation and manifest.get('config', {}).get('hpo_spec', {}).get('schema_version') in (3,4,5))
     if resident and not evaluation:
         from gf_training.hpo_collection import check_hpo_collection
         check_hpo_collection(manifest)
-    if (manifest.get('schema_version') != (8 if owned else 7 if resident else 6 if hpo else 5) or type(manifest['schema_version']) is not int
+    expected_version = (9 if owned and manifest.get('config',{}).get('hpo_spec',{}).get('schema_version')==5 else 8 if owned else 7 if resident else 6 if hpo else 5)
+    if _rust:
+        from gf_common.rust_ppo_source import source_mode
+        expected_version = (12 if source_mode(manifest['config']) is not None else 10) + int(hpo)
+    if (manifest.get('schema_version') != expected_version or type(manifest['schema_version']) is not int
             or manifest.get('status') != 'complete' or manifest.get('collection_role') != role.role
             or manifest.get('model_version') != ('4' if hpo else '3') or manifest.get('journal_schema_version') != 6
             or manifest.get('derived_schema_version') != 6 or manifest.get('participant_protocol_version') != 3
@@ -193,18 +223,27 @@ def inspect_game_manifest(owner: _SourceOwner, manifest: Json, actions: ActionCo
                 or type(manifest.get('elapsed_seconds')) not in (float, int)
                 or not math.isfinite(manifest['elapsed_seconds']) or manifest['elapsed_seconds'] < 0):
             raise ContractError('original final validation projection/cost required')
-    specs = [(group, spec) for group in manifest.get('schedule', []) for spec in group.get('episodes', [])]
+    schedule = manifest.get('schedule', [])
+    games = role.games
+    if _rust and role is PPO_BATCH:
+        from gf_models.config import ppo_update_config
+        training = config.get('training', {})
+        if 'ppo_update' in training:
+            games = ppo_update_config(training['ppo_update'], complete=True).collection_games
+        if len(schedule) != games // 2 or any(len(group.get('episodes', [])) != 2 for group in schedule):
+            raise ContractError('original Rust PPO requires the frozen whole paired schedule')
+    specs = [(group, spec) for group in schedule for spec in group.get('episodes', [])]
     names = [_name(spec.get('episode_id')) for _, spec in specs]
     episodes = manifest.get('episodes')
-    if (len(specs) != role.games or len(set(names)) != role.games or type(episodes) is not list or len(episodes) != role.games
+    if (len(specs) != games or len(set(names)) != games or type(episodes) is not list or len(episodes) != games
             or {row.get('episode_id') for row in episodes} != set(names)
-            or len({row.get('game_id') for row in episodes}) != role.games
+            or len({row.get('game_id') for row in episodes}) != games
             or len(manifest.get('groups', [])) != len(manifest['schedule'])
             or len(manifest.get('runtime_evidence', [])) != len(manifest['schedule'])
             or link['learner_seats'] != {spec['episode_id']: integer(spec.get('learner_viewer'), 1, 2) for _, spec in specs}
             or link['schedule_digest'] != digest(manifest['schedule'])
             or link['policy_registry_digest'] != digest(manifest.get('policy_bindings'))):
-        raise ContractError('whole16 original collection roles/schedule/registry required')
+        raise ContractError('whole original collection roles/schedule/registry required')
     registry = manifest.get('policy_bindings')
     neural = closed(manifest.get('neural_inputs'), {'input_contract', 'policies'})
     if (type(registry) is not dict or set(manifest.get('policies', [])) != set(registry)
@@ -255,13 +294,13 @@ def inspect_game_manifest(owner: _SourceOwner, manifest: Json, actions: ActionCo
         expected_names.add(name)
         # Constructor validation has already verified every packed original
         # byte/member. Opaque diagnostics need admitted evidence, not JSON decode.
-        if type(owner) is PackedSourceOwner:
+        if _rust or type(owner) is PackedSourceOwner:
             owner.remember_inventory_entry(name, entry['bytes'], checksum(entry['sha256']))
         else:
             owner.read(owner.root / path)
             if owner.files[name]['sha256'] != checksum(entry['sha256']) or owner.files[name]['bytes'] != entry['bytes']:
                 raise ContractError('original collection inventory hash/size mismatch')
-    if type(owner) is PackedSourceOwner:
+    if _rust or type(owner) is PackedSourceOwner:
         if config.get('storage', {}).get('format') != 'sqlite-group-pack-v1':
             raise ContractError('packed original requires explicit original storage Config')
         owner.validate_index(manifest)

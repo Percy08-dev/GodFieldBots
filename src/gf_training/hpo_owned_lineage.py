@@ -181,8 +181,9 @@ class OwnedRunRegistry:
         self.generation_directories: dict[int,Any]={}
         self._retirement_owners: list[Any]=[]
         self.file_identities: dict[tuple[int,str],tuple[int,int,int,int,int]]={}
-        self.registry: Json={'schema_version':6,'origin':'producer-owned-v1','encoder':'canonical-python','generations':{},
+        self.registry: Json={'schema_version':7 if state.get('run_variant')=='hpo-ppo-owned-shared-v1' else 6,'origin':'producer-owned-v1','encoder':'canonical-python','generations':{},
             'evaluation_references':{},'cache_references':{}}
+        if state.get('run_variant')=='hpo-ppo-owned-shared-v1':self.registry['service_references']={}
         self._cache_attempts: dict[str,Any]={}
         self._encoded: Any=None
         self._encoded_collection: Any=None
@@ -487,6 +488,7 @@ class OwnedRunRegistry:
         references={'evaluation_references':self.registry['evaluation_references'],
             'cache_references':{token:row['binding'] for token,row in self.registry['cache_references'].items()
                 if row['phase']=='acquire'}}
+        references['cache_references'].update({token:row['binding'] for token,row in self.registry.get('service_references',{}).items() if row['phase']=='acquire'})
         pending=[{'generation':attempt.generation} for token,attempt in self._cache_attempts.items()
             if token not in self.registry['cache_references']]
         return protected_hpo_files_for_operating(operating,self.records,references,pending)
@@ -497,6 +499,7 @@ class OwnedRunRegistry:
         controls=self.records[-1]['parent_controls']
         protected=self.protected_files(operating)
         live=set(controls['snapshot_pool'])|{current}|{row['binding']['generation'] for row in self.registry['cache_references'].values() if row['phase']=='acquire'}
+        live.update(row['binding']['generation'] for row in self.registry.get('service_references',{}).values() if row['phase']=='acquire')
         for generation,record in enumerate(self.records):
             for name in record['artifact_files']:
                 row=self.registry['generations'][str(generation)]['files'][name]

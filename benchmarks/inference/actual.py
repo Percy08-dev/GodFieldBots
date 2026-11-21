@@ -44,6 +44,10 @@ def prior_runner() -> Any:
 def charged_admission(original: Any, selected: Any = None) -> Any:
     from gf_models.inference_experiment import WORKER_STORAGE_BYTES
     def admitted(*args: Any, **kwargs: Any) -> Any:
+        # Explicit experimental buffers/algorithms keep the original learner
+        # lease; their allocation lifetimes are outside normal owned admission.
+        if 'owned_cuda' in kwargs:
+            kwargs = {**kwargs,'owned_cuda':False}
         if selected is not None:
             from dataclasses import replace
             # Charge the effective experimental chunk/padded bucket everywhere
@@ -57,7 +61,12 @@ def charged_admission(original: Any, selected: Any = None) -> Any:
         ram, cuda = max(phases.values()), base['peak_cuda_bytes'] + extra
         if ram > base['managed_ram_bytes'] or cuda > base['managed_cuda_bytes']:
             raise ValueError('experimental all-cache worker envelope exceeds original managed caps')
-        return {**base, 'worker_bytes': base['worker_bytes'] + extra, 'ram_phases': phases,
+        summaries = {}
+        if 'worker_host_bytes' in base:
+            summaries['worker_host_bytes'] = base['worker_host_bytes'] + extra
+        if 'cuda_phases' in base:
+            summaries['cuda_phases'] = {name:value + extra for name,value in base['cuda_phases'].items()}
+        return {**base, **summaries, 'worker_bytes': base['worker_bytes'] + extra, 'ram_phases': phases,
                 'peak_ram_bytes': ram, 'peak_cuda_bytes': cuda,
                 'experimental_storage_bytes': extra, 'experimental_storage_per_worker': WORKER_STORAGE_BYTES}
     return admitted

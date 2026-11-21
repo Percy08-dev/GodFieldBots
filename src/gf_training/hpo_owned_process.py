@@ -251,6 +251,7 @@ def _check_actor_origin(owner: RemoteModelSnapshot) -> None:
 class HpoOwnedLearningProcess(HpoLearningProcess):
     """Separate initialize_owned/update_owned entry; raw requests cannot update."""
     def __init__(self, *args: Any, budget: Any, _training_execution: tuple[str, str] | None = None, **kwargs: Any) -> None:
+        self._owned_learner_launch = kwargs.pop('_owned_learner_launch',None)
         self._training_execution = _training_execution
         if _training_execution is not None:
             from gf_training.hpo_training_execution import read_execution_spec
@@ -262,6 +263,11 @@ class HpoOwnedLearningProcess(HpoLearningProcess):
         integer(limits['numeric_budget_bytes'],1,MAX_BANK_BYTES)
         if save_estimate(self.model)['additional_bytes']>limits['save_budget_bytes']:
             raise ContractError('Wire7 additional save envelope insufficient before process/network allocation')
+        if self._owned_learner_launch is not None:
+            from gf_training.owned_learner_admission import _OwnedLearnerLaunch
+            if type(self._owned_learner_launch) is not _OwnedLearnerLaunch:
+                raise ContractError('actual original owned learner launch authority required')
+            self.resident_bytes = self._owned_learner_launch.bind(self)
         self._owned_never_requested=object()
         self._owned_factory_request=self._owned_never_requested
         self._owned_original_factory=self._create_process
@@ -274,6 +280,11 @@ class HpoOwnedLearningProcess(HpoLearningProcess):
         self._partial_controls: list[Any] = []
         self._control_exports: list[Any] = []
         self._inflight_batch: Any = None
+
+    def _launch_arguments(self) -> tuple[str,...]:
+        if self._owned_learner_launch is not None:
+            return self._owned_learner_launch.arguments(self)
+        return super()._launch_arguments()
 
     def _require_original_creator_bindings(self) -> None:
         originals=((self._owned_original_factory,self._create_process,_ORIGINAL_OWNED_FACTORY),

@@ -191,7 +191,12 @@ def read_hpo_rollout(directory: Path, expected_digest: str, model: ModelConfigV4
     hpo = {'training_recipe': asdict(training), 'selection': selection,
         'expected_optimizer_step_delta': optimizer_delta(selection['used_decisions'],
             epochs=training.epochs, minibatch_size=training.minibatch_size)}
-    if manifest.get('schema_version')==6:
+    if manifest.get('schema_version') == 8 and options.get('_ppo_source') is not None:
+        from gf_models.structured_sealed import checksum
+        if expected_snapshot_identity is None or checksum(manifest['snapshot_identity']) != checksum(expected_snapshot_identity):
+            raise ContractError('Numeric8 audit requires original snapshot identity')
+        hpo.update(origin='producer-owned-v1', encoder='canonical-rust', snapshot_identity=expected_snapshot_identity)
+    elif manifest.get('schema_version') == 6:
         from gf_common.hpo import require_owned_record_version
         from gf_models.structured_sealed import checksum
         require_owned_record_version(manifest,'numeric')

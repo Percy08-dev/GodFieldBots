@@ -2,6 +2,179 @@
 
 ## Status and scope
 
+[ADR0057](adr/0057-rust-ppo-training-data.md) accepts the versioned Rust PPO
+training-data route for Model3 and Model4 MLPs. The acting game task retains
+the accepted learner operands. The original writer binds them to sealed
+Journal and Replay records before the local learner receives the arrays.
+New-mode training, completion, resume and evaluation use committed Pack
+SHA-256 evidence. Explicit diagnostics retain full Python reconstruction.
+The [verification record](verification/rust-ppo-training-data.md) records the
+parity, saved-state and matched CUDA results behind adoption.
+
+[ADR0054](adr/0054-single-process-rust-player-runtime.md) accepts the owner's
+[single-process Rust player plan](design/rust-player-runtime-approved-plan.md)
+and the independently reviewed [bounded design](design/rust-player-runtime.md).
+The [ordinary Rust packing path](design/rust-player-checked-candidate-reuse.md)
+reuses validated candidate pairs and cached Pack data within the exact
+synchronous owner. Original verification gates the Source handoff and
+numeric manifest publication.
+The bounded native v5 search/RNG/Random/Heuristic/Refresh core passes independent
+correctness and conformance review after two local parity repairs. Its owned
+array-serving/async-dispatcher/transactional-RNG component also passes both reviews
+after retirement/timer failure repairs, including actual CUDA row/RNG checks.
+The common live HTTP/game actor and both real A/B schedulers also pass scoped
+correctness/conformance after failed-service custody and Refresh-domain repairs,
+including genuine overlap/natural/Replay/fault smokes. The same-process thread-storage component also passes engineering reviews after
+failure-custody repairs, with real SQLite/J6/Pack and one recording account.
+The standalone supervisor/host protocol and installed companion pass scoped
+independent reviews after four phase-clock, group-identity, ACK and packaging
+repairs, with actual Linux process/kernel and both namespace-direction checks.
+Targeted retained-bank storage measurements pass only their recorded shaped-bank/
+small-terminal scope. Pure closed normal/HPO6 configuration also passes both independent reviews;
+legacy entries explicitly refuse new selectors; the separately reviewed timed
+ordinary train route now uses its actual sealed-launch factory.
+Local numerical/data support, canonical effective-config handoff, actual parent
+borrowers, ordered writer inventory/deferred contexts and strict Simulator cleanup
+also pass independent reviews after five boundary repairs. Private Source/common-PPO/save/restore/cold integration now passes scoped
+independent correctness and conformance after two repair rounds, including actual
+ordinary CPU single-use and current-source Model4 CUDA returned-Parent handoff.
+The generic same-host CUDA account also passes scoped independent correctness
+and conformance after actual Source-funding, exception-chain cleanup and historical
+path-containment repairs. It estimates managed phase demand. Actual CUDA
+and process memory observations cover the recorded workloads. The
+artifact-retention and healthy-empty DATA/ownership component also passes
+scoped independent correctness/conformance after historical completion-schema
+and protected-inventory repairs. The public CPU pruned-checkpoint case
+resumes to a third committed update after actual old payload retirement.
+Source review establishes that a healthy zero-frame engine cohort is
+unreachable under the current paired/repeated-seed contract, with its revisit
+condition in [the verification proof](design/rust-player-runtime-empty-feasibility.md).
+The public Model3 and schema 6 Model4 routes pass bounded learning, save, resume
+and independent Original, Replay, numeric and saved-state audits. The HPO
+controller imports only qualified final-D parents for separate Fresh evaluation.
+Deployment comparison and entrance recommendations are recorded with the results
+and limitations in [the verification record](verification/rust-player-runtime.md).
+
+[ADR0055](adr/0055-owned-rust-model3-parity-validation.md) keeps frozen-output
+parity as an explicit validation for ordinary Rust Model3. Its live update
+uses the actual single-use Source and performs the existing admission before
+optimizer work. Fresh and resumed CUDA verification cover the owned path.
+
+[ADR0056](adr/0056-ordinary-rust-ppo-update.md) specifies the versioned ordinary
+Rust Model3 PPO update settings. The saved effective config binds the paired
+collection size, logical batch size, epochs, shuffle order and CUDA group cap.
+The Source and cold audit use that recipe. CUDA groups reuse the Model4 planner
+and packing with Model3 forward and PPO loss. The
+[verification record](verification/ordinary-rust-ppo-update.md) records exact
+fixed-data resume, two supervised 256-game cohorts, and 15 verified
+concurrency runs. The Source workspace stays separate from the capped
+saved-state scanner loan.
+
+The standalone std-only Rust [process observer](design/rust-player-runtime-observer.md)
+passes scoped correctness/conformance after original-file and ancestry-binding
+repairs, with19 command-level and14 helper checks. It observes an actual command
+without a Python controller or Source/termination authority. Application telemetry also passes scoped independent correctness/conformance
+after diagnostic processing isolation, terminal profile-window, closed scope and
+relay-observation ordering repairs. The verification record includes the
+matched physical comparison, observation calibration and the per-entrance
+opt-in decision.
+
+The pure [native MLP row storage estimate](design/rust-player-runtime-native-cuda.md)
+also passes scoped correctness/conformance and57 CPU checks. It compiles immutable
+checkpoint-specific geometry and counts actual row inputs/aliases once, without
+Torch/device access. Whole-host CUDA admission and physical capacity remain
+unaccepted until their separate integration and measurement gates pass.
+
+
+The [public-entry control protocol](design/rust-player-runtime-public-entry.md)
+and scoped [campaign byte encoding](design/rust-player-runtime-campaign-encoding.md)
+pass independent correctness/conformance after two repair rounds. Actual campaign
+Store borrowers retain the supervisor OFD without unlocking it. Failed training
+can return to a distinct CPU control host only after actual original retirement;
+durable FAIL/disposition acknowledgment remains separate from parent release and
+scientific completion. Pending terminal Stop ACKs require strict settlement then
+actual EOF. An uncertain raw close never retries a numeric FD. Fixed control-only
+CPU cases and fresh57 Python/3 native terminal checks pass. The subsequent
+public HPO composition and supervised CUDA runs exercise those boundaries with
+the actual original processes and retained receipts.
+
+The [explicit post-host clock and launch factory](design/rust-player-runtime-public-clock.md)
+passes independent correctness/conformance after one repair round. New native-only
+timing variants require owner-selected P with no numeric default and preserve old
+serialized shapes. Pure previews count the planned learner and G0 networks once.
+The actual ordinary factory retains the original run OFD, canonical config and
+clock provenance, verified installed companion and fixed venv interpreter through
+sealed exec. Resume reuses every original clock bit; reconstructed inspection
+wrappers cannot issue launch/companion facts. Root250 CPU checks and127 joined
+C1/factory checks pass. C2c subsequently connects ordinary timed train; actual
+training, capacity and adoption acceptance remain separate requirements.
+
+The ordinary timed train route, cold scalar output, native6 planning and campaign
+CONFIG/bootstrap foundation also pass independent correctness/conformance after
+two repair rounds. Actual conditions identify legacy-fresh evaluation; previews
+use real trial/control/selected materializations and actual published resources.
+Cold result close, parent release and control close precede stdout. Canonical
+pinned settings reconstruct without rereading original TOMLs; actual Store OFD
+and exact original soft/hard clocks survive sealed launch. Root333 CPU checks and
+scoped lint/typing pass. The explicit schema 6 route now uses the supervised
+controller and existing Fresh evaluation workers. The wiring has passed
+independent code review and bounded CPU checks.
+Actual small two-seed public execution and completed-history resume verify
+the training and evaluation admission order.
+
+The evaluation DATA bridge has passed independent correctness and design
+conformance. It checks the exact qualified training parent, prepares the
+independent evaluation account and holds original inference FDs and references
+before the training parent closes. Historical import uses a current actual
+owner and independently rechecks the saved Original, Replay, numeric and
+checkpoint chain. After a cleanup error the owners of still-live data keep
+their reservations through positive retirement. The bounded public campaign
+verifies this path across two successful seeds and their separate evaluation jobs.
+
+[ADR0053](adr/0053-mlp-shared-batch-inference.md) implements the owner's
+[shared MLP design](design/mlp-shared-batch-inference.md) under Simulator
+072dabb section 21.1. Independent correctness and architecture conformance are
+READY. The bounded comparison and full Original/Replay/numeric audits pass:
+384 required HPO games, 128 near-tie confirmation games, and 32 ordinary Model3
+games. HPO parents remain incomplete at D10000; this is not quality acceptance.
+Shared C4/B4 is selected for the 32-game scaling preset. At matched C3, shared
+mode saves memory but is about 5% slower in collection; resident presets remain
+available. [The verification record](verification/ppo-shared-inference.md)
+contains identities, measurements and the whole-suite baseline disposition.
+
+One optional official TorchRL 0.15.0/TensorDict 0.15.2 service serves clean CPU
+participants for HPO Model4 and ordinary Model3. Immutable checkpoint publication,
+request identity/retirement, separate service custody and cold reference proofs
+are explicit. The host recipe is calibrated soft planning, with documented
+extreme-shape, long-run and shared-page attribution limits. Fresh external audits
+may contain the recorded original pool in a caller-owned capacity loan, while
+numeric reconstruction owns a separate peak; existing/borrowed pools keep their
+previous custody. GRU, Transformer and formal/final-test shared serving remain
+future work. Historical evidence retains its recorded contract and scope.
+
+[ADR0052](adr/0052-owned-learner-device-allowance.md) separates the owned
+learner's execution cap from its invocation's admitted device budget. Future
+participant/cache/BEGIN capacity remains reserved when setting that budget;
+the normal Wire7 creator checks its original lease and the child checks the
+same model and limits. The group planner applies independent host-inclusive
+logical and device gates before numerical work.
+
+[ADR0051](adr/0051-resident-actor-cuda-admission.md) refines ADR0050 with a
+role-specific no-grad single-participant CUDA estimate for homogeneous HPO
+resident training. The pool and collector use the same device lease; active
+actor host RAM and learner execution accounting have separate limitations.
+
+[ADR0050](adr/0050-resident-training-cache-accounting.md) adopts shape-based
+Model4 HPO training cache accounting (`hpo-resident-cache-envelope-v2`).
+A constructing participant holds its concurrent BEGIN charge through inner
+READY validation or, on failure, confirmed reap and I/O/FD retirement.
+Postcommit SYNC stages one owner at a time. The legacy learner/execution
+allowance and other mixed host/device estimates still need separate calibration.
+The [verification record](verification/ppo-shared-inference.md) distinguishes
+managed reservations from physical memory. The shared GPU service's historical
+[Simulator contract handoff](issues/0011-shared-inference-participant-process.md)
+is resolved; ADR0053 governs adoption and implementation.
+
 [ADR0049](adr/0049-configurable-hpo-game-concurrency.md) accepts the owner's
 request for configurable HPO game counts above two and user-owned OOM tuning.
 Implementation passes independent correctness/conformance READY and root accepts
@@ -789,9 +962,9 @@ Wire DTOs may resolve representation details; no engine dependency is allowed.
 | `gf_simulator_client` | validated HTTP, attestation, subprocess/game ownership, worker transport | common, httpx; v2 stdlib-only model binding/config/cost metadata |
 | `gf_training` | journals/projection, split/feasibility, owned numeric training, generation lineage and frozen datasets | common, model adapters, optional PyArrow; shared client.structured_resources owner, corrected-runtime preflight-only client.card_instance_runtime, and the private component-diagnostic Tree scores facade |
 | `gf_evaluation` | paired scheduling, aggregation and costs | common |
-| `gf_models` | participant-local Random/heuristic/LightGBM/MLP/GRU/Transformer, common encoder/config and artifacts | common, lazy extras |
+| `gf_models` | participant-local policies, common encoder/config/artifacts, trusted shared MLP row scoring/immutable registry and allocator wrapper | common, lazy extras |
 | `gf_cli` | strict config, composition, commands, manifest | application packages |
-| `gf_native` (optional Rust extension) | Serde offline parsing/structural validation, fixed feature kernels, typed staging/index columns and numeric capacity/document-admission leases | Rust crates, Serde, PyO3, rust-numpy; no upper Python package or learning dependency |
+| `gf_native` (optional Rust extension) | Serde offline parsing/structural validation, fixed feature kernels, typed staging/index columns and numeric capacity/document-admission leases; ADR0054 adds own-view v5 policies, bounded array-serving/RNG dispatcher and common external-HTTP/game actors with A/B scheduling | Rust crates, Serde, PyO3, rust-numpy, Tokio/reqwest; no Simulator engine, upper Python package or learning dependency |
 
 The existing `godfieldbots` entry point becomes a compatibility wrapper.
 Common never imports upper layers. Models never handle HTTP or management
@@ -812,11 +985,22 @@ game-policy authority. Revisit placement if another independent training workflo
 needs that transport or the facade gains management/game responsibilities; do not
 duplicate its process/reap protocol inside training.
 Runtime is CPython 3.14, GIL enabled, uv; baseline dependencies httpx/NumPy.
+ADR0053 adds a narrow production process-facade edge from the training
+coordinator to `gf_simulator_client.shared_service`. Client code retains broker,
+socket, relay and process retirement I/O; training retains committed checkpoint
+publication and service-shaped reference transactions. This imports no HTTP or
+Environment into training. Model code has no reverse dependency on the training
+controller. Revisit the facade placement if unrelated consumers or HTTP/game
+responsibilities enter it; do not duplicate its lifecycle protocol.
+
 Extras are `data` (PyArrow), `lightgbm`, mutually exclusive `torch` (CPU) and
 `torch-cuda` (cu132), and `hpo` (Optuna5.0.0); dev is pytest/ruff/mypy. NumPy is pinned to 2.5.4, Torch to
 2.14.1 and torchvision to 0.29.1. PyTorch indexes are explicit; baseline
 dependencies continue to resolve from PyPI.
 Optional libraries must not load for baseline or CLI help.
+The opt-in `shared-inference` extra pins TorchRL0.15.0 and TensorDict0.15.2;
+combine it with `torch-cuda` for shared production inference. CPU component
+transport tests do not authorize CPU fallback for that mode.
 
 The separate `godfieldbots-native` uv workspace member uses Maturin1.15.0,
 PyO3 0.30.1, rust-numpy0.30.0 and ndarray0.17.2, pinned in its build configuration
@@ -939,6 +1123,18 @@ leases fully clear private history/RNG/cache/request state at verified handoff.
 No physical process receives both seats' views. Parked owners retain real GPU
 residency and require live authority through update/Source/commit; only actual
 reap releases physical ownership. Ordinary and historical paths remain fresh.
+
+ADR0053 separately permits trusted shared MLP serving under Simulator072dabb
+section21.1. Participant CPU processes still receive only their own inputs and
+own ordered results; the trusted broker/GPU executor may internally cohost rows.
+CPU participants own candidate generation, sampling and Act. Each request binds
+execution/game/participant/request/revision/checkpoint; normalization and model
+math are local to its row, and expired results cannot produce actions or data.
+Shared service residency/cache references are separate from participant slots
+and require positive original-child, relay/IPC and broker retirement. Ordinary
+PPO retains invocation-local custody; HPO retains its durable GPU gate. The
+current implementation/measurement acceptance state is recorded at the top of
+this document and in ADR0053; older isolation variants keep their own meanings.
 
 Clean-bootstrap amendment reviewed READY on 2026-10-27: launch a fixed
 `python -m gf_simulator_client.worker_bootstrap` with a minimal platform environment,

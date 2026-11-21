@@ -18,7 +18,7 @@ from gf_training.hpo_retention import pin_hpo_cache, release_hpo_cache
 
 class ResidentTrainingRuntime:
     """Never outlives the SAME actual job, original parent lock or invocation."""
-    def __init__(self, job: Any, ownership: Any, config: Any, state: Json, *, deadline: float, cleanup_deadline: float | None = None, owned_registry: Any = None) -> None:
+    def __init__(self, job: Any, ownership: Any, config: Any, state: Json, *, deadline: float, cleanup_deadline: float | None = None, owned_registry: Any = None, owned_cuda: bool = False) -> None:
         from gf_common.structured_layout import CORRECTED_CARD_INSTANCE_LAYOUT as layout
         from gf_models.structured_runtime import hpo_resident_training_admission
         from gf_training.hpo_lineage import require_hpo_run_owner
@@ -30,19 +30,57 @@ class ResidentTrainingRuntime:
         self.directory, self.state = ownership.directory, state
         self.deadline = deadline if cleanup_deadline is None else cleanup_deadline
         self.limit = config.hpo_spec['operating']['parent_budget_bytes']
-        envelope = hpo_resident_training_admission(config.model.architecture(layout=layout), config.model.inference,
+        self.shared=config.hpo_spec["schema_version"]==5
+        self.shared_controller: Any=None
+        from gf_models.shared_admission import shared_training_admission
+        admission=shared_training_admission if self.shared else hpo_resident_training_admission
+        envelope = admission(config.model.architecture(layout=layout), config.model.inference,
             config.hpo_spec['training_recipe']['tbptt_length'], config.hpo_spec['operating'],
-            config.hpo_spec['runtime'], layout=layout)
-        self.custody = ResidentPoolCustody(job, run_id=state['run_id'], pool_id=uuid.uuid4().hex)
+            config.hpo_spec['runtime'], layout=layout,**({} if self.shared else {'owned_cuda':owned_cuda}))
+        self.custody = ResidentPoolCustody(job, run_id=state['run_id'], pool_id=uuid.uuid4().hex,shared=self.shared)
         self.pool = ResidentParticipantPool(self.custody, resident_bytes=envelope['worker_bytes']//envelope['workers'],
             deadline=self.deadline, acquire_cache=self.acquire_cache, release_cache=self.release_cache,
-            owned_snapshots=owned_registry is not None)
+            owned_snapshots=owned_registry is not None,
+            begin_import_bytes=0 if self.shared else envelope['begin_staging_bytes']//envelope['workers'],shared=self.shared,
+            profile_io=config.actions.action_contract.simulator_revision=='072dabbca1458c9526897781d2fd64edeeb4f9ca')
         self.pool.execution_deadline = deadline
         self.entries: dict[int, OrderedDict[str, tuple[int, Any]]] = {}
         self.pins: dict[str,tuple[Any,Any]] = {}
         self.acquisitions: dict[str,tuple[Any,Any]] = {}
         self.transition: Any = None
         self.envelope = envelope
+
+    def ensure_service(self,operations: Any) -> None:
+        if not self.shared or self.shared_controller is not None:return
+        from gf_simulator_client.shared_service import SharedInferenceService
+        from gf_training.shared_serving import SharedServingController
+        service=SharedInferenceService(self.job.ledger,self.config.hpo_spec['runtime'],execution=uuid.uuid4().hex,
+            directory=self.directory,slots=2*self.config.hpo_spec['operating']['game_concurrency'],
+            estimate=self.envelope['service'],visibility=self.config.model.cuda_visible_devices,
+            job_id=self.job.ticket,deadline=self.deadline,execution_deadline=self.pool.execution_deadline,run_id=self.state["run_id"],config_sha256=self.state["config_sha256"])
+        self.shared_controller=SharedServingController(operations,self.config,self.state,service,owned_registry=self.owned_registry)
+        self.pool.service=self.custody.service=service
+        operations.shared_controller=self.shared_controller
+        service.controller=self.shared_controller
+        operations.persist_control(self.directory/'run.json',self.state,self.config,deadline=self.deadline)
+
+    def game_admission(self, roles: tuple[Any,Any]) -> Json:
+        """Collector admission uses this actual pool, including explicit extras."""
+        from gf_common.card_instance_rules import card_instance_rules
+        from gf_common.structured_layout import CORRECTED_CARD_INSTANCE_LAYOUT as layout
+        from gf_models.structured_runtime import admit_hpo_resident_game_workers
+        self.custody._require()
+        ledger, operating = self.job.ledger, self.config.hpo_spec['operating']
+        if self.shared:
+            return {'recipe':'shared-mlp-admission-v1','workers':2*operating['game_concurrency'],
+                'worker_resident_bytes':0,'service_cuda_bytes':self.envelope['service']['cuda_bytes'],
+                'peak_cuda_bytes':ledger.cuda_bytes,'game_concurrency':operating['game_concurrency']}
+        return admit_hpo_resident_game_workers(self.config.actions,roles,rules=card_instance_rules(),
+            model=self.config.model.architecture(layout=layout),inference=self.config.model.inference,
+            worker_cuda_bytes=self.pool.resident_bytes,begin_import_bytes=self.pool.begin_import_bytes,
+            game_concurrency=operating['game_concurrency'],global_cuda_bytes=ledger.global_cuda_bytes,
+            max_workers=ledger.max_workers,
+            learner_cuda_bytes=0 if ledger.learner is None else ledger.learner.resident_bytes)
 
     def _identity(self, owner: Any) -> Json:
         return self.custody._identity(self.custody._row(owner.lease))
@@ -84,7 +122,8 @@ class ResidentTrainingRuntime:
             raise ContractError('resident training cache escaped original parent artifacts')
         return self._acquire(owner,int(path.name),options['expected_manifest_digest'])
 
-    async def acquire_cache(self, owner: Any, binding: Any) -> str:
+    async def acquire_cache(self, owner: Any, binding: Any) -> str | None:
+        if self.shared:return None
         entries = self.entries.setdefault(owner.lease.key, OrderedDict())
         policy_sha = digest(asdict(binding))
         options = binding.policy_options
@@ -150,6 +189,15 @@ class ResidentTrainingRuntime:
         from gf_training.lineage import checkpoint_path
         authority = self.pool.authority
         authority.require(self.job.ledger)
+        if self.shared:
+            self.shared_controller.after_commit(generation)
+            _,binding=self.owned_registry.binding(generation)
+            for owner in self.pool.owners:
+                if owner.lease.released:continue
+                initial=episode_initial(binding,0,self.config.actions,card_instance_rules())
+                await owner.control('SYNC',checkpoint=record['inference_sha256'],generation=generation,payload=initial,timeout=10.)
+                await owner.control('PARK',checkpoint=record['inference_sha256'],timeout=10.)
+            return
         previous = generation-1
         affected = [owner for owner in self.pool.owners if not owner.lease.released and any(
             receipt is not None and receipt.binding['generation'] == previous
@@ -196,27 +244,33 @@ class ResidentTrainingRuntime:
             raise ContractError('resident original pool/cache references/transition retirement unconfirmed')
 
     async def close(self) -> None:
-        primary = None
+        primary: BaseException | None=None
         try:
             await self.pool.close()
-        except BaseException as error:  # noqa: BLE001 - verify actual facts even after a failed CLOSE
-            primary = error
+        except BaseException as error:  # noqa: BLE001 - verify actual facts even after a failed CLOSE.
+            primary=error
+        retired=False
         try:
             if self.transition is not None and self.transition.active:
                 self.transition.retire_failed_transition()
-                self.transition = None
+                self.transition=None
+            if self.shared_controller is not None:self.shared_controller.close()
             self.require_closed()
-            if self.owned_registry is not None:
-                for snapshot in tuple(self.pool._owned_snapshots.values()):
-                    self.pool.unbind_owned_snapshot(snapshot)
-        except BaseException as error:  # noqa: BLE001 - retain the concrete original cleanup owner
-            failed = primary or error
-            vars(failed)['cleanup_owner'] = self
-            vars(failed)['_resident_cleanup_owner'] = self
-            if primary is not None:
-                primary.add_note('resident positive retirement unavailable: '+str(error))
-            raise failed
+            retired=True
+        except BaseException as error:  # noqa: BLE001 - retain actual failed service/transition owner.
+            if primary is None:primary=error
+            else:primary.add_note('resident positive retirement unavailable: '+str(error))
+        # Shared service journaling can fail after positive operational reap.
+        # Retire independent pool bindings through their existing actual-use guard.
+        if self.owned_registry is not None and (self.shared or retired):
+            for snapshot in tuple(self.pool._owned_snapshots.values()):
+                try:self.pool.unbind_owned_snapshot(snapshot)
+                except BaseException as error:  # noqa: BLE001 - attempt every original snapshot owner.
+                    if primary is None:primary=error
+                    else:primary.add_note('resident snapshot retirement: '+str(error))
         if primary is not None:
+            vars(primary)['cleanup_owner']=self
+            vars(primary)['_resident_cleanup_owner']=self
             raise primary
 
 

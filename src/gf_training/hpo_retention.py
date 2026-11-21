@@ -66,7 +66,7 @@ def _mkdir(path: Path, *, ownership: RunOwnership) -> None:
 
 def _reference_parent(scan: Any, *, max_owned_bytes: int, deadline: float) -> tuple[Json,list[Json]]:
     state=scan.object(scan.root/'run.json')
-    if state.get('run_variant')=='hpo-ppo-owned-v1':
+    if state.get('run_variant') in ('hpo-ppo-owned-v1','hpo-ppo-owned-shared-v1'):
         from gf_training.hpo_owned_restore import _read_owned_metadata
         state,records,_registry=_read_owned_metadata(scan)
         return state,records

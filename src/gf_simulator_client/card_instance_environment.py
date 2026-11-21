@@ -87,6 +87,7 @@ class CardInstanceSimulatorEnvironment(SimulatorEnvironment):
         server_output_root: Path | None = None,
         resident_pool: Any = None,
         capture: HpoCapture | None = None,
+        game_observer: Any = None,
     ) -> None:
         if type(settings.actions) is not ActionConfigV3:
             raise ContractError("corrected environment requires exact actions3")
@@ -121,6 +122,8 @@ class CardInstanceSimulatorEnvironment(SimulatorEnvironment):
         self.artifact_inputs = artifact_inputs
         self.resident_pool = resident_pool
         self.capture = capture
+        self.game_observer=game_observer
+        self._observed_terminal: set[str]=set()
         self.artifact_sink, self.server_output_root = artifact_sink, server_output_root
         self._managed_server: ManagedServer | None = None
         self._storage_group_owner: CardInstanceSimulatorEnvironment | None = None
@@ -144,7 +147,7 @@ class CardInstanceSimulatorEnvironment(SimulatorEnvironment):
             ledger=self.ledger,
             runtime_evidence=CardInstanceRuntimeEvidence(
                 self.runtime_evidence.binary,
-                self.runtime_evidence.source_root,
+                self.runtime_evidence.source_root, contract=cast(ActionConfigV3,self.settings.actions).action_contract,
                 deadline=min(self.settings.wall_deadline, self.settings.work_deadline),
             ),
             artifact_inputs=self.artifact_inputs,
@@ -152,6 +155,7 @@ class CardInstanceSimulatorEnvironment(SimulatorEnvironment):
             server_output_root=self.server_output_root,
             resident_pool=self.resident_pool,
             capture=getattr(self,'capture',None),
+            game_observer=getattr(self,'game_observer',None),
         )
         if self.artifact_sink is not None:
             self._storage_group_owner = own
@@ -165,6 +169,7 @@ class CardInstanceSimulatorEnvironment(SimulatorEnvironment):
         return result
 
     def _episode_opened(self, result: EpisodeResult) -> None:
+        self._observe_game(result,'created')
         capture=getattr(self,'capture',None)
         if capture is not None:
             assert result.game_id is not None
@@ -172,6 +177,8 @@ class CardInstanceSimulatorEnvironment(SimulatorEnvironment):
 
     def _act_acknowledged(self, result: EpisodeResult, viewer: int, command: Json,
                           acknowledgement: Json) -> None:
+        if acknowledgement.get('status') in ('terminal','aborted'):
+            self._observe_game(result,'terminal' if acknowledgement['status']=='terminal' else 'aborted')
         capture=getattr(self,'capture',None)
         if capture is not None:
             try:
@@ -180,17 +187,29 @@ class CardInstanceSimulatorEnvironment(SimulatorEnvironment):
                 result.health["capture_failure"] = str(exc)
 
     def _terminal_observed(self, result: EpisodeResult, viewer: int, observation: Json) -> None:
+        self._observe_game(result,'terminal')
         capture=getattr(self,'capture',None)
         if capture is not None:
             capture.terminal_observation(result.episode_id, viewer, observation)
 
     def _episode_closed(self, result: EpisodeResult) -> None:
+        self._observe_game(result,'retired')
         capture=getattr(self,'capture',None)
         if capture is not None and result.game_id is not None:
             try:
                 capture.close_episode(result.episode_id, result)
             except ContractError as exc:
                 result.health["capture_failure"] = str(exc)
+
+    def _observe_game(self,result: EpisodeResult,event: str) -> None:
+        observer=getattr(self,'game_observer',None)
+        if observer is None or result.game_id is None:return
+        from gf_common.hpo_progress import observe
+        if event!='created':
+            if result.game_id in self._observed_terminal:return
+            self._observed_terminal.add(result.game_id)
+        observe(observer,{'event':event,'game_id':result.game_id,'episode_id':result.episode_id,
+            'monotonic':time.monotonic(),'scope':'actual-created-to-first-terminal-abort-or-retirement'})
 
     def _new_server(self, *args: Any, **kwargs: Any) -> ManagedServer:
         server = super()._new_server(*args, **kwargs)
@@ -313,6 +332,13 @@ class CardInstanceSimulatorEnvironment(SimulatorEnvironment):
         binding = self.settings.policy_bindings.get(label, RuntimePolicyBinding(label))
         try:
             factory = CardInstanceParticipantWorker if self.resident_pool is None else lambda *args, **kwargs: self.resident_pool.worker(viewer, *args, **kwargs)
+            shared_options={}
+            if self.ledger.service is not None and self.resident_pool is None:
+                from gf_simulator_client.shared_worker import SharedParticipantWorker
+                factory=SharedParticipantWorker
+                shared_options={'service':self.ledger.service.owner,'game':game,'viewer':viewer}
+            elif self.resident_pool is not None and self.resident_pool.shared:
+                shared_options={'game':game}
             worker = factory(
                 binding.model_id,
                 spec.sampling_seeds[viewer - 1],
@@ -320,6 +346,7 @@ class CardInstanceSimulatorEnvironment(SimulatorEnvironment):
                 self.settings.worker_seconds,
                 ledger=self.ledger,
                 policy_options=binding.policy_options,
+                **shared_options,
                 artifact_inputs=self.artifact_inputs if binding.policy_options is not None and binding.model_id != "heuristic_refresh" else None,
                 **({"deadline": self.settings.work_deadline} if binding.model_id == "lightgbm" else {}),
             )

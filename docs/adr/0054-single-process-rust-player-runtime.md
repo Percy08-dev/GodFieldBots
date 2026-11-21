@@ -1,0 +1,549 @@
+# 0054: Single-process Rust player runtime
+
+Status: accepted design; implementation and experiment acceptance pending.
+Preimplementation review: `/root/runtime_architecture` READY after three blocking
+ownership/packaging findings were resolved. Root adopts advisor
+`/root/runtime_lifecycle_advice` option B, prepared→original-host reap→cold
+continuation, rather than a campaign-wide GPU lease.
+Date: 2026-11-19. Owner: root. Baseline: 9680f06.
+
+## Context
+
+ADR0053's trusted shared MLP inference still retains participant, broker, learner
+and writer Python processes. The owner approved a single Python learning host
+with Rust participant handling and a real A/B scheduling comparison. Its research
+identifies v5 search compatibility, persistence custody and positive termination
+as substantive boundaries, rather than treating a thread as a process receipt.
+
+## Decision
+
+Implement the [bounded design](../design/rust-player-runtime.md) and retain the
+[approved protocol](../design/rust-player-runtime-approved-plan.md) unchanged.
+The supervisor preserves original campaign and parent-run lock custody through
+sequential host reentry; cold finalization retains strict Source validation and
+legacy evaluation admission. Runtime-wheel packaging pins the installed companion
+hash/source identity and refuses missing or mismatched executables.
+Rust owns own-view policies, external HTTP and game/request state. Python retains
+FP32 Torch inference and participant CPU sampling, PPO and saved state, with a
+single dedicated SQLite writer thread. Add explicit runtime/producer/exit versions
+and an original-handle Rust supervisor. Compare Tokio-per-game and fixed workers
+using common processing; defaults change independently per entrance only after
+correctness, resume, audits, <=3% timing changes and consistently reduced PSS.
+
+## Alternatives and consequences
+
+Keep multiprocess shared mode as comparison and old-parent resume route. Python
+HTTP/player callbacks would preserve GIL/serialization costs and miss the approved
+Rust ownership; merely relabeling them is rejected. An asyncio bridge, custom
+lock-free queues, Rayon co-scheduling and new learning math have no initial need.
+Logical participant separation replaces process separation only for the explicitly
+versioned mode under the owner authorization and pinned Simulator21.1 tests.
+
+Porting Python search/RNG is substantial; exact fixed-clock baseline cases and
+independent review precede production use. No speedup or memory gain is presumed.
+Existing formats keep their meanings. The design records measured/estimated,
+shared/private and steady/peak allocation limits. No accepted implementation debt
+yet; missing evidence remains required work.
+
+## Verification
+
+Fixed-clock v5 candidate/RNG parity, per-participant isolation, retirement and
+buffer/queue/failure tests; external HTTP contract; both schedulers W1/W2;
+Model3/4 CUDA continuous/save/resume and strict original/numeric/Replay audits;
+actual single-Python process tree and original-handle termination; approved C8,
+C16 and deployment-concurrency timing protocol. Record results and unresolved
+limitations in docs/verification/rust-player-runtime.md before acceptance.
+
+## Scoped core implementation evidence
+
+The native v5 public policy core is implemented and passes independent correctness
+and architecture conformance READY after one local fix round. The two blocking
+parity findings (empty table after deadline and separate baseline capacity18)
+are resolved and independently re-reviewed. Original broad679Python checks pass;
+final11covering/245affectedPython and180native/13ignored checks pass. This is
+core acceptance only; the [verification record](../verification/rust-player-runtime.md)
+keeps complete-runtime/learning/performance/adoption work outstanding.
+
+## Supervisor/packaging design refinement
+
+Independent `/root/runtime_architecture` preimplementation supplement review is
+READY. Linux subreaper adoption plus an isolated original-host group and actual
+adopted-child wait statuses close the orphan-Simulator boundary; stdinEOF alone
+is only a shutdown request. WNOHANG zero means still running. Cleanup signals
+may establish physical retirement but never qualified completion. Unknown/reap/
+durable-proof failure retains quarantine. Revisit containment if a later pinned
+Simulator spawns OS children or changes groups/sessions.
+
+A disposable Maturin1.15 wheel proves the exact wheel-only companion include
+paths and0755mode; installed distribution inventory drives discovery. Ordinary
+native-only builds remain companion-free. Actual runtime-wheel installation and
+forced-exit tests remain required; this refinement accepts design feasibility,
+not implementation or performance.
+
+## Scoped inference component and record compatibility
+
+The owned array/dispatcher/Python inference component passes independent
+correctness/conformance READY after blocked-admission retirement and timer
+representation fixes. Final55inference checks (including CUDA) and189native/
+13ignored checks pass; full live runtime/performance remain pending.
+
+The record-semantics clarification is independently READY: unchanged Journal6/
+DTO3 contents are not Python-process proofs; persisted Numeric6 remains honest
+only when its canonical-python encoder actually runs in Python. Native serving
+encoding and Rust online capture have distinct producer identity. New strict
+outer run/collection/proof/update/registry/import/completion selectors remain
+mandatory. Exact outer-version mapping must pass its gate before implementation;
+this clarification does not preapprove unspecified mappings or legacy receipts.
+
+## Exact outer records and live history refinements
+
+The [outer-record inventory](../design/rust-player-runtime-records.md) is
+independently READY after explicit cache transactions and cold parent/evaluation
+handoff resolved the two initial omissions. It keeps unchanged Journal6/DTO3,
+normal Numeric4/HPO Numeric6 and Python checkpoint4/5; new outer selectors and
+actual owner/exit authority remain explicit. Cache records carry no fictional
+broker/GPU PIDs. Evaluation consumes validated new-parent inference data through
+the existing independently admitted fresh runtime, without reconstructing legacy
+training completion or actor9/10 authority.
+
+The typed async game-release helper and incremental Arc-backed history/trusted
+projection/token-kernel factoring also pass their preimplementation gates. They
+preserve original lease/producer lifetime and feature semantics, keep untrusted
+diagnostic validation, and remove redundant whole-prefix work. Actual actor
+implementation, conformance and prescribed verification remain pending.
+
+## Scoped live actor implementation
+
+The common external-HTTP game actor and actual Tokio/fixed-worker schedulers pass
+independent correctness/conformance READY after one fix round. Failed service
+status now precedes route settlement, preserving actual holds through join; live
+Refresh preserves arbitrary positive threshold identity. Original policy/frame/
+token/hash semantics remain exact, with incremental Arc history and borrowed
+immutable capture. Final197native/13ignored and537Python/18explicit skips pass,
+including actual overlap/natural/Replay/CPU-CUDA cancellation. This accepts the
+actor component only; real writer/Source/learning/supervisor/CLI integration and
+approved performance/default gates remain outstanding.
+
+## Thread storage accounting and failure ownership
+
+The [storage bridge design](../design/rust-player-runtime-storage.md) passes
+independent preimplementation architecture READY. One native parent recording
+account serves native captures and additional Python staging/pack byte leases;
+original bundle/view custody is charged once. Decoder/private metadata scratch
+has its separately admitted role, and a new restrictive formula still requires
+bounded evidence/root review. No second interpreter/IPC estimate is inherited.
+
+A genuine fault probe shows transitional readonly FD ownership could be lost
+when old-original close failed; process exit formerly retired it, thread exit
+would not. The new owner must retain every transitional/db handle before fallible
+handoff and report uncertain cleanup honestly. Actual thread/bridge implementation
+and fault verification remain pending.
+
+## Scoped thread storage engineering acceptance
+
+The actual SQLite thread/canonical original encoder and single native recording
+account pass independent engineering correctness/conformance READY after nested
+FD, construction, traceback-buffer and cancel/seal repairs. Final273affected
+checks pass; normal old process-worker behavior is preserved. Explicit workspace
+loan is soft planning, and bounded studies retain their original producer hashes.
+Production/default retained-active-bank calibration and prescribed workloads stay
+open, alongside Source/local-learning/supervisor/CLI integration. This is not
+archive/learning qualification or performance adoption.
+
+## Exact supervisor protocol
+
+The [supervision protocol](../design/rust-player-runtime-supervision.md) passes
+independent preimplementation READY after two immutable hash cycles were removed.
+Original monotonic f64-bit deadlines, credential-bound Linux packets, actual
+retained flock OFDs and explicit close-only lock transfer preserve authority.
+Prepared precedes Exit/handoff; independent cache retirement precedes host-close.
+Fixed application dispatch and cold Source qualification stay distinct. Actual
+process/namespace/installed-wheel implementation tests remain pending.
+
+
+## Learning integration refinement
+
+The [learning integration seams](../design/rust-player-runtime-integration.md)
+pass independent preimplementation architecture READY. Ordinary run.player_runtime
+and HPO6 runtime hold the materialized declaration; actual producer/admission
+identity comes from owned code/control, not raw configuration. The common PPO
+coordinator gains closed new-mode operations using original monotonic authority
+and actual OFD transfer. Local saved banks/ACKs issue new service publications
+without borrowing protocol9 actor authority. Live committed work awaits the
+original host reap and cold audit before final eligibility. Implementation,
+real numerical/Source/restore checks and deployment measurements remain required.
+
+
+## Supervision repair design
+
+Independent initial5b reviews found phase-clock, historical-PGID signal ownership,
+stop-ACK and missing-build-instruction violations before component acceptance.
+The [bounded repair design](../design/rust-player-runtime-supervision-fixes.md)
+passes independent architecture READY. Cold consumes original operation finish;
+finalized/released interoperation control consumes original session finish. Neither
+starts a fresh allowance. Root adopts advisor option B: retain the original
+session leader with WNOWAIT until group signaling is permanently finished, drain
+adopted children with targeted waits, then consume actual Child.wait. A live-member
+snapshot can race with a member leaving its group. This refines the earlier
+consume-original-first wording without changing receipt meaning or dependencies.
+Cost is one zombie during bounded cleanup; no dependency/framework is added.
+Actual WSL6.18 kernel probes, all four corrections and scoped independent
+re-review remain required before implementation acceptance.
+
+
+## Scoped original-host supervisor acceptance
+
+The standalone supervisor, authenticated host/cold protocol, same-namespace
+admission2/termination3 and actual installed companion now pass independent
+correctness and architecture conformance READY. All four initial P2s are
+addressed under the accepted repair: phase-specific original clocks, retained
+leader identity, exactly-once stop ACK and actionable wheel workflow. Root fresh
+fix-only11native/13Python and exact installed/source/artifact identity checks pass;
+agent complete22supervisor/60Python checks pass. Final nativef8671dee, extension
+8f633e9b and supervisor6e53acad are recorded in verification. Old broad-suite and
+16b742 evidence remain historical. Source/local learner/campaign science/user
+CLI and prescribed CPU/CUDA/performance/default acceptance remain outstanding.
+
+
+## Pure new-mode configuration acceptance
+
+Normal run.player_runtime and HPO campaign/spec6 declaration, study identity,
+matching-base materialization and closed legacy entry guards pass independent
+correctness/conformance READY. All six fields are explicit; W differs from legacy
+process/evaluation capacity, unknown/bool/nonfinite values refuse. Initial
+participant support and explicit normal Pack storage are checked before work.
+338focused checks, including70new cases, static/import checks and Root fresh70
+pass. No resource or Source authority follows from parsing: public HPO resource
+validation and all actual new execution still require the forthcoming genuine
+planner, local learning/Source and supervisor CLI composition. Old default classes,
+selectors and record meanings remain. No default/performance/learning claim.
+
+
+## Local learning and Source composition design
+
+The [bounded learning/Source design](../design/rust-player-runtime-learning.md)
+passes independent architecture READY before dependent code. CLI reconstructs
+stable canonical effective-config inputs and passes loaded data into fixed
+training handlers, avoiding training-to-CLI parsing dependency. Real inherited/
+transferred run owners close without unlocking the supervisor OFD. Concrete
+common-PPO operations use local actual snapshots and native/writer witnesses to
+issue new Source authority; no Wire7/actor9/10/GpuJob receipt is synthesized.
+Per-kind versions remain the accepted inventory. Source workspace uses the same
+remaining account after retained owners; no resource coefficient is approved.
+Cold audit stays CPU data work under original authority, then CLI consumes or
+closes the finalized result. Actual implementation, numerical/Source correspondence,
+full CPU/CUDA restore, CLI/campaign and performance acceptance remain open.
+
+
+## Local numerical and data support acceptance
+
+Task5c1A passes both independent reviews after five corrections and a narrow
+second config-boundary review. Actual local saved pairs, parent OFD ownership,
+canonical typed handoff, data-only J6/Replay factoring/originals, ordered inventory/
+deferred actual contexts and strict Simulator cleanup are implemented. The actual
+one-invocation CUDA numerical component compares Model3/4 saved state exactly and
+retains its793b source; later validation repairs/current76d9 source are not silently
+relabelled as that run. No numerical kernel/checkpoint format changed. Source B,
+common-PPO/new outer issuers, cold qualification, public CLI/campaign and full
+CPU/CUDA/performance/default gates remain unimplemented/unaccepted downstream.
+
+
+## Explicit invocation and restored identity design
+
+The [bounded operation2 refinement](../design/rust-player-runtime-operation-v2.md)
+passes independent architecture READY before B code. Explicit fresh/resume/pause
+controls are immutable and bound to the current operation SHA, avoiding deadline
+inference or config/budget changes. Frozen invocation states retain that hash
+through Prepared/Exit/completion without back-reference cycles. Computational
+complete status alone grants no Source eligibility. Completed-wave queries use
+full run/trial/episode identities and actual post-handoff reports while persistent
+workers stay alive. A restored-policy data owner preserves original saved lineage
+separately from newly loaded bank identities; it never fabricates a save ACK or
+re-saves unchanged prior generations. Actual implementation remains pending.
+
+
+## Mixed policy costs and saved inference ownership design
+
+Independent architecture READY accepts [per-participant costs](../design/rust-player-runtime-participant-costs.md)
+to preserve existing baseline versus MLP generator admission/provenance in mixed
+games, with old default fallback and raw/Journal meanings intact. Separate READY
+accepts inference-only RustSavedPolicy after real save/commit: it retains actual
+inference ownership and immutable facts while retiring unused CPU optimizer/RNG
+backings, without pretending the partial snapshot still has a complete save ACK.
+No new estimate, margin, mathematical or engine change is approved. Actual mixed
+and lifetime tests/build provenance remain required before implementation acceptance.
+
+## Scoped local Source, PPO and cold-owner acceptance
+
+The accepted operation2, per-policy cost, held-resume and cold/next-host ownership
+refinements are implemented in the private learning composition. Both independent
+correctness/conformance reviews are READY after two repair rounds: actual returned
+parent borrower liveness, control-graph last-use funding, stopped traceback and
+nested constructor FD custody, and exact-D-only bounded component admission.
+Root's fresh125 CPU checks/two pure boundary cases and scoped typing/lint pass.
+Current-source Model4 CUDA pause/resume returns a genuine exact-D Parent, permits
+caller access, then closes/relinquishes actual custody in38.91s; ordinary CPU
+single-use and full audits also have retained scoped evidence. See the verification
+record for exact producers, failures and limits. No learning-quality conclusion.
+
+Before public new-mode activation, generic combined CUDA planning, existing
+artifact-file retention compatibility and healthy all-natural empty-collection
+parity remain mandatory current work. Raw originals and numeric batches retain
+their existing preservation policy. These are unaccepted integration requirements,
+not permanent debt. User CLI/campaign/evaluation, full CUDA two-update/resume and
+process/audit acceptance and the complete approved timing/default protocol remain
+open; no default switch follows from this engineering milestone.
+
+## Generic same-host CUDA engineering scope
+
+The [whole-host device account](../design/rust-player-runtime-device-account.md)
+and accepted Model3 export/frozen-kernel supplements are implemented under both
+independent scoped rereviews READY. One actual host account and existing Torch
+mutex compose actual learner/cache storage with checkpoint-cached native-row
+geometry and immutable per-update numerical allowances. Update scratch and
+prospective publication are separate phases; mixed CPU/CUDA roles retain their
+actual storage responsibilities. New update6/8 embeds the closed15-field plan as
+DATA bound to its actual Source invocation, without a new namespace capability.
+
+R1 preserves actual CPU Source funding while failed device copies still retain
+rollout/token aliases, retires the actual captured cause/context/nested cleanup
+owners before proof, and prevents historical `..` receipt-path escape. Original
+errors and uncertain owners remain retained. Existing bindings, checkpoint
+formats and all eight frozen kernels stay unchanged; no new resource margin or
+external model loader is introduced. CPU/data tests establish this engineering
+scope. Full actual CUDA two-update/resume, Source/process/campaign/evaluation and
+physical/performance/default gates remain required before final acceptance.
+
+## Artifact retention and healthy-empty engineering scope
+
+The accepted [artifact-retention](../design/rust-player-runtime-artifact-retention.md)
+and [healthy-empty](../design/rust-player-runtime-empty-collection.md) designs are
+implemented and pass scoped independent correctness/conformance after two repair
+rounds. Retirement is declared-artifact-only with actual current owners, held
+original directories/files, both synchronization barriers and positive FD closure
+before receipt. Cold reading binds the historical retirement invocation and the
+existing strict completion1/audit1 chain; current protected payloads and ordinary
+inference manifests remain mandatory. Existing warm recipes, Raw/numeric retention,
+scientific formats and the eight frozen kernels are unchanged.
+
+All-natural zero-own-seat HPO results carry DATA-only extra-collection markers,
+stop incomplete before numeric/update/new generation, and receive independent
+extra Raw/Replay checks without a fabricated Source/Parent. Bounded genuine
+control/fault cases cover physical retirement; first/later genuine engine-empty
+capture and complete genuine pruned-checkpoint resume remain explicit Task6
+verification, before final public/experiment acceptance. This is engineering
+component acceptance, not learning quality, physical capacity or default adoption.
+
+## Conditional verification domain for healthy-empty HPO
+
+The earlier engineering-scope reservation for a genuine first/later empty-engine
+capture is superseded by the independently reviewed
+[reachability proof](../design/rust-player-runtime-empty-feasibility.md). Under
+current same-seed mirrored two-player HPO pairs, initial-action and frame-recording
+contracts, every complete cohort has positive learner frames and positive selected
+frames before its decision budget is exhausted. That engine case is conditionally
+UNREACHABLE / NOT APPLICABLE, not an executed PASS. Generic DATA/marker compatibility
+and negative auditing stay. Revisit before any listed invariant changes. Genuine
+pruned-checkpoint resume and every other Task6/7 requirement remain mandatory.
+
+## Bounded application telemetry engineering acceptance
+
+The [closed telemetry contract](../design/rust-player-runtime-telemetry-contract.md)
+is implemented under both independent R1 rereviews READY. Fixed histograms,
+actual logical Events pages/accepted RTT, full-window batch coverage, queue models,
+PyO3 entries and explicit monotonic phases remain diagnostic DATA. Optional
+worker-thread profiling has a terminal first-collection window and original trace
+custody; primary timing remains profiler-off.
+
+The [failure clarification](../design/rust-player-runtime-diagnostic-failures.md)
+contains healthy, completely framed diagnostic processing errors while preserving
+real shared-transport/framing/timeout quarantine. It adds no resynchronization or
+authority. Profile END precedes fallible snapshots, noncollection batch IDs remain
+null, and completed delivery observation precedes diagnostic retirement through
+the existing positive relay wait. Policy/scientific behavior, deadlines and native
+interfaces are unchanged by the R1 repairs. Matching final integrated execution,
+Source/process acceptance, observation-cost calibration, genuine GPU profiles and
+the full conditional performance/default protocol remain mandatory.
+
+
+## Public-entry control protocol engineering acceptance
+
+The bounded public-entry and campaign-encoding refinements pass independent
+correctness/conformance READY. C1 implements immutable control records, authenticated
+initial/current-purpose dispatch, borrowed campaign OFD custody, cursor CAS and
+control-only completion. A failed training original remains noncooperative with
+no Prepared; a fresh CPU controller follows only positive actual retirement.
+Durable terminal disposition acknowledgment does not grant Source/completion or
+release authority. Parent borrowers must positively close before release/rebind.
+New campaign records use scoped canonical Python JSON without newline; existing
+Store records keep their original bytes and hashes. No generic JSON reader changes.
+
+Two repair rounds close post-terminal packet races, provisional FD custody,
+whole-record reason-envelope accounting, legitimate pending Stop ACK crossing
+and uncertain-close numeric FD reuse. The original three and later two P2s are
+resolved by both reviewers; no third round or advisor escalation is required.
+Root freshly confirms57 Python/3 native terminal checks plus scoped Ruff/mypy.
+Actual fixed CPU controls remain component evidence, with truthful incomplete
+scientific data. Full public routing/campaign/evaluation, two completed operations,
+CUDA2/resume2/full audits/process checks and the complete performance/adoption
+populations remain outstanding.
+
+
+The C1 control protocol is also integrated with the accepted device/retention/
+telemetry foundation. Both independent join reviews are READY. The native
+handshake/failure-return chain and original wait-instant diagnostic are retained
+together; campaign-return CPU startup uses the existing startup phase on both
+ends. Root fresh57 Python and4 pure native checks pass. This source integration
+does not establish new scientific, packaging, CUDA or performance acceptance.
+
+
+## Explicit public clock and ordinary-launch factory acceptance
+
+The independently reviewed public-clock refinement is implemented and passes
+both final correctness/conformance reviews after R1. Native-only concrete timing
+variants preserve all old types/asdict/defaults and six-field runtime declarations.
+Ordinary run.post_host_seconds and authoritative HPO6 operating.post_host_seconds
+are explicit with no inferred numeric reserve. For original anchor t: A=t+A,
+E=t+E, finish=t+W and TERM=KILL=finish-P, with representable E<TERM<finish.
+Operation-clock1 is provenance DATA, separate from actual launch/operation authority.
+Pure startup preview counts one learner and one G0 network for actual CUDA roles
+with context/workspace once; future phase and physical capacity stay unproven.
+
+Actual ordinary preparation uses the existing registered run owner/SAME descriptor,
+canonical effective snapshot, original input fingerprints, verified companion and
+fixed venv interpreter. Resume checks original boot/config/producer/paused lineage
+and reuses all original clock bits without recapture or paused-time refund.
+Factory facts are issued only by actual preparation; dataclass reconstruction
+and companion/manifest retargeting cannot reissue them. R1 also restores existing
+merged timer validation before P arithmetic; no blanket CLI exception handling.
+
+Root fresh250 CPU checks and127 checks after joining C1 pass, with scoped lint/
+typing. All actual execs in these tests are mocked; normal metadata/import helper
+subprocesses are not training hosts. Public execution guards remain closed.
+Full ordinary/campaign/evaluation composition and all actual Task6/Task7 gates
+remain mandatory, including original clocks, strict Source audits and default
+comparison. No training quality or universal resource guarantee is accepted.
+
+
+## Ordinary public routing and campaign CONFIG foundation acceptance
+
+C2c now connects explicit timed ordinary gf-bots train to its real sealed factory.
+Earlier argument checks and legacy/unsupported-command behavior remain. Cold
+output accepts real typed owners, extracts held validated scalar DATA, then
+positively closes result, releases parent and closes control before stdout.
+Actual training/Source/termination authority is not granted by these diagnostics.
+
+Native6 planning uses existing actual pure trial/control/selected materializations
+and same-host geometry. Initial CPU campaign operation uses exact session soft
+for its first four fields and hard finish; pinned campaign CONFIG uses the
+existing normalized parsers and exact canonical/base/combined hash roundtrip.
+Actual Store/SAME-OFD/sealed launch retains original clocks and fixed facts.
+Legacy1–5 types/identities/validators and global resident resolver remain strict.
+
+Both original final reviewers are READY after R1/R2. Native6 conditions now
+explicitly identify existing legacy-fresh evaluation; actual materialization
+validates the strict P tail before preview. A later cached-preview defect is
+fixed by reusing requested DATA only for the identical actual outside-control
+object; reconstructed in-space resources are recalculated without changing
+scientific identity. Root333 CPU checks, Ruff11/mypy7 and frozen11 hashes pass.
+
+At the earlier C2a milestone public guards were closed. Ordinary routing is now
+wired; PUBLIC HPO execution remains closed and its module supplies CONFIG factory
+only, with no fake handler. Successful-history validation and the actual C2b/
+campaign/evaluation composition are mandatory before HPO activation. No installed
+source match, real host/GPU/Source acceptance, experiment quality or default
+adoption is inferred. All actual Task6/Task7 gates remain outstanding.
+
+
+## Supervised evaluation data custody
+
+Independent correctness and architecture conformance are READY for the DATA
+bridge joined in `0bfffaa64c9b2ecb1480573ae11969bb6c6f0156`. A live qualified
+Parent can export original inference FDs and an artifact reference to an
+independently owned evaluation account before Native releases the original
+parent. The new provider and metadata phase is included in the receiving
+Source budget. A current real campaign and parent owner can reopen complete
+historical DATA for independent Original, Replay, numeric and saved-state
+revalidation. Archived receipts cannot furnish live training authority.
+
+The reviewed repairs enforce distinct accounts on a live transfer and preserve
+all cause and context frames and actual nested owners until closure. Repeated
+capture revisits newly added frames and ownership links. A candidate cleanup
+owner may not be adopted when it already owns the capturing owner through the
+existing cleanup chain. The advisor-backed check preserves existing custody
+while allowing positive retry. The borrowed verifier and shrink supplements
+retain their existing pool guards and exact budget boundaries.
+
+Root precollected and ran 224 CPU DATA and retention checks successfully. The
+bridge has no current production success claim until the public workflow passes
+its original process, CUDA, qualified seed and evaluation checks.
+
+
+## Public supervised HPO composition
+
+The reviewed explicit schema 6 route uses the original Rust supervisor and
+fixed campaign controller. The real Store and parent OFDs pass through the
+existing protocol. The controller preserves the Optuna scheduler and exact
+outcome lineage. The original training process retires before a separately
+admitted Fresh evaluation consumes the retained inputs. Evaluation and parent
+retirement must settle before the next training bind.
+
+Resume preserves the old cursor through exec. An actual borrowed Store owner
+verifies existing operation history and the real current namespace before
+updating the pointer. A preparation interrupted before cursor creation can
+resume after the same checks. Missing pointer alone supplies no authority.
+Existing schema 1–5 command and evaluation defaults remain compatible.
+
+Both independent code reviews are READY after the pre-cursor repair. Genuine
+two-operation campaign, original process, full Cold and CUDA restoration
+evidence remain mandatory for runtime acceptance.
+
+## Physical verification and opt-in delivery
+
+The public Model3 and schema 6 Model4 paths passed bounded same-process
+learning, save, CUDA restore and independent Original, Replay, numerical and
+saved-state checks. The actual two-seed campaign also exercised the existing
+Fresh evaluator after its original training host was reaped and passed
+completed-history resume. Both A/B modes preserve the scoped information and
+ownership boundaries above.
+
+The measured 24-command comparison selected Tokio W2, using the approved
+3% speed band and the lower measured peak PSS at C16. The actual selected
+runtime passed CUDA pause and same-clock resume at both deployment entrances.
+HPO retains explicit opt-in because the whole invocation exceeded the approved
+wall increase in both pairs. Ordinary's two raw pairs met the thresholds and
+its observation uncertainty remains material at the narrower measured margin.
+Both entrances therefore retain explicit selection.
+
+A post-exit tool validates original observer coverage and authenticated typed
+legacy journals. Its legacy broker validation recognizes only the measured
+sequence around the original host's invocation-bind transition. The verifier
+projects DATA and supplies no new execution or eligibility authority. The
+24 primary and 12 calibration observations retain the original producer and
+independent audits. Source identity, clocks and stored compatibility stay
+attached to each original parent.
+
+After five empty Kineto exports, the profiled route uses the supported
+synchronous Torch Python serializer through the original retained FD.
+The five fixed replacements captured actual CUDA activities in the original
+logical window. Timings under the profiling recipe remain separate.
+[Verification and results](../verification/rust-player-runtime.md) and
+[explicit CUDA configuration](../design/rust-player-runtime-integration.md)
+record the applicable conditions and scope.
+
+## Verified input reuse in ordinary packing
+
+Packed Journal decoding relies on mandatory selection validation to check the
+entire candidate table against the actor's frame. The ordinary Rust Model3
+Source later converts its immutable, already validated `EpisodeRecords`
+through the canonical token encoder. Its synchronous Pack projection reuses
+verified cached data between full original checks at entry and exit. Newly
+loaded groups and control bytes remain authenticated by the Pack reader.
+
+Numeric packing checks the original Source at entry and again before
+publishing the completed manifest. Elapsed-time and capacity checks govern the
+intermediate work. The learner checks persisted numeric originals before
+optimizer admission. A failed final check leaves the batch without a completion
+manifest. The [implementation design](../design/rust-player-checked-candidate-reuse.md)
+and [verification record](../verification/rust-player-runtime.md#verified-input-reuse-in-ordinary-packing)
+record the contracts and observed results.

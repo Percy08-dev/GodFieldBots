@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import math
 import stat
 import time
@@ -20,7 +21,10 @@ from gf_cli.config import (
     require_storage_command,
 )
 from gf_common.artifacts import ArtifactReader
-from gf_common.card_instance import ActionConfigV3, corrected_card_instance_contract
+from gf_common.card_instance import (
+    ActionConfigV3,
+    is_corrected_contract,
+)
 from gf_common.card_instance_validation import reconcile_replay, replay_closure
 from gf_common.domain import (
     ContractError,
@@ -66,7 +70,7 @@ def _check(deadline: float) -> None:
 def _require_actions(loaded: LoadedConfig) -> None:
     config = loaded.config
     if (type(config.actions) is not ActionConfigV3
-            or config.actions.action_contract != corrected_card_instance_contract()
+            or not is_corrected_contract(config.actions.action_contract)
             or config.actions.max_sequence_length > 18 or not isinstance(config.run, RunConfigV2)):
         raise ContractError("corrected baseline collection requires the corrected contract and real18card limits")
 
@@ -220,7 +224,7 @@ async def run_inference(loaded: LoadedConfig, command: str) -> tuple[Path, Json]
     tree_runtime = any(type(model) is ConfiguredTreeModelV3 for model in neural)
     evidence = None
     if not tree_runtime:
-        evidence = CardInstanceRuntimeEvidence(Path(config.server.binary), Path(config.server.source_dir),
+        evidence = CardInstanceRuntimeEvidence(Path(config.server.binary), Path(config.server.source_dir),contract=config.actions.action_contract,
                                               deadline=preflight_deadline)
         evidence.preflight()
     from gf_common.card_instance_rules import card_instance_rules
@@ -238,7 +242,7 @@ async def run_inference(loaded: LoadedConfig, command: str) -> tuple[Path, Json]
             config.actions, rules=rules, **ownership_options)
     try:
         if evidence is None:
-            evidence = CardInstanceRuntimeEvidence(Path(config.server.binary), Path(config.server.source_dir),
+            evidence = CardInstanceRuntimeEvidence(Path(config.server.binary), Path(config.server.source_dir),contract=config.actions.action_contract,
                                                   deadline=preflight_deadline)
             evidence.preflight()
         bindings, labels = _baseline_labels(loaded, artifact_inputs=owner)
@@ -272,6 +276,7 @@ async def _run_corrected(loaded: LoadedConfig, command: str,
                          _final_validation_context: Any = None,
                          _hpo_evaluation_job: Any = None,
                          _hpo_evaluation_cleanup: Any = None,
+                         _rust_evaluation_data: Any = None,
                          resident_pool: Any = None, progress: Any = None, _owned_collection: Any = None) -> tuple[Path, Any] | PackedRunResult:
     config = loaded.config
     from gf_cli.hpo_config import HPOExperimentConfig
@@ -291,7 +296,12 @@ async def _run_corrected(loaded: LoadedConfig, command: str,
     elif _hpo_evaluation_job is not None:
         raise ContractError('evaluation job cannot authorize a training/final collection')
     assert isinstance(config.actions, ActionConfigV3)
-    require_storage_command(config, command, standalone=collection is None and owned_ledger is None)
+    if _rust_evaluation_data is None:
+        require_storage_command(config, command, standalone=collection is None and owned_ledger is None)
+    else:
+        if command != 'evaluate' or eval_plan is None:
+            raise ContractError('Rust evaluation DATA cannot authorize another collector role')
+        _require_rust_evaluation_storage(loaded, eval_plan, _hpo_evaluation_job, artifact_inputs, _rust_evaluation_data)
     if config.server.external_url is not None or config.server.source_dir is None:
         raise ContractError("corrected baseline collection requires locally managed verified source/binary evidence")
     started = time.monotonic() if started is None else started
@@ -301,7 +311,7 @@ async def _run_corrected(loaded: LoadedConfig, command: str,
     replay_deadline = work_deadline - config.server.cleanup_reserve_seconds
     execution_deadline = started + config.run.execution_seconds if collection is None else collection.execution_deadline
     preflight_deadline = min(execution_deadline, replay_deadline)
-    evidence = runtime_evidence or CardInstanceRuntimeEvidence(Path(config.server.binary), Path(config.server.source_dir), deadline=preflight_deadline)
+    evidence = runtime_evidence or CardInstanceRuntimeEvidence(Path(config.server.binary), Path(config.server.source_dir), contract=config.actions.action_contract, deadline=preflight_deadline)
     evidence.preflight()
     planned = (schedule(config.run.seeds, config.run.sampling_seeds, config.run.pairs_per_seed,
                         labels[0], labels[1], deadline=preflight_deadline)
@@ -334,6 +344,16 @@ async def _run_corrected(loaded: LoadedConfig, command: str,
     ledger = (ReservationLedger(config.run.global_cuda_budget_bytes, config.run.max_participant_workers)
               if owned_ledger is None else owned_ledger)
     extra: dict[str, Any] = {} if artifact_inputs is None else {"artifact_inputs": artifact_inputs}
+    game_events: list[Json]=[]
+    from gf_common.hpo_progress import observe
+    def game_observer(value: Json) -> None:
+        game_events.append(value)
+        observe(progress,{'game_lifecycle':value})
+    from gf_common.card_instance import SHARED_SIMULATOR_REVISION
+    diagnose_games=progress is not None or config.actions.action_contract.simulator_revision==SHARED_SIMULATOR_REVISION
+    if diagnose_games:extra['game_observer']=game_observer
+    service=None if ledger.service is None else ledger.service.owner
+    if service is not None:service._exchange({'command':'METRICS_RESET'})
     if resident_pool is not None:
         extra["resident_pool"] = resident_pool
     if _owned_collection is not None:
@@ -485,6 +505,12 @@ async def _run_corrected(loaded: LoadedConfig, command: str,
         summary = report(episodes, planned, bootstrap_samples=config.evaluation.bootstrap_samples,
             bootstrap_seed=config.evaluation.bootstrap_seed, wall_seconds=time.monotonic() - started,
             groups_health=[group.health for group in groups], deadline=work_deadline)
+        if diagnose_games:summary['game_lifecycle']={'scope':'actual-created-to-first-terminal-abort-or-retirement','events':game_events}
+        if service is not None:
+            service.quiesce()
+            summary['shared_service']=service.telemetry
+            observe(progress,{'shared_service':service.telemetry,'collection_boundary':'drained',
+                'collection_batch':None if collection is None else collection.linkage.get('batch_id')})
         # Every runtime clone checks its executed process and finalizes after reap.
         evidence.deadline = work_deadline
         evidence.preflight()
@@ -698,7 +724,7 @@ def _validate_online_collection(loaded: LoadedConfig, plan: CollectionPlan,
 
 
 async def collect_ppo(loaded: LoadedConfig, plan: CollectionPlan,
-                      ledger: ReservationLedger) -> FinalizedCollection:
+                      ledger: ReservationLedger, *, progress: Any = None) -> FinalizedCollection:
     """Same live parent's frozen plan; metadata cannot mint admission."""
     require_storage_command(loaded.config, "collect", standalone=False)
     _require_actions(loaded)
@@ -718,7 +744,7 @@ async def collect_ppo(loaded: LoadedConfig, plan: CollectionPlan,
     started = time.monotonic() if plan.started_monotonic is None else plan.started_monotonic
     work_deadline = plan.wall_deadline - config.run.report_reserve_seconds
     preflight_deadline = min(plan.execution_deadline, work_deadline - config.server.cleanup_reserve_seconds)
-    evidence = CardInstanceRuntimeEvidence(Path(config.server.binary), Path(config.server.source_dir),
+    evidence = CardInstanceRuntimeEvidence(Path(config.server.binary), Path(config.server.source_dir),contract=config.actions.action_contract,
                                           deadline=preflight_deadline)
     evidence.preflight()
     from gf_common.card_instance_rules import card_instance_rules
@@ -730,10 +756,14 @@ async def collect_ppo(loaded: LoadedConfig, plan: CollectionPlan,
                             config.preprocessing.memory_budget_mib * 1024**2),
         preflight_deadline=preflight_deadline, finalization_deadline=work_deadline)
     try:
-        admissions = [admit_game_workers_v3(config.actions,
+        if ledger.service is not None:
+            ledger.service.owner.controller.ensure(plan.bindings,owner)
+        admissions: list[Json] = [({'recipe':'shared-mlp-admission-v1','peak_cuda_bytes':ledger.cuda_bytes,
+            'workers':2*config.run.concurrency,'worker_resident_bytes':0,'service_cuda_bytes':ledger.service.resident_bytes}
+            if ledger.service is not None else admit_game_workers_v3(config.actions,
             (plan.bindings[spec.policies[0]], plan.bindings[spec.policies[1]]), rules=rules,
             game_concurrency=config.run.concurrency, global_cuda_bytes=config.run.global_cuda_budget_bytes,
-            max_workers=config.run.max_participant_workers, learner_cuda_bytes=ledger.cuda_bytes)
+            max_workers=config.run.max_participant_workers, learner_cuda_bytes=ledger.cuda_bytes))
             for group in plan.groups for spec in group.episodes]
         if not admissions:
             raise ContractError("empty frozen PPO collection schedule")
@@ -742,7 +772,7 @@ async def collect_ppo(loaded: LoadedConfig, plan: CollectionPlan,
         result = await _run_corrected(loaded, "collect", plan.bindings,
             tuple(plan.bindings), started=started, artifact_inputs=owner, runtime_evidence=evidence,
             resource_admission=max(admissions, key=lambda value: value["peak_cuda_bytes"]),
-            collection=plan, owned_ledger=ledger)
+            collection=plan, owned_ledger=ledger,progress=progress)
         if type(result) is PackedRunResult:
             from gf_training.collection import PackedFinalizedCollection
             return PackedFinalizedCollection(result.directory, result.report, result.locator,
@@ -780,7 +810,7 @@ async def collect_hpo_ppo(loaded: LoadedConfig,plan: CollectionPlan,ledger: Rese
     started=time.monotonic() if plan.started_monotonic is None else plan.started_monotonic
     work_deadline=plan.wall_deadline-config.run.report_reserve_seconds
     preflight_deadline=min(plan.execution_deadline,work_deadline-config.server.cleanup_reserve_seconds)
-    evidence=CardInstanceRuntimeEvidence(Path(config.server.binary),Path(config.server.source_dir),deadline=preflight_deadline)
+    evidence=CardInstanceRuntimeEvidence(Path(config.server.binary),Path(config.server.source_dir),contract=config.actions.action_contract,deadline=preflight_deadline)
     evidence.preflight()
     # The retained registry shares the parent phase envelope with its already
     # admitted immutable config/plan graphs; collection bytes use Pack's account.
@@ -791,14 +821,40 @@ async def collect_hpo_ppo(loaded: LoadedConfig,plan: CollectionPlan,ledger: Rese
         max_owned_bytes=min(parent_limit,config.model.resources.max_owned_bytes),
         preflight_deadline=preflight_deadline,finalization_deadline=work_deadline))
     try:
-        admissions=[admit_hpo_game_workers(config.actions,(plan.bindings[spec.policies[0]],plan.bindings[spec.policies[1]]),
+        if resident is not None and resident.shared_controller is not None:
+            resident.shared_controller.ensure(plan.bindings,owner)
+        admissions=[(resident.game_admission((plan.bindings[spec.policies[0]],plan.bindings[spec.policies[1]]))
+            if resident is not None else admit_hpo_game_workers(config.actions,(plan.bindings[spec.policies[0]],plan.bindings[spec.policies[1]]),
             rules=card_instance_rules(),game_concurrency=config.run.concurrency,global_cuda_bytes=config.run.global_cuda_budget_bytes,
-            max_workers=config.run.max_participant_workers,learner_cuda_bytes=ledger.learner.resident_bytes if pool is not None and ledger.learner is not None else ledger.cuda_bytes)
+            max_workers=config.run.max_participant_workers,learner_cuda_bytes=ledger.cuda_bytes))
             for group in plan.groups for spec in group.episodes]
         if not admissions: raise ContractError('HPO collection cannot have an empty schedule')
+        admission = max(admissions,key=lambda row:row['peak_cuda_bytes'])
+        if online.owned_registry is not None and pool is not None:
+            registry = online.owned_registry
+            source, phase = registry.budget, registry.parent_budget
+            # Existing reservation order is parent phase -> Source. Snapshot
+            # those SAME accounts once, before collector startup, without I/O.
+            with phase._lock, source._condition:
+                host: Json = {'scope':'coordinator admission bookkeeping, not physical memory',
+                    'sample':'before collector startup; peaks are account lifetime high-waters',
+                    'source':{'limit_bytes':source.limit,'used_bytes':source.used,'peak_bytes':source.peak},
+                    'parent_phase':{'limit_bytes':phase.limit,'used_bytes':phase.used,'peak_bytes':phase.peak,
+                        'relationship':'nested in source; already included in source charges'}}
+            host.update(external_graph_estimate_bytes=operating['parent_budget_bytes']-parent_limit,
+                external_graph_scope='existing materialized config/binding graph estimate outside Source; not a full parent-limit allocation',
+                external_scan_retained_bytes=(None if registry.external_controls is None else registry.external_controls.retained),
+                external_scan_scope='separate live coordinator SealedScan admission; not a Source charge',
+                collector_limit_bytes=operating['collector_budget_bytes'],
+                collector_scope='separate configured collector allowance; not measured current use',
+                child_phase_bounds={'numeric_bytes':operating['numeric_budget_bytes'],'save_bytes':operating['save_budget_bytes'],
+                    'scope':'declared phase bounds of one separate learner account; not independent physical allocations or measured child charges'},
+                legacy_ram_limit_bytes=operating['managed_ram_bytes'],
+                legacy_ram_scope='unchanged compatibility reservation, not physical demand')
+            admission['host_accounting'] = host
         result=await _run_corrected(loaded,'collect',plan.bindings,tuple(plan.bindings),started=started,
             artifact_inputs=owner,runtime_evidence=evidence,
-            resource_admission=max(admissions,key=lambda row:row['peak_cuda_bytes']),collection=plan,owned_ledger=ledger,progress=progress,
+            resource_admission=admission,collection=plan,owned_ledger=ledger,progress=progress,
             **({} if online.owned_registry is None else {'_owned_collection':online.owned_registry.capture}),
             **({} if pool is None else {'resident_pool':pool}))
         if online.owned_registry is not None:
@@ -822,6 +878,35 @@ def hpo_artifact_budget(loaded: LoadedConfig,bindings: dict[str,RuntimePolicyBin
     result=loaded.config.hpo_spec['operating']['parent_budget_bytes']-reserved
     if result<=0: raise ContractError('HPO parent metadata envelope exhausted before artifact custody')
     return result
+
+
+def _require_rust_evaluation_storage(loaded: LoadedConfig, plan: Any, job: Any,
+                                     artifacts: Any, data: Any) -> None:
+    from gf_cli.config import _require_hpo_model4_storage
+    from gf_cli.hpo_config import HPOExperimentConfig
+    from gf_cli.hpo_evaluation import HpoEvaluationPlan
+    from gf_models.card_instance_artifacts import RetainedGameArtifacts
+    from gf_training.hpo_gpu_lease import GpuJob
+    from gf_training.rust_player_evaluation import RustEvaluationData, final_policy_binding
+    if (type(data) is not RustEvaluationData or type(plan) is not HpoEvaluationPlan or type(job) is not GpuJob
+            or type(artifacts) is not RetainedGameArtifacts or data.job is not job or data.provider is not artifacts):
+        raise ContractError('actual SAME Rust evaluation DATA/provider/Fresh plan/job required')
+    plan.require(loaded, gpu_job=job)
+    data.require()
+    config = loaded.config
+    if (type(config) is not HPOExperimentConfig or config.hpo_spec['schema_version'] != 6
+            or getattr(config.run, 'inference_service', None) is not None):
+        raise ContractError('explicit schema6 Fresh validation storage required')
+    _require_hpo_model4_storage(config, 'evaluate', standalone=False)
+    state, metadata = json.loads(data._state), json.loads(data._metadata)
+    label, binding = final_policy_binding(state, metadata)
+    parent = plan.linkage['left_parent']
+    if (plan.bindings.get(label) != binding or parent['policy_label'] != label
+            or parent['run_path'] != str(data.directory) or parent['source_receipt_sha256'] != hashlib.sha256(data._metadata + b'\n').hexdigest()
+            or parent['training_seed'] != state['seed'] or data.binding['token'] != job.ticket
+            or any(parent[name] != data.binding[name] for name in
+                ('run_id', 'generation', 'inference_sha256', 'generation_sha256'))):
+        raise ContractError('Rust evaluation DATA differs from exact frozen Fresh request')
 
 
 def _require_hpo_evaluation_retirement(plan: HpoEvaluationPlan,gpu_job: GpuJob,
@@ -848,7 +933,8 @@ def _require_hpo_evaluation_retirement(plan: HpoEvaluationPlan,gpu_job: GpuJob,
 
 async def collect_hpo_evaluation(loaded: LoadedConfig, plan: HpoEvaluationPlan, *, gpu_job: GpuJob,
                                artifact_inputs: RetainedGameArtifacts,
-                               _cleanup_observation: _HpoEvaluationCleanupObservation, progress: Any = None) -> PackedRunResult:
+                               _cleanup_observation: _HpoEvaluationCleanupObservation, progress: Any = None,
+                               _rust_evaluation_data: Any = None) -> PackedRunResult:
     from gf_cli.hpo_evaluation import _HpoEvaluationCleanupObservation
     if type(_cleanup_observation) is not _HpoEvaluationCleanupObservation:
         raise ContractError('actual invocation-bound evaluation cleanup observation required')
@@ -858,7 +944,8 @@ async def collect_hpo_evaluation(loaded: LoadedConfig, plan: HpoEvaluationPlan, 
     observe(progress, {'phase':'evaluate'})
     try:
         result = await _collect_hpo_evaluation(loaded, plan, gpu_job=gpu_job,
-            artifact_inputs=artifact_inputs, _cleanup_observation=observation,**({} if progress is None else {'progress':progress}))
+            artifact_inputs=artifact_inputs, _cleanup_observation=observation,
+            **({} if _rust_evaluation_data is None else {'_rust_evaluation_data': _rust_evaluation_data}),**({} if progress is None else {'progress':progress}))
     except BaseException as error:
         observation._core_error, observation._core_phase = error, 'failed'
         raise
@@ -874,7 +961,8 @@ def _require_hpo_evaluation_policy(binding: RuntimePolicyBinding) -> None:
 
 async def _collect_hpo_evaluation(loaded: LoadedConfig,plan: HpoEvaluationPlan,*,gpu_job: GpuJob,
                                    artifact_inputs: RetainedGameArtifacts,
-                                   _cleanup_observation: _HpoEvaluationCleanupObservation, progress: Any = None) -> PackedRunResult:
+                                   _cleanup_observation: _HpoEvaluationCleanupObservation, progress: Any = None,
+                                   _rust_evaluation_data: Any = None) -> PackedRunResult:
     """Borrow the outer evaluator's exact custody owner through the one collector."""
     from gf_cli.hpo_config import HPOExperimentConfig
     from gf_cli.hpo_evaluation import HpoEvaluationPlan, ResidentHpoEvaluationPlan
@@ -891,7 +979,10 @@ async def _collect_hpo_evaluation(loaded: LoadedConfig,plan: HpoEvaluationPlan,*
         raise ContractError('evaluation requires concrete corrected packed HPO validation runtime')
     if canonical(loaded.effective)!=canonical(asdict(config)) or loaded.sha256!=digest(loaded.effective):
         raise ContractError('evaluation caller changed its effective configuration')
-    require_storage_command(config,'evaluate',standalone=False)
+    if _rust_evaluation_data is None:
+        require_storage_command(config,'evaluate',standalone=False)
+    else:
+        _require_rust_evaluation_storage(loaded, plan, gpu_job, artifact_inputs, _rust_evaluation_data)
     _require_actions(loaded)
     op=config.hpo_spec['operating']
     ledger=gpu_job.ledger
@@ -911,7 +1002,7 @@ async def _collect_hpo_evaluation(loaded: LoadedConfig,plan: HpoEvaluationPlan,*
     retained=(artifact_inputs.retained_bytes if type(artifact_inputs) is OwnedGameArtifacts else artifact_inputs._scan.peak)
     if retained>hpo_artifact_budget(loaded,bindings):
         raise ContractError('evaluation artifact custody exceeds additional parent envelope')
-    evidence=CardInstanceRuntimeEvidence(Path(config.server.binary),Path(config.server.source_dir),
+    evidence=CardInstanceRuntimeEvidence(Path(config.server.binary),Path(config.server.source_dir),contract=config.actions.action_contract,
         deadline=min(plan.execution_deadline,plan.work_deadline-config.server.cleanup_reserve_seconds))
     evidence.preflight()
     admissions=[admit_hpo_game_workers(config.actions,(bindings[spec.policies[0]],bindings[spec.policies[1]]),
@@ -930,6 +1021,7 @@ async def _collect_hpo_evaluation(loaded: LoadedConfig,plan: HpoEvaluationPlan,*
             artifact_inputs=artifact_inputs,runtime_evidence=evidence,resource_admission=max(admissions,key=lambda row:row['peak_cuda_bytes']),
             collection=plan,owned_ledger=ledger,_hpo_evaluation_job=gpu_job,
             _hpo_evaluation_cleanup=_cleanup_observation,progress=progress,
+            **({} if _rust_evaluation_data is None else {'_rust_evaluation_data': _rust_evaluation_data}),
             **({} if resident_runtime is None else {'resident_pool':resident_runtime.pool}))
     finally:
         from gf_common.hpo_progress import observe
@@ -973,7 +1065,7 @@ async def collect_owned_final_validation(context: Any) -> Any:
     config = loaded.config
     work_deadline = plan.wall_deadline - config.run.report_reserve_seconds
     preflight_deadline = min(plan.execution_deadline, work_deadline - config.server.cleanup_reserve_seconds)
-    evidence = CardInstanceRuntimeEvidence(Path(config.server.binary), Path(config.server.source_dir), deadline=preflight_deadline)
+    evidence = CardInstanceRuntimeEvidence(Path(config.server.binary), Path(config.server.source_dir), contract=config.actions.action_contract, deadline=preflight_deadline)
     evidence.preflight()
     from gf_common.card_instance_rules import card_instance_rules
     from gf_models.card_instance_artifacts import RetainedGameArtifacts

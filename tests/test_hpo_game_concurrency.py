@@ -46,7 +46,8 @@ def test_expanded_materialization_lineage_and_all_managed_resource_phases(tmp_pa
     assert large['worker_bytes'] == (games//2)*small['worker_bytes']
     if resident:
         assert large['cache_weight_bytes'] == (games//2)*small['cache_weight_bytes']
-        assert large['staging_bytes'] == (games//2)*small['staging_bytes']
+        assert large['begin_staging_bytes'] == (games//2)*small['begin_staging_bytes']
+        assert large['staging_bytes'] == small['staging_bytes']
         assert all(large['ram_phases'][phase] > small['ram_phases'][phase] for phase in small['ram_phases'])
     for resource, limit in (('managed_ram_bytes', 'peak_ram_bytes'), ('managed_cuda_bytes', 'peak_cuda_bytes')):
         refused = replace(after.config, operating=replace(after.config.operating, **{resource: large[limit]-1}))

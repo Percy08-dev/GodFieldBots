@@ -229,7 +229,10 @@ class StructuredLearningProcess(LearningProcess):
                 raise ContractError('wire3 update before initialization')
             resident_authority = getattr(getattr(self, '_issued_handle', None), 'resident_authority', None)
             if resident_authority is None:
-                self.ledger.begin_update(0)
+                if self.ledger.service is not None:
+                    service=self.ledger.service
+                    self.ledger.begin_shared_update(0,service=service,quiescence=service.owner.quiesce())
+                else:self.ledger.begin_update(0)
             else:
                 from gf_training.hpo_gpu_lease import _AuditedLedger
                 if type(self.ledger) is not _AuditedLedger:

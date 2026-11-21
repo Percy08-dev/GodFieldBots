@@ -179,6 +179,10 @@ def test_packed_proof2_and_full_own_input_numeric_parity(tmp_path: Path) -> None
         files = lambda folder: {p.name: sha256(p) for p in folder.iterdir()}
         assert files(tmp_path / 'reference') == files(tmp_path / 'packed')
         assert actual.proof['schema_version'] == 2
+        from gf_common.group_pack_game import checked_packed_proof
+        checked_packed_proof(actual.proof)
+        with pytest.raises(ContractError):
+            checked_packed_proof(actual.proof | {'service_usage':{}})
         assert actual.proof['kind'] == 'card-instance-packed-original-source-proof'
         assert actual.proof['source_set_sha256'] == digest(actual.proof['files'])
         assert actual.proof['custody'] == original.custody

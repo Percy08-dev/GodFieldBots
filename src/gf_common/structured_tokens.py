@@ -288,9 +288,17 @@ def tokenize_table(table: CandidateTable, frame: DecisionFrame, max_positions: i
         raise ContractError("raw candidate tokenizer layout mismatch")
     integer(max_positions, 1, 128)
     table.validate(frame)
+    return _encode_candidate_tokens(table, frame.frame_hash, max_positions,
+        aggregate_window=aggregate_window, aggregate_recipe=aggregate_recipe, layout=layout)
+
+
+def _encode_candidate_tokens(table: CandidateTable, frame_hash: str, max_positions: int, *,
+                             aggregate_window: int, aggregate_recipe: str | None,
+                             layout: StructuredLayout) -> CandidateTokens:
+    """Canonical encoding body; callers establish full original pair validation."""
     if any(b - a > max_positions for a, b in zip(table.offsets[:-1], table.offsets[1:], strict=True)):
         raise ContractError("candidate token position capacity exceeded")
-    return CandidateTokens(table.table_hash, frame.frame_hash, signature(aggregate_window, aggregate_recipe=aggregate_recipe, layout=layout),
+    return CandidateTokens(table.table_hash, frame_hash, signature(aggregate_window, aggregate_recipe=aggregate_recipe, layout=layout),
                            tuple(category(kind, layout.action_kinds) for kind in table.kinds),
                            tuple(category(target, layout.targets) for target in table.targets), table.numerics,
                            table.presence, table.offsets, table.slots)

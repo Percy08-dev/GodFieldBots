@@ -146,7 +146,7 @@ def test_decode_admission_failure_does_not_leave_unbacked_live_receipt(paused_pa
     reserve=account.reserve
     primary=ValueError('decode admission denied before allocation')
     def denied(size,**options):
-        if inspect.currentframe().f_back.f_code.co_name=='_decode_bank': raise primary
+        if inspect.currentframe().f_back.f_code.co_name=='_decode_banks_data': raise primary
         return reserve(size,**options)
     monkeypatch.setattr(account,'reserve',denied)
     try:

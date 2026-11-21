@@ -15,7 +15,7 @@ from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Any
 
-from gf_common.card_instance import CORRECTED_REVIEWED_SPEC_HASHES, ActionConfigV3, action_config_v3
+from gf_common.card_instance import ActionConfigV3, action_config_v3, reviewed_specs
 from gf_common.card_instance_rules import card_instance_rules
 from gf_common.domain import ContractError, Json, canonical, closed, digest, integer
 from gf_common.group_pack_game import checked_storage_binding
@@ -24,7 +24,6 @@ from gf_common.hpo_resident import (
     RESIDENT_VARIANT,
     cache_owner,
     is_resident,
-    resident_runtime,
 )
 from gf_common.preprocessing import preparation_config
 from gf_common.structured_layout import CORRECTED_CARD_INSTANCE_LAYOUT as LAYOUT
@@ -110,21 +109,47 @@ def _path(value: Any) -> None:
 
 def hpo_spec(state: Json) -> Json:
     """Parse the sole immutable spec; this grants no live or original authority."""
+    if state.get("run_variant") == "hpo-ppo-owned-rust-player-v1":
+        raise ContractError("Rust player has its own closed Source/lineage reader")
+    return _checked_hpo_spec(state)
+
+
+def rust_player_hpo_spec(config: Json) -> Json:
+    """Data-only spec6 validation; never grants legacy Source authority."""
+    return _checked_hpo_spec({"effective_config": config,
+        "run_variant": "hpo-ppo-owned-rust-player-v1",
+        "hpo_spec_sha256": digest(config.get("hpo_spec"))})
+
+
+def _checked_hpo_spec(state: Json) -> Json:
     config = state.get("effective_config")
     if type(config) is not dict:
         raise ContractError("HPO effective config required")
     from gf_common.training_opponents import training_opponents
     mixed = training_opponents(config)
+    rust_player = state.get('run_variant') == 'hpo-ppo-owned-rust-player-v1'
     resident = is_resident(state)
-    owned = state.get("run_variant") == "hpo-ppo-owned-v1"
+    owned = rust_player or state.get("run_variant") in ('hpo-ppo-owned-v1','hpo-ppo-owned-shared-v1')
     spec = closed(config.get("hpo_spec"), {"schema_version", "kind", "decision_budget", "training_recipe",
         "effective_settings_sha256", "base_config_sha256", "campaign_config_sha256", "study_identity",
-        "operating", "storage", "selection_version", "deadline_version", "deadline_inputs"} | ({"training_opponents"} if mixed is not None else set()) | ({"runtime"} if resident else set()) | ({"origin","encoder"} if owned else set()))
-    expected_schema = 4 if owned else 3 if resident else 2 if mixed is not None else 1
+        "operating", "storage", "selection_version", "deadline_version", "deadline_inputs"} | ({"training_opponents"} if mixed is not None else set()) | ({"runtime"} if resident or rust_player else set()) | ({"origin","encoder"} if owned else set()))
+    expected_schema = 6 if rust_player else 5 if state.get('run_variant')=='hpo-ppo-owned-shared-v1' else 4 if owned else 3 if resident else 2 if mixed is not None else 1
     integer(spec["schema_version"], expected_schema, expected_schema)
+    if expected_schema in (5, 6):
+        from gf_common.card_instance import shared_card_instance_contract
+        if (action_config_v3(config['actions']).action_contract!=shared_card_instance_contract()
+                or config['model'].get('model_id')!='mlp' or config['model'].get('inference',{}).get('device')!='cuda:0'
+                or config['preprocessing'].get('backend')!='python'):
+            raise ContractError('shared HPO requires the adopted-profile Python CUDA MLP contract')
+    if rust_player:
+        from gf_common.rust_player import player_runtime
+        player_runtime(spec["runtime"], game_concurrency=spec["operating"]["game_concurrency"])
     if resident:
-        resident_runtime(spec["runtime"])
-    if owned and (spec["origin"]!="producer-owned-v1" or spec["encoder"]!="canonical-python"):
+        from gf_common.shared_inference import runtime_for_spec
+        runtime_for_spec(spec)
+    from gf_common.rust_ppo_source import source_encoder
+    encoder = source_encoder(config) if rust_player else 'canonical-python'
+    if owned and (spec["origin"]!="producer-owned-v1" or spec["encoder"]!=encoder):
         raise ContractError("owned origin/encoder mismatch")
     if (spec["kind"] != "ppo-hpo-run" or spec["selection_version"] != SELECTION_VERSION
             or spec["deadline_version"] != "hpo-deadline-v1"):
@@ -133,9 +158,13 @@ def hpo_spec(state: Json) -> Json:
     hpo_training_config(spec["training_recipe"])
     for name in ("effective_settings_sha256", "base_config_sha256", "campaign_config_sha256", "study_identity"):
         checksum(spec[name])
-    operating = closed(spec["operating"], _OPERATING)
-    for value in operating.values():
-        integer(value, 1, 2**63 - 1)
+    timed_native = rust_player and 'post_host_seconds' in spec['operating']
+    operating = closed(spec["operating"], _OPERATING | ({'post_host_seconds'} if timed_native else set()))
+    for name, value in operating.items():
+        if name == 'post_host_seconds':
+            _number(value, positive=True)
+        else:
+            integer(value, 1, 2**63 - 1)
     integer(operating["game_concurrency"], 1, 2**63 - 1)
     integer(operating["max_participant_workers"], 1, 2**63 - 1)
     integer(operating["trial_concurrency"], 1, 1)
@@ -184,7 +213,11 @@ def _runtime_training(value: Json, spec: Json) -> PPOTrainingConfig:
 
 
 def _run_projection(config: Json, spec: Json, training: PPOTrainingConfig) -> tuple[float,float,float]:
-    run = closed(config["run"], _RUN)
+    from gf_common.rust_ppo_source import source_mode
+    timed_native = spec['schema_version'] == 6 and 'post_host_seconds' in spec['operating']
+    mode = spec['schema_version'] == 6 and source_mode(config) is not None
+    run = closed(config["run"], _RUN | ({'post_host_seconds'} if timed_native else set())
+        | ({'ppo_source'} if mode else set()))
     if run["split"] != "train":
         raise ContractError("HPO requires training split")
     operating = spec['operating']
@@ -197,6 +230,9 @@ def _run_projection(config: Json, spec: Json, training: PPOTrainingConfig) -> tu
     wall = inputs["run_wall_seconds"]
     final = inputs["base_finalization_seconds"]
     execute = wall - final
+    if timed_native and (run['post_host_seconds'] != operating['post_host_seconds']
+            or not 0 < _number(run['post_host_seconds'], positive=True) < wall - execute):
+        raise ContractError('HPO native post_host_seconds projection differs from operating allocation')
     admission = execute * (inputs["base_admission_seconds"] / inputs["base_execution_seconds"])
     expected = {"wall_seconds": wall, "execution_seconds": execute,
         "admission_seconds": admission, "finalization_seconds": final}
@@ -229,7 +265,7 @@ def hpo_state(state: Json) -> tuple[ActionConfigV3, ModelConfigV4, PPOTrainingCo
     packed = "storage_binding" in state
     closed(state, HPO_RUN_FIELDS | ({"storage_binding"} if packed else set()), RUN_OPTIONAL)
     integer(state["schema_version"], 5, 5)
-    if (state["algorithm"] != "ppo" or state["run_variant"] not in ("hpo-ppo-v1", RESIDENT_VARIANT, "hpo-ppo-owned-v1")
+    if (state["algorithm"] != "ppo" or state["run_variant"] not in ("hpo-ppo-v1", RESIDENT_VARIANT, "hpo-ppo-owned-v1", "hpo-ppo-owned-shared-v1")
             or state["model_version"] != "4" or state["input_recipe"] != LAYOUT.input_recipe
             or state["status"] not in ("running", "paused", "incomplete", "complete")):
         raise ContractError("healthy exact HPO Run5 required")
@@ -282,7 +318,11 @@ def hpo_state(state: Json) -> tuple[ActionConfigV3, ModelConfigV4, PPOTrainingCo
             or settings.memory_budget_mib * 1024**2 > spec["operating"]["source_budget_bytes"]):
         raise ContractError("HPO source reader/memory projection mismatch")
     _deadlines(state, spec, training)
-    execution = closed(state["execution"], {"learner", "inference"})
+    shared_mode=state['run_variant']=='hpo-ppo-owned-shared-v1'
+    execution = closed(state["execution"], {"learner", "inference"} | ({'service'} if shared_mode else set()))
+    if shared_mode:
+        from gf_common.shared_inference import SHARED_ADMISSION, SHARED_LIBRARIES, runtime_for_spec
+        _same(execution['service'],{'runtime':runtime_for_spec(spec),'admission_recipe':SHARED_ADMISSION,'libraries':dict(SHARED_LIBRARIES),'record_version':2},'shared execution mismatch')
     for role, device in (("learner", training.device), ("inference", configured.inference.device)):
         declared = closed(execution[role], {"binding", "cuda_visible_devices"})
         expected = replace(configured.inference, device=device)
@@ -293,7 +333,7 @@ def hpo_state(state: Json) -> tuple[ActionConfigV3, ModelConfigV4, PPOTrainingCo
     if type(identity) is not dict or not identity:
         raise ContractError("HPO recorded source/runtime identity required")
     integration = closed(identity.get("integration"), {"binary_sha256", "server_config_sha256",
-        "declared_simulator_revision", "source_revision", "source_spec_sha256"}, {"binary_build_revision"})
+        "declared_simulator_revision", "source_revision", "source_spec_sha256"}, {"binary_build_revision","source_dirty"})
     from gf_common.card_instance_runtime import APPROVED_BINARY_SHA256
     if type(config["server"]) is not dict or config["server"].get("external_url") is not None:
         raise ContractError("HPO requires recorded locally owned Simulator runtime")
@@ -302,8 +342,10 @@ def hpo_state(state: Json) -> tuple[ActionConfigV3, ModelConfigV4, PPOTrainingCo
             or integration.get("declared_simulator_revision") != actions.action_contract.simulator_revision
             or config["server"].get("simulator_revision") != actions.action_contract.simulator_revision):
         raise ContractError("HPO recorded Simulator identity mismatch")
+    if actions.action_contract.simulator_revision=='072dabbca1458c9526897781d2fd64edeeb4f9ca' and integration.get('source_dirty') is not False:
+        raise ContractError('shared-profile source cleanliness evidence required')
     checksum(integration.get("server_config_sha256"))
-    _same(integration.get("source_spec_sha256"), dict(CORRECTED_REVIEWED_SPEC_HASHES), "HPO recorded spec hashes mismatch")
+    _same(integration.get("source_spec_sha256"), reviewed_specs(actions.action_contract), "HPO recorded spec hashes mismatch")
     preprocessing = identity.get("preprocessing", {})
     if settings.backend == "python":
         _same(preprocessing, {"backend": "python", "reader_contract": "participant-structured-v2",
@@ -346,10 +388,13 @@ def hpo_state(state: Json) -> tuple[ActionConfigV3, ModelConfigV4, PPOTrainingCo
         if not state["invocations"]:
             raise ContractError("HPO closed run requires learner cleanup history")
     for invocation in state["invocations"]:
-        closed(invocation, {"mode", "elapsed_seconds", "child_health"})
+        shared=state.get('run_variant')=='hpo-ppo-owned-shared-v1'
+        closed(invocation, {"mode", "elapsed_seconds", "child_health"} | ({'shared_service'} if shared else set()))
         if invocation["mode"] not in ("fresh", "resume"):
             raise ContractError("HPO invocation mode invalid")
         _number(invocation["elapsed_seconds"])
+        if (shared and status=='running' and invocation is state['invocations'][-1]
+                and invocation['shared_service'].get('finished') is False and invocation['child_health']=={}):continue
         health = closed(invocation["child_health"], {"exit_code", "stderr_bytes"})
         integer(health["exit_code"], 0, 0)
         integer(health["stderr_bytes"], 0)
@@ -382,7 +427,7 @@ def _rng(value: Json) -> None:
 
 def _generation(record: Json, state: Json, number: int, parent: str | None,
                 previous: Json | None, pool: list[int]) -> list[int]:
-    owned=state['run_variant']=='hpo-ppo-owned-v1'
+    owned=state['run_variant'] in ('hpo-ppo-owned-v1','hpo-ppo-owned-shared-v1')
     shared={'model_id','model_version','input_recipe','hpo_spec_sha256',*_CLASSIFICATION}
     closed(record, (HPO_GENERATION_FIELDS-shared)|{'origin','encoder','snapshot_identity'} if owned else HPO_GENERATION_FIELDS)
     integer(record['schema_version'], 5 if owned else 4, 5 if owned else 4)
@@ -1124,7 +1169,7 @@ def validate_hpo_chain(directory: Path, *, require_complete: bool = False, max_o
             raise ContractError("HPO chain requires SAME admitted open parent scan")
         scan.deadline = min(scan.deadline, deadline)
         state = scan.object(directory / "run.json")
-        if state.get('run_variant')=='hpo-ppo-owned-v1':
+        if state.get('run_variant') in ('hpo-ppo-owned-v1','hpo-ppo-owned-shared-v1'):
             from gf_training.hpo_owned_restore import _read_owned_metadata, audit_owned_artifacts
             owned_state,owned_records,owned_registry=_read_owned_metadata(scan,require_complete=require_complete)
             audit_owned_artifacts(scan,owned_state,owned_records,owned_registry)

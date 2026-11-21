@@ -71,6 +71,11 @@ class TerminationReceipt:
 
 
 @dataclass(frozen=True)
+class SharedTerminationReceipt(TerminationReceipt):
+    services: tuple[Json, ...]
+
+
+@dataclass(frozen=True)
 class RestartReceipt:
     schema_version: int
     kind: str
@@ -261,6 +266,10 @@ class _Lock:
 
 
 def _admission(value: Json, ticket: str) -> None:
+    if type(value.get("schema_version")) is int and value["schema_version"] == 2:
+        from gf_common.rust_player import validate_global_admission
+        validate_global_admission(value, ticket)
+        return
     closed(value, {"schema_version", "kind", "ticket", "context", "boot_id", "owner_pid", "admitted_unix"})
     if type(value["schema_version"]) is not int or value["schema_version"] != 1 or value["kind"] != "hpo-gpu-admission" or value["ticket"] != ticket:
         raise ContractError("mismatched GPU admission record")
@@ -271,9 +280,15 @@ def _admission(value: Json, ticket: str) -> None:
     _time(value["admitted_unix"])
 
 
-def _termination(value: Json, admission: Json) -> TerminationReceipt:
-    closed(value, {"schema_version", "kind", "ticket", "admission_sha256", "context_sha256", "boot_id", "confirmed_unix", "resources"})
-    if (type(value["schema_version"]) is not int or value["schema_version"] != 1 or value["kind"] != "hpo-gpu-termination"
+def _termination(value: Json, admission: Json) -> TerminationReceipt | Json:
+    if type(value.get("schema_version")) is int and value["schema_version"] == 3:
+        from gf_common.rust_player import validate_global_termination
+        return validate_global_termination(value, admission)
+    if admission.get("schema_version") != 1:
+        raise ContractError("legacy physical proof cannot resolve supervised admission")
+    shared=type(value.get("schema_version")) is int and value["schema_version"]==2
+    closed(value, {"schema_version", "kind", "ticket", "admission_sha256", "context_sha256", "boot_id", "confirmed_unix", "resources"} | ({"services"} if shared else set()))
+    if (type(value["schema_version"]) is not int or value["schema_version"] not in (1,2) or value["kind"] != "hpo-gpu-termination"
             or value["ticket"] != admission["ticket"] or value["admission_sha256"] != digest(admission)
             or value["context_sha256"] != digest(admission["context"]) or value["boot_id"] != admission["boot_id"]):
         raise ContractError("GPU termination receipt identity mismatch")
@@ -296,6 +311,23 @@ def _termination(value: Json, admission: Json) -> TerminationReceipt:
         if (resource["outcome"] == "reaped") != (resource["pid"] is not None):
             raise ContractError("resource outcome/PID mismatch")
         resources.append(ResourceTermination(**resource))
+    if shared:
+        if type(value['services']) is not list or len(value['services'])!=1:
+            raise ContractError('shared termination requires exactly one service')
+        service=closed(value['services'][0],{'key','service_id','broker_pid','broker_outcome','gpu_pid','gpu_outcome',
+            'gpu_exitcode','registration_sha256','retirement_sha256'})
+        _ticket(service['service_id'])
+        integer(service['key'],1,1)
+        for name in ('registration_sha256','retirement_sha256'):_sha(service[name])
+        if service['broker_outcome']==service['gpu_outcome']=='never_started':
+            if service['broker_pid'] is not None or service['gpu_pid'] is not None or service['gpu_exitcode'] is not None:
+                raise ContractError('shared never-started proof cannot contain a returned process')
+        else:
+            for prefix in ('broker','gpu'):
+                if service[prefix+'_outcome']!='reaped':raise ContractError('shared service requires actual composite reap')
+                integer(service[prefix+'_pid'],1)
+            if type(service['gpu_exitcode']) is not int:raise ContractError('shared GPU original exitcode required')
+        return SharedTerminationReceipt(**{**value,'resources':tuple(resources),'services':(service,)})
     return TerminationReceipt(**{**value, "resources": tuple(resources)})
 
 
@@ -376,6 +408,22 @@ def _scan(lock: _Lock, *, allow_missing_current: bool = False) -> dict[str, tupl
     return jobs
 
 
+def require_resolved_namespace() -> None:
+    """Check existing admission resolution under its actual lock, without a job.
+
+    Operator restart/release retains the scan's existing admission meaning; this
+    does not issue or replace any independent physical-termination evidence.
+    """
+    lock = _Lock()
+    try:
+        jobs = _scan(lock)
+        unresolved = [ticket for ticket, (_record, resolved) in jobs.items() if not resolved]
+        if unresolved:
+            raise RecoveryRequired('RECOVERY_REQUIRED: ' + ','.join(sorted(unresolved)))
+    finally:
+        lock.close()
+
+
 class _AuditedLedger(ReservationLedger):
     _MAX_GLOBAL_CUDA_BYTES = 2**63 - 1
     _MAX_WORKERS = 2**63 - 1
@@ -384,10 +432,12 @@ class _AuditedLedger(ReservationLedger):
         super().__init__(global_cuda_bytes, max_workers)
         self._job = job
         self._history: list[_Worker | _Learner] = []
+        self._service_history: list[Any]=[]
         self._resident_pool: Any = None
         self._resident_temporary = 0
         self._resident_update = False
         self._resident_transition: Any = None
+        self._resident_begin_imports: dict[int, _Worker] = {}
 
     def reserve_worker(self, resident_bytes: int) -> WorkerReservation:
         self._job._require_open()
@@ -404,6 +454,21 @@ class _AuditedLedger(ReservationLedger):
         except BaseException:
             self._job._poisoned = True
             raise
+
+    def reserve_service(self,resident_bytes: int,owner: Any) -> Any:
+        self._job._require_open()
+        token=super().reserve_service(resident_bytes,owner)
+        self._service_history.append(token)
+        return token
+
+    def _service_retirement(self) -> tuple[Json,...]:
+        result=[]
+        for service in self._service_history:
+            if not service.released or service.proof is None:
+                raise ContractError('shared GPU/broker original retirement remains unconfirmed')
+            service.owner.require_retirement(service.proof)
+            result.append(service.proof)
+        return tuple(result)
 
     def reserve_learner(self, resident_bytes: int, owner: Any) -> LearnerReservation:
         self._job._require_open()
@@ -429,12 +494,15 @@ class _AuditedLedger(ReservationLedger):
         self._job._require_open()
         if self._resident_pool is not None:
             self._resident_pool._require()
+        if self._resident_begin_imports:
+            raise ContractError('learner update overlaps resident BEGIN import')
         super().begin_update(temporary_bytes)
 
 
     @property
     def cuda_bytes(self) -> int:
-        return super().cuda_bytes + getattr(self, '_resident_temporary', 0)
+        return (super().cuda_bytes + getattr(self, '_resident_temporary', 0)
+                + sum(worker._resident_begin_bytes for worker in self._resident_begin_imports.values()))
 
     def _parked(self, authority: Any) -> None:
         from gf_training.hpo_resident import ParkedAuthority
@@ -445,8 +513,12 @@ class _AuditedLedger(ReservationLedger):
 
     def begin_resident_update(self, temporary_bytes: int, *, authority: Any) -> None:
         self._parked(authority)
+        if self.service is not None:
+            self.begin_shared_update(temporary_bytes,service=self.service,quiescence=self.service.owner.quiesce())
+            return
         integer(temporary_bytes, 0, self.global_cuda_bytes)
-        if self.updating or self._resident_transition or self._resident_temporary or self.cuda_bytes + temporary_bytes > self.global_cuda_bytes:
+        if (self.updating or self._resident_transition or self._resident_temporary or self._resident_begin_imports
+                or self.cuda_bytes + temporary_bytes > self.global_cuda_bytes):
             raise ContractError('resident update/transition overlaps or exceeds shared CUDA budget')
         self._resident_temporary = temporary_bytes
         self._resident_update = self.updating = True
@@ -484,6 +556,8 @@ def _actual_process(process: Any, owner: Any) -> None:
 
 
 class _Worker(WorkerReservation):
+    _resident_begin_bytes: int = 0
+    _resident_begin_epoch: tuple[int, int] | None = None
     _owner: Any = None
     _process: Any = None
     _proof: ResourceTermination | None = None
@@ -696,11 +770,13 @@ class GpuJob:
             raise ContractError('SAME unpoisoned already-confirmed termination receipt required')
         ledger=self._ledger
         proofs=tuple(token._proof for token in ledger._history)
-        if (ledger.workers or ledger.learner is not None or ledger.updating or ledger._resident_temporary
-                or ledger._resident_transition or len(proofs)!=len(receipt.resources)
+        if (ledger.service is not None or ledger.workers or ledger.learner is not None or ledger.updating or ledger._resident_temporary
+                or ledger._resident_transition or ledger._resident_begin_imports or len(proofs)!=len(receipt.resources)
                 or any(not token.released or token.creation_pending or token._proof is None for token in ledger._history)
                 or any(proof is not recorded for proof,recorded in zip(proofs,receipt.resources,strict=True))):
             raise ContractError('confirmed termination original resource history changed')
+        services=ledger._service_retirement()
+        if services!=getattr(receipt,'services',()):raise ContractError('shared termination history changed')
         path=self._lock.root/'jobs'/self.ticket/'termination.json'
         if _termination(_read(path),self._admission)!=receipt:
             raise ContractError('original confirmed durable termination receipt changed')
@@ -716,11 +792,12 @@ class GpuJob:
             return self._receipt
         self._require_open()
         ledger = self._ledger
-        if ledger.workers or ledger.learner is not None or ledger.updating or ledger._resident_temporary or ledger._resident_transition or any(
+        if ledger.service is not None or ledger.workers or ledger.learner is not None or ledger.updating or ledger._resident_temporary or ledger._resident_transition or ledger._resident_begin_imports or any(
                 not token.released or token.creation_pending or token._proof is None for token in ledger._history):
             raise ContractError("GPU resource creation/reap/update remains unconfirmed")
         if ledger._resident_pool is not None:
             ledger._resident_pool.require_resource_retirement(self,ledger)
+        services=ledger._service_retirement()
         self._sealed = True
         try:
             path = self._lock.root / "jobs" / self.ticket
@@ -732,6 +809,8 @@ class GpuJob:
             receipt = TerminationReceipt(1, "hpo-gpu-termination", self.ticket, digest(self._admission),
                 digest(self._admission["context"]), self._admission["boot_id"], time.time(),
                 tuple(token._proof for token in ledger._history if token._proof is not None))
+            if services:
+                receipt=SharedTerminationReceipt(**{**asdict(receipt),"resources":receipt.resources,"schema_version":2},services=services)
             _write(path / "termination.json", asdict(receipt), immutable=True)
             self._receipt = receipt
             return receipt
