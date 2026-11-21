@@ -1,7 +1,7 @@
 # 0057 Rust-owned PPO training data and sealed collection verification
 
-Status — experimental. The design passed independent preimplementation review.
-Default adoption requires the measurements and acceptance checks below.
+Status — Accepted and implemented in `1268781` for the measured Model3 and
+Model4 configurations. The mode is selected by its explicit configuration.
 
 ## Context
 
@@ -29,7 +29,7 @@ The operation verifier provides `--full-source-audit` for complete original
 and numerical comparison. A past run resumes with its saved config and
 producer identity.
 
-The experimental selector is `[run.ppo_source]` for Model3 and `[ppo_source]`
+The selector is `[run.ppo_source]` for Model3 and `[ppo_source]`
 for a schema 6 Model4 campaign. Both take `training_data = "rust-ppo-training-v1"`
 and `audit = "sealed-pack-sha256-v1"`. Model4 also declares
 `encoder = "canonical-rust"` at the campaign root.
@@ -54,6 +54,7 @@ checkpoint and rollout array layouts retain their established representations.
 
 The [design](../design/rust-ppo-training-data.md) records the information and
 ownership boundaries. The [verification record](../verification/rust-ppo-training-data.md)
-records parity, operational checks and the comparison against `aab5f35`. Both
-workloads must improve median whole-invocation time within their original
-resource limits for adoption.
+records parity, operational checks and the comparison against `aab5f35`.
+Independent correctness and conformance reviews cleared the implementation.
+Both workloads passed the median whole-invocation time gate within their
+original resource limits.

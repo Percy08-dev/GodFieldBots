@@ -14,6 +14,10 @@
 
 ## 一覧
 
+[0057](0057-rust-ppo-training-data.md) — Accepted。Model3・Model4 の Rust 対戦経路で
+学習配列と GAE を構築し、通常監査では封印済み Pack を SHA-256 で照合する。
+同一入力、保存・再開、Model4 評価への引き継ぎと実機比較を確認済み。
+
 [0056](0056-ordinary-rust-ppo-update.md) — Accepted。通常 Rust Model3 に版付きの
 PPO 更新設定を追加し、対戦収集、学習、保存後の監査で同じ条件を使う。
 

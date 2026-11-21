@@ -15,24 +15,97 @@ The architecture reviewer cleared the live and saved designs before
 implementation. The review resolved the shared recording budget, the
 pre-seal versus post-seal evidence boundary and the Model4 empty marker.
 
-## Baseline recordings
+## Numerical and operational verification
 
-Baseline trials were run sequentially on an RTX 5070 Ti with the same pin,
-seed 17 and the existing original resource and measurement settings.
+- Model3 used an actual supervised 16-game collection with 230 learner and
+  436 all-seat decisions. Eight games shared one checkpoint across both
+  seats. The Python reconstruction matched row/seat/candidate order,
+  selection, old logprob/value and features exactly. Advantage and value
+  target passed with `atol=rtol=1e-6`. With the GPU-shaped group planner on
+  CPU, the first and tail losses at logical widths 64 and 128 and the
+  singleton loss matched exactly. Tail sizes were 38 and 102.
+- Model4 used an actual CUDA run with 174 collected and 64 selected
+  decisions. Its explicit audit reconstructed Python GAE and the selected
+  normalization, kept full trajectory targets, and applied the same feature
+  and numerical checks as Model3. The independent first-loss comparison
+  evaluated the saved arrays and Python reconstruction under the saved G0
+  weights on CPU. Both gave `0.2401694431900978`. Actual Rust grouping ran on
+  CUDA in the matched trials.
+- Continuous and pause/resume runs completed two CUDA updates at C1/W1 so
+  serving batch shape was fixed. Model3 processed 401 decisions and reached
+  28 Adam steps. Model4 used a 200-decision comparison budget so resume
+  performed a second optimization, reaching 12 Adam steps. Final weight and
+  resume shard hashes matched within each pair. This covers named Adam
+  arrays and Torch CPU/CUDA RNG arrays. The PCG64 shuffle and scheduling
+  states also matched.
+- With legacy Pack opening, rollout reconstruction and Python GAE guarded
+  in the isolated Python processes, Model3 and Model4 ran the normal live,
+  cold and resume phases successfully. The Model4 16-game/D64 public
+  campaign finished actual final-policy evaluations and independently
+  imported its saved history under the same guard. The process records
+  identify five guarded training hosts, five cold hosts and the campaign
+  history host.
+- The operation verifier's `--full-source-audit` passed on a new 256-game
+  Model3 run, a new 16-game/D64 Model4 run and an archived baseline Model4
+  run. Focused tests rejected changed and swapped Pack bytes, missing or
+  changed numeric shards, and Pack mutation during live numerical
+  validation before Adam. They also exercised capacity refusal before
+  shuffle and successful subdivision under the actual native ledger.
 
-| Model | Verified trials | Collection seconds | Preparation phase seconds | Update/save seconds | Whole wall seconds | Process-tree PSS bytes | Device VRAM MiB |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| Model3 C16/W16, 256 games, inference cap 64 and GPU learning width 16 | 3 | 64.34 | 119.42 | 16.47 | 230.64 | 2,969,105,408 | 3,603 |
+The focused host pytest run passed 793 tests with two skips. The optional
+saved Model4 loss test passed separately. The `player_runtime::` Cargo
+test filter passed 36 tests. Ruff passed and mypy passed for the 27 changed
+Python source files. A full source mypy run reports the existing
+`shared_inventory.py:194` union error, reproduced at `aab5f35`.
+Independent correctness and architecture-conformance reviews cleared the
+final changes.
 
-Each value is the median. The host preparation phase contains collection
-and Source creation. Device VRAM is sampled device-wide.
+## Matched CUDA measurements
 
-The Model4 C1/W1 16-game, 64-decision baseline passed three fresh pause and
-resume invocations. The median fresh wall was 27.14 s and median resume
-wall was 16.43 s. The exact-D resume audits and restores the checkpoint
-without adding Adam steps. A separate two-update comparison is required for
-continuous versus resumed numerical identity.
+Baseline `aab5f35` and candidate `1268781` each ran three sequential trials
+per model with seed 17 on an RTX 5070 Ti. Initial weight hashes matched
+across all six trials within each model. The source-matched release wheel
+used CPython 3.14.10, NumPy 2.5.4 and Torch 2.14.1+cu132. Its native source
+SHA-256 is `3bc9c92fe0436ab83cb7c09c3691312a380f4a89153b01064ac08388099bff8e`.
 
-The original command/config/observer records and results are under the primary
-checkout's `runs/ordinary-rust-ppo-update/rust-training-baseline-aab5f35` and
-`rust-training-model4-baseline-aab5f35`.
+Model3 used 256 games at C16/W16, inference cap 64, formation wait 1 ms,
+logical width 64 and GPU learning width 16. Each trial recorded 4,928
+all-seat and 2,541 learner decisions and completed 160 Adam steps. The
+shared limits were 8 GiB recording, 16 GiB Source and 12 GiB CUDA.
+Model4 used `mixed-refresh-16-v1`, C1/W1, inference cap 1 and a 64-decision
+budget. Its common limits were 1 GiB recording, 2 GiB Source, 512 MiB numeric,
+24 GiB managed host and 12 GiB CUDA. Each exact-D trial used 64 of 174
+learner decisions and finished four Adam steps before pause.
+
+Each table entry is the median of the three trials. Post-collection
+preparation is the difference between the host collection phase and the
+persisted collection time, calculated per trial. Update includes input hash
+checks and PPO. Cold is the measured post-host verification phase. PSS and
+VRAM are sampled peaks per invocation, with VRAM measured device-wide.
+
+| Invocation | Collect s | Post-collect s | Update s | Save s | Cold s | Wall s | PSS GiB | VRAM MiB |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Model3 baseline | 64.34 | 55.05 | 16.55 | 0.51 | 89.75 | 230.64 | 2.765 | 3,603 |
+| Model3 Rust data | 68.99 | 3.63 | 16.71 | 0.37 | 0.31 | 93.85 | 2.612 | 3,678 |
+| Model4 baseline fresh | 9.63 | 5.13 | 1.60 | 0.18 | 6.36 | 27.14 | 2.148 | 3,618 |
+| Model4 Rust data fresh | 9.86 | 0.21 | 1.05 | 0.16 | 0.19 | 15.45 | 2.278 | 3,687 |
+| Model4 baseline resume | — | — | — | — | 6.39 | 16.43 | 0.833 | 3,362 |
+| Model4 Rust data resume | — | — | — | — | 0.20 | 4.47 | 0.901 | 3,426 |
+
+Model3 wall fell 59.3%. Model4 paired fresh-plus-resume wall fell from
+43.57 s to 19.91 s, a 54.3% reduction. The measured resume restored the
+exact-D checkpoint with no further optimizer work. The separate two-update
+comparison above exercises optimizer work after resume. Collection cost
+rose 4.65 s for the Model3 median and 0.23 s for the Model4 median. Both
+workloads improved whole wall within their common limits and passed the
+adoption condition for the explicit versioned mode.
+
+The primary checkout retains original configurations, commands, observer
+logs and full readbacks under `runs/ordinary-rust-ppo-update/`. The timed
+directories are `rust-training-baseline-aab5f35`,
+`rust-training-model4-baseline-aab5f35`, `rust-training-model3-1268781` and
+`rust-training-model4-1268781`. Parity scripts and test logs are in
+`rust-training-verification-1268781`. A temporary environment symlink during
+wheel setup touched the baseline companion files after the timed baseline
+runs. Those files were restored and checked against the original wheel's
+hashes before running the baseline public evaluation.

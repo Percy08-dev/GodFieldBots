@@ -91,9 +91,9 @@ proof and audit result. Select
 the mode from the saved effective snapshot on resume. An absent mode preserves
 the prior config hash, resume identity, strict Original read flow, and
 historical numeric format version. A recipe mismatch or unknown version fails
-closed. The experimental selector allows comparing the identical workload
-against the approved baseline. Default adoption needs both measured Model3
-and Model4 improvements under common limits.
+closed. The explicit selector permits comparison against the approved
+baseline. Adoption requires both measured Model3 and Model4 improvements
+under common limits.
 
 Use distinctly versioned outer records for new PPO numeric manifests (Model3
 7, Model4 8) and Source proofs (Model3 5, Model4 8). Existing array names,
