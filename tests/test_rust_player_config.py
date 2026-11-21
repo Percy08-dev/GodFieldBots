@@ -88,8 +88,8 @@ def test_normal_explicit_runtime_normalizes_wait_and_keeps_effective_hash():
 
 
 @pytest.mark.parametrize("field", list(runtime()))
-def test_runtime_requires_every_field_explicitly(field):
-    declaration = runtime()
+def test_fixed_runtime_requires_every_field_explicitly(field):
+    declaration = runtime(scheduler="fixed")
     del declaration[field]
     with pytest.raises(ContractError):
         load_config(NORMAL_BASE, {"run": {"player_runtime": declaration}})
@@ -443,3 +443,32 @@ def test_hpo6_base_agrees_on_schedule_and_campaign_owns_inference(tmp_path, base
     assert "player_runtime" not in run.effective["run"]
     with pytest.raises(ContractError, match="conflicts"):
         campaign_config(raw | {"runtime": declaration | {"max_batch_size": 99}}, origin=tmp_path)
+
+
+def test_tokio_graph_runtime_defaults_fresh_and_requires_materialized_worker_count(tmp_path):
+    from gf_common.rust_player import player_runtime
+    from gf_training.hpo_lineage import rust_player_hpo_spec
+
+    graph = runtime(inference_recipe="batched-torch-graph-v1")
+    declaration = {key: value for key, value in graph.items() if key != "player_worker_threads"}
+    ordinary = load_config(NORMAL_BASE, {"run": {"player_runtime": declaration}})
+    assert ordinary.effective["run"]["player_runtime"]["player_worker_threads"] == 16
+    ordinary_incomplete = deepcopy(ordinary.effective)
+    del ordinary_incomplete["run"]["player_runtime"]["player_worker_threads"]
+    archived = tmp_path / "effective.json"
+    archived.write_text(canonical(ordinary_incomplete))
+    with pytest.raises(ContractError, match="normalized effective"):
+        load_rust_player_effective(archived, expected_sha256=digest(ordinary_incomplete))
+    loaded = campaign_config(campaign_raw() | {"runtime": declaration}, origin=tmp_path)
+    settings = effective_settings(loaded.config.model, loaded.config.training, {}, layout=LAYOUT)
+    run = materialize_hpo_run(loaded, settings, learning_seed=17, run_id=RUN_ID)
+    assert rust_player_hpo_spec(run.effective)["runtime"]["player_worker_threads"] == 16
+    malformed = deepcopy(run.effective)
+    del malformed["hpo_spec"]["runtime"]["player_worker_threads"]
+    with pytest.raises(ContractError, match="normalized.*runtime"):
+        rust_player_hpo_spec(malformed)
+    assert player_runtime(graph, game_concurrency=2)["player_worker_threads"] == 7
+    fixed = declaration | {"scheduler": "fixed"}
+    with pytest.raises(ContractError):
+        player_runtime(fixed, game_concurrency=2)
+    assert player_runtime(fixed | {"player_worker_threads": 3}, game_concurrency=2)["player_worker_threads"] == 3

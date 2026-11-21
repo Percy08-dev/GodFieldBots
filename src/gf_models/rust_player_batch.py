@@ -20,12 +20,13 @@ _BOOL = np.dtype(np.bool_)
 _CANDIDATES = frozenset(("kinds", "targets", "numerics", "present", "references"))
 
 
-def _bucket(length: int, cap: int) -> int:
-    return min(1 << (length - 1).bit_length(), cap) if length else 0
+def _bucket(length: int, cap: int, floor: int) -> int:
+    return min(max(1 << (length - 1).bit_length(), floor), cap) if length else 0
 
 
-def _buckets(cap: int) -> tuple[int, ...]:
-    return (*tuple(1 << power for power in range((cap - 1).bit_length())), cap)
+def _buckets(cap: int, floor: int) -> tuple[int, ...]:
+    first = (min(floor, cap) - 1).bit_length()
+    return (*tuple(1 << power for power in range(first, (cap - 1).bit_length())), cap)
 
 
 @dataclass(frozen=True)
@@ -40,15 +41,19 @@ class BatchGeometry:
     rows: int
     max_candidates: int
     max_events: int
+    candidate_floor: int = 1
+    event_floor: int = 1
 
     def shape(self, candidates: int, events: int) -> BatchShape:
         integer(candidates, 1, self.max_candidates)
         integer(events, 0, self.max_events)
-        return BatchShape(self.rows, _bucket(candidates, self.max_candidates), _bucket(events, self.max_events))
+        return BatchShape(self.rows, _bucket(candidates, self.max_candidates, self.candidate_floor),
+                          _bucket(events, self.max_events, self.event_floor))
 
     def shapes(self) -> tuple[BatchShape, ...]:
         return tuple(BatchShape(self.rows, candidates, events) for candidates, events in
-                     product(_buckets(self.max_candidates), (0, *_buckets(self.max_events))))
+                     product(_buckets(self.max_candidates, self.candidate_floor),
+                             (0, *_buckets(self.max_events, self.event_floor))))
 
 
 @dataclass(frozen=True)
@@ -136,7 +141,7 @@ def pack_native_rows(rows: list[dict[str, Any]], inputs: BatchInputs) -> PackedR
                 out[index, :len(row["inputs"]["kinds"])] = True
             out[len(rows):, 0] = True  # A dummy still has a finite normalization.
         elif name == "last_event":
-            if rows[0]["inputs"]["interval_numerics"].shape[0]:
+            if rows and rows[0]["inputs"]["interval_numerics"].shape[0]:
                 for index, row in enumerate(rows):
                     out[index] = row["inputs"]["interval_numerics"].shape[0] - 1
         elif name in _CANDIDATES or name.startswith("interval_"):

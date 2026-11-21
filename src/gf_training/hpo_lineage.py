@@ -143,7 +143,9 @@ def _checked_hpo_spec(state: Json) -> Json:
             raise ContractError('shared HPO requires the adopted-profile Python CUDA MLP contract')
     if rust_player:
         from gf_common.rust_player import player_runtime
-        player_runtime(spec["runtime"], game_concurrency=spec["operating"]["game_concurrency"])
+        normalized = player_runtime(spec["runtime"], game_concurrency=spec["operating"]["game_concurrency"])
+        if normalized != spec["runtime"]:
+            raise ContractError("normalized Rust player runtime declaration required")
     if resident:
         from gf_common.shared_inference import runtime_for_spec
         runtime_for_spec(spec)

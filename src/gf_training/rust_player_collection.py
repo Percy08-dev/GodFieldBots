@@ -13,7 +13,6 @@ from gf_common.domain import ContractError, Json, digest, group_health_failures
 from gf_common.rust_player import deadline_seconds
 from gf_common.rust_ppo_source import source_encoder, source_mode
 from gf_common.schedule import serialize_schedule
-from gf_models.rust_player import serialized_torch
 from gf_models.structured_runtime import own_game_worker_settings_v3
 from gf_simulator_client.card_instance_runtime import CardInstanceRuntimeEvidence
 from gf_simulator_client.rust_player import RustPlayerRuntime
@@ -224,7 +223,8 @@ class RustPlayerCollector:
                                                   deadline=plan.execution_deadline)
                 checkpoints[published["checkpoint"]] = None
         self.registry.service.bind_collection(tuple(checkpoints),
-            game_concurrency=self.declaration["game_concurrency"], max_batch_size=self.declaration["max_batch_size"])
+            game_concurrency=self.declaration["game_concurrency"], max_batch_size=self.declaration["max_batch_size"],
+            learner_checkpoint=self.registry.current.files["inference.json"])
         diagnostics = self.runtime.diagnostics
         if diagnostics is not None:
             scope = diagnostics.scope(run_id=self.registry.state['run_id'],
@@ -279,11 +279,7 @@ class RustPlayerCollector:
                 raise ContractError("actual inference consumers remain unsettled")
             if self.runtime.dispatcher.checkpoint_references() or any(self.registry.service.references.values()):
                 raise ContractError("actual native/service policy references remain live")
-            with serialized_torch():
-                if self.registry.service.device != "cpu":
-                    import torch
-                    torch.cuda.synchronize(self.registry.service.device)
-                self.registry.service.end_collection()
+            self.registry.service.end_collection()
             end_counters = self._counters()
             settlement = {"schema_version": 1, "kind": "rust-player-service-consumer-settlement-v1",
                 "run_id": self.registry.state["run_id"], "batch_id": plan.linkage["batch_id"],

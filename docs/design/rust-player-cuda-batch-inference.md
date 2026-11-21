@@ -47,6 +47,24 @@ that request's valid prefix, and replies contain its ordered logs and value.
 The existing CPU, PPO update and frozen-reference kernels continue to operate
 under their established contracts.
 
+## Direct Graph selection
+
+Select `inference_recipe = "batched-torch-graph-v1"` in the same ordinary
+or HPO runtime table. For this recipe the first candidate bucket is 64 and
+the first positive-event bucket is 16, each capped at its configured maximum.
+With the fixed axis at 32, the sole Graph shape is `(32,64,16)`. The current
+learner checkpoint must have one of the two qualified MLP compute profiles
+and a supported CUDA runtime. Admitted groups outside that selection use
+the same recipe's Eager forward. An omitted Tokio worker count defaults to
+16 and is written into the effective declaration. An explicit count still
+selects the requested value.
+
+The service owns the immutable checkpoint's Graph and buffers from pre-actor
+capture through producer settlement and the device fence. Graph residency
+is charged separately from checkpoint weights and is included while Eager
+and scalar serving remain available. The next collection can capture the
+new checkpoint. Graph replay counts are part of scope-bound diagnostics.
+
 ## CUDA admission and cleanup
 
 The per-collection shape decision uses the existing device account's

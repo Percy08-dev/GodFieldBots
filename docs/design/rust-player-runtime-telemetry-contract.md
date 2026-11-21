@@ -157,6 +157,12 @@ batched counts. The CUDA peaks measure Torch allocation and reservation over
 the collection scope. CPU summaries have null peaks. Diagnostic readers
 accept historical metrics without this field.
 
+For `batched-torch-graph-v1`, `native_inference` also requires
+`graph_replays`, the number of successful CUDA Graph forwards included in
+`batched_groups`. It is an integer from zero through `batched_groups`. A
+positive count requires `batch_width = 32`. The scalar and earlier batched
+recipes omit `graph_replays`.
+
 phase1/kind rust-player-phase-event-v1 exact
 {schema_version,kind,observation_id,owner,clock,scope,monotonic_ns,event,links}.
 owner/clock/scope as above; event=phase_start/phase_end/host_reaped/prepared_written/

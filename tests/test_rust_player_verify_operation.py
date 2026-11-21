@@ -1252,3 +1252,21 @@ def test_optional_collection_inference_metrics_validate_width_and_useful_populat
             metric_data(corrupted, **options)
     with pytest.raises(ContractError):
         metric_data(row | {'owner': row['owner'] | {'role': 'native-runtime'}}, **options)
+
+
+def test_graph_collection_inference_metrics_validate_real_replay_population():
+    from tools.rust_player_verify_operation import metric_data
+
+    row = metric()
+    row['owner']['role'] = 'native-inference'
+    totals = {'recipe': 'batched-torch-graph-v1', 'batch_width': 32, 'batched_groups': 2,
+        'useful_rows': 3, 'dummy_rows': 61, 'scalar_rows': 1, 'useful_size_counts': {'1': 1, '2': 1},
+        'cuda_peak_allocated_bytes': 100, 'cuda_peak_reserved_bytes': 120}
+    options = {'observation_id': 'obs', 'boot_id': 'boot', 'run_id': 'run', 'interval': (0, 300)}
+    for count in (0, 1, 2):
+        row['native_inference'] = totals | {'graph_replays': count}
+        assert metric_data(row, **options)['native_inference'] == row['native_inference']
+    for damage in ({}, {'graph_replays': -1}, {'graph_replays': 3},
+                   {'graph_replays': 1, 'batch_width': 16, 'dummy_rows': 29}):
+        with pytest.raises(ContractError):
+            metric_data(row | {'native_inference': totals | damage}, **options)

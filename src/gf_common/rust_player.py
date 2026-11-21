@@ -41,6 +41,7 @@ BUDGET_KEYS = {
 DEADLINE_KEYS = ("admission_bits", "execution_bits", "term_bits", "kill_bits", "finish_bits")
 PLAYER_RUNTIME_MODE = "rust-player-runtime-v1"
 BATCHED_TORCH_INFERENCE = "batched-torch-v1"
+RUST_BATCHED_TORCH_GRAPH_RECIPE = "batched-torch-graph-v1"
 
 
 def player_runtime(value: Any, *, game_concurrency: int) -> Json:
@@ -51,16 +52,20 @@ def player_runtime(value: Any, *, game_concurrency: int) -> Json:
             "mode",
             "scheduler",
             "game_concurrency",
-            "player_worker_threads",
             "max_batch_size",
             "formation_wait_ms",
         },
-        {"inference_recipe"},
+        {"inference_recipe", "player_worker_threads"},
     )
     if raw["mode"] != PLAYER_RUNTIME_MODE or raw["scheduler"] not in ("tokio", "fixed"):
         raise ContractError("explicit Rust player mode and tokio|fixed scheduler required")
-    if "inference_recipe" in raw and raw["inference_recipe"] != BATCHED_TORCH_INFERENCE:
+    if "inference_recipe" in raw and raw["inference_recipe"] not in (
+            BATCHED_TORCH_INFERENCE, RUST_BATCHED_TORCH_GRAPH_RECIPE):
         raise ContractError("unknown Rust player inference recipe")
+    if "player_worker_threads" not in raw:
+        if raw["scheduler"] == "fixed":
+            raise ContractError("fixed Rust player scheduler requires an explicit worker count")
+        raw = dict(raw, player_worker_threads=16)
     integer(game_concurrency, 1)
     for key in ("game_concurrency", "player_worker_threads", "max_batch_size"):
         integer(raw[key], 1)

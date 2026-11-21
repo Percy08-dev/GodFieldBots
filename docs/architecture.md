@@ -1555,6 +1555,16 @@ their existing 64 MiB ceiling. A shape that exceeds its admission uses
 scalar serving. Failed CUDA operations retain their owners through producer
 retirement and the device fence. Omitted configuration and CPU serving use
 scalar inference. Resume binds the exact effective recipe and producer.
+
+The explicit `batched-torch-graph-v1` recipe uses the measured minimum
+candidate and positive-event buckets of 64 and 16. It captures one
+`(32, 64, 16)` forward for the current immutable learner checkpoint when
+the compute profile, runtime and memory allowance support it. Eager
+serving handles the other admitted shapes. The collection owns the Graph
+until native producers settle and the device is fenced. Its static banks
+and private allocator pool are charged separately from checkpoint weights.
+Fresh Tokio declarations default to 16 workers. Effective configuration
+stores the worker count, and explicit worker values remain valid.
 The [verification record](verification/rust-player-cuda-batch-inference.md)
 tracks functional and performance acceptance.
 

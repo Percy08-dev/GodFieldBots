@@ -3,7 +3,9 @@
 import json
 import struct
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
+from types import SimpleNamespace
 
 import gf_native
 import numpy as np
@@ -128,6 +130,99 @@ def test_checkpoint_capacity_uses_fixed_geometry_and_observed_residency():
     assert estimate.input_bytes == exact_leaves
     assert estimate.peak_bytes > estimate.input_bytes
     assert estimate.largest_tensor_bytes >= 4 * 15 * model.max_positions * model.heads.actor_hidden_sizes[0] * 4
+
+
+@pytest.mark.parametrize("candidates,events", [(123, 25), (5, 3), (65, 16)])
+def test_graph_recipe_floor_obeys_checkpoint_caps_and_keeps_zero_separate(candidates, events):
+    from gf_models.rust_player import RustPlayerInference
+    from gf_models.rust_player_batch import BatchShape
+    from gf_models.rust_player_device import CudaCheckpointProfile, RustPlayerDeviceAccount
+
+    network = _network(3)
+    model = replace(network.config, event=replace(network.config.event, max_interval=events))
+    binding = replace(network.binding, max_candidates=candidates)
+    profile = CudaCheckpointProfile(model, binding, layout=LAYOUT)
+    account = RustPlayerDeviceAccount(global_bytes=1024**3, learner_device="cpu", serving_device="cuda:0",
+        learner_profile=profile, admitted_profiles=(profile,))
+    account.observe_cache("checkpoint", profile, {("cuda", 0, 1, profile.network_bytes): profile.network_bytes})
+    service = RustPlayerInference.__new__(RustPlayerInference)
+    service.device, service.device_account = "cuda:0", account
+    service.inference_recipe = "batched-torch-graph-v1"
+
+    service.bind_collection(("checkpoint",), game_concurrency=16, max_batch_size=32)
+    geometry, plan = service._collection["checkpoint"]
+    floor_candidates, floor_events = min(64, candidates), min(16, events)
+    assert geometry.shape(1, 0) == BatchShape(16, floor_candidates, 0)
+    assert geometry.shape(1, 1) == BatchShape(16, floor_candidates, floor_events)
+    assert geometry.shape(candidates, events) == BatchShape(16, candidates, events)
+    assert set(plan) == {BatchShape(16, cap, interval)
+        for cap in (floor_candidates, candidates) for interval in (0, floor_events, events)}
+
+
+@pytest.mark.parametrize("version", [3, 4])
+def test_graph_admission_requires_measured_model_math_and_cuda_runtime(version):
+    from gf_models._rust_player_graph import expected_collection_pool
+    from gf_models.rust_player_device import CudaCheckpointProfile
+
+    network = _network(version, workload=True)
+    profile = CudaCheckpointProfile(network.config, network.binding, layout=LAYOUT)
+    torch_runtime = SimpleNamespace(__version__="2.14.1+cu132",
+        version=SimpleNamespace(cuda="13.2"), cuda=SimpleNamespace(
+            get_allocator_backend=lambda: "native", get_device_capability=lambda device: (12, 0)))
+
+    assert expected_collection_pool(profile, torch=torch_runtime, device="cuda:0")
+    model = profile.model
+    different_math = replace(profile, model=replace(model, event=replace(model.event, num_layers=2)))
+    partial_chunk = replace(profile, binding=replace(profile.binding, candidate_chunk=63))
+    for altered in (different_math, partial_chunk):
+        assert expected_collection_pool(altered, torch=torch_runtime, device="cuda:0") is None
+
+    for runtime_changes, cuda_changes in (
+        ({"__version__": "2.14.2+cu132"}, {}),
+        ({"version": SimpleNamespace(cuda="13.1")}, {}),
+        ({}, {"get_allocator_backend": lambda: "cudaMallocAsync"}),
+        ({}, {"get_device_capability": lambda device: (12, 1)}),
+    ):
+        altered_cuda = SimpleNamespace(**(vars(torch_runtime.cuda) | cuda_changes))
+        altered = SimpleNamespace(**(vars(torch_runtime) | runtime_changes | {"cuda": altered_cuda}))
+        assert expected_collection_pool(profile, torch=altered, device="cuda:0") is None
+
+
+def test_graph_admission_preserves_learner_scalar_fallback_under_its_own_budget(monkeypatch):
+    from gf_models import _rust_player_graph
+    from gf_models.rust_player import RustPlayerInference
+    from gf_models.rust_player_batch import BatchShape
+    from gf_models.rust_player_device import CudaCheckpointProfile, RustPlayerDeviceAccount
+
+    mib = 1024**2
+    network = _network(3, workload=True)
+    base = network.config
+    model = replace(base, event=replace(base.event, max_interval=8192),
+                    resources=replace(base.resources, max_tensor_bytes=20 * mib))
+    binding = replace(network.binding, max_candidates=65536)
+    profile = CudaCheckpointProfile(model, binding, layout=LAYOUT)
+    # Measured Graph reservation plus the largest Eager group uses under 80 MiB.
+    # The actual scalar endpoint's 43.6 MiB must also coexist with the Graph.
+    binding = replace(binding, managed_budget_bytes=profile.fixed_bytes + profile.network_bytes + 84 * mib)
+    profile = replace(profile, binding=binding)
+    account = RustPlayerDeviceAccount(global_bytes=12 * 1024**3, learner_device="cpu", serving_device="cuda:0",
+        learner_profile=profile, admitted_profiles=(profile,))
+    account.observe_cache("learner", profile, {("cuda", 0, 1, profile.network_bytes): profile.network_bytes})
+    service = RustPlayerInference.__new__(RustPlayerInference)
+    service.device, service.device_account = "cuda:0", account
+    service.inference_recipe = "batched-torch-graph-v1"
+    service.registry = SimpleNamespace(networks={"learner": network})
+
+    def unexpected_capture(*args):
+        pytest.fail("capture would displace the learner's admitted scalar phase")
+
+    monkeypatch.setattr(_rust_player_graph, "_graph_runtime_supported", lambda *args: True)
+    monkeypatch.setattr(_rust_player_graph.CollectionCudaGraph, "capture", unexpected_capture)
+    service.bind_collection(("learner",), learner_checkpoint="learner", game_concurrency=32, max_batch_size=32)
+    _, plan = service._collection["learner"]
+    assert plan[BatchShape(32, 64, 16)] is not None
+    assert plan[BatchShape(32, 65536, 8192)] is None
+    assert not service.collection_graph_active
 
 
 def _cuda_services(version, *, capacity=4, workload=False, publish_next=True):
@@ -417,13 +512,14 @@ def test_cuda_same_game_seats_and_reused_game_ids_keep_own_rng_namespace():
         replacement.close()
 
 
-def test_cpu_opt_in_still_uses_original_scalar_recipe():
+@pytest.mark.parametrize("recipe", ["batched-torch-v1", "batched-torch-graph-v1"])
+def test_cpu_opt_in_still_uses_original_scalar_recipe(recipe):
     from gf_models.rust_player import RustPlayerInference
 
     net = _network(3)
     baseline = RustPlayerInference(device="cpu", cache_entries=1, cache_weight_bytes=64 * 1024**2)
     opted_in = RustPlayerInference(device="cpu", cache_entries=1, cache_weight_bytes=64 * 1024**2,
-        inference_recipe="batched-torch-v1")
+        inference_recipe=recipe)
     a = "a" * 64
     for service in (baseline, opted_in):
         service.publish(net, a)
@@ -436,6 +532,7 @@ def test_cpu_opt_in_still_uses_original_scalar_recipe():
         scope = opted_in.end_collection_metrics()
         assert scope["recipe"] == "scalar-torch-v1" and scope["scalar_rows"] == 2
         assert scope["batch_width"] is None and scope["cuda_peak_allocated_bytes"] is None
+        assert "graph_replays" not in scope
     finally:
         d.close()
 
@@ -601,3 +698,188 @@ def test_cuda_width_32_newly_admitted_shape_matches_scalar_and_is_bit_independen
                 dispatcher.wait_result(token, time.monotonic() + 2)
         finally:
             dispatcher.close()
+
+
+def _cuda_graph_services(version, *, tight=False, second=True):
+    import torch
+
+    from gf_models.rust_player import RustPlayerInference
+    from gf_models.rust_player_device import CudaCheckpointProfile, RustPlayerDeviceAccount
+
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA hardware/build unavailable")
+    if (torch.__version__ != "2.14.1+cu132" or torch.version.cuda != "13.2"
+            or torch.cuda.get_device_capability() != (12, 0)
+            or torch.cuda.get_allocator_backend() != "native"):
+        pytest.skip("CUDA Graph tests require the measured runtime and SM120")
+    model_a = _network(version, workload=True)
+    if tight:
+        model_a.config = replace(model_a.config, event=replace(model_a.config.event, max_interval=16))
+        model_a.binding = replace(model_a.binding, max_candidates=64)
+    profile = CudaCheckpointProfile(model_a.config, model_a.binding, layout=LAYOUT)
+    account = RustPlayerDeviceAccount(global_bytes=12 * 1024**3, learner_device="cpu", serving_device="cuda:0",
+        learner_profile=profile, admitted_profiles=(profile,))
+    gpu = RustPlayerInference(device="cuda:0", visibility="0", cache_entries=2, cache_weight_bytes=64 * 1024**2,
+        device_account=account, inference_recipe="batched-torch-graph-v1")
+    cpu = RustPlayerInference(device="cpu", cache_entries=2, cache_weight_bytes=64 * 1024**2)
+    a, b = "a" * 64, "b" * 64
+    for service in (gpu, cpu):
+        service.publish(model_a, a)
+        if second:
+            service.publish(_network(version, seed=321, workload=True), b)
+    return gpu, cpu, account
+
+
+@pytest.mark.parametrize("version", [3, 4])
+def test_cuda_graph_replays_original_independent_responses_and_retires_before_next_checkpoint(version):
+    import torch
+
+    gpu, cpu, account = _cuda_graph_services(version)
+    a, b = "a" * 64, "b" * 64
+    cache_before = account.retained_cache_tensor_bytes
+    allowance_before = account.serving_tensor_allowance()
+
+    def score(executor, cases):
+        dispatcher, tokens, batch = _batch(gpu.runtime, cases, capacity=32)
+        try:
+            for row in batch["rows"]:
+                if json.loads(row["identity"])["game"] != "own":
+                    row["inputs"]["state_numerics"][:] *= 7
+            expected = cpu.evaluate(batch)
+            actual = executor.submit(gpu.evaluate, batch).result()
+            for received, reference in zip(actual, expected, strict=True):
+                np.testing.assert_allclose(received["logs"], reference["logs"], atol=1e-5, rtol=1e-5)
+                assert received["value"] == pytest.approx(reference["value"], abs=1e-5, rel=1e-5)
+                assert (received["sample"], received["next_state"]) == (reference["sample"], reference["next_state"])
+            assert dispatcher.submit_results(batch["batch_id"], actual) == len(cases)
+            for token, response in zip(tokens, actual, strict=True):
+                accepted = dispatcher.wait_result(token, time.monotonic() + 5)
+                assert accepted["identity"] == response["identity"]
+                assert accepted["sample"] == response["sample"]
+            own = next(answer for answer in actual if json.loads(answer["identity"])["game"] == "own")
+            request = control(0, game="own", request=2)
+            request["identity"]["checkpoint"] = json.loads(own["identity"])["checkpoint"]
+            dispatcher.enqueue(canonical(request).encode())
+            following, = dispatcher.next_batch(time.monotonic() + 5)["rows"]
+            assert following["rng_state"] == own["next_state"]
+            return own
+        finally:
+            dispatcher.close()
+
+    gpu.bind_collection((a, b), learner_checkpoint=a, game_concurrency=32, max_batch_size=64)
+    first_pool = gpu._collection_graph.pool
+    assert torch.cuda.memory_snapshot(mempool_id=first_pool, include_traces=False)
+    assert account.retained_cache_tensor_bytes == cache_before
+    assert account.serving_tensor_allowance() < allowance_before
+    gpu.begin_collection_metrics()
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        own = score(executor, [(0, "own", a)])
+        _assert_same(score(executor, [(1, "peer", a), (0, "own", a),
+                                     (3, "zero-event", a), (0, "opponent", b)]), own)
+        _assert_same(score(executor, [(i % 2, f"co-request-{i}", a) for i in range(31)] + [(0, "own", a)]), own)
+        gpu.end_collection()
+        totals = gpu.end_collection_metrics()
+        assert totals["recipe"] == "batched-torch-graph-v1"
+        assert (totals["batched_groups"], totals["graph_replays"], totals["scalar_rows"]) == (5, 3, 0)
+        assert not torch.cuda.memory_snapshot(mempool_id=first_pool, include_traces=False)
+        assert account.serving_tensor_allowance() == allowance_before
+        assert gpu._collection_graph is None
+
+        gpu.bind_collection((a, b), learner_checkpoint=b, game_concurrency=32, max_batch_size=64)
+        second_pool = gpu._collection_graph.pool
+        assert second_pool != first_pool
+        gpu.begin_collection_metrics()
+        replacement = score(executor, [(0, "opponent", a), (0, "own", b)])
+        assert not np.isclose(replacement["value"], own["value"], rtol=1e-5, atol=1e-5)
+        assert gpu.end_collection_metrics()["graph_replays"] == 1
+        gpu.end_collection()
+        assert not torch.cuda.memory_snapshot(mempool_id=second_pool, include_traces=False)
+        assert account.serving_tensor_allowance() == allowance_before
+
+
+def test_cuda_graph_budget_decline_preserves_eager_and_retires_observed_pool(monkeypatch):
+    import torch
+
+    from gf_models import _rust_player_graph
+    from gf_models.rust_player_batch import BatchShape
+
+    gpu, cpu, account = _cuda_graph_services(3, tight=True, second=False)
+    a = "a" * 64
+    account.global_bytes = account.host_fixed_bytes + account.retained_cache_tensor_bytes + 32 * 1024**2
+    allowance = account.serving_tensor_allowance()
+
+    # This allowance admits both fixed buckets and excludes the measured Graph.
+    gpu.bind_collection((a,), learner_checkpoint=a, game_concurrency=32, max_batch_size=32)
+    assert gpu._collection_graph is None
+    assert gpu._collection[a][1][BatchShape(32, 64, 16)] is not None
+    gpu.end_collection()
+
+    # Force capture to exercise measured admission even when preflight underpredicts it.
+    captured = []
+    capture = _rust_player_graph.CollectionCudaGraph.capture
+
+    def record_pool(graph, *args):
+        result = capture(graph, *args)
+        captured.append(graph.pool)
+        return result
+
+    monkeypatch.setitem(_rust_player_graph._EXPECTED_POOL_BYTES, "3", 0)
+    monkeypatch.setattr(_rust_player_graph.CollectionCudaGraph, "capture", record_pool)
+    gpu.bind_collection((a,), learner_checkpoint=a, game_concurrency=32, max_batch_size=32)
+    assert len(captured) == 1
+    assert not torch.cuda.memory_snapshot(mempool_id=captured[0], include_traces=False)
+    assert gpu._collection_graph is None
+    assert account.serving_tensor_allowance() == allowance
+    gpu.begin_collection_metrics()
+    dispatcher, _, batch = _batch(gpu.runtime, [(0, "own", a)], capacity=32)
+    try:
+        actual, = gpu.evaluate(batch)
+        reference, = cpu.evaluate(batch)
+        np.testing.assert_allclose(actual["logs"], reference["logs"], atol=1e-5, rtol=1e-5)
+        assert actual["next_state"] == reference["next_state"]
+        totals = gpu.end_collection_metrics()
+        assert (totals["batched_groups"], totals["graph_replays"], totals["scalar_rows"]) == (1, 0, 0)
+    finally:
+        dispatcher.close()
+        gpu.end_collection()
+
+
+def test_cuda_graph_replay_failure_keeps_private_pool_until_consumer_and_worker_retire(monkeypatch):
+    import torch
+
+    from gf_models._rust_player_graph import CollectionCudaGraph
+
+    gpu, _, account = _cuda_graph_services(3, second=False)
+    a = "a" * 64
+    gpu.bind_collection((a,), learner_checkpoint=a, game_concurrency=32, max_batch_size=32)
+    pool_id = gpu._collection_graph.pool
+    replay = CollectionCudaGraph.replay
+
+    def fail_after_launch(graph):
+        replay(graph)
+        raise RuntimeError("injected after real graph launch")
+
+    monkeypatch.setattr(CollectionCudaGraph, "replay", fail_after_launch)
+    dispatcher, _, batch = _batch(gpu.runtime, [(0, "own", a)], capacity=32)
+    try:
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            with pytest.raises(RuntimeError, match="after real graph launch"):
+                executor.submit(gpu.evaluate, batch).result()
+            operation = account._active
+            assert operation.state == "FAILED_HELD"
+            with pytest.raises(ContractError, match="consumers must retire"):
+                gpu.retire_device_failure(dispatcher=dispatcher)
+            with pytest.raises(ContractError, match="consumers must retire"):
+                gpu.end_collection()
+            dispatcher.close()
+            with pytest.raises(ContractError, match="worker is still running"):
+                gpu.retire_device_failure(dispatcher=dispatcher)
+            assert torch.cuda.memory_snapshot(mempool_id=pool_id, include_traces=False)
+        gpu.retire_device_failure(dispatcher=dispatcher)
+        assert operation.state == "FAILED_RETIRED"
+        assert not gpu.collection_graph_active
+        assert not torch.cuda.memory_snapshot(mempool_id=pool_id, include_traces=False)
+        with pytest.raises(ContractError, match="account failed"):
+            account.serving_tensor_allowance()
+    finally:
+        dispatcher.close()

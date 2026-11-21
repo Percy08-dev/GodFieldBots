@@ -814,7 +814,8 @@ def load_rust_player_effective(path: Path, *, expected_sha256: str) -> LoadedCon
             raise ContractError("complete normalized effective settings required") from error
         if not isinstance(loaded.config.run, RustPlayerRunConfigV2):
             raise ContractError("explicit Rust player effective input required")
-    if canonical(asdict(loaded.config)) != canonical(effective):
+    # Normalization may update nested tables in place. Bind the original bytes.
+    if canonical(asdict(loaded.config)).encode() != raw:
         raise ContractError("complete normalized effective settings required without defaults")
     for table, key in _PATHS:
         value = effective[table].get(key)

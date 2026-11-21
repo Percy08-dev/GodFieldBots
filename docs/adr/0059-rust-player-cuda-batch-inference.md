@@ -64,3 +64,35 @@ The 128 MiB comparison eliminated 351 and 321 scalar fallbacks from the
 two measured workloads. The widened shapes passed scalar-reference and
 neighbor-independence tests and the ordinary and HPO standard operation
 verifiers. See the [verification record](../verification/rust-player-cuda-batch-inference.md).
+
+## Direct CUDA Graph for a single collection shape
+
+The operator can select `batched-torch-graph-v1` in the same runtime table.
+Its candidate buckets start at 64 and its positive-event buckets at 16,
+subject to the existing caps. Width and zero-event handling follow the fixed
+batch design. The earlier Eager recipe keeps its fixed geometry and identity.
+An omitted worker count in a fresh Tokio declaration materializes as 16.
+Explicit counts remain valid, and the fixed scheduler requires a count.
+
+The collection captures `(32, 64, 16)` for the current immutable learner
+checkpoint before starting actors. Eligibility is limited to the measured
+MLP compute configurations and the tested Torch, CUDA and allocator
+combination on SM120. The same recipe runs its Eager forward for other
+checkpoints, shapes, deployments and capacity declines. Only the forward
+is captured. Input copies, result copies, per-participant CPU sampling, and
+the original full Rust batch submission follow their existing boundaries.
+The device budget charges the Graph inputs and private pool once. The
+collection releases them after producer settlement and the device fence,
+before the next PPO update. CUDA failures use the existing failed-operation
+owner and terminal retirement. A later checkpoint gets its own capture.
+
+The matched 256-game tests improved median collection time by 5.5% and
+4.8%. Model3's pooled response p95 rose from 4.56–4.70 to 4.83–4.97 seconds.
+Model4's p95 fell from 4.97–5.10 to 4.83–4.97 seconds. The capture's measured
+persistent cost was 44.7 and 54.7 MiB. Reusing a capture across multiple
+collection waves would avoid only about 0.09 seconds of already-warm
+preparation per hypothetical 1,024-game update. Additional shape slots and
+cross-collection reuse require their own throughput and residency evidence.
+
+The [production design and matched results](../superpowers/plans/2026-11-21-rust-cuda-inference-performance.md)
+record the acceptance conditions and timing boundaries.

@@ -38,6 +38,7 @@ class RustPlayerRuntime:
         self._service_thread: threading.Thread | None = None
         self._service_error: str | None = None
         self._closing = threading.Event()
+        self._native_joined = False
         self._joined = False
         self._joining = False
         self._quiesced = False
@@ -351,6 +352,7 @@ class RustPlayerRuntime:
         try:
             try:
                 report = json.loads(self._native.join())
+                self._native_joined = True
             finally:
                 if self._service_thread is not None:
                     self._service_thread.join()

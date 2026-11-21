@@ -160,10 +160,11 @@ def metric_data(row: Json, *, observation_id: str, boot_id: str, run_id: str,
 
 
 def _validate_inference_totals(value: Json) -> None:
-    from gf_common.rust_player import BATCHED_TORCH_INFERENCE
+    from gf_common.rust_player import BATCHED_TORCH_INFERENCE, RUST_BATCHED_TORCH_GRAPH_RECIPE
 
     row = closed(value, {'recipe', 'batch_width', 'batched_groups', 'useful_rows', 'dummy_rows',
-        'scalar_rows', 'useful_size_counts', 'cuda_peak_allocated_bytes', 'cuda_peak_reserved_bytes'})
+        'scalar_rows', 'useful_size_counts', 'cuda_peak_allocated_bytes', 'cuda_peak_reserved_bytes'},
+        {'graph_replays'})
     groups, useful, dummy = (integer(row[name], 0) for name in ('batched_groups', 'useful_rows', 'dummy_rows'))
     integer(row['scalar_rows'], 0)
     counts = _batch_map(row['useful_size_counts'])
@@ -172,12 +173,17 @@ def _validate_inference_totals(value: Json) -> None:
         integer(allocated, 0)
         integer(reserved, allocated)
     width = row['batch_width']
-    if row['recipe'] == BATCHED_TORCH_INFERENCE:
+    if row['recipe'] in (BATCHED_TORCH_INFERENCE, RUST_BATCHED_TORCH_GRAPH_RECIPE):
         integer(width, 1)
         if allocated is None or any(size > width for size in counts):
             raise ContractError('batched CUDA inference totals require device peaks and fixed geometry')
     elif row['recipe'] != 'scalar-torch-v1' or width is not None or counts or groups or useful or dummy:
         raise ContractError('invalid scalar inference totals')
+    if row['recipe'] == RUST_BATCHED_TORCH_GRAPH_RECIPE:
+        if integer(row.get('graph_replays'), 0, groups) and width != 32:
+            raise ContractError('CUDA Graph replay totals require fixed width 32')
+    elif 'graph_replays' in row:
+        raise ContractError('CUDA Graph replay totals require the graph recipe')
     if (sum(counts.values()) != groups or sum(size * count for size, count in counts.items()) != useful
             or (width or 0) * groups != useful + dummy):
         raise ContractError('native inference group totals do not match the useful-size histogram')

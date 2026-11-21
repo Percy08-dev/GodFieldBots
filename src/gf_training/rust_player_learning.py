@@ -892,6 +892,9 @@ class RustGameOperations:
                 thread = runtime._service_thread
                 if thread is not None and thread.is_alive():
                     raise ContractError('actual service producer must stop before device cleanup')
+                if self.registry.service.collection_graph_active and (
+                        not runtime._native_joined or runtime._holds or runtime._active_routes):
+                    raise ContractError('actual collection graph actors must retire before device cleanup')
                 self.registry.service.retire_device_failure(dispatcher=runtime.dispatcher)
             except BaseException as failure:  # noqa: BLE001 -- no hold credit for unconfirmed service cleanup.
                 failed('service-device', failure)

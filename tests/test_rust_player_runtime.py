@@ -972,6 +972,7 @@ def test_fix1_failed_service_cannot_release_terminal_holds_before_original_join(
             owner.storage_ack(terminal)
             assert service.references["a" * 64] == 2
             assert owner._service_error is not None and tensors[0]() is not None
+            assert not owner._native_joined
             with pytest.raises(ValueError, match="referenced"):
                 service.evict("a" * 64, dispatcher=original_dispatcher)
             with concurrent.futures.ThreadPoolExecutor() as pool:
@@ -986,6 +987,7 @@ def test_fix1_failed_service_cannot_release_terminal_holds_before_original_join(
                 release.set()
                 with pytest.raises(RuntimeError, match=f"backend-private-{phase}"):
                     joining.result(5)
+            assert owner._native_joined
             gc.collect()
             assert tensors[0]() is None and service.references["a" * 64] == 0
             with pytest.raises(RuntimeError, match="native inference service failed"):

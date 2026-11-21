@@ -172,3 +172,53 @@ the change. These trials use the recorded full-wave launch and shape floors.
 
 See the [follow-up plan](../superpowers/plans/2026-11-21-rust-cuda-inference-performance.md)
 for the comparison conditions and the subsequent Graph experiment.
+
+## Product CUDA Graph and Tokio defaults
+
+`batched-torch-graph-v1` captures the tested `(32,64,16)` learner forward
+and preserves the original Rust dispatch and full response. The configuration
+tests cover the default of 16 workers for fresh Tokio declarations, explicit
+worker counts, and materialized worker counts in saved effective ordinary
+and HPO declarations. All 31 archived ordinary and HPO effective configs
+used by the measurements still loaded. Graph accounting tests cover the
+actual capture pool, capacity decline, and reserve headroom for the current
+checkpoint's scalar fallbacks as well as its admitted Eager groups.
+
+Both ordinary PPO and HPO completed two real 32-game updates through the
+normal entry and the source-matched native extension. Each operation
+produced three distinct checkpoint manifests and reported positive Graph
+replay counts for both collection generations. The config omitted the
+worker count and the saved effective runtime materialized 16. The standard
+verifier validated sealed collection originals and saved update artifacts.
+The focused live CUDA cases compared both models' results and request-local
+RNG, checked the state committed by Rust on the next request, and observed
+old private pool retirement. A replay failure test held the Graph until
+the original consumer and CUDA work were settled.
+
+The full-concurrency performance comparisons use the previously recorded
+full-wave Simulator launch overlay and the paired RTX 5070 Ti environment.
+The same Torch geometry and checkpoint flow are shared by both lanes.
+The Eager control sets the Graph support decision to false in its disposable
+Python source copy. The production comparison and diagnostic overlays use
+different native wheels. The production wheel's native source digest
+matches the tracked native source. The timing wheel adds observation at
+request admission, queue readiness and dequeue.
+
+The 256-game checks observed 51.46 → 50.39 seconds for Model3 and
+56.31 → 55.41 seconds for Model4. Each condition ran once. All four
+operations passed the standard verifier and reached 256 simultaneously
+active games. The paired journals had identical submitted action payloads
+and FP32 log probabilities and values. These performance copies preceded
+the last two guards for owning-checkpoint scalar admission and exact saved
+ordinary config validation. The final source passed two new ordinary updates
+and two new HPO updates with both guards in place. The replays were 191/132
+and 208/122 by collection generation. The actual second-shape experiment
+also passed the standard verifier and matched the one-shape journal.
+
+The final scoped CPU command passed 390 tests with 6 skips and 26 CUDA
+tests deselected. The complete batch inference test file passed 47 tests
+with CUDA enabled. Ruff, scoped mypy across 11 source files, and
+`git diff --check` passed. The normal-entry final run records are under
+`graph-collection.MMtWST/product-check/refresh-final/`, within the run tree
+linked from the [follow-up plan](../superpowers/plans/2026-11-21-rust-cuda-inference-performance.md).
+That plan records the queue timings, Graph shape experiment and trade-offs.

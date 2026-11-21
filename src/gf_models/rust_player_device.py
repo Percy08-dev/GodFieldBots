@@ -178,7 +178,7 @@ class DeviceOperation:
         with serialized_torch():
             if self.account._active is not self or self.state != 'ACTIVE':
                 raise ContractError('actual active device operation required')
-            if self.phase in ('row', 'batch') and self.references is not None:
+            if self.phase in ('row', 'batch', 'collection-graph-retire') and self.references is not None:
                 raise ContractError('GPU inference inputs must positively retire inside the Torch lock')
             self.references = self.owner = None
             self.state, self.account._active = 'SETTLED', None
@@ -298,6 +298,7 @@ class RustPlayerDeviceAccount:
         self._profiles: dict[str, CudaCheckpointProfile] = {}
         self._cache_owners: dict[str, Any] = {}
         self._learner_bytes = self._cache_bytes = 0
+        self._collection_graph_bytes = 0
         self._active: DeviceOperation | None = None
         self._poisoned = False
 
@@ -305,10 +306,12 @@ class RustPlayerDeviceAccount:
         if self._poisoned:
             raise ContractError('device account failed; actual operation remains held')
 
-    def _idle(self) -> None:
+    def _idle(self, *, allow_collection_graph: bool = False) -> None:
         self._healthy()
         if self._active is not None:
             raise ContractError('another device operation remains live')
+        if self._collection_graph_bytes and not allow_collection_graph:
+            raise ContractError('collection CUDA Graph must retire before this device phase')
 
     @property
     def learner_tensor_bytes(self) -> int:
@@ -440,12 +443,11 @@ class RustPlayerDeviceAccount:
     def begin_row(self, checkpoint: str, *, interval_events: int, candidates: int,
                   input_leaf_bytes: int, owner: Any = None) -> DeviceOperation:
         with serialized_torch():
-            self._idle()
+            available = self._serving_tensor_allowance()
             estimate = self._profiles[checkpoint].row.estimate(interval_events=interval_events,
                 candidates=candidates, input_leaf_bytes=input_leaf_bytes)
-            required = (self.host_fixed_bytes + self.learner_tensor_bytes
-                + self.retained_cache_tensor_bytes + estimate.peak_bytes)
-            if required > self.global_bytes:
+            if estimate.peak_bytes > available:
+                required = self.global_bytes - available + estimate.peak_bytes
                 raise ContractError(f'CUDA actual row exceeds allowance: required={required} limit={self.global_bytes}')
             self._active = DeviceOperation(self, 'row', owner=owner, storage_bytes=estimate.peak_bytes)
             return self._active
@@ -453,16 +455,38 @@ class RustPlayerDeviceAccount:
     def serving_tensor_allowance(self) -> int:
         """Available transient CUDA bytes after actual residency and one host charge."""
         with serialized_torch():
-            self._idle()
-            return (self.global_bytes - self.host_fixed_bytes - self.learner_tensor_bytes
-                    - self.retained_cache_tensor_bytes)
+            return self._serving_tensor_allowance()
+
+    def _serving_tensor_allowance(self) -> int:
+        self._idle(allow_collection_graph=True)
+        return (self.global_bytes - self.host_fixed_bytes - self.learner_tensor_bytes
+                - self.retained_cache_tensor_bytes - self._collection_graph_bytes)
 
     def begin_batch(self, peak_bytes: int, *, owner: Any) -> DeviceOperation:
         with serialized_torch():
-            if peak_bytes > self.serving_tensor_allowance():
+            if peak_bytes > self._serving_tensor_allowance():
                 raise ContractError('CUDA residency changed after batch geometry admission')
             self._active = DeviceOperation(self, 'batch', owner=owner, storage_bytes=peak_bytes)
             return self._active
+
+    def retain_collection_graph(self, capture: DeviceOperation, reserved_bytes: int) -> None:
+        """Capture's measured reservation coexists with later serving operation holds."""
+        with serialized_torch():
+            if (self._active is not capture or capture.state != 'ACTIVE' or capture.phase != 'batch'
+                    or self._collection_graph_bytes or reserved_bytes <= 0):
+                raise ContractError('actual graph capture requires one collection reservation')
+            self._collection_graph_bytes = reserved_bytes
+
+    def begin_graph_retirement(self, *, owner: Any) -> DeviceOperation:
+        with serialized_torch():
+            self._idle(allow_collection_graph=True)
+            self._active = DeviceOperation(self, 'collection-graph-retire', owner=owner)
+            return self._active
+
+    def clear_collection_graph(self) -> None:
+        """The service calls this after the actual graph and allocator pool retire."""
+        with serialized_torch():
+            self._collection_graph_bytes = 0
 
     def _begin_required(self, phase: str, required: int, owner: Any) -> DeviceOperation:
         self._idle()

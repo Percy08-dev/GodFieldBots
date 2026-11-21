@@ -12,15 +12,18 @@ import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from functools import cache
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
 from gf_common.domain import ContractError, digest
-from gf_common.rust_player import BATCHED_TORCH_INFERENCE
-from gf_models.rust_player_batch import BatchEstimate, BatchGeometry, BatchShape
+from gf_common.rust_player import BATCHED_TORCH_INFERENCE, RUST_BATCHED_TORCH_GRAPH_RECIPE
+from gf_models.rust_player_batch import BatchEstimate, BatchGeometry, BatchInputs, BatchShape
 from gf_models.structured_config import MAX_TENSOR_BYTES
 from gf_models.torch_runtime import serialized_torch
+
+if TYPE_CHECKING:
+    from gf_models._rust_player_graph import CollectionCudaGraph
 
 _CUDA_BATCH_TEMPORARY_TENSOR_BYTES = 128 * 1024**2
 
@@ -110,15 +113,17 @@ class RustPlayerInference:
 
         if device_account is not None and device_account.serving_device != device:
             raise ContractError('actual inference/account serving role differs')
-        if inference_recipe not in (None, BATCHED_TORCH_INFERENCE):
+        if inference_recipe not in (None, BATCHED_TORCH_INFERENCE, RUST_BATCHED_TORCH_GRAPH_RECIPE):
             raise ContractError("unknown Rust player inference recipe")
         if inference_recipe is not None and device != 'cpu' and device_account is None:
             raise ContractError("batched CUDA inference needs the actual device account")
         self.device, self.device_account = device, device_account
         self.inference_recipe = inference_recipe
         self._collection: dict[str, tuple[BatchGeometry, dict[BatchShape, BatchEstimate | None]]] = {}
+        self._collection_graph: CollectionCudaGraph | None = None
         self._batch_counts: dict[int, int] | None = None
         self._scalar_rows = 0
+        self._graph_replays = 0
         self._measurement_batch_width: int | None = None
         self._previous_cuda_peaks = (0, 0)
         with serialized_torch():
@@ -198,7 +203,14 @@ class RustPlayerInference:
         with serialized_torch():
             account = getattr(self, 'device_account', None)
             hold = account._active if account is not None else None
+            if self.collection_graph_active and (dispatcher is None
+                    or dispatcher.checkpoint_references() or any(self.references.values())):
+                raise ContractError('actual collection graph consumers must retire before device cleanup')
             if account is None or hold is None or hold.owner is not self:
+                if self.collection_graph_active:
+                    if hold is not None:
+                        raise ContractError('another actual operation still holds the device')
+                    self.end_collection()
                 return
             if hold.state != 'FAILED_HELD':
                 raise ContractError('inference device operation has not stopped')
@@ -219,6 +231,8 @@ class RustPlayerInference:
                     account.discard_failed_cache(checkpoint)
             hold.retire_failed(gpu_settled=True)
             self._failed_publication = None
+            if self.collection_graph_active:
+                self.end_collection()
 
     def retain(self, checkpoint: str) -> None:
         with serialized_torch():
@@ -240,6 +254,8 @@ class RustPlayerInference:
                 checkpoint, 0
             ):
                 raise ContractError("native checkpoint still referenced")
+            if self.collection_graph_active:
+                raise ContractError("collection CUDA Graph must retire before checkpoint eviction")
             self.registry.load_policy_weights(
                 TensorDict(
                     {"publication": NonTensorData({"command": "EVICT", "checkpoint": checkpoint})},
@@ -265,14 +281,21 @@ class RustPlayerInference:
                 ),
             }
 
+    @property
+    def collection_graph_active(self) -> bool:
+        return getattr(self, "_collection_graph", None) is not None
+
     def bind_collection(self, checkpoints: tuple[str, ...], *, game_concurrency: int,
-                        max_batch_size: int) -> None:
+                        max_batch_size: int, learner_checkpoint: str | None = None) -> None:
         """Freeze every scheduled checkpoint's shape decisions before actor admission."""
         from gf_models.rust_player_batch import estimate_batch
 
         if self.inference_recipe is None or self.device == "cpu":
             return
         with serialized_torch():
+            graph_recipe = self.inference_recipe == RUST_BATCHED_TORCH_GRAPH_RECIPE
+            if graph_recipe and getattr(self, "_collection_graph", None) is not None:
+                raise ContractError("previous collection CUDA Graph remains live")
             account = self.device_account
             available = account.serving_tensor_allowance()
             plans = {}
@@ -288,7 +311,8 @@ class RustPlayerInference:
                 if tensor_limit == MAX_TENSOR_BYTES:
                     tensor_limit = _CUDA_BATCH_TEMPORARY_TENSOR_BYTES
                 geometry = BatchGeometry(min(game_concurrency, max_batch_size),
-                                         binding.max_candidates, model.event.max_interval)
+                    binding.max_candidates, model.event.max_interval,
+                    candidate_floor=64 if graph_recipe else 1, event_floor=16 if graph_recipe else 1)
                 shapes = {}
                 for shape in geometry.shapes():
                     estimate = estimate_batch(model, binding, layout=profile.layout, shape=shape,
@@ -297,9 +321,101 @@ class RustPlayerInference:
                                      estimate.largest_tensor_bytes <= tensor_limit else None)
                 plans[checkpoint] = geometry, shapes
             self._collection = plans
+            if graph_recipe and learner_checkpoint is not None and learner_checkpoint in plans:
+                self._prepare_collection_graph(learner_checkpoint, available)
+
+    def _prepare_collection_graph(self, checkpoint: str, available: int) -> None:
+        import torch
+
+        from gf_models._rust_player_graph import (
+            COLLECTION_GRAPH_SHAPE,
+            CollectionCudaGraph,
+            expected_collection_pool,
+        )
+
+        estimate = self._collection[checkpoint][1].get(COLLECTION_GRAPH_SHAPE)
+        if estimate is None:
+            return
+        account = self.device_account
+        profile = account.cached_profile(checkpoint)
+        expected_pool = expected_collection_pool(profile, torch=torch, device=self.device)
+        if expected_pool is None:
+            return
+        model_limit = (min(profile.model.resources.max_owned_bytes, profile.binding.managed_budget_bytes)
+                       - profile.fixed_bytes - profile.network_bytes)
+        graph = CollectionCudaGraph(checkpoint, estimate, self.device)
+        host_peak = checkpoint_peak = graph.replay_bytes
+        for candidate, (_, shapes) in self._collection.items():
+            candidate_profile = account.cached_profile(candidate)
+            for shape, eager in shapes.items():
+                if eager is None:
+                    # Native row peaks grow with the real C/E lengths within
+                    # each bucket. Only unadmitted batch buckets can use rows.
+                    schema = BatchInputs.compile(BatchShape(1, shape.candidates, shape.events),
+                        positions=candidate_profile.model.max_positions, layout=candidate_profile.layout)
+                    # The native row omits the batched candidate mask and last-event index.
+                    leaf_bytes = sum(schema.bank_bytes) - shape.candidates - 8
+                    peak = candidate_profile.row.estimate(interval_events=shape.events,
+                        candidates=shape.candidates, input_leaf_bytes=leaf_bytes).peak_bytes
+                    host_peak = max(host_peak, peak)
+                    if candidate == checkpoint:
+                        checkpoint_peak = max(checkpoint_peak, peak)
+                elif candidate != checkpoint or shape != COLLECTION_GRAPH_SHAPE:
+                    host_peak = max(host_peak, eager.peak_bytes)
+                    if candidate == checkpoint:
+                        checkpoint_peak = max(checkpoint_peak, eager.peak_bytes)
+
+        ceiling = min(available - host_peak, model_limit - checkpoint_peak)
+        expected = estimate.input_bytes + expected_pool
+        if expected > ceiling:
+            return
+        preflight = max(estimate.peak_bytes, expected + graph.replay_bytes)
+        hold = account.begin_batch(preflight, owner=self)
+        self._collection_graph = graph
+        hold.references = graph
+        try:
+            measured = graph.capture(torch, self.registry.networks[checkpoint])
+            if measured <= ceiling:
+                account.retain_collection_graph(hold, measured)
+            else:
+                self._drop_collection_graph(graph, torch)
+            hold.references = None
+            hold.complete()
+        except BaseException as error:
+            hold.fail(error, references=graph)
+            raise
+
+    def _drop_collection_graph(self, graph: CollectionCudaGraph, torch: Any) -> None:
+        graph.retire(torch)
+        self.device_account.clear_collection_graph()
+        self._collection_graph = None
 
     def end_collection(self) -> None:
         with serialized_torch():
+            if self.device != "cpu":
+                import torch
+
+                graph = self._collection_graph
+                account = self.device_account
+                if graph is not None and (account._active is not None or any(self.references.values())):
+                    raise ContractError("actual collection graph consumers must retire before device cleanup")
+                # A terminal retry on a poisoned account has already retired
+                # the failed operation's stopped traceback and temporary aliases.
+                hold = (account.begin_graph_retirement(owner=self)
+                        if graph is not None and not account._poisoned else None)
+                if hold is not None:
+                    hold.references = graph
+                try:
+                    torch.cuda.synchronize(self.device)
+                    if graph is not None:
+                        self._drop_collection_graph(graph, torch)
+                    if hold is not None:
+                        hold.references = None
+                        hold.complete()
+                except BaseException as error:
+                    if hold is not None:
+                        hold.fail(error, references=graph)
+                    raise
             self._collection.clear()
 
     def begin_collection_metrics(self) -> None:
@@ -312,6 +428,7 @@ class RustPlayerInference:
             first = next(iter(self._collection.values()), None)
             self._measurement_batch_width = first[0].rows if first is not None else None
             self._scalar_rows = 0
+            self._graph_replays = 0
             self._batch_counts = {}
 
     def end_collection_metrics(self) -> dict[str, Any] | None:
@@ -328,11 +445,15 @@ class RustPlayerInference:
 
                 allocated = torch.cuda.max_memory_allocated(self.device)
                 reserved = torch.cuda.max_memory_reserved(self.device)
-            return {"recipe": BATCHED_TORCH_INFERENCE if width is not None else "scalar-torch-v1",
+            recipe = self.inference_recipe if width is not None else "scalar-torch-v1"
+            totals = {"recipe": recipe,
                     "batch_width": width, "batched_groups": groups, "useful_rows": useful,
                     "dummy_rows": (width or 0) * groups - useful, "scalar_rows": self._scalar_rows,
                     "useful_size_counts": {str(size): count for size, count in counts.items()},
                     "cuda_peak_allocated_bytes": allocated, "cuda_peak_reserved_bytes": reserved}
+            if recipe == RUST_BATCHED_TORCH_GRAPH_RECIPE:
+                totals["graph_replays"] = self._graph_replays
+            return totals
 
     def process_cuda_peaks(self) -> tuple[int, int]:
         """Preserve the cumulative series across opt-in collection peak resets."""
@@ -466,26 +587,37 @@ class RustPlayerInference:
         at = time.perf_counter()
         packed = pack_native_rows(rows, estimate.inputs)
         self.timings["cpu_share"] += time.perf_counter() - at
-        hold = self.device_account.begin_batch(estimate.peak_bytes, owner=self)
+        graph = self._collection_graph
+        if graph is not None and (graph.checkpoint != checkpoint or graph.estimate is not estimate):
+            graph = None
+        hold = self.device_account.begin_batch(estimate.peak_bytes if graph is None else graph.replay_bytes, owner=self)
         roots: dict[np.dtype[Any], Any] = {}
-        hold.references = roots  # Each completed transfer is retained if a later one fails.
+        hold.references = roots if graph is None else graph
         try:
             at = time.perf_counter()
             try:
-                inputs = packed.transfer(device=self.device, roots=roots)
+                if graph is None:
+                    inputs = packed.transfer(device=self.device, roots=roots)
+                else:
+                    graph.transfer(torch, packed)
             finally:
                 self.timings["h2d"] += time.perf_counter() - at
             at = time.perf_counter()
             try:
-                if self.performance_callback is None:
+                if graph is not None:
+                    logs, probabilities, values = graph.replay()
+                elif self.performance_callback is None:
                     logs, probabilities, values = score_numeric_batch(self.registry.networks[checkpoint], inputs)
                 else:
                     with torch.profiler.record_function("gf-native-batch-forward"):
                         logs, probabilities, values = score_numeric_batch(self.registry.networks[checkpoint], inputs)
                 # One blocking D2H also fences this serialized forward.
                 size = logs.shape[1]
-                output = torch.cat((logs, probabilities, values[:, None]), dim=1).to("cpu", non_blocking=False)
-                del logs, probabilities, values, inputs
+                combined = torch.cat((logs, probabilities, values[:, None]), dim=1)
+                output = combined.to("cpu", non_blocking=False)
+                del logs, probabilities, values, combined
+                if graph is None:
+                    del inputs
             finally:
                 self.timings["forward"] += time.perf_counter() - at
             if self.performance_callback is not None:
@@ -494,7 +626,7 @@ class RustPlayerInference:
             hold.references = None
             hold.complete()
         except BaseException as error:
-            hold.fail(error, references=roots)
+            hold.fail(error, references=roots if graph is None else graph)
             raise
 
         answers = []
@@ -518,6 +650,8 @@ class RustPlayerInference:
         self.calls["rows"] += len(rows)
         if self._batch_counts is not None:
             self._batch_counts[len(rows)] = self._batch_counts.get(len(rows), 0) + 1
+            if graph is not None:
+                self._graph_replays += 1
         return answers
 
     def serve_next(self, dispatcher: Any, *, deadline: float) -> int:
