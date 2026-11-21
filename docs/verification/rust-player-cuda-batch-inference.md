@@ -158,3 +158,17 @@ telemetry, and `summary.json` under `runs/cuda-batch-inference.kYXk2q/`.
 runs/cuda-batch-inference.kYXk2q/env/bin/python \
   runs/cuda-batch-inference.kYXk2q/experiment.py comparison
 ```
+
+## 128 MiB for CUDA batch temporaries
+
+The widened planner passed 36 focused RTX 5070 Ti tests with the tracked
+Python source and the paired installed native extension. Both models matched
+scalar CPU and CUDA references at `atol=rtol=1e-5` in width-32 groups above
+the old ceiling. Neighbor changes and position changes preserved the exact
+own logs, value, draw and next RNG state. Lower per-tensor and existing
+aggregate allowance controls passed. The worker comparison's 256-game
+ordinary and HPO trials also passed the standard operation verifier after
+the change. These trials use the recorded full-wave launch and shape floors.
+
+See the [follow-up plan](../superpowers/plans/2026-11-21-rust-cuda-inference-performance.md)
+for the comparison conditions and the subsequent Graph experiment.

@@ -517,3 +517,87 @@ def test_cuda_multichunk_index_lifetimes_veto_group_before_transfer(monkeypatch)
             _assert_same(actual, expected)
     finally:
         d.close()
+
+
+@pytest.mark.parametrize("version", [3, 4])
+@pytest.mark.parametrize("restriction", ["default", "explicit", "host", "model", "binding"])
+def test_width_32_batch_temporary_limit_preserves_other_admission_limits(version, restriction):
+    from gf_models.rust_player import RustPlayerInference
+    from gf_models.rust_player_batch import BatchGeometry, estimate_batch
+    from gf_models.rust_player_device import CudaCheckpointProfile, RustPlayerDeviceAccount
+
+    network = _network(version, workload=True)
+    model, binding = network.config, network.binding
+    geometry = BatchGeometry(32, binding.max_candidates, model.event.max_interval)
+    widened, oversized = geometry.shape(408, 0), geometry.shape(32768, 0)
+    fitted = estimate_batch(model, binding, layout=LAYOUT, shape=widened)
+    rejected = estimate_batch(model, binding, layout=LAYOUT, shape=oversized)
+    assert 64 * 1024**2 < fitted.largest_tensor_bytes < 128 * 1024**2
+    assert rejected.largest_tensor_bytes > 128 * 1024**2
+    profile = CudaCheckpointProfile(model, binding, layout=LAYOUT)
+    tight = profile.fixed_bytes + profile.network_bytes + fitted.peak_bytes - 1
+    if restriction == "explicit":
+        model = replace(model, resources=replace(model.resources, max_tensor_bytes=60 * 1024**2))
+    elif restriction == "model":
+        model = replace(model, resources=replace(model.resources, max_owned_bytes=tight))
+    elif restriction == "binding":
+        binding = replace(binding, managed_budget_bytes=tight)
+    profile = CudaCheckpointProfile(model, binding, layout=LAYOUT)
+    account = RustPlayerDeviceAccount(global_bytes=tight if restriction == "host" else 12 * 1024**3,
+        learner_device="cpu", serving_device="cuda:0", learner_profile=profile, admitted_profiles=(profile,))
+    account.observe_cache("checkpoint", profile, {("cuda", 0, 1, profile.network_bytes): profile.network_bytes})
+    service = RustPlayerInference.__new__(RustPlayerInference)
+    service.device, service.device_account, service.inference_recipe = "cuda:0", account, "batched-torch-v1"
+
+    service.bind_collection(("checkpoint",), game_concurrency=32, max_batch_size=64)
+    bound_geometry, plan = service._collection["checkpoint"]
+    assert bound_geometry == geometry
+    assert plan[geometry.shape(32, 0)] is not None
+    assert (plan[widened] is not None) == (restriction == "default")
+    assert plan[oversized] is None
+
+
+@pytest.mark.parametrize("version", [3, 4])
+def test_cuda_width_32_newly_admitted_shape_matches_scalar_and_is_bit_independent(version):
+    from gf_models.rust_player import RustPlayerInference
+
+    width, checkpoint = 32, "a" * 64
+    scalar, batched, _ = _cuda_services(version, capacity=width, workload=True, publish_next=False)
+    reference = RustPlayerInference(device="cpu", cache_entries=1, cache_weight_bytes=64 * 1024**2)
+    reference.publish(_network(version, workload=True), checkpoint)
+    own = (7, "own", checkpoint)  # 408 real candidates, fixed bucket width 512.
+    baseline = None
+    for cases, counts in (
+        ([own], {"1": 1}),
+        ([(0, "different-events", checkpoint), (6, "different-count", checkpoint),
+          (7, "peer", checkpoint), own], {"1": 2, "2": 1}),
+        ([(7, f"peer-{index}", checkpoint) for index in range(width - 1)] + [own], {"32": 1}),
+    ):
+        dispatcher, tokens, batch = _batch(batched.runtime, cases, capacity=width)
+        try:
+            own_index = next(index for index, row in enumerate(batch["rows"])
+                             if json.loads(row["identity"])["game"] == "own")
+            for index, row in enumerate(batch["rows"]):
+                if index != own_index:
+                    row["inputs"]["state_numerics"][:] *= index + 2
+            batched.begin_collection_metrics()
+            answers = batched.evaluate(batch)
+            metrics = batched.end_collection_metrics()
+            assert metrics["scalar_rows"] == 0 and metrics["useful_size_counts"] == counts
+            actual = answers[own_index]
+            single = batch | {"rows": [batch["rows"][own_index]]}
+            for service in (scalar, reference):
+                expected, = service.evaluate(single)
+                np.testing.assert_allclose(actual["logs"], expected["logs"], atol=1e-5, rtol=1e-5)
+                assert actual["value"] == pytest.approx(expected["value"], abs=1e-5, rel=1e-5)
+                assert actual["sample"] == expected["sample"]
+                assert actual["next_state"] == expected["next_state"]
+            if baseline is None:
+                baseline = actual
+            else:
+                _assert_same(actual, baseline)
+            assert dispatcher.submit_results(batch["batch_id"], answers) == len(cases)
+            for token in tokens:
+                dispatcher.wait_result(token, time.monotonic() + 2)
+        finally:
+            dispatcher.close()

@@ -1548,7 +1548,10 @@ CPU sampling consumes only the request's ordered valid results.
 
 Collection admission fixes each shape after checkpoint publication. It uses
 observed same-host learner and cache storage, the model and binding limits,
-and modeled live group allocations. A shape that exceeds a limit uses
+and modeled live group allocations. The default per-tensor allowance for
+temporary CUDA batch inference allocations is 128 MiB. Model declarations
+below 64 MiB retain their lower allowance. Learning and saved arrays use
+their existing 64 MiB ceiling. A shape that exceeds its admission uses
 scalar serving. Failed CUDA operations retain their owners through producer
 retirement and the device fence. Omitted configuration and CPU serving use
 scalar inference. Resume binds the exact effective recipe and producer.

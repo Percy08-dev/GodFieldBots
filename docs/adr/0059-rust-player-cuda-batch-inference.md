@@ -50,3 +50,17 @@ time fell 7.6% for Model3 and 7.7% for Model4. Pooled p95 fell in both models.
 The largest Torch reserved peak was 170 MiB under the 12 GiB managed
 allowance. Different models or narrower budgets use the same pre-transfer
 admission and require their own performance measurements.
+
+## CUDA inference temporary allowance
+
+Accepted on 2026-11-22. The batch planner maps the normalized default
+model tensor limit of 64 MiB to an allowance of 128 MiB for temporary
+CUDA batch allocations. Lower model limits remain binding. The aggregate
+same-host, model and device reservations apply, including the configured
+workspace that covers the observed cuBLAS allocation. Weight, learning
+and saved data validation continue to use their existing limits.
+
+The 128 MiB comparison eliminated 351 and 321 scalar fallbacks from the
+two measured workloads. The widened shapes passed scalar-reference and
+neighbor-independence tests and the ordinary and HPO standard operation
+verifiers. See the [verification record](../verification/rust-player-cuda-batch-inference.md).

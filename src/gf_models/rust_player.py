@@ -19,7 +19,10 @@ import numpy as np
 from gf_common.domain import ContractError, digest
 from gf_common.rust_player import BATCHED_TORCH_INFERENCE
 from gf_models.rust_player_batch import BatchEstimate, BatchGeometry, BatchShape
+from gf_models.structured_config import MAX_TENSOR_BYTES
 from gf_models.torch_runtime import serialized_torch
+
+_CUDA_BATCH_TEMPORARY_TENSOR_BYTES = 128 * 1024**2
 
 
 @cache
@@ -280,6 +283,10 @@ class RustPlayerInference:
                 model, binding = profile.model, profile.binding
                 logical = min(model.resources.max_owned_bytes, binding.managed_budget_bytes)
                 allowance = min(available, logical - profile.fixed_bytes - profile.network_bytes)
+                tensor_limit = model.resources.max_tensor_bytes
+                # Only CUDA batch temporaries receive the wider default cap.
+                if tensor_limit == MAX_TENSOR_BYTES:
+                    tensor_limit = _CUDA_BATCH_TEMPORARY_TENSOR_BYTES
                 geometry = BatchGeometry(min(game_concurrency, max_batch_size),
                                          binding.max_candidates, model.event.max_interval)
                 shapes = {}
@@ -287,7 +294,7 @@ class RustPlayerInference:
                     estimate = estimate_batch(model, binding, layout=profile.layout, shape=shape,
                                               row_profile=profile.row)
                     shapes[shape] = (estimate if estimate.peak_bytes <= allowance and
-                                     estimate.largest_tensor_bytes <= model.resources.max_tensor_bytes else None)
+                                     estimate.largest_tensor_bytes <= tensor_limit else None)
                 plans[checkpoint] = geometry, shapes
             self._collection = plans
 
