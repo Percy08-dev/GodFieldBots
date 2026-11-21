@@ -79,6 +79,8 @@ class RustMatchPump:
                         'expected_fingerprint': startup['test_server_info']['seed_fingerprint'],
                         'expected_effective': startup['test_server_config'], 'startup_info': startup['test_server_info'],
                         'request_seconds': server.request_seconds}}
+                if 'learner_viewer' in value:
+                    current_specs[episode.episode_id]['learner_viewer'] = value['learner_viewer']
             self.runtime.start([current_specs[group.episodes[0].episode_id]])
 
         while next_group < min(len(groups), game_concurrency):

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -10,6 +11,7 @@ from typing import Any
 from gf_common.diverse_actions import NumericCosts
 from gf_common.domain import ContractError, Json, digest, group_health_failures
 from gf_common.rust_player import deadline_seconds
+from gf_common.rust_ppo_source import source_encoder, source_mode
 from gf_common.schedule import serialize_schedule
 from gf_models.rust_player import serialized_torch
 from gf_models.structured_runtime import own_game_worker_settings_v3
@@ -26,6 +28,7 @@ from gf_training.rust_player_storage import (
     RecordingBudget,
     RustPlayerStorage,
     StorageGroup,
+    WriterTrainingEpisode,
 )
 
 _ISSUER = object()
@@ -34,7 +37,9 @@ _ISSUER = object()
 class RustCollectedBatch:
     def __init__(self, issuer: object, collector: RustPlayerCollector, plan: Any,
                  writer: RustPlayerStorage, pending: Any, manifest_sha256: str,
-                 capture_sha256: str, retirement_sha256: str) -> None:
+                 capture_sha256: str, retirement_sha256: str, *,
+                 training: tuple[WriterTrainingEpisode, ...] = (), pack_verification: Json | None = None,
+                 manifest: Json | None = None, report: Json | None = None, metadata_lease: Any = None) -> None:
         if issuer is not _ISSUER:
             raise ContractError("actual native/writer collection owner required")
         self.collector, self.registry, self.plan = collector, collector.registry, plan
@@ -42,6 +47,9 @@ class RustCollectedBatch:
         self.directory, self.manifest_sha256 = plan.output, manifest_sha256
         self.capture_sha256, self.retirement_sha256 = capture_sha256, retirement_sha256
         self.originals: RustPlayerOriginals | None = None
+        self.training = training
+        self.pack_verification = pack_verification
+        self._manifest, self._report, self._metadata_lease = manifest, report, metadata_lease
         self._closed = False
         self._cleanup_children: list[Any] = []
 
@@ -56,6 +64,8 @@ class RustCollectedBatch:
 
     def open(self) -> RustPlayerOriginals:
         self.require(self.registry, self.plan)
+        if self.pack_verification is not None:
+            raise ContractError("live native training collection has no decoded Pack owner")
         if self.originals is None:
             try:
                 self.originals = RustPlayerOriginals(self.pending, pool=self.registry.pool,
@@ -68,10 +78,18 @@ class RustCollectedBatch:
 
     @property
     def manifest(self) -> Json:
+        if self.pack_verification is not None:
+            self.require(self.registry, self.plan)
+            assert self._manifest is not None
+            return self._manifest
         return self.open().object(self.open().root / "manifest.json")
 
     @property
     def report(self) -> Json:
+        if self.pack_verification is not None:
+            self.require(self.registry, self.plan)
+            assert self._report is not None
+            return self._report
         return self.open().object(self.open().root / "report.json")
 
     def close(self) -> None:
@@ -79,6 +97,13 @@ class RustCollectedBatch:
             return
         from gf_training.group_pack_resources import close_resources
         close_resources(self, [self.originals, self.pending])
+        self._manifest = self._report = None
+        for episode in self.training:
+            episode.close()
+        self.training = ()
+        if self._metadata_lease is not None:
+            self._metadata_lease.close()
+            self._metadata_lease = None
         self._closed = True
 
 
@@ -89,13 +114,16 @@ class RustPlayerCollector:
         registry.require()
         self.registry, self.config = registry, registry.config
         self.declaration = registry.state["identity"]["player_runtime"]["runtime"]
+        self.mode = source_mode(registry.state["effective_config"])
         self.settings = self.config.storage.settings()
         self.cleanup_deadline = deadline_seconds(registry.admission.observation["deadlines"]["term_bits"])
+        numeric_limit = ({"training_numeric_bytes": self.config.hpo_spec["operating"]["numeric_budget_bytes"]}
+            if self.mode is not None and registry.hpo else {})
         self.runtime = RustPlayerRuntime({key: self.declaration[key] for key in (
             "scheduler", "player_worker_threads", "game_concurrency", "max_batch_size", "formation_wait_ms")} |
             {"storage_bytes": self.settings.budget_bytes,
              "storage_queue": self.declaration["game_concurrency"],
-             "runtime_identity": registry.service.runtime}, service=registry.service)
+             "runtime_identity": registry.service.runtime} | numeric_limit, service=registry.service)
         self.current: RustCollectedBatch | None = None
         self._active_writer: RustPlayerStorage | None = None
         self._inventory: Any = None
@@ -145,6 +173,14 @@ class RustPlayerCollector:
                     "actions": self.config.actions, "rules": self.registry.local.learner._context.rules,
                     "numeric_costs": asdict(NumericCosts()), "policies": (policies[0], policies[1]),
                     "deadline": plan.execution_deadline, "clock": None}
+                if self.mode is not None:
+                    viewer = episode.learner_viewer
+                    if viewer != plan.linkage['learner_seats'][episode.episode_id] or viewer not in (1, 2):
+                        raise ContractError("original plan requires explicit matching learner seat")
+                    learner = policies[viewer - 1].native
+                    if learner['kind'] != 'mlp' or learner['epoch'] != plan.linkage['collection_generation']:
+                        raise ContractError("learner seat requires the actual parent checkpoint")
+                    contexts[episode.episode_id]['learner_viewer'] = viewer
         return contexts
 
     async def collect(self, plan: Any, resources: Any = None) -> RustCollectedBatch:
@@ -208,7 +244,7 @@ class RustPlayerCollector:
         writer = RustPlayerStorage(self.runtime, db_directory, run_id=self.registry.state["run_id"],
             contexts=(), groups=groups, settings=self.settings, workspace=self.registry.budget,
             workspace_bytes=grant, deadline=plan.execution_deadline, cleanup_deadline=self.cleanup_deadline,
-            deferred_contexts=True, context_plans=plans)
+            deferred_contexts=True, context_plans=plans, training=self.mode is not None)
         self._active_writer = writer
         writer_history: Json = {'writer': writer, 'descriptor_sha256': None}
         self.writer_history.append(writer_history)
@@ -223,7 +259,7 @@ class RustPlayerCollector:
             controls.json(name, value)
             data = controls.chunks[name][0][0]
             writer.store_control(name, data)
-            return digest(value), len(data)
+            return hashlib.sha256(data).hexdigest(), len(data)
 
         try:
             execution = await self._matches.execute(plan.groups, contexts, writer,
@@ -323,17 +359,34 @@ class RustPlayerCollector:
                 "player_producer": actual["producer"], "actor_protocol_version": 11,
                 "capture_authority": capture, "logical_retirement": retirement, "service_usage": usage}
             if self.registry.hpo:
-                manifest.update(origin="producer-owned-v1", encoder="canonical-python",
+                manifest.update(origin="producer-owned-v1", encoder=source_encoder(self.registry.state['effective_config']),
                     snapshot_identity=self.registry.current.identity, replay_reconciled=False)
+            planned_names = tuple(key[2] for key in keys)
+            if self.mode is not None:
+                if not healthy:
+                    raise ContractError("native training requires healthy natural completion of every game")
+                training_facts = writer.training_evidence(inventory, planned_names)
+                for fact, row in zip(training_facts, rows, strict=True):
+                    if (fact['episode_id'] != row['episode_id'] or fact['game_id'] != row['game_id']
+                            or fact['viewer'] != plan.linkage['learner_seats'][row['episode_id']]
+                            or fact['decisions'] > row['decisions']):
+                        raise ContractError("committed training evidence differs from planned game/report")
+                manifest.update(schema_version=13 if self.registry.hpo else 12, training_episodes=training_facts)
             validate_record_shape(manifest, "collection", hpo=self.registry.hpo)
             manifest_sha, _ = store("manifest.json", manifest)
             capture_sha, retirement_sha = digest(capture), digest(retirement)
             await asyncio.to_thread(writer.seal)
             await asyncio.to_thread(writer.join)
+            extras: Json = {}
+            if self.mode is not None:
+                pack = await asyncio.to_thread(writer.verify_training_seal, manifest_sha)
+                metadata_lease = writer.budget.reserve(_owned_bytes((manifest, report, pack)))
+                extras.update(pack_verification=pack, manifest=manifest, report=report, metadata_lease=metadata_lease,
+                    training=writer.take_training_episodes(planned_names))
             pending = writer.take_pending_owner()
             writer_history['descriptor_sha256'] = pending.descriptor_sha256
             return RustCollectedBatch(_ISSUER, self, plan, writer, pending, manifest_sha,
-                capture_sha, retirement_sha)
+                capture_sha, retirement_sha, **extras)
         except BaseException as error:
             if diagnostics is not None:
                 diagnostics.error("collection_interrupted")
@@ -352,6 +405,11 @@ class RustPlayerCollector:
                 await asyncio.to_thread(writer.close)
             except BaseException as cleanup:  # noqa: BLE001 -- retain primary failure and actual owner.
                 error.add_note("actual writer remains owned: " + type(cleanup).__name__)
+            if self.mode is not None:
+                try:
+                    await asyncio.to_thread(writer.close_unclaimed_training)
+                except BaseException as cleanup:  # noqa: BLE001 -- retain primary failure and actual owner.
+                    error.add_note("actual sealed writer originals remain owned: " + type(cleanup).__name__)
             # Error tracebacks can still own metadata/serialized rows. Preserve
             # their concrete loan holders on cleanup_owner rather than refunding
             # memory still reachable through the failed transaction.

@@ -60,7 +60,7 @@ def source_handoff_data(local, rollout, monkeypatch):
         state={'updates': 0, 'optimizer_steps': 0}, current=parent, pending=None,
         config=SimpleNamespace(training=PPOTrainingConfig()))
     plan = SimpleNamespace(linkage={'collection_generation': 0})
-    collection = SimpleNamespace(registry=registry, plan=plan)
+    collection = SimpleNamespace(registry=registry, plan=plan, pack_verification=None)
     inspection = SimpleNamespace(collection=collection, registry=registry, plan=plan, parent=parent,
         originals=None, manifest={}, _records=(), accepted_decisions=len(rollout),
         closure_counts={'natural': 16}, missing_replays=[])

@@ -46,7 +46,7 @@ def validate_parent_metadata(value: Json) -> Json:
     row = closed(value, _PARENT_FIELDS)
     if (type(row['schema_version']) is not int or row['schema_version'] != 3
             or row['kind'] != 'hpo-rust-parent-metadata-validation'
-            or row['origin'] != 'producer-owned-v1' or row['encoder'] != 'canonical-python'):
+            or row['origin'] != 'producer-owned-v1' or row['encoder'] not in ('canonical-python', 'canonical-rust')):
         raise ContractError('explicit Rust parent metadata3 required')
     _receipt_fields(row)
     return row
@@ -84,6 +84,7 @@ def validate_parent_binding(metadata: Json, state: Json, *, run_path: str) -> No
     spec = state['effective_config']['hpo_spec']
     if (state['run_variant'] != 'hpo-ppo-owned-rust-player-v1' or state['status'] != 'complete'
             or spec['schema_version'] != 6 or state['used_decisions'] != spec['decision_budget']
+            or metadata['encoder'] != spec['encoder']
             or metadata['run_path'] != run_path or metadata['run_id'] != state['run_id']
             or metadata['training_seed'] != state['seed'] or metadata['generation'] != state['updates']
             or metadata['used_decisions'] != state['used_decisions']
@@ -342,7 +343,7 @@ class RustCompletedParentAudit:
             _audit_retirement_data(state, prepared, self.pool, self._loans, self.deadline, hpo=True,
                 operating=self.loaded.config.hpo_spec['operating'], parent_directory=self.ownership.directory,
                 record_root=self.record_root, session_finish=session_finish)
-            current, generation_sha, generations_sha, updates = _audit_committed_data(self, self.ownership, self.pool,
+            current, generation_sha, generations_sha, updates, _empty_pack = _audit_committed_data(self, self.ownership, self.pool,
                 self.loaded, state, prepared, self.deadline, control_loans=self._loans)
             if generation_sha != metadata['generation_sha256'] or generations_sha != metadata['generations_sha256']:
                 raise ContractError('full independent completed generation chain differs')

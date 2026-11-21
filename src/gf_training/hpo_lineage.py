@@ -147,7 +147,9 @@ def _checked_hpo_spec(state: Json) -> Json:
     if resident:
         from gf_common.shared_inference import runtime_for_spec
         runtime_for_spec(spec)
-    if owned and (spec["origin"]!="producer-owned-v1" or spec["encoder"]!="canonical-python"):
+    from gf_common.rust_ppo_source import source_encoder
+    encoder = source_encoder(config) if rust_player else 'canonical-python'
+    if owned and (spec["origin"]!="producer-owned-v1" or spec["encoder"]!=encoder):
         raise ContractError("owned origin/encoder mismatch")
     if (spec["kind"] != "ppo-hpo-run" or spec["selection_version"] != SELECTION_VERSION
             or spec["deadline_version"] != "hpo-deadline-v1"):
@@ -211,8 +213,11 @@ def _runtime_training(value: Json, spec: Json) -> PPOTrainingConfig:
 
 
 def _run_projection(config: Json, spec: Json, training: PPOTrainingConfig) -> tuple[float,float,float]:
+    from gf_common.rust_ppo_source import source_mode
     timed_native = spec['schema_version'] == 6 and 'post_host_seconds' in spec['operating']
-    run = closed(config["run"], _RUN | ({'post_host_seconds'} if timed_native else set()))
+    mode = spec['schema_version'] == 6 and source_mode(config) is not None
+    run = closed(config["run"], _RUN | ({'post_host_seconds'} if timed_native else set())
+        | ({'ppo_source'} if mode else set()))
     if run["split"] != "train":
         raise ContractError("HPO requires training split")
     operating = spec['operating']

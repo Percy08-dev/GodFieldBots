@@ -1,6 +1,7 @@
 """Pure bounded grouping and lifetime-aware structured execution admission."""
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from math import prod
 from typing import Any
@@ -18,6 +19,7 @@ from gf_models.structured_learning import (
 )
 
 UpdateCapacityError=LearningCapacityError
+_NativePackFit = Callable[[tuple[int, ...], FrameStagingPlan | None], bool]
 
 
 @dataclass(frozen=True)
@@ -302,7 +304,7 @@ def execution_plan(endpoints: list[Any],model: Any,binding: Any,tbptt: int,*,lay
 
 def _packed_mlp_groups(endpoints: dict[int, Any], model: Any, binding: Any, tbptt: int, *,
                        layout: Any, resident_bytes: int, reservation_bytes: int, device_bytes: int | None,
-                       width: int, headroom: int | None) -> list[UpdateGroup]:
+                       width: int, headroom: int | None, native_pack_fits: _NativePackFit | None) -> list[UpdateGroup]:
     """Check whole padding bins once, subdividing in order on preallocation failure."""
     accepted: list[UpdateGroup] = []
 
@@ -317,6 +319,8 @@ def _packed_mlp_groups(endpoints: dict[int, Any], model: Any, binding: Any, tbpt
             if headroom is not None and incremental > headroom:
                 raise UpdateCapacityError('packed MLP group exceeds measured CUDA headroom: '
                     f'resource=cuda phase=update required={incremental} limit={headroom}')
+            if native_pack_fits is not None and not native_pack_fits(tuple(indices), None):
+                raise UpdateCapacityError('native PPO padding exceeds storage/numeric reservation')
         except UpdateCapacityError:
             if len(indices) == 1:
                 raise
@@ -345,9 +349,12 @@ def _packed_mlp_groups(endpoints: dict[int, Any], model: Any, binding: Any, tbpt
 
 def plan_groups(rollout: Any, logical: list[int], model: Any, binding: Any, tbptt: int, *,
                 variant: str, reservation_bytes: int, layout: Any, device_bytes: int | None = None,
-                mlp_width: int = 16, packed_device_headroom: int | None = None) -> list[UpdateGroup]:
+                mlp_width: int = 16, packed_device_headroom: int | None = None,
+                _native_pack_fits: _NativePackFit | None = None) -> list[UpdateGroup]:
     if variant=='shared-prefix' and model.model_id=='mlp':
         raise ContractError('shared-prefix is sequence-only')
+    if _native_pack_fits is not None and model.model_id != 'mlp':
+        raise ContractError('native PPO padding requires MLP endpoints')
     endpoints={index:rollout.endpoint(index) for index in logical}
     if packed_device_headroom is not None or mlp_width != 16:
         if model.model_id != 'mlp' or variant != 'microbatch':
@@ -355,7 +362,8 @@ def plan_groups(rollout: Any, logical: list[int], model: Any, binding: Any, tbpt
         integer(mlp_width, 1)
         return _packed_mlp_groups(endpoints, model, binding, tbptt, layout=layout,
             resident_bytes=rollout.resident_bytes, reservation_bytes=reservation_bytes,
-            device_bytes=device_bytes, width=mlp_width, headroom=packed_device_headroom)
+            device_bytes=device_bytes, width=mlp_width, headroom=packed_device_headroom,
+            native_pack_fits=_native_pack_fits)
     bins: dict[Any,list[int]]={}
     shared_bins: dict[Any,list[int]]={}
     for index in logical:
@@ -403,4 +411,23 @@ def plan_groups(rollout: Any, logical: list[int], model: Any, binding: Any, tbpt
                 bins.setdefault((0,length),[]).append(index)
     for indices in bins.values():
         emit(indices,False)
-    return accepted
+    if _native_pack_fits is None:
+        return accepted
+
+    native_fit = _native_pack_fits
+    refined: list[UpdateGroup] = []
+
+    def refine(group: UpdateGroup) -> None:
+        assert group.plan is not None
+        if native_fit(group.indices, group.plan.staging):
+            refined.append(group)
+            return
+        if len(group.indices) == 1:
+            raise UpdateCapacityError('native PPO padding exceeds storage/numeric reservation')
+        midpoint = len(group.indices) // 2
+        refine(planned(list(group.indices[:midpoint]), False))
+        refine(planned(list(group.indices[midpoint:]), False))
+
+    for group in accepted:
+        refine(group)
+    return refined

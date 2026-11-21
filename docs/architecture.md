@@ -2,6 +2,15 @@
 
 ## Status and scope
 
+[ADR0057](adr/0057-rust-ppo-training-data.md) records the experimental Rust PPO
+training-data route for Model3 and Model4 MLPs. The acting game task retains
+the accepted learner operands. The original writer binds them to sealed
+Journal and Replay records before the local learner receives the arrays.
+New-mode training, completion, resume and evaluation use committed Pack
+SHA-256 evidence. Explicit diagnostics retain full Python reconstruction.
+The [verification record](verification/rust-ppo-training-data.md) tracks the
+conditions for default adoption.
+
 [ADR0054](adr/0054-single-process-rust-player-runtime.md) accepts the owner's
 [single-process Rust player plan](design/rust-player-runtime-approved-plan.md)
 and the independently reviewed [bounded design](design/rust-player-runtime.md).

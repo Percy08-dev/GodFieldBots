@@ -346,14 +346,21 @@ def _retirement_history_data(state: Json, prepared: Json, intent: Json,
 
 
 def _validate_historical_audit(audit: Json, *, state: Json, prepared: Json, completion: Json) -> None:
-    """Existing audit1 data chain; full current Raw/numeric audits remain separate."""
+    """Validate the historical result under the recorded Source verification mode."""
     from gf_common.domain import digest
+    from gf_common.rust_ppo_source import source_mode
     from gf_models.structured_sealed import basename
-    closed(audit, {'schema_version', 'kind', 'run_id', 'invocation_id', 'operation_sha256',
+    from gf_training.rust_ppo_pack import validate_pack_verification
+    mode = source_mode(state['effective_config'])
+    version = 2 if mode is not None else 1
+    fields = {'schema_version', 'kind', 'run_id', 'invocation_id', 'operation_sha256',
         'prepared_sha256', 'exit_sha256', 'state_sha256', 'generation_sha256', 'updates',
-        'saved_pair', 'runtime_binding_sha256'})
-    if (type(audit['schema_version']) is not int or audit['schema_version'] != 1
-            or audit['kind'] != 'rust-player-cold-audit-v1'
+        'saved_pair', 'runtime_binding_sha256'}
+    if mode is not None:
+        fields.update({'ppo_source', 'empty_pack_verification'})
+    closed(audit, fields)
+    if (type(audit['schema_version']) is not int or audit['schema_version'] != version
+            or audit['kind'] != f'rust-player-cold-audit-v{version}' or audit.get('ppo_source') != mode
             or any(audit[key] != completion[key] for key in ('run_id', 'invocation_id',
                 'operation_sha256', 'prepared_sha256', 'exit_sha256', 'state_sha256',
                 'generation_sha256', 'runtime_binding_sha256'))):
@@ -378,8 +385,15 @@ def _validate_historical_audit(audit: Json, *, state: Json, prepared: Json, comp
     if type(updates) is not list or len(updates) != state['updates']:
         raise ContractError('historical audit must contain only every committed update')
     for generation, row in enumerate(updates, 1):
-        closed(row, {'generation', 'manifest_sha256', 'numeric_sha256', 'learner_decisions',
-            'episode_digests', 'source_set_sha256'})
+        fields = {'generation', 'manifest_sha256', 'numeric_sha256', 'learner_decisions',
+            'episode_digests', 'source_set_sha256'}
+        if mode is not None:
+            fields.update({'ppo_source', 'pack_verification'})
+        closed(row, fields)
+        if mode is not None:
+            if row['ppo_source'] != mode:
+                raise ContractError('historical audit Source recipe differs')
+            validate_pack_verification(row['pack_verification'], run_id=state['run_id'])
         integer(row['generation'], 1)
         integer(row['learner_decisions'], 0)
         for key in ('manifest_sha256', 'numeric_sha256', 'source_set_sha256'):
@@ -388,7 +402,13 @@ def _validate_historical_audit(audit: Json, *, state: Json, prepared: Json, comp
             raise ContractError('historical audit committed update order differs')
         for checksum in row['episode_digests']:
             hex_identity(checksum)
-    if updates and updates[-1]['manifest_sha256'] != completion['source_manifest_sha256']:
+    marker = state['invocations'][completion['invocation_id']].get('empty_collection')
+    if mode is not None:
+        expected_empty = marker['pack_verification'] if marker is not None else None
+        if audit['empty_pack_verification'] != expected_empty:
+            raise ContractError('historical empty Pack verification differs')
+    last_source = marker['manifest_sha256'] if marker is not None else updates[-1]['manifest_sha256'] if updates else None
+    if last_source != completion['source_manifest_sha256']:
         raise ContractError('historical audit source manifest differs from completion')
 
 

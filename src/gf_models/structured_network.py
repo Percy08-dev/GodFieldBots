@@ -596,14 +596,15 @@ def make_network(model: ModelConfigV2 | ModelConfigV3 | ModelConfigV4, seed: int
             return self._learning_heads(window.operands,context,cards)
 
         def _learning_streamed(self,window: Any,lengths: list[int],suffix_length: int,
-                               *,shared: bool=False) -> tuple[Any,Any]:
+                               *,shared: bool=False, _pack_frames: Any = None) -> tuple[Any,Any]:
             from gf_models.structured_learning import pack_frames
             batch=len(lengths)
             def stage(chunks: Any,retain: bool) -> tuple[dict[int,Any],dict[int,Any]]:
                 projected: dict[int,Any]={}
                 cards: dict[int,Any]={}
                 for indices in chunks:
-                    packed=pack_frames(self,[window.frames[index] for index in indices])
+                    packed = (_pack_frames(indices) if _pack_frames is not None else
+                        pack_frames(self,[window.frames[index] for index in indices]))
                     encoded,actor_cards=self._learning_frames(packed,list(range(len(indices))))
                     projected.update(zip(indices,encoded.unbind(0),strict=True))
                     if retain:

@@ -116,6 +116,7 @@ class GroupPackDatabase:
         self.run_id: str | None = None
         self.db: sqlite3.Connection | None = None
         self.sealed = False
+        self._sealed_logical_sha256: str | None = None
         self.database_original: OriginalFile | None = None
         self.originals: list[OriginalFile] = []
         self.max_owned_bytes = max_owned_bytes
@@ -287,6 +288,7 @@ class GroupPackDatabase:
                     database_original.recheck()
                     if command in ("seal-metrics", "seal-producer"):
                         result = {"descriptor": result, "checkpoint_metrics": checkpoint_metrics}
+                    self._sealed_logical_sha256 = original_seal["logical_sha256"]
                     sealed = True
                 elif command == "close":
                     db.close()

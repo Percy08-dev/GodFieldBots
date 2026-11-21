@@ -400,14 +400,15 @@ def _game_header(header: Json, manifest: Json, episode: Json, spec: Json,
     else:
         raw = manifest['neural_inputs']['policies'][header['policy']]
         safe, label = validate_neural_metadata(raw, actions=actions, rules=card_instance_rules())
-        if manifest['schema_version'] in (6, 7, 8, 9, 11):
+        model4 = manifest['schema_version'] in (6, 7, 8, 9, 11, 13)
+        if model4:
             # Inference5 is written by atomic_json's canonical UTF-8+newline
             # codec. Retained Journal6 metadata keeps that complete document
             # even after Registry4 deliberately deletes the physical manifest.
             encoded = (canonical(raw['inference_manifest']) + '\n').encode()
             if hashlib.sha256(encoded).hexdigest() != safe['expected_manifest_digest']:
                 raise ContractError('HPO original neural manifest bytes/hash differ from generation identity')
-        if header['model_version'] != ('4' if manifest['schema_version'] in (6, 7, 8, 9, 11) else '3') or label != header['policy'] or canonical(safe) != canonical(binding['policy_options']) or canonical(header.get('neural')) != canonical(raw):
+        if header['model_version'] != ('4' if model4 else '3') or label != header['policy'] or canonical(safe) != canonical(binding['policy_options']) or canonical(header.get('neural')) != canonical(raw):
             raise ContractError('original neural metadata differs from frozen registry')
 
 

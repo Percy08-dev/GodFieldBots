@@ -45,7 +45,7 @@ def source_data():
     source.registry = SimpleNamespace(hpo=False, failed=False, closed=False,
         state={'updates': 0}, pending=source, current=source.parent,
         local=SimpleNamespace(learner=learner), config=SimpleNamespace(actions=ACTIONS))
-    source.collection = SimpleNamespace(require=lambda *args: events.append('collection'))
+    source.collection = SimpleNamespace(pack_verification=None, require=lambda *args: events.append('collection'))
     return source, events
 
 

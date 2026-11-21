@@ -12,6 +12,7 @@ import hashlib
 import json
 import os
 import random
+import sys
 import threading
 import time
 import weakref
@@ -27,7 +28,7 @@ from gf_common.candidate_columns import encode_candidate_columns_v2
 from gf_common.card_instance import ActionConfigV3
 from gf_common.card_instance_rules import CardInstanceRules
 from gf_common.card_instance_runtime import validate_runtime_receipt
-from gf_common.card_instance_validation import act_response, validate_events
+from gf_common.card_instance_validation import act_response, reconcile_replay, validate_events
 from gf_common.domain import ContractError, Json, canonical, clone, closed, digest, integer
 from gf_common.group_pack import (
     FORMAT,
@@ -70,6 +71,7 @@ class EpisodeEncodingContext:
     policies: tuple[PolicyJournalContext, PolicyJournalContext]
     deadline: float
     clock: Json | None = None
+    learner_viewer: int | None = None
 
 
 @dataclass(frozen=True)
@@ -83,6 +85,8 @@ class EpisodeEncodingPlan:
 def episode_encoding_plan(context: EpisodeEncodingContext) -> EpisodeEncodingPlan:
     controls = asdict(context)
     del controls["runtime_evidence"]
+    if context.learner_viewer is None:
+        del controls["learner_viewer"]
     return EpisodeEncodingPlan(context.episode_id, digest(controls))
 
 
@@ -305,6 +309,103 @@ class _Journal(CardInstanceJournal):
         self.sink.rename(self._name(self.path), self._name(self.final_path))
 
 
+def _verify_training_trajectory(native: Any, context: EpisodeEncodingContext, game: str,
+                                outcome: Any, rows: list[_AcceptedTrainingRow]) -> None:
+    viewer = integer(context.learner_viewer, 1, 2)
+    policy = context.policies[viewer - 1].native
+    winner = None if outcome == 'draw' else outcome['win']['winner']
+    try:
+        native.require_identity(context.run_id, context.trial, context.episode_id, game,
+            viewer, policy['checkpoint'], policy['epoch'], len(rows), winner)
+        for decision, row in enumerate(rows):
+            native.require_row(decision, row.frame.revision, row.frame.frame_hash, row.selection.table_hash,
+                row.candidates, row.selection.index, row.selection.logprob, row.selection.value)
+    except ValueError as error:
+        raise ContractError("native learner/Journal trajectory differs") from error
+
+
+@dataclass(frozen=True)
+class _AcceptedTrainingRow:
+    frame: Any
+    selection: Selection
+    candidates: int
+
+
+class WriterTrainingEpisode:
+    """Numeric capability and raw learner facts from one committed Journal."""
+
+    def __init__(self, budget: RecordingBudget) -> None:
+        self._lease = budget.reserve(0)
+        self._active_bytes = 0
+        self._action_bytes = 0
+        self.actions: tuple[list[Json], list[Json]] = ([], [])
+        self.rows: list[_AcceptedTrainingRow] = []
+        self.events: tuple[bytes, ...] = ()
+        self.boundary: Any = None
+        self.outcome: Any = None
+        self.facts: Json = {}
+        self.native: Any = None
+
+    def grow(self, balance: int) -> None:
+        self._lease.resize(self._active_bytes + balance)
+        self._active_bytes += balance
+
+    def accept(self, viewer: int, action: Json, row: _AcceptedTrainingRow | None) -> None:
+        from gf_training.structured_rollout import _owned_bytes
+        action_bytes = _owned_bytes(action)
+        self.grow(action_bytes + (_owned_bytes(row) if row is not None else 0))
+        self._action_bytes += action_bytes
+        self.actions[viewer - 1].append(action)
+        if row is not None:
+            self.rows.append(row)
+
+    def seal(self, bundle: Any, context: EpisodeEncodingContext, game: str,
+             journal: _Journal, outcome: Any, replays: list[Json]) -> None:
+        from gf_training.structured_rollout import _episode_records_digest, _owned_bytes
+
+        viewers = {replay["viewer_player_id"]: replay for replay in replays}
+        if set(viewers) != {1, 2} or len(replays) != 2 or any(replay['game_id'] != game for replay in replays):
+            raise ContractError("training capture requires both exact participant Replays")
+        for viewer, actions in enumerate(self.actions, 1):
+            reconcile_replay(viewers[viewer], viewer, actions, outcome)
+        del actions
+        if journal.count != len(self.rows):
+            raise ContractError("accepted learner count differs from actual Journal")
+        native = bundle._training_episode()
+        if type(native) is not gf_native.PlayerPpoEpisode:
+            raise ContractError("native learner training capability missing from healthy terminal")
+        _verify_training_trajectory(native, context, game, outcome, self.rows)
+        self.boundary = journal.bank.boundary
+        # Snapshot exact decision-prefix bytes before retiring the writer Journal.
+        # These events are used only to preserve the numeric format's raw fields.
+        self.grow(sum(sys.getsizeof(raw) + 8 for raw in journal.bank._events))
+        self.events = tuple(journal.bank._events)
+        self.outcome = outcome
+        viewer = integer(context.learner_viewer, 1, 2)
+        policy = context.policies[viewer - 1].native
+        self.facts = {"episode_id": context.episode_id, "game_id": game, "viewer": viewer,
+            "checkpoint": policy["checkpoint"], "epoch": policy["epoch"], "decisions": len(self.rows),
+            "episode_digest": _episode_records_digest(context.actions.action_contract, "qualified_game", False,
+                viewer, journal.bank.episode, self.boundary,
+                ((row.frame, row.selection.table_hash, row.selection) for row in self.rows),
+                "natural", outcome, None)}
+        self.grow(_owned_bytes((self.boundary, outcome, self.facts)))
+        for actions in self.actions:
+            actions.clear()
+        self.grow(-self._action_bytes)
+        self._action_bytes = 0
+        self.native = native
+
+    def close(self) -> None:
+        self.native = self.boundary = self.outcome = None
+        self.facts = {}
+        self.events = ()
+        for actions in self.actions:
+            actions.clear()
+        self.rows.clear()
+        self._lease.close()
+
+
 class CanonicalEpisodeEncoder:
     """Encode actual native facts; this is content validation, never a live Source."""
 
@@ -318,6 +419,8 @@ class CanonicalEpisodeEncoder:
         self.terminal: Json | None = None
         self.originals: list[Any] = []
         self.seen: set[int] = set()
+        self.training = WriterTrainingEpisode(sink.budget) if context.learner_viewer is not None else None
+        self._training_pending: _AcceptedTrainingRow | None = None
 
     def _open(self, game: str) -> None:
         if self.game is not None:
@@ -468,6 +571,8 @@ class CanonicalEpisodeEncoder:
                 value,
             )
             index = journal.begin_frame(frame, delta, generated, selection, data["command"], {})
+            if viewer == c.learner_viewer:
+                self._training_pending = _AcceptedTrainingRow(frame, selection, len(generated.table.kinds))
             self.pending = viewer, data["command"]["command_id"]
             assert index == journal.count - 1
         elif kind == "ack":
@@ -493,6 +598,9 @@ class CanonicalEpisodeEncoder:
                     )
                 },
             )
+            if self.training is not None and response["status"] in ("active", "terminal"):
+                self.training.accept(viewer, data["command"]["action"], self._training_pending)
+            self._training_pending = None
             self.revision = response["state_revision"]
             self.pending = None
         elif kind == "terminal":
@@ -557,6 +665,10 @@ class CanonicalEpisodeEncoder:
                     )
                 elif bank["events"]:
                     raise ContractError("events without a created participant journal")
+            if (self.training is not None and report["end_kind"] == "natural"
+                    and report["error"] is None and not report["cleanup_errors"] and report["inference_released"]):
+                self.training.seal(bundle, c, bundle.game,
+                    self.journals[integer(c.learner_viewer, 1, 2)], report["outcome"], data["replays"])
             for replay in data["replays"]:
                 viewer = replay.get("viewer_player_id", replay.get("viewer"))
                 integer(viewer, 1, 2)
@@ -581,6 +693,10 @@ class CanonicalEpisodeEncoder:
         self.originals.clear()
         self.journals.clear()
         self.policy_states.clear()
+        self._training_pending = None
+        if self.training is not None:
+            self.training.close()
+            self.training = None
 
 
 def _state(value: Json) -> tuple[Any, ...]:
@@ -627,6 +743,17 @@ class RustPendingDescriptor:
             if self._owner is None or self._files_closed:
                 raise RuntimeError("pending descriptor closed")
             self._owner.recheck()
+
+    def verify_training_pack(self, *, manifest_sha256: str, logical_sha256: str, run_id: str) -> Json:
+        from gf_training.rust_ppo_pack import check_sealed_pack
+        with self._lock:
+            self.recheck()
+            assert self._owner is not None
+            result = check_sealed_pack(self._owner.raw, self._owner.database,
+                descriptor_sha256=self.descriptor_sha256, manifest_sha256=manifest_sha256,
+                logical_sha256=logical_sha256, run_id=run_id)
+            self.recheck()
+            return result
 
     def __buffer__(self, flags: int) -> memoryview:
         with self._lock:
@@ -786,6 +913,7 @@ class RustPlayerStorage:
         cleanup_deadline: float,
         deferred_contexts: bool = False,
         context_plans: tuple[EpisodeEncodingPlan, ...] = (),
+        training: bool = False,
     ) -> None:
         if len({c.episode_id for c in contexts}) != len(contexts):
             raise ValueError("duplicate planned storage episode")
@@ -809,6 +937,10 @@ class RustPlayerStorage:
         elif context_plans:
             raise ValueError("context plans require explicit deferred mode")
         self.deferred_contexts = deferred_contexts
+        self.training = training
+        self._training_episodes: dict[str, WriterTrainingEpisode] = {}
+        self._sealed_logical_sha256: str | None = None
+        self._training_seal_verified = False
         self._context_plans = {plan.episode_id: plan for plan in context_plans}
         self.runtime, self.directory, self.run_id = runtime, directory, run_id
         self.settings, self.deadline, self.cleanup_deadline = settings, deadline, cleanup_deadline
@@ -947,6 +1079,15 @@ class RustPlayerStorage:
             raise ContractError("complete committed groups required for writer inventory")
         return value
 
+    def training_evidence(self, inventory: RustWriterInventory, episode_ids: tuple[str, ...]) -> list[Json]:
+        if (not self.training or inventory._closed or inventory._loan.workspace is not self._workspace_lease
+                or set(episode_ids) != self._training_episodes.keys() or len(set(episode_ids)) != len(episode_ids)):
+            raise ContractError("complete committed learner trajectories required")
+        rows = [self._training_episodes[episode].facts for episode in episode_ids]
+        if len({row['game_id'] for row in rows}) != len(rows):
+            raise ContractError("duplicate learner trajectory game identity")
+        return rows
+
     def bind_contexts(self, contexts: tuple[EpisodeEncodingContext, ...]) -> None:
         """Bind one actual complete group before any original native admission."""
         if not self.deferred_contexts:
@@ -991,6 +1132,33 @@ class RustPlayerStorage:
             raise RuntimeError("no actual pending descriptor owner")
         result, self._pending_owner = self._pending_owner, None
         return result
+
+    def verify_training_seal(self, manifest_sha256: str) -> Json:
+        if not self.training or not self._sealed or self._thread.is_alive() or self._pending_owner is None or self._sealed_logical_sha256 is None:
+            raise ContractError("sealed joined writer with actual training witness required")
+        with self.budget.reserve(2 * 64 * 1024):
+            observed = self._pending_owner.verify_training_pack(manifest_sha256=manifest_sha256,
+                logical_sha256=self._sealed_logical_sha256, run_id=self.run_id)
+        self._training_seal_verified = True
+        return observed
+
+    def take_training_episodes(self, episode_ids: tuple[str, ...]) -> tuple[WriterTrainingEpisode, ...]:
+        if (not self.training or not self._sealed or self._thread.is_alive() or not self._training_seal_verified
+                or set(episode_ids) != self._training_episodes.keys()):
+            raise ContractError("actual sealed learner trajectories required")
+        result = tuple(self._training_episodes[episode] for episode in episode_ids)
+        self._training_episodes.clear()
+        return result
+
+    def close_unclaimed_training(self) -> None:
+        if not self.training or self._thread.is_alive():
+            return
+        for trajectory in self._training_episodes.values():
+            trajectory.close()
+        self._training_episodes.clear()
+        if self._pending_owner is not None:
+            self._pending_owner.close()
+            self._pending_owner = None
 
     def cancel(self, reason: str) -> None:
         with self._condition:
@@ -1088,7 +1256,10 @@ class RustPlayerStorage:
         del members, index
         self.committed.add(group.group_id)
         for episode in group.episodes:
-            self.encoders[episode].retire()
+            encoder = self.encoders[episode]
+            if encoder.training is not None and encoder.training.native is not None:
+                self._training_episodes[episode], encoder.training = encoder.training, None
+            encoder.retire()
         sink.close()
 
     def _publish(self, descriptor: Json) -> CollectionLocator:
@@ -1197,6 +1368,10 @@ class RustPlayerStorage:
             _retain_failure(self, error, clear_frames=True)
             errors.append(type(error).__name__)
         if not errors:
+            if not self._sealed:
+                for trajectory in self._training_episodes.values():
+                    trajectory.close()
+                self._training_episodes.clear()
             for encoder in self.encoders.values():
                 encoder.retire()
             for sink in self.sinks.values():
@@ -1282,7 +1457,10 @@ class RustPlayerStorage:
                         encoder.pending is not None for encoder in self.encoders.values()
                     ):
                         raise ValueError("cannot seal incomplete original groups")
-                    descriptor = self._db("seal-metrics", publication="pending")["descriptor"]
+                    descriptor = self._db("seal-producer" if self.training else "seal-metrics", publication="pending")["descriptor"]
+                    if self.training:
+                        assert self._database is not None
+                        self._sealed_logical_sha256 = self._database._sealed_logical_sha256
                     locator = self._publish(descriptor)
                     # Cancellation and successful seal advertisement have ONE
                     # linearization owner. A completed publish alone is not it.

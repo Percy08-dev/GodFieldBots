@@ -9,6 +9,7 @@ use super::{
     history::History,
     http::{Http, Server},
     numeric::ServingRow,
+    training::Trajectory,
     requests::Identity,
     rng::{PythonRng, search_seed},
     search::{self, Costs, Table},
@@ -73,6 +74,8 @@ pub struct GameSpec {
     pub deadline: f64,
     pub cleanup_deadline: f64,
     #[serde(default)]
+    pub learner_viewer: Option<u8>,
+    #[serde(default)]
     pub runtime_evidence: Value,
     #[serde(default)]
     pub clock: Value,
@@ -94,6 +97,10 @@ impl GameSpec {
             "game cleanup deadline must cover execution deadline",
         )?;
         Costs::parse(&self.numeric_costs)?;
+        if let Some(viewer) = self.learner_viewer {
+            ensure(matches!(viewer, 1 | 2) && self.policies[usize::from(viewer - 1)].kind == "mlp",
+                "PPO learner route requires an explicit MLP seat")?;
+        }
         for p in &self.policies {
             if let Some(costs) = &p.numeric_costs {
                 Costs::parse(costs)?;
@@ -255,6 +262,7 @@ struct Actor {
     report: GameReport,
     final_observations: Vec<Value>,
     replays: Vec<Value>,
+    training: Option<Trajectory>,
 }
 fn command_id() -> Result<String> {
     use std::io::Read;
@@ -347,9 +355,13 @@ impl Actor {
             report,
             final_observations: vec![],
             replays: vec![],
+            training: None,
         })
     }
     async fn play(&mut self, dispatcher: &Arc<Dispatcher>, storage: &Arc<Mailbox>) -> Result<()> {
+        if self.spec.learner_viewer.is_some() {
+            self.training = Some(Trajectory::new(storage.account().account));
+        }
         self.http.attest().await?;
         let definitions = self.http.catalog().await?;
         let game = self.http.create().await?;
@@ -427,21 +439,26 @@ impl Actor {
                 "configured candidate capacity exceeded",
             )?;
             let mut scores = None;
+            let mut training_row = None;
             let selected =
                 if let Some(index) = seat.policy.select(&input, &config, &generated.table)? {
                     index
                 } else {
-                    let row = ServingRow::build_owned(
-                        &frame,
-                        &seat.history.events,
-                        &input,
-                        &config,
-                        &generated.table,
-                        limits.aggregate_window,
-                        limits.max_positions,
-                        &budget,
-                        &control,
-                    )?;
+                    let row = if self.spec.learner_viewer == Some(actor) {
+                        let training = self.training.as_mut().expect("explicit learner trajectory");
+                        training.reserve_next()?;
+                        let (serving, kept) = ServingRow::build_training(
+                            &frame, &seat.history.events, &input, &config, &generated.table,
+                            limits.aggregate_window, limits.max_positions, &budget, &control, training.account(),
+                        )?;
+                        training_row = Some(kept);
+                        serving
+                    } else {
+                        ServingRow::build_owned(
+                            &frame, &seat.history.events, &input, &config, &generated.table,
+                            limits.aggregate_window, limits.max_positions, &budget, &control,
+                        )?
+                    };
                     let mut measurement = super::metrics::InferenceSpan::new(&dispatcher.metrics);
                     let identity = Identity {
                         run: self.spec.run.clone(),
@@ -511,6 +528,11 @@ impl Actor {
                 )
                 .await?;
             let ack = self.http.act(&game, actor, &command).await?;
+            if ack["status"] != "aborted" && let Some(row) = training_row {
+                let scores = scores.as_ref().expect("accepted learner MLP inference");
+                self.training.as_mut().expect("explicit learner trajectory")
+                    .accept(row, scores.identity.request, scores.sample, scores.logprob, scores.value);
+            }
             if ack["status"] == "terminal" {
                 self.report.end_kind = "natural".into();
                 self.report.outcome = ack["result"].clone();
@@ -706,6 +728,17 @@ pub async fn run(
     }
     actor.cleanup(&dispatcher).await;
     let game = actor.game.as_deref().unwrap_or("");
+    let mut training = None;
+    if let Some(trajectory) = actor.training.take()
+        && actor.report.end_kind == "natural" && actor.report.error.is_none()
+        && actor.report.cleanup_errors.is_empty() && actor.report.inference_released
+        && actor.replays.len() == 2 && actor.final_observations.len() == 2
+    {
+        match trajectory.finish(&actor.spec, game, &actor.report.outcome) {
+            Ok(episode) => training = Some(episode),
+            Err(error) => actor.report.error = Some(error.to_string()),
+        }
+    }
     let release_key = if actor.report.inference_released && actor.report.cleanup_errors.is_empty() {
         Some((
             actor.spec.run.clone(),
@@ -736,7 +769,7 @@ pub async fn run(
     // Cancellation/failure still reports the explicit final diagnostics through
     // the seam if it remains open; no manufactured archive success.
     match storage
-        .publish("terminal", &episode, game, &terminal, release_key, deadline)
+        .publish_with_training("terminal", &episode, game, &terminal, release_key, deadline, training)
         .await
     {
         Ok(()) => actor.report.storage_accepted = true,

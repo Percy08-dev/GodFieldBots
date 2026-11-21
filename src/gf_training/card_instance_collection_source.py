@@ -154,7 +154,9 @@ def inspect_rust_game_manifest(owner: object, manifest: Json, actions: ActionCon
         RustPlayerOriginals,
         RustResumeOriginals,
     )
-    if type(owner) not in (RustPlayerOriginals, RustColdOriginals, RustResumeOriginals, RustCompletedOriginals):
+    from gf_training.rust_ppo_diagnostics import RustDiagnosticOriginals
+    if type(owner) not in (RustPlayerOriginals, RustColdOriginals, RustResumeOriginals, RustCompletedOriginals,
+            RustDiagnosticOriginals):
         raise ContractError('actual Rust writer originals required')
     validate_record_shape(manifest, 'collection', hpo=type(role) is HpoCollectionRole)
     if type(manifest['actor_protocol_version']) is not int or manifest['actor_protocol_version'] != 11:
@@ -185,7 +187,11 @@ def _inspect_game_manifest(owner: Any, manifest: Json, actions: ActionConfigV3,
     if resident and not evaluation:
         from gf_training.hpo_collection import check_hpo_collection
         check_hpo_collection(manifest)
-    if (manifest.get('schema_version') != (11 if _rust and hpo else 10 if _rust else 9 if owned and manifest.get('config',{}).get('hpo_spec',{}).get('schema_version')==5 else 8 if owned else 7 if resident else 6 if hpo else 5) or type(manifest['schema_version']) is not int
+    expected_version = (9 if owned and manifest.get('config',{}).get('hpo_spec',{}).get('schema_version')==5 else 8 if owned else 7 if resident else 6 if hpo else 5)
+    if _rust:
+        from gf_common.rust_ppo_source import source_mode
+        expected_version = (12 if source_mode(manifest['config']) is not None else 10) + int(hpo)
+    if (manifest.get('schema_version') != expected_version or type(manifest['schema_version']) is not int
             or manifest.get('status') != 'complete' or manifest.get('collection_role') != role.role
             or manifest.get('model_version') != ('4' if hpo else '3') or manifest.get('journal_schema_version') != 6
             or manifest.get('derived_schema_version') != 6 or manifest.get('participant_protocol_version') != 3

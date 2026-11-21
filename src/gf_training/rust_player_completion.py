@@ -8,6 +8,7 @@ from typing import Any
 
 from gf_common.domain import ContractError, Json, canonical, digest, integer
 from gf_common.rust_player import deadline_seconds
+from gf_common.rust_ppo_source import source_encoder, source_mode
 from gf_models.config import PPOUpdateConfig, ordinary_ppo_update
 from gf_training.group_pack_pool import PackedArtifactPool
 from gf_training.group_pack_resources import close_resources, retain_cleanup
@@ -326,7 +327,7 @@ class ColdFinalizedRustParent:
         owner = self._invocation
         state = json.loads(self._state)
         body = {'schema_version': 3, 'kind': 'hpo-rust-parent-metadata-validation',
-            'origin': 'producer-owned-v1', 'encoder': 'canonical-python', 'run_id': state['run_id'],
+            'origin': 'producer-owned-v1', 'encoder': source_encoder(state['effective_config']), 'run_id': state['run_id'],
             'run_path': str(owner._parent_directory), 'training_seed': state['seed'],
             'config_sha256': state['config_sha256'], 'state_sha256': self._state_sha256,
             'generation': state['updates'], 'generation_sha256': self._generation_sha256,
@@ -512,6 +513,14 @@ def _audit_raw_originals(originals: Any, *, loaded: Any, state: Json, previous: 
                 or canonical(originals.files) != canonical(proof['files'])
                 or digest(originals.files) != proof['source_set_sha256']):
             raise ContractError('cold FULL raw/Replay/count/file correspondence differs')
+        if proof.get('ppo_source') is not None:
+            evidence = proof['training_episodes']
+            if (evidence != manifest['training_episodes']
+                    or [(row['episode_id'], row['game_id'], row['viewer'], row['decisions'], row['episode_digest']) for row in evidence]
+                    != [(row.episode_id, episodes[row.episode_id]['game_id'], row.viewer, len(record.frames), checksum)
+                        for row, record, checksum in zip((row for row in outputs if row.viewer == seats[row.episode_id]),
+                            records, episode_digests, strict=True)]):
+                raise ContractError('full raw learner rows differ from sealed Rust PPO evidence')
         correspondence = {'recipe': 'rust-player-source-numeric-v1',
             'manifest_sha256': proof['manifest_sha256'], 'episode_digests': episode_digests,
             'snapshot_identity': previous['snapshot_identity'], 'numeric_files': update['numeric_files']}
@@ -595,6 +604,7 @@ def _audit_update(cold: Any, ownership: Any, pool: PackedArtifactPool,
     hpo = getattr(loaded.config, 'hpo_spec', {}).get('schema_version') == 6
     validate_record_shape(update, 'update', hpo=hpo)
     proof = validate_record_shape(update['source_proof'], 'proof', hpo=hpo)
+    mode = source_mode(state['effective_config'])
     generation = current['generation']
     expected = Path(loaded.config.storage.db_root) / state['run_id'] / 'collections' / f'batch-{generation - 1:06}' / 'collection.pending.json'
     if (proof['storage']['descriptor_path'] != str(expected) or update['generation'] != generation
@@ -603,26 +613,35 @@ def _audit_update(cold: Any, ownership: Any, pool: PackedArtifactPool,
             or update['result_snapshot_identity'] != current['snapshot_identity']
             or proof['snapshot_identity'] != previous['snapshot_identity']
             or proof['runtime_binding_sha256'] != state['runtime_binding_sha256']
-            or proof['player_producer'] != state['identity']['player_runtime']['producer']):
+            or proof['player_producer'] != state['identity']['player_runtime']['producer']
+            or proof.get('ppo_source') != mode):
         raise ContractError('cold Source/update/generation ownership correspondence differs')
     if type(cold) is ColdContinuation:
-        originals: Any = RustColdOriginals(cold, ownership, expected, proof['storage']['descriptor_sha256'],
-            pool=pool, settings=loaded.config.preprocessing, deadline=deadline)
+        cold.require_pair()
         record_root = cold._control.root
+        if mode is None:
+            originals: Any = RustColdOriginals(cold, ownership, expected, proof['storage']['descriptor_sha256'],
+                pool=pool, settings=loaded.config.preprocessing, deadline=deadline)
     elif type(cold) is RustCompletedParentAudit:
         cold.require()
         if cold.ownership is not ownership or cold.pool is not pool or cold.loaded is not loaded:
             raise ContractError('actual SAME completed DATA audit/ownership/pool/config required')
-        originals = RustCompletedOriginals(cold, expected, proof['storage']['descriptor_sha256'],
-            settings=loaded.config.preprocessing, deadline=deadline)
         record_root = cold.record_root
+        if mode is None:
+            originals = RustCompletedOriginals(cold, expected, proof['storage']['descriptor_sha256'],
+                settings=loaded.config.preprocessing, deadline=deadline)
     else:
         from gf_training.rust_player_restore import RustResumeAudit
         if type(cold) is not RustResumeAudit:
             raise ContractError('actual cold or current-host resume audit required')
-        originals = RustResumeOriginals(cold, expected, proof['storage']['descriptor_sha256'],
-            settings=loaded.config.preprocessing, deadline=deadline)
+        cold.require()
         record_root = cold.control.root
+        if mode is None:
+            originals = RustResumeOriginals(cold, expected, proof['storage']['descriptor_sha256'],
+                settings=loaded.config.preprocessing, deadline=deadline)
+    if mode is not None:
+        return _audit_sealed_update(ownership, pool, loaded, state, previous, current, update,
+            deadline, expected=expected, record_root=record_root, control_loans=control_loans)
     return _audit_update_data(originals, ownership, pool, loaded, state, previous, current, update,
         deadline, record_root=record_root, control_loans=control_loans)
 
@@ -639,6 +658,102 @@ def _audit_ordinary_update_counts(recipe: PPOUpdateConfig, previous: Json, curre
         raise ContractError('cold ordinary saved games/steps/decisions differ from frozen PPO recipe')
 
 
+def _audit_sealed_update(ownership: Any, pool: PackedArtifactPool, loaded: Any, state: Json,
+                         previous: Json, current: Json, update: Json, deadline: float, *,
+                         expected: Path, record_root: Path, control_loans: list[Any]) -> Json:
+    """Normal saved audit for a writer-attested collection and a committed update."""
+    from gf_common.hpo import optimizer_delta
+    from gf_training.hpo_collection import selection_for_counts
+    from gf_training.rust_ppo_pack import verify_numeric_files, verify_saved_pack
+
+    proof, generation = update['source_proof'], current['generation']
+    hpo = getattr(loaded.config, 'hpo_spec', {}).get('schema_version') == 6
+    batch_id = f'batch-{generation - 1:06}'
+    recipe = ordinary_ppo_update(loaded.config.training) if not hpo else None
+    games = recipe.collection_games if recipe is not None else loaded.config.hpo_spec['training_recipe']['collection_games']
+    episodes = proof['training_episodes']
+    evidence = proof['pack_verification']
+    storage = {'format': 'sqlite-group-pack-v1', 'descriptor_path': str(expected),
+        **{key: evidence[key] for key in ('descriptor_sha256', 'database_sha256', 'logical_sha256', 'seal_id')}}
+    counts = tuple(row['decisions'] for row in episodes)
+    episode_digests = [row['episode_digest'] for row in episodes]
+    seats = {row['episode_id']: row['viewer'] for row in episodes}
+    collected = sum(counts)
+    usage = proof['service_usage']
+    writer = proof['writer_retirement']
+    if (update['run_id'] != state['run_id'] or proof['run_id'] != state['run_id']
+            or update['batch_id'] != batch_id or proof['batch_id'] != batch_id
+            or proof['generation'] != generation - 1 or proof['games'] != games
+            or update['planned_games'] != games or update['actual_games'] != games
+            or proof['manifest_sha256'] != update['collection_manifest_sha256']
+            or proof['collection_retirement_sha256'] != update['collection_retirement_sha256']
+            or usage != update['service_usage'] or usage['run_id'] != state['run_id']
+            or usage['config_sha256'] != state['config_sha256']
+            or usage['generation'] != generation - 1 or usage['batch_id'] != batch_id
+            or usage['invocation_id'] not in state['invocations']
+            or writer['run_id'] != state['run_id'] or writer['batch_id'] != batch_id
+            or writer['descriptor_sha256'] != evidence['descriptor_sha256']
+            or writer['writer_joined'] is not True or writer['cleanup_errors'] != []
+            or proof['storage'] != storage or proof['closure_counts'] != {'natural': games}
+            or proof['missing_replays'] != [] or len(episodes) != games
+            or proof['accepted_decisions'] < collected
+            or seats != update['learner_seats'] or episode_digests != proof['episode_digests']
+            or any(row['epoch'] != generation - 1 or row['checkpoint'] != previous['inference_sha256']
+                for row in episodes)
+            or proof['files']['manifest.json']['sha256'] != proof['manifest_sha256']
+            or digest(proof['files']) != proof['source_set_sha256']):
+        raise ContractError('sealed PPO writer evidence differs from committed collection or learner plan')
+    count = collected
+    if hpo:
+        spec = loaded.config.hpo_spec
+        selection = selection_for_counts(counts, learning_seed=state['seed'], batch=generation - 1,
+            decision_budget=spec['decision_budget'], used_before=previous['used_decisions'])
+        count = selection['used_decisions']
+        steps = optimizer_delta(count, epochs=spec['training_recipe']['epochs'],
+            minibatch_size=spec['training_recipe']['minibatch_size'])
+        encoder = source_encoder(state['effective_config'])
+        if (update['encoder'] != encoder or current['encoder'] != encoder or previous['encoder'] != encoder
+                or proof['selection'] != selection or digest(selection) != proof['selection_sha256']
+                or proof['replay_reconciled'] is not True or update['collected_decisions'] != collected
+                or update['used_decisions'] != count or update['expected_optimizer_step_delta'] != steps
+                or proof['expected_optimizer_step_delta'] != steps
+                or current['optimizer_steps'] != previous['optimizer_steps'] + steps
+                or current['optimizer_steps'] != update['metrics']['optimizer_steps']
+                or current['used_decisions'] != previous['used_decisions'] + count
+                or current['collected_decisions'] != previous['collected_decisions'] + collected):
+            raise ContractError('sealed Model4 selection or optimizer lineage differs')
+    elif recipe is not None:
+        _audit_ordinary_update_counts(recipe, previous, current, update, decisions=count)
+    if count != update['accepted_decisions']:
+        raise ContractError('sealed PPO decision count differs from update')
+    if digest({'recipe': 'rust-player-source-numeric-v1', 'manifest_sha256': proof['manifest_sha256'],
+            'episode_digests': episode_digests, 'snapshot_identity': previous['snapshot_identity'],
+            'numeric_files': update['numeric_files']}) != proof['source_correspondence']:
+        raise ContractError('sealed PPO numeric correspondence differs')
+    observed = verify_saved_pack(expected, evidence, run_id=state['run_id'],
+        manifest_sha256=proof['manifest_sha256'], deadline=deadline, budget=pool.budget)
+    mark = len(control_loans)
+    _audit_source_device_plan(update, loaded=loaded, state=state, source_invocation=usage['invocation_id'],
+        record_root=record_root, pool=pool, deadline=deadline, loans=control_loans)
+    numeric = ownership.directory / 'numeric' / batch_id / 'rollout.json'
+    if ownership.directory / update['numeric'] != numeric.parent or update['numeric_files'].get('rollout.json') != update['numeric_sha256']:
+        raise ContractError('sealed PPO numeric manifest path or checksum differs')
+    header, _ = _read(numeric, pool.budget, deadline, update['numeric_sha256'], loans=control_loans)
+    shard_files = header['data']['files']
+    if (header['schema_version'] != (8 if hpo else 7) or header.get('ppo_source') != proof['ppo_source']
+            or shard_files != {name: sha for name, sha in update['numeric_files'].items() if name != 'rollout.json'}):
+        raise ContractError('sealed PPO numeric manifest differs from the committed recipe or file inventory')
+    verify_numeric_files(numeric.parent, shard_files, deadline=deadline, budget=pool.budget)
+    del header, shard_files
+    for loan in control_loans[mark:]:
+        loan.close()
+    del control_loans[mark:]
+    return {'generation': generation, 'manifest_sha256': proof['manifest_sha256'],
+        'numeric_sha256': update['numeric_sha256'], 'learner_decisions': count,
+        'episode_digests': episode_digests, 'source_set_sha256': proof['source_set_sha256'],
+        'ppo_source': proof['ppo_source'], 'pack_verification': observed}
+
+
 def _audit_update_data(originals: Any, ownership: Any, pool: PackedArtifactPool, loaded: Any,
                        state: Json, previous: Json, current: Json, update: Json, deadline: float, *,
                        record_root: Path, control_loans: list[Any]) -> Json:
@@ -651,6 +766,8 @@ def _audit_update_data(originals: Any, ownership: Any, pool: PackedArtifactPool,
     from gf_training.structured_rollout import _source_correspondence, read_game_rollout
     hpo = getattr(loaded.config, 'hpo_spec', {}).get('schema_version') == 6
     proof, generation = update['source_proof'], current['generation']
+    mode = proof.get('ppo_source')
+    source_options = {'_ppo_source': mode} if mode is not None else {}
     expected = Path(loaded.config.storage.db_root) / state['run_id'] / 'collections' / f'batch-{generation - 1:06}' / 'collection.pending.json'
     count, _collected, episode_digests, source_invocation = _audit_raw_originals(originals, loaded=loaded,
         state=state, previous=previous, update=update, proof=proof,
@@ -703,12 +820,12 @@ def _audit_update_data(originals: Any, ownership: Any, pool: PackedArtifactPool,
                 rules=card_instance_rules(), expected_selection=proof['selection'],
                 expected_correspondence=correspondence, expected_snapshot_identity=proof['snapshot_identity'],
                 storage_binding=storage_binding(), numeric_budget_bytes=numeric_workspace,
-                max_owned_bytes=pool.budget.limit, reserve=reservation.resize)
+                max_owned_bytes=pool.budget.limit, reserve=reservation.resize, **source_options)
         else:
             readback = read_game_rollout(numeric, update['numeric_sha256'], model,
                 actions=loaded.config.actions, rules=card_instance_rules(), declaration=declaration,
                 expected_correspondence=correspondence, storage_binding=storage_binding(),
-                max_owned_bytes=pool.budget.limit, reserve=reservation.resize)
+                max_owned_bytes=pool.budget.limit, reserve=reservation.resize, **source_options)
         readback.require_learning()
         if len(readback) != count:
             raise ContractError('cold numeric learner count differs')
@@ -833,13 +950,16 @@ def _audit_empty_originals(originals: Any, *, loaded: Any, state: Json, current:
 
 
 def _audit_empty(cold: ColdContinuation, ownership: Any, pool: PackedArtifactPool,
-                 loaded: Any, state: Json, current: Json, marker: Json, deadline: float, loans: list[Any]) -> None:
+                 loaded: Any, state: Json, current: Json, marker: Json, deadline: float, loans: list[Any]) -> Json | None:
     from gf_training.rust_player_lineage import validate_empty_collection
     from gf_training.rust_player_source import RustColdOriginals
     validate_empty_collection(marker, state=state, config=loaded.config)
     admission, _, _ = cold.require_pair()
-    originals = RustColdOriginals(cold, ownership, Path(marker['descriptor_path']), marker['descriptor_sha256'],
-        pool=pool, settings=loaded.config.preprocessing, deadline=deadline)
+    mode = source_mode(state['effective_config'])
+    originals = None
+    if mode is None:
+        originals = RustColdOriginals(cold, ownership, Path(marker['descriptor_path']), marker['descriptor_sha256'],
+            pool=pool, settings=loaded.config.preprocessing, deadline=deadline)
     mark = len(loans)
     inference_files = {state['updates']: current['inference_sha256']}
     try:
@@ -852,20 +972,49 @@ def _audit_empty(cold: ColdContinuation, ownership: Any, pool: PackedArtifactPoo
                 inference_files[generation] = row['inference_sha256']
                 del row
     except BaseException as error:
-        vars(error)['cleanup_owner'] = _FailedRawAudit(originals, error)
+        if originals is not None:
+            vars(error)['cleanup_owner'] = _FailedRawAudit(originals, error)
         raise
-    _audit_empty_originals(originals, loaded=loaded, state=state, current=current,
-        marker=marker, admission=admission, parent=ownership.directory, inference_files=inference_files)
+    observed = None
+    if originals is not None:
+        _audit_empty_originals(originals, loaded=loaded, state=state, current=current,
+            marker=marker, admission=admission, parent=ownership.directory, inference_files=inference_files)
+    else:
+        observed = _audit_sealed_empty(pool, loaded, state, current, marker, admission,
+            parent=ownership.directory, inference_files=inference_files, deadline=deadline)
     inference_files.clear()
     for loan in loans[mark:]:
         loan.close()
     del loans[mark:]
+    return observed
+
+
+def _audit_sealed_empty(pool: PackedArtifactPool, loaded: Any, state: Json, current: Json,
+                        marker: Json, admission: Json, *, parent: Path,
+                        inference_files: dict[int, str], deadline: float) -> Json:
+    from gf_training.rust_ppo_pack import verify_saved_pack
+
+    _audit_empty_schedule(marker, state=state, current=current, loaded=loaded,
+        parent=parent, inference_files=inference_files)
+    schedule = [(row['episode_id'], row['learner_viewer']) for group in marker['schedule']
+        for row in group['episodes']]
+    usage = marker['service_usage']
+    if (marker['snapshot_identity'] != current['snapshot_identity']
+            or schedule != [(row['episode_id'], row['viewer']) for row in marker['training_episodes']]
+            or any(row['epoch'] != current['generation'] or row['checkpoint'] != current['inference_sha256']
+                for row in marker['training_episodes'])
+            or usage['invocation_id'] != admission['invocation_id']
+            or usage['config_sha256'] != state['config_sha256'] or usage['run_id'] != state['run_id']
+            or usage['batch_id'] != marker['batch_id'] or usage['generation'] != current['generation']):
+        raise ContractError('sealed empty PPO collection differs from original plan or current checkpoint')
+    return verify_saved_pack(Path(marker['descriptor_path']), marker['pack_verification'],
+        run_id=state['run_id'], manifest_sha256=marker['manifest_sha256'], deadline=deadline, budget=pool.budget)
 
 
 def _audit_committed_data(context: Any, ownership: Any, pool: PackedArtifactPool, loaded: Any,
                           state: Json, prepared: Json, deadline: float, *,
-                          control_loans: list[Any]) -> tuple[Json, str, str, list[Json]]:
-    """Shared immutable generation/Raw/Replay/numeric audit; grants no Parent."""
+                          control_loans: list[Any]) -> tuple[Json, str, str, list[Json], Json | None]:
+    """Shared immutable generation and configured Source audit; grants no Parent."""
     import hashlib
     hpo = getattr(loaded.config, 'hpo_spec', {}).get('schema_version') == 6
     parent = ownership.directory
@@ -912,12 +1061,13 @@ def _audit_committed_data(context: Any, ownership: Any, pool: PackedArtifactPool
     marker = invocation.get('empty_collection')
     if hpo and ((state['stop_reason'] == 'empty_collection') != (marker is not None)):
         raise ContractError('empty marker must belong to the actual current frozen invocation')
+    empty_pack = None
     if marker is not None:
         if current is None:
             raise ContractError('empty collection requires genuine current saved generation')
         if type(context) is not ColdContinuation:
             raise ContractError('complete imported parent cannot contain an empty collection marker')
-        _audit_empty(context, ownership, pool, loaded, state, current, marker, deadline, control_loans)
+        empty_pack = _audit_empty(context, ownership, pool, loaded, state, current, marker, deadline, control_loans)
     expected_batches = {f'batch-{number:06}' for number in range(state['updates'] + int(marker is not None))}
     collection_root = Path(loaded.config.storage.db_root) / state['run_id'] / 'collections'
     if collection_root.exists() and {path.name for path in collection_root.iterdir()} != expected_batches:
@@ -927,7 +1077,7 @@ def _audit_committed_data(context: Any, ownership: Any, pool: PackedArtifactPool
             or digest(current['artifact_files']) != prepared['artifacts_sha256']
             or last_source != prepared['source_manifest_sha256']):
         raise ContractError('cold current committed artifacts/source differs')
-    return current, parent_sha, chain_digest.hexdigest(), updates
+    return current, parent_sha, chain_digest.hexdigest(), updates, empty_pack
 
 
 def _audit_saved_data(parent: Path, loaded: Any, state: Json, current: Json, scan: Any) -> Any:
@@ -1004,7 +1154,7 @@ def finalize_cold(control: HostControl, cold: ColdContinuation, *, loaded: Any) 
             raise ContractError('cold frozen state/current actual operation/Prepared differs')
         _audit_retirement(control, state, prepared, pool, result._control_loans, deadline, hpo=hpo,
             operating=loaded.config.hpo_spec['operating'] if hpo else None)
-        current, parent_sha, generations_sha, updates = _audit_committed_data(cold, ownership, pool, loaded,
+        current, parent_sha, generations_sha, updates, empty_pack = _audit_committed_data(cold, ownership, pool, loaded,
             state, prepared, deadline, control_loans=result._control_loans)
         scan = result._open_saved_scan(deadline)
         target = parent / 'artifacts' / f'{state["updates"]:06}'
@@ -1023,6 +1173,10 @@ def finalize_cold(control: HostControl, cold: ColdContinuation, *, loaded: Any) 
                 'resume_sha256': current['resume_sha256'], 'artifact_files': artifact.files,
                 'optimizer_steps': state['optimizer_steps'], 'full_content_validated': True},
             'runtime_binding_sha256': state['runtime_binding_sha256']}
+        mode = source_mode(state['effective_config'])
+        if mode is not None:
+            audit.update(schema_version=2, kind='rust-player-cold-audit-v2', ppo_source=mode,
+                empty_pack_verification=empty_pack)
         audit_path = control.root / f'cold-audit-{admission["invocation_id"]}.json'
         audit_sha = write_control_record(audit_path, audit)
         completion = {'schema_version': 1, 'kind': 'rust-player-training-completion-v1',

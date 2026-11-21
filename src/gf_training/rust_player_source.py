@@ -17,6 +17,7 @@ from typing import Any
 
 from gf_common.artifacts import json_bound
 from gf_common.domain import ContractError, Json, canonical, digest
+from gf_common.rust_ppo_source import source_encoder, source_mode
 from gf_models.config import ordinary_ppo_update
 from gf_training.group_pack_pool import OriginalArtifactReader, PackedArtifactPool
 from gf_training.group_pack_resources import close_resources, retain_cleanup
@@ -389,7 +390,7 @@ class RustPlayerSource:
     _numeric_originals: dict[str, OriginalFile]
     _parent_lease: Any
     _pool_hold: Any
-    originals: RustPlayerOriginals
+    originals: RustPlayerOriginals | None
     manifest: Any
     accepted_decisions: int
     closure_counts: Json
@@ -449,6 +450,8 @@ class RustPlayerSource:
         self.require()
         if self.state != 'SEALED':
             raise ContractError('actual Source numeric persistence is single use')
+        if self.collection.pack_verification is not None:
+            return self._persist_native(directory)
         if self.registry.hpo:
             return self._persist_hpo(directory)
         budget = self.registry.budget
@@ -497,11 +500,37 @@ class RustPlayerSource:
     def decision_count(self) -> int:
         if self.registry.hpo:
             return self.selection['used_decisions']
-        return sum(len(record.frames) for record in self._records)
+        return self.collected_decisions
 
     @property
     def collected_decisions(self) -> int:
+        if self.collection.pack_verification is not None:
+            return self._inspection.collected_decisions
         return sum(len(record.frames) for record in self._records)
+
+    def _persist_native(self, directory: Path) -> Json:
+        from gf_training.rust_ppo_rollout import _RustTrainingRollout
+        try:
+            self._numeric = _RustTrainingRollout(self)
+            if not self.registry.hpo:
+                self._rollout = self._numeric
+            metadata, self.numeric_files = self._numeric.persist(directory)
+            self.numeric_directory = directory
+            for name, expected in self.numeric_files.items():
+                original = OriginalFile(directory / name, self.plan.execution_deadline)
+                self._numeric_originals[name] = original
+                if original.sha256 != expected:
+                    raise ContractError('actual native numeric publication checksum differs')
+            self._numeric_metadata = canonical(metadata)
+            self._charges.append(self.registry.budget.reserve(32 * len(self._numeric_metadata.encode()) + 65536))
+            self._episode_digests = self._digests()
+            self._proof_json = self._build_proof()
+            self.state = 'PERSISTED'
+            return metadata
+        except BaseException as error:
+            self.state = 'FAILED'
+            vars(error)['cleanup_owner'] = self
+            raise
 
     def _persist_hpo(self, directory: Path) -> Json:
         from gf_common.hpo import selected_locations
@@ -531,6 +560,8 @@ class RustPlayerSource:
 
     def _digests(self) -> tuple[str, ...]:
         from gf_training.structured_rollout import _episode_correspondence_digest
+        if self.collection.pack_verification is not None:
+            return tuple(episode.facts['episode_digest'] for episode in self.collection.training)
         return tuple(_episode_correspondence_digest(record) for record in self._records)
 
     def _build_proof(self) -> str:
@@ -539,9 +570,16 @@ class RustPlayerSource:
         from gf_training.rust_player_lineage import validate_record_shape
         owner, collection, registry = self.originals, self.collection, self.registry
         actual = registry.admission.observation
-        assert owner.source is not None
-        original = owner.source._originals
-        descriptor = original.descriptor
+        mode = source_mode(registry.state['effective_config'])
+        if mode is not None:
+            storage = collection.pack_verification
+            assert storage is not None
+            files = self._inspection._training_files
+        else:
+            assert owner is not None and owner.source is not None
+            original = owner.source._originals
+            storage = original.descriptor | {'logical_sha256': original.validated['seal']['logical_sha256']}
+            files = owner.files
         correspondence = {'recipe': 'rust-player-source-numeric-v1',
             'manifest_sha256': collection.manifest_sha256, 'episode_digests': self._episode_digests,
             'snapshot_identity': self.parent.identity, 'numeric_files': self.numeric_files}
@@ -549,8 +587,8 @@ class RustPlayerSource:
             **input_binding_game_v3(registry.config.actions.action_contract, registry.local.learner._context.rules),
             'qualified': False, 'parent_qualification': 'not_performed', 'run_id': registry.state['run_id'],
             'generation': registry.state['updates'], 'batch_id': self.plan.linkage['batch_id'],
-            'manifest_sha256': collection.manifest_sha256, 'source_set_sha256': digest(owner.files),
-            'files': owner.files, 'games': len(self.manifest['episodes']),
+            'manifest_sha256': collection.manifest_sha256, 'source_set_sha256': digest(files),
+            'files': files, 'games': len(self.manifest['episodes']),
             'accepted_decisions': self.accepted_decisions, 'closure_counts': self.closure_counts,
             'missing_replays': self.missing_replays, 'runtime_binding_sha256': registry.state['runtime_binding_sha256'],
             'player_producer': actual['producer'], 'capture_authority_sha256': collection.capture_sha256,
@@ -562,8 +600,8 @@ class RustPlayerSource:
                 'cleanup_errors': list(collection.writer.cleanup_errors)},
             'storage': {'format': 'sqlite-group-pack-v1', 'descriptor_path': str(collection.pending.path),
                 'descriptor_sha256': collection.pending.descriptor_sha256,
-                'database_sha256': descriptor['database_sha256'], 'seal_id': descriptor['seal_id'],
-                'logical_sha256': original.validated['seal']['logical_sha256']},
+                'database_sha256': storage['database_sha256'], 'seal_id': storage['seal_id'],
+                'logical_sha256': storage['logical_sha256']},
             'snapshot_identity': self.parent.identity, 'episode_digests': self._episode_digests,
             'source_correspondence': digest(correspondence), 'service_usage': self.manifest['service_usage']}
         if registry.hpo:
@@ -571,11 +609,14 @@ class RustPlayerSource:
             training = registry.local.learner.training
             locations = selected_locations(self.selection)
             proof.update(schema_version=7, kind='rust-player-hpo-source-proof-v1',
-                origin='producer-owned-v1', encoder='canonical-python', selection=self.selection,
+                origin='producer-owned-v1', encoder=source_encoder(registry.state['effective_config']), selection=self.selection,
                 selection_sha256=digest(self.selection), replay_reconciled=True,
                 expected_optimizer_step_delta=self._numeric.metadata['expected_optimizer_step_delta'],
                 context_costs={'context_decisions': training.epochs * sum(position + 1 for _, position in locations),
                     'suffix_decisions': training.epochs * sum(min(position + 1, training.tbptt_length) for _, position in locations)})
+        if mode is not None:
+            proof.update(schema_version=8 if registry.hpo else 5, ppo_source=mode,
+                pack_verification=collection.pack_verification, training_episodes=self.manifest['training_episodes'])
         validate_record_shape(proof, 'proof', hpo=registry.hpo)
         self._charges.append(registry.budget.reserve(32 * json_bound(proof) + 65536))
         return canonical(proof)
@@ -620,6 +661,8 @@ class RustPlayerSource:
             if canonical(json.loads(self._numeric_originals['rollout.json'].read(
                     registry.config.preprocessing.max_source_file_mib * 1024**2))) != self._numeric_metadata:
                 raise ContractError('actual persisted numeric metadata changed')
+        if self.collection.pack_verification is not None:
+            self.require()  # Recheck the same held Pack after the numeric read interval.
         before = local.learner.steps
         self.state = 'UPDATING'  # Failures are terminal; no retry resets Adam/RNG.
         try:
@@ -718,12 +761,14 @@ class RustEmptyCollection:
     _parent_lease: Any
     _pool_hold: Any
     _records: Any
-    originals: RustPlayerOriginals
+    originals: RustPlayerOriginals | None
     manifest: Any
     accepted_decisions: int
     closure_counts: Json
     missing_replays: list[str]
     selection: Json
+    _training_files: Json
+    _files_charge: Any = None
 
     def __init__(self, issuer: object) -> None:
         if issuer is not _SOURCE_ISSUER:
@@ -750,9 +795,14 @@ class RustEmptyCollection:
         result._cleanup_children = []
         result._parent_lease = result._pool_hold = None
         result._records, result.manifest = (), None
+        result.originals = None
         try:
             result._parent_lease = result.parent.retain(result)
             result._pool_hold = registry.pool.hold_close(result)
+            if collection.pack_verification is not None:
+                result._inspect_native()
+                result.state = 'SEALED'
+                return result
             owner = collection.open()
             result.originals = owner
             with owner._ordinary_inspection(result) if not registry.hpo else nullcontext():
@@ -788,8 +838,55 @@ class RustEmptyCollection:
             retain_cleanup(result, error)
             raise
 
+    def _inspect_native(self) -> None:
+        from gf_training.card_instance_source import _check_collection_parent
+        from gf_training.hpo_collection import selection_for_counts
+
+        collection, registry, plan = self.collection, self.registry, self.plan
+        manifest = collection.manifest
+        actual = registry.admission.observation
+        if (source_mode(registry.state['effective_config']) is None
+                or digest(manifest) != collection.manifest_sha256
+                or manifest['runtime_binding_sha256'] != registry.state['runtime_binding_sha256']
+                or manifest['player_producer'] != actual['producer']
+                or digest(manifest['capture_authority']) != collection.capture_sha256
+                or digest(manifest['logical_retirement']) != collection.retirement_sha256
+                or manifest['status'] != 'complete'):
+            raise ContractError('actual native training collection identity/runtime/capture differs')
+        _check_collection_parent(manifest, registry.state, plan)
+        self.manifest = manifest
+        self.accepted_decisions = sum(episode['decisions'] for episode in manifest['episodes'])
+        self.closure_counts, self.missing_replays = {'natural': len(collection.training)}, []
+        if registry.hpo:
+            self.selection = selection_for_counts(tuple(len(episode.rows) for episode in collection.training),
+                learning_seed=registry.state['seed'], batch=registry.state['updates'],
+                decision_budget=registry.config.hpo_spec['decision_budget'], used_before=registry.state['used_decisions'])
+        with collection.pending.view() as view:
+            descriptor_controls = json.loads(bytes(view))['controls']
+        controls = {row['name']: (row['bytes'], row['sha256']) for row in descriptor_controls}
+        filed = {row['path']: (row['bytes'], row['sha256']) for row in manifest['files']}
+        for name, pair in filed.items():
+            if name in controls and controls[name] != pair:
+                raise ContractError('sealed writer control differs from actual manifest inventory')
+        if set(controls) - set(filed) != {'manifest.json', 'report.json'}:
+            raise ContractError('sealed writer control inventory differs from manifest')
+        if controls['report.json'][1] != manifest['report_sha256']:
+            raise ContractError('sealed report SHA differs from actual manifest')
+        self._files_charge = registry.budget.reserve(1024 * (len(filed) + len(controls)))
+        storage = collection.pack_verification
+        assert storage is not None
+        files = {}
+        for name, (size, expected) in (filed | controls).items():
+            identity = {'recipe': 'rust-player-packed-member-v1', 'name': name, 'length': size,
+                'sha256': expected, 'descriptor_sha256': storage['descriptor_sha256'],
+                'database_sha256': storage['database_sha256']}
+            files[name] = {'bytes': size, 'sha256': expected, 'identity': identity}
+        self._training_files = files
+
     @property
     def collected_decisions(self) -> int:
+        if self.collection.pack_verification is not None:
+            return sum(len(episode.rows) for episode in self.collection.training)
         return sum(len(record.frames) for record in self._records)
 
     @property
@@ -810,17 +907,27 @@ class RustEmptyCollection:
             raise ContractError('actual zero learner collection required')
         pending = self.collection.pending
         pending.recheck()
-        return {'batch_id': self.plan.linkage['batch_id'],
+        result = {'batch_id': self.plan.linkage['batch_id'],
             'collection_generation': self.parent.generation,
-            'manifest_path': str(self.originals.root / 'manifest.json'),
+            'manifest_path': str(pending.directory / 'manifest.json'),
             'manifest_sha256': self.collection.manifest_sha256,
             'descriptor_path': str(pending.path), 'descriptor_sha256': pending.descriptor_sha256,
             'learner_decisions': 0}
+        if self.collection.pack_verification is not None:
+            result.update(ppo_source=source_mode(self.registry.state['effective_config']),
+                pack_verification=self.collection.pack_verification, snapshot_identity=self.parent.identity,
+                training_episodes=self.manifest['training_episodes'], policy_bindings=self.manifest['policy_bindings'],
+                schedule=self.manifest['schedule'], service_usage=self.manifest['service_usage'])
+        return result
 
     def close(self) -> None:
         if self.state == 'CLOSED':
             return
         self._records, self.manifest = (), None
+        if self._files_charge is not None:
+            self._training_files = {}
+            self._files_charge.close()
+            self._files_charge = None
         close_resources(self, [self.collection])
         if self._parent_lease is not None:
             self._parent_lease.close(self)

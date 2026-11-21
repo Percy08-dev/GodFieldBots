@@ -156,12 +156,13 @@ class HpoLearner(Learner):
     def update_owned(self, rollout: Any, *, _device_bytes: int | None = None) -> Json:
         self._last_update_execution=None
         from gf_training.hpo_owned_rollout import OwnedNumericBatch
+        from gf_training.rust_ppo_rollout import _RustTrainingRollout
         device_bytes = self._training_device_bytes if _device_bytes is None else _device_bytes
         if device_bytes is not None:
             integer(device_bytes, 1, 2**63 - 1)
         if self._owned_legacy:
             raise ContractError('legacy update/restore cannot enter producer-owned numerical route')
-        if type(rollout) is not OwnedNumericBatch or getattr(self, '_owned_failed', False):
+        if type(rollout) not in (OwnedNumericBatch, _RustTrainingRollout) or getattr(self, '_owned_failed', False):
             raise ContractError('owned learner is terminal or batch owner invalid')
         if rollout._budget is not self._owned_source_budget:
             raise ContractError('owned learner and batch require SAME invocation Source account')
@@ -185,11 +186,12 @@ class HpoLearner(Learner):
         snapshot_owner = rollout._snapshot_owner
         if snapshot_owner is not None and getattr(snapshot_owner, '_learner', None) is not self:
             raise ContractError('owned batch frozen snapshot differs from actual learner')
-        if device_bytes is not None:
+        singletons_checked = device_bytes is not None or type(rollout) is _RustTrainingRollout
+        if singletons_checked:
             self._validate_singleton_capacity(rollout, _device_bytes=device_bytes)
         rollout._begin_update()
         try:
-            if device_bytes is None:
+            if not singletons_checked:
                 result = self._update_numeric(rollout, {'status': 'not_run'}, time.perf_counter(), self.network._forward_owned)
             else:
                 result = self._update_numeric(rollout, {'status': 'not_run'}, time.perf_counter(), self.network._forward_owned,
@@ -207,6 +209,7 @@ class HpoLearner(Learner):
                         _singletons_checked: bool = False, _device_bytes: int | None = None) -> Json:
         self._last_update_execution=None
         from gf_training.hpo_training_execution import TrainingExecutionSpec
+        from gf_training.rust_ppo_rollout import _RustTrainingRollout
         spec = getattr(self, '_training_execution', None)
         if spec is None:
             spec=TrainingExecutionSpec(variant='microbatch' if self.model.model_id=='mlp' else 'shared-prefix')
@@ -234,14 +237,22 @@ class HpoLearner(Learner):
                 for index in logical:
                     frames, candidates = rollout.endpoint(index)
                     suffix = self._suffix_length(len(frames))
-                    logs, value, _ = forward(frames, candidates, suffix_length=suffix)
-                    selected, old, _, advantage, target = rollout.vector(index)
-                    self.synchronize()
-                    mask = torch.ones((1, len(candidates.kinds)), dtype=torch.bool, device=self.binding.device)
-                    selected_tensor = torch.tensor([selected], dtype=torch.int64, device=self.binding.device)
-                    vectors = [torch.tensor([number], dtype=torch.float32, device=self.binding.device)
-                        for number in (old, advantage, target)]
-                    loss, measured = hpo_losses(logs[None], value[None], mask, selected_tensor, *vectors, training=recipe)
+                    if type(rollout) is _RustTrainingRollout:
+                        window = rollout.pack(self.network, (index,))
+                        logs, value = self.network._learning_serial(window, frames, candidates, suffix)
+                        raw = window.operands
+                        self.synchronize()
+                        loss, measured = hpo_losses(logs, value, raw['mask'], raw['selected'], *raw['vectors'], training=recipe)
+                        del window, raw
+                    else:
+                        logs, value, _ = forward(frames, candidates, suffix_length=suffix)
+                        selected, old, _, advantage, target = rollout.vector(index)
+                        self.synchronize()
+                        mask = torch.ones((1, len(candidates.kinds)), dtype=torch.bool, device=self.binding.device)
+                        selected_tensor = torch.tensor([selected], dtype=torch.int64, device=self.binding.device)
+                        vectors = [torch.tensor([number], dtype=torch.float32, device=self.binding.device)
+                            for number in (old, advantage, target)]
+                        loss, measured = hpo_losses(logs[None], value[None], mask, selected_tensor, *vectors, training=recipe)
                     if not torch.isfinite(loss):
                         raise ContractError("nonfinite HPO PPO loss")
                     (loss / len(logical)).backward()
@@ -270,12 +281,24 @@ class HpoLearner(Learner):
             "suffix_decisions": suffix_decisions, "update_seconds": time.perf_counter() - started}
 
     def _validate_singleton_capacity(self, rollout: Any, *, _device_bytes: int | None = None) -> None:
-        from gf_training.hpo_update_planning import execution_plan
+        from gf_training.hpo_update_planning import admit_group, execution_plan
+        from gf_training.rust_ppo_rollout import _RustTrainingRollout
+
+        native = type(rollout) is _RustTrainingRollout
+        variant = getattr(getattr(self, '_training_execution', None), 'variant', 'microbatch')
+        staged = self.binding.device != 'cpu' and variant == 'microbatch'
+        device_bytes = self._training_device_bytes if _device_bytes is None else _device_bytes
         for index in range(len(rollout)):
-            execution_plan([rollout.endpoint(index)],self.model,self.binding,self.training.tbptt_length,
+            plan = execution_plan([rollout.endpoint(index)],self.model,self.binding,self.training.tbptt_length,
                 layout=self.network.layout,reservation_bytes=self._training_reservation_bytes,
                 resident_bytes=rollout.resident_bytes,
-                device_bytes=self._training_device_bytes if _device_bytes is None else _device_bytes)
+                device_bytes=device_bytes)
+            if native:
+                if plan.staging is not None and not staged:
+                    admit_group(rollout, (index,), self.model, self.binding, self.training.tbptt_length,
+                        layout=self.network.layout, reservation_bytes=self._training_reservation_bytes,
+                        device_bytes=device_bytes)
+                rollout.require_singleton_packing(index, plan.staging if staged else None)
 
     def _update_experimental(self, rollout: Any, parity: Json, started: float, forward: Any, spec: Any, *,
                             _singletons_checked: bool = False, _device_bytes: int | None = None) -> Json:

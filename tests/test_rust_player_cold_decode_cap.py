@@ -12,6 +12,7 @@ MIB = 1024**2
 
 
 def isolated_core(tmp_path, monkeypatch, *, no_remaining=False, hpo=True):
+    from gf_models.config import PPOTrainingConfig
     from gf_training import hpo_rollout, structured_rollout
     from gf_training import rust_player_completion as module
     from tests.test_card_instance_learning import ACTIONS
@@ -35,14 +36,18 @@ def isolated_core(tmp_path, monkeypatch, *, no_remaining=False, hpo=True):
         monkeypatch.setattr('gf_models.structured_artifacts.semantics_v3', lambda *a, **k: {})
     monkeypatch.setattr('gf_training.hpo_config.hpo_training_config', lambda value: None)
     loaded = SimpleNamespace(config=SimpleNamespace(storage=SimpleNamespace(db_root=tmp_path),
-        actions=ACTIONS, model=SimpleNamespace(architecture=lambda **kwargs: None),
+        actions=ACTIONS, model=SimpleNamespace(architecture=lambda **kwargs: None), training=PPOTrainingConfig(),
         hpo_spec={'schema_version': 6, 'training_recipe': {}, 'operating': {'numeric_budget_bytes': MIB}} if hpo else {}))
     update = {'source_proof': {'selection': {}, 'snapshot_identity': 'snapshot',
         'manifest_sha256': 'a' * 64, 'source_set_sha256': 'b' * 64},
         'numeric': 'numeric/batch-000000', 'numeric_files': {}, 'numeric_sha256': 'c' * 64}
+    if not hpo:
+        update.update(planned_games=16, actual_games=16, metrics={'optimizer_steps': 4})
     def invoke(owner):
-        return module._audit_update_data(object(), owner, pool, loaded, {'run_id': 'run'}, {},
-            {'generation': 1}, update, pool.deadline, record_root=tmp_path, control_loans=[])
+        return module._audit_update_data(object(), owner, pool, loaded, {'run_id': 'run'},
+            {'optimizer_steps': 0, 'accepted_decisions': 0},
+            {'generation': 1, 'optimizer_steps': 4, 'accepted_decisions': 3}, update,
+            pool.deadline, record_root=tmp_path, control_loans=[])
     def close():
         raw.close()
         for loan in filled: loan.close()

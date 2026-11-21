@@ -585,11 +585,13 @@ class RustGameOperations:
                 'current_inference_backings': policy._inference_backings}, deadline=self.deadlines()['execution_bits'], immutable=True)
 
     def initial_registry(self, state: Json) -> Json:
+        from gf_common.rust_ppo_source import source_encoder
+
         result = {'schema_version': self.registry_schema, 'run_id': state['run_id'],
             'runtime_binding_sha256': state['runtime_binding_sha256'], 'generations': {},
             'evaluation_references': {}, 'service_references': {}}
         if self._is_hpo:
-            result.update(origin='producer-owned-v1', encoder='canonical-python')
+            result.update(origin='producer-owned-v1', encoder=source_encoder(state['effective_config']))
         return result
 
     def external_roots(self, state: Json) -> tuple[Path, ...]:
@@ -1348,7 +1350,7 @@ class RustHpoOperations(RustGameOperations):
         super().update_record(update, state, numeric_files)
         source = self.registry.pending
         proof = source.proof
-        update.update(schema_version=8, model_version='4', origin='producer-owned-v1', encoder='canonical-python',
+        update.update(schema_version=8, model_version='4', origin='producer-owned-v1', encoder=proof['encoder'],
             hpo_spec_sha256=digest(self.config.hpo_spec), collected_decisions=proof['selection']['collected_decisions'],
             used_decisions=proof['selection']['used_decisions'],
             overshoot_decisions=proof['selection']['collected_decisions'] - proof['selection']['used_decisions'],

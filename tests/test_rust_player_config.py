@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from gf_cli.config import load_config
+from gf_cli.config import load_config, load_rust_player_effective
 from gf_cli.hpo_config import campaign_config, materialize_hpo_run
 from gf_common.domain import ContractError, canonical, digest
 from gf_common.structured_layout import CORRECTED_CARD_INSTANCE_LAYOUT as LAYOUT
@@ -20,6 +20,7 @@ ROOT = Path(__file__).parents[1]
 BASE = ROOT / "configs/experiments/mlp-shared-inference-base.toml"
 NORMAL_BASE = ROOT / "configs/experiments/mlp-shared-inference-scaling-base.toml"
 RUN_ID = "00000000-0000-0000-0000-000000000017"
+PPO_SOURCE = {"training_data": "rust-ppo-training-v1", "audit": "sealed-pack-sha256-v1"}
 
 
 def runtime(**changes):
@@ -38,6 +39,36 @@ def campaign_raw():
     raw.update(schema_version=6, base_experiment=str(BASE), runtime=runtime())
     raw["operating"].update(game_concurrency=2)
     return raw
+
+
+def test_ordinary_source_recipe_is_closed_and_round_trips(tmp_path):
+    runtime_overrides = {"player_runtime": runtime()}
+    legacy = load_config(NORMAL_BASE, {"run": runtime_overrides})
+    loaded = load_config(NORMAL_BASE, {"run": runtime_overrides | {"ppo_source": PPO_SOURCE}})
+    assert "ppo_source" not in legacy.effective["run"]
+    assert loaded.effective["run"]["ppo_source"] == PPO_SOURCE
+    assert loaded.sha256 != legacy.sha256
+    path = tmp_path / "effective.json"
+    path.write_text(canonical(loaded.effective))
+    assert load_rust_player_effective(path, expected_sha256=loaded.sha256).effective == loaded.effective
+    with pytest.raises(ContractError, match="source"):
+        load_config(NORMAL_BASE, {"run": runtime_overrides | {"ppo_source": PPO_SOURCE | {"audit": "other"}}})
+    with pytest.raises(ContractError):
+        load_config(NORMAL_BASE, {"run": {"ppo_source": PPO_SOURCE}})
+
+
+def test_hpo_source_recipe_materializes_with_canonical_rust_encoder(tmp_path):
+    raw = campaign_raw() | {"ppo_source": PPO_SOURCE, "encoder": "canonical-rust"}
+    loaded = campaign_config(raw, origin=tmp_path)
+    settings = effective_settings(loaded.config.model, loaded.config.training, {}, layout=LAYOUT)
+    run = materialize_hpo_run(loaded, settings, learning_seed=17, run_id=RUN_ID)
+    assert run.effective["run"]["ppo_source"] == PPO_SOURCE
+    assert run.effective["hpo_spec"]["encoder"] == "canonical-rust"
+    path = tmp_path / "effective.json"
+    path.write_text(canonical(run.effective))
+    assert load_rust_player_effective(path, expected_sha256=run.sha256).effective == run.effective
+    with pytest.raises(ContractError, match="encoder"):
+        campaign_config(raw | {"encoder": "canonical-python"}, origin=tmp_path)
 
 
 def test_normal_explicit_runtime_normalizes_wait_and_keeps_effective_hash():

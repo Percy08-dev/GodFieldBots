@@ -11,6 +11,7 @@ from typing import Any
 
 from gf_common.domain import ContractError, Json, clone, digest
 from gf_common.ram_bank import MAX_BANK_BYTES, ReadonlyRamBankSet
+from gf_common.rust_ppo_source import source_encoder
 from gf_models.rust_player import serialized_torch
 from gf_training.group_pack_source import OriginalFile
 from gf_training.hpo_owned_lineage import OwnedControlWriter
@@ -289,7 +290,7 @@ class RustRunRegistry:
             "runtime_binding_sha256": state["runtime_binding_sha256"], "generations": {},
             "evaluation_references": {}, "service_references": {}}
         if self.hpo:
-            self.registry.update(origin="producer-owned-v1", encoder="canonical-python")
+            self.registry.update(origin="producer-owned-v1", encoder=source_encoder(state['effective_config']))
 
     def require(self) -> None:
         require_hpo_run_owner(self.directory, self.ownership)
@@ -359,7 +360,7 @@ class RustRunRegistry:
             "accepted_decisions": self.state["accepted_decisions"],
             "runtime_binding_sha256": self.state["runtime_binding_sha256"]}
         if self.hpo:
-            row.update(origin="producer-owned-v1", encoder="canonical-python",
+            row.update(origin="producer-owned-v1", encoder=source_encoder(self.state['effective_config']),
                 used_decisions=self.state["used_decisions"], collected_decisions=self.state["collected_decisions"])
         else:
             row.update({key: self.state[key] for key in ("model_id", "model_version", "input_recipe",

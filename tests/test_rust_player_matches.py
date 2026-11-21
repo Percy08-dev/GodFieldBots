@@ -205,6 +205,7 @@ def test_collector_keeps_original_preflight_try_cleanup_order_aliases_and_loans(
     collector.runtime, collector._matches = runtime, pump
     collector._servers, collector.server_history = pump.servers, pump.server_history
     collector.writer_history, collector.current = [], None
+    collector.mode = None
     collector.settings, collector.cleanup_deadline = StorageSettings(), deadline+10
     collector.declaration = {'game_concurrency': 1}
     collector.config = SimpleNamespace(storage=SimpleNamespace(db_root=str(tmp_path/'db')),

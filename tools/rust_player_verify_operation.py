@@ -492,6 +492,7 @@ def _native_chain(parent: Path, loaded: Any, scan: Any, state: Json, state_sha: 
         validate_prepared,
     )
     from gf_common.rust_player_clock import operation_clock
+    from gf_common.rust_ppo_source import source_mode
     from gf_training.rust_player_completion import _audit_saved_data
     from gf_training.rust_player_lineage import (
         validate_completion,
@@ -500,6 +501,7 @@ def _native_chain(parent: Path, loaded: Any, scan: Any, state: Json, state_sha: 
     )
     from gf_training.rust_player_retention import _validate_historical_audit
     hpo = bool(getattr(loaded.config, 'hpo_spec', {}))
+    mode = source_mode(loaded.effective)
     validate_run(state, hpo=hpo)
     records = []
     previous = None
@@ -593,15 +595,17 @@ def _native_chain(parent: Path, loaded: Any, scan: Any, state: Json, state_sha: 
                     or update['numeric_sha256'] != fact['numeric_sha256']
                     or update['accepted_decisions'] != fact['learner_decisions']
                     or update['source_proof']['source_set_sha256'] != fact['source_set_sha256']
-                    or update['source_proof']['episode_digests'] != fact['episode_digests']):
+                    or update['source_proof']['episode_digests'] != fact['episode_digests']
+                    or update['source_proof'].get('pack_verification') != fact.get('pack_verification')):
                 raise ContractError('native actual cold update receipt differs')
             numeric = Path(update['numeric'])
             if numeric.is_absolute() or '..' in numeric.parts:
                 raise ContractError('native numeric data leaves original parent')
             from gf_models.structured_sealed import basename
-            for name, sha in update['numeric_files'].items():
-                with scan.file(parent / numeric / basename(name), sha):
-                    pass
+            if mode is None:
+                for name, sha in update['numeric_files'].items():
+                    with scan.file(parent / numeric / basename(name), sha):
+                        pass
         receipt = {'invocation_id': invocation, 'operation_id': operation['operation_id'],
             'operation_sha256': entry['operation_sha256'], 'admission_sha256': entry['admission_sha256'],
             'prepared_sha256': prepared_sha, 'exit_sha256': exit_sha,
@@ -767,7 +771,9 @@ def _legacy_packed_diagnostics(scan: Any, parent: Path, state: Json, update: Jso
 
 
 def _audit_parent(parent: Path, loaded: Any, *, lane: str, observer_directory: Path,
-                  deadline: float, limit: int, config_path: Path, ownership: Any) -> tuple[Json, Json]:
+                  deadline: float, limit: int, config_path: Path, ownership: Any,
+                  full_source_audit: bool = False) -> tuple[Json, Json]:
+    from gf_common.rust_ppo_source import source_mode
     from gf_models.structured_sealed import MAX_SEALED_SCAN_BYTES
     from gf_training.lineage import require_hpo_run_owner
     from gf_training.structured_lineage import _ChainScan
@@ -823,12 +829,28 @@ def _audit_parent(parent: Path, loaded: Any, *, lane: str, observer_directory: P
         measurement_scope = (_native_measurement_scope(receipts) if lane.startswith('native-')
             else _legacy_measurement_scope(state, binding=legacy_binding))
         updates = []
+        mode = source_mode(loaded.effective)
+        empty_pack = None
+        if lane == 'native-hpo' and (mode is not None or full_source_audit):
+            invocation = next(row['invocation_id'] for row in receipts if row['current'])
+            entry = state['invocations'][invocation]
+            if 'empty_collection' in entry:
+                from gf_training.rust_ppo_diagnostics import audit_empty_source
+                admission = scan.object(Path(entry['admission_path']), entry['admission_sha256'])
+                empty_pack = audit_empty_source(ownership, loaded, state, records, entry['empty_collection'],
+                    admission, full=full_source_audit, max_owned_bytes=scan.limit - scan.retained, deadline=deadline)
         for generation, record in enumerate(records[1:], 1):
             update = scan.object(parent / 'updates' / f'{generation:06}.json', record['update_sha256'])
             proof = update['source_proof']
             if lane.startswith('native-'):
                 diagnostic = {'source_proof': {'storage': proof['storage'], 'closure_counts': proof['closure_counts'],
                     'accepted_decisions': proof['accepted_decisions']}}
+                if mode is not None or full_source_audit:
+                    from gf_training.rust_ppo_diagnostics import audit_source_update
+                    verified = audit_source_update(ownership, loaded, state, records[generation - 1], record,
+                        update, full=full_source_audit, max_owned_bytes=scan.limit - scan.retained, deadline=deadline)
+                    if verified is not None:
+                        diagnostic['pack_verification'] = verified
             else:
                 diagnostic = _legacy_packed_diagnostics(scan, parent, state, update, lane=lane)
             updates.append({key: update[key] for key in ('batch_id', 'actual_games', 'planned_games',
@@ -841,6 +863,13 @@ def _audit_parent(parent: Path, loaded: Any, *, lane: str, observer_directory: P
                 and measurement_scope['start_generation'] < generation <= measurement_scope['end_generation'])
             if measurement_scope is not None and updates[-1]['measurement_current'] and updates[-1]['invocation_id'] != measurement_scope['invocation_id']:
                 raise ContractError('current update differs from verified original invocation interval')
+        if mode is not None:
+            source_audit = 'full Journal, Replay and Python numeric comparison' if full_source_audit else mode['audit']
+        elif lane.startswith('native-'):
+            source_audit = ('full Journal, Replay and Python numeric comparison' if full_source_audit
+                else 'hash-checked actual in-command Cold audit receipts')
+        else:
+            source_audit = 'existing legacy full audit'
         result = {'measurement_scope': measurement_scope, 'lane': lane, 'run_id': state['run_id'], 'status': state['status'], 'updates': updates,
             'generation_sha256': state['generation_sha256'], 'state_sha256': state_sha,
             'optimizer_steps': state['optimizer_steps'], 'receipts': receipts, 'legacy_observer_binding': legacy_binding,
@@ -849,7 +878,10 @@ def _audit_parent(parent: Path, loaded: Any, *, lane: str, observer_directory: P
             'recorded_simulator_revision': loaded.effective['actions']['action_contract']['simulator_revision'],
             'recorded_player_producer': state['identity'].get('player_runtime', {}).get('producer'),
             'saved_pair_full_content_validated': True,
-            'original_replay_numeric_audit': 'existing legacy full audit' if not lane.startswith('native-') else 'hash-checked actual in-command Cold audit receipts'}
+            'original_replay_numeric_audit': source_audit}
+        if mode is not None:
+            result['ppo_source'] = mode
+            result['empty_pack_verification'] = empty_pack
         scan.finalize()
         return result, observer
 
@@ -860,6 +892,20 @@ def _project_collections(audit: Json, *, limit: int, deadline: float, retained: 
     from gf_training.structured_rollout import _owned_bytes
     results: list[Json] = []
     for ordinal, update in enumerate(_measurement_updates(audit), 1):
+        if 'pack_verification' in update:
+            proof = update['source_proof']
+            seconds = _number(update['collection_seconds'])
+            accepted = proof['accepted_decisions']
+            natural = proof['closure_counts']['natural']
+            results.append({'ordinal': ordinal, 'batch_id': update['batch_id'],
+                'actual_games': update['actual_games'], 'planned_games': update['planned_games'],
+                'natural_games': natural, 'accepted_decisions': accepted, 'journal_decisions': None,
+                'collection_seconds': seconds, 'update_seconds': _number(update['update_seconds']),
+                'rate_scope': 'persisted committed update collection_seconds and sealed writer counts',
+                'games_per_second': natural / seconds if seconds else None,
+                'decisions_per_second': accepted / seconds if seconds else None, 'seats': None,
+                'pack_verification': update['pack_verification']})
+            continue
         storage = update['source_proof']['storage']
         path = Path(storage['descriptor_path'])
         remaining = limit - _owned_bytes((retained, results))
@@ -1111,7 +1157,8 @@ def _telemetry(directory: Path | None, *, observer: Json, audit: Json, observati
 
 def verify_operation(*, config_path: Path, parent: Path, observer_directory: Path,
                      observation_id: str, lane: str, telemetry_directory: Path | None = None,
-                     run_id: str | None = None, learning_seed: int | None = None) -> Json:
+                     run_id: str | None = None, learning_seed: int | None = None,
+                     full_source_audit: bool = False) -> Json:
     """Read a finished original; separate external audit clocks never renew training."""
     from gf_training.lineage import run_lock
     if lane not in ('native-ordinary', 'native-hpo', 'legacy-ordinary', 'legacy-hpo'):
@@ -1125,18 +1172,20 @@ def verify_operation(*, config_path: Path, parent: Path, observer_directory: Pat
         return _verify_owned(config_path=config_path, parent=parent, observer_directory=observer_directory,
             telemetry_directory=telemetry_directory, observation_id=observation_id, lane=lane,
             run_id=run_id, learning_seed=learning_seed, loaded=loaded, limit=limit, deadline=deadline,
-            started=started, seconds=seconds, ownership=ownership)
+            started=started, seconds=seconds, ownership=ownership, full_source_audit=full_source_audit)
 
 
 def _verify_owned(*, config_path: Path, parent: Path, observer_directory: Path,
                   telemetry_directory: Path | None, observation_id: str, lane: str,
                   run_id: str | None, learning_seed: int | None, loaded: Any,
-                  limit: int, deadline: float, started: float, seconds: float, ownership: Any) -> Json:
+                  limit: int, deadline: float, started: float, seconds: float, ownership: Any,
+                  full_source_audit: bool = False) -> Json:
     from gf_models.structured_sealed import MAX_SEALED_SCAN_BYTES, SealedScan
     from gf_training.lineage import require_hpo_run_owner
     from gf_training.structured_rollout import _owned_bytes
     audit, observer = _audit_parent(parent, loaded, lane=lane, observer_directory=observer_directory,
-        deadline=deadline, limit=limit, config_path=config_path, ownership=ownership)
+        deadline=deadline, limit=limit, config_path=config_path, ownership=ownership,
+        full_source_audit=full_source_audit)
     if lane.endswith('-hpo'):
         assert run_id is not None
         argv = observer['command']['argv']
@@ -1178,11 +1227,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('--lane', choices=('native-ordinary', 'native-hpo', 'legacy-ordinary', 'legacy-hpo'), required=True)
     parser.add_argument('--run-id')
     parser.add_argument('--learning-seed', type=int)
+    parser.add_argument('--full-source-audit', action='store_true',
+        help='decode original Journals, Replays and numeric inputs for a Python reference comparison')
     args = parser.parse_args(argv)
     try:
         value = verify_operation(config_path=args.config, parent=args.run_dir, observer_directory=args.observer,
             telemetry_directory=args.telemetry, observation_id=args.observation_id, lane=args.lane,
-            run_id=args.run_id, learning_seed=args.learning_seed)
+            run_id=args.run_id, learning_seed=args.learning_seed, full_source_audit=args.full_source_audit)
     except (ContractError, OSError, ValueError, TimeoutError, KeyError, TypeError, RuntimeError) as error:
         print(canonical({'verified': False, 'source_authority': False, 'adoption': None,
             'error': type(error).__name__, 'reason': str(error)}))

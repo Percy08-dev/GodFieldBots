@@ -123,6 +123,8 @@ def test_new_record_shape_is_closed_per_kind_and_never_authorizes_input(record_t
         elif record_type == "proof":
             row.update(kind="rust-player-hpo-source-proof-v1" if hpo else "rust-player-source-proof-v1",
                 qualified=False, parent_qualification="not_performed")
+        if hpo and record_type in ('collection', 'proof'):
+            row['encoder'] = 'canonical-python'
         assert validate_record_shape(row, record_type, hpo=hpo) is row
         for bad_version in (True, version + 100):
             bad = row | {"schema_version": bad_version}

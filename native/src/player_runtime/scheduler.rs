@@ -57,6 +57,8 @@ pub struct RuntimeConfig {
     pub formation_wait_ms: f64,
     pub storage_bytes: usize,
     pub storage_queue: usize,
+    #[serde(default)]
+    pub training_numeric_bytes: Option<usize>,
     pub runtime_identity: String,
 }
 struct Completion {
@@ -293,7 +295,8 @@ impl PlayerRuntime {
         ensure(
             ["tokio", "fixed"].contains(&config.scheduler.as_str())
                 && config.player_worker_threads > 0
-                && config.game_concurrency > 0,
+                && config.game_concurrency > 0
+                && config.training_numeric_bytes != Some(0),
             "invalid native scheduler geometry",
         )
         .map_err(crate::python_error)?;
@@ -304,7 +307,8 @@ impl PlayerRuntime {
             config.runtime_identity.clone(),
         )
         .map_err(crate::python_error)?;
-        let storage = Mailbox::new_monitored(config.storage_bytes, config.storage_queue, dispatcher.metrics.clone())
+        let storage = Mailbox::new_with_training_limit(config.storage_bytes, config.storage_queue,
+            config.training_numeric_bytes.unwrap_or(config.storage_bytes), dispatcher.metrics.clone())
             .map_err(crate::python_error)?;
         Ok(Self {
             config,

@@ -1,5 +1,5 @@
 //! Immutable capture transport. Acceptance transfers custody, never proves persistence.
-use super::super::{ensure, error};
+use super::super::{ensure, error, training::{Episode, PlayerPpoEpisode}};
 use crate::{
     budget::monotonic,
     error::{Error, Result},
@@ -29,15 +29,17 @@ impl Write for Count {
 struct Ledger {
     native: usize,
     external: usize,
+    training: usize,
     peak: usize,
 }
 pub struct Account {
     metrics: Arc<super::super::metrics::Metrics>,
     limit: usize,
+    training_limit: usize,
     ledger: Mutex<Ledger>,
 }
 impl Account {
-    fn change(&self, native: bool, old: usize, new: usize) -> Result<()> {
+    fn change(&self, native: bool, training: bool, old: usize, new: usize) -> Result<()> {
         let mut s = self.ledger.lock().unwrap();
         let total = s
             .native
@@ -46,6 +48,12 @@ impl Account {
             .and_then(|n| n.checked_add(new))
             .filter(|n| *n <= self.limit)
             .ok_or_else(|| Error::resource("recording byte budget exhausted"))?;
+        if training {
+            s.training = s.training.checked_sub(old)
+                .and_then(|n| n.checked_add(new))
+                .filter(|n| *n <= self.training_limit)
+                .ok_or_else(|| Error::resource("PPO numeric byte budget exhausted"))?;
+        }
         if native {
             s.native = s.native - old + new;
         } else {
@@ -55,23 +63,37 @@ impl Account {
         Ok(())
     }
     fn reserve(self: &Arc<Self>, bytes: usize, native: bool) -> Result<Reservation> {
-        self.change(native, 0, bytes)?;
+        self.change(native, false, 0, bytes)?;
         Ok(Reservation {
             bytes,
             native,
+            training: false,
             account: self.clone(),
         })
+    }
+    pub(crate) fn reserve_training(self: &Arc<Self>, bytes: usize) -> Result<Reservation> {
+        self.change(true, true, 0, bytes)?;
+        Ok(Reservation { bytes, native: true, training: true, account: self.clone() })
+    }
+    pub(crate) fn training_fits(&self, bytes: usize) -> bool {
+        let ledger = self.ledger.lock().unwrap();
+        bytes <= self.limit - ledger.native - ledger.external
+            && bytes <= self.training_limit - ledger.training
     }
 }
 pub struct Reservation {
     bytes: usize,
     native: bool,
+    training: bool,
     account: Arc<Account>,
+}
+impl Reservation {
+    pub(crate) fn bytes(&self) -> usize { self.bytes }
 }
 impl Drop for Reservation {
     fn drop(&mut self) {
         // A refund cannot exceed the admitted total; no allocation or callback.
-        self.account.change(self.native, self.bytes, 0).unwrap();
+        self.account.change(self.native, self.training, self.bytes, 0).unwrap();
     }
 }
 #[pyclass(frozen)]
@@ -146,7 +168,7 @@ impl RecordingLease {
             .as_mut()
             .ok_or_else(|| crate::python_error(error("recording lease closed")))?;
         r.account
-            .change(false, r.bytes, bytes)
+            .change(false, false, r.bytes, bytes)
             .map_err(crate::python_error)?;
         r.bytes = bytes;
         Ok(())
@@ -164,6 +186,7 @@ pub struct Record {
     array: Array1<u8>,
     transport_sha256: String,
     release_key: Option<(String, String, String)>,
+    training: Option<Arc<Episode>>,
     _reservation: Reservation,
 }
 struct Entry {
@@ -224,6 +247,10 @@ impl Mailbox {
         Self::new_monitored(limit, capacity, Arc::new(super::super::metrics::Metrics::default()))
     }
     pub fn new_monitored(limit: usize, capacity: usize, metrics: Arc<super::super::metrics::Metrics>) -> Result<Arc<Self>> {
+        Self::new_with_training_limit(limit, capacity, limit, metrics)
+    }
+    pub(crate) fn new_with_training_limit(limit: usize, capacity: usize, training_limit: usize,
+        metrics: Arc<super::super::metrics::Metrics>) -> Result<Arc<Self>> {
         ensure(
             limit > 0 && capacity > 0,
             "positive storage bounds required",
@@ -240,6 +267,7 @@ impl Mailbox {
             account: Arc::new(Account {
                 metrics: metrics.clone(),
                 limit,
+                training_limit,
                 ledger: Mutex::new(Ledger::default()),
             }),
             capacity,
@@ -279,6 +307,18 @@ impl Mailbox {
         value: &T,
         release_key: Option<(String, String, String)>,
         deadline: f64,
+    ) -> Result<()> {
+        self.publish_with_training(kind, episode, game, value, release_key, deadline, None).await
+    }
+    pub(crate) async fn publish_with_training<T: Serialize + Sync>(
+        &self,
+        kind: &str,
+        episode: &str,
+        game: &str,
+        value: &T,
+        release_key: Option<(String, String, String)>,
+        deadline: f64,
+        mut training: Option<Arc<Episode>>,
     ) -> Result<()> {
         super::super::requests::wait_duration(deadline)?;
         if monotonic() >= deadline {
@@ -336,6 +376,7 @@ impl Mailbox {
                         array,
                         transport_sha256: transport_sha256.clone(),
                         release_key: release_key.clone(),
+                        training: training.take(),
                         _reservation,
                     });
                     s.entries.insert(
@@ -446,6 +487,12 @@ pub struct StorageBundle {
 }
 #[pymethods]
 impl StorageBundle {
+    /// The trusted Python writer calls this on an original terminal bundle to
+    /// compare its accepted Journal and Replay facts before the collection seals.
+    #[pyo3(name = "_training_episode")]
+    fn training_episode(&self) -> Option<PlayerPpoEpisode> {
+        self.record.training.as_ref().map(|episode| PlayerPpoEpisode::new(episode.clone()))
+    }
     #[getter]
     fn id(&self) -> u64 {
         self.record._reservation.account.metrics.increment("pyo3_other", 1);
@@ -519,6 +566,25 @@ mod tests {
             .build()
             .unwrap()
             .block_on(future);
+    }
+    #[test]
+    fn training_limit_is_subordinate_to_the_same_recording_allocation() {
+        let mailbox = Mailbox::new_with_training_limit(100, 1, 60, Arc::new(Default::default())).unwrap();
+        let account = mailbox.account().account;
+        let native_capture = account.reserve(30, true).unwrap();
+        let native_training = account.reserve_training(60).unwrap();
+        assert_eq!(mailbox.used(), 90);
+        assert!(!account.training_fits(1));
+        assert!(account.reserve_training(1).is_err());
+        assert!(account.reserve(11, false).is_err());
+        drop(native_capture);
+        assert_eq!(mailbox.used(), 60);
+        drop(native_training);
+        assert_eq!(mailbox.used(), 0);
+        let other = account.reserve(70, false).unwrap();
+        assert!(account.training_fits(30));
+        assert!(!account.training_fits(31));
+        drop(other);
     }
     #[test]
     fn ingress_admission_wait_excludes_original_count_encode_and_hash_preparation() {

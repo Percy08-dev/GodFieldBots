@@ -10,6 +10,7 @@ from typing import Any
 
 from gf_common.domain import ContractError, Json, closed, digest
 from gf_common.rust_player import validate_runtime_binding
+from gf_common.rust_ppo_source import source_encoder, source_mode, validate_source_mode
 
 _RUN = frozenset(['schema_version', 'algorithm', 'run_id', 'status', 'config_sha256',
     'effective_config', 'config_inputs', 'identity', 'seed', 'device', 'created_unix', 'last_unix',
@@ -44,7 +45,8 @@ def validate_run(value: Json, *, hpo: bool = False) -> Json:
         integer(raw[name], 0)
     if hpo:
         spec = raw['effective_config']['hpo_spec']
-        if spec['schema_version'] != 6 or digest(spec) != raw['hpo_spec_sha256']:
+        if (spec['schema_version'] != 6 or digest(spec) != raw['hpo_spec_sha256']
+                or spec['encoder'] != source_encoder(raw['effective_config'])):
             raise ContractError('explicit new HPO spec6 required')
         integer(raw['used_decisions'], 0, spec['decision_budget'])
         integer(raw['collected_decisions'], raw['used_decisions'])
@@ -82,6 +84,8 @@ _HPO_EXTRA = {"collection": frozenset(["origin", "encoder", "snapshot_identity",
     "registry": frozenset(("origin", "encoder"))}
 _VERSIONS = {"collection": (10, 11), "proof": (4, 7), "generation": (4, 6),
     "update": (6, 8), "registry": (5, 8)}
+_NATIVE_SOURCE_VERSIONS = {'collection': (12, 13), 'proof': (5, 8)}
+_NATIVE_PROOF_FIELDS = {'ppo_source', 'pack_verification', 'training_episodes'}
 
 
 def record_fields(record_type: str, *, hpo: bool = False) -> frozenset[str]:
@@ -98,8 +102,18 @@ def validate_record_shape(value: Json, record_type: str, *, hpo: bool = False) -
     allowed = set(record_fields(record_type, hpo=hpo))
     if record_type == 'update' and type(value) is dict and 'device_plan' in value:
         allowed.add('device_plan')
+    mode = None
+    if type(value) is dict:
+        if record_type == 'collection' and isinstance(value.get('config'), dict) and 'run' in value['config']:
+            mode = source_mode(value['config'])
+            if mode is not None:
+                allowed.add('training_episodes')
+        elif record_type == 'proof' and 'ppo_source' in value:
+            mode = validate_source_mode(value['ppo_source'])
+            allowed.update(_NATIVE_PROOF_FIELDS)
     raw = closed(value, allowed)
-    if type(raw["schema_version"]) is not int or raw["schema_version"] != _VERSIONS[record_type][int(hpo)]:
+    versions = _NATIVE_SOURCE_VERSIONS if mode is not None else _VERSIONS
+    if type(raw['schema_version']) is not int or raw['schema_version'] != versions[record_type][int(hpo)]:
         raise ContractError("unknown Rust-player record version")
     if record_type == "collection" and (raw["kind"] != "card-instance-collection" or raw["command"] != "collect"):
         raise ContractError("unknown Rust-player collection kind")
@@ -107,10 +121,41 @@ def validate_record_shape(value: Json, record_type: str, *, hpo: bool = False) -
         expected = "rust-player-hpo-source-proof-v1" if hpo else "rust-player-source-proof-v1"
         if raw["kind"] != expected or raw["qualified"] is not False or raw["parent_qualification"] != "not_performed":
             raise ContractError("Source metadata cannot grant parent/update authority")
+        if mode is not None:
+            from gf_training.rust_ppo_pack import validate_pack_verification
+            validate_pack_verification(raw['pack_verification'], run_id=raw['run_id'])
+    if mode is not None:
+        validate_training_episodes(raw['training_episodes'])
+    if (hpo and record_type in ('collection', 'proof')
+            and raw['encoder'] != ('canonical-rust' if mode is not None else 'canonical-python')):
+        raise ContractError('Rust-player encoder differs from the Source recipe')
     if record_type == 'update' and 'device_plan' in raw:
         from gf_models.rust_player_device import validate_device_plan
         validate_device_plan(raw['device_plan'], generation=raw['generation'])
     return raw
+
+
+def validate_training_episodes(value: Any) -> list[Json]:
+    from gf_common.domain import integer
+    from gf_common.rust_player import hex_identity, text
+
+    if type(value) is not list:
+        raise ContractError('ordered Rust PPO episode evidence required')
+    episodes, games = set(), set()
+    for item in value:
+        row = closed(item, {'episode_id', 'game_id', 'viewer', 'checkpoint', 'epoch',
+            'decisions', 'episode_digest'})
+        episode, game = text(row['episode_id']), text(row['game_id'])
+        if episode in episodes or game in games:
+            raise ContractError('duplicate Rust PPO episode or game')
+        episodes.add(episode)
+        games.add(game)
+        integer(row['viewer'], 1, 2)
+        integer(row['epoch'], 0)
+        integer(row['decisions'], 0)
+        hex_identity(row['checkpoint'])
+        hex_identity(row['episode_digest'])
+    return value
 
 
 def resume_identity(*, effective_config: Json, identity: Json, execution: Json,
@@ -129,8 +174,12 @@ def validate_empty_collection(value: Json, *, state: Json, config: Any) -> Json:
 
     from gf_common.domain import integer
     from gf_common.rust_player import hex_identity
-    row = closed(value, {'batch_id', 'collection_generation', 'manifest_path', 'manifest_sha256',
-        'descriptor_path', 'descriptor_sha256', 'learner_decisions'})
+    mode = source_mode(state['effective_config'])
+    fields = {'batch_id', 'collection_generation', 'manifest_path', 'manifest_sha256',
+        'descriptor_path', 'descriptor_sha256', 'learner_decisions'}
+    if mode is not None:
+        fields.update(_NATIVE_PROOF_FIELDS | {'snapshot_identity', 'policy_bindings', 'schedule', 'service_usage'})
+    row = closed(value, fields)
     generation = integer(row['collection_generation'], 0)
     integer(row['learner_decisions'], 0, 0)
     root = Path(config.storage.db_root) / state['run_id'] / 'collections' / f'batch-{generation:06}'
@@ -141,6 +190,13 @@ def validate_empty_collection(value: Json, *, state: Json, config: Any) -> Json:
         raise ContractError('empty collection exact current logical/physical binding differs')
     hex_identity(row['manifest_sha256'])
     hex_identity(row['descriptor_sha256'])
+    if mode is not None:
+        from gf_training.rust_ppo_pack import validate_pack_verification
+        if (validate_source_mode(row['ppo_source']) != mode
+                or validate_pack_verification(row['pack_verification'], run_id=state['run_id'])['descriptor_sha256'] != row['descriptor_sha256']):
+            raise ContractError('empty collection saved descriptor proof differs')
+        if any(item['decisions'] for item in validate_training_episodes(row['training_episodes'])):
+            raise ContractError('empty collection contains a learner decision')
     return row
 
 

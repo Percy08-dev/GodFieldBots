@@ -11,6 +11,7 @@ pub mod rng;
 pub mod rules;
 pub mod scheduler;
 pub mod search;
+pub mod training;
 use crate::{
     budget::{Budget, Control},
     error::{Error, Result},

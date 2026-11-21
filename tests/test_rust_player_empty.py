@@ -22,7 +22,8 @@ def marker():
     ('manifest_sha256', 'x' * 64), ('extra', None)])
 def test_empty_marker_has_exact_logical_original_root_and_physical_descriptor(field, value):
     from gf_training.rust_player_lineage import validate_empty_collection
-    state = {'run_id': 'run', 'updates': 2, 'status': 'incomplete', 'stop_reason': 'empty_collection'}
+    state = {'run_id': 'run', 'updates': 2, 'status': 'incomplete', 'stop_reason': 'empty_collection',
+        'effective_config': {'run': {}}}
     config = SimpleNamespace(storage=SimpleNamespace(db_root=Path('/data')))
     row = marker()
     assert validate_empty_collection(row, state=state, config=config) is row

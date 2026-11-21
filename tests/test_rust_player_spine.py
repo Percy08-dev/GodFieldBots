@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import os
 import re
 import sys
 import time
@@ -28,8 +29,10 @@ def prepare_cpu_source(root: Path, supervisor: Path, *, common: bool = False) ->
     text += f'\ndb_root = "{root / "database"}"\nram_root = "{root / "ram"}"\n'
     input_path = root / 'component-config.toml'
     input_path.write_text(text)
+    mode = ({'ppo_source': {'training_data': 'rust-ppo-training-v1', 'audit': 'sealed-pack-sha256-v1'}}
+        if os.environ.get('GFB_TEST_RUST_PPO_PARITY') == '1' and not common else {})
     loaded = load_config(input_path, {
-        "run": {"concurrency": 1, "player_runtime": declaration, "output_dir": str(root / "parent")},
+        "run": {"concurrency": 1, "player_runtime": declaration, "output_dir": str(root / "parent"), **mode},
         "server": {"source_dir": "/tmp/gf-issue72-shared-inference",
             "binary": "/tmp/gfb-shared-simulator-072dabb/target/release/gf-test-server"},
         "model": {"inference": {"device": "cpu"}}, "training": {"device": "cpu", **({'max_updates': 1} if common else {})},
@@ -186,12 +189,16 @@ def prepare_exec_hpo(supervisor: Path, *, config_only: bool = False):
 
 
 def run_cpu_source(control, ownership) -> None:
+    from contextlib import ExitStack
+    from unittest.mock import patch
+
     import numpy as np
 
     from gf_cli.config import load_rust_player_effective
     from gf_common.card_instance_rules import card_instance_rules
     from gf_common.domain import RuntimePolicyBinding, digest
     from gf_common.rust_player import deadline_seconds
+    from gf_common.rust_ppo_source import source_mode
     from gf_common.structured_layout import CORRECTED_CARD_INSTANCE_LAYOUT as layout
     from gf_models.arrays import sha256
     from gf_models.rust_player import RustPlayerInference
@@ -213,6 +220,7 @@ def run_cpu_source(control, ownership) -> None:
     loaded = load_rust_player_effective(Path(control.operation['config_path']),
         expected_sha256=control.operation['config_sha256'])
     config = loaded.config
+    mode = source_mode(loaded.effective)
     bound = json.loads((root / 'component-runtime.json').read_bytes())
     assert digest(bound) == control.operation['runtime_binding_sha256']
     budget = {'managed_ram_bytes': 24 * 1024**3, 'managed_cuda_bytes': 0,
@@ -275,23 +283,36 @@ def run_cpu_source(control, ownership) -> None:
     assert checkpoint['writer_workspace_bytes'] == checkpoint['static_context_bytes'] == 0
     assert collection.originals is None and not pool.sources
     assert collection.report['healthy'] is True
-    try:
-        source = RustPlayerSource.project(collection)
-    except BaseException:
-        failed = registry.pending
-        originals = failed.originals
-        packed = originals.source
-        checkpoint.update(phase='source-failed', source_used=pool.budget.used,
-            source_peak=pool.budget.peak,
-            source_graph_metadata_charges=sum(charge.size for charge in originals._reservations),
-            packed_total=packed._budget.used, packed_group_cache=packed._cache_charge,
-            packed_detached_bytes=packed._detached_charge,
-            packed_original_metadata=packed._originals.metadata_charge)
-        (root / 'cpu-source-accounting.json').write_text(json.dumps(checkpoint, sort_keys=True))
-        raise
-    assert source.state == 'SEALED' and source.closure_counts == {'natural': 16}
-    numeric = source.persist(parent / 'numeric' / '000000')
-    assert source.state == 'PERSISTED' and numeric['schema_version'] == 4 and numeric['decision_count'] > 0
+    with ExitStack() as path_guards:
+        if mode is not None:
+            for name in ('rust_player_source.RustPlayerOriginals.__init__',
+                    'structured_rollout.gae', 'structured_rollout._read_rollout'):
+                path_guards.enter_context(patch('gf_training.' + name,
+                    side_effect=AssertionError('normal native Source invoked legacy decode or GAE: ' + name)))
+        try:
+            source = RustPlayerSource.project(collection)
+        except BaseException:
+            if mode is not None:
+                raise
+            failed = registry.pending
+            originals = failed.originals
+            packed = originals.source
+            checkpoint.update(phase='source-failed', source_used=pool.budget.used,
+                source_peak=pool.budget.peak,
+                source_graph_metadata_charges=sum(charge.size for charge in originals._reservations),
+                packed_total=packed._budget.used, packed_group_cache=packed._cache_charge,
+                packed_detached_bytes=packed._detached_charge,
+                packed_original_metadata=packed._originals.metadata_charge)
+            (root / 'cpu-source-accounting.json').write_text(json.dumps(checkpoint, sort_keys=True))
+            raise
+        assert source.state == 'SEALED' and source.closure_counts == {'natural': 16}
+        numeric = source.persist(parent / 'numeric' / '000000')
+    assert source.state == 'PERSISTED' and numeric['schema_version'] == (7 if mode is not None else 4) and numeric['decision_count'] > 0
+    if mode is not None:
+        from tests.test_rust_ppo_live_source import audit_model3_live_rollout
+        assert collection.originals is None and not pool.sources
+        evidence = audit_model3_live_rollout(source, local.learner, mode)
+        (root / 'cpu-source-rust-ppo-parity.json').write_text(json.dumps(evidence, sort_keys=True))
     try:
         source.persist(parent / 'numeric' / 'duplicate')
     except ValueError:

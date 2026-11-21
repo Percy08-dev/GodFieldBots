@@ -246,9 +246,15 @@ class Learner:
             raise ContractError('non-nested owned Model3 operation required')
         self._rust_operation_limit = _OperationDeviceLimit(device_bytes, rollout)
         try:
+            from gf_training.rust_ppo_rollout import _RustTrainingRollout
+
             self.admit(rollout)
             cuda_width = recipe.gpu_microbatch_size if self.binding.device != 'cpu' else 1
-            if (cuda_width == 1 and recipe.minibatch_size == LEGACY_PPO_UPDATE.minibatch_size
+            native = type(rollout) is _RustTrainingRollout
+            if type(rollout) is _RustTrainingRollout:
+                for index in range(len(rollout)):
+                    rollout.require_singleton_packing(index)
+            if (not native and cuda_width == 1 and recipe.minibatch_size == LEGACY_PPO_UPDATE.minibatch_size
                     and recipe.epochs == LEGACY_PPO_UPDATE.epochs and recipe.shuffle_strategy == 'all'):
                 return self.update(rollout)
             if self.model.model_id != 'mlp':
@@ -260,17 +266,29 @@ class Learner:
     def _packed_model3_loss(self, rollout: StructuredRollout, indices: tuple[int, ...]) -> tuple[Any, Json]:
         from gf_models.structured_learning import pack_window
         from gf_training.hpo_update_planning import group_frames
+        from gf_training.rust_ppo_rollout import _RustTrainingRollout
 
-        endpoints = [rollout.endpoint(index) for index in indices]
-        window = pack_window(self.network, group_frames(endpoints, self.model, False),
-            [candidates for _, candidates in endpoints], [rollout.vector(index) for index in indices])
+        if type(rollout) is _RustTrainingRollout:
+            window = rollout.pack(self.network, indices)
+        else:
+            endpoints = [rollout.endpoint(index) for index in indices]
+            window = pack_window(self.network, group_frames(endpoints, self.model, False),
+                [candidates for _, candidates in endpoints], [rollout.vector(index) for index in indices])
         logs, values = self.network._learning_forward(window, [1] * len(indices), 1)
         raw = window.operands
         return losses(logs, values, raw['mask'], raw['selected'], *raw['vectors'])
 
     def _scalar_model3_loss(self, rollout: StructuredRollout, index: int) -> tuple[Any, Json]:
+        from gf_training.rust_ppo_rollout import _RustTrainingRollout
+
         torch = self.torch
         frames, candidates = rollout.endpoint(index)
+        if type(rollout) is _RustTrainingRollout:
+            window = rollout.pack(self.network, (index,))
+            logs, value = self.network._learning_serial(window, frames, candidates, min(len(frames), self.model.temporal.sequence_length))
+            self.synchronize()
+            raw = window.operands
+            return losses(logs, value, raw['mask'], raw['selected'], *raw['vectors'])
         logs, value, _ = self.network(frames, candidates,
             suffix_length=min(len(frames), self.model.temporal.sequence_length))
         selected, old, _, advantage, target = rollout.vector(index)
@@ -283,6 +301,7 @@ class Learner:
 
     def _update_ordinary_model3(self, rollout: StructuredRollout, recipe: PPOUpdateConfig, *, cuda_width: int) -> Json:
         from gf_training.hpo_update_planning import plan_groups
+        from gf_training.rust_ppo_rollout import _RustTrainingRollout
 
         torch = self.torch
         parity = self.parity(rollout)
@@ -293,6 +312,7 @@ class Learner:
         gradient_bytes = (sum(parameter.numel() * parameter.element_size()
             for parameter in self.network.parameters()) if packed else 0)
         runs = _ppo_episode_runs(rollout) if recipe.shuffle_strategy != 'all' else ()
+        native_options: Json = {'_native_pack_fits': rollout.pack_fits} if type(rollout) is _RustTrainingRollout else {}
         self.network.train()
         for _ in range(recipe.epochs):
             order = _ppo_epoch_order(self.shuffle, len(rollout), runs, recipe.shuffle_strategy)
@@ -308,7 +328,8 @@ class Learner:
                     plans = plan_groups(rollout, logical, self.model, self.binding, 1,
                         variant='microbatch', reservation_bytes=self.binding.managed_budget_bytes,
                         layout=self.network.layout, device_bytes=self._current_device_limit(None),
-                        mlp_width=cuda_width, packed_device_headroom=free_bytes + idle_bytes - gradient_bytes)
+                        mlp_width=cuda_width, packed_device_headroom=free_bytes + idle_bytes - gradient_bytes,
+                        **native_options)
                     groups = (group.indices for group in plans)
                 else:
                     groups = ((index,) for index in logical)

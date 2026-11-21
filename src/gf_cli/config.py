@@ -106,6 +106,31 @@ class RustPlayerPublicHpoRunConfigV2(RunConfigV2):
     post_host_seconds: float
 
 
+@dataclass(frozen=True, kw_only=True)
+class _RustPPODataRun:
+    ppo_source: Json
+
+
+@dataclass(frozen=True)
+class RustPPODataRun(_RustPPODataRun, RustPlayerRunConfigV2):
+    pass
+
+
+@dataclass(frozen=True)
+class RustPPODataPublicRun(_RustPPODataRun, RustPlayerPublicRunConfigV2):
+    pass
+
+
+@dataclass(frozen=True)
+class RustPPODataHpoRun(_RustPPODataRun, RunConfigV2):
+    pass
+
+
+@dataclass(frozen=True)
+class RustPPODataPublicHpoRun(_RustPPODataRun, RustPlayerPublicHpoRunConfigV2):
+    pass
+
+
 @dataclass(frozen=True)
 class ServerConfig:
     binary: str = "../GodFieldSimurator/target/debug/gf-test-server"
@@ -277,6 +302,9 @@ def _validate_table(name: str, values: Json, *, context: Json | None = None) -> 
             default = defaults[key]
             if name == "run" and key == "player_runtime":
                 continue  # The closed declaration has its own zero-wait semantics.
+            elif name == 'run' and key == 'ppo_source':
+                from gf_common.rust_ppo_source import validate_source_mode
+                validate_source_mode(value)
             elif name == "training" and key == "ppo_update":
                 ppo_update_config(value)
             elif isinstance(default, dict):
@@ -339,6 +367,9 @@ def _validate_table(name: str, values: Json, *, context: Json | None = None) -> 
         if "inference_service" in values:
             from gf_common.shared_inference import shared_runtime
             defaults["inference_service"] = shared_runtime(values["inference_service"],game_concurrency=values.get("concurrency",2))
+        if 'ppo_source' in values and ('player_runtime' in values
+                or context.get('hpo_spec', {}).get('schema_version') == 6):
+            defaults['ppo_source'] = {}
     if name in ("model", "opponent") and "model_id" not in values and not structured_model:
         defaults["inference"] = asdict(MLPModelConfig().inference)
         defaults["network"].update(asdict(MLPModelConfig().network))
@@ -650,7 +681,9 @@ def _normalized_config(effective: Json, *, data: Json, inputs: tuple[Json, ...])
         values = effective[name]
         defaults = asdict(cls(**({'post_host_seconds': values['post_host_seconds']}
             if cls is RustPlayerPublicRunConfigV2 else {})))
-        values = {k: tuple(v) if isinstance(defaults[k], tuple) else v for k, v in values.items()}
+        if name == 'run' and 'ppo_source' in values:
+            cls = RustPPODataPublicRun if cls is RustPlayerPublicRunConfigV2 else RustPPODataRun
+        values = {k: tuple(v) if isinstance(defaults.get(k), tuple) else v for k, v in values.items()}
         converted[name] = cls(**values)
     mixed = data.get("training_opponents")
     if mixed is not None and (not card_instance_actions or card_revision not in (CORRECTED_SIMULATOR_REVISION,SHARED_SIMULATOR_REVISION)

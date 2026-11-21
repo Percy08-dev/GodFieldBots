@@ -1,5 +1,5 @@
 //! Final-dtype serving operands. Native token kernels; no Python tokenizer or JSON transport.
-use super::{Config, Input, ensure, error, search::Table};
+use super::{Config, Input, ensure, error, game::storage::Account, search::Table, training::RowOperands};
 use crate::{
     budget::{Budget, Control},
     error::Result,
@@ -17,6 +17,11 @@ pub enum Buffer {
     Bool(Vec<bool>, Vec<usize>),
 }
 impl Buffer {
+    pub(super) fn shape(&self) -> &[usize] {
+        match self {
+            Self::Float(_, shape) | Self::Long(_, shape) | Self::Bool(_, shape) => shape,
+        }
+    }
     fn export(self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         macro_rules! array {
             ($v:expr,$s:expr) => {
@@ -115,7 +120,8 @@ impl ServingRow {
             budget,
             control,
             false,
-        )
+            None,
+        ).map(|(serving, _)| serving)
     }
     /// Native actor only: its incremental History owns original validation.
     pub(crate) fn build_owned(
@@ -140,7 +146,24 @@ impl ServingRow {
             budget,
             control,
             true,
-        )
+            None,
+        ).map(|(serving, _)| serving)
+    }
+    pub(super) fn build_training(
+        frame: &Value,
+        events: &[Value],
+        input: &Input,
+        config: &Config,
+        table: &Table,
+        window: usize,
+        max_positions: usize,
+        budget: &Arc<Budget>,
+        control: &Control,
+        account: &Arc<Account>,
+    ) -> Result<(Self, RowOperands)> {
+        let (serving, training) = Self::build_context(frame, events, input, config, table,
+            window, max_positions, budget, control, true, Some(account))?;
+        Ok((serving, training.expect("explicit learner row")))
     }
     fn build_context(
         frame: &Value,
@@ -153,7 +176,8 @@ impl ServingRow {
         budget: &Arc<Budget>,
         control: &Control,
         owned: bool,
-    ) -> Result<Self> {
+        training: Option<&Arc<Account>>,
+    ) -> Result<(Self, Option<RowOperands>)> {
         let at = Instant::now();
         ensure(
             (1..=65536).contains(&window) && (1..=128).contains(&max_positions),
@@ -321,15 +345,19 @@ impl ServingRow {
             "references".into(),
             Buffer::Long(refs, vec![n, max_positions]),
         );
-        Ok(Self {
+        let mut serving = Self {
             actor: input.actor,
             revision: input.revision,
             fields,
             candidates: n,
             events: count,
             candidate_offsets: table.offsets.iter().map(|v| *v as i64).collect(),
-            assembly_seconds: at.elapsed().as_secs_f64(),
-        })
+            assembly_seconds: 0.,
+        };
+        let row = training.map(|account| RowOperands::build(t, table, &serving, order, account))
+            .transpose()?;
+        serving.assembly_seconds = at.elapsed().as_secs_f64();
+        Ok((serving, row))
     }
     pub fn bytes(&self) -> usize {
         self.fields.values().map(Buffer::bytes).sum::<usize>() + self.candidate_offsets.len() * 8

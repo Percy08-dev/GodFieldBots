@@ -19,6 +19,8 @@ from gf_cli.config import (
     LoadedConfig,
     RunConfigV2,
     RustPlayerPublicHpoRunConfigV2,
+    RustPPODataHpoRun,
+    RustPPODataPublicHpoRun,
     load_config,
 )
 from gf_common.card_instance import (
@@ -202,9 +204,10 @@ class RustPlayerHPOCampaignConfig(HPOCampaignConfig):
 
     @property
     def study_identity(self) -> str:
+        source: Json = {'ppo_source': self.ppo_source} if isinstance(self, _RustPPODataCampaign) else {}
         return digest({'recipe': 'hpo-rust-player-study-v1', 'base': super().study_identity,
             'runtime': player_runtime(self.runtime, game_concurrency=self.operating.game_concurrency),
-            'origin': self.origin, 'encoder': self.encoder})
+            'origin': self.origin, 'encoder': self.encoder, **source})
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -215,6 +218,21 @@ class RustPlayerRefreshHPOCampaignConfig(RustPlayerHPOCampaignConfig):
     def study_identity(self) -> str:
         return digest({'base': super().study_identity,
             'training_opponents': parse_training_opponents(self.training_opponents)})
+
+
+@dataclass(frozen=True, kw_only=True)
+class _RustPPODataCampaign:
+    ppo_source: Json
+
+
+@dataclass(frozen=True)
+class RustPPODataCampaign(_RustPPODataCampaign, RustPlayerHPOCampaignConfig):
+    pass
+
+
+@dataclass(frozen=True)
+class RustPPODataRefreshCampaign(_RustPPODataCampaign, RustPlayerRefreshHPOCampaignConfig):
+    pass
 
 
 @dataclass(frozen=True)
@@ -292,6 +310,9 @@ def materialize_hpo_run(loaded_campaign: LoadedHPOConfig, settings: Any, *, lear
         from gf_cli.config import _validate_post_host
         run = RustPlayerPublicHpoRunConfigV2(**asdict(run), post_host_seconds=operating.post_host_seconds)
         _validate_post_host(asdict(run))
+    if isinstance(campaign, _RustPPODataCampaign):
+        data_run_cls = RustPPODataPublicHpoRun if isinstance(run, RustPlayerPublicHpoRunConfigV2) else RustPPODataHpoRun
+        run = data_run_cls(**asdict(run), ppo_source=campaign.ppo_source)
     source_mib=min(base.preprocessing.memory_budget_mib,operating.source_budget_bytes//1024**2)
     _validate_hpo_source_codec(source_mib)
     preprocessing=preparation_config(asdict(replace(base.preprocessing,memory_budget_mib=source_mib)))
@@ -353,6 +374,7 @@ def normalized_rust_player_hpo(effective: Json, *, inputs: tuple[Json, ...]) -> 
     )
     from gf_common.card_instance import action_config_v3
     from gf_common.preprocessing import preparation_config
+    from gf_common.rust_ppo_source import source_mode
     from gf_models.config import model_config
     from gf_models.structured_binding import configured_model_v4
     from gf_training.hpo_lineage import _run_projection, _runtime_training, rust_player_hpo_spec
@@ -376,7 +398,9 @@ def normalized_rust_player_hpo(effective: Json, *, inputs: tuple[Json, ...]) -> 
     for name in ("run", "server", "evaluation", "opponent"):
         _validate_table(name, effective[name], context=effective)
     timed = 'post_host_seconds' in spec['operating']
-    run_cls = RustPlayerPublicHpoRunConfigV2 if timed else RunConfigV2
+    run_cls: type[RunConfigV2] = RustPlayerPublicHpoRunConfigV2 if timed else RunConfigV2
+    if source_mode(effective) is not None:
+        run_cls = RustPPODataPublicHpoRun if timed else RustPPODataHpoRun
     run = closed(effective["run"], set(run_cls.__dataclass_fields__))
     run = {**run, "seeds": tuple(run["seeds"]), "sampling_seeds": tuple(run["sampling_seeds"])}
     settings = effective_settings(model.architecture(layout=CORRECTED_CARD_INSTANCE_LAYOUT),
@@ -494,10 +518,13 @@ def campaign_config(value: Json, *, origin: Path, _pinned_base: LoadedConfig | N
     resident = type(value.get("schema_version")) is int and value["schema_version"] in (3,4,5)
     mixed = value.get("schema_version") == 2 or (resident or rust_player) and "training_opponents" in value
     closed(value, required | ({"training_opponents"} if mixed else set()) | ({"runtime"} if resident or rust_player else set()) | ({"origin","encoder"} if owned else set()),
-        {"model", "training", "inference", "operating", "storage"})
+        {"model", "training", "inference", "operating", "storage"} | ({'ppo_source'} if rust_player else set()))
     integer(value["schema_version"], 1, 6)
-    if owned and (value["origin"] != "producer-owned-v1" or value["encoder"] != "canonical-python"):
-        raise ContractError("owned HPO requires explicit producer origin and canonical Python encoder")
+    from gf_common.rust_ppo_source import source_encoder, validate_source_mode
+    mode = validate_source_mode(value['ppo_source']) if 'ppo_source' in value else None
+    encoder = source_encoder({'run': {} if mode is None else {'ppo_source': mode}})
+    if owned and (value["origin"] != "producer-owned-v1" or value["encoder"] != encoder):
+        raise ContractError('owned HPO origin/encoder differs from its source recipe')
     shared = value["schema_version"] == 5
     if rust_player and value['model_id'] != 'mlp':
         raise ContractError('Rust player HPO6 supports Model4 MLP only')
@@ -545,6 +572,8 @@ def campaign_config(value: Json, *, origin: Path, _pinned_base: LoadedConfig | N
         base = _pinned_base
     if 'ppo_update' in base.effective['training']:
         raise ContractError('HPO base must not declare ordinary training.ppo_update')
+    if 'ppo_source' in base.effective['run']:
+        raise ContractError('HPO base must not declare ordinary run.ppo_source')
     if hasattr(base.config.run,'inference_service'):
         raise ContractError('HPO base must not declare ordinary run.inference_service; campaign runtime is authoritative')
     if hasattr(base.config.run, 'player_runtime'):
@@ -576,13 +605,16 @@ def campaign_config(value: Json, *, origin: Path, _pinned_base: LoadedConfig | N
     cls: Any = ((RustPlayerRefreshHPOCampaignConfig if mixed else RustPlayerHPOCampaignConfig) if rust_player else (SharedRefreshHPOCampaignConfig if mixed else SharedHPOCampaignConfig) if shared else (OwnedRefreshHPOCampaignConfig if mixed else OwnedHPOCampaignConfig) if owned else
         (ResidentRefreshHPOCampaignConfig if mixed else ResidentHPOCampaignConfig) if resident else
         (RefreshOpponentsHPOCampaignConfig if mixed else HPOCampaignConfig))
+    if mode is not None:
+        cls = RustPPODataRefreshCampaign if mixed else RustPPODataCampaign
     config: HPOCampaignConfig = cls(**{name: value[name] for name in (
         "schema_version", "kind", "model_id", "stage", "trial_count", "decision_budget", "sampler_seed", "startup_trials")},
         base_experiment=base_path, base_config_sha256=base.sha256, learning_seeds=learning, evaluation_game_seeds=games,
         session_seconds=session, run_wall_seconds=wall, space=space, model=model, training=recipe,
         inference=inference, operating=operating, storage=storage,
         **({'training_opponents': descriptor} if mixed else {}), **({'runtime': runtime} if resident or rust_player else {}),
-        **({'origin':value['origin'],'encoder':value['encoder']} if owned else {}))
+        **({'origin':value['origin'],'encoder':value['encoder']} if owned else {}),
+        **({'ppo_source': mode} if mode is not None else {}))
     if mixed:
         _mixed_collection_games(config)
     if hasattr(base.config, 'training_opponents'):
