@@ -217,9 +217,14 @@ class RustPlayerCollector:
                 or plan.linkage["collection_generation"] != self.registry.state["updates"]
                 or plan.execution_deadline != deadline_seconds(actual["deadlines"]["execution_bits"])):
             raise ContractError("collection differs from actual current generation/original deadline")
+        checkpoints: dict[str, None] = {}
         for binding in plan.bindings.values():
             if binding.model_id == "mlp":
-                self.registry.publish(int(Path(binding.policy_options["checkpoint"]).name), deadline=plan.execution_deadline)
+                published = self.registry.publish(int(Path(binding.policy_options["checkpoint"]).name),
+                                                  deadline=plan.execution_deadline)
+                checkpoints[published["checkpoint"]] = None
+        self.registry.service.bind_collection(tuple(checkpoints),
+            game_concurrency=self.declaration["game_concurrency"], max_batch_size=self.declaration["max_batch_size"])
         diagnostics = self.runtime.diagnostics
         if diagnostics is not None:
             scope = diagnostics.scope(run_id=self.registry.state['run_id'],
@@ -278,6 +283,7 @@ class RustPlayerCollector:
                 if self.registry.service.device != "cpu":
                     import torch
                     torch.cuda.synchronize(self.registry.service.device)
+                self.registry.service.end_collection()
             end_counters = self._counters()
             settlement = {"schema_version": 1, "kind": "rust-player-service-consumer-settlement-v1",
                 "run_id": self.registry.state["run_id"], "batch_id": plan.linkage["batch_id"],

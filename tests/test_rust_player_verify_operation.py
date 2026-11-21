@@ -1234,3 +1234,21 @@ def test_verifier_preserves_pack_budget_above_sealed_scan_limit(tmp_path, monkey
             seconds=30, deadline=started + 30, ownership=owner)
     assert result['external_audit']['source_limit_bytes'] == source
     assert observed == [scan_limit, source, scan_limit]
+
+
+def test_optional_collection_inference_metrics_validate_width_and_useful_population():
+    from tools.rust_player_verify_operation import metric_data
+    row = metric()
+    options = {'observation_id': 'obs', 'boot_id': 'boot', 'run_id': 'run', 'interval': (0, 300)}
+    assert 'native_inference' not in metric_data(row, **options)
+    row['owner']['role'] = 'native-inference'
+    row['native_inference'] = {'recipe': 'batched-torch-v1', 'batch_width': 4, 'batched_groups': 2,
+        'useful_rows': 3, 'dummy_rows': 5, 'scalar_rows': 7, 'useful_size_counts': {'1': 1, '2': 1},
+        'cuda_peak_allocated_bytes': 100, 'cuda_peak_reserved_bytes': 120}
+    assert metric_data(row, **options)['native_inference'] == row['native_inference']
+    for damage in ({'dummy_rows': 4}, {'useful_size_counts': {'3': 1}}, {'cuda_peak_reserved_bytes': 90}):
+        corrupted = row | {'native_inference': row['native_inference'] | damage}
+        with pytest.raises(ContractError):
+            metric_data(corrupted, **options)
+    with pytest.raises(ContractError):
+        metric_data(row | {'owner': row['owner'] | {'role': 'native-runtime'}}, **options)

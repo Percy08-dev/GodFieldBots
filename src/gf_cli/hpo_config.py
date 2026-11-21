@@ -54,6 +54,11 @@ from gf_training.hpo_config import (
 GIB = 1024**3
 
 
+def _same_player_schedule(base: Json, campaign: Json) -> bool:
+    return ({key: value for key, value in base.items() if key != 'inference_recipe'}
+        == {key: value for key, value in campaign.items() if key != 'inference_recipe'})
+
+
 @dataclass(frozen=True)
 class HPOOperatingConfig:
     managed_ram_bytes: int = 24 * GIB
@@ -299,7 +304,8 @@ def materialize_hpo_run(loaded_campaign: LoadedHPOConfig, settings: Any, *, lear
     execute=wall-final
     base_run = base.run
     if isinstance(campaign, RustPlayerHPOCampaignConfig) and hasattr(base_run, 'player_runtime'):
-        if player_runtime(base_run.player_runtime, game_concurrency=base_run.concurrency) != campaign.runtime:
+        if not _same_player_schedule(
+                player_runtime(base_run.player_runtime, game_concurrency=base_run.concurrency), campaign.runtime):
             raise ContractError('HPO6 base player_runtime conflicts with authoritative campaign runtime')
         base_run = RunConfigV2(**{name: getattr(base_run, name) for name in RunConfigV2.__dataclass_fields__})
     run=replace(base_run,name=run_id,output_dir=storage.parent_root,wall_seconds=wall,
@@ -579,7 +585,8 @@ def campaign_config(value: Json, *, origin: Path, _pinned_base: LoadedConfig | N
     if hasattr(base.config.run, 'player_runtime'):
         if not rust_player:
             raise ContractError('legacy HPO base must not declare run.player_runtime')
-        if base.config.run.player_runtime != runtime:
+        assert runtime is not None
+        if not _same_player_schedule(base.config.run.player_runtime, runtime):
             raise ContractError('HPO6 base player_runtime conflicts with authoritative campaign runtime')
         if (hasattr(base.config.run, 'post_host_seconds')
                 and base.config.run.post_host_seconds != getattr(operating, 'post_host_seconds', None)):

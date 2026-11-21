@@ -428,3 +428,18 @@ def test_rust_supported_opponent_composition_remains_explicit(kind, version):
         {"opponent": {"model_id": kind, "version": version}, "run": {"player_runtime": runtime()}},
     )
     assert loaded.config.opponent.model_id == kind
+
+
+@pytest.mark.parametrize("base_batched,campaign_batched", [(False, True), (True, False), (True, True)])
+def test_hpo6_base_agrees_on_schedule_and_campaign_owns_inference(tmp_path, base_batched, campaign_batched):
+    recipe = {"inference_recipe": "batched-torch-v1"}
+    base = normal_file(tmp_path, runtime() | (recipe if base_batched else {}))
+    declaration = runtime() | (recipe if campaign_batched else {})
+    raw = campaign_raw() | {"base_experiment": str(base), "runtime": declaration}
+    loaded = campaign_config(raw, origin=tmp_path)
+    settings = effective_settings(loaded.config.model, loaded.config.training, {}, layout=LAYOUT)
+    run = materialize_hpo_run(loaded, settings, learning_seed=17, run_id=RUN_ID)
+    assert run.config.hpo_spec["runtime"] == declaration
+    assert "player_runtime" not in run.effective["run"]
+    with pytest.raises(ContractError, match="conflicts"):
+        campaign_config(raw | {"runtime": declaration | {"max_batch_size": 99}}, origin=tmp_path)

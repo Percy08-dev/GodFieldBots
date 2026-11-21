@@ -122,7 +122,7 @@ from actual persisted J6 decisions and preserve participant/collection identity.
 
 ## Closed diagnostic records
 
-metrics1/kind rust-player-phase-metrics-v1 exact keys
+metrics1/kind rust-player-phase-metrics-v1 required keys
 {schema_version,kind,observation_id,owner,clock,scope,start_monotonic_ns,
 end_monotonic_ns,complete,errors,counters,histograms,batch_rows,stage_seconds,queue}.
 owner={pid,start_ticks,role}; clock={name,boot_id}, name=CLOCK_MONOTONIC.
@@ -146,6 +146,16 @@ native_submit}; each value is null or {method,seconds}, seconds finite>=0.
 queue={model,queued_bytes_peak,in_service_bytes_peak,outstanding_bytes_peak,
 depth_peak,failed_attempts}; model=thread-fifo/native-ingress/legacy-parent-rpc,
 unavailable values null. Byte counts are observational ownership, not extra PSS.
+
+Native-inference collection metrics can include `native_inference`. The field
+records `recipe`, `batch_width`, `batched_groups`, `useful_rows`, `dummy_rows`,
+`scalar_rows`, `useful_size_counts`, `cuda_peak_allocated_bytes`, and
+`cuda_peak_reserved_bytes`. The histogram counts actual Torch forwards by
+useful row count. The fixed width times the number of forwards equals the
+sum of useful and dummy rows. Scalar summaries have null width and zero
+batched counts. The CUDA peaks measure Torch allocation and reservation over
+the collection scope. CPU summaries have null peaks. Diagnostic readers
+accept historical metrics without this field.
 
 phase1/kind rust-player-phase-event-v1 exact
 {schema_version,kind,observation_id,owner,clock,scope,monotonic_ns,event,links}.

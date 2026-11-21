@@ -178,8 +178,8 @@ class DeviceOperation:
         with serialized_torch():
             if self.account._active is not self or self.state != 'ACTIVE':
                 raise ContractError('actual active device operation required')
-            if self.phase == 'row' and self.references is not None:
-                raise ContractError('GPU row inputs must positively retire inside the Torch lock')
+            if self.phase in ('row', 'batch') and self.references is not None:
+                raise ContractError('GPU inference inputs must positively retire inside the Torch lock')
             self.references = self.owner = None
             self.state, self.account._active = 'SETTLED', None
 
@@ -448,6 +448,20 @@ class RustPlayerDeviceAccount:
             if required > self.global_bytes:
                 raise ContractError(f'CUDA actual row exceeds allowance: required={required} limit={self.global_bytes}')
             self._active = DeviceOperation(self, 'row', owner=owner, storage_bytes=estimate.peak_bytes)
+            return self._active
+
+    def serving_tensor_allowance(self) -> int:
+        """Available transient CUDA bytes after actual residency and one host charge."""
+        with serialized_torch():
+            self._idle()
+            return (self.global_bytes - self.host_fixed_bytes - self.learner_tensor_bytes
+                    - self.retained_cache_tensor_bytes)
+
+    def begin_batch(self, peak_bytes: int, *, owner: Any) -> DeviceOperation:
+        with serialized_torch():
+            if peak_bytes > self.serving_tensor_allowance():
+                raise ContractError('CUDA residency changed after batch geometry admission')
+            self._active = DeviceOperation(self, 'batch', owner=owner, storage_bytes=peak_bytes)
             return self._active
 
     def _begin_required(self, phase: str, required: int, owner: Any) -> DeviceOperation:

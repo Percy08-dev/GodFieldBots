@@ -14,6 +14,10 @@
 
 ## 一覧
 
+[0059](0059-rust-player-cuda-batch-inference.md) — Accepted。Model3・Model4 の Rust
+対戦収集で固定形状の CUDA バッチ推論を選択できる。256 試合の実測で両モデルの
+収集時間と応答 p95 が改善し、標準は従来の逐次推論とする。
+
 [0058](0058-four-pytest-workers.md) — Accepted。Pytestの標準を4ワーカーの
 ファイル単位分配とし、`-n 0` で直列実行を選べるようにする。
 

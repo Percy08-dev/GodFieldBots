@@ -268,8 +268,9 @@ def make_network(model: ModelConfigV2 | ModelConfigV3 | ModelConfigV4, seed: int
             # expression order, including separate mask/category/order copies.
             return self._encode_frame_operands(tokens, lambda name: self._frame_tensor_operand(tokens, name))
 
-        def _encode_frame_operands(self, tokens: Any, raw: Any, *, batch_lengths: Any = None) -> tuple[Any, Any]:
-            batched = batch_lengths is not None
+        def _encode_frame_operands(self, tokens: Any, raw: Any, *, batch_lengths: Any = None,
+                                   fixed_event_indices: Any = None) -> tuple[Any, Any]:
+            batched = batch_lengths is not None or fixed_event_indices is not None
             state_input = torch.cat((self._float_tensor(raw("state_numerics")),
                                      raw("state_present"),
                                      self._onehot_tensor(raw("state_categories"), layout.state_categories),
@@ -306,7 +307,17 @@ def make_network(model: ModelConfigV2 | ModelConfigV3 | ModelConfigV4, seed: int
                 else:
                     hand = latent.masked_fill(~mask[..., None], -torch.inf).max(-2).values
                     hand = torch.where(mask.any(-1)[..., None] if batched else mask.any(), hand, torch.zeros_like(hand))
-            if batched:
+            if fixed_event_indices is not None:
+                if raw("interval_numerics").shape[1]:
+                    event_input = torch.cat((self._float_tensor(raw("interval_numerics")),
+                        raw("interval_present"), self._onehot_tensor(raw("interval_categories"), layout.event_categories)), -1)
+                    with no_cudnn():
+                        sequence, _ = self.event_encoder(event_input)
+                    event = sequence.gather(1, fixed_event_indices[:, None, None].expand(
+                        -1, 1, model.event.hidden_size)).squeeze(1)
+                else:
+                    event = torch.zeros((fixed_event_indices.shape[0], model.event.hidden_size), device=self.device)
+            elif batched:
                 event = torch.zeros((len(batch_lengths), model.event.hidden_size), device=self.device)
                 positive = [index for index, length in enumerate(batch_lengths) if length]
                 if positive:
@@ -641,7 +652,7 @@ def make_network(model: ModelConfigV2 | ModelConfigV3 | ModelConfigV4, seed: int
                 cards=torch.stack([actor_cards[row*length+length-1] for row in range(batch)])
             return self._learning_heads(window.operands,context,cards)
 
-        def _learning_heads(self,raw: Any,context: Any,cards: Any) -> tuple[Any,Any]:
+        def _batched_logits(self, raw: Any, context: Any, cards: Any) -> Any:
             first = self.actor[0]
             width = model.temporal.hidden_size
             shared_context = functional.linear(context,first.weight[:,:width],first.bias)
@@ -662,7 +673,10 @@ def make_network(model: ModelConfigV2 | ModelConfigV3 | ModelConfigV4, seed: int
                     logits.append(recompute(self._candidate_chunk_calculate,*args,use_reentrant=False))
                 else:
                     logits.append(self._candidate_chunk_calculate(*args))
-            scores = torch.cat(logits,1).masked_fill(~raw["mask"],-torch.inf)
+            return torch.cat(logits,1)
+
+        def _learning_heads(self,raw: Any,context: Any,cards: Any) -> tuple[Any,Any]:
+            scores = self._batched_logits(raw, context, cards).masked_fill(~raw["mask"],-torch.inf)
             if not torch.isfinite(scores[raw["mask"]]).all():
                 raise ContractError("nonfinite actor output")
             logs = scores.log_softmax(-1)

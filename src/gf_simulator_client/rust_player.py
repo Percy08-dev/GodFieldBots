@@ -77,6 +77,8 @@ class RustPlayerRuntime:
                 self._native.measurement_begin(canonical(scope).encode())
                 self._measurement_scope = dict(scope)
                 self._measurement_stages = self._stage_snapshot() if self.service is not None else None
+                if self.service is not None and scope['phase'] == 'collection':
+                    self.service.begin_collection_metrics()
                 if self.diagnostics.profile_recipe == 'forward-window-v1' and self._profile_status is None and self.service is not None:
                     from gf_simulator_client.performance_profile import (
                         ForwardProfile,
@@ -100,6 +102,8 @@ class RustPlayerRuntime:
             with self._settled:
                 if complete and (self._active_routes or self._holds):
                     raise ValueError('measurement overlaps unsettled actual inference')
+                inference = (self.service.end_collection_metrics()
+                    if self.service is not None and self._measurement_scope['phase'] == 'collection' else None)
                 data = json.loads(self._native.measurement_end(canonical(self._measurement_scope).encode(), complete))
                 self.diagnostics.metrics(data, role='native-runtime')
                 if self._measurement_stages is not None:
@@ -113,7 +117,10 @@ class RustPlayerRuntime:
                             stage_metrics.error('invalid_stage_interval:' + name)
                         else:
                             stage_metrics.stages[name] = {'method': 'synchronized-host-wall-v1', 'seconds': seconds}
-                    self.diagnostics.metrics(stage_metrics.snapshot(end_ns=data['end_monotonic_ns'], complete=complete), role='native-inference')
+                    metrics = stage_metrics.snapshot(end_ns=data['end_monotonic_ns'], complete=complete)
+                    if inference is not None:
+                        metrics['native_inference'] = inference
+                    self.diagnostics.metrics(metrics, role='native-inference')
                 if (self._profile_status is not None and self._measurement_scope['phase'] == 'collection'
                         and not self._profile_reported):
                     import torch

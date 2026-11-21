@@ -638,7 +638,8 @@ class RustGameOperations:
             cache_entries=config.hpo_spec['operating']['opponent_pool_size'] + 2 if self._is_hpo else 7,
             cache_weight_bytes=self.admission.observation['budget']['managed_ram_bytes']
                 if config.model.inference.device == 'cpu' else self.admission.observation['budget']['managed_cuda_bytes'],
-            visibility=config.model.cuda_visible_devices, device_account=self.device_account)
+            visibility=config.model.cuda_visible_devices, device_account=self.device_account,
+            inference_recipe=state['identity']['player_runtime']['runtime'].get('inference_recipe'))
         self.registry = RustRunRegistry(self._ownership, state, config=config, admission=self.admission,
             pool=self.pool, writer=self.writer, local=local, service=service)
         self.collector = RustPlayerCollector(self.registry)
@@ -1261,11 +1262,12 @@ class RustHpoOperations(RustGameOperations):
         import torch
         self.admission.require()
         with serialized_torch():
+            peak_allocated, peak_reserved = self.registry.service.process_cuda_peaks()
             self._gpu_samples.append({'phase': phase,
                 'allocated_bytes': torch.cuda.memory_allocated(0),
                 'reserved_bytes': torch.cuda.memory_reserved(0),
-                'process_peak_allocated_bytes': torch.cuda.max_memory_allocated(0),
-                'process_peak_reserved_bytes': torch.cuda.max_memory_reserved(0),
+                'process_peak_allocated_bytes': peak_allocated,
+                'process_peak_reserved_bytes': peak_reserved,
                 'captured_policy_backings': {str(generation): policy._inference_backings
                     for generation, policy in self.registry.policies.items()}})
         directory = self._ownership.directory / 'retirement'

@@ -1536,6 +1536,25 @@ then sent as diagnostic metadata and reported separately from whole-worker
 journal selection timing. It never enters PolicyDecision, features or journal
 schema. CPU/GPU memory and elapsed metrics state their measured scope.
 
+### CUDA collection with the Rust player runtime
+
+[ADR0059](adr/0059-rust-player-cuda-batch-inference.md) records the
+`batched-torch-v1` recipe for Model3 and schema 6 Model4 collection.
+The Rust scheduler still forms batches and commits accepted responses and
+participant RNG. Python scores matching immutable checkpoints and fixed
+candidate and event shapes under the existing Torch lock. Request geometry
+depends on its own candidate and event lengths and the configured Rust cap.
+CPU sampling consumes only the request's ordered valid results.
+
+Collection admission fixes each shape after checkpoint publication. It uses
+observed same-host learner and cache storage, the model and binding limits,
+and modeled live group allocations. A shape that exceeds a limit uses
+scalar serving. Failed CUDA operations retain their owners through producer
+retirement and the device fence. Omitted configuration and CPU serving use
+scalar inference. Resume binds the exact effective recipe and producer.
+The [verification record](verification/rust-player-cuda-batch-inference.md)
+tracks functional and performance acceptance.
+
 ## Verification and acceptance
 
 Unit/HTTP fixture tests cover strict config precedence/path origins/hashes;

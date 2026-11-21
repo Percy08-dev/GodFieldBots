@@ -17,6 +17,8 @@ from typing import Any
 import numpy as np
 
 from gf_common.domain import ContractError, digest
+from gf_common.rust_player import BATCHED_TORCH_INFERENCE
+from gf_models.rust_player_batch import BatchEstimate, BatchGeometry, BatchShape
 from gf_models.torch_runtime import serialized_torch
 
 
@@ -99,12 +101,23 @@ class RustPlayerInference:
         cache_weight_bytes: int,
         visibility: str | None = None,
         device_account: Any = None,
+        inference_recipe: str | None = None,
     ) -> None:
         from gf_models.shared_registry import make_registry
 
         if device_account is not None and device_account.serving_device != device:
             raise ContractError('actual inference/account serving role differs')
+        if inference_recipe not in (None, BATCHED_TORCH_INFERENCE):
+            raise ContractError("unknown Rust player inference recipe")
+        if inference_recipe is not None and device != 'cpu' and device_account is None:
+            raise ContractError("batched CUDA inference needs the actual device account")
         self.device, self.device_account = device, device_account
+        self.inference_recipe = inference_recipe
+        self._collection: dict[str, tuple[BatchGeometry, dict[BatchShape, BatchEstimate | None]]] = {}
+        self._batch_counts: dict[int, int] | None = None
+        self._scalar_rows = 0
+        self._measurement_batch_width: int | None = None
+        self._previous_cuda_peaks = (0, 0)
         with serialized_torch():
             hold = device_account.begin_backend(owner=self) if device_account is not None and device != 'cpu' else None
             try:
@@ -249,94 +262,255 @@ class RustPlayerInference:
                 ),
             }
 
+    def bind_collection(self, checkpoints: tuple[str, ...], *, game_concurrency: int,
+                        max_batch_size: int) -> None:
+        """Freeze every scheduled checkpoint's shape decisions before actor admission."""
+        from gf_models.rust_player_batch import estimate_batch
+
+        if self.inference_recipe is None or self.device == "cpu":
+            return
+        with serialized_torch():
+            account = self.device_account
+            available = account.serving_tensor_allowance()
+            plans = {}
+            for checkpoint in checkpoints:
+                profile = account.cached_profile(checkpoint)
+                if profile is None:
+                    raise ContractError("unpublished native collection checkpoint")
+                model, binding = profile.model, profile.binding
+                logical = min(model.resources.max_owned_bytes, binding.managed_budget_bytes)
+                allowance = min(available, logical - profile.fixed_bytes - profile.network_bytes)
+                geometry = BatchGeometry(min(game_concurrency, max_batch_size),
+                                         binding.max_candidates, model.event.max_interval)
+                shapes = {}
+                for shape in geometry.shapes():
+                    estimate = estimate_batch(model, binding, layout=profile.layout, shape=shape,
+                                              row_profile=profile.row)
+                    shapes[shape] = (estimate if estimate.peak_bytes <= allowance and
+                                     estimate.largest_tensor_bytes <= model.resources.max_tensor_bytes else None)
+                plans[checkpoint] = geometry, shapes
+            self._collection = plans
+
+    def end_collection(self) -> None:
+        with serialized_torch():
+            self._collection.clear()
+
+    def begin_collection_metrics(self) -> None:
+        with serialized_torch():
+            if self.device != "cpu":
+                import torch
+
+                self._previous_cuda_peaks = self.process_cuda_peaks()
+                torch.cuda.reset_peak_memory_stats(self.device)
+            first = next(iter(self._collection.values()), None)
+            self._measurement_batch_width = first[0].rows if first is not None else None
+            self._scalar_rows = 0
+            self._batch_counts = {}
+
+    def end_collection_metrics(self) -> dict[str, Any] | None:
+        with serialized_torch():
+            counts, self._batch_counts = self._batch_counts, None
+            if counts is None:
+                return None
+            groups = sum(counts.values())
+            useful = sum(size * count for size, count in counts.items())
+            width = self._measurement_batch_width
+            allocated = reserved = None
+            if self.device != "cpu":
+                import torch
+
+                allocated = torch.cuda.max_memory_allocated(self.device)
+                reserved = torch.cuda.max_memory_reserved(self.device)
+            return {"recipe": BATCHED_TORCH_INFERENCE if width is not None else "scalar-torch-v1",
+                    "batch_width": width, "batched_groups": groups, "useful_rows": useful,
+                    "dummy_rows": (width or 0) * groups - useful, "scalar_rows": self._scalar_rows,
+                    "useful_size_counts": {str(size): count for size, count in counts.items()},
+                    "cuda_peak_allocated_bytes": allocated, "cuda_peak_reserved_bytes": reserved}
+
+    def process_cuda_peaks(self) -> tuple[int, int]:
+        """Preserve the cumulative series across opt-in collection peak resets."""
+        import torch
+
+        with serialized_torch():
+            allocated, reserved = self._previous_cuda_peaks
+            return (max(allocated, torch.cuda.max_memory_allocated(self.device)),
+                    max(reserved, torch.cuda.max_memory_reserved(self.device)))
+
     def evaluate(self, batch: dict[str, Any]) -> list[dict[str, Any]]:
         """Provisional results only. Caller must pass them to native acceptance."""
         import torch
 
-        from gf_models.shared_numeric import score_numeric_row
-
         if batch["runtime"] != self.runtime:
             raise ContractError("native inference batch runtime mismatch")
-        answers = []
         with serialized_torch(), torch.no_grad():
-            for row in batch["rows"]:
+            groups: dict[tuple[str, BatchShape], list[tuple[int, dict[str, Any]]]] = {}
+            answers = []
+            collection = getattr(self, "_collection", {})
+            for index, row in enumerate(batch["rows"]):
                 self.timings["assembly"] += row["assembly_seconds"]
-                identity = json.loads(row["identity"])
-                checkpoint = identity["checkpoint"]
+                checkpoint = json.loads(row["identity"])["checkpoint"]
                 if checkpoint not in self.registry.networks:
                     raise ContractError("unpublished native checkpoint")
-                account = getattr(self, 'device_account', None) if self.device != 'cpu' else None
-                hold = (account.begin_row(checkpoint,
-                    interval_events=row['inputs']['interval_numerics'].shape[0],
-                    candidates=row['inputs']['kinds'].shape[0],
-                    input_leaf_bytes=sum(value.nbytes for value in row['inputs'].values()), owner=self)
-                    if account is not None else None)
-                inputs: dict[str, Any] = {}
-                if hold is not None:
-                    hold.references = inputs  # Retain BEFORE a partial H2D can fail.
-                try:
-                    at = time.perf_counter()
-                    try:
-                        cpu = tensor_views(row["inputs"], device="cpu")
-                    finally:
-                        self.timings["cpu_share"] += time.perf_counter() - at
-                    at = time.perf_counter()
-                    try:
-                        for name, cpu_value in cpu.items():
-                            inputs[name] = cpu_value.to(self.device, non_blocking=False)
-                    finally:
-                        self.timings["h2d"] += time.perf_counter() - at
-                    at = time.perf_counter()
-                    try:
-                        if self.performance_callback is None:
-                            logs, value = score_numeric_row(self.registry.networks[checkpoint], inputs)
-                        else:
-                            with torch.profiler.record_function("gf-native-row-forward"):
-                                logs, value = score_numeric_row(self.registry.networks[checkpoint], inputs)
-                        if self.device != "cpu":
-                            torch.cuda.synchronize(self.device)
-                    finally:
-                        self.timings["forward"] += time.perf_counter() - at
-                    if self.performance_callback is not None:
-                        self.performance_callback.after_forward(scored_rows=1, boundary="native-post-row-forward")
-                    at = time.perf_counter()
-                    try:
-                        sample, next_state = provisional_sample(
-                            logs.exp(),
-                            state=row["rng_state"],
-                            seed=row["sampling_seed"],
-                            runtime=batch["runtime"],
-                        )
-                    finally:
-                        self.timings["sampling"] += time.perf_counter() - at
-                    at = time.perf_counter()
-                    try:
-                        logs = logs.detach().to("cpu", non_blocking=False)
-                        value = value.detach().to("cpu", non_blocking=False)
-                        answers.append(
-                            {
-                                "identity": row["identity"],
-                                "logs": logs.reshape(-1).numpy(),
-                                "value": float(value.item()),
-                                "sample": sample,
-                                "next_state": next_state,
-                                "runtime": self.runtime,
-                            }
-                        )
-                        self.calls["rows"] += 1
-                    finally:
-                        self.timings["return"] += time.perf_counter() - at
-                    # Forward synchronization and blocking CPU result transfers
-                    # have completed. Last GPU input references retire INSIDE
-                    # this same Torch lock, before another row/update can start.
-                    inputs.clear()
-                    if hold is not None:
-                        hold.references = None
-                        hold.complete()
-                except BaseException as error:
-                    if hold is not None:
-                        hold.fail(error, references=inputs)
-                    raise
+                if not collection:
+                    answers.append(self._evaluate_row(row, checkpoint))
+                    continue
+                geometry, _ = collection[checkpoint]
+                operands = row["inputs"]
+                shape = geometry.shape(len(operands["kinds"]), len(operands["interval_numerics"]))
+                groups.setdefault((checkpoint, shape), []).append((index, row))
+                answers.append({})
+            for (checkpoint, shape), indexed in groups.items():
+                _, shapes = collection[checkpoint]
+                estimate = shapes[shape]
+                if estimate is None:
+                    for index, row in indexed:
+                        answers[index] = self._evaluate_row(row, checkpoint)
+                else:
+                    scored = self._evaluate_group([row for _, row in indexed], checkpoint, estimate)
+                    for (index, _), answer in zip(indexed, scored, strict=True):
+                        answers[index] = answer
+            return answers
+
+    def _evaluate_row(self, row: dict[str, Any], checkpoint: str) -> dict[str, Any]:
+        import torch
+
+        from gf_models.shared_numeric import score_numeric_row
+
+        account = getattr(self, 'device_account', None) if self.device != 'cpu' else None
+        hold = (account.begin_row(checkpoint,
+            interval_events=row['inputs']['interval_numerics'].shape[0],
+            candidates=row['inputs']['kinds'].shape[0],
+            input_leaf_bytes=sum(value.nbytes for value in row['inputs'].values()), owner=self)
+            if account is not None else None)
+        inputs: dict[str, Any] = {}
+        if hold is not None:
+            hold.references = inputs  # Retain BEFORE a partial H2D can fail.
+        try:
+            at = time.perf_counter()
+            try:
+                cpu = tensor_views(row["inputs"], device="cpu")
+            finally:
+                self.timings["cpu_share"] += time.perf_counter() - at
+            at = time.perf_counter()
+            try:
+                for name, cpu_value in cpu.items():
+                    inputs[name] = cpu_value.to(self.device, non_blocking=False)
+            finally:
+                self.timings["h2d"] += time.perf_counter() - at
+            at = time.perf_counter()
+            try:
+                if self.performance_callback is None:
+                    logs, value = score_numeric_row(self.registry.networks[checkpoint], inputs)
+                else:
+                    with torch.profiler.record_function("gf-native-row-forward"):
+                        logs, value = score_numeric_row(self.registry.networks[checkpoint], inputs)
+                if self.device != "cpu":
+                    torch.cuda.synchronize(self.device)
+            finally:
+                self.timings["forward"] += time.perf_counter() - at
+            if self.performance_callback is not None:
+                self.performance_callback.after_forward(scored_rows=1, boundary="native-post-row-forward")
+            at = time.perf_counter()
+            try:
+                sample, next_state = provisional_sample(
+                    logs.exp(),
+                    state=row["rng_state"],
+                    seed=row["sampling_seed"],
+                    runtime=self.runtime,
+                )
+            finally:
+                self.timings["sampling"] += time.perf_counter() - at
+            at = time.perf_counter()
+            try:
+                logs = logs.detach().to("cpu", non_blocking=False)
+                value = value.detach().to("cpu", non_blocking=False)
+                answer = {
+                    "identity": row["identity"],
+                    "logs": logs.reshape(-1).numpy(),
+                    "value": float(value.item()),
+                    "sample": sample,
+                    "next_state": next_state,
+                    "runtime": self.runtime,
+                }
+                self.calls["rows"] += 1
+                if getattr(self, "_batch_counts", None) is not None:
+                    self._scalar_rows += 1
+            finally:
+                self.timings["return"] += time.perf_counter() - at
+            # Forward synchronization and blocking CPU result transfers
+            # have completed. Last GPU input references retire INSIDE
+            # this same Torch lock, before another row/update can start.
+            inputs.clear()
+            if hold is not None:
+                hold.references = None
+                hold.complete()
+        except BaseException as error:
+            if hold is not None:
+                hold.fail(error, references=inputs)
+            raise
+        return answer
+
+    def _evaluate_group(self, rows: list[dict[str, Any]], checkpoint: str,
+                        estimate: BatchEstimate) -> list[dict[str, Any]]:
+        import torch
+
+        from gf_models.rust_player_batch import pack_native_rows, score_numeric_batch
+
+        at = time.perf_counter()
+        packed = pack_native_rows(rows, estimate.inputs)
+        self.timings["cpu_share"] += time.perf_counter() - at
+        hold = self.device_account.begin_batch(estimate.peak_bytes, owner=self)
+        roots: dict[np.dtype[Any], Any] = {}
+        hold.references = roots  # Each completed transfer is retained if a later one fails.
+        try:
+            at = time.perf_counter()
+            try:
+                inputs = packed.transfer(device=self.device, roots=roots)
+            finally:
+                self.timings["h2d"] += time.perf_counter() - at
+            at = time.perf_counter()
+            try:
+                if self.performance_callback is None:
+                    logs, probabilities, values = score_numeric_batch(self.registry.networks[checkpoint], inputs)
+                else:
+                    with torch.profiler.record_function("gf-native-batch-forward"):
+                        logs, probabilities, values = score_numeric_batch(self.registry.networks[checkpoint], inputs)
+                # One blocking D2H also fences this serialized forward.
+                size = logs.shape[1]
+                output = torch.cat((logs, probabilities, values[:, None]), dim=1).to("cpu", non_blocking=False)
+                del logs, probabilities, values, inputs
+            finally:
+                self.timings["forward"] += time.perf_counter() - at
+            if self.performance_callback is not None:
+                self.performance_callback.after_forward(scored_rows=len(rows), boundary="native-post-row-forward")
+            roots.clear()
+            hold.references = None
+            hold.complete()
+        except BaseException as error:
+            hold.fail(error, references=roots)
+            raise
+
+        answers = []
+        returned = output.numpy()
+        for index, row in enumerate(rows):
+            n = len(row["inputs"]["kinds"])
+            logs_cpu, value = returned[index, :n], float(returned[index, -1])
+            if not np.isfinite(logs_cpu).all() or not np.isfinite(value):
+                raise ContractError("nonfinite shared MLP output")
+            at = time.perf_counter()
+            try:
+                sample, next_state = provisional_sample(output[index, size:size + n],
+                    state=row["rng_state"], seed=row["sampling_seed"], runtime=self.runtime)
+            finally:
+                self.timings["sampling"] += time.perf_counter() - at
+            at = time.perf_counter()
+            answers.append({"identity": row["identity"], "logs": logs_cpu,
+                            "value": value, "sample": sample, "next_state": next_state,
+                            "runtime": self.runtime})
+            self.timings["return"] += time.perf_counter() - at
+        self.calls["rows"] += len(rows)
+        if self._batch_counts is not None:
+            self._batch_counts[len(rows)] = self._batch_counts.get(len(rows), 0) + 1
         return answers
 
     def serve_next(self, dispatcher: Any, *, deadline: float) -> int:

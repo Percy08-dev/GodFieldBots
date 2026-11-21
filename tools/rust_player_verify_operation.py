@@ -83,7 +83,7 @@ def metric_data(row: Json, *, observation_id: str, boot_id: str, run_id: str,
                 interval: tuple[int, int], startup_owner: tuple[int, int] | None = None) -> Json:
     closed(row, {'schema_version', 'kind', 'observation_id', 'owner', 'clock', 'scope',
         'start_monotonic_ns', 'end_monotonic_ns', 'complete', 'errors', 'counters',
-        'histograms', 'batch_rows', 'stage_seconds', 'queue'})
+        'histograms', 'batch_rows', 'stage_seconds', 'queue'}, {'native_inference'})
     _pairing(row, observation_id=observation_id, boot_id=boot_id, run_id=run_id, startup_owner=startup_owner)
     if row['kind'] != 'rust-player-phase-metrics-v1':
         raise ContractError('metrics1 required')
@@ -91,6 +91,10 @@ def metric_data(row: Json, *, observation_id: str, boot_id: str, run_id: str,
     integer(start, interval[0], interval[1]); integer(end, start, interval[1])
     if type(row['complete']) is not bool or type(row['errors']) is not list:
         raise ContractError('explicit diagnostic completeness required')
+    if 'native_inference' in row:
+        if row['owner']['role'] != 'native-inference' or row['scope']['phase'] != 'collection':
+            raise ContractError('native inference totals require the collection service scope')
+        _validate_inference_totals(row['native_inference'])
     closed(row['counters'], set(COUNTERS)); closed(row['histograms'], set(HISTOGRAMS))
     closed(row['stage_seconds'], set(STAGES))
     for value in row['counters'].values():
@@ -152,7 +156,31 @@ def metric_data(row: Json, *, observation_id: str, boot_id: str, run_id: str,
         'batch_rows': batches, 'batch_histogram': None if histogram is None else {str(k): v for k, v in histogram.items()},
         'pyo3_calls': None if None in pyo3 else sum(pyo3),
         'stage_seconds': row['stage_seconds'], 'stage_scope': 'synchronized host wall; not CUDA event time',
-        'queue': row['queue']}
+        'queue': row['queue']} | ({'native_inference': row['native_inference']} if 'native_inference' in row else {})
+
+
+def _validate_inference_totals(value: Json) -> None:
+    from gf_common.rust_player import BATCHED_TORCH_INFERENCE
+
+    row = closed(value, {'recipe', 'batch_width', 'batched_groups', 'useful_rows', 'dummy_rows',
+        'scalar_rows', 'useful_size_counts', 'cuda_peak_allocated_bytes', 'cuda_peak_reserved_bytes'})
+    groups, useful, dummy = (integer(row[name], 0) for name in ('batched_groups', 'useful_rows', 'dummy_rows'))
+    integer(row['scalar_rows'], 0)
+    counts = _batch_map(row['useful_size_counts'])
+    allocated, reserved = row['cuda_peak_allocated_bytes'], row['cuda_peak_reserved_bytes']
+    if reserved is not None or allocated is not None:
+        integer(allocated, 0)
+        integer(reserved, allocated)
+    width = row['batch_width']
+    if row['recipe'] == BATCHED_TORCH_INFERENCE:
+        integer(width, 1)
+        if allocated is None or any(size > width for size in counts):
+            raise ContractError('batched CUDA inference totals require device peaks and fixed geometry')
+    elif row['recipe'] != 'scalar-torch-v1' or width is not None or counts or groups or useful or dummy:
+        raise ContractError('invalid scalar inference totals')
+    if (sum(counts.values()) != groups or sum(size * count for size, count in counts.items()) != useful
+            or (width or 0) * groups != useful + dummy):
+        raise ContractError('native inference group totals do not match the useful-size histogram')
 
 
 def _batch_map(value: Any) -> dict[int, int]:

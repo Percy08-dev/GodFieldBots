@@ -40,6 +40,7 @@ BUDGET_KEYS = {
 }
 DEADLINE_KEYS = ("admission_bits", "execution_bits", "term_bits", "kill_bits", "finish_bits")
 PLAYER_RUNTIME_MODE = "rust-player-runtime-v1"
+BATCHED_TORCH_INFERENCE = "batched-torch-v1"
 
 
 def player_runtime(value: Any, *, game_concurrency: int) -> Json:
@@ -54,9 +55,12 @@ def player_runtime(value: Any, *, game_concurrency: int) -> Json:
             "max_batch_size",
             "formation_wait_ms",
         },
+        {"inference_recipe"},
     )
     if raw["mode"] != PLAYER_RUNTIME_MODE or raw["scheduler"] not in ("tokio", "fixed"):
         raise ContractError("explicit Rust player mode and tokio|fixed scheduler required")
+    if "inference_recipe" in raw and raw["inference_recipe"] != BATCHED_TORCH_INFERENCE:
+        raise ContractError("unknown Rust player inference recipe")
     integer(game_concurrency, 1)
     for key in ("game_concurrency", "player_worker_threads", "max_batch_size"):
         integer(raw[key], 1)
