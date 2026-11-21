@@ -43,7 +43,7 @@ def response(value, status=200, **kwargs):
 @pytest.mark.parametrize("field,value", [
     ("schema_version", True), ("schema_version", 2), ("seed_use_limit", 0),
     ("max_game_turns", 149), ("player_action_timeout_secs", 0),
-    ("server_idle_timeout_secs", 86401), ("server_instance_id", str(uuid.uuid1())),
+    ("server_idle_timeout_secs", 86401), ("server_instance_id", "f81d4fae-7dec-11d0-a765-00a0c91e6bf6"),
     ("seed_fingerprint", "v1-" + "A" * 64), ("seed_mode", "unknown"),
 ])
 def test_info_strict_domains(field, value):

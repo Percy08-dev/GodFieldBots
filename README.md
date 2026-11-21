@@ -367,12 +367,15 @@ uv run mypy src
 uv build
 ```
 
+通常のPytest実行は `pytest-xdist` の4ワーカーで、同じファイルのテストを同じワーカーに
+割り当てます。実GPUの検証や時間計測など、直列で実行する場合は `uv run pytest -n 0` を使います。
+
 CPU先読み起動の安全性テストは、軽い設定・検証経路の確認を通常実行に残し、
 実プロセスの異常系やモデル一致・学習の追加確認は明示実行にしています。
 先読み起動に関する一式を実行する場合:
 
 ```console
-GFB_RUN_CPU_PRELOAD_SAFETY=1 uv run pytest tests/test_cpu_preload.py tests/test_cpu_preload_review.py tests/test_tree_cpu_preload.py tests/test_native_cpu_preload.py tests/test_numeric_cpu_preload.py
+GFB_RUN_CPU_PRELOAD_SAFETY=1 uv run pytest -n 0 tests/test_cpu_preload.py tests/test_cpu_preload_review.py tests/test_tree_cpu_preload.py tests/test_native_cpu_preload.py tests/test_numeric_cpu_preload.py
 ```
 
 起動・通信・終了処理、モデルの初期化やRNG、Torchを変更した際の確認に使用します。

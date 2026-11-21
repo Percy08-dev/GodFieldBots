@@ -22,7 +22,7 @@ hpo = ["optuna==5.0.0"]
 shared-inference = ["torchrl==0.15.0", "tensordict==0.15.2"]
 
 [dependency-groups]
-dev = ["pytest>=8.4,<10", "ruff>=0.14,<1", "mypy>=1.18,<2"]
+dev = ["pytest>=8.4,<10", "pytest-xdist==3.8.0", "ruff>=0.14,<1", "mypy>=1.18,<2"]
 
 [project.scripts]
 godfieldbots = "godfieldbots:main"
@@ -64,6 +64,7 @@ members = ["native"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = "-n 4 --dist=loadfile"
 markers = ["integration: opt-in checks using a prebuilt external TestServer"]
 
 [tool.ruff]
