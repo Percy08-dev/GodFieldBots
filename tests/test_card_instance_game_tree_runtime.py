@@ -767,6 +767,8 @@ def _controlled_shared_worker(branch, *, ledger):
     from gf_simulator_client.structured_worker import StructuredParticipantWorker
     cls = StructuredParticipantWorker if branch == 'protocol2' else CardInstanceParticipantWorker
     worker = object.__new__(cls)
+    if isinstance(worker, CardInstanceParticipantWorker):
+        worker._performance_metrics = None
     worker.health, worker.closed, worker._close_task = {}, False, None
     worker._tree = branch == 'tree'
     worker._tree_failed = True
