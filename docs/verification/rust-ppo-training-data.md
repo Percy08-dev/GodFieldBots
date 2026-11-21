@@ -109,3 +109,48 @@ directories are `rust-training-baseline-aab5f35`,
 wheel setup touched the baseline companion files after the timed baseline
 runs. Those files were restored and checked against the original wheel's
 hashes before running the baseline public evaluation.
+
+## Model4 with the Model3 inference settings
+
+The follow-up used Tokio, 16 game slots, 16 Rust workers, inference batch cap
+64 and a 1 ms formation wait. Both lanes used seed 17, identical initial
+Model4 weights and the pinned Simulator above. The candidate was `684f6df`,
+which adds documentation to the measured implementation. The decision
+budget remained 64.
+
+The 16-game `mixed-refresh-16-v1` schedule has eight seat-swapped pairs and
+reached eight games concurrently. Across three trials per lane, collection
+throughput was 2.87 → 2.80 games/s and whole fresh-plus-resume throughput
+was 1.62 → 4.05 used decisions/s. The median average inference batch was
+2.08 → 2.10. The largest observed batch was seven in both lanes.
+
+The 32-game standard HPO schedule reached 16 simultaneous games in all
+six trials. The legacy checkpoint export with a 2 GiB Source allocation
+requested approximately 2.32 GiB in total. Both timed lanes used the same
+3 GiB Source allocation and 512 MiB numerical limit. Each trial collected
+331 learner decisions, used 64 of them and completed four Adam steps.
+
+| 32-game metric | Baseline | Rust data |
+| --- | ---: | ---: |
+| Collection games/s | 3.26 | 3.21 |
+| Inference requests per collection second | 50.47 | 49.58 |
+| Average inference batch size | 3.09 | 3.13 |
+| Largest observed inference batch | 13 | 13 |
+| Fresh plus resume wall (s) | 67.10 | 20.35 |
+| Used decisions per whole wall second | 0.95 | 3.14 |
+
+The figures are medians across three verified trials per lane, apart from
+the largest batch observed. An additional 256-game Rust run reached 16
+simultaneous games and collected 2,662 learner decisions at 3.25 games/s.
+Its average and peak inference batch sizes were 5.40 and 15. The run saved
+and resumed in 93.90 s combined with a 1 GiB numerical limit. The first
+256-game run collected all games but failed before numeric publication at
+512 MiB. On the saved input the Rust metadata reservation was about 746 MiB,
+and the legacy token preparation estimate was 1,431 MiB against its
+512 MiB implementation limit. The legacy figure is a capacity calculation
+over saved inputs. The paired wall comparison uses the 32-game runs.
+
+The primary checkout retains the follow-up inputs and results under
+`runs/ordinary-rust-ppo-update/` in `rust-training-model4-c16-w16-b64-t1-g16`,
+`rust-training-model4-c16-w16-b64-t1-g32-s3072` and
+`rust-training-model4-c16-w16-b64-t1-g256-n1024`.
