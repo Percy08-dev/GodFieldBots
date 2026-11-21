@@ -235,7 +235,7 @@ def test_resolved_route_fact_is_successful_actual_branch_and_clears_on_failure(m
     rollout=rollout_for(learner,count=3)
     learner._update_numeric(rollout,{},0.,learner.network)
     assert learner._last_update_execution=='microbatch'
-    def fail(*args):
+    def fail(*args,**kwargs):
         raise ContractError('actual numerical failure')
     monkeypatch.setattr(learner,'_update_experimental',fail)
     with pytest.raises(ContractError,match='actual numerical'):
