@@ -1659,6 +1659,11 @@ passes and42explicit heavy skips are added; prior4,396statuses are preserved.
 Numerical/Source algorithms and protocols remain original; cold, CUDA, legacy
 and unsupported-runtime defaults are separate. New expensive faults are opt-in.
 
+[ADR0058](adr/0058-four-pytest-workers.md) sets four file-scheduled pytest
+workers through the development-only xdist plugin. Each worker owns its
+session fixtures. Serial GPU and timing checks select `-n 0`. The verified
+default CPU run passed 8,942 cases with the recorded archive exclusions.
+
 Checks: `uv run pytest`, `uv run ruff check .`, `uv run mypy src`; wheel installed
 in a separate Python 3.14 environment, baseline without ML imports. Verify CPU
 compatibility per implemented extra. Record exact commands and PASS/FAIL/NOT RUN

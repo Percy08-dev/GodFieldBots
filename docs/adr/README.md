@@ -14,6 +14,9 @@
 
 ## 一覧
 
+[0058](0058-four-pytest-workers.md) — Accepted。Pytestの標準を4ワーカーの
+ファイル単位分配とし、`-n 0` で直列実行を選べるようにする。
+
 [0057](0057-rust-ppo-training-data.md) — Accepted。Model3・Model4 の Rust 対戦経路で
 学習配列と GAE を構築し、通常監査では封印済み Pack を SHA-256 で照合する。
 同一入力、保存・再開、Model4 評価への引き継ぎと実機比較を確認済み。
