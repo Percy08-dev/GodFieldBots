@@ -48,6 +48,8 @@ class RustMatchPump:
         positions: dict[int, int] = {}
         receipts: dict[int, Json] = {}
         startups: dict[int, Json] = {}
+        total = sum(len(group.episodes) for group in groups)
+        full_wave = 0 < total <= game_concurrency
         next_group = 0
         drain_error: BaseException | None = None
 
@@ -102,13 +104,17 @@ class RustMatchPump:
                         'request_seconds': server.request_seconds}}
                 if 'learner_viewer' in value:
                     current_specs[episode.episode_id]['learner_viewer'] = value['learner_viewer']
-            start_games([current_specs[group.episodes[0].episode_id]])
+            if not full_wave:
+                start_games([current_specs[group.episodes[0].episode_id]])
 
         while next_group < min(len(groups), game_concurrency):
             await admit_group(next_group)
             next_group += 1
+        if full_wave:
+            # Repeated-seed games have independent IDs and use the same seed.
+            # Submit only after the original writer contexts are bound.
+            start_games([current_specs[episode.episode_id] for group in groups for episode in group.episodes])
         episode_group = {episode.episode_id: index for index, group in enumerate(groups) for episode in group.episodes}
-        total = sum(len(group.episodes) for group in groups)
         loop = asyncio.get_running_loop()
         terminal_ready = asyncio.Event()
 
@@ -155,9 +161,7 @@ class RustMatchPump:
                 index = episode_group[row['episode']]
                 positions[index] += 1
                 group = groups[index]
-                if positions[index] < len(group.episodes):
-                    start_games([current_specs[group.episodes[positions[index]].episode_id]])
-                else:
+                if positions[index] == len(group.episodes):
                     managed = self.servers[index]
                     health = await managed.stop()
                     completed_groups[index] = {'runtime_evidence': receipts[index],
@@ -166,6 +170,8 @@ class RustMatchPump:
                         check_drain()
                         await admit_group(next_group)
                         next_group += 1
+                elif not full_wave:
+                    start_games([current_specs[group.episodes[positions[index]].episode_id]])
             await asyncio.shield(drain)
         except BaseException as error:
             for cancel in (self.runtime.cancel, writer.cancel):

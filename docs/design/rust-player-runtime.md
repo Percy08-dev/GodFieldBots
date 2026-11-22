@@ -313,6 +313,13 @@ Pause/resume occurs only at a committed update boundary with the original
 remaining deadline. Writer/GPU failures invalidate the whole parent eligibility;
 never synthesize a win/loss, bootstrap or completed update.
 
+The Python match pump uses one collection-local executor job to read the existing
+Rust FIFO continuously. The writer validates and accepts the original bundle
+before the executor acknowledges that bundle in Rust. The pump uses the ordered
+capture records and an event for terminal notification. Its async loop owns
+server admission and shutdown. Failure cancels acquisition and joins the actual
+executor job before caller cleanup. See [ADR0060](../adr/0060-rust-player-journal-handoff.md).
+
 ## Supervisor, termination and GPU admission
 
 The [accepted exact supervision protocol](rust-player-runtime-supervision.md)

@@ -14,6 +14,9 @@
 
 ## 一覧
 
+[0060](0060-rust-player-journal-handoff.md) — 共通のRust対戦経路でJournalを連続取得し、
+全試合が設定上限に収まる収集では、ペアの実行証跡とwriterコンテキストを確定して一括投入する。
+
 [0059](0059-rust-player-cuda-batch-inference.md) — Accepted。Model3・Model4 の Rust
 対戦収集で固定形状の CUDA バッチ推論を選択できる。256 試合の実測で両モデルの
 収集時間と応答 p95 が改善し、標準は従来の逐次推論とする。

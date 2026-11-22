@@ -260,10 +260,13 @@ extra process/resource budget or new runtime dependency changes.
 ## Late binding of actual group contexts (accepted after architecture READY)
 
 A collection fixes the full immutable paired-group/episode/policy plan before
-work. Only up to C group servers are alive, and each server runs its two seats
-sequentially as the current collector. Executed process receipts for later groups
-do not exist at writer construction; never start all servers merely to obtain
-receipts, invent placeholders or mutate an already registered context.
+work. Only up to C group servers are alive. When the collection exceeds C games,
+the collector starts each group's games sequentially and obtains later process
+receipts as it admits groups. When the full collection fits C, it starts the
+servers to run the entire collection together, binds every original receipt, then
+submits all planned games in one wave. Repeated-seed games have independent
+identities and share the same assigned seed. The collector never invents receipts
+or mutates a bound context. See [ADR0060](../adr/0060-rust-player-journal-handoff.md).
 
 Add a narrow deferred_contexts=False constructor opt-in to the actual thread
 writer. Default callers still supply every actual context up front. In deferred

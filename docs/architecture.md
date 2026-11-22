@@ -55,6 +55,10 @@ controller imports only qualified final-D parents for separate Fresh evaluation.
 Deployment comparison and entrance recommendations are recorded with the results
 and limitations in [the verification record](verification/rust-player-runtime.md).
 
+[ADR0060](adr/0060-rust-player-journal-handoff.md) records the shared match pump's
+continuous Journal handoff and full-cohort admission when all games fit the
+configured concurrency limit.
+
 [ADR0055](adr/0055-owned-rust-model3-parity-validation.md) keeps frozen-output
 parity as an explicit validation for ordinary Rust Model3. Its live update
 uses the actual single-use Source and performs the existing admission before

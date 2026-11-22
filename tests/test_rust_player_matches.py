@@ -139,6 +139,35 @@ def test_match_pump_preserves_slots_write_ack_arrival_and_plan_report_order(tmp_
     assert spec['policies'][0] is contexts['e00']['policies'][0].native
 
 
+@pytest.mark.parametrize('concurrency', [6, 8])
+def test_match_pump_admits_fitting_wave_once_after_all_contexts_are_bound(tmp_path, monkeypatch, concurrency):
+    _, runtime, writer, _, servers, events, execute = pump_fixture(tmp_path, monkeypatch, concurrency=concurrency)
+    # Odd seats finish first. Each group must remain alive until both of its
+    # original terminal records have passed writer acceptance and ACK.
+    runtime.bundles[:] = [runtime.bundles[i] for i in (3, 5, 6, 1, 2, 4)]
+    first_start = runtime.start
+
+    def start(specs):
+        assert len(writer.contexts) == 3
+        first_start(specs)
+
+    monkeypatch.setattr(runtime, 'start', start)
+    result = asyncio.run(execute())
+
+    planned = ('e00', 'e01', 'e10', 'e11', 'e20', 'e21')
+    assert runtime.start_batches == [planned]
+    assert tuple(row['episode'] for row in result.reports) == planned
+    assert [row['episode'] for row in result.accepted] == ['e11', 'e01', 'e21', 'e10', 'e00', 'e20']
+    for index, (pair, server) in enumerate(zip(writer.contexts, servers, strict=True)):
+        first, second = runtime.started[index * 2:index * 2 + 2]
+        assert server.expected == {'seed': f'seed-{index}'} and server.stopped
+        assert first['runtime_evidence'] is second['runtime_evidence'] is result.receipts[index]
+        assert first['runtime_evidence'] is pair[0].runtime_evidence is pair[1].runtime_evidence
+        for row in result.accepted:
+            if row['episode'] in planned[index * 2:index * 2 + 2]:
+                assert events.index(('ack', row['id'])) < events.index(('stop', index))
+
+
 def test_match_pump_retains_same_runtime_handle_map_and_original_history_across_executes(tmp_path, monkeypatch):
     pump, runtime, _writer, contexts, servers, _events, execute = pump_fixture(tmp_path, monkeypatch)
     handles, history = pump.servers, pump.server_history
