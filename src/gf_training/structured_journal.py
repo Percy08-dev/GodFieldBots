@@ -149,7 +149,7 @@ class StructuredJournal(ParticipantJournal):
         self, frame: DecisionFrame, delta: EventDelta, report: SearchReport | SearchReportV3,
         selection: Selection, command: Json, timings: Json, started: float, *,
         candidate_count: int, action: Callable[[], Json], publish: Callable[[], Json],
-        offsets: tuple[int, ...] | None = None,
+        offsets: tuple[int, ...] | None = None, owned_bank: bool = False,
     ) -> int:
         """Validate the decision envelope and emit its checked candidates and Journal rows."""
         if self.caps["max_decisions"] is not None:
@@ -182,7 +182,10 @@ class StructuredJournal(ParticipantJournal):
         self.bank.append(delta)
         if self.bank.boundary != frame.boundary:
             raise ContractError("journal5 delta must match exact frame boundary")
-        frame.bank_view(self.bank.view())
+        if owned_bank:
+            self.bank._require_frame_prefix(frame)
+        else:
+            frame.bank_view(self.bank.view())
         if selection.policy_version != self.policy or report.config_hash != self.header["action_config_hash"]:
             raise ContractError("journal5 policy/search configuration mismatch")
         if report.rng_before != self.last_search_state:

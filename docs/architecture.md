@@ -69,6 +69,13 @@ Historical profiles use the existing Python validation. The
 [native writer verification](verification/native-journal-writer.md) records
 the memory lifetimes, checkpoint compatibility and collection timings.
 
+[ADR0062](adr/0062-rust-player-owned-event-prefix.md) binds intervals in the
+live native writer to its owned EventBank's existing hashes. The writer
+validates and hashes each appended event. External readers and Replay
+retain independent verification. The
+[verification record](verification/owned-event-prefix.md) includes collection
+A/B, resume, phase load, and the isolated Eager experiments.
+
 [ADR0055](adr/0055-owned-rust-model3-parity-validation.md) keeps frozen-output
 parity as an explicit validation for ordinary Rust Model3. Its live update
 uses the actual single-use Source and performs the existing admission before

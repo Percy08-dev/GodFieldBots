@@ -344,7 +344,7 @@ class _Journal(CardInstanceJournal):
         try:
             return self._begin_frame(
                 frame, delta, report, selection, command, {}, started,
-                candidate_count=report.selected, action=reconstruct, publish=publish,
+                candidate_count=report.selected, action=reconstruct, publish=publish, owned_bank=True,
             )
         except BaseException as error:
             _retain_failure(self.sink, error, clear_frames=True)

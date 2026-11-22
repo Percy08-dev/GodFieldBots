@@ -225,7 +225,9 @@ def journal_context(spec):
 
 
 @pytest.mark.parametrize("decisions", [8])
-def test_actual_native_originals_encode_journal6_and_both_replay_views(tmp_path, decisions):
+def test_actual_native_originals_encode_journal6_and_both_replay_views(
+    tmp_path, monkeypatch, decisions
+):
     import asyncio
     import json
     from dataclasses import replace
@@ -235,6 +237,7 @@ def test_actual_native_originals_encode_journal6_and_both_replay_views(tmp_path,
         corrected_card_instance_contract,
         shared_card_instance_contract,
     )
+    from gf_common.structured import EventBank
     from gf_simulator_client.card_instance_runtime import CardInstanceRuntimeEvidence
     from gf_simulator_client.process import ManagedServer
     from gf_simulator_client.rust_player import RustPlayerRuntime
@@ -284,6 +287,10 @@ def test_actual_native_originals_encode_journal6_and_both_replay_views(tmp_path,
             reference._native_candidates = False  # compare both codecs on the same exact native owner
             runtime.start([spec])
             account_checked = False
+
+            def unexpected_snapshot(*args, **kwargs):
+                pytest.fail("live native pending rebuilt the validated event bank")
+
             while encoder.terminal is None:
                 bundle = runtime.next_storage(time.monotonic() + 20)
                 if not account_checked:
@@ -296,7 +303,12 @@ def test_actual_native_originals_encode_journal6_and_both_replay_views(tmp_path,
                     loan.close()
                     assert account.used == native_used
                     account_checked = True
-                encoder.consume(bundle)
+                if bundle.kind == "pending":
+                    with monkeypatch.context() as live_pending:
+                        live_pending.setattr(EventBank, "view", unexpected_snapshot)
+                        encoder.consume(bundle)
+                else:
+                    encoder.consume(bundle)
                 reference.consume(bundle)
                 runtime.storage_ack(bundle)
                 del bundle
@@ -486,12 +498,15 @@ def hashlib_sha(view):
     return hashlib.sha256(view).hexdigest()
 
 
-@pytest.mark.parametrize("failure", ["duplicate", "sql", "publication", "command"])
+@pytest.mark.parametrize("failure", ["duplicate", "sql", "publication", "command", "interval-prefix"])
 def test_actual_storage_failure_cancels_and_never_publishes_healthy_seal(
     tmp_path, monkeypatch, failure
 ):
     from contextlib import suppress
+    from dataclasses import replace
+    from types import SimpleNamespace
 
+    from gf_common.domain import ContractError, digest
     from gf_simulator_client.rust_player import RustPlayerRuntime
     from gf_training import group_pack_worker as database_module
     from gf_training import rust_player_storage as storage_module
@@ -503,7 +518,45 @@ def test_actual_storage_failure_cancels_and_never_publishes_healthy_seal(
     )
     from tests.test_rust_player_runtime import game_spec, managed, runtime_config
 
-    if failure == "command":
+    prefix_rejected = False
+    if failure == "interval-prefix":
+        begin_native_frame = storage_module._Journal._begin_native_frame
+
+        def wrong_prefix(journal, bundle, frame, delta, report, selection, command):
+            nonlocal prefix_rejected
+            start_hash = "0" * 64
+            assert start_hash != frame.interval_start_hash
+            bad_frame = replace(
+                frame, interval_start_hash=start_hash,
+                frame_hash=digest(frame._binding() | {"interval_start_hash": start_hash}),
+            )
+            table = storage_module.decode_original(bundle)["generated"]["table"]
+            table.pop("table_hash")
+            table_hash = digest(table | {"frame_hash": bad_frame.frame_hash})
+
+            def checked_candidates(max_positions, size):
+                _, _, selected, count, elements, action, payload, sha256 = (
+                    bundle._journal_candidates(max_positions, size)
+                )
+                return (
+                    bad_frame.frame_hash, table_hash, selected, count, elements, action, payload,
+                    sha256,
+                )
+
+            before = {name: len(chunks) for name, chunks in journal.sink.chunks.items()}
+            with pytest.raises(ContractError, match="interval prefix mismatch") as rejected:
+                begin_native_frame(
+                    journal, SimpleNamespace(_journal_candidates=checked_candidates), bad_frame,
+                    delta, replace(report, table_hash=table_hash),
+                    replace(selection, table_hash=table_hash), command,
+                )
+            assert journal.count == 0 and not journal.pending
+            assert {name: len(chunks) for name, chunks in journal.sink.chunks.items()} == before
+            prefix_rejected = True
+            raise rejected.value
+
+        monkeypatch.setattr(storage_module._Journal, "_begin_native_frame", wrong_prefix)
+    elif failure == "command":
         decode = storage_module.decode_original
 
         def wrong_action(bundle):
@@ -559,10 +612,11 @@ def test_actual_storage_failure_cancels_and_never_publishes_healthy_seal(
             runtime.start([spec])
             while True:
                 bundle = runtime.next_storage(time.monotonic() + 10)
-                if failure == "command" and bundle.kind == "pending":
+                if failure in ("command", "interval-prefix") and bundle.kind == "pending":
                     held = bundle.view()
                     with pytest.raises(RuntimeError, match="storage failed") as caught:
                         writer.accept(bundle)
+                    assert failure == "command" or prefix_rejected
                     caught.value.__traceback__ = None  # caller's exception retained the original
                     del caught, bundle
                     break

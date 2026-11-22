@@ -288,6 +288,14 @@ class EventBank:
             self._events.append(event)
         return self.boundary
 
+    def _require_frame_prefix(self, frame: DecisionFrame) -> None:
+        # The live writer has appended the validated delta and matched the end boundary.
+        if (self.layout is not frame.layout
+                or (self.actor, self.episode) != (frame.actor, frame.episode)):
+            raise ContractError("foreign event viewer/episode")
+        if self._prefixes[frame.interval_start] != frame.interval_start_hash:
+            raise ContractError("interval prefix mismatch")
+
     def view(self, boundary: EventBoundary | None = None) -> EventBankView:
         boundary = self.boundary if boundary is None else boundary
         integer(boundary.end, 0, len(self._events))
