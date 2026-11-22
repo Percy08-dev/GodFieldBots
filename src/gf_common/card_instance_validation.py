@@ -276,7 +276,7 @@ def validate_action(value: Any, obs: Json | None = None) -> Json:
     return clone(value)
 
 
-def _action_options(value: Any, obs: Json) -> Json:
+def _validate_action_options(value: Any, obs: Json) -> None:
     fields = (
         {
             "action_options_schema_version",
@@ -338,18 +338,22 @@ def _action_options(value: Any, obs: Json) -> Json:
         raise ContractError("duplicate target hint")
     for name in _FLAGS:
         boolean(value[name])
-    return clone(value)
 
 
 def action_options(value: Any, obs: Json) -> Json:
     obs = observation(obs)
     if not obs["actionable"]:
         raise ContractError("ActionOptions require the actionable actor")
-    return _action_options(value, obs)
+    _validate_action_options(value, obs)
+    return clone(value)
 
 
 def actor_action_options(value: Any, obs: Json, *, raw: bool = True) -> Json:
-    obs = observation(obs)
+    return _actor_action_options(value, observation(obs), raw=raw)
+
+
+def _actor_action_options(value: Any, obs: Json, *, raw: bool) -> Json:
+    # The observation is independently validated and owned by this record.
     closed(value, {"state_revision", "action_options"} | (set() if raw else {"viewer_player_id"}))
     integer(value["state_revision"])
     if value["state_revision"] != obs["state_revision"]:
@@ -358,7 +362,9 @@ def actor_action_options(value: Any, obs: Json, *, raw: bool = True) -> Json:
         player(value["viewer_player_id"])
         if value["viewer_player_id"] != obs["viewer_player_id"]:
             raise ContractError("ActionOptions wrapper actor mismatch")
-    action_options(value["action_options"], obs)
+    if not obs["actionable"]:
+        raise ContractError("ActionOptions require the actionable actor")
+    _validate_action_options(value["action_options"], obs)
     return clone(value)
 
 
@@ -634,7 +640,7 @@ def replay(value: Any, game: str, viewer: int) -> Json:
             if decision["actor"] != obs["current_player"]:
                 raise ContractError("replay actor differs from original observation")
             if decision["action_options"] is not None:
-                _action_options(decision["action_options"], obs)
+                _validate_action_options(decision["action_options"], obs)
             visible = decision["visible_action"]
             if visible is not None:
                 if not isinstance(visible, dict):
@@ -694,7 +700,7 @@ def own_visible_input(value: Any) -> Any:
         if (definition["classification"]["definition_class"] != "owned_card"
                 or (card["kind"] == "miracle") != (definition["kind"] == "miracles")):
             raise ContractError("observed kind/class differs from own perceived definition")
-    hints = actor_action_options(value.action_options, obs, raw=False)
+    hints = _actor_action_options(value.action_options, obs, raw=False)
     return DecisionInput(obs, tuple(clone(list(value.events))), value.history_end,
                          tuple(clone(list(value.typed_metadata))), clone(value.catalog), hints)
 

@@ -18,7 +18,7 @@ from gf_common.card_instance import (
     card_instance_contract,
     parse_card_instance_contract,
 )
-from gf_common.domain import ContractError, digest
+from gf_common.domain import ContractError, DecisionInput, digest
 
 REF1, REF2 = "c1_" + "01" * 16, "c1_" + "02" * 16
 
@@ -307,6 +307,99 @@ def test_hint_binding_overlap_and_unknown_group_are_preserved():
         del hints[key]
         with pytest.raises(ContractError):
             wire.action_options(hints, obs)
+
+
+def _own_input_with_hints():
+    obs = observation()
+    visible = {card["definition_id"] for card in obs["own"]["cards"]}
+    catalog = {
+        entry["definition_id"]: entry
+        for entry in fixture("catalog")["definitions"]
+        if entry["definition_id"] in visible
+    }
+    envelope = {"viewer_player_id": 1, "state_revision": 7, "action_options": options(obs)}
+    return DecisionInput(obs, (), None, tuple(obs["typed_action_schema"]), catalog, envelope)
+
+
+def test_own_visible_input_reuses_one_validated_observation_and_returns_owned_data(monkeypatch):
+    original = wire.observation
+    inspections = []
+
+    def inspect(obs):
+        inspections.append(obs)
+        return original(obs)
+
+    monkeypatch.setattr(wire, "observation", inspect)
+    raw = _own_input_with_hints()
+    checked = wire.own_visible_input(raw)
+    assert len(inspections) == 1
+    assert inspections[0] is raw.observation
+    assert checked == raw
+
+    raw.observation["own"]["cards"][0]["definition_id"] = "changed-input"
+    raw.action_options["action_options"]["usable_cards"][0]["definition_id"] = "changed-input"
+    assert checked.observation["own"]["cards"][0]["definition_id"] == "bronze-club"
+    assert checked.action_options["action_options"]["usable_cards"][0]["definition_id"] == "bronze-club"
+
+    checked.observation["own"]["cards"].clear()
+    checked.action_options["action_options"]["usable_cards"].clear()
+    assert len(raw.observation["own"]["cards"]) == 2
+    assert len(raw.action_options["action_options"]["usable_cards"]) == 2
+
+
+@pytest.mark.parametrize(
+    "mutation,message",
+    [
+        ("wrapper_viewer", "ActionOptions wrapper actor mismatch"),
+        ("wrapper_revision", "ActionOptions wrapper revision mismatch"),
+        ("actor", "ActionOptions actor/revision/choice mismatch"),
+        ("revision", "ActionOptions actor/revision/choice mismatch"),
+        ("foreign_ref", "duplicate/foreign/perception-mismatched atomic hint"),
+        ("wrong_definition", "duplicate/foreign/perception-mismatched atomic hint"),
+    ],
+)
+def test_own_and_standalone_hints_bind_to_validated_actor_revision_and_visible_cards(mutation, message):
+    raw = _own_input_with_hints()
+    envelope = raw.action_options
+    hints = envelope["action_options"]
+    if mutation == "wrapper_viewer":
+        envelope["viewer_player_id"] = 2
+    elif mutation == "wrapper_revision":
+        envelope["state_revision"] = 8
+    elif mutation == "actor":
+        hints["actor"] = 2
+    elif mutation == "revision":
+        hints["state_revision"] = 8
+    elif mutation == "foreign_ref":
+        hints["usable_cards"][0]["card_ref"] = "c1_" + "ff" * 16
+    else:
+        hints["usable_cards"][0]["definition_id"] = "fireball"
+
+    with pytest.raises(ContractError, match=message):
+        wire.own_visible_input(raw)
+    with pytest.raises(ContractError, match=message):
+        wire.actor_action_options(envelope, raw.observation, raw=False)
+    if not mutation.startswith("wrapper_"):
+        with pytest.raises(ContractError, match=message):
+            wire.action_options(hints, raw.observation)
+
+
+def test_standalone_hint_entry_validates_observation_and_owns_returned_data():
+    obs = observation()
+    hints = options(obs)
+    envelope = {"state_revision": 7, "action_options": hints}
+    checked = wire.action_options(hints, obs)
+    checked_envelope = wire.actor_action_options(envelope, obs)
+    checked["usable_cards"].clear()
+    hints["usable_cards"][0]["definition_id"] = "changed-input"
+    assert len(checked_envelope["action_options"]["usable_cards"]) == 2
+    assert checked_envelope["action_options"]["usable_cards"][0]["definition_id"] == "bronze-club"
+
+    obs.pop("observation_schema_version")
+    with pytest.raises(ContractError, match="invalid fields"):
+        wire.action_options(hints, obs)
+    with pytest.raises(ContractError, match="invalid fields"):
+        wire.actor_action_options(envelope, obs)
 
 
 @pytest.mark.parametrize(

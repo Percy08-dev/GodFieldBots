@@ -76,6 +76,12 @@ retain independent verification. The
 [verification record](verification/owned-event-prefix.md) includes collection
 A/B, resume, phase load, and the isolated Eager experiments.
 
+CardInstance input validation checks the writer's observation once. The
+ActionOptions checks use that same record's owned snapshot and issue an
+independent owned result. Public entry points still validate their incoming
+observations. The [observation reuse measurements](verification/journal-observation-reuse.md)
+record the scope and the matched collection results.
+
 [ADR0055](adr/0055-owned-rust-model3-parity-validation.md) keeps frozen-output
 parity as an explicit validation for ordinary Rust Model3. Its live update
 uses the actual single-use Source and performs the existing admission before
