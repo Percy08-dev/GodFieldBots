@@ -1,5 +1,6 @@
 """Managed pump ordering/ownership fixtures; no game or Source authority."""
 import asyncio
+import threading
 import time
 from dataclasses import dataclass
 from types import SimpleNamespace
@@ -15,7 +16,7 @@ class Controls:
     value: int
 
 
-def pump_fixture(tmp_path, monkeypatch, *, failure=None):
+def pump_fixture(tmp_path, monkeypatch, *, failure=None, concurrency=2):
     from gf_training import rust_player_matches as module
     events, servers = [], []
     execution, cleanup = time.monotonic()+30, time.monotonic()+40
@@ -34,14 +35,33 @@ def pump_fixture(tmp_path, monkeypatch, *, failure=None):
             self.bundles = [SimpleNamespace(id=i, kind=kind, episode=ep, game='game-'+ep,
                 transport_sha256=str(i), reserved_bytes=i+1, written=False) for i, (kind, ep) in enumerate(arrivals)]
             self.started = []
+            self.start_batches = []
+            self.condition = threading.Condition()
+            self.cancelled = False
         def start(self, specs):
-            self.started.extend(specs); events.append(('start', specs[0]['episode']))
+            with self.condition:
+                self.started.extend(specs)
+                self.start_batches.append(tuple(s['episode'] for s in specs))
+                events.append(('start', specs[0]['episode']))
+                self.condition.notify_all()
         def next_storage(self, deadline):
             assert deadline == execution
-            return self.bundles.pop(0)
+            with self.condition:
+                while not self.cancelled:
+                    if self.bundles and any(s['episode'] == self.bundles[0].episode for s in self.started):
+                        return self.bundles.pop(0)
+                    self.condition.wait(deadline - time.monotonic())
+                    if time.monotonic() >= deadline:
+                        raise TimeoutError('original storage deadline')
+                raise OSError('original storage cancelled')
         def storage_ack(self, bundle):
             assert bundle.written
             events.append(('ack', bundle.id))
+        def cancel(self, reason):
+            with self.condition:
+                self.cancelled = True
+                events.append(('runtime-cancel', reason))
+                self.condition.notify_all()
         def wait(self, deadline):
             assert deadline == execution and not self.bundles
             events.append(('wait',))
@@ -85,15 +105,15 @@ def pump_fixture(tmp_path, monkeypatch, *, failure=None):
             events.append(('write', bundle.id))
             if failure == 'write': raise OSError('original writer failure')
             bundle.written = True
+        def cancel(self, reason):
+            events.append(('writer-cancel', reason))
     writer = Writer()
     monkeypatch.setattr(module, 'ManagedServer', Server)
-    async def inline(function, *args): return function(*args)
-    monkeypatch.setattr(module.asyncio, 'to_thread', inline)
     server_config = SimpleNamespace(binary='binary', config='config', startup_seconds=5., shutdown_seconds=7., request_seconds=9.)
     def execute(*, batch_id='batch', output=tmp_path):
         return pump.execute(groups, contexts, writer, server=server_config, actions=actions,
             max_decisions=11, output=output, execution_deadline=execution, cleanup_deadline=cleanup,
-            game_concurrency=2, run_id='run', batch_id=batch_id, evidence=Evidence())
+            game_concurrency=concurrency, run_id='run', batch_id=batch_id, evidence=Evidence())
     return pump, runtime, writer, contexts, servers, events, execute
 
 
@@ -136,6 +156,128 @@ def test_match_pump_retains_same_runtime_handle_map_and_original_history_across_
     assert [handles[i] for i in range(3)] == servers[3:]
     assert all(key[1] == 'next-batch' for key in result.keys)
     assert set(vars(pump)) == {'runtime', 'servers', 'server_history'}
+
+
+def test_match_pump_keeps_draining_originals_during_server_stop(tmp_path, monkeypatch):
+    from gf_training import rust_player_matches as module
+
+    _, runtime, _, _, _, events, execute = pump_fixture(tmp_path, monkeypatch)
+    stopping_group = 1
+    concurrent_terminal = runtime.bundles.pop(5)
+    runtime.bundles.insert(4, concurrent_terminal)
+    original_stop = module.ManagedServer.stop
+    original_ack = runtime.storage_ack
+
+    async def run():
+        loop = asyncio.get_running_loop()
+        released = asyncio.Event()
+
+        def ack(bundle):
+            original_ack(bundle)
+            if bundle is concurrent_terminal:
+                loop.call_soon_threadsafe(released.set)
+
+        async def stop(server):
+            if server.index == stopping_group:
+                await asyncio.wait_for(released.wait(), 2)
+            return await original_stop(server)
+
+        monkeypatch.setattr(runtime, 'storage_ack', ack)
+        monkeypatch.setattr(module.ManagedServer, 'stop', stop)
+        return await execute()
+
+    result = asyncio.run(run())
+    assert events.index(('ack', concurrent_terminal.id)) < events.index(('stop', stopping_group))
+    assert [r['id'] for r in result.accepted] == [0, 1, 2, 3, 5, 4, 6]
+
+
+def test_match_pump_worker_failure_wakes_terminal_wait_and_cancels_both_owners(tmp_path, monkeypatch):
+    _, runtime, _, _, _, events, execute = pump_fixture(tmp_path, monkeypatch, failure='write')
+
+    async def run():
+        with pytest.raises(OSError, match='original writer failure'):
+            await asyncio.wait_for(execute(), 2)
+
+    asyncio.run(run())
+    assert runtime.cancelled and any(event[0] == 'writer-cancel' for event in events)
+    assert not any(event[0] in ('ack', 'stop', 'wait', 'reports') for event in events)
+
+
+def test_match_pump_preserves_reader_failure_when_native_rolling_start_races_it(tmp_path, monkeypatch):
+    _, runtime, _, _, _, events, execute = pump_fixture(tmp_path, monkeypatch)
+    rolling_start = threading.Event()
+    native_cancelled = threading.Event()
+    original_start, original_cancel = runtime.start, runtime.cancel
+    original_error = OSError('original reader failure')
+    original_next = runtime.next_storage
+
+    def receive(deadline):
+        if runtime.bundles[0].id == 2:
+            assert rolling_start.wait(2)
+            raise original_error
+        return original_next(deadline)
+
+    def start(specs):
+        if specs[0]['episode'] == 'e11':
+            rolling_start.set()
+            assert native_cancelled.wait(2)
+            raise RuntimeError('native scheduler closed')
+        original_start(specs)
+
+    def cancel(reason):
+        original_cancel(reason)
+        native_cancelled.set()
+
+    monkeypatch.setattr(runtime, 'next_storage', receive)
+    monkeypatch.setattr(runtime, 'start', start)
+    monkeypatch.setattr(runtime, 'cancel', cancel)
+
+    with pytest.raises(OSError, match='original reader failure') as caught:
+        asyncio.run(execute())
+    assert caught.value is original_error
+    assert runtime.start_batches == [('e00',), ('e10',)]
+    assert ('ack', 1) in events and ('ack', 2) not in events
+
+
+def test_match_pump_repeated_cancellation_joins_original_drain(tmp_path, monkeypatch):
+    _, runtime, _, _, _, events, execute = pump_fixture(tmp_path, monkeypatch)
+    release = threading.Event()
+
+    async def run():
+        loop = asyncio.get_running_loop()
+        entered = asyncio.Event()
+        cancelled = asyncio.Event()
+        original_cancel = runtime.cancel
+
+        def receive(deadline):
+            loop.call_soon_threadsafe(entered.set)
+            assert release.wait(4)
+            events.append(('drain-exited',))
+            raise OSError('original storage cancelled')
+
+        def cancel(reason):
+            original_cancel(reason)
+            cancelled.set()
+
+        monkeypatch.setattr(runtime, 'next_storage', receive)
+        monkeypatch.setattr(runtime, 'cancel', cancel)
+        task = asyncio.create_task(execute())
+        try:
+            await asyncio.wait_for(entered.wait(), 2)
+            task.cancel('primary cancellation')
+            await asyncio.wait_for(cancelled.wait(), 2)
+            task.cancel('repeated cancellation')
+            await asyncio.sleep(0)
+            assert not task.done()
+        finally:
+            release.set()
+        with pytest.raises(asyncio.CancelledError, match='primary cancellation'):
+            await task
+
+    asyncio.run(run())
+    assert ('drain-exited',) in events
+    assert any(event[0] == 'writer-cancel' for event in events)
+    assert not any(event[0] in ('ack', 'wait', 'reports') for event in events)
 
 
 @pytest.mark.parametrize('failure', ['start', 'receipt', 'bind', 'write'])

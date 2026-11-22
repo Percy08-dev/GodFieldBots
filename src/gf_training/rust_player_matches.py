@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -48,6 +49,26 @@ class RustMatchPump:
         receipts: dict[int, Json] = {}
         startups: dict[int, Json] = {}
         next_group = 0
+        drain_error: BaseException | None = None
+
+        def cancel_owner(cancel: Callable[[str], None], error: BaseException) -> None:
+            try:
+                cancel('match journal drain failed')
+            except BaseException as cleanup:  # noqa: BLE001 - preserve the first failure.
+                error.add_note('Journal cancellation failed: ' + type(cleanup).__name__)
+
+        def check_drain() -> None:
+            if drain_error is not None:
+                raise drain_error from None
+
+        def start_games(specs: list[dict[str, Any]]) -> None:
+            check_drain()
+            try:
+                self.runtime.start(specs)
+            except Exception:
+                # Native admission may have observed cancellation first.
+                check_drain()
+                raise
 
         async def admit_group(index: int) -> None:
             group = groups[index]
@@ -81,38 +102,89 @@ class RustMatchPump:
                         'request_seconds': server.request_seconds}}
                 if 'learner_viewer' in value:
                     current_specs[episode.episode_id]['learner_viewer'] = value['learner_viewer']
-            self.runtime.start([current_specs[group.episodes[0].episode_id]])
+            start_games([current_specs[group.episodes[0].episode_id]])
 
         while next_group < min(len(groups), game_concurrency):
             await admit_group(next_group)
             next_group += 1
         episode_group = {episode.episode_id: index for index, group in enumerate(groups) for episode in group.episodes}
-        terminal_count = 0
         total = sum(len(group.episodes) for group in groups)
-        while terminal_count < total:
-            bundle = await asyncio.to_thread(self.runtime.next_storage, execution_deadline)
-            row = {'id': bundle.id, 'kind': bundle.kind, 'episode': bundle.episode,
-                'game': bundle.game, 'transport_sha256': bundle.transport_sha256, 'bytes': bundle.reserved_bytes}
-            await asyncio.to_thread(writer.accept, bundle)
-            await asyncio.to_thread(self.runtime.storage_ack, bundle)
-            accepted.append(row)
-            del bundle
-            if row['kind'] != 'terminal':
-                continue
-            terminal_count += 1
-            index = episode_group[row['episode']]
-            positions[index] += 1
-            group = groups[index]
-            if positions[index] < len(group.episodes):
-                self.runtime.start([current_specs[group.episodes[positions[index]].episode_id]])
-            else:
-                managed = self.servers[index]
-                health = await managed.stop()
-                completed_groups[index] = {'runtime_evidence': receipts[index],
-                    'startup': startups[index], 'expected_effective': managed.expected, 'process': clone(health)}
-                if next_group < len(groups):
-                    await admit_group(next_group)
-                    next_group += 1
+        loop = asyncio.get_running_loop()
+        terminal_ready = asyncio.Event()
+
+        def drain_storage() -> None:
+            nonlocal drain_error
+            terminal_count = 0
+            try:
+                while terminal_count < total:
+                    bundle = self.runtime.next_storage(execution_deadline)
+                    row = {'id': bundle.id, 'kind': bundle.kind, 'episode': bundle.episode,
+                        'game': bundle.game, 'transport_sha256': bundle.transport_sha256, 'bytes': bundle.reserved_bytes}
+                    writer.accept(bundle)
+                    self.runtime.storage_ack(bundle)
+                    # One producer appends completed metadata. The event-loop cursor
+                    # only reads this prefix and never owns a native bundle.
+                    accepted.append(row)
+                    del bundle
+                    if row['kind'] == 'terminal':
+                        terminal_count += 1
+                        loop.call_soon_threadsafe(terminal_ready.set)
+            except BaseException as error:
+                # Publish the cause and stop native admission even if the event loop
+                # has not yet delivered the executor future's completion callback.
+                drain_error = error
+                cancel_owner(self.runtime.cancel, error)
+                raise
+
+        drain = loop.run_in_executor(None, drain_storage)
+        drain.add_done_callback(lambda _: terminal_ready.set())
+        terminal_count = cursor = 0
+        try:
+            while terminal_count < total:
+                terminal_ready.clear()
+                check_drain()
+                while cursor < len(accepted):
+                    row = accepted[cursor]
+                    cursor += 1
+                    if row['kind'] == 'terminal':
+                        break
+                else:
+                    await terminal_ready.wait()
+                    continue
+                terminal_count += 1
+                index = episode_group[row['episode']]
+                positions[index] += 1
+                group = groups[index]
+                if positions[index] < len(group.episodes):
+                    start_games([current_specs[group.episodes[positions[index]].episode_id]])
+                else:
+                    managed = self.servers[index]
+                    health = await managed.stop()
+                    completed_groups[index] = {'runtime_evidence': receipts[index],
+                        'startup': startups[index], 'expected_effective': managed.expected, 'process': clone(health)}
+                    if next_group < len(groups):
+                        check_drain()
+                        await admit_group(next_group)
+                        next_group += 1
+            await asyncio.shield(drain)
+        except BaseException as error:
+            for cancel in (self.runtime.cancel, writer.cancel):
+                cancel_owner(cancel, error)
+            # The caller owns final cleanup. Keep the original reader alive
+            # until it has actually unwound, including on a second cancellation.
+            while not drain.done():
+                try:
+                    await asyncio.shield(drain)
+                except asyncio.CancelledError:
+                    continue
+                except BaseException:  # noqa: BLE001 - retrieve the completed outcome below.
+                    break
+            try:
+                drain.result()
+            except BaseException as cleanup:  # noqa: BLE001 - preserve the first failure.
+                if cleanup is not error:
+                    error.add_note('Journal drain exit: ' + type(cleanup).__name__)
+            raise
         await asyncio.to_thread(self.runtime.wait, execution_deadline)
         keys = [(run_id, batch_id, episode.episode_id) for group in groups for episode in group.episodes]
         reports = self.runtime.completed_reports(keys)
