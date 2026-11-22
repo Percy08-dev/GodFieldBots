@@ -6,7 +6,7 @@ use crate::{
 };
 use ndarray::Array1;
 use numpy::PyArray1;
-use pyo3::prelude::*;
+use pyo3::{prelude::*, types::PyBytes};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::{
@@ -527,6 +527,27 @@ impl StorageBundle {
     fn reserved_bytes(&self) -> usize {
         self.record._reservation.account.metrics.increment("pyo3_other", 1);
         self.record.array.len()
+    }
+    /// Independently validate and encode the writer's original pending candidate table.
+    /// The caller reserves the codec Vec and Python bytes using the same recording account.
+    fn _journal_candidates<'py>(
+        &self,
+        py: Python<'py>,
+        max_positions: usize,
+        output_bytes: usize,
+    ) -> PyResult<(
+        &str, &str, usize, usize, usize, Bound<'py, PyBytes>, Bound<'py, PyBytes>, String,
+    )> {
+        self.record._reservation.account.metrics.increment("pyo3_other", 1);
+        ensure(self.record.kind == "pending", "writer candidates require pending")
+            .map_err(crate::python_error)?;
+        let whole = self.record.array.as_slice().expect("own contiguous capture");
+        let checked = py.detach(|| super::super::journal_candidates::check(whole, max_positions, output_bytes))
+            .map_err(crate::python_error)?;
+        Ok((
+            checked.frame_hash, checked.table_hash, checked.selected, checked.count, checked.elements,
+            PyBytes::new(py, &checked.action), PyBytes::new(py, &checked.payload), checked.sha256,
+        ))
     }
     fn view<'py>(slf: Bound<'py, Self>) -> PyResult<Bound<'py, PyArray1<u8>>> {
         slf.borrow().record._reservation.account.metrics.increment("pyo3_other", 1);

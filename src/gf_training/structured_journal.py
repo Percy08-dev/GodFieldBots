@@ -9,13 +9,22 @@ import stat
 import sys
 import time
 import uuid
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
+from itertools import pairwise
 from pathlib import Path
 from typing import Any, BinaryIO, cast
 
 from gf_common.action_contract import ActionContract
 from gf_common.artifacts import ArtifactReader
-from gf_common.diverse_actions import GENERATOR_V2, GeneratedCandidates, NumericCosts
+from gf_common.diverse_actions import (
+    GENERATOR_V2,
+    GameGeneratedCandidatesV3,
+    GeneratedCandidates,
+    NumericCosts,
+    SearchReport,
+    SearchReportV3,
+)
 from gf_common.domain import (
     CATALOG_META,
     END_PROJECTION_VERSION,
@@ -113,7 +122,8 @@ class StructuredJournal(ParticipantJournal):
     def begin(self, *args: Any, **kwargs: Any) -> int:
         raise ContractError("journal5 requires explicit frame/delta/compact-table begin_frame")
 
-    def begin_frame(self, frame: DecisionFrame, delta: EventDelta, generated: GeneratedCandidates,
+    def begin_frame(self, frame: DecisionFrame, delta: EventDelta,
+                    generated: GeneratedCandidates | GameGeneratedCandidatesV3,
                     selection: Selection, command: Json, timings: Json) -> int:
         started = time.perf_counter()
         if self._context is not None:
@@ -122,9 +132,29 @@ class StructuredJournal(ParticipantJournal):
         check({"action_contract": asdict(generated.table.action_contract), "purpose": generated.table.purpose,
                              "synthetic_capacity": generated.table.synthetic_capacity}, action_contract=self.action_contract,
                             purpose=self.purpose, synthetic_capacity=False)
+        table = generated.table
+        def publish() -> Json:
+            return self._publish_candidates(
+                frame, table, self.count, max_positions=self.caps["max_positions"],
+                action_contract=self.action_contract, purpose=self.purpose, synthetic_capacity=False,
+            )
+
+        return self._begin_frame(
+            frame, delta, generated.report, selection, command, timings, started,
+            candidate_count=len(table.kinds), action=lambda: selection.validate(table, frame),
+            publish=publish, offsets=table.offsets,
+        )
+
+    def _begin_frame(
+        self, frame: DecisionFrame, delta: EventDelta, report: SearchReport | SearchReportV3,
+        selection: Selection, command: Json, timings: Json, started: float, *,
+        candidate_count: int, action: Callable[[], Json], publish: Callable[[], Json],
+        offsets: tuple[int, ...] | None = None,
+    ) -> int:
+        """Validate the decision envelope and emit its checked candidates and Journal rows."""
         if self.caps["max_decisions"] is not None:
             integer(self.count + 1, 1, self.caps["max_decisions"])
-        integer(len(generated.table.kinds), 1, self.caps["max_candidates"])
+        integer(candidate_count, 1, self.caps["max_candidates"])
         integer(frame.boundary.end, 0, self.caps["max_episode_events"])
         interval_count = frame.boundary.end - frame.interval_start
         integer(interval_count, 0, self.caps["max_interval_events"])
@@ -134,8 +164,9 @@ class StructuredJournal(ParticipantJournal):
         integer(delta.start + delta_count, 0, self.caps["max_episode_events"])
         if delta_count != interval_count:
             raise ContractError("journal5 delta count/frame interval mismatch")
-        for start, end in zip(generated.table.offsets[:-1], generated.table.offsets[1:], strict=True):
-            integer(end - start, 0, self.caps["max_positions"])
+        if offsets is not None:  # The native path checks every row before reconstructing its action.
+            for start, end in pairwise(offsets):
+                integer(end - start, 0, self.caps["max_positions"])
         if self.header["model_id"] in ("mlp", "gru", "transformer") and (selection.logprob is None or selection.value is None):
             raise ContractError("journal5 neural selection requires finite logprob/value")
         if self.header["model_id"] == "lightgbm" and (selection.logprob is not None or selection.value is not None):
@@ -147,23 +178,20 @@ class StructuredJournal(ParticipantJournal):
         previous = 0 if self.last_frame is None else self.last_frame.boundary.end
         if frame.interval_start != previous or self.last_frame is not None and frame.revision <= self.last_frame.revision:
             raise ContractError("journal5 decision interval/revision continuity mismatch")
-        action = selection.validate(generated.table, frame)
-        _command(command, frame, action)
+        _command(command, frame, action())
         self.bank.append(delta)
         if self.bank.boundary != frame.boundary:
             raise ContractError("journal5 delta must match exact frame boundary")
         frame.bank_view(self.bank.view())
-        if selection.policy_version != self.policy or generated.report.config_hash != self.header["action_config_hash"]:
+        if selection.policy_version != self.policy or report.config_hash != self.header["action_config_hash"]:
             raise ContractError("journal5 policy/search configuration mismatch")
-        if generated.report.rng_before != self.last_search_state:
+        if report.rng_before != self.last_search_state:
             raise ContractError("journal5 independent search RNG continuity mismatch")
-        if generated.report.numeric_costs_hash != digest(self.header["numeric_costs"]):
+        if report.numeric_costs_hash != digest(self.header["numeric_costs"]):
             raise ContractError("journal5 numeric cost binding mismatch")
         _host_timings(timings)
         index = self.count
-        descriptor = self._publish_candidates(frame, generated.table, index,
-                                        max_positions=self.caps["max_positions"], action_contract=self.action_contract,
-                                        purpose=self.purpose, synthetic_capacity=False)
+        descriptor = publish()
         # Sidecar is closed/verified/published BEFORE any referencing JSONL row.
         if self.last_accepted is not None:
             self.write({"kind": "transition", "decision": self.last_accepted, "next_decision": index,
@@ -173,13 +201,13 @@ class StructuredJournal(ParticipantJournal):
         self.write({"kind": "events", "delta": delta_dict(delta, **active_layout), "boundary": {"end": frame.boundary.end,
                     "prefix_hash": frame.boundary.prefix_hash}})
         self.write({"kind": "decision", "decision": index, "frame": frame_dict(frame, **active_layout),
-                    "table": descriptor, "search_report": asdict(generated.report), "selection": asdict(selection),
+                    "table": descriptor, "search_report": asdict(report), "selection": asdict(selection),
                     "command": command, "timings": timings})
         self.pending.add(index)
         self.commands[index] = command
         self.count += 1
         self.last_frame = frame
-        self.last_search_state = generated.report.rng_after
+        self.last_search_state = report.rng_after
         self.last_storage_ms = (time.perf_counter() - started) * 1000
         return index
 

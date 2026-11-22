@@ -24,11 +24,17 @@ from typing import Any, Self
 import gf_native
 
 from gf_common.artifacts import ArtifactAdmission
-from gf_common.candidate_columns import encode_candidate_columns_v2
-from gf_common.card_instance import ActionConfigV3
+from gf_common.candidate_columns import (
+    CODEC_V2,
+    _codebook,
+    column_layout,
+    encode_candidate_columns_v2,
+)
+from gf_common.card_instance import ActionConfigV3, shared_card_instance_contract
 from gf_common.card_instance_rules import CardInstanceRules
 from gf_common.card_instance_runtime import validate_runtime_receipt
 from gf_common.card_instance_validation import act_response, reconcile_replay, validate_events
+from gf_common.diverse_actions import SearchReportV3
 from gf_common.domain import ContractError, Json, canonical, clone, closed, digest, integer
 from gf_common.group_pack import (
     FORMAT,
@@ -41,9 +47,14 @@ from gf_common.group_pack import (
     member_index,
     safe_name,
 )
-from gf_common.structured import Selection
+from gf_common.structured import DecisionFrame, EventDelta, Selection
 from gf_common.structured_layout import CORRECTED_CARD_INSTANCE_LAYOUT as LAYOUT
-from gf_common.structured_wire import parse_delta, parse_frame, parse_game_generated_v3
+from gf_common.structured_wire import (
+    parse_delta,
+    parse_frame,
+    parse_game_generated_v3,
+    parse_report_v3,
+)
 from gf_training.candidate_storage import candidate_basename
 from gf_training.card_instance_journal import CardInstanceJournal
 from gf_training.group_pack_db import DATABASE, fsync_directory, validate_descriptor
@@ -276,9 +287,73 @@ class _Journal(CardInstanceJournal):
     def _final_exists(self) -> bool:
         return self.sink.contains(self._name(self.final_path))
 
-    def _publish_candidates(self, frame: Any, table: Any, index: int, **kwargs: Any) -> Json:
-        from gf_common.candidate_columns import column_layout
+    def _begin_native_frame(
+        self, bundle: gf_native.StorageBundle, frame: DecisionFrame, delta: EventDelta,
+        report: SearchReportV3, selection: Selection, command: Json,
+    ) -> int:
+        started = time.perf_counter()
+        self._context.validate_report(report, selection)
+        payload: bytes | None = None
+        descriptor: Json | None = None
+        lease: _RecordingReservation | None = None
 
+        def reconstruct() -> Json:
+            nonlocal payload, descriptor, lease
+            columns, size = column_layout(report.selected, report.selected_elements)
+            lease = self.sink.budget.reserve(2 * size)  # native codec Vec and returned bytes coexist
+            try:
+                frame_hash, table_hash, selected, count, elements, action, payload, sha256 = (
+                    bundle._journal_candidates(self.caps["max_positions"], size)
+                )
+            except ValueError as error:
+                raise ContractError(str(error)) from error
+            lease.resize(len(payload))
+            if (
+                frame_hash != frame.frame_hash
+                or table_hash != selection.table_hash
+                or selected != selection.index
+                or count != report.selected
+                or elements != report.selected_elements
+            ):
+                raise ContractError("native writer candidate/frame/report mismatch")
+            descriptor = {
+                "schema_version": 2,
+                "codec": CODEC_V2,
+                "file": candidate_basename(frame.actor, self.count),
+                "count": count,
+                "elements": elements,
+                "bytes": size,
+                "sha256": sha256,
+                "frame_hash": frame_hash,
+                "table_hash": table_hash,
+                "columns": columns,
+                "action_contract": asdict(self.action_contract),
+                "purpose": self.purpose,
+                "synthetic_capacity": False,
+                "codebook_sha256": _codebook(LAYOUT),
+            }
+            return json.loads(action)
+
+        def publish() -> Json:
+            nonlocal lease
+            assert lease is not None and payload is not None and descriptor is not None
+            self.sink.write(self.path.parent.name + "/" + descriptor["file"], payload, lease)
+            lease = None  # recording sink owns the only lease from here
+            return descriptor
+
+        try:
+            return self._begin_frame(
+                frame, delta, report, selection, command, {}, started,
+                candidate_count=report.selected, action=reconstruct, publish=publish,
+            )
+        except BaseException as error:
+            _retain_failure(self.sink, error, clear_frames=True)
+            if lease is not None:
+                payload = None
+                lease.close()
+            raise
+
+    def _publish_candidates(self, frame: Any, table: Any, index: int, **kwargs: Any) -> Json:
         _, size = column_layout(len(table.kinds), len(table.slots))
         lease = self.sink.budget.reserve(2 * size)  # codec bytearray and final bytes overlap
         try:
@@ -297,9 +372,6 @@ class _Journal(CardInstanceJournal):
                 del payload
             lease.close()
             raise
-
-    def begin_frame(self, frame: Any, delta: Any, generated: Any, *args: Any, **kwargs: Any) -> int:
-        return super().begin_frame(frame, delta, generated, *args, **kwargs)
 
     def acknowledge(self, index: int, acknowledgement: Json) -> None:
         super().acknowledge(index, acknowledgement)
@@ -411,6 +483,7 @@ class CanonicalEpisodeEncoder:
 
     def __init__(self, context: EpisodeEncodingContext, sink: RecordingArtifacts) -> None:
         self.context, self.sink = context, sink
+        self._native_candidates = context.actions.action_contract == shared_card_instance_contract()
         self.game: str | None = None
         self.journals: dict[int, _Journal] = {}
         self.pending: tuple[int, str] | None = None
@@ -508,14 +581,26 @@ class CanonicalEpisodeEncoder:
                 raise ContractError("native pending chronology/policy context mismatch")
             frame = parse_frame(data["frame"], layout=LAYOUT)
             delta = parse_delta(data["delta"], layout=LAYOUT)
-            generated = parse_game_generated_v3(
-                data["generated"], action_contract=c.actions.action_contract, rules=c.rules
-            )
+            if self._native_candidates:
+                raw = closed(data["generated"], {"table", "report"})
+                generated = None
+                report = parse_report_v3(
+                    raw["report"], action_contract=c.actions.action_contract, rules=c.rules
+                )
+                candidate_count = report.selected
+                table_hash = report.table_hash
+            else:
+                generated = parse_game_generated_v3(
+                    data["generated"], action_contract=c.actions.action_contract, rules=c.rules
+                )
+                report = generated.report
+                candidate_count = len(generated.table.kinds)
+                table_hash = generated.table.table_hash
             if (
                 self.revision is not None
                 and frame.revision != self.revision
-                or generated.report.rng_before != _state(data["search_rng_before"])
-                or generated.report.rng_after != _state(data["search_rng_after"])
+                or report.rng_before != _state(data["search_rng_before"])
+                or report.rng_after != _state(data["search_rng_after"])
             ):
                 raise ContractError("native revision/search RNG chronology mismatch")
             scores = data["scores"]
@@ -557,22 +642,25 @@ class CanonicalEpisodeEncoder:
                 rng.setstate(_state(before["rng"]))
                 if (
                     policy.native["kind"] == "random"
-                    and rng.randrange(len(generated.table.kinds)) != data["selected"]
+                    and rng.randrange(candidate_count) != data["selected"]
                 ):
                     raise ContractError("Random selection differs from original own RNG")
                 if rng.getstate() != _state(after["rng"]):
                     raise ContractError("baseline RNG transition mismatch")
                 self.policy_states[viewer] = after
             selection = Selection(
-                generated.table.table_hash,
+                table_hash,
                 data["selected"],
                 policy.journal["policy"],
                 logprob,
                 value,
             )
-            index = journal.begin_frame(frame, delta, generated, selection, data["command"], {})
+            if generated is None:
+                index = journal._begin_native_frame(bundle, frame, delta, report, selection, data["command"])
+            else:
+                index = journal.begin_frame(frame, delta, generated, selection, data["command"], {})
             if viewer == c.learner_viewer:
-                self._training_pending = _AcceptedTrainingRow(frame, selection, len(generated.table.kinds))
+                self._training_pending = _AcceptedTrainingRow(frame, selection, candidate_count)
             self.pending = viewer, data["command"]["command_id"]
             assert index == journal.count - 1
         elif kind == "ack":

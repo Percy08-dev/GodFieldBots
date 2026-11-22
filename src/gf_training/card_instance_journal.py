@@ -25,7 +25,7 @@ from gf_common.card_instance_runtime import (
     validate_runtime_receipt,
 )
 from gf_common.card_instance_validation import observation
-from gf_common.diverse_actions import GameGeneratedCandidatesV3, NumericCosts
+from gf_common.diverse_actions import GameGeneratedCandidatesV3, NumericCosts, SearchReportV3
 from gf_common.domain import (
     END_PROJECTION_VERSION,
     ContractError,
@@ -95,13 +95,17 @@ class _Context:
         return parse_report_v3(raw, action_contract=self.actions.action_contract, rules=self.rules)
 
     def validate_generated(self, value: Any, selection: Selection) -> None:
+        if type(value) is not GameGeneratedCandidatesV3:
+            raise ContractError("journal6 exact baseline game report/config/rules required")
+        self.validate_report(value.report, selection)
+
+    def validate_report(self, report: SearchReportV3, selection: Selection) -> None:
         if (
-            type(value) is not GameGeneratedCandidatesV3
-            or value.report.rule_signature != self.binding["rule_signature"]
-            or value.report.config_hash != digest(asdict(self.actions))
-            or value.report.attempts > self.actions.max_expansions
-            or value.report.discovered > self.actions.max_temporary_candidates
-            or value.report.numeric_costs_hash != self.numeric_costs_hash
+            report.rule_signature != self.binding["rule_signature"]
+            or report.config_hash != digest(asdict(self.actions))
+            or report.attempts > self.actions.max_expansions
+            or report.discovered > self.actions.max_temporary_candidates
+            or report.numeric_costs_hash != self.numeric_costs_hash
             or selection.policy_version != self.policy
             or self.neural is None and (selection.logprob is not None or selection.value is not None)
             or self.neural is not None and any(type(number) not in (int, float)

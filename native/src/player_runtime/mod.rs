@@ -4,6 +4,7 @@ pub mod batch;
 pub mod game;
 pub mod history;
 pub mod http;
+mod journal_candidates;
 pub mod numeric;
 pub mod metrics;
 pub mod requests;
@@ -21,7 +22,7 @@ use crate::{
 use rules::{Card, Incoming};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 pub(crate) fn error(s: impl Into<String>) -> Error {
     Error::contract(s)
 }
@@ -34,6 +35,22 @@ pub fn hash(v: &Value) -> Result<String> {
 fn canonical(v: &Value) -> Result<Vec<u8>> {
     Ok(json::canonical(v, &Budget::new(12usize << 30), &Control::new(f64::MAX)?)?.to_vec())
 }
+fn shared_card_instance_contract() -> &'static Value {
+    static CONTRACT: LazyLock<Value> = LazyLock::new(|| {
+        let mut pins: Value = serde_json::from_slice(include_bytes!(
+            "../../assets/card-instance-validation-pins-v2.json"
+        ))
+        .expect("checked-in card-instance pins");
+        let contract = &mut pins["action_contract"];
+        contract["profile_id"] = json!("card-instance-simulator-v2-shared-20261118");
+        contract["simulator_revision"] = json!("072dabbca1458c9526897781d2fd64edeeb4f9ca");
+        contract["spec_inventory_sha256"] =
+            json!("da4bde0ce82d91dc10c4a8a7f012c1cb95b0079113344453b956f638fb1d39d4");
+        contract.take()
+    });
+    &CONTRACT
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
@@ -54,17 +71,8 @@ pub struct Config {
 impl Config {
     pub fn parse(v: &Value, rules: &Value) -> Result<Self> {
         let c: Self = serde_json::from_value(v.clone()).map_err(|e| error(e.to_string()))?;
-        let mut expected: Value = serde_json::from_slice(include_bytes!(
-            "../../assets/card-instance-validation-pins-v2.json"
-        ))
-        .unwrap();
-        let contract = &mut expected["action_contract"];
-        contract["profile_id"] = json!("card-instance-simulator-v2-shared-20261118");
-        contract["simulator_revision"] = json!("072dabbca1458c9526897781d2fd64edeeb4f9ca");
-        contract["spec_inventory_sha256"] =
-            json!("da4bde0ce82d91dc10c4a8a7f012c1cb95b0079113344453b956f638fb1d39d4");
         ensure(
-            c.action_contract == *contract,
+            c.action_contract == *shared_card_instance_contract(),
             "shared072dabb action contract required",
         )?;
         ensure(

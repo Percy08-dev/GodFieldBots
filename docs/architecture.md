@@ -62,6 +62,13 @@ against the acting participant's frame before acknowledgement. The
 [CPU verification record](verification/journal-writer-cpu.md) covers the
 canonical candidate-hash and Action validation copy reductions.
 
+[ADR0061](adr/0061-native-journal-candidates.md) delegates complete candidate
+validation and codec2 encoding for the shared CardInstance profile to the
+original Rust StorageBundle. Python owns publication and acknowledgements.
+Historical profiles use the existing Python validation. The
+[native writer verification](verification/native-journal-writer.md) records
+the memory lifetimes, checkpoint compatibility and collection timings.
+
 [ADR0055](adr/0055-owned-rust-model3-parity-validation.md) keeps frozen-output
 parity as an explicit validation for ordinary Rust Model3. Its live update
 uses the actual single-use Source and performs the existing admission before

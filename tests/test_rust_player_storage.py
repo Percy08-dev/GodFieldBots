@@ -228,9 +228,13 @@ def journal_context(spec):
 def test_actual_native_originals_encode_journal6_and_both_replay_views(tmp_path, decisions):
     import asyncio
     import json
+    from dataclasses import replace
     from pathlib import Path
 
-    from gf_common.card_instance import shared_card_instance_contract
+    from gf_common.card_instance import (
+        corrected_card_instance_contract,
+        shared_card_instance_contract,
+    )
     from gf_simulator_client.card_instance_runtime import CardInstanceRuntimeEvidence
     from gf_simulator_client.process import ManagedServer
     from gf_simulator_client.rust_player import RustPlayerRuntime
@@ -264,12 +268,20 @@ def test_actual_native_originals_encode_journal6_and_both_replay_views(tmp_path,
         sink = RecordingArtifacts(
             RecordingBudget(runtime.recording_account(), time.monotonic() + 30)
         )
+        reference_sink = RecordingArtifacts(sink.budget)
         try:
             startup = await server.start()
             spec = game_spec(startup, evidence.verify_executed(server.process))
             spec["max_decisions"] = decisions
             context = journal_context(spec)
             encoder = CanonicalEpisodeEncoder(context, sink)
+            assert encoder._native_candidates
+            old_profile = replace(context, actions=replace(
+                context.actions, action_contract=corrected_card_instance_contract(),
+            ))
+            assert not CanonicalEpisodeEncoder(old_profile, reference_sink)._native_candidates
+            reference = CanonicalEpisodeEncoder(context, reference_sink)
+            reference._native_candidates = False  # compare both codecs on the same exact native owner
             runtime.start([spec])
             account_checked = False
             while encoder.terminal is None:
@@ -285,12 +297,14 @@ def test_actual_native_originals_encode_journal6_and_both_replay_views(tmp_path,
                     assert account.used == native_used
                     account_checked = True
                 encoder.consume(bundle)
+                reference.consume(bundle)
                 runtime.storage_ack(bundle)
                 del bundle
             runtime.wait(time.monotonic() + 10)
             runtime.join()
             members = sink.members()
             files = {member.name: member.data for member in members}
+            assert files == {member.name: member.data for member in reference_sink.members()}
             assert sum(name.endswith(".jsonl") for name in files) == 2
             assert sum("replay-player-" in name for name in files) == 2
             directory = tmp_path / context.episode_id
@@ -313,11 +327,14 @@ def test_actual_native_originals_encode_journal6_and_both_replay_views(tmp_path,
             del members, files, data
             encoder.retire()
             del encoder
+            reference.retire()
+            reference_sink.close()
             sink.close()
             assert runtime.recording_account().used == 0
         finally:
             runtime.cancel("encoder test complete")
             runtime.join()
+            reference_sink.close()
             sink.close()
             await server.stop()
 
@@ -469,7 +486,7 @@ def hashlib_sha(view):
     return hashlib.sha256(view).hexdigest()
 
 
-@pytest.mark.parametrize("failure", ["duplicate", "sql", "publication"])
+@pytest.mark.parametrize("failure", ["duplicate", "sql", "publication", "command"])
 def test_actual_storage_failure_cancels_and_never_publishes_healthy_seal(
     tmp_path, monkeypatch, failure
 ):
@@ -477,6 +494,7 @@ def test_actual_storage_failure_cancels_and_never_publishes_healthy_seal(
 
     from gf_simulator_client.rust_player import RustPlayerRuntime
     from gf_training import group_pack_worker as database_module
+    from gf_training import rust_player_storage as storage_module
     from gf_training.group_pack_resources import StorageBudget
     from gf_training.rust_player_storage import (
         RustPendingDescriptor,
@@ -485,7 +503,17 @@ def test_actual_storage_failure_cancels_and_never_publishes_healthy_seal(
     )
     from tests.test_rust_player_runtime import game_spec, managed, runtime_config
 
-    if failure == "sql":
+    if failure == "command":
+        decode = storage_module.decode_original
+
+        def wrong_action(bundle):
+            value = decode(bundle)
+            if bundle.kind == "pending":
+                value["command"]["action"] = {"type": "invalid test action"}
+            return value
+
+        monkeypatch.setattr(storage_module, "decode_original", wrong_action)
+    elif failure == "sql":
 
         def fail_sql(*args, **kwargs):
             raise OSError("private SQL injection")
@@ -531,6 +559,13 @@ def test_actual_storage_failure_cancels_and_never_publishes_healthy_seal(
             runtime.start([spec])
             while True:
                 bundle = runtime.next_storage(time.monotonic() + 10)
+                if failure == "command" and bundle.kind == "pending":
+                    held = bundle.view()
+                    with pytest.raises(RuntimeError, match="storage failed") as caught:
+                        writer.accept(bundle)
+                    caught.value.__traceback__ = None  # caller's exception retained the original
+                    del caught, bundle
+                    break
                 writer.accept(bundle)
                 if held is None:
                     held = bundle.view()
@@ -546,7 +581,7 @@ def test_actual_storage_failure_cancels_and_never_publishes_healthy_seal(
                 del bundle
                 if terminal:
                     break
-            if failure != "duplicate":
+            if failure in ("sql", "publication"):
                 with pytest.raises(RuntimeError, match="storage failed"):
                     writer.seal()
             with pytest.raises(RuntimeError, match="storage failed"):
@@ -1397,13 +1432,14 @@ def test_fix1_chained_error_retires_private_buffer_before_refund(tmp_path, monke
 
         monkeypatch.setattr(worker, "submit_group", submit)
     else:
-        actual_encode = module.encode_candidate_columns_v2
+        actual_write = module.RecordingArtifacts.write
 
-        def encode(*args, **kwargs):
-            data, _descriptor = actual_encode(*args, **kwargs)
-            fail_with_buffer(data)
+        def write(owner, name, data, reservation=None):
+            if name.endswith(".columns"):
+                fail_with_buffer(data)
+            return actual_write(owner, name, data, reservation)
 
-        monkeypatch.setattr(module, "encode_candidate_columns_v2", encode)
+        monkeypatch.setattr(module.RecordingArtifacts, "write", write)
     settings = StorageSettings(
         db_root=tmp_path / "catalog",
         ram_root=tmp_path / "ram",

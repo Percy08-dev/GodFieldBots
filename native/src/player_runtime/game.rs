@@ -285,15 +285,32 @@ fn action(frame: &Value, table: &Table, index: usize) -> Result<Value> {
         index < table.kinds.len(),
         "selected candidate outside own table",
     )?;
-    let kind = &table.kinds[index];
-    let target = &table.targets[index];
     let slots = &table.slots[table.offsets[index]..table.offsets[index + 1]];
-    let numerics = &table.numerics[index];
-    let presence = &table.presence[index];
     let refs = &frame["payload"]["observation"]["own"]["cards"];
-    let elements: Vec<Value> = slots.iter().map(|i| refs[*i]["card_ref"].clone()).collect();
+    let elements = slots.iter().map(|i| refs[*i]["card_ref"].clone()).collect();
+    let action = action_from_parts(
+        &table.kinds[index],
+        &table.targets[index],
+        frame["actor"].as_u64().unwrap(),
+        elements,
+        &table.numerics[index],
+        &table.presence[index],
+    )?;
+    card_instance::action_value2(&action, Some(&frame["payload"]["observation"]))?;
+    Ok(action)
+}
+
+// Both callers bind these fields to their own validated frame and candidate row.
+pub(super) fn action_from_parts(
+    kind: &str,
+    target: &str,
+    actor: u64,
+    elements: Vec<Value>,
+    numerics: &[i64; 4],
+    presence: &[bool; 4],
+) -> Result<Value> {
     let mut a = json!({"type":kind});
-    match kind.as_str() {
+    match kind {
         "play_sequence" | "respond" => a["ordered_card_refs"] = json!(elements),
         "discard" | "sacrifice" => a["card_refs"] = json!(elements),
         "exchange" | "sell" | "buy" | "invoke_phenomenon" => {
@@ -306,11 +323,7 @@ fn action(frame: &Value, table: &Table, index: usize) -> Result<Value> {
         _ => return Err(error("unknown typed candidate")),
     }
     if target != "omitted" {
-        a["target"] = json!(if target == "self" {
-            frame["actor"].as_u64().unwrap()
-        } else {
-            3 - frame["actor"].as_u64().unwrap()
-        });
+        a["target"] = json!(if target == "self" { actor } else { 3 - actor });
     }
     for (i, k) in ["hp", "mp", "money", "accept"].iter().enumerate() {
         if presence[i] {
@@ -321,7 +334,6 @@ fn action(frame: &Value, table: &Table, index: usize) -> Result<Value> {
             };
         }
     }
-    card_instance::action_value2(&a, Some(&frame["payload"]["observation"]))?;
     Ok(a)
 }
 impl Actor {
