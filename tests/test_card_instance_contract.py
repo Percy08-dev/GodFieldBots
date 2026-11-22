@@ -332,6 +332,20 @@ def test_public_action_syntax_and_dataset_string_wrapper(action):
             wire.dataset_action(action, action_schema_version=version)
 
 
+def test_check_action_shares_submission_checks_and_public_outputs_remain_owned():
+    action = {"type": "discard", "card_refs": [REF1]}
+    submission = wire.validate_action(action)
+    recorded = wire.dataset_action(action, action_schema_version="2")
+
+    assert wire.check_action(action) is None
+    submission["card_refs"].append(REF2)
+    recorded["card_refs"].clear()
+    assert action["card_refs"] == [REF1]
+    invalid = {"type": "discard", "card_refs": [REF1, REF1]}
+    with pytest.raises(ContractError, match="repeated card ref"):
+        wire.check_action(invalid)
+
+
 @pytest.mark.parametrize(
     "action",
     [

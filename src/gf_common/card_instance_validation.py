@@ -224,7 +224,7 @@ def dataset_observation(value: Any, viewer: int | None = None) -> Json:
     return _observation(value, viewer, representation="dataset")
 
 
-def _validate_action(value: Any, obs: Json | None, *, submission: bool) -> Json:
+def _validate_action(value: Any, obs: Json | None, *, submission: bool) -> None:
     if not isinstance(value, dict):
         raise ContractError("typed Action object required")
     descriptors = {
@@ -263,12 +263,17 @@ def _validate_action(value: Any, obs: Json | None, *, submission: bool) -> Json:
             raise ContractError("Action kind differs from required choice")
         if not set(refs) <= {card["card_ref"] for card in obs["own"]["cards"]}:
             raise ContractError("Action contains foreign card ref")
-    return clone(value)
+
+
+def check_action(value: Any) -> None:
+    """Check submission syntax without making an owned copy."""
+    _validate_action(value, None, submission=True)
 
 
 def validate_action(value: Any, obs: Json | None = None) -> Json:
     """Submission/accepted-Action syntax with distinct bounded own references."""
-    return _validate_action(value, obs, submission=True)
+    _validate_action(value, obs, submission=True)
+    return clone(value)
 
 
 def _action_options(value: Any, obs: Json) -> Json:
@@ -653,7 +658,8 @@ def dataset_action(value: Any, *, action_schema_version: Any) -> Json:
     """
     if type(action_schema_version) is not str or action_schema_version != "2":
         raise UnsupportedContract("Dataset Action schema must be string 2")
-    return _validate_action(value, None, submission=False)
+    _validate_action(value, None, submission=False)
+    return clone(value)
 
 
 def own_visible_input(value: Any) -> Any:

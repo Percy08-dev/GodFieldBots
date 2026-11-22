@@ -539,7 +539,19 @@ class CandidateTable:
             validate_game_references(self.slots[start:end] for start, end in zip(self.offsets[:-1], self.offsets[1:], strict=True))
 
     def _content(self) -> Json:
-        return {key: value for key, value in asdict(self).items() if key != "table_hash"}
+        # Hash the validated immutable columns using the original canonical fields.
+        return {
+            "action_contract": asdict(self.action_contract),
+            "purpose": self.purpose,
+            "synthetic_capacity": self.synthetic_capacity,
+            "frame_hash": self.frame_hash,
+            "kinds": self.kinds,
+            "targets": self.targets,
+            "numerics": self.numerics,
+            "presence": self.presence,
+            "offsets": self.offsets,
+            "slots": self.slots,
+        }
 
     @classmethod
     def from_actions(cls, frame: DecisionFrame, actions: tuple[Json, ...] | list[Json],
@@ -694,11 +706,18 @@ class _ActionContext:
         # frames, and never exposed as mutable policy/global cache state.
         raw = frame.raw
         own = raw["observation"]["own"]
-        references = (tuple(card["card_ref"] for card in own["cards"]) if is_card_instance_layout(frame.layout) else tuple([{"source": "hand_artifact", "instance_id": card["instance_id"]}
-                            for card in own["hand"]]
-                           + [{"source": "learned_miracle", "definition_id": name}
-                              for name in own["learned_miracles"]]))
-        return cls(frame.actor, references, frozenset(canonical(ref) for ref in references),
+        references: tuple[Any, ...]
+        if is_card_instance_layout(frame.layout):
+            # The frame already checked that CardInstance references are opaque strings.
+            references = tuple(card["card_ref"] for card in own["cards"])
+            owned = frozenset(references)
+        else:
+            references = tuple(
+                [{"source": "hand_artifact", "instance_id": card["instance_id"]} for card in own["hand"]]
+                + [{"source": "learned_miracle", "definition_id": name} for name in own["learned_miracles"]]
+            )
+            owned = frozenset(canonical(ref) for ref in references)
+        return cls(frame.actor, references, owned,
                    {item["type"]: item for item in raw["typed_metadata"]}, frame.layout)
 
 
@@ -708,16 +727,17 @@ def _validate_action_context(action: Json, context: _ActionContext, *, synthetic
         raise ContractError("action kind not in typed metadata")
     desc = descriptors[action["type"]]
     closed(action, {"type"} | set(desc["required_fields"]), set(desc["optional_fields"]))
-    if is_card_instance_layout(context.layout):
+    card_instance = is_card_instance_layout(context.layout)
+    if card_instance:
         if synthetic:
             card_v2.dataset_action(action, action_schema_version="2")
         else:
-            card_v2.validate_action(action)
+            card_v2.check_action(action)
     for field_name in ("ordered_elements", "ordered_defenses", "instance_ids"):
         if field_name in action and not isinstance(action[field_name], list):
             raise ContractError("ordered action array required")
     for ref in _action_refs(action, context.layout):
-        if canonical(ref) not in context.owned:
+        if (ref if card_instance else canonical(ref)) not in context.owned:
             raise ContractError("action reference not owned")
     if "target" in action and action["target"] is not None:
         integer(action["target"], 1, 2)

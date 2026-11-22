@@ -394,6 +394,26 @@ def test_corrected_flash_response_and_unpaid_costcut_paths(flash):
 
 
 @pytest.mark.parametrize("layout", [OLD, NEW])
+@pytest.mark.parametrize("synthetic", [False, True])
+def test_candidate_hash_uses_immutable_columns_with_original_canonical_bytes(layout, synthetic):
+    frame, _, _ = records(layout=layout)
+    table = CandidateTable.from_actions(
+        frame,
+        [{"type": "play_sequence", "ordered_card_refs": list(frame.references), "target": 2}],
+        action_contract=layout.action_contract,
+        purpose="component",
+        synthetic_capacity=synthetic,
+    )
+    original = asdict(table)
+    assert original.pop("table_hash") == table.table_hash
+    content = table._content()
+    assert canonical(content) == canonical(original)
+    assert digest(content) == table.table_hash
+    for column in ("kinds", "targets", "numerics", "presence", "offsets", "slots"):
+        assert content[column] is getattr(table, column)
+
+
+@pytest.mark.parametrize("layout", [OLD, NEW])
 def test_both_profiles_reject_old_codec_numeric_and_submit_ready_synthetic(
     layout, tmp_path, monkeypatch
 ):
