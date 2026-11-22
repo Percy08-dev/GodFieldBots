@@ -57,7 +57,10 @@ and limitations in [the verification record](verification/rust-player-runtime.md
 
 [ADR0060](adr/0060-rust-player-journal-handoff.md) records the shared match pump's
 continuous Journal handoff and full-cohort admission when all games fit the
-configured concurrency limit.
+configured concurrency limit. The writer validates the complete candidate table
+against the acting participant's frame before acknowledgement. The
+[CPU verification record](verification/journal-writer-cpu.md) covers the
+canonical candidate-hash and Action validation copy reductions.
 
 [ADR0055](adr/0055-owned-rust-model3-parity-validation.md) keeps frozen-output
 parity as an explicit validation for ordinary Rust Model3. Its live update
