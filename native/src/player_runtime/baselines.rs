@@ -36,6 +36,7 @@ pub fn heuristic(input: &Input, config: &Config, rows: &[Proposal]) -> Result<us
                     config.max_sequence_length,
                     &input.usable,
                     input.context,
+                    config.requires_powder_weapon,
                 );
                 ensure(
                     a.complete,
@@ -112,6 +113,7 @@ fn facts(input: &Input, config: &Config, rows: &[Proposal]) -> Result<Vec<Fact>>
                     config.max_sequence_length,
                     &input.usable,
                     Incoming::Unknown,
+                    config.requires_powder_weapon,
                 );
                 ensure(
                     a.complete,

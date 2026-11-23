@@ -27,11 +27,9 @@ from gf_cli.config import (
     load_config,
 )
 from gf_common.card_instance import (
-    CORRECTED_SIMULATOR_REVISION,
-    SHARED_SIMULATOR_REVISION,
     ActionConfigV3,
     is_corrected_contract,
-    shared_card_instance_contract,
+    is_shared_contract,
 )
 from gf_common.domain import ContractError, Json, canonical, clone, closed, digest, integer
 from gf_common.hpo_resident import resident_runtime
@@ -657,10 +655,10 @@ def campaign_config(value: Json, *, origin: Path, _pinned_base: LoadedConfig | N
             or not is_corrected_contract(base.config.actions.action_contract)
             or type(base.config.model) is not ConfiguredNeuralModelV3
             or base.config.model.model_id != model.model_id
-            or base.config.server.simulator_revision not in (CORRECTED_SIMULATOR_REVISION,SHARED_SIMULATOR_REVISION)
+            or base.config.server.simulator_revision != base.config.actions.action_contract.simulator_revision
             or base.config.run.split != "train"):
         raise ContractError("HPO requires a matching corrected model3 training experiment base")
-    if (shared or rust_player) and (base.config.actions.action_contract != shared_card_instance_contract() or model.model_id != "mlp" or base.config.preprocessing.backend != "python"):
+    if (shared or rust_player) and (not is_shared_contract(base.config.actions.action_contract) or model.model_id != "mlp" or base.config.preprocessing.backend != "python"):
         raise ContractError("shared HPO requires new-profile Python MLP base")
     if rust_player:
         opponent = base.config.opponent

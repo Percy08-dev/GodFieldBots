@@ -133,3 +133,43 @@ def test_shared_storage_discovery_still_refuses_standalone_serving_commands():
             require_storage_command(loaded.config,command)
     for command in ('train','validate'):require_storage_command(loaded.config,command)
     require_storage_command(loaded.config,'collect',standalone=False)
+
+
+def test_strength_powder_profile_pins_release_and_rule_identity():
+    from gf_common.card_instance_rules import card_instance_rules, rule_signature
+    from gf_common.card_instance_runtime import approved_runtime_build, validate_runtime_receipt
+
+    historical = card_instance.shared_card_instance_contract()
+    corrected = card_instance.strength_powder_card_instance_contract()
+    rules = card_instance_rules()
+    assert rule_signature(historical, rules) != rule_signature(corrected, rules)
+    build = approved_runtime_build(corrected)
+    assert digest(build["spec_files"]) == corrected.spec_inventory_sha256
+    assert digest(build["change_files"]) == build["change_inventory_sha256"]
+    identity = [1, 2, 3, 4, 5]
+    receipt = {
+        "schema_version": 2,
+        "action_contract": asdict(corrected),
+        "build": build,
+        "binary": {
+            "path": "/test/runtime", "sha256": build["binary_sha256"], "identity": identity,
+        },
+        "source": {
+            "path": "/test/source", "revision": corrected.simulator_revision, "dirty": False,
+            "spec_files": build["spec_files"], "change_files": build["change_files"],
+        },
+        "executed": {
+            "pid": 123, "start_time": 1, "sha256": build["binary_sha256"], "identity": identity,
+        },
+    }
+    assert validate_runtime_receipt(receipt, require_executed=True) == receipt
+    old_build = approved_runtime_build(historical)
+    for invalid in (
+        receipt | {"build": old_build},
+        receipt | {"binary": receipt["binary"] | {"sha256": old_build["binary_sha256"]}},
+        receipt | {"source": receipt["source"] | {"dirty": True}},
+        receipt | {"source": receipt["source"] | {"revision": historical.simulator_revision}},
+        receipt | {"action_contract": asdict(historical)},
+    ):
+        with pytest.raises(ContractError):
+            validate_runtime_receipt(invalid, require_executed=True)

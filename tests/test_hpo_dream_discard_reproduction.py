@@ -13,7 +13,6 @@ from random import Random
 
 import pytest
 
-from gf_cli.config import load_config
 from gf_common.card_instance import ActionConfigV3, shared_card_instance_contract
 from gf_common.card_instance_rules import card_instance_rules
 from gf_common.card_instance_validation import decision_input
@@ -39,8 +38,7 @@ def _assert_native_search_admits_discard(
     bank.append(event_delta(actor, bank.episode, 0, bank.boundary.prefix_hash,
                             value.events, layout=LAYOUT))
     frame = DecisionFrame.from_input(value, bank, 0, layout=LAYOUT)
-    actions = load_config(_ROOT / "configs/experiments/hpo-rust-mlp-256-base.toml").config.actions
-    assert isinstance(actions, ActionConfigV3)
+    actions = ActionConfigV3(action_contract=shared_card_instance_contract())
     rules = card_instance_rules()
     request = {
         "frame": frame_dict(frame, layout=LAYOUT),

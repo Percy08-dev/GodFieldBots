@@ -10,9 +10,9 @@ from gf_common.card_instance import (
     CORRECTED_REVIEWED_SPEC_HASHES,
     CardInstanceContract,
     is_corrected_contract,
+    is_shared_contract,
     parse_card_instance_contract,
     reviewed_specs,
-    shared_card_instance_contract,
 )
 from gf_common.domain import ContractError, Json, closed, digest, integer
 
@@ -33,12 +33,54 @@ APPROVED_CHANGE_FILES = MappingProxyType(
         "docs/spec/godfield_rule_verification_register.md": "d892bafb621be33dc24455af2ab07d173f1127736e78da3e86a72134520084da",
     }
 )
+STRENGTH_POWDER_BINARY_SHA256 = "45ac711b2f172dfd89c23edf30ba0045ab0704c0215a6995d4e8626af1cfb923"
+STRENGTH_POWDER_CHANGE_SHA256 = "fca9be8a30ae4969047f1136211acba2ee427a0f15df35aa8212f17afa36bf81"
+STRENGTH_POWDER_CHANGE_FILES = MappingProxyType(
+    {
+        "docs/spec/09-gameplay-rules.md":
+            "b6cf7e55c078df3eb893312e30215e58127117792ebce1cc0ce250b51fcbaefa",
+        "src/engine/catalog/mod.rs":
+            "8f61cc4d4719d82c33ecc5aed90337eeb8e416b6c88787e5f69dea90d2f33977",
+        "src/engine/resolution/choice.rs":
+            "4636ba93454bb54d115a39239d59198b9ece27c671f92339e76b64fb3831ddc7",
+        "src/engine/resolution/tests.rs":
+            "0e86413e5678292b1237d0e542179f18a6013b88e634ef3245ab6f98109515ed",
+        "tests/fixtures/full_game_policy_rng_baseline.txt":
+            "270d4f8495c8869f38f48fadb5bf61636d04ba275aa90d011a475810ddb6c4e6",
+        "tests/fixtures/full_game_v2_baseline.txt":
+            "c205750ea1c6cf934429592087294f1881ea99f0bb241b1f582be30c4af2c04b",
+    }
+)
 
 
 def require_corrected_contract(contract: CardInstanceContract) -> None:
     if type(contract) is not CardInstanceContract or not is_corrected_contract(contract):
         raise ContractError("corrected runtime requires the exact approved contract")
 
+
+def approved_binary_sha256(contract: CardInstanceContract) -> str:
+    require_corrected_contract(contract)
+    if contract.requires_powder_weapon:
+        return STRENGTH_POWDER_BINARY_SHA256
+    if is_shared_contract(contract):
+        return SHARED_APPROVED_BINARY_SHA256
+    return APPROVED_BINARY_SHA256
+
+
+def approved_runtime_build(contract: CardInstanceContract) -> Json:
+    binary_sha256 = approved_binary_sha256(contract)
+    change_hash, change_files = (
+        (STRENGTH_POWDER_CHANGE_SHA256, STRENGTH_POWDER_CHANGE_FILES)
+        if contract.requires_powder_weapon
+        else (APPROVED_CHANGE_SHA256, APPROVED_CHANGE_FILES)
+    )
+    return {
+        "binary_sha256": binary_sha256,
+        "spec_inventory_sha256": contract.spec_inventory_sha256,
+        "change_inventory_sha256": change_hash,
+        "spec_files": reviewed_specs(contract),
+        "change_files": dict(change_files),
+    }
 
 def game_binding(contract: CardInstanceContract, rules_signature: str) -> Json:
     from gf_common.card_instance_rules import card_instance_rules, rule_signature
@@ -73,7 +115,12 @@ def _identity(raw: Any) -> None:
         integer(number, 0)
 
 
-def validate_runtime_receipt(raw: Json, *, require_executed: bool = False) -> Json:
+def validate_runtime_receipt(
+    raw: Json,
+    *,
+    require_executed: bool = False,
+    expected_contract: CardInstanceContract | None = None,
+) -> Json:
     """Validate representation/pins only; only the live owner can attest reads."""
     from gf_common.domain import clone
 
@@ -81,30 +128,15 @@ def validate_runtime_receipt(raw: Json, *, require_executed: bool = False) -> Js
     if type(raw["schema_version"]) is not int or raw["schema_version"] not in (1,2):
         raise ContractError("runtime receipt schema required")
     contract = parse_card_instance_contract(raw["action_contract"])
-    require_corrected_contract(contract)
-    shared = contract == shared_card_instance_contract()
+    if expected_contract is not None and contract != expected_contract:
+        raise ContractError("runtime receipt action contract mismatch")
+    shared = is_shared_contract(contract)
     if raw["schema_version"] != (2 if shared else 1):
         raise ContractError("runtime receipt/profile version mismatch")
-    binary_sha = SHARED_APPROVED_BINARY_SHA256 if shared else APPROVED_BINARY_SHA256
-    spec_files = reviewed_specs(contract)
-    build = closed(
-        raw["build"],
-        {
-            "binary_sha256",
-            "spec_inventory_sha256",
-            "change_inventory_sha256",
-            "spec_files",
-            "change_files",
-        },
-    )
-    if (
-        build["binary_sha256"] != binary_sha
-        or build["spec_inventory_sha256"] != contract.spec_inventory_sha256
-        or build["change_inventory_sha256"] != APPROVED_CHANGE_SHA256
-        or build["spec_files"] != spec_files
-        or build["change_files"] != dict(APPROVED_CHANGE_FILES)
-    ):
+    build = approved_runtime_build(contract)
+    if closed(raw["build"], set(build)) != build:
         raise ContractError("unapproved runtime release tuple/file inventory")
+    binary_sha = build["binary_sha256"]
     binary = closed(raw["binary"], {"path", "sha256", "identity"})
     source = closed(raw["source"], {"path", "revision", "spec_files", "change_files"} | ({"dirty"} if shared else set()))
     if shared and source["dirty"] is not False:
@@ -112,8 +144,8 @@ def validate_runtime_receipt(raw: Json, *, require_executed: bool = False) -> Js
     if (
         binary["sha256"] != binary_sha
         or source["revision"] != contract.simulator_revision
-        or source["spec_files"] != spec_files
-        or source["change_files"] != dict(APPROVED_CHANGE_FILES)
+        or source["spec_files"] != build["spec_files"]
+        or source["change_files"] != build["change_files"]
     ):
         raise ContractError("runtime actual code/source differs from approved release")
     for path in (binary["path"], source["path"]):

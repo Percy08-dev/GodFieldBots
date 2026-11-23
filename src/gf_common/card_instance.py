@@ -14,6 +14,9 @@ CORRECTED_SIMULATOR_REVISION = "91d5926a7572db327eaea3751e7c24f428120996"
 SHARED_SIMULATOR_REVISION = "072dabbca1458c9526897781d2fd64edeeb4f9ca"
 SHARED_SPEC_INVENTORY_HASH = "da4bde0ce82d91dc10c4a8a7f012c1cb95b0079113344453b956f638fb1d39d4"
 CORRECTED_SPEC_INVENTORY_HASH = "131890dfe579bc6951f5189e460971d33658339106e219a2e00b1a289a0534d0"
+STRENGTH_POWDER_PROFILE = "card-instance-simulator-v2-shared-20261123"
+STRENGTH_POWDER_SIMULATOR_REVISION = "3172da407e37a4ad57ac82e70a96910c3ac6fbb8"
+STRENGTH_POWDER_SPEC_INVENTORY_HASH = "6403eef771b64c34e78eb653c2baefe65ceca5308051b506a7092151e9316c59"
 RULE_SET = "true-match-1v1-v2"
 CATALOG_HASH = "f51a3c73feb8b3f01837e65768aafb5a3aa805a33483308130244b33b16a8ad6"
 SPEC_INVENTORY_HASH = "8381079eae8a68378d8419c7f7245c62358833f0dd9045667021e112a1e9bad5"
@@ -51,6 +54,10 @@ class CardInstanceContract:
             if type(value) is not type(pin) or value != pin:
                 raise ContractError("unknown card-instance contract pin")
 
+    @property
+    def requires_powder_weapon(self) -> bool:
+        return self.profile_id == STRENGTH_POWDER_PROFILE
+
 
 _CONTRACT_FIELD_NAMES = tuple(CardInstanceContract.__dataclass_fields__)
 _ORIGINAL_PIN: tuple[Any, ...] = tuple(
@@ -70,11 +77,20 @@ _SHARED_PIN: tuple[Any, ...] = tuple(
      "spec_inventory_sha256": SHARED_SPEC_INVENTORY_HASH}.get(name, default)
     for name, default in zip(_CONTRACT_FIELD_NAMES, _CORRECTED_PIN, strict=True)
 )
+_STRENGTH_POWDER_PIN: tuple[Any, ...] = tuple(
+    {
+        "profile_id": STRENGTH_POWDER_PROFILE,
+        "simulator_revision": STRENGTH_POWDER_SIMULATOR_REVISION,
+        "spec_inventory_sha256": STRENGTH_POWDER_SPEC_INVENTORY_HASH,
+    }.get(name, default)
+    for name, default in zip(_CONTRACT_FIELD_NAMES, _SHARED_PIN, strict=True)
+)
 _CONTRACT_PINS = MappingProxyType(
     {
         "card-instance-simulator-v2-20261103": _ORIGINAL_PIN,
         "card-instance-simulator-v2-20261104": _CORRECTED_PIN,
         "card-instance-simulator-v2-shared-20261118": _SHARED_PIN,
+        STRENGTH_POWDER_PROFILE: _STRENGTH_POWDER_PIN,
     }
 )
 
@@ -91,17 +107,37 @@ def shared_card_instance_contract() -> CardInstanceContract:
     return CardInstanceContract(**dict(zip(_CONTRACT_FIELD_NAMES, _SHARED_PIN, strict=True)))
 
 
+def strength_powder_card_instance_contract() -> CardInstanceContract:
+    return CardInstanceContract(**dict(zip(_CONTRACT_FIELD_NAMES, _STRENGTH_POWDER_PIN, strict=True)))
+
+
+def is_shared_contract(contract: object) -> bool:
+    return type(contract) is CardInstanceContract and contract.profile_id in (
+        "card-instance-simulator-v2-shared-20261118",
+        STRENGTH_POWDER_PROFILE,
+    )
+
+
 def is_corrected_contract(contract: object) -> bool:
-    return type(contract) is CardInstanceContract and contract in (
-        corrected_card_instance_contract(), shared_card_instance_contract())
+    return type(contract) is CardInstanceContract and (
+        contract.profile_id == "card-instance-simulator-v2-20261104"
+        or is_shared_contract(contract)
+    )
 
 
 def reviewed_specs(contract: CardInstanceContract) -> dict[str, str]:
     parse_card_instance_contract(asdict(contract))
-    if contract == shared_card_instance_contract():
-        return {**CORRECTED_REVIEWED_SPEC_HASHES,
+    if is_shared_contract(contract):
+        specs = {
+            **CORRECTED_REVIEWED_SPEC_HASHES,
             "docs/spec/07-external-interfaces-adapters.md":
-                "8e5223b45a6e8c4c80e272736ed97b9e271136c939eca74427a035ddfdbfcac2"}
+                "8e5223b45a6e8c4c80e272736ed97b9e271136c939eca74427a035ddfdbfcac2",
+        }
+        if contract.requires_powder_weapon:
+            specs["docs/spec/09-gameplay-rules.md"] = (
+                "b6cf7e55c078df3eb893312e30215e58127117792ebce1cc0ce250b51fcbaefa"
+            )
+        return specs
     return dict(CORRECTED_REVIEWED_SPEC_HASHES if is_corrected_contract(contract) else REVIEWED_SPEC_HASHES)
 
 

@@ -296,7 +296,9 @@ def _inspect_game_manifest(owner: Any, manifest: Json, actions: ActionConfigV3,
     if set(neural['policies']) != expected_neural:
         raise ContractError('extra/missing original neural registry metadata')
     for group, receipt in zip(manifest['groups'], manifest['runtime_evidence'], strict=True):
-        validate_runtime_receipt(receipt, require_executed=True)
+        validate_runtime_receipt(
+            receipt, require_executed=True, expected_contract=actions.action_contract
+        )
         if group.get('runtime_evidence_failure') or canonical(group.get('runtime_evidence')) != canonical(receipt):
             raise ContractError('original group/runtime evidence mismatch')
     for _, spec in specs:

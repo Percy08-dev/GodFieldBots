@@ -56,6 +56,18 @@ def test_extracted_default_manifest_matches_old16_outputs_and_owned_snapshots_ex
     assert result.proof['games'] == 16 and len(result.episodes) == 32
 
 
+def test_cold_source_requires_receipt_contract_matching_collection(tmp_path):
+    from tests.test_card_instance_baseline_runtime import strength_powder_runtime_receipt
+
+    directory = tmp_path / 'UNADMITTED-batch-originals'
+    loaded, manifest, _ = baseline_originals(directory, role=PPO_BATCH)
+    foreign = strength_powder_runtime_receipt()
+    manifest['runtime_evidence'][0] = foreign
+    manifest['groups'][0]['runtime_evidence'] = foreign
+    with pytest.raises(ContractError, match="runtime receipt action contract mismatch"):
+        inspect_game_manifest(source_owner(directory, loaded), manifest, loaded.config.actions, 'train')
+
+
 @pytest.mark.parametrize('mutation', ['role', 'linkage7', 'extra-link', 'generation', 'split', 'cohort', 'seat', 'runtime', 'report', 'replay', 'header', 'inventory', 'projection', 'invocation'])
 def test_final64_raw_corruption_refuses_without_promoting_baseline_fixture(tmp_path, mutation):
     directory = tmp_path / 'UNADMITTED-baseline-originals'

@@ -179,7 +179,10 @@ class _Context:
             raise ContractError("journal6 closed semantic/config identity mismatch")
         if digest({key: header[key] for key in self.binding}) != digest(self.binding):
             raise ContractError("journal6 binding mismatch")
-        validate_runtime_receipt(header["runtime_evidence"], require_executed=True)
+        validate_runtime_receipt(
+            header["runtime_evidence"], require_executed=True,
+            expected_contract=self.actions.action_contract,
+        )
         caps = WorkerCaps(**closed(header["caps"], set(WorkerCaps.__dataclass_fields__)))
         if (
             caps.max_positions != self.actions.max_sequence_length

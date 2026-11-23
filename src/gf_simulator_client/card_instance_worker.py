@@ -78,8 +78,8 @@ class CardInstanceParticipantWorker(StructuredParticipantWorker):
             start_ns=time.monotonic_ns(), counters=("inference_successes",),
             histograms=("inference_roundtrip",)) if self._performance is not None else None)
         self.rules = card_instance_rules()
-        from gf_common.card_instance import shared_card_instance_contract
-        self._profile_io=actions.action_contract==shared_card_instance_contract()
+        from gf_common.card_instance import is_shared_contract
+        self._profile_io=is_shared_contract(actions.action_contract)
         self.binding = game_binding(
             actions.action_contract, rule_signature(actions.action_contract, self.rules)
         )

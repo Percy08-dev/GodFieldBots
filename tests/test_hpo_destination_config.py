@@ -16,6 +16,7 @@ from tests.test_rust_player_config import BASE, ROOT, RUN_ID
 PROBE = ROOT / 'configs/hpo/mlp-256-update-budget-probe.toml'
 TEMPLATE = PROBE.with_name('mlp-256-update-budget-probe-template.toml')
 PROBE_ROOT = Path('/mnt/gf_data/ppo-hpo/mlp-256-probe')
+TEMPLATE_ROOT = Path('/mnt/gf_data/ppo-hpo/strength-powder')
 
 
 def _write_legacy_campaign(path: Path, *, parents: Path) -> Path:
@@ -60,19 +61,20 @@ optuna_path = "study.sqlite3"
     return path
 
 
-@pytest.mark.parametrize('config_path', [PROBE, TEMPLATE], ids=['probe', 'template'])
-def test_probe_materializes_tmpfs_and_dedicated_hdd_storage(config_path):
+@pytest.mark.parametrize(('config_path', 'storage_root'), [(PROBE, PROBE_ROOT),
+    (TEMPLATE, TEMPLATE_ROOT)], ids=['probe', 'template'])
+def test_probe_materializes_tmpfs_and_dedicated_hdd_storage(config_path, storage_root):
     loaded = hpo_config.load_hpo_config(config_path)
     storage = loaded.config.storage
-    parent = str(PROBE_ROOT / 'parents')
-    originals = str(PROBE_ROOT / 'originals')
+    parent = str(storage_root / 'parents')
+    originals = str(storage_root / 'originals')
     assert storage.parent_root == storage.numeric_root == parent
     assert storage.originals_root == originals
-    assert storage.optuna_path == str(PROBE_ROOT / 'study.sqlite3')
-    assert hpo.campaign_directory(loaded, PROBE_ROOT / 'parents' / 'campaign') == PROBE_ROOT / 'parents' / 'campaign'
+    assert storage.optuna_path == str(storage_root / 'study.sqlite3')
+    assert hpo.campaign_directory(loaded, storage_root / 'parents' / 'campaign') == storage_root / 'parents' / 'campaign'
     assert asdict(storage.hpo_diagnostics) == {
         'http_log_ram_root': '/dev/shm/godfieldbots/http-logs',
-        'http_log_archive_root': str(PROBE_ROOT / 'http-logs'),
+        'http_log_archive_root': str(storage_root / 'http-logs'),
         'http_log_retention': 'errors',
         'http_log_compression': 'zstd',
         'update_compression': 'zstd',
@@ -93,7 +95,7 @@ def test_template_copy_validates_without_storage_writes(tmp_path, capsys):
     (config_dir / 'experiments').symlink_to(ROOT / 'configs/experiments', target_is_directory=True)
     config_path.write_bytes(TEMPLATE.read_bytes())
     loaded = hpo_config.load_hpo_config(config_path)
-    parent = PROBE_ROOT / 'parents'
+    parent = TEMPLATE_ROOT / 'parents'
     assert loaded.config.storage.parent_root == loaded.config.storage.numeric_root == str(parent)
     assert hpo.campaign_directory(loaded, None) == parent / 'campaign'
     assert hpo.campaign_directory(loaded, parent / 'campaign') == parent / 'campaign'

@@ -1129,6 +1129,14 @@ invalid attempts 3, shutdown 30s, idle 0. Future model settings follow user plan
 
 ## Policy and search
 
+[ADR0066](adr/0066-strength-powder-simulator-contract.md) binds the Strength
+Powder correction to a new shared Action profile and therefore a new
+`rule_signature`. Python and Rust complete an offense containing visible
+Strength Powder only when an effective visible card is classified as a weapon.
+CostCut binding precedes that check, and the search can extend a powder prefix
+with an additional weapon. The Simulator owns actual identity, legality and
+Dream draws. Historical shared runs retain their recorded rules.
+
 [ADR0039](adr/0039-refresh-heuristic-and-mixed-opponents.md) accepts the separately
 selectable corrected-v2 refresh heuristic and opt-in mixed16 ordinary/HPO training
 opponents. [The design](design/heuristic-refresh.md) keeps participant-local

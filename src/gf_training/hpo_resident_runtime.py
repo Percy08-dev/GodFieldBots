@@ -19,6 +19,7 @@ from gf_training.hpo_retention import pin_hpo_cache, release_hpo_cache
 class ResidentTrainingRuntime:
     """Never outlives the SAME actual job, original parent lock or invocation."""
     def __init__(self, job: Any, ownership: Any, config: Any, state: Json, *, deadline: float, cleanup_deadline: float | None = None, owned_registry: Any = None, owned_cuda: bool = False) -> None:
+        from gf_common.card_instance import is_shared_contract
         from gf_common.structured_layout import CORRECTED_CARD_INSTANCE_LAYOUT as layout
         from gf_models.structured_runtime import hpo_resident_training_admission
         from gf_training.hpo_lineage import require_hpo_run_owner
@@ -42,7 +43,7 @@ class ResidentTrainingRuntime:
             deadline=self.deadline, acquire_cache=self.acquire_cache, release_cache=self.release_cache,
             owned_snapshots=owned_registry is not None,
             begin_import_bytes=0 if self.shared else envelope['begin_staging_bytes']//envelope['workers'],shared=self.shared,
-            profile_io=config.actions.action_contract.simulator_revision=='072dabbca1458c9526897781d2fd64edeeb4f9ca')
+            profile_io=is_shared_contract(config.actions.action_contract))
         self.pool.execution_deadline = deadline
         self.entries: dict[int, OrderedDict[str, tuple[int, Any]]] = {}
         self.pins: dict[str,tuple[Any,Any]] = {}

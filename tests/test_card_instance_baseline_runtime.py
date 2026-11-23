@@ -26,6 +26,7 @@ from gf_common.card_instance import (
     ActionConfigV3,
     card_instance_contract,
     corrected_card_instance_contract,
+    strength_powder_card_instance_contract,
 )
 from gf_common.card_instance_rules import card_instance_rules
 from gf_common.card_instance_runtime import (
@@ -33,6 +34,7 @@ from gf_common.card_instance_runtime import (
     APPROVED_CHANGE_FILES,
     APPROVED_CHANGE_SHA256,
     APPROVED_SPEC_FILES,
+    approved_runtime_build,
     validate_runtime_receipt,
 )
 from gf_common.card_instance_validation import decision_input, reconcile_replay, replay_closure
@@ -99,6 +101,21 @@ def receipt():
             "identity": [1, 2, 3, 4, 5],
         },
     }
+
+
+def strength_powder_runtime_receipt():
+    contract = strength_powder_card_instance_contract()
+    build = approved_runtime_build(contract)
+    value = receipt()
+    value.update(schema_version=2, action_contract=asdict(contract), build=build)
+    value["binary"]["sha256"] = build["binary_sha256"]
+    value["executed"]["sha256"] = build["binary_sha256"]
+    value["source"].update(
+        revision=contract.simulator_revision, dirty=False,
+        spec_files=build["spec_files"], change_files=build["change_files"],
+    )
+    assert validate_runtime_receipt(value, require_executed=True) == value
+    return value
 
 
 def game(value=None, seed=17):
@@ -251,6 +268,19 @@ def test_journal6_rejects_preceding_layout_header_before_bank_allocation(tmp_pat
     monkeypatch.setattr(journals, "EventBank",
         lambda *args, **kwargs: pytest.fail("stale journal reached bank allocation"))
     with pytest.raises(ContractError):
+        journals._Context(ACTIONS, RULES).validate_header(header)
+
+
+def test_journal6_rejects_valid_receipt_from_different_action_contract(tmp_path, monkeypatch):
+    import gf_training.card_instance_journal as journals
+
+    journal, *_ = writer(tmp_path)
+    journal.finish("incomplete", None)
+    header = copy.deepcopy(journal.header)
+    header["runtime_evidence"] = strength_powder_runtime_receipt()
+    monkeypatch.setattr(journals, "EventBank",
+        lambda *args, **kwargs: pytest.fail("foreign runtime reached bank allocation"))
+    with pytest.raises(ContractError, match="runtime receipt action contract mismatch"):
         journals._Context(ACTIONS, RULES).validate_header(header)
 
 
@@ -724,7 +754,7 @@ def test_runtime_binary_mismatch_precedes_environment_output_or_popen(tmp_path, 
     bad = tmp_path / "bad-binary"
     bad.write_bytes(b"not-approved")
     owner = CardInstanceRuntimeEvidence(bad, tmp_path)
-    monkeypatch.setattr(owner, "_source", lambda: receipt()["source"])
+    monkeypatch.setattr(owner, "_source", lambda _build: receipt()["source"])
     monkeypatch.setattr(
         subprocess, "Popen", lambda *a, **kw: pytest.fail("mismatch reached process allocation")
     )
@@ -745,7 +775,7 @@ def test_runtime_closed_approval_maps_and_source_recheck(monkeypatch, tmp_path):
     monkeypatch.setattr(
         module, "_read_hash", lambda path, deadline: (APPROVED_BINARY_SHA256, [1, 2, 3, 4, 5])
     )
-    monkeypatch.setattr(owner, "_source", lambda: expected["source"])
+    monkeypatch.setattr(owner, "_source", lambda _build: expected["source"])
     assert owner.preflight()["executed"] is None
     owner._receipt["executed"] = expected["executed"]
     assert owner.recheck()["executed"] == expected["executed"]

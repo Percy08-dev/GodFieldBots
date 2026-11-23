@@ -8,7 +8,11 @@ from pathlib import Path
 import gf_native
 import pytest
 
-from gf_common.card_instance import ActionConfigV3, shared_card_instance_contract
+from gf_common.card_instance import (
+    ActionConfigV3,
+    shared_card_instance_contract,
+    strength_powder_card_instance_contract,
+)
 from gf_common.card_instance_rules import card_instance_rules
 from gf_common.diverse_actions import NumericCosts, PublicCandidateGeneratorV3
 from gf_common.domain import ContractError, EmptyCandidates, digest
@@ -139,9 +143,12 @@ def own_frame(value, *, episode="native-differential"):
     return DecisionFrame.from_input(value, bank, 0, layout=LAYOUT), bank
 
 
-def differential(value, *, seed=17, costs=None, clock=None, **settings):
+def differential(value, *, seed=17, costs=None, clock=None, contract=None, **settings):
     frame, bank = own_frame(value)
-    config = ActionConfigV3(action_contract=shared_card_instance_contract(), **settings)
+    config = ActionConfigV3(
+        action_contract=shared_card_instance_contract() if contract is None else contract,
+        **settings,
+    )
     costs = costs or NumericCosts()
     py_rng = random.Random(seed)
     clock = clock or TraceClock()
@@ -719,3 +726,39 @@ def test_baseline_capacity_is18_while_generator_capacity_remains128(maximum, kin
             make_policy()
         with pytest.raises(ValueError, match="corrected baseline kind/game capacity required"):
             invoke("player_select_v5", payload)
+
+
+@pytest.mark.parametrize(
+    "spec,powder_attacks",
+    [
+        ([("strength-powder", None)], set()),
+        ([("strength-powder", None)] * 2, set()),
+        ([("strength-powder", None), ("fireball", "unused")], set()),
+        ([("strength-powder", None), ("fireball", "learned")], set()),
+        ([("strength-powder", None), ("fireball", "learned"), ("spiritual-staff", None)],
+         {(2, 0), (2, 0, 1), (2, 1, 0)}),
+        ([("strength-powder", None), ("ogre-s-armor", None)], set()),
+        ([("strength-powder", None), ("bronze-club", None)], {(1, 0)}),
+        ([("strength-powder", None), ("wand-of-mystic-water", None)], {(0, 1), (1, 0)}),
+    ],
+)
+def test_strength_powder_public_candidates(spec, powder_attacks):
+    value = inputs(spec, can_pray=True)
+    value.observation["own"]["status"]["dream"] = True
+    native = differential(value, contract=strength_powder_card_instance_contract())
+    assert native is not None
+    table = native["generated"]["table"]
+    attacks = set()
+    for index, kind in enumerate(table["kinds"]):
+        slots = tuple(table["slots"][table["offsets"][index]:table["offsets"][index + 1]])
+        if kind == "play_sequence" and any(spec[slot][0] == "strength-powder" for slot in slots):
+            attacks.add(slots)
+        if kind == "discard":
+            assert all(spec[slot][0] != "wand-of-mystic-water" for slot in slots)
+    assert attacks == powder_attacks
+
+
+def test_historical_shared_strength_powder_remains_a_completed_singleton():
+    native = differential(inputs([("strength-powder", None)], can_pray=True))
+    assert native is not None
+    assert "play_sequence" in native["generated"]["table"]["kinds"]

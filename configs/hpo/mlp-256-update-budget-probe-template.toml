@@ -6,7 +6,7 @@ schema_version = 6
 kind = "ppo-hpo"
 origin = "producer-owned-v1"
 encoder = "canonical-rust"
-base_experiment = "../experiments/hpo-rust-mlp-256-base.toml"
+base_experiment = "../experiments/hpo-rust-mlp-strength-powder-base.toml"
 model_id = "mlp"
 stage = "mlp-256-update-budget-probe"
 trial_count = 1
@@ -173,21 +173,21 @@ numeric_budget_bytes = 1073741824
 save_budget_bytes = 1073741824
 parent_budget_bytes = 1073741824
 
-# 実験名を変える場合は stage と下記の mlp-256-probe を揃えて変えます。
+# 実験名を変える場合は stage と下記の strength-powder を揃えて変えます。
 # 絶対パスを推奨します。相対パスはこのTOMLのディレクトリが基準です。
 # 別のマウント先を使う場合は /mnt/gf_data を実際の専用ext4のマウント先へ変更します。
 [storage]
 # 学習親・モデル・再開状態・更新記録と数値データ。両方に同じext4のパスを指定します。
-parent_root = "/mnt/gf_data/ppo-hpo/mlp-256-probe/parents"
-numeric_root = "/mnt/gf_data/ppo-hpo/mlp-256-probe/parents"
+parent_root = "/mnt/gf_data/ppo-hpo/strength-powder/parents"
+numeric_root = "/mnt/gf_data/ppo-hpo/strength-powder/parents"
 # 任意。parent_root配下に置きます。省略したときは実行時に --campaign-dir を指定します。
 # 途中・最終評価の結果、キャンペーン管理情報、最良チェックポイントの索引を保存します。
-campaign_dir = "/mnt/gf_data/ppo-hpo/mlp-256-probe/parents/campaign"
+campaign_dir = "/mnt/gf_data/ppo-hpo/strength-powder/parents/campaign"
 # 試行履歴。SQLite用のext4パスを指定します。
-optuna_path = "/mnt/gf_data/ppo-hpo/mlp-256-probe/study.sqlite3"
+optuna_path = "/mnt/gf_data/ppo-hpo/strength-powder/study.sqlite3"
 # 学習の収集作業は基礎実験の collection_work_root に置きます。
 # Journal・Replay・候補列などを含む確定済み原本DBは専用ext4に保存します。
-originals_root = "/mnt/gf_data/ppo-hpo/mlp-256-probe/originals"
+originals_root = "/mnt/gf_data/ppo-hpo/strength-powder/originals"
 # 容量の単位はバイトです。現在値は100 GiB、開始時の予約は1 GiBです。
 destination_capacity_bytes = 107374182400
 admission_reservation_bytes = 1073741824
@@ -198,7 +198,7 @@ admission_reservation_bytes = 1073741824
 [storage.hpo_diagnostics]
 # 一時ログは書き込み可能なtmpfsへ、保持するログはext4へ保存します。
 http_log_ram_root = "/dev/shm/godfieldbots/http-logs"
-http_log_archive_root = "/mnt/gf_data/ppo-hpo/mlp-256-probe/http-logs"
+http_log_archive_root = "/mnt/gf_data/ppo-hpo/strength-powder/http-logs"
 # errors + zstd は異常ペアを圧縮保存、all + zstd は正常ペアも圧縮保存します。
 # errors + none は異常ペアの生JSONL、all + none は全ペアの生JSONLを保持します。
 http_log_retention = "errors"

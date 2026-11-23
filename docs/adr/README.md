@@ -14,6 +14,9 @@
 
 ## 一覧
 
+[0066](0066-strength-powder-simulator-contract.md) — ちからの粉の夢と
+武器併用条件を訂正したSimulatorを新しい共有Action契約で採用。
+
 [0065](0065-staged-native-collection-storage.md) — ネイティブPPO・HPO6の
 収集をtmpfsで行い、HDD上の専用ext4へ検証・同期してからSourceを発行する。
 

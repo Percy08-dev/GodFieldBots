@@ -151,6 +151,7 @@ pub fn analyze(
     maximum: usize,
     usable: &[bool],
     context: Incoming,
+    requires_powder_weapon: bool,
 ) -> Analysis {
     let empty = || Analysis {
         attribute: "neutral".into(),
@@ -183,6 +184,7 @@ pub fn analyze(
         .filter(|r| suppressed & (1 << r) == 0)
         .collect();
     let mut uncertain = false;
+    let (mut has_powder, mut has_weapon) = (false, false);
     match family {
         Family::Utility | Family::Status => {
             if effective.len() != 1 {
@@ -249,6 +251,10 @@ pub fn analyze(
             }
             for (i, &r) in effective.iter().enumerate() {
                 let c = &cards[r];
+                if requires_powder_weapon {
+                    has_powder |= c.id == "strength-powder";
+                    has_weapon |= c.kind == "weapons";
+                }
                 if c.miracle {
                     if !["weapon", "additional_weapon", "attack_support"]
                         .contains(&c.subclass.as_str())
@@ -351,7 +357,7 @@ pub fn analyze(
     effects.dedup();
     Analysis {
         viable: affordable || salvage,
-        complete: affordable && !uncertain,
+        complete: affordable && !uncertain && (!has_powder || has_weapon),
         payment,
         spent,
         attack: attack.saturating_mul(rounds),

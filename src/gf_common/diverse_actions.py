@@ -619,6 +619,7 @@ class _CardInstanceSpace:
         if frame.layout is not layout_for_contract(config.action_contract):
             raise ContractError("candidate configuration/frame contract mismatch")
         self.frame, self.config, self.rules = frame, config, rules
+        self.requires_powder_weapon = config.action_contract.requires_powder_weapon
         self.rule_signature = rule_signature(config.action_contract, rules)
         self.obs, self.raw = frame.observation, frame.raw
         self.context = defense_context(frame, bank_view)
@@ -667,7 +668,8 @@ class _CardInstanceSpace:
     def analysis(self, family: str, refs: tuple[int, ...]) -> SequenceAnalysis:
         return analyze_sequence(self.cards, refs, family=family, mp=self.obs["own"]["mp"],
             flash=self.obs["own"]["status"]["flash"], maximum=self.config.max_sequence_length, usable=self.usable,
-            rules=self.rules, context=self.context)
+            rules=self.rules, context=self.context,
+            requires_powder_weapon=self.requires_powder_weapon)
 
     def valid(self, family: str, refs: tuple[int, ...]) -> bool:
         if family == "discard":

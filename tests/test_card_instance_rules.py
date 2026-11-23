@@ -152,3 +152,22 @@ def test_response_numeric_ring_exclusive_costcut_and_physical_flash():
     ).viable
     assert facts([("wall", "learned")], family="defense", mp=50, flash=True).complete
     assert facts([("abyss-dart", None)] * 2, flash=True).complete  # Flash is response-specific.
+
+
+def test_strength_powder_completion_requires_effective_public_weapon():
+    powder = ("strength-powder", None)
+    bronze_club = ("bronze-club", None)
+    wand = ("wand-of-mystic-water", None)
+    fireball = ("fireball", "learned")
+    staff = ("spiritual-staff", None)
+    armor = ("ogre-s-armor", None)
+
+    assert facts([powder]).complete
+    for spec in ([powder], [powder, powder], [powder, fireball], [fireball, staff, powder],
+                 [armor, powder]):
+        result = facts(spec, requires_powder_weapon=True)
+        assert not result.complete
+    assert facts([powder], requires_powder_weapon=True).viable
+    for spec in ([bronze_club, powder], [wand, powder], [powder, wand]):
+        assert facts(spec, requires_powder_weapon=True).complete
+    assert not facts([powder, bronze_club], requires_powder_weapon=True).viable

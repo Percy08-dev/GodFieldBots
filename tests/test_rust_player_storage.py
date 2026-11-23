@@ -498,7 +498,9 @@ def hashlib_sha(view):
     return hashlib.sha256(view).hexdigest()
 
 
-@pytest.mark.parametrize("failure", ["duplicate", "sql", "publication", "command", "interval-prefix"])
+@pytest.mark.parametrize(
+    "failure", ["duplicate", "sql", "publication", "command", "interval-prefix", "mixed-profile"]
+)
 def test_actual_storage_failure_cancels_and_never_publishes_healthy_seal(
     tmp_path, monkeypatch, failure
 ):
@@ -556,16 +558,23 @@ def test_actual_storage_failure_cancels_and_never_publishes_healthy_seal(
             raise rejected.value
 
         monkeypatch.setattr(storage_module._Journal, "_begin_native_frame", wrong_prefix)
-    elif failure == "command":
+    elif failure in ("command", "mixed-profile"):
         decode = storage_module.decode_original
 
-        def wrong_action(bundle):
+        def wrong_pending(bundle):
             value = decode(bundle)
             if bundle.kind == "pending":
-                value["command"]["action"] = {"type": "invalid test action"}
+                if failure == "command":
+                    value["command"]["action"] = {"type": "invalid test action"}
+                else:
+                    from gf_common.card_instance import strength_powder_card_instance_contract
+
+                    value["generated"]["table"]["action_contract"] = asdict(
+                        strength_powder_card_instance_contract()
+                    )
             return value
 
-        monkeypatch.setattr(storage_module, "decode_original", wrong_action)
+        monkeypatch.setattr(storage_module, "decode_original", wrong_pending)
     elif failure == "sql":
 
         def fail_sql(*args, **kwargs):
@@ -612,11 +621,11 @@ def test_actual_storage_failure_cancels_and_never_publishes_healthy_seal(
             runtime.start([spec])
             while True:
                 bundle = runtime.next_storage(time.monotonic() + 10)
-                if failure in ("command", "interval-prefix") and bundle.kind == "pending":
+                if failure in ("command", "interval-prefix", "mixed-profile") and bundle.kind == "pending":
                     held = bundle.view()
                     with pytest.raises(RuntimeError, match="storage failed") as caught:
                         writer.accept(bundle)
-                    assert failure == "command" or prefix_rejected
+                    assert failure != "interval-prefix" or prefix_rejected
                     caught.value.__traceback__ = None  # caller's exception retained the original
                     del caught, bundle
                     break

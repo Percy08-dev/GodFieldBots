@@ -51,6 +51,22 @@ fn shared_card_instance_contract() -> &'static Value {
     &CONTRACT
 }
 
+fn strength_powder_card_instance_contract() -> &'static Value {
+    static CONTRACT: LazyLock<Value> = LazyLock::new(|| {
+        let mut contract = shared_card_instance_contract().clone();
+        contract["profile_id"] = json!("card-instance-simulator-v2-shared-20261123");
+        contract["simulator_revision"] = json!("3172da407e37a4ad57ac82e70a96910c3ac6fbb8");
+        contract["spec_inventory_sha256"] =
+            json!("6403eef771b64c34e78eb653c2baefe65ceca5308051b506a7092151e9316c59");
+        contract
+    });
+    &CONTRACT
+}
+
+fn is_shared_card_instance_contract(contract: &Value) -> bool {
+    contract == shared_card_instance_contract() || contract == strength_powder_card_instance_contract()
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
@@ -67,13 +83,15 @@ pub struct Config {
     pub count_milliseconds: u64,
     pub search_milliseconds: u64,
     pub channel_weights: [u64; 7],
+    #[serde(skip)]
+    requires_powder_weapon: bool,
 }
 impl Config {
     pub fn parse(v: &Value, rules: &Value) -> Result<Self> {
-        let c: Self = serde_json::from_value(v.clone()).map_err(|e| error(e.to_string()))?;
+        let mut c: Self = serde_json::from_value(v.clone()).map_err(|e| error(e.to_string()))?;
         ensure(
-            c.action_contract == *shared_card_instance_contract(),
-            "shared072dabb action contract required",
+            is_shared_card_instance_contract(&c.action_contract),
+            "approved shared action contract required",
         )?;
         ensure(
             *rules
@@ -112,7 +130,15 @@ impl Config {
                 .all(|w| *w > 0 && *w <= i32::MAX as u64),
             "invalid channel weight",
         )?;
+        c.requires_powder_weapon = c.action_contract == *strength_powder_card_instance_contract();
         Ok(c)
+    }
+    fn simulator_binary_sha256(&self) -> &'static str {
+        if self.requires_powder_weapon {
+            "45ac711b2f172dfd89c23edf30ba0045ab0704c0215a6995d4e8626af1cfb923"
+        } else {
+            "76aff19c2f720a572bfe422d9b1e089a1467f253038cda66de3d8c35180d0f7d"
+        }
     }
     pub fn signature(&self, rules: &Value) -> Result<String> {
         hash(

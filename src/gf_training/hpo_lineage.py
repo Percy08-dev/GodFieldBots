@@ -15,7 +15,12 @@ from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Any
 
-from gf_common.card_instance import ActionConfigV3, action_config_v3, reviewed_specs
+from gf_common.card_instance import (
+    ActionConfigV3,
+    action_config_v3,
+    is_shared_contract,
+    reviewed_specs,
+)
 from gf_common.card_instance_rules import card_instance_rules
 from gf_common.domain import ContractError, Json, canonical, closed, digest, integer
 from gf_common.group_pack_game import checked_storage_binding
@@ -144,12 +149,13 @@ def _checked_hpo_spec(state: Json) -> Json:
         "operating", "storage", "selection_version", "deadline_version", "deadline_inputs"} | ({"training_opponents"} if mixed is not None else set()) | ({"runtime"} if resident or rust_player else set()) | ({"origin","encoder"} if owned else set()))
     expected_schema = 6 if rust_player else 5 if state.get('run_variant')=='hpo-ppo-owned-shared-v1' else 4 if owned else 3 if resident else 2 if mixed is not None else 1
     integer(spec["schema_version"], expected_schema, expected_schema)
-    if expected_schema in (5, 6):
-        from gf_common.card_instance import shared_card_instance_contract
-        if (action_config_v3(config['actions']).action_contract!=shared_card_instance_contract()
-                or config['model'].get('model_id')!='mlp' or config['model'].get('inference',{}).get('device')!='cuda:0'
-                or config['preprocessing'].get('backend')!='python'):
-            raise ContractError('shared HPO requires the adopted-profile Python CUDA MLP contract')
+    if expected_schema in (5, 6) and (
+        not is_shared_contract(action_config_v3(config['actions']).action_contract)
+        or config['model'].get('model_id') != 'mlp'
+        or config['model'].get('inference', {}).get('device') != 'cuda:0'
+        or config['preprocessing'].get('backend') != 'python'
+    ):
+        raise ContractError('shared HPO requires the adopted-profile Python CUDA MLP contract')
     if rust_player:
         from gf_common.rust_player import player_runtime
         normalized = player_runtime(spec["runtime"], game_concurrency=spec["operating"]["game_concurrency"])
@@ -346,15 +352,15 @@ def hpo_state(state: Json) -> tuple[ActionConfigV3, ModelConfigV4, PPOTrainingCo
         raise ContractError("HPO recorded source/runtime identity required")
     integration = closed(identity.get("integration"), {"binary_sha256", "server_config_sha256",
         "declared_simulator_revision", "source_revision", "source_spec_sha256"}, {"binary_build_revision","source_dirty"})
-    from gf_common.card_instance_runtime import APPROVED_BINARY_SHA256
+    from gf_common.card_instance_runtime import approved_binary_sha256
     if type(config["server"]) is not dict or config["server"].get("external_url") is not None:
         raise ContractError("HPO requires recorded locally owned Simulator runtime")
-    if (integration.get("binary_sha256") != APPROVED_BINARY_SHA256
+    if (integration.get("binary_sha256") != approved_binary_sha256(actions.action_contract)
             or integration.get("source_revision") != actions.action_contract.simulator_revision
             or integration.get("declared_simulator_revision") != actions.action_contract.simulator_revision
             or config["server"].get("simulator_revision") != actions.action_contract.simulator_revision):
         raise ContractError("HPO recorded Simulator identity mismatch")
-    if actions.action_contract.simulator_revision=='072dabbca1458c9526897781d2fd64edeeb4f9ca' and integration.get('source_dirty') is not False:
+    if is_shared_contract(actions.action_contract) and integration.get('source_dirty') is not False:
         raise ContractError('shared-profile source cleanliness evidence required')
     checksum(integration.get("server_config_sha256"))
     _same(integration.get("source_spec_sha256"), reviewed_specs(actions.action_contract), "HPO recorded spec hashes mismatch")

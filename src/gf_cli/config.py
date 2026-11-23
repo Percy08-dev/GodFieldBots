@@ -15,13 +15,12 @@ from gf_common.action_contract import engineering_contract, parse_action_contrac
 from gf_common.card_instance import (
     CARD_INSTANCE_SIMULATOR_REVISION,
     CORRECTED_SIMULATOR_REVISION,
-    SHARED_SIMULATOR_REVISION,
     ActionConfigV3,
     action_config_v3,
     card_instance_contract,
     is_corrected_contract,
+    is_shared_contract,
     parse_card_instance_contract,
-    shared_card_instance_contract,
 )
 from gf_common.domain import (
     SIMULATOR_REVISION,
@@ -519,7 +518,7 @@ def load_config(path: str | Path, overrides: Json | None = None) -> LoadedConfig
         card_revision = selected_contract.simulator_revision
         if data["server"].get("simulator_revision") != card_revision:
             raise ContractError("Gameplay v2 requires the explicit pinned simulator revision")
-        if card_revision in (CORRECTED_SIMULATOR_REVISION,SHARED_SIMULATOR_REVISION):
+        if is_corrected_contract(selected_contract):
             card_server_cls = CorrectedServerConfigV2
         base["actions"] = asdict(ActionConfigV3(action_contract=selected_contract))
         base["server"] = asdict(card_server_cls())
@@ -541,7 +540,7 @@ def load_config(path: str | Path, overrides: Json | None = None) -> LoadedConfig
         base["actions"] = asdict(ActionConfigV2(action_contract=engineering_contract()))
         base["run"] = asdict(RunConfigV2())
     if (any(data.get(name, {}).get("version") == "3" for name in ("model", "opponent"))
-            and (not card_instance_actions or card_revision not in (CORRECTED_SIMULATOR_REVISION,SHARED_SIMULATOR_REVISION))):
+            and (not card_instance_actions or not is_corrected_contract(selected_contract))):
         raise ContractError("model3 experiment Config requires the corrected card-instance contract")
     for name in ("model", "opponent"):
         if data.get(name, {}).get("model_id") == "heuristic_refresh":
@@ -576,7 +575,7 @@ def _normalized_config(effective: Json, *, data: Json, inputs: tuple[Json, ...])
     if card_instance_actions:
         selected_contract = parse_card_instance_contract(effective["actions"]["action_contract"])
         card_revision = selected_contract.simulator_revision
-        if card_revision in (CORRECTED_SIMULATOR_REVISION, SHARED_SIMULATOR_REVISION):
+        if is_corrected_contract(selected_contract):
             card_server_cls = CorrectedServerConfigV2
     for name in _TABLES:
         _validate_table(name, effective[name], context=effective)
@@ -590,7 +589,7 @@ def _normalized_config(effective: Json, *, data: Json, inputs: tuple[Json, ...])
         if not rust_player and run["max_participant_workers"] < 2 * run["concurrency"]:
             raise ContractError("participant capacity must cover both players of every concurrent game")
     if (any(effective[name].get("model_id") == "heuristic_refresh" for name in ("model", "opponent"))
-            and (not card_instance_actions or card_revision not in (CORRECTED_SIMULATOR_REVISION,SHARED_SIMULATOR_REVISION))):
+            and (not card_instance_actions or not is_corrected_contract(selected_contract))):
         raise ContractError("refresh baseline requires the corrected card-instance layout")
     models = {name: model_config(effective[name], layout=layout_for_contract(selected_contract))
               if effective[name].get("version") == "3" or effective[name].get("model_id") == "heuristic_refresh" else model_config(effective[name])
@@ -671,12 +670,12 @@ def _normalized_config(effective: Json, *, data: Json, inputs: tuple[Json, ...])
     if "inference_service" in run:
         from gf_common.shared_inference import shared_runtime
         run["inference_service"] = shared_runtime(run["inference_service"],game_concurrency=run["concurrency"])
-        if (not card_instance_actions or selected_contract != shared_card_instance_contract()
+        if (not card_instance_actions or not is_shared_contract(selected_contract)
                 or type(models["model"]) is not ConfiguredNeuralModelV3 or models["model"].model_id != "mlp"
                 or models["model"].inference.device != "cuda:0" or type(training) is not PPOTrainingConfig
                 or preprocessing.backend != "python" or preprocessing.reader != "participant-structured-v2"):
             raise ContractError("shared mode requires new-profile Python MLP CUDA PPO")
-    if card_instance_actions and selected_contract == shared_card_instance_contract() and preprocessing.backend != "python":
+    if card_instance_actions and is_shared_contract(selected_contract) and preprocessing.backend != "python":
         raise ContractError("shared contract profile has no native implementation")
     converted: dict[str, Any] = {}
     for name, cls in _TABLES.items():
@@ -709,11 +708,11 @@ def _normalized_config(effective: Json, *, data: Json, inputs: tuple[Json, ...])
         values = {k: tuple(v) if isinstance(defaults.get(k), tuple) else v for k, v in values.items()}
         converted[name] = cls(**values)
     mixed = data.get("training_opponents")
-    if mixed is not None and (not card_instance_actions or card_revision not in (CORRECTED_SIMULATOR_REVISION,SHARED_SIMULATOR_REVISION)
+    if mixed is not None and (not card_instance_actions or not is_corrected_contract(selected_contract)
             or type(models["model"]) is not ConfiguredNeuralModelV3 or type(training) is not PPOTrainingConfig):
         raise ContractError("training_opponents requires corrected ordinary Model3 PPO")
     if "storage" in data:
-        if (not card_instance_actions or card_revision not in (CORRECTED_SIMULATOR_REVISION,SHARED_SIMULATOR_REVISION)
+        if (not card_instance_actions or not is_corrected_contract(selected_contract)
                 or server["external_url"] is not None):
             raise ContractError("storage requires corrected actions3 and a locally managed server")
         config: ExperimentConfig = (PackedRefreshOpponentsExperimentConfig(**converted,
@@ -787,7 +786,7 @@ def _validate_rust_player_profile(*, run: Json, server: Json, actions: Any,
             or (type(opponent) is ModelConfig and opponent.model_id in ("random", "heuristic"))
             or type(opponent) is RefreshHeuristicConfig):
         raise ContractError("Rust player opponent must be Model3 MLP, Random, Heuristic or Refresh")
-    if (type(actions) is not ActionConfigV3 or actions.action_contract != shared_card_instance_contract()
+    if (type(actions) is not ActionConfigV3 or not is_shared_contract(actions.action_contract)
             or server.get("gameplay_api") != "v2" or server["external_url"] is not None
             or type(model) is not expected_model or model.model_id != "mlp"
             or model.checkpoint is not None or type(training) is not PPOTrainingConfig

@@ -155,7 +155,9 @@ impl GameSpec {
                 && self.runtime_evidence["source"]["revision"]
                     == config.action_contract["simulator_revision"]
                 && self.runtime_evidence["binary"]["sha256"]
-                    == "76aff19c2f720a572bfe422d9b1e089a1467f253038cda66de3d8c35180d0f7d"
+                    == config.simulator_binary_sha256()
+                && self.runtime_evidence["build"]["spec_inventory_sha256"]
+                    == config.action_contract["spec_inventory_sha256"]
                 && self.runtime_evidence["executed"]["sha256"]
                     == self.runtime_evidence["binary"]["sha256"]
                 && self.runtime_evidence["executed"]["pid"]

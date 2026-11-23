@@ -30,7 +30,7 @@ from gf_common.candidate_columns import (
     column_layout,
     encode_candidate_columns_v2,
 )
-from gf_common.card_instance import ActionConfigV3, shared_card_instance_contract
+from gf_common.card_instance import ActionConfigV3, is_shared_contract
 from gf_common.card_instance_rules import CardInstanceRules
 from gf_common.card_instance_runtime import validate_runtime_receipt
 from gf_common.card_instance_validation import act_response, reconcile_replay, validate_events
@@ -483,7 +483,8 @@ class CanonicalEpisodeEncoder:
 
     def __init__(self, context: EpisodeEncodingContext, sink: RecordingArtifacts) -> None:
         self.context, self.sink = context, sink
-        self._native_candidates = context.actions.action_contract == shared_card_instance_contract()
+        self._native_candidates = is_shared_contract(context.actions.action_contract)
+        self._action_contract = asdict(context.actions.action_contract)
         self.game: str | None = None
         self.journals: dict[int, _Journal] = {}
         self.pending: tuple[int, str] | None = None
@@ -587,6 +588,12 @@ class CanonicalEpisodeEncoder:
                 report = parse_report_v3(
                     raw["report"], action_contract=c.actions.action_contract, rules=c.rules
                 )
+                table = raw["table"]
+                if (
+                    not isinstance(table, dict)
+                    or table.get("action_contract") != self._action_contract
+                ):
+                    raise ContractError("native writer candidate table action contract mismatch")
                 candidate_count = report.selected
                 table_hash = report.table_hash
             else:

@@ -111,10 +111,8 @@ def checked_packed_proof(value: Json) -> Json:
     shared=type(value.get('schema_version')) is int and value['schema_version']==3
     closed(value, fields | ({'service_usage'} if shared else set()))
     if shared:
-        from dataclasses import asdict
-
-        from gf_common.card_instance import shared_card_instance_contract
-        if value['action_contract']!=asdict(shared_card_instance_contract()):
+        from gf_common.card_instance import is_shared_contract, parse_card_instance_contract
+        if not is_shared_contract(parse_card_instance_contract(value['action_contract'])):
             raise ContractError('shared packed proof requires adopted contract')
         from gf_common.shared_inference import checked_usage
         checked_usage(value['service_usage'])

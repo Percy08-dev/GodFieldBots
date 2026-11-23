@@ -348,6 +348,7 @@ impl<'a> Space<'a> {
             self.config.max_sequence_length,
             &self.input.usable,
             self.input.context,
+            self.config.requires_powder_weapon,
         )
     }
     fn valid(&self, f: Family, r: &[usize]) -> bool {

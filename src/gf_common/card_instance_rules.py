@@ -220,6 +220,7 @@ def analyze_sequence(
     usable: frozenset[int],
     rules: CardInstanceRules,
     context: DefenseContext = UNKNOWN_DEFENSE_CONTEXT,
+    requires_powder_weapon: bool = False,
 ) -> SequenceAnalysis:
     """Separate extendable prefixes from completed affordable public proposals.
 
@@ -232,6 +233,7 @@ def analyze_sequence(
     if type(rules) is not CardInstanceRules or type(context) is not DefenseContext:
         raise ContractError("explicit rules and public defense context required")
     uncertain = False
+    has_powder, has_weapon = False, False
     if type(flash) is not bool or family not in ("offense", "defense", "utility", "status"):
         raise ContractError("closed sequence family and public Flash state required")
     by_slot = {card.slot: card for card in cards}
@@ -298,6 +300,9 @@ def analyze_sequence(
         ):
             return SequenceAnalysis()
         for index, card in enumerate(effective):
+            if requires_powder_weapon:
+                has_powder |= card.definition["definition_id"] == "strength-powder"
+                has_weapon |= card.definition["kind"] == "weapons"
             if card.miracle:
                 if card.subclass not in ("weapon", "additional_weapon", "attack_support"):
                     return SequenceAnalysis()
@@ -358,7 +363,7 @@ def analyze_sequence(
     )
     return SequenceAnalysis(
         affordable or salvage,
-        affordable and not uncertain,
+        affordable and not uncertain and (not has_powder or has_weapon),
         payment,
         spent,
         tuple(card.slot for card in effective),

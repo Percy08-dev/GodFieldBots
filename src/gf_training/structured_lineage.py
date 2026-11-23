@@ -479,8 +479,8 @@ def _state(state: Json, *, recorded_signature: str | None = None, _game: bool = 
     if any(canonical(state[key]) != canonical(value) for key, value in expected.items()):
         raise ContractError('component run Config classification mismatch')
     if _game:
-        from gf_common.card_instance import reviewed_specs
-        from gf_common.card_instance_runtime import APPROVED_BINARY_SHA256
+        from gf_common.card_instance import is_shared_contract, reviewed_specs
+        from gf_common.card_instance_runtime import approved_binary_sha256
         from gf_common.preprocessing import preparation_config
         settings = preparation_config(config['preprocessing'])
         preprocessing = {'backend': 'python', 'reader_contract': 'participant-structured-v2',
@@ -490,12 +490,12 @@ def _state(state: Json, *, recorded_signature: str | None = None, _game: bool = 
             preprocessing = state['identity'].get('preprocessing', {})
             recorded_card_instance_preprocessing(preprocessing, binding=expected)
         integration = state['identity'].get('integration', {})
-        if actions.action_contract.simulator_revision=='072dabbca1458c9526897781d2fd64edeeb4f9ca' and integration.get('source_dirty') is not False:
+        if is_shared_contract(actions.action_contract) and integration.get('source_dirty') is not False:
             raise ContractError('shared-profile source cleanliness evidence required')
         checksum(integration.get('server_config_sha256'))
         if (settings.backend not in ('python', 'rust') or settings.reader != 'participant-structured-v2'
                 or canonical(state['identity'].get('preprocessing')) != canonical(preprocessing)
-                or integration.get('binary_sha256') != APPROVED_BINARY_SHA256
+                or integration.get('binary_sha256') != approved_binary_sha256(actions.action_contract)
                 or integration.get('declared_simulator_revision') != actions.action_contract.simulator_revision
                 or integration.get('source_revision') != actions.action_contract.simulator_revision
                 or canonical(integration.get('source_spec_sha256')) != canonical(reviewed_specs(actions.action_contract))):

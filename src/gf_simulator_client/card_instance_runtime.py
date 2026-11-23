@@ -14,14 +14,10 @@ from typing import Any
 from gf_common.card_instance import (
     CardInstanceContract,
     corrected_card_instance_contract,
-    reviewed_specs,
-    shared_card_instance_contract,
+    is_shared_contract,
 )
 from gf_common.card_instance_runtime import (
-    APPROVED_BINARY_SHA256,
-    APPROVED_CHANGE_FILES,
-    APPROVED_CHANGE_SHA256,
-    SHARED_APPROVED_BINARY_SHA256,
+    approved_runtime_build,
     validate_runtime_receipt,
 )
 from gf_common.domain import ContractError, Json, clone
@@ -62,13 +58,13 @@ class CardInstanceRuntimeEvidence:
 
     def __init__(self, binary: Path, source_root: Path, *, deadline: float = float("inf"), contract: CardInstanceContract | None = None) -> None:
         self.contract = corrected_card_instance_contract() if contract is None else contract
-        self.shared = self.contract == shared_card_instance_contract()
+        self.shared = is_shared_contract(self.contract)
         self.binary, self.source_root = binary.absolute(), source_root.absolute()
         self.deadline = deadline
         self._receipt: Json | None = None
         self._closed = False
 
-    def _source(self) -> Json:
+    def _source(self, build: Json) -> Json:
         try:
             revision = subprocess.run(
                 ["git", "-C", str(self.source_root), "rev-parse", "HEAD"],
@@ -80,7 +76,7 @@ class CardInstanceRuntimeEvidence:
         except subprocess.SubprocessError as error:
             raise ContractError("runtime source revision read failed") from error
         maps = []
-        for expected in (reviewed_specs(self.contract), APPROVED_CHANGE_FILES):
+        for expected in (build["spec_files"], build["change_files"]):
             actual = {
                 name: _read_hash(self.source_root / name, self.deadline)[0] for name in expected
             }
@@ -103,19 +99,14 @@ class CardInstanceRuntimeEvidence:
         if self._closed:
             raise ContractError("runtime owner already finalized")
         contract = self.contract
+        build = approved_runtime_build(contract)
         sha, identity = _read_hash(self.binary, self.deadline)
         actual = {
             "schema_version": 2 if self.shared else 1,
             "action_contract": asdict(contract),
-            "build": {
-                "binary_sha256": SHARED_APPROVED_BINARY_SHA256 if self.shared else APPROVED_BINARY_SHA256,
-                "spec_inventory_sha256": contract.spec_inventory_sha256,
-                "change_inventory_sha256": APPROVED_CHANGE_SHA256,
-                "spec_files": reviewed_specs(contract),
-                "change_files": dict(APPROVED_CHANGE_FILES),
-            },
+            "build": build,
             "binary": {"path": str(self.binary), "sha256": sha, "identity": identity},
-            "source": self._source(),
+            "source": self._source(build),
             "executed": None,
         }
         validate_runtime_receipt(actual)

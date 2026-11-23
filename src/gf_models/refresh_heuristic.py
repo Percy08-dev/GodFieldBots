@@ -60,6 +60,7 @@ def _facts(
     usable = frozenset(
         refs[row["card_ref"]] for row in raw["action_options"]["action_options"]["usable_cards"]
     )
+    requires_powder_weapon = actions.action_contract.requires_powder_weapon
     result = []
     for row, kind in enumerate(table.kinds):
         slots = table.slots[table.offsets[row] : table.offsets[row + 1]]
@@ -85,6 +86,7 @@ def _facts(
                 maximum=actions.max_sequence_length,
                 usable=usable,
                 rules=rules,
+                requires_powder_weapon=requires_powder_weapon,
             )
             if not analysis.complete:
                 raise ContractError("refresh sequence lacks complete public analysis")

@@ -1,5 +1,7 @@
 //! Independent Journal6 candidate validation over an original pending capture.
-use super::{ensure, error, game::action_from_parts, shared_card_instance_contract};
+use super::{ensure, error, game::action_from_parts, is_shared_card_instance_contract};
+#[cfg(test)]
+use super::shared_card_instance_contract;
 use crate::error::Result;
 use crate::structured_journal::{TARGETS, card_instance::KINDS};
 use serde::{
@@ -159,7 +161,7 @@ pub(super) fn check(
         "invalid position capacity",
     )?;
     ensure(
-        table.action_contract == *shared_card_instance_contract()
+        is_shared_card_instance_contract(&table.action_contract)
             && table.purpose == "qualified_game"
             && !table.synthetic_capacity
             && frame.frame_hash == table.frame_hash
