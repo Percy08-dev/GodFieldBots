@@ -14,6 +14,7 @@ from gf_models.structured_sealed import SEMANTIC_KEYS_V3, checksum
 from gf_training.hpo_collection import selection_for_counts
 from gf_training.hpo_lineage import hpo_spec, hpo_state, validate_hpo_chain
 from gf_training.hpo_source import _initial_schedule, recorded_hpo_plan
+from gf_training.hpo_update_storage import read_hpo_update
 from gf_training.structured_lineage import _ChainScan
 from gf_training.structured_rollout import _source_correspondence
 
@@ -127,7 +128,7 @@ def authorize_controls(value: Json, native: Any, actions: Any, *, directory: Pat
                 raise ContractError('native HPO original facts have invalid qualification/hash context')
             stored = None
             if generation < state['updates']:
-                stored = scan.object(directory / 'updates' / f'{generation + 1:06}.json', records[generation + 1]['update_sha256'])
+                stored = read_hpo_update(directory, generation + 1, state, records[generation + 1]['update_sha256'], scan=scan)
                 _same(after, records[generation + 1]['parent_controls']['schedule_opponent_rng'], 'HPO original schedule RNG advance differs')
                 _same(selection, stored['source_proof']['selection'], 'HPO saved subset differs from independent original-count RNG replay')
                 _same(raw['numeric'], {'directory': str(directory / stored['numeric']), 'sha256': stored['numeric_sha256'],

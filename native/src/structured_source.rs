@@ -2483,6 +2483,7 @@ impl OriginalInputs {
         // from the caller's optional explicit selection list.
         let mut committed: BudgetVec<CommittedSource> = BudgetVec::new(&budget);
         for (pi, parent) in parents.iter_mut().enumerate() {
+            let compressed = format.hpo() && crate::structured_controls::hpo::compressed_updates(&parent.state.root)?;
             let count = integer(
                 &parent.state.root,
                 "updates",
@@ -2497,13 +2498,15 @@ impl OriginalInputs {
                         .join("generations")
                         .join(format!("{generation:06}.json")),
                 )?;
-                let update = parent.sources.checked_json(
-                    &parent
-                        .directory
-                        .join("updates")
-                        .join(format!("{generation:06}.json")),
-                    record.root.require("update_sha256")?,
-                )?;
+                let update = if format.hpo() {
+                    crate::structured_controls::hpo::read_update(&mut parent.sources, generation as usize,
+                        compressed, record.root.require("update_sha256")?)?
+                } else {
+                    parent.sources.checked_json(
+                        &parent.directory.join("updates").join(format!("{generation:06}.json")),
+                        record.root.require("update_sha256")?,
+                    )?
+                };
                 let path = owned_relative(&parent.directory, update.root.require("collection")?)?;
                 let index =
                     if let Some(index) = requests.iter().position(|(actual, _)| *actual == path) {

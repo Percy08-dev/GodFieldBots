@@ -2,11 +2,12 @@
 from __future__ import annotations
 
 import re
-from typing import Any
+from typing import Any, cast
 
 from gf_common.domain import ContractError, Json, canonical, clone, closed, digest, integer
 from gf_common.shared_inference import checked_usage
 from gf_models.structured_sealed import checksum
+from gf_training.hpo_update_storage import read_hpo_update
 
 STAMP_FIELDS={'schema_version','finished','start_generation','end_generation','service_id','execution',
     'job_id','registration_sha256','proof_sha256','termination_sha256','publications','tail_usage'}
@@ -106,8 +107,8 @@ def validate_inventory(registry: Json,state: Json,records: list[Json],scan: Any)
         usage_limits: dict[str,int]={}
         windows=[]
         for generation in range(start+1,end+1):
-            update=scan.object(scan.root/'updates'/f'{generation:06}.json',records[generation]['update_sha256'])
-            usage=checked_usage(update.get('service_usage'))
+            update=read_hpo_update(scan.root, generation, state, records[generation]['update_sha256'], scan=scan)
+            usage=checked_usage(cast(Json, update.get('service_usage')))
             if canonical(update['source_proof'].get('service_usage'))!=canonical(usage):raise ContractError('shared update/Source usage differs')
             neural={label:row['policy_options']['expected_manifest_digest'] for label,row in update['policy_bindings'].items()
                 if row['model_id']=='mlp' and row['policy_options'] is not None}

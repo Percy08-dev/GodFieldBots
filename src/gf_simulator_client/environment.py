@@ -7,7 +7,7 @@ import uuid
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 from gf_common.action_contract import require_qualified_contract
 from gf_common.card_instance import ActionConfigV3
@@ -27,6 +27,7 @@ from gf_common.domain import (
     UnsupportedContract,
     canonical,
     digest,
+    group_health_failures,
 )
 from gf_common.structured import ActionConfigV2
 from gf_common.validation import (
@@ -42,8 +43,12 @@ from gf_simulator_client.http import (
     DeliveryUnknown,
     seed_fingerprint,
 )
+from gf_simulator_client.http_diagnostics import HttpFacts, HttpPairCapture
 from gf_simulator_client.process import ManagedServer, server_effective
 from gf_simulator_client.workers import ParticipantWorker
+
+if TYPE_CHECKING:
+    from gf_common.hpo_storage import HPODiagnosticsConfig
 
 
 class Journal(Protocol):
@@ -77,6 +82,9 @@ class EnvironmentSettings:
     work_deadline: float = float("inf")
     replay_deadline: float = float("inf")
     policy_bindings: dict[str, RuntimePolicyBinding] = field(default_factory=dict)
+    http_diagnostics: HPODiagnosticsConfig | None = None
+    http_operation_id: str | None = None
+    http_collection_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -453,15 +461,26 @@ class SimulatorEnvironment:
         health: Json = {}
         server: ManagedServer | None = None
         client: AttestedClient | None = None
+        capture = None
+        http_facts = None
         try:
             if time.monotonic() >= self.settings.admission_deadline:
                 raise TimeoutError("group admission deadline")
             startup = None
             if self.settings.external_url is None:
+                if self.settings.http_diagnostics is not None:
+                    assert self.settings.http_operation_id is not None
+                    assert self.settings.http_collection_id is not None
+                    capture = HttpPairCapture.configured(self.settings.http_diagnostics,
+                        operation_id=self.settings.http_operation_id,
+                        collection_id=self.settings.http_collection_id,
+                        pair_id=group.episodes[0].pair_id, episode_count=len(group.episodes))
+                    http_facts = HttpFacts()
                 server = self._new_server(self.settings.binary, self.settings.server_config, group.seed,
                                        len(group.episodes), self._server_directory(group),
                                        self.settings.startup_seconds, self.settings.shutdown_seconds,
-                                       cleanup_deadline=min(self.settings.wall_deadline, self.settings.work_deadline))
+                                       cleanup_deadline=min(self.settings.wall_deadline, self.settings.work_deadline),
+                                       **({} if capture is None else {"http_capture": capture}))
                 async with asyncio.timeout_at(self.settings.execution_deadline):
                     startup = await server.start()
                 self._server_started(server)
@@ -476,7 +495,8 @@ class SimulatorEnvironment:
                                     fixed_seed_experiment=self.settings.fixed_seed_experiment,
                                     expected_effective=expected, startup_info=startup["test_server_info"] if startup else None,
                                     request_seconds=self.settings.request_seconds, retries=self.settings.transport_retries,
-                                    deadline=self.settings.execution_deadline)
+                                    deadline=self.settings.execution_deadline,
+                                    **({} if http_facts is None else {"http_facts": http_facts}))
             await client.attest()
             definitions = await client.public_catalog()
             for spec in group.episodes:
@@ -502,7 +522,17 @@ class SimulatorEnvironment:
                     except (TimeoutError, OSError):
                         health["client_close_failure"] = "close deadline/failure"
                 if server:
-                    health["process"] = await server.stop(max(0.0, min(self.settings.wall_deadline, self.settings.work_deadline) - time.monotonic()))
+                    deadline = min(self.settings.wall_deadline, self.settings.work_deadline)
+                    try:
+                        health["process"] = await server.stop(max(0.0, deadline - time.monotonic()))
+                    except BaseException as error:
+                        if capture is not None:
+                            assert http_facts is not None
+                            failure = await server.settle_http(deadline=deadline, abnormal=True,
+                                                               **vars(http_facts))
+                            health["http_diagnostics"] = failure
+                            error.add_note("HTTP pair diagnostics " + str(failure))
+                        raise
                     if health["process"]["exit_code"] != 0 or health["process"]["shutdown"] != "stdin_eof" or health["process"]["log_error"]:
                         for episode in results:
                             episode.health["process_failure"] = str(health["process"])
@@ -512,6 +542,14 @@ class SimulatorEnvironment:
                         health["runtime_evidence_failure"] = str(exc)
                         for episode in results:
                             episode.health["runtime_evidence_failure"] = str(exc)
+                    if capture is not None:
+                        assert http_facts is not None
+                        abnormal = (len(results) != len(group.episodes)
+                            or bool(group_health_failures(health))
+                            or any(episode.end_kind != "natural" or episode.failure
+                                   or any(episode.health.values()) for episode in results))
+                        health["http_diagnostics"] = await server.settle_http(
+                            deadline=deadline, abnormal=abnormal, **vars(http_facts))
                 if time.monotonic() > min(self.settings.wall_deadline, self.settings.work_deadline):
                     health["budget_overrun_seconds"] = time.monotonic() - min(self.settings.wall_deadline, self.settings.work_deadline)
                     for episode in results:

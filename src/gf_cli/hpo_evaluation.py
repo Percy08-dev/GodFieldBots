@@ -14,7 +14,7 @@ from contextlib import ExitStack
 from dataclasses import asdict, dataclass, field, fields, replace
 from pathlib import Path
 from types import ModuleType
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from gf_cli.config import GroupPackExperimentConfig, LoadedConfig
 from gf_cli.hpo_config import LoadedHPOConfig, require_hpo_runtime_execution
@@ -37,6 +37,7 @@ from gf_common.shared_inference import evaluation_runtime
 from gf_training.hpo_gpu_lease import GpuJob
 
 if TYPE_CHECKING:
+    from gf_common.hpo_storage import HPODiagnosticsConfig
     from gf_evaluation.hpo_compare import ComparisonPanel
     from gf_training.hpo_retention import HpoReferenceReceipt
 
@@ -1095,6 +1096,20 @@ def _confirm_failed_evaluation(error: BaseException, store: Any, name: str,
     _copy_failed_evaluation_receipt(error,store,name,observation._identity[0].linkage['evaluation_id'],receipt)
 
 
+def _check_live_evaluation_storage(output: Path, projected: LoadedConfig) -> None:
+    from gf_cli.hpo_storage import check_evaluation_destination
+    from gf_common.hpo_storage import hpo_diagnostics
+
+    config = projected.config
+    diagnostics = hpo_diagnostics(getattr(config, "hpo_spec", {}).get("storage", {}))
+    if diagnostics is None:
+        check_evaluation_destination(output)
+    else:
+        packed = cast(GroupPackExperimentConfig, config)
+        check_evaluation_destination(output, originals_root=Path(packed.storage.db_root),
+                                     diagnostics=diagnostics)
+
+
 async def evaluate_seed(store: object, loaded: LoadedHPOConfig, campaign: Json, proposal: object,
                         training: Json, *, output: Path, progress: Any = None, completion: Any = None) -> Json:
     """One actual primary evaluation; no interrupted request is silently rerun."""
@@ -1125,6 +1140,7 @@ async def evaluate_seed(store: object, loaded: LoadedHPOConfig, campaign: Json, 
     raw = clone(asdict(config))
     projected = LoadedConfig(config, raw, digest(raw), base.inputs)
     started = time.monotonic()
+    _check_live_evaluation_storage(output, projected)
     store.put(folder + '/evaluation.intent.json', {'schema_version': 1, 'kind': 'hpo-evaluation-intent',
         'evaluation_id': evaluation_id, 'directory': str(output), 'config_sha256': projected.sha256,
         'training_receipt_sha256': store.get(folder + '/training.json')[1],
@@ -1356,7 +1372,8 @@ def _comparison_artifacts(left: Any, right: Any, sources: list[Any], bindings: A
 async def evaluate_comparison(store: object, left: LoadedHPOConfig, right: LoadedHPOConfig,
                               left_proposal: object, right_proposal: object, left_training: Json,
                               right_training: Json, *, comparison_id: str, conditions_sha256: str,
-                              output: Path, evaluation_runtime: Any = _RUNTIME_OMITTED, progress: Any = None) -> ComparisonPanel:
+                              output: Path, evaluation_runtime: Any = _RUNTIME_OMITTED, progress: Any = None,
+                              diagnostics: HPODiagnosticsConfig | None = None) -> ComparisonPanel:
     """One complete declared seed-pair matchup through the actual shared collector."""
     evaluation_runtime = comparison_execution_runtime(left.config,right.config,choice=evaluation_runtime)
     require_hpo_runtime_execution(left.config)
@@ -1386,12 +1403,18 @@ async def evaluate_comparison(store: object, left: LoadedHPOConfig, right: Loade
         learning_seed=left_training['training_seed'], run_id=left_training['run_id'])
     run = replace(base.config.run, split='validation', name=evaluation_id, output_dir=str(output.parent),
         seeds=left.config.evaluation_game_seeds, sampling_seeds=(left.config.sampler_seed,), pairs_per_seed=1)
-    config = replace(base.config, run=run)
+    spec = clone(base.config.hpo_spec)
+    if diagnostics is None:
+        spec["storage"].pop("hpo_diagnostics", None)
+    else:
+        spec["storage"]["hpo_diagnostics"] = asdict(diagnostics)
+    config = replace(base.config, run=run, hpo_spec=spec)
     raw = clone(asdict(config))
     projected = LoadedConfig(config, raw, digest(raw), base.inputs)
     started = time.monotonic()
     wall, execution = started + run.wall_seconds, started + run.execution_seconds
     work = wall - run.report_reserve_seconds
+    _check_live_evaluation_storage(output, projected)
     store.put(folder + '/intent.json', {'schema_version': 1, 'kind': 'hpo-comparison-matchup-intent',
         'evaluation_id': evaluation_id, 'config_sha256': projected.sha256, 'directory': str(output),
         'left_source_receipt_sha256': left_training['source_receipt_sha256'],

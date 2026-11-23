@@ -214,7 +214,7 @@ cat "$pilot_root/logs/campaign-01-result.json"
 
 各提案の`evaluation.json`には最終評価の`value`、
 `seeds/17/training.json`には親ディレクトリの`run_path`があります。
-親の`updates/000001.json`以降に各更新の`actual_games`、`accepted_decisions`、
+親の`updates/000001.json.zst`以降に各更新の`actual_games`、`accepted_decisions`、
 `metrics.total_loss`、`metrics.policy_loss`、`metrics.value_mse`、
 `metrics.entropy`、`metrics.approx_kl`が残ります。自然終局した収集試合数は
 `actual_games`を累積して数えます。評価試合数はこの累計には含めません。
@@ -237,8 +237,11 @@ for receipt_path in sorted(campaign.glob("proposals/*/seeds/*/training.json")):
     state = json.loads((parent / "run.json").read_text())
     games = used = 0
     for number in range(1, state["updates"] + 1):
-        update = json.loads((parent / "updates" / f"{number:06}.json").read_text())
+        generation = json.loads((parent / "generations" / f"{number:06}.json").read_text())
+        update = read_hpo_update(parent, number, state, generation["update_sha256"])
         games += update["actual_games"]
+from gf_training.hpo_update_storage import read_hpo_update
+
         used += update["accepted_decisions"]
         metrics = update["metrics"]
         row = [receipt_path.parents[2].name, receipt["training_seed"], number, games, used]
@@ -359,17 +362,65 @@ OOM後に自動で並列数を下げたり、学習を成功扱いで継続し�
 resumeせず、新しいcampaign名で`fresh`を使用してください。過去の固定実験条件と
 通常実行の2試合・4worker上限は、このHPO拡張では変更しません。
 
-`[storage]`の`parent_root`・`numeric_root`・`optuna_path`はext4側です。
-現行実装は`numeric_root == parent_root`の配置を要求します。
-`originals_root`は学習・評価の圧縮対戦原本DBの保存先です。
-予備検証用の3設定は`/mnt/d/godfield/ppo-budget-probe-v2/<model>/d10000/originals`
-を指定し、今後の新規実行ではDドライブへ書き込みます。保存対象にはjournal・Replay・
-候補列・HTTPログ等のPack内対戦原本が含まれます。既存履歴の移動・再保存は行いません。
-数値配列・チェックポイント・Optuna DB・campaign管理情報・ターミナルログは
-この変更ではWSL側に残ります。全データをD上の専用ext4へ移す設定は別の作業です。
-容量上限は`destination_capacity_bytes`、開始前の余裕は
-`admission_reservation_bytes`で指定します。Windows側Cドライブも実際のmountと
-空き容量を照合します。存在しないD/CパスをSSD上の祖先へ読み替えません。
+### 保存先の設定
+
+[256試合プローブ用テンプレート](../configs/hpo/mlp-256-update-budget-probe-template.toml)を
+`configs/hpo/`内にコピーして使います。実験名を変える場合は`stage`と
+保存先の`mlp-256-probe`を揃えて変えます。相対パスの基準はHPO TOMLのあるディレクトリです。
+
+| `[storage]`の項目 | 指定と用途 |
+| --- | --- |
+| `parent_root`、`numeric_root` | 同じext4パスを指定。モデル・再開状態・更新記録・学習用数値データを保存します。省略時は両方とも`runs/hpo`です。 |
+| `campaign_dir` | 任意。`parent_root`配下にキャンペーン管理情報・評価結果・最良チェックポイントの索引を保存します。省略時は`--campaign-dir`が必須です。両方を指定した場合は同じパスが必要です。 |
+| `optuna_path` | ext4のSQLiteファイル。試行履歴を保存します。省略時は`runs/hpo/optuna.sqlite3`です。 |
+| `originals_root` | 任意。Journal・Replay・候補列・試合結果などの圧縮対戦原本DBを保存します。省略時は基礎実験の保存先を使います。 |
+| `destination_capacity_bytes`、`admission_reservation_bytes` | 管理対象の容量上限と開始時の予約。単位はバイトです。既定は10 GiBと1 GiB、テンプレートは100 GiBと1 GiBです。 |
+| `windows_c_root`、`windows_c_min_free_bytes` | Windows Cの場所と空き容量下限。既定は`/mnt/c`と1 GiBです。 |
+| `ext4_control_required` | 省略時は`true`。親・キャンペーン・Optunaのext4要件を適用します。 |
+
+256試合プローブの実行用TOMLとテンプレートは、HDD上の専用ext4 VHDXを
+`/mnt/gf_data` にマウントする構成です。確定済み原本DB、親・数値データ、
+Optuna、保持するHTTPログは、このマウントの `ppo-hpo/mlp-256-probe` 配下に保存します。
+別のマウント先を使う環境では、コピーしたHPO TOMLの保存先を実際の専用ext4に揃えます。
+開始時に書き込み可能な専用ext4とtmpfsを確認します。現在の空き容量で
+1万更新を完走できるかは別に測定します。
+
+#### 学習の収集作業領域をtmpfsに置く
+
+両方の256試合プローブTOMLが参照する
+[基礎実験TOML](../configs/experiments/hpo-rust-mlp-256-base.toml) は、
+`collection_work_root = "/dev/shm/godfieldbots/collections"` を設定済みです。
+他の通常PPOやHPO6で使う場合は、実験側の `[storage]` に同じ項目を追加します。
+通常PPOは実験側の `db_root`、HPO6はHPO側の `originals_root` に
+HDD上の専用ext4を指定します。親・数値データも専用ext4に置きます。
+
+収集が完了すると、閉じたSQLite原本を専用ext4へ転送し、実ファイルの
+SHA-256、SQLiteと全Packの整合性を確認します。ファイルとディレクトリの
+同期後にHDD上のSourceを発行します。次の更新はそのSourceを使います。
+収集中にWSLが停止した場合、tmpfsに残った収集データは失われます。
+再開の単位は、同じbootで正常に一時停止したコミット済み更新です。
+[ADR0065](adr/0065-staged-native-collection-storage.md)
+
+| `[storage.hpo_diagnostics]`の項目 | 任意指定、既定値と用途 |
+| --- | --- |
+| `http_log_ram_root` | `/dev/shm/godfieldbots/http-logs`。席交換ペアの試合中の生ログをtmpfsに置きます。 |
+| `http_log_archive_root` | `<parent_root>/http-logs`。保持するHTTPログをext4に保存します。テンプレートは親の外側で同じ専用ext4上に置きます。 |
+| `http_log_retention` | `errors`で異常ペアを保持し、`all`で正常ペアも保持します。 |
+| `http_log_compression` | `zstd`でレベル3の`.jsonl.zst`、`none`で生の`.jsonl`を保存します。 |
+| `update_compression` | `zstd`で`updates/<更新番号>.json.zst`、`none`で`updates/<更新番号>.json`を保存します。 |
+
+`errors`と`zstd`が通常設定です。`all`と`zstd`は正常時も調査する設定、
+`all`と`none`は全件を生JSONLで確認する設定です。`errors`と`none`を組み合わせると
+異常分だけを生JSONLで保存します。対象は学習・途中評価・最終評価・候補比較です。
+ペア終了後にサーバーの停止を確認し、4xx・5xx、復旧した通信エラー、通信タイムアウト、
+試合中断やサーバー異常があれば、前後の通信を含むペア全体を保持します。
+保存に失敗したときは診断状態と残存先を記録します。保存先の空き容量は実行前に確認し、
+HTTPアーカイブは管理対象の再帰的な容量集計から外します。
+HTTPログのペイロードは別アーカイブに置くため、新規実行の原本DBには重複格納しません。
+
+世代記録は保存した更新ファイルのSHA-256を持ち、読み取り時に照合します。
+過去のキャンペーンと親は記録済みの保存先とJSON形式を使います。新しい圧縮設定は
+新規実行から適用します。
 
 各更新で推論・再開状態を完全に保存し検証してから保持処理を行います。
 G0と最新2個以上の再開状態、Pool・評価が参照中の推論重みを保護します。
@@ -382,12 +433,13 @@ G0と最新2個以上の再開状態、Pool・評価が参照中の推論重み�
 
 ```console
 gf-bots hpo validate --config campaign.toml
-gf-bots hpo run --config campaign.toml --mode fresh --campaign-dir /absolute/parent-root/campaigns/stage-name
+gf-bots hpo run --config campaign.toml --mode fresh
 gf-bots hpo inspect --campaign-dir /absolute/parent-root/campaigns/stage-name
-gf-bots hpo run --config campaign.toml --mode resume --campaign-dir /absolute/parent-root/campaigns/stage-name
+gf-bots hpo run --config campaign.toml --mode resume
 ```
 
-`validate`は型・次元・探索条件・共同資源・実際の保存先を確認します。
+`validate`は型・次元・探索条件・共同資源とTOMLから解決した保存先を確認します。
+実マウント、書き込み可能性と空き容量は開始時に確認します。
 OptunaやTorchを読み込まず、学習・Simulator起動・Source資格検査は行いません。
 `inspect`も保存記録の構造と記録済み状態を表示する機能で、成績を再認定しません。
 `fresh`には新しいディレクトリ、`resume`には同じ設定と保存先を渡します。
@@ -449,6 +501,8 @@ strict経路・データ・監査の意味も変更しません。
 実装・受入状況と再開・campaign対応範囲は
 [ADR0043](adr/0043-hpo-producer-owned-data.md)と
 [検証記録](verification/hpo-producer-owned-data.md)を参照してください。
+`campaign_dir`を設定していないTOMLでは`run`に
+`--campaign-dir /absolute/parent-root/campaigns/stage-name`を追加します。
 fresh統合・同一コードでのcold再開・campaign/evaluation連携は独立レビュー済みです。
 再開時は必要なcontrol・checkpoint・RNG・opponent poolだけを一度読み込み、
 次の更新で使わない過去sampleは再生しません。全プロジェクト検証・実GPUでの

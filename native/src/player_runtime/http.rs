@@ -28,12 +28,20 @@ pub fn client() -> Result<Client> {
         .build()
         .map_err(|e| Error::Io(e.to_string()))
 }
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct HttpFacts {
+    pub responses: u64,
+    pub error_responses: u64,
+    pub transport_errors: u64,
+}
+
 pub struct Http {
     client: Client,
     server: Server,
     cached: Option<Value>,
     poisoned: bool,
     reconnect: bool,
+    pub(crate) facts: HttpFacts,
     pub deadline: f64,
     pub metrics: Option<std::sync::Arc<super::metrics::Metrics>>,
 }
@@ -64,11 +72,12 @@ impl Http {
             cached: None,
             poisoned: false,
             reconnect: false,
+            facts: HttpFacts::default(),
             deadline,
         })
     }
     async fn wire(
-        &self,
+        &mut self,
         method: Method,
         path: &str,
         body: Option<&[u8]>,
@@ -84,7 +93,17 @@ impl Http {
                 .header("content-type", "application/json")
                 .body(body.to_vec());
         }
-        request.send().await
+        let result = request.send().await;
+        match &result {
+            Ok(response) => {
+                self.facts.responses += 1;
+                if response.status().is_client_error() || response.status().is_server_error() {
+                    self.facts.error_responses += 1;
+                }
+            }
+            Err(_) => self.facts.transport_errors += 1,
+        }
+        result
     }
     pub async fn attest(&mut self) -> Result<()> {
         ensure(!self.poisoned, "attestation connection poisoned")?;
@@ -114,7 +133,11 @@ impl Http {
                     }),
             "attestation requires 200/no-store",
         )?;
-        let value: Value = response.json().await.map_err(|e| error(e.to_string()))?;
+        let bytes = response.bytes().await.map_err(|e| {
+            self.facts.transport_errors += 1;
+            error(e.to_string())
+        })?;
+        let value: Value = serde_json::from_slice(&bytes).map_err(|e| error(e.to_string()))?;
         value.closed(
             &[
                 "schema_version",
@@ -202,6 +225,7 @@ impl Http {
             let bytes = match response.bytes().await {
                 Ok(v) => v,
                 Err(e) => {
+                    self.facts.transport_errors += 1;
                     self.reconnect = true;
                     if retry && attempt < 2 {
                         continue;

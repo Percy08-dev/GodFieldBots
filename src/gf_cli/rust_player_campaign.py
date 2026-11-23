@@ -320,7 +320,11 @@ def prepare_campaign(loaded: LoadedHPOConfig, directory: Path, *, mode: str,
     from gf_cli.hpo_campaign import initialize_campaign
     from gf_cli.hpo_config import RustPlayerHPOCampaignConfig
     from gf_cli.hpo_storage import CampaignStore
-    from gf_cli.rust_player_entry import _capture_clock
+    from gf_cli.rust_player_entry import (
+        _capture_clock,
+        check_native_collection_storage,
+        require_native_hpo_storage,
+    )
     from gf_common.rust_player import BUILD_KEYS, runtime_binding, validate_campaign_bootstrap
     from gf_models.rust_player import sampling_runtime_identity
     from gf_simulator_client.rust_player_companion import discover_companion
@@ -333,10 +337,16 @@ def prepare_campaign(loaded: LoadedHPOConfig, directory: Path, *, mode: str,
     config = loaded.config
     if not isinstance(config, RustPlayerHPOCampaignConfig):
         raise ContractError('actual native6 campaign configuration required')
-    hpo.validate(loaded)
+    directory = hpo.campaign_directory(loaded, directory)
+    check_native_collection_storage(getattr(loaded.base.config, 'storage', None), directory,
+                                    catalog_root=hpo._originals(loaded))
+    hpo.validate(loaded, storage_probe=False)
+    hpo.check_storage(config.storage, campaign_dir=directory, originals_root=hpo._originals(loaded),
+                      deadline=time.monotonic() + config.run_wall_seconds)
     conditions = hpo._conditions(loaded)
     _settings, sources = hpo._settings_inputs(seed_paths, loaded) if mode == 'fresh' else ((), [])
     native = binary_identity()
+    require_native_hpo_storage(config.storage, native)
     companion = discover_companion(native)
     bound = runtime_binding(config.runtime, runtime_producer(companion,
         sampling_runtime_sha256=sampling_runtime_identity()))
@@ -521,8 +531,10 @@ def dispatch_campaign_training(control: Any, store: Any, study: Any, proposal: A
     import hashlib
     from types import SimpleNamespace
 
-    from gf_cli.hpo_config import materialize_hpo_run
-    from gf_cli.rust_player_entry import _capture_clock
+    from gf_cli.hpo import _originals
+    from gf_cli.hpo_config import HPODiagnosticStorageConfig, materialize_hpo_run
+    from gf_cli.hpo_storage import check_run_destination
+    from gf_cli.rust_player_entry import _capture_clock, check_native_collection_storage
     from gf_common.rust_player import deadline_seconds, runtime_binding
     from gf_models.rust_player import sampling_runtime_identity
     from gf_training.hpo_gpu_lease import require_resolved_namespace
@@ -546,6 +558,11 @@ def dispatch_campaign_training(control: Any, store: Any, study: Any, proposal: A
         sampling_runtime_sha256=sampling_runtime_identity()))
     binding = _capture_clock()
     parent = Path(materialized.config.run.output_dir) / materialized.config.run.name
+    check_native_collection_storage(materialized.config.storage, parent)
+    storage = study.loaded.config.storage
+    if isinstance(storage, HPODiagnosticStorageConfig):
+        check_run_destination(storage, campaign_dir=store.directory,
+                              originals_root=_originals(study.loaded), directory=parent)
     scope = ExitStack()
     try:
         owner = scope.enter_context(run_lock(parent, create=True))

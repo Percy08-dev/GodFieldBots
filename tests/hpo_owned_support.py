@@ -5,7 +5,7 @@ from pathlib import Path
 from gf_common.domain import clone, digest
 
 
-def owned_runtime(tmp_path,monkeypatch,kind='mlp',decision_budget=32,*,save_budget_bytes=None,operating=None):
+def owned_runtime(tmp_path,monkeypatch,kind='mlp',decision_budget=32,*,save_budget_bytes=None,operating=None,diagnostic_storage=None):
     from gf_cli.config import LoadedConfig
     from gf_cli.hpo_config import campaign_config, materialize_hpo_run
     from gf_common.structured_layout import CORRECTED_CARD_INSTANCE_LAYOUT as LAYOUT
@@ -22,8 +22,9 @@ def owned_runtime(tmp_path,monkeypatch,kind='mlp',decision_budget=32,*,save_budg
         storage={'parent_root':str(tmp_path/'parents'),'numeric_root':str(tmp_path/'parents'),'originals_root':str(tmp_path/'originals')})
     if operating is not None: raw['operating']=dict(operating)
     if save_budget_bytes is not None: raw.setdefault('operating',{})['save_budget_bytes']=save_budget_bytes
+    if diagnostic_storage is not None: raw['storage']['hpo_diagnostics']=diagnostic_storage
     raw['space']={'parameters':[],'coupled':[]}
-    campaign=campaign_config(raw,origin=tmp_path)
+    campaign=campaign_config(raw,origin=tmp_path,_new_storage_defaults=False)
     tiny=learner_for(kind)
     settings=effective_settings(tiny.model,replace(HPOTrainingConfig(),epochs=1),{},layout=LAYOUT)
     run_id='00000000-0000-0000-0000-000000000017'

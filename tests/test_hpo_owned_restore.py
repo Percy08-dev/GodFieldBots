@@ -139,21 +139,33 @@ def test_owned_external_evaluation_pins_preserve_metadata_route(tmp_path,monkeyp
     asyncio.run(run())
 
 
-@pytest.mark.parametrize('kind',['mlp','gru','transformer'])
-def test_cold_resume_matches_continuous_final_adam_rng_arrays(tmp_path,monkeypatch,kind):
+@pytest.mark.parametrize(('kind','compressed'), [('mlp',False), ('gru',False), ('transformer',False), ('mlp',True)])
+def test_cold_resume_matches_continuous_final_adam_rng_arrays(tmp_path,monkeypatch,kind,compressed):
     import asyncio
     import json
 
     from gf_models.sharded_arrays import read_bundle
+    from gf_training.hpo_update_storage import read_hpo_update
     from tests.hpo_owned_support import owned_runtime, run_owned
+    from tests.test_hpo_update_storage import diagnostic_storage
     async def one(root,pause):
         root.mkdir()
-        runtime,run_id,_,_=owned_runtime(root,monkeypatch,kind)
+        storage = diagnostic_storage(root, 'zstd') if pause and compressed else None
+        runtime,run_id,_,_=owned_runtime(root,monkeypatch,kind,diagnostic_storage=storage)
         directory=root/'parents'/run_id
         first,ops=await run_owned(runtime,directory,pause_after_update=1 if pause else None)
         if pause:
             assert first['status']=='paused'
+            updates = directory/'updates'
+            suffix = '.json.zst' if compressed else '.json'
+            saved = updates/f'000001{suffix}'
+            before = saved.read_bytes()
             _,ops=await run_owned(runtime,directory,mode='resume')
+            assert saved.read_bytes() == before
+            assert {path.name for path in updates.iterdir()} == {f'000001{suffix}', f'000002{suffix}'}
+            state = json.loads((directory/'run.json').read_text())
+            record = json.loads((directory/'generations/000002.json').read_text())
+            assert read_hpo_update(directory, 2, state, record['update_sha256'])['generation'] == 2
         snapshot=ops.completion
         assert snapshot is not None
         snapshot.close()

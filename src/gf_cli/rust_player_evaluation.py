@@ -584,7 +584,10 @@ async def _run_rust_evaluation(scope: _RustEvaluationAttempt, store: Any, loaded
     import time
     import uuid
 
-    from gf_cli.hpo_evaluation import _HpoEvaluationCleanupObservation
+    from gf_cli.hpo_evaluation import (
+        _check_live_evaluation_storage,
+        _HpoEvaluationCleanupObservation,
+    )
     from gf_common.artifacts import ArtifactPhaseAdmission
     from gf_common.card_instance_collection import checked_hpo_evaluation_parent
     from gf_common.hpo_progress import observe
@@ -606,6 +609,7 @@ async def _run_rust_evaluation(scope: _RustEvaluationAttempt, store: Any, loaded
         projected = _project_fresh_config(loaded, proposal.settings, training, output=output,
             evaluation_id=evaluation_id, started=started, hard_finish=hard_finish)
         run, config_sha = projected.config.run, projected.sha256
+        _check_live_evaluation_storage(output, projected)
         if time.monotonic() >= soft_finish:
             raise TimeoutError('original soft dispatch finish before evaluation intent')
         store.put(folder + '/evaluation.intent.json', {'schema_version': 1, 'kind': 'hpo-evaluation-intent',

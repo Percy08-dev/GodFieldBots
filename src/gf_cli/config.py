@@ -207,6 +207,25 @@ class GroupPackStorageConfig:
             self.budget_mib * MIB, self.queue_mib * MIB, self.max_pack_mib * MIB)
 
 
+@dataclass(frozen=True, kw_only=True)
+class StagedGroupPackStorageConfig(GroupPackStorageConfig):
+    collection_work_root: str
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        value = self.collection_work_root
+        if type(value) is not str or '\x00' in value or value.startswith('//'):
+            raise ContractError("collection_work_root requires an absolute normalized path")
+        path = Path(value)
+        if not path.is_absolute() or '..' in path.parts or str(path) != value:
+            raise ContractError("collection_work_root requires an absolute normalized path")
+
+
+def group_pack_storage(values: Json) -> GroupPackStorageConfig:
+    cls = StagedGroupPackStorageConfig if "collection_work_root" in values else GroupPackStorageConfig
+    return cls(**values)
+
+
 @dataclass(frozen=True)
 class GroupPackExperimentConfig(ExperimentConfig):
     storage: GroupPackStorageConfig = field(default_factory=GroupPackStorageConfig)
@@ -232,6 +251,9 @@ def _require_hpo_model4_storage(config: ExperimentConfig, command: str, *, stand
 
 
 def require_storage_command(config: ExperimentConfig, command: str, *, standalone: bool = True) -> None:
+    if (command != 'validate' and isinstance(config, GroupPackExperimentConfig)
+            and isinstance(config.storage, StagedGroupPackStorageConfig)):
+        raise ContractError('collection_work_root requires supervised native PPO training')
     if command != 'validate':
         require_legacy_player_entry(config)
     if getattr(getattr(config,'run',None),'inference_service',None) is not None and command not in ('train','validate') and not (command=='collect' and not standalone):
@@ -417,9 +439,10 @@ def load_config(path: str | Path, overrides: Json | None = None) -> LoadedConfig
             merged["training_opponents"] = parse_training_opponents(data["training_opponents"])
         if "storage" in data:
             storage = data["storage"]
-            closed(storage, set(), set(GroupPackStorageConfig.__dataclass_fields__))
+            closed(storage, set(), set(StagedGroupPackStorageConfig.__dataclass_fields__))
             storage = {**asdict(GroupPackStorageConfig()), **storage}
-            for key in ("db_root", "ram_root"):
+            roots = ("db_root", "ram_root", "collection_work_root")
+            for key in (name for name in roots if name in storage):
                 if type(storage[key]) is not str or not storage[key]:
                     raise ContractError("storage root requires a path string")
                 storage[key] = os.path.abspath(source.parent / storage[key])
@@ -427,7 +450,7 @@ def load_config(path: str | Path, overrides: Json | None = None) -> LoadedConfig
                 integer(storage[key], 1)
             if storage["format"] != "sqlite-group-pack-v1":
                 raise ContractError("unsupported storage format")
-            settings = GroupPackStorageConfig(**storage).settings()
+            settings = group_pack_storage(storage).settings()
             if settings.max_pack_bytes > settings.budget_bytes - 128 * 1024**2:
                 raise ContractError("impossible storage Pack budget")
             merged["storage"] = storage
@@ -694,8 +717,8 @@ def _normalized_config(effective: Json, *, data: Json, inputs: tuple[Json, ...])
                 or server["external_url"] is not None):
             raise ContractError("storage requires corrected actions3 and a locally managed server")
         config: ExperimentConfig = (PackedRefreshOpponentsExperimentConfig(**converted,
-            storage=GroupPackStorageConfig(**data["storage"]), training_opponents=mixed) if mixed is not None else
-            GroupPackExperimentConfig(**converted, storage=GroupPackStorageConfig(**data["storage"])))
+            storage=group_pack_storage(data["storage"]), training_opponents=mixed) if mixed is not None else
+            GroupPackExperimentConfig(**converted, storage=group_pack_storage(data["storage"])))
     else:
         config = RefreshOpponentsExperimentConfig(**converted, training_opponents=mixed) if mixed is not None else ExperimentConfig(**converted)
     return LoadedConfig(config, clone(asdict(config)), digest(asdict(config)), tuple(inputs))

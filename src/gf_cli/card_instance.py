@@ -325,9 +325,17 @@ async def _run_corrected(loaded: LoadedConfig, command: str,
         else:
             _validate_final_collection(loaded, collection, owned_ledger, _final_validation_context, preflight_deadline)
     run_id = eval_plan.linkage['evaluation_id'] if eval_plan is not None else str(uuid.uuid4())
+    from gf_common.hpo_storage import hpo_diagnostics
+    http_diagnostics = hpo_diagnostics(config.hpo_spec["storage"]) if type(config) is HPOExperimentConfig else None
+    operation_id = run_id
+    collection_id = "evaluation" if eval_plan is not None else "collection"
+    if http_diagnostics is not None and collection is not None and eval_plan is None:
+        operation_id = collection.linkage["parent_run_id"]
+        collection_id = collection.linkage["batch_id"]
     directory = (Path(config.run.output_dir) / (config.run.name + "-" + run_id)
                  if collection is None else collection.output)
-    directory.mkdir(parents=True, exist_ok=False)
+    if type(config) is not HPOExperimentConfig:
+        directory.mkdir(parents=True, exist_ok=False)
     settings = EnvironmentSettings(binary=config.server.binary, server_config=config.server.config,
         output_dir=directory, run_id=run_id, actions=config.actions,
         fixed_seed_experiment=config.server.fixed_seed_experiment,
@@ -339,7 +347,8 @@ async def _run_corrected(loaded: LoadedConfig, command: str,
                             else started + config.run.admission_seconds if collection is None else execution_deadline),
         execution_deadline=execution_deadline,
         wall_deadline=wall_deadline, work_deadline=work_deadline, replay_deadline=replay_deadline,
-        policy_bindings=bindings)
+        policy_bindings=bindings, http_diagnostics=http_diagnostics,
+        http_operation_id=operation_id, http_collection_id=collection_id)
     assert isinstance(config.run, RunConfigV2)
     ledger = (ReservationLedger(config.run.global_cuda_budget_bytes, config.run.max_participant_workers)
               if owned_ledger is None else owned_ledger)
@@ -384,6 +393,12 @@ async def _run_corrected(loaded: LoadedConfig, command: str,
                 owned_directory = Path(config.storage.db_root) / online.state['run_id'] / 'collections' / collection.linkage['batch_id']
             else:
                 _validate_final_collection(loaded, collection, owned_ledger, _final_validation_context, preflight_deadline)
+        if type(config) is HPOExperimentConfig:
+            from gf_common.hpo_storage import check_collection_destinations
+
+            originals = Path(config.storage.db_root)
+            check_collection_destinations(directory, owned_directory or (originals / run_id), catalog_root=originals)
+            directory.mkdir(parents=True, exist_ok=False)
         if observation is not None:
             observation._pack_phase = 'creating'
             packed = GroupPackCollection.__new__(GroupPackCollection)
@@ -443,7 +458,10 @@ async def _run_corrected(loaded: LoadedConfig, command: str,
                     observation._group_result(group, result)
                 if not own_environment.storage_cleanup_complete(result):
                     from gf_training.group_pack_resources import CleanupError
-                    raise CleanupError("Simulator/participant reap and drain are not confirmed", packed)
+                    error = CleanupError("Simulator/participant reap and drain are not confirmed", packed)
+                    if diagnostic := result.health.get("http_diagnostics"):
+                        error.add_note("HTTP pair diagnostics " + str(diagnostic))
+                    raise error
                 expected = {spec.episode_id: (spec, result.health.get("runtime_evidence", {}))
                             for spec in group.episodes}
                 neural_metadata = ({label: artifact_inputs.journal_metadata(label)

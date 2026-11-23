@@ -1,0 +1,211 @@
+# このファイルを configs/hpo/ 内にコピーし、実験名と保存先を変更して使います。
+# 設定検証: gf-bots hpo validate --config configs/hpo/<コピー先>.toml
+# 実行: gf-bots hpo run --config configs/hpo/<コピー先>.toml --mode fresh
+# 従来の256試合プローブと同じ学習設定です。decision_budgetは実測に基づく探索用のDに置き換えます。
+schema_version = 6
+kind = "ppo-hpo"
+origin = "producer-owned-v1"
+encoder = "canonical-rust"
+base_experiment = "../experiments/hpo-rust-mlp-256-base.toml"
+model_id = "mlp"
+stage = "mlp-256-update-budget-probe"
+trial_count = 1
+# 10,000更新 × 256試合 × 1,024学習判断 + 1。プローブで収集した判断を全部使うための値です。
+decision_budget = 2_621_440_001
+learning_seeds = [17]
+evaluation_game_seeds = [
+    "10000000-0000-0000-0000-000000000001",
+    "10000000-0000-0000-0000-000000000002",
+    "b92fb8bc-1831-5662-846c-1f4c494b01c9",
+    "57918903-84d4-55f9-9d08-af99b507b532",
+    "fd6091ea-04a7-5731-83c3-c71ce504b03d",
+    "16052ce8-7bae-566d-b233-605e42d2b86e",
+    "7d57f9fe-e370-5e20-9768-3bab76e69c6f",
+    "587a97ba-e918-53e4-8253-8cd5cf22ab9d",
+    "b62fae31-4fc3-521e-a1c6-cf45f0bc2bc8",
+    "65577f54-2d9e-5f67-9577-c87466156cd1",
+    "1484b791-2c40-5e8d-b24f-6374f74107d0",
+    "e09c5407-090b-5254-a70b-0094236d909f",
+    "b0a09695-3331-5881-bc64-9fb15831e629",
+    "60c31896-6114-5c76-9569-487748045391",
+    "c86c9edd-7537-5785-b4ba-1409cb8a956d",
+    "3cd6bae1-7fc6-5f58-b431-19a28b487fc5",
+    "908d6161-fdd0-5cde-aeca-be8d8f8b2732",
+    "ff215265-980c-5b50-924c-a1ccc50f00f9",
+    "bc26cdd5-22ed-5ba6-aee2-0ccdbc6ce4c2",
+    "91864e2d-9c71-5d27-81da-4b6a7b5e6535",
+    "58d08ccb-28ed-5936-80a0-0c8bc23cd259",
+    "f27273cc-2c90-59c5-a2bf-10907d179c72",
+    "f6990729-701a-5c28-95aa-bc30641ea9c2",
+    "ebf59700-aef6-5839-912c-0e1523661ccd",
+    "a381fb3e-80f6-53b3-9de1-99b330c3e26e",
+    "89b15d39-c03f-5ad7-af33-8cc466805810",
+    "2d24baff-24aa-5ba6-bdd7-7bd6639b29de",
+    "772a2c87-3911-599d-ac3e-c219b99daa8d",
+    "c99cd1fb-cd07-5567-8016-e61273b46a75",
+    "d7cd02c9-61e9-59bf-a899-59589d243b1d",
+    "f73cebca-27df-5702-ae60-66f26a31e000",
+    "48615d39-1475-5ca6-9e36-680e4bf7d166",
+    "7bdb1ce4-1b7f-5c7e-9ad4-af4306710145",
+    "ad65c0b0-d333-5215-9ec4-b3aaf8b8f676",
+    "6ba53f5f-8399-5a38-9ad9-d94ce18369d6",
+    "66517ece-144b-5d0f-b19e-29a40a1032a4",
+    "d839d990-2b6c-552f-affa-64508e97046e",
+    "6e2fa445-eb1e-542d-afb5-a52454ebab60",
+    "be209c42-a82e-5d80-940a-890b38f139c7",
+    "dbfb7421-f50b-5ec2-b9fa-6bfd1ec23503",
+    "e851b9b7-c4e6-530c-bede-22ca5694c305",
+    "d8ad7b70-f384-580b-8645-70579746d35e",
+    "55f49a93-215c-574e-a8fc-d52247890f68",
+    "0f3d3e63-777c-59bd-a76f-4f81b07e6e4b",
+    "bad87271-45b4-5aec-b24f-ff7038d740d9",
+    "d2fa1193-990f-51de-8a08-864dd87cb113",
+    "404b47c6-5c0f-573f-b301-e80c6e3cd1eb",
+    "f07b44ed-7b20-5c08-b4c8-99965bcec6f8",
+    "a9bd2cf8-6d37-5ecb-afd7-4997793510f2",
+    "0d895e07-06ae-5701-aa0a-632b40de11eb",
+    "8eb5a719-9fab-58e8-a9e4-5e583e24406c",
+    "afb6d0ce-f9a5-56c5-9eb4-3400ea9f890b",
+    "e27c673a-b4a7-5705-b9fe-06aa65d28819",
+    "34112263-7ed5-5a2a-9d80-64fc9671497a",
+    "774ff31f-8907-5b89-a531-29ceafe4dc85",
+    "cedf6400-8f40-529c-92fa-f39f552856f7",
+    "3f8a9505-3d12-5266-b446-68cf0f1268c5",
+    "ff92c8a6-1e58-52e6-983e-3effd6639820",
+    "426f6acc-13d4-5193-a4f2-55cc9bbc3cea",
+    "579e986e-4264-5855-a54e-c32be1bc019e",
+    "3dafd6c5-04d8-576b-b1b1-75921b9643ce",
+    "0cfd35de-e5b3-5eae-bf09-66b1bdd9b384",
+    "48ef1601-719b-5ed1-a431-602a56fc0c97",
+    "b42ac7fb-b5b1-55f3-a6d1-c4b608c936e7",
+    "810abbb2-36e6-549b-abb8-29dcf3b1763e",
+    "0dc5f1aa-16b4-58c9-a61f-851fdd1990a5",
+    "353a2b3b-c306-52f7-8fc5-7f0ce661e8ec",
+    "b0f98574-3ac4-5a62-a4dd-fe8419b91f67",
+    "c2f75400-575e-5394-8536-dde28ecbf419",
+    "6c23bfcb-92dd-542e-b2ba-622bc6170a20",
+    "3b15974d-d5e6-56c1-81d5-6612e4ac1592",
+    "2b1ac86f-7974-50c9-a191-0ea1c6eba184",
+    "100566a8-3d4a-56c9-ba00-b86c8679a0fd",
+    "3c904311-2424-5c98-a574-81a3c0063735",
+    "e066b7d9-3532-529a-b850-840b0b8f981d",
+    "d9dbe7d8-436b-5821-9564-81e691332608",
+    "3cd6eb93-1e8e-5c56-886e-3c91c597b61c",
+    "8e7c9d5e-3bd6-559e-a686-8883f3bb73af",
+    "821c56b7-be88-5e53-a56c-fc08df24f28a",
+    "fd0f9f27-6327-593a-bedc-42dbc592abf3",
+    "82c60c55-5de9-5497-a149-2b271e99489a",
+    "9ae4ad92-1488-52f5-aa3e-12aae6bdd207",
+    "451ff1b0-8d2c-5786-b1ef-e0330595bc71",
+    "9a08cde7-d7d2-51e5-8e93-cd2178c79547",
+    "da522d02-c502-5996-8c3e-0a30fea8ecc9",
+    "49ee4eca-eec0-5292-9db9-cb2f9604d32b",
+    "938945ce-849b-5022-b988-64e80a7ca34d",
+    "5a5e9304-21a2-53c8-a75e-b846394b35d4",
+    "e27eba8e-7e41-5391-a2d8-08fa76e4f535",
+    "fb8b4c6d-864b-5d78-9bc9-54373fed5079",
+    "478a3694-d259-5f26-920a-610f93c9febf",
+    "d646781c-45a1-5015-a6ca-b9eb8f75d1f6",
+    "54833244-6e95-506d-8759-53a6db104b8f",
+    "e3c49f74-8952-55e8-976b-9bd272fdb290",
+    "331883e8-e5ab-5925-9f77-61d0b8313ca8",
+    "07c1be97-b85b-5501-828f-cc14fa9408a8",
+    "4e640cfc-f4e0-5cb3-bab1-5f6a3267d48b",
+    "094ff89c-7bb6-5894-9e3a-f6916491a7f1",
+    "76449a48-5a3b-55ca-b1f6-5db7d7bbdef0",
+    "27233677-5c3a-51c6-8abc-0165a7bdc268",
+]
+sampler_seed = 17
+startup_trials = 1
+session_seconds = 1800
+run_wall_seconds = 3600
+
+[model.state]
+hidden_sizes = [192]
+
+[model.hand]
+hidden_sizes = [192]
+latent_size = 192
+
+[model.temporal]
+hidden_size = 192
+num_layers = 2
+
+[model.heads]
+actor_hidden_sizes = [192]
+critic_hidden_sizes = [192]
+
+[training]
+collection_games = 256
+epochs = 4
+minibatch_size = 64
+
+[runtime]
+mode = "rust-player-runtime-v1"
+scheduler = "tokio"
+game_concurrency = 256
+player_worker_threads = 16
+inference_recipe = "batched-torch-graph-v1"
+max_batch_size = 32
+formation_wait_ms = 1.0
+
+[inference]
+device = "cuda:0"
+candidate_chunk = 256
+max_candidates = 32768
+managed_budget_bytes = 12884901888
+
+[space]
+parameters = []
+coupled = []
+
+[operating]
+game_concurrency = 256
+# 既存の評価経路では1試合に参加者workerが2枠必要です。
+max_participant_workers = 512
+max_updates = 10_000
+post_host_seconds = 600
+managed_ram_bytes = 25769803776
+managed_cuda_bytes = 12884901888
+collector_budget_bytes = 8589934592
+source_budget_bytes = 12884901888
+numeric_budget_bytes = 1073741824
+save_budget_bytes = 1073741824
+parent_budget_bytes = 1073741824
+
+# 実験名を変える場合は stage と下記の mlp-256-probe を揃えて変えます。
+# 絶対パスを推奨します。相対パスはこのTOMLのディレクトリが基準です。
+# 別のマウント先を使う場合は /mnt/gf_data を実際の専用ext4のマウント先へ変更します。
+[storage]
+# 学習親・モデル・再開状態・更新記録と数値データ。両方に同じext4のパスを指定します。
+parent_root = "/mnt/gf_data/ppo-hpo/mlp-256-probe/parents"
+numeric_root = "/mnt/gf_data/ppo-hpo/mlp-256-probe/parents"
+# 任意。parent_root配下に置きます。省略したときは実行時に --campaign-dir を指定します。
+# 途中・最終評価の結果、キャンペーン管理情報、最良チェックポイントの索引を保存します。
+campaign_dir = "/mnt/gf_data/ppo-hpo/mlp-256-probe/parents/campaign"
+# 試行履歴。SQLite用のext4パスを指定します。
+optuna_path = "/mnt/gf_data/ppo-hpo/mlp-256-probe/study.sqlite3"
+# 学習の収集作業は基礎実験の collection_work_root に置きます。
+# Journal・Replay・候補列などを含む確定済み原本DBは専用ext4に保存します。
+originals_root = "/mnt/gf_data/ppo-hpo/mlp-256-probe/originals"
+# 容量の単位はバイトです。現在値は100 GiB、開始時の予約は1 GiBです。
+destination_capacity_bytes = 107374182400
+admission_reservation_bytes = 1073741824
+# Windows Cの空き下限もバイトで指定できます。既定は1 GiBです。
+# windows_c_min_free_bytes = 1073741824
+
+# 任意。省略時も新規実行では errors / zstd / zstd です。
+[storage.hpo_diagnostics]
+# 一時ログは書き込み可能なtmpfsへ、保持するログはext4へ保存します。
+http_log_ram_root = "/dev/shm/godfieldbots/http-logs"
+http_log_archive_root = "/mnt/gf_data/ppo-hpo/mlp-256-probe/http-logs"
+# errors + zstd は異常ペアを圧縮保存、all + zstd は正常ペアも圧縮保存します。
+# errors + none は異常ペアの生JSONL、all + none は全ペアの生JSONLを保持します。
+http_log_retention = "errors"
+http_log_compression = "zstd"
+# zstd は .json.zst、none は .json で更新記録を保存します。
+update_compression = "zstd"
+
+[ppo_source]
+training_data = "rust-ppo-training-v1"
+audit = "sealed-pack-sha256-v1"

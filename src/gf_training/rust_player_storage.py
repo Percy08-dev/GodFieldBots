@@ -1002,7 +1002,11 @@ class RustPlayerStorage:
         deferred_contexts: bool = False,
         context_plans: tuple[EpisodeEncodingPlan, ...] = (),
         training: bool = False,
+        work_directory: Path | None = None,
+        durable_mount: tuple[Path, int] | None = None,
     ) -> None:
+        if (work_directory is None) != (durable_mount is None):
+            raise ValueError("staged writer requires both work and durable mount ownership")
         if len({c.episode_id for c in contexts}) != len(contexts):
             raise ValueError("duplicate planned storage episode")
         planned = [episode for group in groups for episode in group.episodes]
@@ -1031,6 +1035,8 @@ class RustPlayerStorage:
         self._training_seal_verified = False
         self._context_plans = {plan.episode_id: plan for plan in context_plans}
         self.runtime, self.directory, self.run_id = runtime, directory, run_id
+        self._work_directory = directory if work_directory is None else work_directory
+        self._durable_mount = durable_mount
         self.settings, self.deadline, self.cleanup_deadline = settings, deadline, cleanup_deadline
         self.budget = RecordingBudget(runtime.recording_account(), deadline)
         if self.budget.limit != settings.budget_bytes:
@@ -1239,7 +1245,7 @@ class RustPlayerStorage:
         return result
 
     def close_unclaimed_training(self) -> None:
-        if not self.training or self._thread.is_alive():
+        if (not self.training and self._durable_mount is None) or self._thread.is_alive():
             return
         for trajectory in self._training_episodes.values():
             trajectory.close()
@@ -1247,6 +1253,10 @@ class RustPlayerStorage:
         if self._pending_owner is not None:
             self._pending_owner.close()
             self._pending_owner = None
+
+    def staging_input_retired(self) -> bool:
+        return (self._thread.ident is not None and not self._thread.is_alive()
+                and not self.cleanup_errors and self._publication_database is None)
 
     def cancel(self, reason: str) -> None:
         with self._condition:
@@ -1365,6 +1375,19 @@ class RustPlayerStorage:
             raise ValueError("sealed descriptor differs from original held DB")
         raw = canonical_json(descriptor, limit=MAX_JSON)
         self._publication_lease = self.budget.reserve(len(raw))
+        if self._durable_mount is not None:
+            from gf_training.rust_player_promotion import promote_collection
+
+            mount_root, mount_device = self._durable_mount
+            pending = promote_collection(database, directory=self.directory, descriptor=descriptor, raw=raw,
+                settings=self.settings, deadline=self.deadline, max_owned_bytes=self.workspace_bytes,
+                mount_root=mount_root, mount_device=mount_device)
+            self._pending_owner = RustPendingDescriptor(pending, self._publication_lease)
+            self._publication_lease = None
+            database.close()
+            self._publication_database = None
+            self._pending_owner.recheck()
+            return CollectionLocator(FORMAT, pending.path)
         target = self.directory / "collection.pending.json"
         temporary = self.directory / f".descriptor-{uuid4().hex}.tmp"
         import os
@@ -1429,7 +1452,10 @@ class RustPlayerStorage:
                     setattr(self, attribute, None)
         try:
             if self._pending_owner is not None and not self._sealed:
-                self._pending_owner._invalidate()
+                # A completed durable catalog may already reference this exact
+                # seal even when cancellation wins before Source handoff.
+                if self._durable_mount is None:
+                    self._pending_owner._invalidate()
                 self._pending_owner.close()
                 self._pending_owner = None
                 self._published = None
@@ -1477,21 +1503,21 @@ class RustPlayerStorage:
         command = None
         try:
             self._workspace_lease = _WriterWorkspace(self.workspace.reserve(self.workspace_bytes))
-            self.directory.mkdir(parents=True, exist_ok=False)
+            self._work_directory.mkdir(parents=True, exist_ok=False)
             self._database = GroupPackDatabase(max_owned_bytes=self.workspace_bytes)
             values = asdict(self.settings) | {
-                "db_root": str(self.settings.db_root),
+                "db_root": str(self.settings.db_root if self._durable_mount is None else self._work_directory.parent),
                 "ram_root": str(self.settings.ram_root),
             }
             self._db(
                 "init",
-                directory=str(self.directory),
+                directory=str(self._work_directory),
                 run_id=self.run_id,
                 settings=values,
                 deadline=self.deadline,
             )
             self._publication_database = OriginalFile(
-                self.directory / DATABASE, self.deadline, mutable=True
+                self._work_directory / DATABASE, self.deadline, mutable=True
             )
             self._ready.set()
             while True:

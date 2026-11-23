@@ -844,7 +844,7 @@ def hpo_binding_fixture(tmp_path, monkeypatch, *, fault=None):
         'kind': 'training', 'run_id': 'run', 'evaluation_id': None}
     campaign = SimpleNamespace(sha256='c' * 64, inputs=({'path': 'original', 'sha256': 'b' * 64},))
     loaded = SimpleNamespace(sha256='d' * 64, config=SimpleNamespace(run=SimpleNamespace(output_dir=str(root))))
-    monkeypatch.setattr('gf_cli.hpo_config.load_hpo_config', lambda path: campaign)
+    monkeypatch.setattr('gf_cli.hpo_config.load_hpo_config', lambda path, *, expected_sha256=None: campaign)
     namespace = root / '.operation-control/experiment/run'
     invocation = {'schema_version': 1, 'kind': 'hpo-operation-invocation-data-v1', 'context': context,
         'campaign_config_sha256': campaign.sha256, 'config_sha256': loaded.sha256,

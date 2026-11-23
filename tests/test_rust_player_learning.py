@@ -498,7 +498,8 @@ def test_model4_two_operation_limits_stay_fixed_through_group_forward(monkeypatc
     assert (learner._training_device_bytes, learner._training_reservation_bytes, asdict(learner.binding)) == before
 
 
-def test_failed_local_close_still_attempts_other_actual_cleanup_boundaries(tmp_path):
+@pytest.mark.parametrize('http_status', [None, 'archived', 'settlement_unconfirmed'])
+def test_failed_local_close_still_attempts_other_actual_cleanup_boundaries(tmp_path, http_status):
     import asyncio
     import time
     from types import SimpleNamespace
@@ -540,16 +541,29 @@ def test_failed_local_close_still_attempts_other_actual_cleanup_boundaries(tmp_p
     ops.admission = SimpleNamespace(observation={'invocation_id': 'inv', 'run_id': 'run'})
     ops.registry = SimpleNamespace(pending=None, service=SimpleNamespace(device='cpu', references={}))
     receipt = {'executed': {'pid': 1, 'start_time': 1}}
-    ops.collector = SimpleNamespace(runtime=Runtime(), server_history=[
+    second = Server('second')
+    stage = tmp_path / 'private-http'
+    if http_status is not None:
+        second.http_capture = SimpleNamespace(directory=stage)
+    async def settle_http(server, *, deadline, abnormal):
+        assert server is second and server.stopped and abnormal
+        calls.append('http-settle')
+        return {'status': http_status, 'residual': str(stage)}
+    ops.collector = SimpleNamespace(runtime=Runtime(), current=None, server_history=[
         {'server': Server('first', True), 'runtime_evidence': receipt},
-        {'server': Server('second'), 'runtime_evidence': receipt}],
-        writer_history=[{'writer': Writer(), 'descriptor_sha256': None}])
+        {'server': second, 'runtime_evidence': receipt}],
+        _matches=SimpleNamespace(settle_http=settle_http), cleanup_deadline=time.monotonic()+30,
+        writer_history=[{'writer': Writer(), 'descriptor_sha256': None}],
+        retire_work=lambda error: calls.append('work-retire'))
     local = SimpleNamespace(learner=SimpleNamespace(synchronize=lambda: calls.append('fence')))
     with run_lock(tmp_path) as owner:
         ops._ownership = owner
         with pytest.raises(OSError, match='uncertain') as failed:
             asyncio.run(ops.close_local(local, deadline=time.monotonic() + 30))
-        assert calls == ['first', 'second', 'writer', 'quiesce', 'native', 'fence']
+        expected_http = [] if http_status is None else ['http-settle']
+        assert calls == ['first', 'second', *expected_http, 'writer', 'work-retire', 'quiesce', 'native', 'fence']
+        if http_status == 'settlement_unconfirmed':
+            assert any(str(stage) in note for note in failed.value.__notes__)
         assert failed.value.cleanup_owner is ops
         assert ops.host_health['errors'] and not ops.host_health['servers_joined']
         assert ops.host_health['writers_joined'] and ops.host_health['actors_joined']

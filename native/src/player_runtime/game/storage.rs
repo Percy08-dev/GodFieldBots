@@ -1,5 +1,5 @@
 //! Immutable capture transport. Acceptance transfers custody, never proves persistence.
-use super::super::{ensure, error, training::{Episode, PlayerPpoEpisode}};
+use super::super::{ensure, error, http::HttpFacts, training::{Episode, PlayerPpoEpisode}};
 use crate::{
     budget::monotonic,
     error::{Error, Result},
@@ -178,6 +178,12 @@ impl RecordingLease {
         self.lease.lock().unwrap().take();
     }
 }
+#[derive(Clone, Copy)]
+pub(crate) struct TerminalHttpDiagnostics {
+    pub facts: HttpFacts,
+    pub abnormal: bool,
+}
+
 pub struct Record {
     pub id: u64,
     pub kind: String,
@@ -187,6 +193,7 @@ pub struct Record {
     transport_sha256: String,
     release_key: Option<(String, String, String)>,
     training: Option<Arc<Episode>>,
+    http_diagnostics: Option<TerminalHttpDiagnostics>,
     _reservation: Reservation,
 }
 struct Entry {
@@ -308,7 +315,7 @@ impl Mailbox {
         release_key: Option<(String, String, String)>,
         deadline: f64,
     ) -> Result<()> {
-        self.publish_with_training(kind, episode, game, value, release_key, deadline, None).await
+        self.publish_with_training(kind, episode, game, value, release_key, deadline, None, None).await
     }
     pub(crate) async fn publish_with_training<T: Serialize + Sync>(
         &self,
@@ -319,6 +326,7 @@ impl Mailbox {
         release_key: Option<(String, String, String)>,
         deadline: f64,
         mut training: Option<Arc<Episode>>,
+        http_diagnostics: Option<TerminalHttpDiagnostics>,
     ) -> Result<()> {
         super::super::requests::wait_duration(deadline)?;
         if monotonic() >= deadline {
@@ -377,6 +385,7 @@ impl Mailbox {
                         transport_sha256: transport_sha256.clone(),
                         release_key: release_key.clone(),
                         training: training.take(),
+                        http_diagnostics,
                         _reservation,
                     });
                     s.entries.insert(
@@ -492,6 +501,13 @@ impl StorageBundle {
     #[pyo3(name = "_training_episode")]
     fn training_episode(&self) -> Option<PlayerPpoEpisode> {
         self.record.training.as_ref().map(|episode| PlayerPpoEpisode::new(episode.clone()))
+    }
+    /// Opaque HTTP diagnostic observations; never encoded in the capture.
+    fn _http_diagnostics(&self) -> Option<(u64, u64, u64, bool)> {
+        self.record.http_diagnostics.map(|info| (
+            info.facts.responses, info.facts.error_responses,
+            info.facts.transport_errors, info.abnormal,
+        ))
     }
     #[getter]
     fn id(&self) -> u64 {

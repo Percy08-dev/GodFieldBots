@@ -9,26 +9,28 @@ import stat
 import threading
 import time
 import uuid
-from dataclasses import asdict, dataclass
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any, BinaryIO, Self
 
-from gf_cli.hpo_config import HPOStorageConfig
+from gf_cli.hpo_config import HPODiagnosticStorageConfig, HPOStorageConfig
 from gf_common.domain import ContractError, Json, integer
 from gf_common.group_pack import canonical_json, parse_json
+from gf_common.hpo_storage import (
+    HPODiagnosticsConfig,
+    check_sqlite_mounts,
+    require_zstd,
+    windows_drive,
+)
+from gf_common.hpo_storage import destination_mount as _destination_mount
+from gf_common.hpo_storage import existing_ancestor as _existing
+from gf_common.hpo_storage import read_mounts as _mounts
+from gf_common.hpo_storage import safe_storage_path as _safe
 
 
 def _deadline(deadline: float) -> None:
     if time.monotonic() >= deadline:
         raise TimeoutError('HPO storage admission deadline')
-
-
-def _safe(path: Path) -> None:
-    if not path.is_absolute() or '..' in path.parts:
-        raise ContractError('absolute HPO owned storage path required')
-    for ancestor in (path, *path.parents):
-        if ancestor.is_symlink():
-            raise ContractError('symlink in HPO owned storage ancestry')
 
 
 def _sync(path: Path) -> None:
@@ -58,6 +60,48 @@ def _directories(path: Path) -> None:
 
 class CampaignBusy(ContractError):
     """An actual campaign owner already holds the campaign lock."""
+
+
+def _read_campaign_record(path: Path, *, limit: int, newline: bool) -> tuple[Json, str]:
+    info = path.lstat()
+    if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_nlink != 1:
+        raise ContractError('campaign record must be an actual owned regular file')
+    if info.st_size > limit + 1:
+        raise ContractError('campaign record exceeds declared parent envelope')
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(fd, 'rb') as source:
+        opened = os.fstat(source.fileno())
+        if (opened.st_dev, opened.st_ino) != (info.st_dev, info.st_ino):
+            raise ContractError('campaign record changed before read')
+        data = source.read(limit + 2)
+        after = os.fstat(source.fileno())
+        current = path.lstat()
+        before_identity = (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+        if any((item.st_dev, item.st_ino, item.st_size, item.st_mtime_ns, item.st_ctime_ns) != before_identity
+               for item in (after, current)):
+            raise ContractError('campaign record changed during read')
+    if not newline:
+        encoded = data
+    else:
+        if not data.endswith(b'\n'):
+            raise ContractError('canonical completed campaign record required')
+        encoded = data[:-1]
+    value = parse_json(encoded, canonical=True, limit=limit)
+    if type(value) is not dict:
+        raise ContractError('closed campaign record object required')
+    return value, hashlib.sha256(data).hexdigest()
+
+
+def read_campaign_manifest(directory: Path, *, max_owned_bytes: int) -> Json:
+    """Read the immutable manifest for preflight before opening a writable owner."""
+    path = directory / 'campaign.json'
+    _safe(path)
+    value, _ = _read_campaign_record(path, limit=max_owned_bytes // 32, newline=True)
+    checksum = value.get('loaded_config_sha256')
+    if (value.get('kind') != 'hpo-campaign' or type(checksum) is not str
+            or re.fullmatch(r'[0-9a-f]{64}', checksum) is None):
+        raise ContractError('original campaign configuration hash required')
+    return value
 
 
 class CampaignStore:
@@ -171,33 +215,7 @@ class CampaignStore:
     def get(self, name: str) -> tuple[Json, str]:
         path = self._path(name)
         try:
-            info = path.lstat()
-            if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_nlink != 1:
-                raise ContractError('campaign record must be an actual owned regular file')
-            if info.st_size > self._limit + 1:
-                raise ContractError('campaign record exceeds declared parent envelope')
-            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
-            with os.fdopen(fd, 'rb') as source:
-                opened = os.fstat(source.fileno())
-                if (opened.st_dev, opened.st_ino) != (info.st_dev, info.st_ino):
-                    raise ContractError('campaign record changed before read')
-                data = source.read(self._limit + 2)
-                after = os.fstat(source.fileno())
-                current = path.lstat()
-                before_identity = (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
-                if any((item.st_dev, item.st_ino, item.st_size, item.st_mtime_ns, item.st_ctime_ns) != before_identity
-                       for item in (after, current)):
-                    raise ContractError('campaign record changed during read')
-            if name.split('/')[0] == 'supervision':
-                encoded = data
-            else:
-                if not data.endswith(b'\n'):
-                    raise ContractError('canonical completed campaign record required')
-                encoded = data[:-1]
-            value = parse_json(encoded, canonical=True, limit=self._limit)
-            if type(value) is not dict:
-                raise ContractError('closed campaign record object required')
-            return value, hashlib.sha256(data).hexdigest()
+            return _read_campaign_record(path, limit=self._limit, newline=name.split('/')[0] != 'supervision')
         except FileNotFoundError:
             raise
         except ValueError as error:
@@ -477,81 +495,12 @@ class CampaignStore:
         self.close()
 
 
-@dataclass(frozen=True)
-class Mount:
-    mount_id: int
-    device: str
-    root: str
-    mount_point: str
-    fs_type: str
-    source: str
-    options: tuple[str, ...]
-
-
-def _unescape(value: str) -> str:
-    return re.sub(r'\\([0-7]{3})', lambda match: chr(int(match[1], 8)), value)
-
-
-def mount_facts(text: str) -> tuple[Mount, ...]:
-    result = []
-    for line in text.splitlines():
-        try:
-            before, after = line.split(' - ', 1)
-            fields, filesystem = before.split(), after.split()
-            if len(fields) < 6 or len(filesystem) != 3:
-                raise ValueError
-            mount = Mount(int(fields[0]), fields[2], _unescape(fields[3]), _unescape(fields[4]),
-                filesystem[0], _unescape(filesystem[1]),
-                tuple(_unescape(value) for value in (fields[5] + ',' + filesystem[2]).split(',')))
-            if not Path(mount.mount_point).is_absolute():
-                raise ValueError
-            result.append(mount)
-        except (ValueError, IndexError) as error:
-            raise ContractError('unreadable actual Linux mount identity') from error
-    if not result:
-        raise ContractError('actual Linux mount table required')
-    return tuple(result)
-
-
-def _mounts() -> tuple[Mount, ...]:
-    return mount_facts(Path('/proc/self/mountinfo').read_text())
-
-
-def windows_drive(mount: Mount) -> str | None:
-    if mount.fs_type not in ('9p', 'drvfs', 'fuseblk'):
-        return None
-    match = re.match(r'^([A-Za-z]):[\\/]', mount.source)
-    if match is not None:
-        return match[1].upper()
-    if mount.fs_type in ('9p', 'drvfs'):
-        for option in mount.options:
-            match = re.search(r'(?:^|;)path=([A-Za-z]):[\\/]', option)
-            if match is not None and ('drvfs' in option or mount.fs_type == 'drvfs'):
-                return match[1].upper()
-    return None
-
-
-def _existing(path: Path) -> Path:
-    _safe(path)
-    while not path.exists():
-        path = path.parent
-    return path
-
-
-def _mount(path: Path, mounts: tuple[Mount, ...]) -> Mount:
-    actual = _existing(path)
-    candidates = [mount for mount in mounts if actual.is_relative_to(Path(mount.mount_point))]
-    if not candidates:
-        raise ContractError('destination has no actual mounted filesystem identity')
-    return max(candidates, key=lambda mount: (len(Path(mount.mount_point).parts), mount.mount_id))
-
-
 def _free(path: Path) -> int:
     info = os.statvfs(path)
     return info.f_bavail * info.f_frsize
 
 
-def _usage(path: Path, deadline: float) -> int:
+def _usage(path: Path, deadline: float, *, excluded: Path | None = None) -> int:
     if not path.exists():
         return 0
     total = 0
@@ -559,6 +508,8 @@ def _usage(path: Path, deadline: float) -> int:
     while pending:
         _deadline(deadline)
         current = pending.pop()
+        if current == excluded:
+            continue
         info = current.lstat()
         if stat.S_ISREG(info.st_mode):
             total += info.st_size
@@ -570,35 +521,120 @@ def _usage(path: Path, deadline: float) -> int:
     return total
 
 
-def check_storage(storage: HPOStorageConfig, *, campaign_dir: Path, originals_root: Path,
-                  deadline: float) -> Json:
-    """Measure actual destinations before work; this is not an OS quota promise."""
-    if type(storage) is not HPOStorageConfig:
+def _overlap(left: Path, right: Path) -> bool:
+    return left.is_relative_to(right) or right.is_relative_to(left)
+
+
+def storage_destinations(storage: HPOStorageConfig, *, campaign_dir: Path | None, originals_root: Path,
+                         run_directory: Path | None = None, operation_dir: Path | None = None) -> Json:
+    """Resolve the declared layout without a live filesystem admission."""
+    if not isinstance(storage, HPOStorageConfig):
         raise ContractError('closed HPO storage settings required')
-    _deadline(deadline)
     parent, numeric, optuna = map(Path, (storage.parent_root, storage.numeric_root, storage.optuna_path))
-    for path in (parent, numeric, optuna, campaign_dir, originals_root):
+    windows = Path(storage.windows_c_root)
+    paths = (parent, numeric, optuna, originals_root, windows)
+    for path in paths:
         _safe(path)
-    if parent != numeric or not campaign_dir.is_relative_to(parent):
+    if parent != numeric:
         raise ContractError('HPO numeric controls must colocate with parent and campaign namespace')
+    control_dir = campaign_dir if campaign_dir is not None else operation_dir
+    if campaign_dir is not None and operation_dir is not None:
+        raise ContractError('supply either the HPO campaign or operation directory')
+    if control_dir is not None:
+        _safe(control_dir)
+    if campaign_dir is not None and (campaign_dir == parent or not campaign_dir.is_relative_to(parent)):
+        raise ContractError('HPO campaign namespace must be beneath parent_root')
+    if run_directory is not None:
+        _safe(run_directory)
+        if run_directory == parent or not run_directory.is_relative_to(parent):
+            raise ContractError('HPO run directory must be beneath parent_root')
     if storage.ext4_control_required is not True:
         raise ContractError('HPO parent/numeric/Optuna must remain ext4')
+    result: Json = dict(zip(('parent_root', 'numeric_root', 'optuna_path', 'originals_root',
+                            'windows_c_root'), map(str, paths), strict=True))
+    result['operation_dir' if operation_dir is not None else 'campaign_dir'] = (
+        None if control_dir is None else str(control_dir))
+    if not isinstance(storage, HPODiagnosticStorageConfig):
+        return result
+    diagnostics = storage.hpo_diagnostics
+    archive, ram = Path(diagnostics.http_log_archive_root), Path(diagnostics.http_log_ram_root)
+    for path in (archive, ram):
+        _safe(path)
+        if (parent.is_relative_to(path) or any(_overlap(path, other)
+                for other in (originals_root, control_dir, optuna, run_directory) if other is not None)):
+            raise ContractError('HPO HTTP logs must be separate from original and control directories')
+    return result | {'hpo_diagnostics': asdict(diagnostics)}
+
+
+def check_run_destination(storage: HPOStorageConfig, *, campaign_dir: Path, originals_root: Path,
+                          directory: Path) -> None:
+    storage_destinations(storage, campaign_dir=campaign_dir, originals_root=originals_root, run_directory=directory)
+    _destination_mount(directory, _mounts(), fs_type='ext4', writable=True)
+
+
+def check_evaluation_destination(output: Path, *, originals_root: Path | None = None,
+                                 diagnostics: HPODiagnosticsConfig | None = None) -> None:
+    mounts = _mounts()
+    _destination_mount(output, mounts, fs_type='ext4', writable=True)
+    if originals_root is not None:
+        _destination_mount(originals_root, mounts, writable=True)
+    if diagnostics is not None:
+        if diagnostics.http_log_compression == 'zstd':
+            require_zstd()
+        for path, fs_type in ((Path(diagnostics.http_log_archive_root), 'ext4'),
+                              (Path(diagnostics.http_log_ram_root), 'tmpfs')):
+            if _overlap(path, output) or originals_root is not None and _overlap(path, originals_root):
+                raise ContractError('HPO HTTP logs must be separate from evaluation and original destinations')
+            _destination_mount(path, mounts, fs_type=fs_type, writable=True)
+
+
+def check_comparison_input(directory: Path, optuna: Path) -> None:
+    """Verify destinations opened writable by an existing comparison audit."""
+    mounts = _mounts()
+    _destination_mount(directory, mounts, fs_type='ext4', writable=True)
+    if optuna.exists() or optuna.is_symlink():
+        check_sqlite_mounts(optuna, mounts, fs_type='ext4', writable=True)
+
+
+def check_storage(storage: HPOStorageConfig, *, originals_root: Path, deadline: float,
+                  campaign_dir: Path | None = None, operation_dir: Path | None = None,
+                  writable: bool = True, run_directory: Path | None = None) -> Json:
+    """Check physical destinations before work and account for declared storage reserve."""
+    _deadline(deadline)
+    if campaign_dir is None and operation_dir is None:
+        raise ContractError('an actual HPO campaign or operation directory is required')
+    paths = storage_destinations(storage, campaign_dir=campaign_dir, originals_root=originals_root,
+                                 run_directory=run_directory, operation_dir=operation_dir)
+    parent, optuna = Path(paths['parent_root']), Path(paths['optuna_path'])
     for value in (storage.destination_capacity_bytes, storage.admission_reservation_bytes, storage.windows_c_min_free_bytes):
         integer(value, 1, 2**63 - 1)
     mounts = _mounts()
+    targets = ((parent, 'ext4'), (optuna.parent, 'ext4'), (originals_root, None))
+    measured = {path: _destination_mount(path, mounts, fs_type=fs_type, writable=writable)
+                for path, fs_type in targets}
+    control_dir = paths['campaign_dir' if campaign_dir is not None else 'operation_dir']
+    _destination_mount(Path(control_dir), mounts, fs_type='ext4', writable=writable)
+    check_sqlite_mounts(optuna, mounts, fs_type='ext4', writable=writable)
+    if run_directory is not None:
+        _destination_mount(run_directory, mounts, fs_type='ext4', writable=writable)
+    http_mounts = {}
+    archive = None
+    if isinstance(storage, HPODiagnosticStorageConfig):
+        diagnostics = storage.hpo_diagnostics
+        if 'zstd' in (diagnostics.http_log_compression, diagnostics.update_compression):
+            require_zstd()
+        archive = Path(diagnostics.http_log_archive_root)
+        for path, fs_type in ((archive, 'ext4'), (Path(diagnostics.http_log_ram_root), 'tmpfs')):
+            mount = _destination_mount(path, mounts, fs_type=fs_type, writable=writable)
+            existing = _existing(path)
+            free = _free(existing)
+            if free == 0:
+                raise ContractError(f'HPO HTTP diagnostic destination is full: {path}')
+            http_mounts[str(path)] = {'mount': asdict(mount), 'free_bytes': free}
     rows = []
-    seen = set()
-    for path, ext4 in ((parent, True), (numeric, True), (optuna.parent, True), (originals_root, False)):
-        if path in seen:
-            continue
-        seen.add(path)
+    for path, mount in measured.items():
         _deadline(deadline)
-        mount = _mount(path, mounts)
-        if ext4 and mount.fs_type != 'ext4':
-            raise ContractError('HPO parent/model/numeric/Optuna destination is not actual ext4')
-        if path.is_relative_to(Path('/mnt/d')) and windows_drive(mount) != 'D':
-            raise ContractError('configured D-drive destination cannot fall back to an SSD ancestor')
-        used, free = _usage(path, deadline), _free(_existing(path))
+        used, free = _usage(path, deadline, excluded=archive), _free(_existing(path))
         if used + storage.admission_reservation_bytes > storage.destination_capacity_bytes or free < storage.admission_reservation_bytes:
             raise ContractError('actual destination usage/free space cannot admit declared storage reservation')
         rows.append({'path': str(path), 'mount': asdict(mount), 'used_bytes': used, 'free_bytes': free,
@@ -607,13 +643,17 @@ def check_storage(storage: HPOStorageConfig, *, campaign_dir: Path, originals_ro
     _safe(windows)
     if not windows.is_dir():
         raise ContractError('actual Windows C path must exist; no ancestor free-space fallback')
-    mount = _mount(windows, mounts)
+    mount = _destination_mount(windows, mounts, writable=False)
     if windows_drive(mount) != 'C':
         raise ContractError('actual mount facts cannot prove configured path is Windows C')
     free = _free(windows)
     if free < storage.windows_c_min_free_bytes:
         raise ContractError('actual Windows C free space is below declared minimum')
     _deadline(deadline)
-    return {'schema_version': 1, 'kind': 'hpo-storage-admission', 'usage_scope': 'regular-file-size-sum',
+    receipt: Json = {'schema_version': 1, 'kind': 'hpo-storage-admission',
+        'usage_scope': 'regular-file-size-sum' if archive is None else 'regular-file-size-sum-excluding-http-archive',
         'destinations': rows, 'windows_c': {'path': str(windows), 'drive': 'C', 'mount': asdict(mount),
             'free_bytes': free, 'minimum_free_bytes': storage.windows_c_min_free_bytes}}
+    if http_mounts:
+        receipt['http_diagnostics_destinations'] = http_mounts
+    return receipt

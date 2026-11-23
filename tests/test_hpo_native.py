@@ -105,6 +105,18 @@ def test_actual_candidate_public_hpo_admission_and_old_markers(candidate):
     assert hpo_reader_settings(settings,candidate,packed=True)==asdict(settings)
 
 
+def test_new_hpo_storage_refuses_old_native_reader_before_admission(monkeypatch):
+    from gf_common.hpo import NATIVE_CAPABILITY
+    from gf_training import native_backend
+
+    settings = PreparationConfig(backend='rust', reader='participant-structured-v2')
+    module = SimpleNamespace(build_info=lambda: [('card_instance_hpo', NATIVE_CAPABILITY)])
+    monkeypatch.setattr(native_backend, 'card_instance_reader_settings',
+        lambda *_: pytest.fail('old package reached native reader admission'))
+    with pytest.raises(ContractError, match='update storage'):
+        native_backend.hpo_reader_settings(settings, module, require_update_storage=True)
+
+
 def _authorization(directory,pending):
     from gf_common.domain import canonical, digest
     from gf_common.schedule import serialize_schedule

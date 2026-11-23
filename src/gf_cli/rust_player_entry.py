@@ -17,6 +17,7 @@ from typing import Any
 
 from gf_cli.config import LoadedConfig
 from gf_common.domain import ContractError, Json, canonical, digest
+from gf_common.hpo_storage import check_staged_collection_destinations
 
 
 def _config(loaded: LoadedConfig) -> tuple[Any, bool, float]:
@@ -30,6 +31,13 @@ def _config(loaded: LoadedConfig) -> tuple[Any, bool, float]:
     if not hasattr(cfg.run, 'post_host_seconds'):
         raise ContractError('public execution requires explicit post_host_seconds')
     return cfg, hpo, cfg.run.post_host_seconds
+
+
+def check_native_collection_storage(storage: Any, directory: Path, *, catalog_root: Path | None = None) -> None:
+    work = getattr(storage, 'collection_work_root', None)
+    if work is not None:
+        check_staged_collection_destinations(
+            Path(work), directory, catalog_root=catalog_root or Path(storage.db_root))
 
 
 def startup_preview(loaded: LoadedConfig) -> Json:
@@ -321,6 +329,7 @@ def prepare_ordinary(loaded: LoadedConfig, directory: Path, *, mode: str,
         raise ContractError('explicit ordinary fresh/resume factory required')
     if pause_after_update is not None:
         integer(pause_after_update, 1)
+    check_native_collection_storage(cfg.storage, Path(directory).absolute())
     startup_preview(loaded)
     native = binary_identity()
     companion = discover_companion(native)
@@ -451,10 +460,23 @@ class PreparedHpoOperation(PreparedOrdinary):
         self._require_records([mapping, _parent_mapping(self.ownership)])
 
 
+def require_native_hpo_storage(storage: Any, identity: Json) -> None:
+    from gf_cli.hpo_config import HPODiagnosticStorageConfig
+    if isinstance(storage, HPODiagnosticStorageConfig):
+        from gf_training.native_backend import CARD_INSTANCE_HPO_UPDATE_STORAGE, load_native
+
+        native = load_native()
+        if (identity['build'].get('card_instance_hpo_update_storage') != CARD_INSTANCE_HPO_UPDATE_STORAGE
+                or not hasattr(getattr(native, 'StorageBundle', None), '_http_diagnostics')):
+            raise ContractError('HPO diagnostics storage requires a matching native runtime wheel')
+
+
 @contextmanager
 def prepare_hpo_operation(loaded: LoadedConfig, context: Any, namespace: Path, *, mode: str,
                           pause_after_update: int | None = None) -> Iterator[PreparedHpoOperation]:
     """Fixed hpo-train launch owning BOTH actual OFDs inside original clocks."""
+    from gf_cli.hpo_config import sealed_storage
+    from gf_cli.hpo_storage import check_storage
     from gf_cli.rust_player_campaign import _store_mapping
     from gf_common.domain import integer
     from gf_common.rust_player import (
@@ -477,8 +499,13 @@ def prepare_hpo_operation(loaded: LoadedConfig, context: Any, namespace: Path, *
     namespace = Path(namespace).absolute()
     namespace_data = _operation_namespace_data(loaded, context, namespace)
     parent = Path(namespace_data['parent_directory'])
+    check_native_collection_storage(cfg.storage, parent)
     startup_preview(loaded)
+    storage = sealed_storage(cfg.hpo_spec['storage'])
+    check_storage(storage, operation_dir=namespace, originals_root=Path(cfg.storage.db_root),
+                  run_directory=parent, deadline=time.monotonic() + cfg.run.wall_seconds)
     native = binary_identity()
+    require_native_hpo_storage(storage, native)
     companion = discover_companion(native)
     producer = runtime_producer(companion, sampling_runtime_sha256=sampling_runtime_identity())
     bound = runtime_binding(cfg.hpo_spec['runtime'], producer)

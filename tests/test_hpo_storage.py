@@ -9,10 +9,9 @@ from gf_cli.hpo_storage import (
     CampaignBusy,
     CampaignStore,
     check_storage,
-    mount_facts,
-    windows_drive,
 )
 from gf_common.domain import ContractError
+from gf_common.hpo_storage import mount_facts, windows_drive
 
 
 def test_campaign_records_are_owned_immutable_and_require_the_held_lock(tmp_path):

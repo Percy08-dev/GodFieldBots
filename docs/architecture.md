@@ -2,6 +2,23 @@
 
 ## Status and scope
 
+[ADR0065](adr/0065-staged-native-collection-storage.md) defines opt-in
+collection staging for supervised native PPO and HPO6. The existing writer
+collects on tmpfs, then verifies and synchronizes the closed SQLite Pack
+on dedicated ext4. It binds Source ownership to the durable files before
+projection. The collection transaction and the same-boot training resume
+boundary keep their existing roles.
+
+[ADR0064](adr/0064-hpo-storage-and-compression.md) adds TOML-selected HPO
+destinations and checks live mount and write readiness before opening
+storage. Managed servers keep pair-scoped HTTP capture on tmpfs. After server
+shutdown, diagnostics retain failing pairs by default in a separate archive.
+New HPO update controls use zstd with stored-byte hashes and bounded,
+format-aware Python and Rust readers. Historical parents retain their
+recorded configuration and JSON format.
+[Verification](verification/hpo-storage-and-compression.md) records coverage
+and the physical performance comparison conditions.
+
 [ADR0057](adr/0057-rust-ppo-training-data.md) accepts the versioned Rust PPO
 training-data route for Model3 and Model4 MLPs. The acting game task retains
 the accepted learner operands. The original writer binds them to sealed

@@ -482,14 +482,15 @@ def observer_data(directory: Path, *, scan: Any) -> Json:
     return result
 
 
-def _configuration(path: Path, lane: str, *, run_id: str | None, learning_seed: int | None) -> Any:
+def _configuration(path: Path, lane: str, *, run_id: str | None, learning_seed: int | None,
+                   expected_campaign_sha256: str | None = None) -> Any:
     if lane.endswith('-hpo'):
         from gf_cli.hpo_config import load_hpo_config, materialize_hpo_run
         from gf_common.structured_layout import CORRECTED_CARD_INSTANCE_LAYOUT as layout
         from gf_training.hpo_config import effective_settings
         if run_id is None or learning_seed is None:
             raise ContractError('HPO requires original declared run UUID/learning seed')
-        campaign = load_hpo_config(path)
+        campaign = load_hpo_config(path, expected_sha256=expected_campaign_sha256)
         if campaign.config.schema_version != (6 if lane == 'native-hpo' else 5):
             raise ContractError('experiment requires shared HPO5 or native HPO6 CONFIG')
         selected = effective_settings(campaign.config.model, campaign.config.training, {}, layout=layout)
@@ -527,6 +528,7 @@ def _native_chain(parent: Path, loaded: Any, scan: Any, state: Json, state_sha: 
     )
     from gf_common.rust_player_clock import operation_clock
     from gf_common.rust_ppo_source import source_mode
+    from gf_training.hpo_update_storage import check_update_inventory, read_hpo_update
     from gf_training.rust_player_completion import _audit_saved_data
     from gf_training.rust_player_lineage import (
         validate_completion,
@@ -537,6 +539,8 @@ def _native_chain(parent: Path, loaded: Any, scan: Any, state: Json, state_sha: 
     hpo = bool(getattr(loaded.config, 'hpo_spec', {}))
     mode = source_mode(loaded.effective)
     validate_run(state, hpo=hpo)
+    if hpo:
+        check_update_inventory(parent, state['updates'], state, scan)
     records = []
     previous = None
     for generation in range(state['updates'] + 1):
@@ -623,7 +627,8 @@ def _native_chain(parent: Path, loaded: Any, scan: Any, state: Json, state_sha: 
                 ('inference_sha256', 'resume_sha256', 'artifact_files', 'optimizer_steps')):
             raise ContractError('cold saved pair differs from actual committed generation')
         for fact in audit['updates']:
-            update = scan.object(parent / 'updates' / f'{fact["generation"]:06}.json', records[fact['generation']]['update_sha256'])
+            generation = fact['generation']
+            update = read_hpo_update(parent, generation, state, records[generation]['update_sha256'], scan=scan)
             validate_record_shape(update, 'update', hpo=hpo)
             if (update['collection_manifest_sha256'] != fact['manifest_sha256']
                     or update['numeric_sha256'] != fact['numeric_sha256']
@@ -689,7 +694,7 @@ def _legacy_hpo_binding(parent: Path, loaded: Any, *, config_path: Path,
     invocation = scan.object(namespace / 'invocations' / (context['operation_id'] + '.json'))
     closed(invocation, {'schema_version', 'kind', 'context', 'campaign_config_sha256', 'config_sha256',
         'config_inputs', 'mode', 'pause_after_update', 'launcher_path', 'launcher_sha256', 'python_executable'})
-    campaign = load_hpo_config(config_path)
+    campaign = load_hpo_config(config_path, expected_sha256=invocation['campaign_config_sha256'])
     pause = argument('--pause-after-update', optional=True)
     if (type(invocation['schema_version']) is not int or invocation['schema_version'] != 1
             or invocation['kind'] != 'hpo-operation-invocation-data-v1' or invocation['context'] != context
@@ -809,6 +814,7 @@ def _audit_parent(parent: Path, loaded: Any, *, lane: str, observer_directory: P
                   full_source_audit: bool = False) -> tuple[Json, Json]:
     from gf_common.rust_ppo_source import source_mode
     from gf_models.structured_sealed import MAX_SEALED_SCAN_BYTES
+    from gf_training.hpo_update_storage import read_hpo_update
     from gf_training.lineage import require_hpo_run_owner
     from gf_training.structured_lineage import _ChainScan
     from gf_training.structured_rollout import _owned_bytes
@@ -874,7 +880,7 @@ def _audit_parent(parent: Path, loaded: Any, *, lane: str, observer_directory: P
                 empty_pack = audit_empty_source(ownership, loaded, state, records, entry['empty_collection'],
                     admission, full=full_source_audit, max_owned_bytes=scan.limit - scan.retained, deadline=deadline)
         for generation, record in enumerate(records[1:], 1):
-            update = scan.object(parent / 'updates' / f'{generation:06}.json', record['update_sha256'])
+            update = read_hpo_update(parent, generation, state, record['update_sha256'], scan=scan)
             proof = update['source_proof']
             if lane.startswith('native-'):
                 diagnostic = {'source_proof': {'storage': proof['storage'], 'closure_counts': proof['closure_counts'],
@@ -1198,11 +1204,19 @@ def verify_operation(*, config_path: Path, parent: Path, observer_directory: Pat
     if lane not in ('native-ordinary', 'native-hpo', 'legacy-ordinary', 'legacy-hpo'):
         raise ContractError('explicit supported operation lane required')
     started = time.monotonic()
-    loaded = _configuration(config_path, lane, run_id=run_id, learning_seed=learning_seed)
-    limit, seconds = _bounds(loaded)
-    deadline = started + seconds
     parent = parent.absolute()
     with run_lock(parent) as ownership:
+        expected_campaign_sha256 = None
+        if lane.endswith('-hpo'):
+            from gf_models.structured_sealed import SealedScan, checksum
+            scan = SealedScan(max_owned_bytes=64 * 1024**2, deadline=started + 60)
+            state = scan.object(parent / 'run.json')
+            expected_campaign_sha256 = checksum(state['effective_config']['hpo_spec']['campaign_config_sha256'])
+            del scan, state
+        loaded = _configuration(config_path, lane, run_id=run_id, learning_seed=learning_seed,
+            expected_campaign_sha256=expected_campaign_sha256)
+        limit, seconds = _bounds(loaded)
+        deadline = started + seconds
         return _verify_owned(config_path=config_path, parent=parent, observer_directory=observer_directory,
             telemetry_directory=telemetry_directory, observation_id=observation_id, lane=lane,
             run_id=run_id, learning_seed=learning_seed, loaded=loaded, limit=limit, deadline=deadline,

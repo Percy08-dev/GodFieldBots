@@ -11,6 +11,7 @@ from gf_common.card_instance import ActionConfigV3
 from gf_common.card_instance_rules import card_instance_rules
 from gf_common.domain import ContractError, Json, canonical, digest
 from gf_common.hpo_progress import ActiveRate, ProgressCallback, observe
+from gf_common.hpo_storage import HPO_STORAGE_EXTENSIONS
 from gf_common.structured_layout import CORRECTED_CARD_INSTANCE_LAYOUT as LAYOUT
 from gf_models.structured_binding import ConfiguredNeuralModelV4, input_binding_game_v3
 from gf_models.structured_config import InferenceBindingV2
@@ -103,7 +104,9 @@ class _HpoOperations(_GameOperations):
         if config.preprocessing.backend=='rust':
             from gf_training.native_backend import hpo_reader_settings, load_native
             self.native=load_native()
-            hpo_reader_settings(config.preprocessing,self.native,packed=hasattr(config,'storage'),resident=config.hpo_spec['schema_version']==3)
+            hpo_reader_settings(config.preprocessing,self.native,packed=hasattr(config,'storage'),
+                resident=config.hpo_spec['schema_version']==3,
+                require_update_storage=not HPO_STORAGE_EXTENSIONS.isdisjoint(spec['storage']))
         return model
 
     def preflight(self,config: Any,*,deadline: float) -> None:

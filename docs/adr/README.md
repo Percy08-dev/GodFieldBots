@@ -14,6 +14,12 @@
 
 ## 一覧
 
+[0065](0065-staged-native-collection-storage.md) — ネイティブPPO・HPO6の
+収集をtmpfsで行い、HDD上の専用ext4へ検証・同期してからSourceを発行する。
+
+[0064](0064-hpo-storage-and-compression.md) — Accepted。HPOの保存先をTOMLで
+指定し、席交換ペアのHTTP診断と更新JSONにzstdを導入する。過去の更新は元の形式で読む。
+
 [0060](0060-rust-player-journal-handoff.md) — 共通のRust対戦経路でJournalを連続取得し、
 全試合が設定上限に収まる収集では、ペアの実行証跡とwriterコンテキストを確定して一括投入する。
 

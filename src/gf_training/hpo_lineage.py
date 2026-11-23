@@ -25,10 +25,13 @@ from gf_common.hpo_resident import (
     cache_owner,
     is_resident,
 )
+from gf_common.hpo_storage import HPO_STORAGE_EXTENSIONS, check_storage_extensions
+from gf_common.hpo_update_bytes import ENCODER_BYTES, encode_update
 from gf_common.preprocessing import preparation_config
 from gf_common.structured_layout import CORRECTED_CARD_INSTANCE_LAYOUT as LAYOUT
 from gf_common.validation import result as validate_result
 from gf_models.config import PPOTrainingConfig
+from gf_models.sharded_arrays import json_bytes
 from gf_models.structured_artifacts import adam_recipe
 from gf_models.structured_binding import (
     child_cuda_visibility,
@@ -48,6 +51,12 @@ from gf_models.structured_sealed import (
     pruning_basename,
 )
 from gf_training.hpo_config import effective_settings, finite_number, hpo_training_config
+from gf_training.hpo_update_storage import (
+    check_update_inventory,
+    compressed_updates,
+    read_hpo_update,
+    update_name,
+)
 from gf_training.lineage import (
     RunOwnership,
     checkpoint_path,
@@ -173,7 +182,8 @@ def _checked_hpo_spec(state: Json) -> Json:
     integer(operating["resume_latest"], 2, 1024)
     if operating["max_participant_workers"] < 2 * operating["game_concurrency"]:
         raise ContractError("HPO simultaneous player roles exceed worker projection")
-    storage = closed(spec["storage"], _STORAGE)
+    storage = closed(spec["storage"], _STORAGE, HPO_STORAGE_EXTENSIONS)
+    check_storage_extensions(storage)
     for name in ("parent_root", "numeric_root", "optuna_path", "windows_c_root"):
         _path(storage[name])
     if storage["originals_root"] is not None:
@@ -651,7 +661,7 @@ def sync_hpo_ancestry(path: Path, *, ownership: RunOwnership) -> None:
 
 
 def write_hpo_control(path: Path, value: Json, *, scan: _ChainScan, immutable: bool = False,
-                        ownership: RunOwnership | None = None) -> str:
+                        ownership: RunOwnership | None = None, prepared: bytes | None = None) -> str:
     owner=require_hpo_run_owner(scan.root,ownership)
     try:
         sync_hpo_ancestry(path.parent,ownership=owner)
@@ -660,7 +670,7 @@ def write_hpo_control(path: Path, value: Json, *, scan: _ChainScan, immutable: b
                 raise ContractError('HPO publication refuses foreign/preexisting control entry')
             with scan.file(path,scan.verified_digest(path)): pass
         require_hpo_run_owner(scan.root,owner)
-        result = _write(path, value, scan=scan, immutable=immutable)
+        result = _write(path, value, scan=scan, immutable=immutable, prepared=prepared)
         sync_hpo_ancestry(path.parent,ownership=owner)
         scan.check()
         return result
@@ -936,7 +946,7 @@ def _update(directory: Path, state: Json, records: list[Json], current: Json, sc
     previous = records[-1]
     generation = current["generation"]
     packed = "storage_binding" in state
-    update = closed(scan.object(directory / "updates" / f"{generation:06}.json", current["update_sha256"]) if value is None else value,
+    update = closed(read_hpo_update(directory, generation, state, current["update_sha256"], scan=scan) if value is None else value,
         HPO_UPDATE_FIELDS | ({"storage_binding"} if packed else set()))
     integer(update["schema_version"], 5, 5)
     integer(update["generation"], generation, generation)
@@ -1122,7 +1132,15 @@ def _commit_hpo_generation(directory: Path,state: Json,*,generation: int,update:
             raise ContractError('HPO commit actual resume/counter mismatch')
         _same(artifact.resume['model'],asdict(model),'HPO commit actual model/resources mismatch')
         _same(artifact.resume['binding'],state['execution']['learner']['binding'],'HPO commit execution mismatch')
-        update_sha=None if update is None else hashlib.sha256((canonical(update)+'\n').encode()).hexdigest()
+        compressed = compressed_updates(state)
+        prepared = None
+        update_sha = None
+        if update is not None:
+            scan.charge(32 * json_bytes(update) + 65536)
+            if compressed:
+                scan.charge(ENCODER_BYTES, temporary=True)
+            prepared = encode_update(update, compressed=compressed)
+            update_sha = hashlib.sha256(prepared).hexdigest()
         record={'schema_version':4,'run_id':state['run_id'],'generation':generation,'parent_sha256':parent,
             **{key:state[key] for key in ('model_id','model_version','input_recipe','hpo_spec_sha256',*_CLASSIFICATION)},
             'inference_sha256':files['inference.json'],'resume_sha256':files['resume.json'],'artifact_files':dict(files),
@@ -1136,7 +1154,8 @@ def _commit_hpo_generation(directory: Path,state: Json,*,generation: int,update:
         if projection is not None:
             projection._admit_hpo_saved_output(projection.source.online.process,generation,files,owner)
             projection.prepare_commit()
-        if update is not None and write_hpo_control(directory/'updates'/f'{generation:06}.json',update,scan=scan,immutable=True,ownership=owner)!=update_sha:
+        if update is not None and write_hpo_control(directory/'updates'/update_name(generation, compressed=compressed),
+                update, scan=scan, immutable=True, ownership=owner, prepared=prepared)!=update_sha:
             raise ContractError('HPO update serialization changed during commit')
         sha=write_hpo_control(generation_path(directory,generation),record,scan=scan,immutable=True,ownership=owner)
         registry['generations'][str(generation)]={'files':{name:{'sha256':value,'status':'retained',
@@ -1147,7 +1166,7 @@ def _commit_hpo_generation(directory: Path,state: Json,*,generation: int,update:
         write_hpo_control(directory/'run.json',state,scan=scan,ownership=owner)
         # Own immutable appends update exactly the two known control inventories.
         scan.inventories[directory/'generations']=tuple(f'{n:06}.json' for n in range(generation+1))
-        scan.inventories[directory/'updates']=tuple(f'{n:06}.json' for n in range(1,generation+1))
+        scan.inventories[directory/'updates']=tuple(update_name(n, compressed=compressed) for n in range(1,generation+1))
         scan.finalize()
         return record
 
@@ -1183,7 +1202,7 @@ def validate_hpo_chain(directory: Path, *, require_complete: bool = False, max_o
         count = state["updates"]
         _artifact_directories(directory, count, scan)
         scan.inventory(directory / "generations", {f"{number:06}.json" for number in range(count + 1)})
-        scan.inventory(directory / "updates", {f"{number:06}.json" for number in range(1, count + 1)})
+        check_update_inventory(directory, count, state, scan)
         latest = closed(scan.object(directory / "latest.json"), {"generation", "sha256"})
         integer(latest["generation"], count, count)
         if checksum(latest["sha256"]) != checksum(state["generation_sha256"]):

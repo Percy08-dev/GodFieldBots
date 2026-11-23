@@ -24,7 +24,7 @@ def adapter_case(tmp_path,monkeypatch):
     selection={'episode_counts':[3]*8}
     update={'collection_manifest_sha256':'a'*64,'numeric':'numeric/batch-000000','numeric_sha256':'b'*64,
         'source_proof':{'selection':selection}}
-    state={'effective_config':{'hpo_spec':{'operating':{'numeric_budget_bytes':512*MIB}}}}
+    state={'effective_config':{'hpo_spec':{'storage':{},'operating':{'numeric_budget_bytes':512*MIB}}}}
     pool=ByteBudget(2*GIB,base=256*MIB)
     class Original:
         used=128*MIB

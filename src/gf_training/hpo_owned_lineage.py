@@ -14,7 +14,9 @@ from typing import Any
 from gf_common.artifacts import ArtifactPhaseAdmission, json_bound
 from gf_common.domain import ContractError, Json, canonical, clone
 from gf_common.hpo import require_owned_record_version
+from gf_common.hpo_update_bytes import ENCODER_BYTES, encode_update
 from gf_training.hpo_lineage import sync_hpo_ancestry
+from gf_training.hpo_update_storage import compressed_updates, update_name
 from gf_training.lineage import checkpoint_path, generation_path, require_hpo_run_owner
 
 _TOKEN = object()
@@ -61,19 +63,23 @@ class OwnedControlWriter:
         self.failed = False
         self._uncertain_closes: list[Any]=[]
 
-    def write(self, path: Path, value: Json, *, deadline: float, immutable: bool = False) -> str:
+    def write(self, path: Path, value: Json, *, deadline: float, immutable: bool = False,
+              update_compression: bool | None = None) -> str:
         path=Path(os.path.abspath(path))
         require_hpo_run_owner(self.owner.directory,self.owner)
         if self.failed or not path.is_relative_to(self.owner.directory) or time.monotonic()>=deadline:
             raise ContractError('owned control writer failed, expired or outside original parent')
         allowance = 32*(json_bound(value)+1)+65536
+        if update_compression:
+            allowance += ENCODER_BYTES
         if allowance>self.limit:
             raise ContractError('owned parent control envelope exceeded')
         reservation=self.parent_budget.reserve(allowance)
         descriptor = None
         try:
             with reservation:
-                raw = (canonical(value)+'\n').encode()
+                raw = ((canonical(value)+'\n').encode() if update_compression is None else
+                    encode_update(value, compressed=update_compression))
                 temporary = path.with_name('.owned-'+uuid.uuid4().hex+'.tmp')
                 sync_hpo_ancestry(path.parent,ownership=self.owner)
                 if (path.exists() or path.is_symlink()) and (immutable or path not in self.files or _identity(path)!=self.files[path]):
@@ -82,7 +88,7 @@ class OwnedControlWriter:
                 cursor=0
                 while cursor<len(raw):
                     if time.monotonic()>=deadline: raise TimeoutError('owned control write deadline')
-                    count=os.write(descriptor,raw[cursor:cursor+65536])
+                    count=os.write(descriptor,memoryview(raw)[cursor:cursor+65536])
                     if count<=0: raise OSError('owned control write incomplete')
                     cursor+=count
                 os.fsync(descriptor)
@@ -344,17 +350,20 @@ class OwnedRunRegistry:
             raise ContractError('owned artifacts parent changed from actual original')
         self.artifact_identity=actual_artifacts
         self.generation_directories[generation]=_stat_identity(checkpoint_path(self.directory,generation).lstat())
-        update_sha=None if update is None else hashlib.sha256((canonical(update)+'\n').encode()).hexdigest()
         self._charge_metadata(65536+8192*len(files)+32*json_bound(controls))
         record={'schema_version':5,'origin':'producer-owned-v1','encoder':'canonical-python',
             'run_id':state['run_id'],'generation':generation,'parent_sha256':state['generation_sha256'],
             'snapshot_identity':snapshot.identity,'inference_sha256':files['inference.json'],
-            'resume_sha256':files['resume.json'],'artifact_files':files,'update_sha256':update_sha,
+            'resume_sha256':files['resume.json'],'artifact_files':files,'update_sha256':None,
             'parent_controls':clone(controls),'optimizer_steps':snapshot.optimizer_steps,
             'used_decisions':state['used_decisions'],'collected_decisions':state['collected_decisions'],
             'accepted_decisions':state['accepted_decisions']}
         try:
-            if update is not None: self.writer.write(self.directory/'updates'/f'{generation:06}.json',update,deadline=deadline,immutable=True)
+            if update is not None:
+                compressed = compressed_updates(state)
+                path = self.directory/'updates'/update_name(generation, compressed=compressed)
+                record['update_sha256'] = self.writer.write(path, update, deadline=deadline,
+                    immutable=True, update_compression=compressed)
             require_owned_record_version(record,'generation')
             require_owned_record_version(self.registry,'registry')
             sha=self.writer.write(generation_path(self.directory,generation),record,deadline=deadline,immutable=True)

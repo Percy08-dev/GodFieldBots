@@ -4,12 +4,20 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import os
+import shutil
+import tempfile
+import traceback
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
 from gf_common.diverse_actions import NumericCosts
 from gf_common.domain import ContractError, Json, digest, group_health_failures
+from gf_common.hpo_storage import (
+    check_collection_destinations,
+    check_staged_collection_destinations,
+)
 from gf_common.rust_player import deadline_seconds
 from gf_common.rust_ppo_source import source_encoder, source_mode
 from gf_common.schedule import serialize_schedule
@@ -126,11 +134,52 @@ class RustPlayerCollector:
         self.current: RustCollectedBatch | None = None
         self._active_writer: RustPlayerStorage | None = None
         self._inventory: Any = None
+        self._controls: RecordingArtifacts | None = None
         self._matches = RustMatchPump(self.runtime)
         self._servers = self._matches.servers
         self.server_history = self._matches.server_history
         self.writer_history: list[Json] = []
         self._source_control_charge: Any = None
+        self._work: tuple[Path, int, int] | None = None
+
+    def _create_work(self, root: Path, device: int) -> Path:
+        root.mkdir(parents=True, exist_ok=True)
+        work = Path(tempfile.mkdtemp(prefix="collection-", dir=root))
+        info = work.lstat()
+        self._work = work, info.st_dev, info.st_ino
+        self._active_writer = None
+        self._controls = None
+        if info.st_dev != device:
+            raise ContractError("collection workspace moved off the admitted tmpfs")
+        return work
+
+    def retire_work(self, failure: BaseException | None = None) -> None:
+        if self._work is None:
+            return
+        writer = self._active_writer
+        if (writer is not None and not writer.staging_input_retired()
+                or self._matches._pending_http
+                or any(not server.stopped or any(not task.done() for task in server.drainers)
+                       for server in self._servers.values())):
+            raise ContractError("collection tmpfs still has original activity")
+        if failure is not None:
+            traceback.clear_frames(failure.__traceback__)
+            if writer is not None:
+                writer.close_unclaimed_training()
+            if self._controls is not None:
+                self._controls.close()
+            if self._inventory is not None:
+                self._inventory.close()
+                self._inventory = None
+            if self._source_control_charge is not None:
+                self._source_control_charge.close()
+                self._source_control_charge = None
+        directory, device, inode = self._work
+        current = directory.lstat()
+        if (current.st_dev, current.st_ino) != (device, inode):
+            raise ContractError("collection tmpfs workspace identity changed")
+        shutil.rmtree(directory)
+        self._work = None
 
     def _counters(self) -> Json:
         calls = self.registry.service.calls
@@ -183,18 +232,34 @@ class RustPlayerCollector:
         return contexts
 
     async def collect(self, plan: Any, resources: Any = None) -> RustCollectedBatch:
-        result = await self._collect_owned(plan)
+        try:
+            result = await self._collect_owned(plan)
+        except BaseException as failure:
+            if self._work is not None:
+                try:
+                    self.retire_work(failure)
+                except BaseException as cleanup:  # noqa: BLE001 - original owners may need host retirement.
+                    failure.add_note("collection tmpfs retirement unconfirmed: " + str(cleanup))
+            raise
         # The inner frame and all its borrowed metadata aliases have retired.
         # Inventory retains the shared workspace through writer join and until
         # this concrete final consumer has dropped the encoder graph.
-        assert self._active_writer is not None
-        self._active_writer.encoders.clear()
-        self._controls.close()
-        self._inventory.close()
-        self._inventory = None
-        self._source_control_charge.close()
-        self._source_control_charge = None
         self.current = result
+        try:
+            assert self._active_writer is not None and self._controls is not None
+            self._active_writer.encoders.clear()
+            self._controls.close()
+            self._inventory.close()
+            self._inventory = None
+            self._source_control_charge.close()
+            self._source_control_charge = None
+            self.retire_work()
+        except BaseException as failure:
+            try:
+                result.close()
+            except BaseException as cleanup:  # noqa: BLE001 - retain the actual pending owner.
+                failure.add_note("durable collection retirement unconfirmed: " + str(cleanup))
+            raise
         self.runtime.measurement_end()
         if self.runtime.diagnostics is not None:
             self.runtime.measurement_begin(self.runtime.diagnostics.scope(run_id=self.registry.state["run_id"],
@@ -206,16 +271,38 @@ class RustPlayerCollector:
         from gf_common.card_instance_rules import rule_signature
         from gf_common.card_instance_runtime import game_binding
         from gf_common.domain import EpisodeResult
+        from gf_common.hpo_storage import hpo_diagnostics
         from gf_common.structured_layout import CORRECTED_CARD_INSTANCE_LAYOUT as layout
         from gf_common.structured_tokens import signature
         from gf_training.structured_rollout import _owned_bytes
 
         self.registry.require()
         actual = self.registry.admission.observation
+        http_diagnostics = hpo_diagnostics(getattr(self.config, "hpo_spec", {}).get("storage", {}))
+        if http_diagnostics is not None:
+            from importlib import import_module
+
+            extension = import_module("gf_native")
+            if not hasattr(extension.StorageBundle, "_http_diagnostics"):
+                raise ContractError("Rust player HTTP diagnostics require the terminal bundle capability")
+        configured_work = getattr(self.config.storage, "collection_work_root", None)
         if (self.current is not None and not self.current._closed
+                or configured_work is not None and self._work is not None
                 or plan.linkage["collection_generation"] != self.registry.state["updates"]
                 or plan.execution_deadline != deadline_seconds(actual["deadlines"]["execution_bits"])):
             raise ContractError("collection differs from actual current generation/original deadline")
+        originals = Path(self.config.storage.db_root)
+        db_directory = originals / self.registry.state["run_id"] / "collections" / plan.linkage["batch_id"]
+        work_mount_config = None
+        durable_mount = None
+        if configured_work is not None:
+            work_root = Path(configured_work)
+            work_mount, mount = check_staged_collection_destinations(
+                work_root, plan.output, catalog_root=originals, originals=db_directory)
+            major, minor = work_mount.device.split(":")
+            work_mount_config = work_root, os.makedev(int(major), int(minor))
+            major, minor = mount.device.split(":")
+            durable_mount = Path(mount.mount_point), os.makedev(int(major), int(minor))
         checkpoints: dict[str, None] = {}
         for binding in plan.bindings.values():
             if binding.model_id == "mlp":
@@ -243,13 +330,23 @@ class RustPlayerCollector:
             tuple(episode.episode_id for episode in group.episodes),
             {"seed": group.seed, "episode_ids": [episode.episode_id for episode in group.episodes]})
             for group in plan.groups)
+        if configured_work is None and hasattr(self.config, 'hpo_spec'):
+            check_collection_destinations(plan.output, db_directory, catalog_root=originals)
         plan.output.mkdir(parents=True, exist_ok=False)
-        db_directory = Path(self.config.storage.db_root) / self.registry.state["run_id"] / "collections" / plan.linkage["batch_id"]
+        work = None if work_mount_config is None else self._create_work(*work_mount_config)
         grant = self.registry.budget.limit - self.registry.budget.used
-        writer = RustPlayerStorage(self.runtime, db_directory, run_id=self.registry.state["run_id"],
-            contexts=(), groups=groups, settings=self.settings, workspace=self.registry.budget,
-            workspace_bytes=grant, deadline=plan.execution_deadline, cleanup_deadline=self.cleanup_deadline,
-            deferred_contexts=True, context_plans=plans, training=self.mode is not None)
+        try:
+            writer = RustPlayerStorage(self.runtime, db_directory, run_id=self.registry.state["run_id"],
+                contexts=(), groups=groups, settings=self.settings, workspace=self.registry.budget,
+                workspace_bytes=grant, deadline=plan.execution_deadline, cleanup_deadline=self.cleanup_deadline,
+                deferred_contexts=True, context_plans=plans, training=self.mode is not None,
+                work_directory=None if work is None else work / "originals", durable_mount=durable_mount)
+        except BaseException as failure:
+            owner = vars(failure).get("cleanup_owner")
+            if work is not None and isinstance(owner, RustPlayerStorage):
+                self._active_writer = owner
+                self.writer_history.append({"writer": owner, "descriptor_sha256": None})
+            raise
         self._active_writer = writer
         writer_history: Json = {'writer': writer, 'descriptor_sha256': None}
         self.writer_history.append(writer_history)
@@ -258,7 +355,8 @@ class RustPlayerCollector:
         inventory: Any = None
         evidence = CardInstanceRuntimeEvidence(Path(self.config.server.binary), Path(self.config.server.source_dir),
             contract=self.config.actions.action_contract)
-        evidence.preflight()
+        if work is None:
+            evidence.preflight()
 
         def store(name: str, value: Json) -> tuple[str, int]:
             controls.json(name, value)
@@ -267,14 +365,21 @@ class RustPlayerCollector:
             return hashlib.sha256(data).hexdigest(), len(data)
 
         try:
+            if work is not None:
+                evidence.preflight()
             execution = await self._matches.execute(plan.groups, contexts, writer,
                 server=self.config.server, actions=self.config.actions, max_decisions=self.config.run.max_decisions,
-                output=plan.output, execution_deadline=plan.execution_deadline, cleanup_deadline=self.cleanup_deadline,
+                output=plan.output if work is None else work,
+                execution_deadline=plan.execution_deadline, cleanup_deadline=self.cleanup_deadline,
                 game_concurrency=self.declaration["game_concurrency"], run_id=self.registry.state["run_id"],
-                batch_id=plan.linkage["batch_id"], evidence=evidence)
+                batch_id=plan.linkage["batch_id"], evidence=evidence,
+                **({} if http_diagnostics is None else {"http_diagnostics": http_diagnostics,
+                    "operation_id": actual["operation_id"]}))
             accepted, bound_contexts, completed_groups = execution.accepted, execution.bound_contexts, execution.completed_groups
             receipts, keys, reports, total = execution.receipts, execution.keys, execution.reports, execution.total
             del execution
+            if work is not None and self._matches._pending_http:
+                raise ContractError("staged collection simulator HTTP settlement remains unconfirmed")
             if self.runtime._service_error is not None or self.runtime._active_routes or self.runtime._holds:
                 raise ContractError("actual inference consumers remain unsettled")
             if self.runtime.dispatcher.checkpoint_references() or any(self.registry.service.references.values()):
@@ -403,6 +508,14 @@ class RustPlayerCollector:
                         await server.stop()
                     except BaseException as cleanup:  # noqa: BLE001 -- retain primary failure and actual owner.
                         error.add_note("actual server remains owned: " + type(cleanup).__name__)
+                if http_diagnostics is not None:
+                    try:
+                        diagnostic = await self._matches.settle_http(server, deadline=self.cleanup_deadline,
+                                                                     abnormal=True)
+                        if diagnostic is not None:
+                            error.add_note("HTTP pair diagnostics " + str(diagnostic))
+                    except BaseException as cleanup:  # noqa: BLE001 -- retain original cancellation and raw owner.
+                        error.add_note("HTTP pair diagnostics remain owned: " + type(cleanup).__name__)
             try:
                 await asyncio.to_thread(writer.close)
             except BaseException as cleanup:  # noqa: BLE001 -- retain primary failure and actual owner.

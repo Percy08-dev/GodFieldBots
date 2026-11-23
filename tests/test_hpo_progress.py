@@ -147,7 +147,9 @@ def test_cli_progress_preserves_final_json_and_flags(tmp_path,monkeypatch,capsys
     from types import SimpleNamespace
 
     import gf_cli.hpo as cli
-    loaded = SimpleNamespace(config=SimpleNamespace(schema_version=1))
+    from gf_cli.hpo_config import HPOStorageConfig
+
+    loaded = SimpleNamespace(config=SimpleNamespace(schema_version=1, storage=HPOStorageConfig()))
     monkeypatch.setattr(cli,'load_hpo_config',lambda path: loaded)
     async def run(loaded,path,**options):
         assert options['progress'] == 'plain'

@@ -6,13 +6,21 @@ from contextlib import ExitStack
 from pathlib import Path
 from typing import Any
 
+from gf_common import hpo_update_bytes
 from gf_common.domain import ContractError, Json, canonical, digest, integer
 from gf_common.rust_player import deadline_seconds
 from gf_common.rust_ppo_source import source_encoder, source_mode
 from gf_models.config import PPOUpdateConfig, ordinary_ppo_update
+from gf_models.structured_sealed import checksum as sealed_checksum
+from gf_models.structured_sealed import parse_sealed_object
 from gf_training.group_pack_pool import PackedArtifactPool
 from gf_training.group_pack_resources import close_resources, retain_cleanup
 from gf_training.group_pack_source import OriginalFile
+from gf_training.hpo_update_storage import (
+    check_cold_update_inventory,
+    compressed_updates,
+    update_name,
+)
 from gf_training.lineage import borrow_run_lock
 from gf_training.rust_player_lineage import validate_completion, validate_record_shape, validate_run
 from gf_training.rust_player_supervision import ColdContinuation, HostControl, write_control_record
@@ -395,15 +403,28 @@ class ColdFinalizedRustParent:
 
 
 def _read(path: Path, budget: Any, deadline: float, expected: str | None = None,
-          *, loans: list[Any]) -> tuple[Json, str]:
+          *, loans: list[Any], hpo_update: bool = False) -> tuple[Json, str]:
     """Borrowed JSON within this one admitted helper scope, no data authority."""
-    original = OriginalFile(path, deadline)
+    if hpo_update:
+        expected = sealed_checksum(expected)
+    original = (OriginalFile(path, deadline, max_bytes=hpo_update_bytes.UPDATE_MAX_BYTES)
+        if hpo_update else OriginalFile(path, deadline))
     try:
         if expected is not None and original.sha256 != expected:
             raise ContractError('cold original control checksum differs')
         size = original.identity.st_size
+        if hpo_update and path.name.endswith('.json.zst'):
+            from gf_training.group_pack_resources import remaining
+            workspace = budget.reserve(2 * size + 1)
+            loans.append(workspace)
+            raw = hpo_update_bytes.decode_zstd_update(original.read(size), charge=workspace.resize,
+                check=lambda: remaining(deadline))
+            # The same loan remains reachable through cold error cleanup if a
+            # traceback retains the original/decompressed buffers or parser data.
+            workspace.resize(32 * len(raw) + 65536)
+            return parse_sealed_object(raw), original.sha256
         loans.append(budget.reserve(32 * size + 65536))
-        value = json.loads(original.read(size))
+        value = (parse_sealed_object if hpo_update else json.loads)(original.read(size))
         return value, original.sha256
     finally:
         original.close()
@@ -1018,6 +1039,9 @@ def _audit_committed_data(context: Any, ownership: Any, pool: PackedArtifactPool
     import hashlib
     hpo = getattr(loaded.config, 'hpo_spec', {}).get('schema_version') == 6
     parent = ownership.directory
+    compressed = hpo and compressed_updates(state)
+    if hpo:
+        check_cold_update_inventory(parent, state['updates'], compressed=compressed, deadline=deadline)
     updates: list[Json] = []
     previous: Any = None
     parent_sha: Any = None
@@ -1040,11 +1064,12 @@ def _audit_committed_data(context: Any, ownership: Any, pool: PackedArtifactPool
             integer(current['optimizer_steps'], 0, 0)
             integer(current['accepted_decisions'], 0, 0)
         if generation:
-            path = parent / 'updates' / f'{generation:06}.json'
+            path = parent / 'updates' / update_name(generation, compressed=compressed)
             # The decoded update/proof graph remains funded for its full
             # raw/numeric audit; return only compact facts afterward.
             mark = len(control_loans)
-            update, _ = _read(path, pool.budget, deadline, current['update_sha256'], loans=control_loans)
+            update, _ = _read(path, pool.budget, deadline, current['update_sha256'], loans=control_loans,
+                hpo_update=hpo)
             update_loans = control_loans[mark:]
             facts = _audit_update(context, ownership, pool, loaded, state,
             previous, current, update, deadline, control_loans=control_loans)

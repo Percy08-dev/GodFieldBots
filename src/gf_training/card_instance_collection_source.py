@@ -49,6 +49,31 @@ _EPISODE_ERRORS = {'save_failure', 'finalization_deadline', 'budget_overrun', 'r
     'runtime_evidence_failure', 'finalization_cancelled', 'cleanup_failure'}
 
 
+def _evaluation_http_diagnostics(value: Any) -> None:
+    counts = {'raw_bytes', 'archive_bytes', 'observed_responses', 'observed_error_responses',
+        'logged_responses', 'logged_error_responses', 'transport_errors'}
+    timings = {'scan_seconds', 'archive_seconds', 'settle_seconds'}
+    paths = {'archive', 'residual', 'staging_root'}
+    errors = {'error', 'metadata_error', 'capture_error'}
+    raw = closed(value, {'status'}, {'abnormal'} | counts | timings | paths | errors)
+    if raw['status'] not in ('discarded', 'archived', 'archive_failed', 'capture_failed',
+                            'stop_unconfirmed', 'settlement_unconfirmed', 'cleanup_failed'):
+        raise ContractError('invalid HTTP diagnostics disposition')
+    for field in raw.keys() & counts:
+        integer(raw[field], 0)
+    for field in raw.keys() & timings:
+        duration = raw[field]
+        if type(duration) not in (int, float) or not math.isfinite(duration) or duration < 0:
+            raise ContractError('invalid HTTP diagnostics duration')
+    for field in raw.keys() & paths:
+        if (type(raw[field]) is not str or '\0' in raw[field] or not Path(raw[field]).is_absolute()
+                or '..' in Path(raw[field]).parts):
+            raise ContractError('invalid HTTP diagnostics location')
+    if ('abnormal' in raw and type(raw['abnormal']) is not bool
+            or any(type(raw[field]) is not str for field in raw.keys() & errors)):
+        raise ContractError('invalid HTTP diagnostics flags')
+
+
 def _evaluation_raw_health(manifest: Json) -> None:
     """Read actual saved evidence; a success summary cannot override it."""
     groups, receipts = manifest.get('groups'), manifest.get('runtime_evidence')
@@ -58,7 +83,9 @@ def _evaluation_raw_health(manifest: Json) -> None:
     seen_receipts = set()
     for group, receipt in zip(groups, receipts, strict=True):
         group = closed(group, {'runtime_evidence', 'process'}, _GROUP_ERRORS | {'startup', 'expected_effective',
-            'message', 'budget_overrun_seconds'})
+            'message', 'budget_overrun_seconds', 'http_diagnostics'})
+        if 'http_diagnostics' in group:
+            _evaluation_http_diagnostics(group['http_diagnostics'])
         original = validate_runtime_receipt(receipt, require_executed=True)
         validated = validate_runtime_receipt(group['runtime_evidence'], require_executed=True)
         identity = canonical(validated)

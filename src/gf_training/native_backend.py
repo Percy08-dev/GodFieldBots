@@ -25,6 +25,7 @@ CARD_INSTANCE_GUARDIAN_ACTED = 'card-or-guardian-v1'
 CARD_INSTANCE_DEFENSE_PRIORITY = 'owner-defense-priority-v2'
 CARD_INSTANCE_REFRESH_BASELINE = 'baseline1;options1;identity1'
 CARD_INSTANCE_REFRESH_OPPONENTS = 'mixed16-v1;ordinary1;hpo2'
+CARD_INSTANCE_HPO_UPDATE_STORAGE = 'hpo-update-zstd-v1'
 
 
 def require_native_defense_priority(native: Any) -> None:
@@ -56,15 +57,21 @@ def require_native_refresh_opponents(native: Any = None) -> None:
         raise ContractError('native refresh training opponents capability unavailable; no fallback')
 
 
-def hpo_reader_settings(config: PreparationConfig, native: Any = None, *, packed: bool = False, resident: bool = False) -> Json:
+def hpo_reader_settings(config: PreparationConfig, native: Any = None, *, packed: bool = False,
+                        resident: bool = False,
+                        require_update_storage: bool = False) -> Json:
     """Additive HPO preflight before Source, arrays, collection or process work."""
     from gf_common.hpo import NATIVE_CAPABILITY
     module = load_native() if native is None else native
-    if dict(module.build_info()).get('card_instance_hpo') != NATIVE_CAPABILITY:
+    information = dict(module.build_info())
+    if information.get('card_instance_hpo') != NATIVE_CAPABILITY:
         raise ContractError('native HPO original/model4/selection support unavailable; no fallback')
+    if (require_update_storage
+            and information.get('card_instance_hpo_update_storage') != CARD_INSTANCE_HPO_UPDATE_STORAGE):
+        raise ContractError('native HPO update storage capability unavailable; no fallback')
     if resident:
         from gf_common.hpo_resident import RESIDENT_CAPABILITY
-        if dict(module.build_info()).get('card_instance_hpo_resident') != RESIDENT_CAPABILITY:
+        if information.get('card_instance_hpo_resident') != RESIDENT_CAPABILITY:
             raise ContractError('native resident HPO original/retirement/cache support unavailable; no fallback')
     result = card_instance_reader_settings(config, module)
     if packed:

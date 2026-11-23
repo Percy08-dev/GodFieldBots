@@ -204,16 +204,32 @@ def source_inventory(path: Path) -> dict[str, Any]:
         files.update((parent / item).resolve() for item in ('run.json', 'latest.json', 'artifact-registry.json'))
         state = json.loads((parent / 'run.json').read_text())
         registry = json.loads((parent / 'artifact-registry.json').read_text())
+        hpo = 'hpo_spec' in state.get('effective_config', {})
         for number in range(state['updates'] + 1):
-            files.add((parent / 'generations' / f'{number:06}.json').resolve())
+            generation_path = parent / 'generations' / f'{number:06}.json'
+            files.add(generation_path.resolve())
             artifacts = parent / 'artifacts' / f'{number:06}'
-            files.add((artifacts / 'inference.json').resolve())
-            if registry[str(number)]['status'] == 'retained':
-                files.update((artifacts / item).resolve() for item in
-                             ('weights.json', 'weights.npz', 'resume.json', 'resume.npz'))
+            if hpo:
+                files.update((artifacts / name).resolve() for name, row in
+                    registry['generations'][str(number)]['files'].items() if row['status'] == 'retained')
+            else:
+                files.add((artifacts / 'inference.json').resolve())
+                if registry[str(number)]['status'] == 'retained':
+                    files.update((artifacts / item).resolve() for item in
+                                 ('weights.json', 'weights.npz', 'resume.json', 'resume.npz'))
             if number:
-                update_path = parent / 'updates' / f'{number:06}.json'
-                update = json.loads(update_path.read_text())
+                if hpo:
+                    from gf_training.hpo_update_storage import (
+                        compressed_updates,
+                        read_hpo_update,
+                        update_name,
+                    )
+                    generation = json.loads(generation_path.read_text())
+                    update_path = parent / 'updates' / update_name(number, compressed=compressed_updates(state))
+                    update = read_hpo_update(parent, number, state, generation['update_sha256'])
+                else:
+                    update_path = parent / 'updates' / f'{number:06}.json'
+                    update = json.loads(update_path.read_text())
                 files.add(update_path.resolve())
                 files.add((parent / update['numeric'] / 'rollout.json').resolve())
     entries = [{'path': str(file), 'logical_bytes': file.stat().st_size} for file in sorted(files)]

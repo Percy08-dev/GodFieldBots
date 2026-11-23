@@ -5,14 +5,18 @@ import asyncio
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from gf_common.domain import EpisodeGroup, Json, clone, digest
+from gf_common.domain import ContractError, EpisodeGroup, Json, clone, digest
 from gf_simulator_client.card_instance_runtime import CardInstanceRuntimeEvidence
+from gf_simulator_client.http_diagnostics import HttpFacts, HttpPairCapture
 from gf_simulator_client.process import ManagedServer
 from gf_simulator_client.rust_player import RustPlayerRuntime
 from gf_training.group_pack_resources import remaining
 from gf_training.rust_player_storage import EpisodeEncodingContext, RustPlayerStorage
+
+if TYPE_CHECKING:
+    from gf_common.hpo_storage import HPODiagnosticsConfig
 
 
 @dataclass(frozen=True)
@@ -34,12 +38,26 @@ class RustMatchPump:
         self.runtime = runtime
         self.servers: dict[int, ManagedServer] = {}
         self.server_history: list[Json] = []
+        self._pending_http: dict[ManagedServer, tuple[HttpFacts, Json]] = {}
+
+    async def settle_http(self, server: ManagedServer, *, deadline: float, abnormal: bool) -> Json | None:
+        pair = self._pending_http.get(server)
+        if pair is None:
+            return None
+        facts, history = pair
+        info = await server.settle_http(deadline=deadline, abnormal=abnormal, **vars(facts))
+        history["http_diagnostics"] = info
+        if info["status"] not in ("stop_unconfirmed", "settlement_unconfirmed"):
+            del self._pending_http[server]
+        return info
 
     async def execute(self, groups: tuple[EpisodeGroup, ...], contexts: dict[str, Json],
                       writer: RustPlayerStorage, *, server: Any, actions: Any,
                       max_decisions: int, output: Path, execution_deadline: float,
                       cleanup_deadline: float, game_concurrency: int, run_id: str,
-                      batch_id: str, evidence: CardInstanceRuntimeEvidence) -> RustMatchResult:
+                      batch_id: str, evidence: CardInstanceRuntimeEvidence,
+                      http_diagnostics: HPODiagnosticsConfig | None = None,
+                      operation_id: str | None = None) -> RustMatchResult:
         """Caller already preflighted; errors return through its original cleanup."""
         accepted: list[Json] = []
         bound_contexts: dict[int, str] = {}
@@ -48,6 +66,8 @@ class RustMatchPump:
         positions: dict[int, int] = {}
         receipts: dict[int, Json] = {}
         startups: dict[int, Json] = {}
+        terminal_http: dict[str, tuple[int, int, int, bool]] = {}
+        abnormal_pairs: set[int] = set()
         total = sum(len(group.episodes) for group in groups)
         full_wave = 0 < total <= game_concurrency
         next_group = 0
@@ -74,14 +94,20 @@ class RustMatchPump:
 
         async def admit_group(index: int) -> None:
             group = groups[index]
+            capture = (None if http_diagnostics is None else HttpPairCapture.configured(
+                http_diagnostics, operation_id=operation_id or run_id, collection_id=batch_id,
+                pair_id=group.episodes[0].pair_id, episode_count=len(group.episodes)))
             managed = ManagedServer(server.binary, server.config, group.seed,
                 len(group.episodes), output / 'servers' / group.episodes[0].episode_id,
                 startup_seconds=min(server.startup_seconds, remaining(execution_deadline)),
                 shutdown_seconds=server.shutdown_seconds, cleanup_deadline=cleanup_deadline,
-                strict_cleanup_deadline=True)
+                strict_cleanup_deadline=True,
+                **({} if capture is None else {"http_capture": capture}))
             self.servers[index] = managed
             history: Json = {'server': managed, 'runtime_evidence': None}
             self.server_history.append(history)
+            if capture is not None:
+                self._pending_http[managed] = (HttpFacts(), history)
             startup = await managed.start()
             receipt = evidence.verify_executed(managed.process)
             history['runtime_evidence'] = receipt
@@ -128,6 +154,11 @@ class RustMatchPump:
                         'game': bundle.game, 'transport_sha256': bundle.transport_sha256, 'bytes': bundle.reserved_bytes}
                     writer.accept(bundle)
                     self.runtime.storage_ack(bundle)
+                    if http_diagnostics is not None and row['kind'] == 'terminal':
+                        facts = bundle._http_diagnostics()
+                        if facts is None:
+                            raise ContractError('Rust terminal bundle is missing its HTTP diagnostic facts')
+                        terminal_http[row['episode']] = facts
                     # One producer appends completed metadata. The event-loop cursor
                     # only reads this prefix and never owns a native bundle.
                     accepted.append(row)
@@ -161,11 +192,23 @@ class RustMatchPump:
                 index = episode_group[row['episode']]
                 positions[index] += 1
                 group = groups[index]
+                managed = self.servers[index]
+                if http_diagnostics is not None:
+                    responses, errors, network, abnormal = terminal_http.pop(row["episode"])
+                    facts, _ = self._pending_http[managed]
+                    facts.responses += responses
+                    facts.error_responses += errors
+                    facts.transport_errors += network
+                    if abnormal:
+                        abnormal_pairs.add(index)
                 if positions[index] == len(group.episodes):
-                    managed = self.servers[index]
                     health = await managed.stop()
                     completed_groups[index] = {'runtime_evidence': receipts[index],
                         'startup': startups[index], 'expected_effective': managed.expected, 'process': clone(health)}
+                    diagnostic = await self.settle_http(managed, deadline=cleanup_deadline,
+                                                        abnormal=index in abnormal_pairs)
+                    if diagnostic is not None:
+                        completed_groups[index]["http_diagnostics"] = diagnostic
                     if next_group < len(groups):
                         check_drain()
                         await admit_group(next_group)

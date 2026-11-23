@@ -10,12 +10,13 @@ import argparse
 import asyncio
 import hashlib
 import sys
+import time
 import uuid
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-from gf_common.domain import ContractError, Json, canonical, integer
+from gf_common.domain import ContractError, Json, canonical, digest, integer
 
 
 def _canonical_id(value: str) -> str:
@@ -28,7 +29,7 @@ def _canonical_id(value: str) -> str:
 
 
 def operation_inputs(config_path: Path, *, run_id: str, experiment_id: str,
-                     learning_seed: int) -> tuple[Any, Any, Any, Path]:
+                     learning_seed: int, mode: str = 'fresh') -> tuple[Any, Any, Any, Path]:
     """Load and canonically materialize the configured settings, with no I/O owner."""
     from gf_cli.hpo_config import load_hpo_config, materialize_hpo_run
     from gf_common.structured_layout import CORRECTED_CARD_INSTANCE_LAYOUT as layout
@@ -36,12 +37,25 @@ def operation_inputs(config_path: Path, *, run_id: str, experiment_id: str,
     from gf_training.hpo_gpu_lease import JobContext
     _canonical_id(run_id)
     _canonical_id(experiment_id)
-    loaded = load_hpo_config(config_path)
+    loaded = load_hpo_config(config_path, _new_storage_defaults=mode != 'resume')
+    state = None
+    if mode == 'resume':
+        from gf_models.structured_sealed import MAX_SEALED_SCAN_BYTES, SealedScan
+
+        scan = SealedScan(max_owned_bytes=min(loaded.config.operating.parent_budget_bytes, MAX_SEALED_SCAN_BYTES),
+                          deadline=time.monotonic() + loaded.config.run_wall_seconds)
+        state = scan.object(Path(loaded.config.storage.parent_root) / run_id / 'run.json')
+        effective = state['effective_config']
+        if state['run_id'] != run_id or state['config_sha256'] != digest(effective):
+            raise ContractError('original HPO parent configuration identity required')
+        loaded = load_hpo_config(config_path, expected_sha256=effective['hpo_spec']['campaign_config_sha256'])
     cfg = loaded.config
     if cfg.schema_version not in (5, 6) or cfg.model_id != 'mlp':
         raise ContractError('fixed operation supports only shared5/native6 MLP')
     settings = effective_settings(cfg.model, cfg.training, {}, layout=layout)
     materialized = materialize_hpo_run(loaded, settings, learning_seed=learning_seed, run_id=run_id)
+    if state is not None and state['config_sha256'] != materialized.sha256:
+        raise ContractError('recorded HPO parent configuration differs')
     if cfg.schema_version == 6:
         from gf_cli.rust_player_entry import startup_preview
         startup_preview(materialized)  # Requires explicit P; no capacity/host admission.
@@ -64,10 +78,14 @@ def _invocation_data(loaded: Any, materialized: Any, context: Any, *, mode: str,
 async def _legacy_operation(loaded: Any, materialized: Any, context: Any, namespace: Path, *,
                             mode: str, pause_after_update: int | None) -> Json:
     from gf_cli.card_instance import collect_hpo_ppo
+    from gf_cli.hpo_storage import check_storage
     from gf_cli.rust_player_entry import _operation_namespace
     from gf_training.hpo_gpu_lease import admit_gpu_job
     from gf_training.hpo_ppo import HpoRunResult, train_hpo_ppo
     cfg = loaded.config
+    check_storage(cfg.storage, operation_dir=namespace, originals_root=Path(materialized.config.storage.db_root),
+                  run_directory=Path(cfg.storage.parent_root) / context.run_id,
+                  deadline=time.monotonic() + cfg.run_wall_seconds)
     with _operation_namespace(materialized, context, namespace, mode=mode) as store:
         store.put(f'invocations/{context.operation_id}.json', _invocation_data(loaded, materialized,
             context, mode=mode, pause_after_update=pause_after_update))
@@ -109,7 +127,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.pause_after_update is not None:
         integer(args.pause_after_update, 1)
     loaded, materialized, context, namespace = operation_inputs(args.config, run_id=args.run_id,
-        experiment_id=args.experiment_id, learning_seed=args.learning_seed)
+        experiment_id=args.experiment_id, learning_seed=args.learning_seed, mode=args.mode)
     if loaded.config.schema_version == 6:
         from gf_cli.rust_player_entry import prepare_hpo_operation
         with prepare_hpo_operation(materialized, context, namespace, mode=args.mode,

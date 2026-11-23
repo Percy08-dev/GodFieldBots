@@ -869,7 +869,8 @@ class _LineagePublication:
         close_resources(self, [self.writer, self.reader])
 
 
-def _write(path: Path, value: Json, *, scan: SealedScan, immutable: bool = False) -> str:
+def _write(path: Path, value: Json, *, scan: SealedScan, immutable: bool = False,
+           prepared: bytes | None = None) -> str:
     if not isinstance(scan, _ChainScan):
         raise ContractError('owned lineage writer requires chain snapshots')
     if not path.is_relative_to(scan.root):
@@ -882,9 +883,10 @@ def _write(path: Path, value: Json, *, scan: SealedScan, immutable: bool = False
         parents.append((directory, (info.st_dev, info.st_ino, info.st_mode)))
         if directory == scan.root:
             break
-    scan.charge(32 * json_bytes(value) + 65536)
+    if prepared is None:
+        scan.charge(32 * json_bytes(value) + 65536)
     scan.charge(4096 + sum(512 + len(str(directory).encode()) for directory, _ in parents))
-    raw = (canonical(value) + '\n').encode()
+    raw = (canonical(value) + '\n').encode() if prepared is None else prepared
     scan.check()
     if path.is_symlink():
         raise ContractError('refusing mutable lineage symlink')

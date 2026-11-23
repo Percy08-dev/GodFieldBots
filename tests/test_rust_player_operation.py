@@ -21,6 +21,14 @@ from tests.test_rust_player_config import ROOT, RUN_ID, campaign_raw
 EXPERIMENT = '00000000-0000-0000-0000-000000000018'
 
 
+@pytest.fixture(autouse=True)
+def isolate_mount_admission(monkeypatch):
+    """Keep the fixed-operation ownership tests independent of host mounts."""
+    from gf_cli import hpo_storage
+
+    monkeypatch.setattr(hpo_storage, 'check_storage', lambda *args, **kwargs: {})
+
+
 def campaign(tmp_path):
     raw = campaign_raw()
     raw['operating']['post_host_seconds'] = 30.

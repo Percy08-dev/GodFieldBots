@@ -472,6 +472,10 @@ def fsync_directory(directory: Path) -> None:
         owner.close()
 
 
+class CatalogConflictError(ValueError):
+    """This transaction could not create its requested fresh catalog row."""
+
+
 def catalog_update(
     settings: StorageSettings,
     database: Path,
@@ -479,9 +483,13 @@ def catalog_update(
     state: str,
     deadline: float,
     descriptor: Json = None,
+    *,
+    create_only: bool = False,
 ) -> None:
     if state not in ("writing", "sealed", "failed"):
         raise ValueError("invalid catalog state")
+    if create_only and state != "sealed":
+        raise ValueError("exclusive catalog creation requires a complete seal")
     settings.db_root.mkdir(parents=True, exist_ok=True)
     path = settings.db_root / "catalog.sqlite3"
     if path.is_symlink():
@@ -504,6 +512,8 @@ def catalog_update(
             old = db.execute(
                 "SELECT run_id,state FROM collections WHERE database=?", (key,)
             ).fetchone()
+            if create_only and old is not None:
+                raise CatalogConflictError("catalog identity conflict")
             if old is not None and (
                 old[0] != run_id or (state == "writing" and old[1] == "sealed")
             ):

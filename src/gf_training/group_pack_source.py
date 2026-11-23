@@ -85,12 +85,14 @@ def _no_symlink_path(path: Path) -> Path:
 class OriginalFile(OwnedDescriptor):
     def __init__(
         self, path: Path, deadline: float, *, mutable: bool = False, create: bool = False,
-        database_expected_sha256: str | None = None, _database_index_only: bool = False
+        database_expected_sha256: str | None = None, _database_index_only: bool = False,
+        max_bytes: int | None = None,
     ) -> None:
         super().__init__(-1)
         self.deadline = deadline
         self.mutable = mutable
         self.sha256 = ""
+        self.max_bytes = max_bytes
         if _database_index_only and (mutable or create or path.name != DATABASE or database_expected_sha256 is not None):
             raise ValueError("unbound database is diagnostic-only")
         self._database_expected = database_expected_sha256 is not None or _database_index_only
@@ -107,6 +109,8 @@ class OriginalFile(OwnedDescriptor):
             self.identity = os.fstat(self.fd)
             if not stat.S_ISREG(self.identity.st_mode):
                 raise ValueError("original source is not a regular file")
+            if max_bytes is not None and self.identity.st_size > max_bytes:
+                raise ValueError('stored original size exceeds bound')
             if not mutable and not self._database_expected:
                 self.sha256 = self.hash()
             self.recheck()
@@ -146,6 +150,8 @@ class OriginalFile(OwnedDescriptor):
             if not chunk:
                 break
             offset += len(chunk)
+            if self.max_bytes is not None and offset > self.identity.st_size:
+                raise ValueError('bounded original grew during hashing')
             result.update(chunk)
         return result.hexdigest()
 

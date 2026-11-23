@@ -12,12 +12,14 @@ import numpy as np
 from gf_common.card_instance_rules import card_instance_rules
 from gf_common.domain import ContractError, Json, RuntimePolicyBinding, canonical, digest, integer
 from gf_common.hpo import selection_context
+from gf_common.hpo_storage import HPO_STORAGE_EXTENSIONS
 from gf_models.structured_binding import policy_label_game_v4, safe_options_game_v4
 from gf_models.structured_config import InferenceBindingV2
 from gf_training.collection import CollectionPlan
 from gf_training.hpo_collection import training_groups_hpo
 from gf_training.hpo_config import hpo_training_config, normalize_training_for_model
 from gf_training.hpo_lineage import hpo_spec, hpo_state, validate_hpo_chain
+from gf_training.hpo_update_storage import read_hpo_update
 from gf_training.lineage import checkpoint_path
 from gf_training.structured_lineage import _ChainScan
 
@@ -186,13 +188,14 @@ def validate_hpo_parent(directory: Path, *, require_complete: bool = True, max_o
             require_native_refresh_opponents()
         if settings.backend == 'rust':
             from gf_training.native_backend import hpo_reader_settings
-            hpo_reader_settings(settings, packed='storage_binding' in state, resident=state.get('run_variant') == 'hpo-ppo-resident-v1')
+            hpo_reader_settings(settings, packed='storage_binding' in state, resident=state.get('run_variant') == 'hpo-ppo-resident-v1',
+                require_update_storage=not HPO_STORAGE_EXTENSIONS.isdisjoint(hpo_spec(state)['storage']))
         inventories = []
         for generation in range(state['updates']):
             plan, _, after = recorded_hpo_plan(directory, state, records, generation, deadline)
             if canonical(after) != canonical(records[generation + 1]['parent_controls']['schedule_opponent_rng']):
                 raise ContractError('HPO original opponent RNG schedule differs')
-            update = scan.object(directory / 'updates' / f'{generation + 1:06}.json', records[generation + 1]['update_sha256'])
+            update = read_hpo_update(directory, generation + 1, state, records[generation + 1]['update_sha256'], scan=scan)
             with _open_batch(plan, state, records, scan, settings, online=None,
                     max_owned_bytes=max_owned_bytes, deadline=deadline, extra_owned_bytes=extra_owned_bytes) as source:
                 if canonical(source.proof) != canonical(update['source_proof']):

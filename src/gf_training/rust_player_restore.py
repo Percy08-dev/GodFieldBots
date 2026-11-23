@@ -22,6 +22,11 @@ from gf_models.structured_sealed import (
 from gf_training.group_pack_pool import PackedArtifactPool
 from gf_training.group_pack_source import OriginalFile
 from gf_training.hpo_owned_restore import _ColdScan, _decode_banks_data
+from gf_training.hpo_update_storage import (
+    check_cold_update_inventory,
+    compressed_updates,
+    update_name,
+)
 from gf_training.lineage import require_hpo_run_owner
 from gf_training.rust_player_completion import _audit_retirement, _audit_update, _read
 from gf_training.rust_player_lineage import validate_completion, validate_record_shape, validate_run
@@ -117,6 +122,10 @@ class RustResumeAudit:
                 operating=loaded.config.hpo_spec['operating'] if hpo else None)
             parent_sha = None
             previous: Any = None
+            compressed = hpo and compressed_updates(self.state)
+            if hpo:
+                check_cold_update_inventory(ownership.directory, self.state['updates'], compressed=compressed,
+                    deadline=self.deadline)
             for generation in range(self.state['updates'] + 1):
                 row, checksum = _read(ownership.directory / 'generations' / f'{generation:06}.json',
                     self.budget, self.deadline, loans=self._loans)
@@ -126,8 +135,8 @@ class RustResumeAudit:
                 self.records[generation], self.record_hashes[generation] = row, checksum
                 if generation:
                     mark = len(self._loans)
-                    update, _ = _read(ownership.directory / 'updates' / f'{generation:06}.json',
-                        self.budget, self.deadline, row['update_sha256'], loans=self._loans)
+                    update, _ = _read(ownership.directory / 'updates' / update_name(generation, compressed=compressed),
+                        self.budget, self.deadline, row['update_sha256'], loans=self._loans, hpo_update=hpo)
                     facts = _audit_update(self, ownership, pool, loaded, self.state, previous, row, update, self.deadline, control_loans=self._loans)
                     self.last_source_manifest_sha256 = facts['manifest_sha256']
                     del update, facts

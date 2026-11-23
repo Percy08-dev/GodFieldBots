@@ -25,8 +25,10 @@ from gf_cli.hpo_campaign import (
     initialize_campaign,
 )
 from gf_cli.hpo_config import (
+    HPODiagnosticStorageConfig,
     HPOOperatingConfig,
     LoadedHPOConfig,
+    destination_path,
     joint_resource_admission,
     load_hpo_config,
     require_hpo_runtime_execution,
@@ -39,11 +41,19 @@ from gf_cli.hpo_evaluation import (
     verify_seed_evaluation,
     verify_training_receipt,
 )
-from gf_cli.hpo_storage import CampaignStore, check_storage
+from gf_cli.hpo_storage import (
+    CampaignStore,
+    check_comparison_input,
+    check_run_destination,
+    check_storage,
+    read_campaign_manifest,
+    storage_destinations,
+)
 from gf_common.card_instance import ActionConfigV3
 from gf_common.card_instance_collection import HPO_EVALUATION_STREAM_VERSION
 from gf_common.domain import ContractError, Json, canonical, digest
 from gf_common.hpo_progress import ProgressCallback
+from gf_common.hpo_storage import HPO_STORAGE_EXTENSIONS
 from gf_common.shared_inference import evaluation_runtime
 from gf_common.structured_layout import CORRECTED_CARD_INSTANCE_LAYOUT as LAYOUT
 from gf_models.structured_binding import ConfiguredNeuralModelV3
@@ -55,7 +65,20 @@ def _originals(loaded: LoadedHPOConfig) -> Path:
         base.storage.db_root if isinstance(base, GroupPackExperimentConfig) else GroupPackStorageConfig().db_root))
 
 
-def validate(loaded: LoadedHPOConfig) -> Json:
+def campaign_directory(loaded: LoadedHPOConfig, supplied: Path | None) -> Path:
+    storage = loaded.config.storage
+    declared = getattr(storage, 'campaign_dir', None)
+    selected = (Path(destination_path(str(supplied), Path.cwd(), historical=not isinstance(storage, HPODiagnosticStorageConfig)))
+                if supplied is not None
+                else Path(declared) if declared is not None else None)
+    if selected is None:
+        raise ContractError('HPO requires storage.campaign_dir or --campaign-dir')
+    if declared is not None and selected != Path(declared):
+        raise ContractError('storage.campaign_dir and --campaign-dir must specify the same path')
+    return selected
+
+
+def validate(loaded: LoadedHPOConfig, *, storage_probe: bool = True) -> Json:
     control = canonical_control(loaded.config)
     from dataclasses import replace
     if loaded.config.schema_version == 6:
@@ -65,12 +88,19 @@ def validate(loaded: LoadedHPOConfig) -> Json:
     else:
         admission = joint_resource_admission(loaded.config, layout=LAYOUT)
         control_admission = joint_resource_admission(replace(loaded.config, model=control.model, training=control.training), layout=LAYOUT)
-    storage = check_storage(loaded.config.storage, campaign_dir=Path(loaded.config.storage.parent_root) / 'campaign-validation',
-        originals_root=_originals(loaded), deadline=time.monotonic() + loaded.config.run_wall_seconds)
+    configured = loaded.config.storage
+    declared = getattr(configured, 'campaign_dir', None)
+    directory = None if declared is None else Path(declared)
+    storage = (check_storage(configured, campaign_dir=directory or Path(configured.parent_root) / 'campaign-validation',
+                  originals_root=_originals(loaded),
+                  deadline=time.monotonic() + loaded.config.run_wall_seconds, writable=False)
+               if storage_probe else storage_destinations(
+                   configured, campaign_dir=directory, originals_root=_originals(loaded)))
     return {'schema_version': 1, 'kind': 'hpo-config-validation', 'config_sha256': loaded.sha256,
         'study_config_identity': loaded.config.study_identity, 'canonical_control_identity': control.identity,
         'canonical_control_in_space': encode_settings(loaded.config, control) is not None,
         'resource_admission': admission, 'canonical_control_admission': control_admission, 'storage': storage,
+        'storage_scope': 'mounted-read-only-probe' if storage_probe else 'configured-destinations',
         'runtime_source_preflight': 'not-executed', 'qualification': 'not-performed'}
 
 
@@ -117,7 +147,8 @@ def _conditions(loaded: LoadedHPOConfig) -> Json:
     elif config.preprocessing.backend == 'rust':
         from gf_training.native_backend import binary_identity, hpo_reader_settings, load_native
         native = load_native()
-        hpo_reader_settings(config.preprocessing, native, packed=True,resident=hasattr(loaded.config,'runtime'))
+        hpo_reader_settings(config.preprocessing, native, packed=True, resident=hasattr(loaded.config, 'runtime'),
+                            require_update_storage=not HPO_STORAGE_EXTENSIONS.isdisjoint(loaded.effective['storage']))
         value['native_identity'] = binary_identity(native)
     return value
 
@@ -170,6 +201,9 @@ async def _train_seed(store: CampaignStore, loaded: LoadedHPOConfig, campaign: J
         prospective_evaluation_admission(loaded,proposal.settings)
     run_id = str(uuid.uuid4())
     directory = Path(loaded.config.storage.parent_root) / run_id
+    if isinstance(loaded.config.storage, HPODiagnosticStorageConfig):
+        check_run_destination(loaded.config.storage, campaign_dir=store.directory,
+                              originals_root=_originals(loaded), directory=directory)
     materialized = composition.materialize_hpo_run(loaded, proposal.settings, learning_seed=seed, run_id=run_id)
     folder = f'proposals/{proposal.number:06}/seeds/{seed}'
     store.put(folder + '/training.intent.json', {'schema_version': 1, 'kind': 'hpo-training-intent',
@@ -210,11 +244,12 @@ async def run_campaign(loaded: LoadedHPOConfig, directory: Path, *, mode: str,
     require_hpo_runtime_execution(loaded.config)
     if mode not in ('fresh', 'resume') or mode == 'resume' and seed_paths:
         raise ContractError('explicit fresh/resume required; stage settings are fresh-only')
+    directory = campaign_directory(loaded, directory)
     started, started_unix = time.monotonic(), time.time()
     # Do not let an older editable checkout supply a future runtime.
     owned_runtime_module('gf_cli.hpo_config', ('materialize_hpo_run',))
     owned_runtime_module('gf_training.hpo_ppo', ('train_hpo_ppo',))
-    validate(loaded)
+    validate(loaded, storage_probe=False)
     if loaded.config.schema_version==5:
         from gf_cli.hpo_evaluation import prospective_evaluation_admission
         prospective_evaluation_admission(loaded)
@@ -389,11 +424,8 @@ def _closed_trial(path: Path, stack: ExitStack, stores: dict[Path, CampaignStore
     if path.parent.name != 'proposals' or not path.name.isdecimal():
         raise ContractError('comparison input must be an explicit closed proposal directory')
     directory = path.parent.parent
-    if directory not in stores:
-        stores[directory] = stack.enter_context(CampaignStore(directory, mode='resume',
-            max_owned_bytes=HPOOperatingConfig().parent_budget_bytes))
-    store = stores[directory]
-    campaign, _ = store.get('campaign.json')
+    limit = HPOOperatingConfig().parent_budget_bytes
+    campaign = read_campaign_manifest(directory, max_owned_bytes=limit)
     _checked(campaign, 'hpo-campaign', _CAMPAIGN_KEYS)
     inputs = [row for row in campaign['config_inputs'] if row.get('kind') == 'ppo-hpo']
     if not inputs:
@@ -402,7 +434,11 @@ def _closed_trial(path: Path, stack: ExitStack, stores: dict[Path, CampaignStore
     config_path = Path(source['path'])
     if hashlib.sha256(config_path.read_bytes()).hexdigest() != source['sha256']:
         raise ContractError('original comparison campaign configuration changed')
-    loaded = load_hpo_config(config_path)
+    loaded = load_hpo_config(config_path, expected_sha256=campaign['loaded_config_sha256'])
+    check_comparison_input(directory, Path(loaded.config.storage.optuna_path))
+    if directory not in stores:
+        stores[directory] = stack.enter_context(CampaignStore(directory, mode='resume', max_owned_bytes=limit))
+    store = stores[directory]
     study = CampaignStudy(store, loaded, campaign)
     number = int(path.name)
     intent, _ = study._intent(number)
@@ -427,7 +463,7 @@ async def compare_trials(common: LoadedHPOConfig, left_path: Path, right_path: P
     require_hpo_runtime_execution(common.config)
     from gf_cli.hpo_evaluation import evaluate_comparison
     from gf_evaluation.hpo_compare import comparison_table
-    validate(common)
+    validate(common, storage_probe=False)
     check_storage(common.config.storage, campaign_dir=output, originals_root=_originals(common),
         deadline=time.monotonic() + common.config.run_wall_seconds)
     conditions = _conditions(common)
@@ -436,11 +472,15 @@ async def compare_trials(common: LoadedHPOConfig, left_path: Path, right_path: P
         stores: dict[Path, CampaignStore] = {}
         left_store, left, left_campaign, left_proposal = _closed_trial(left_path, stack, stores)
         right_store, right, right_campaign, right_proposal = _closed_trial(right_path, stack, stores)
+        storage = common.config.storage
+        common_storage = {key: value for key, value in asdict(storage).items() if key not in HPO_STORAGE_EXTENSIONS}
+        left_storage = {key: value for key, value in asdict(left.config.storage).items() if key not in HPO_STORAGE_EXTENSIONS}
         if (common.config.decision_budget != left.config.decision_budget or common.config.decision_budget != right.config.decision_budget
                 or common.config.evaluation_game_seeds != left.config.evaluation_game_seeds
                 or common.config.evaluation_game_seeds != right.config.evaluation_game_seeds
                 or canonical(asdict(common.config.operating)) != canonical(asdict(left.config.operating))
-                or canonical(asdict(common.config.storage)) != canonical(asdict(left.config.storage))
+                or canonical(common_storage) != canonical(left_storage)
+                or _originals(common) != _originals(left)
                 or canonical(asdict(common.config.inference)) != canonical(asdict(left.config.inference))
                 or common.config.run_wall_seconds != left.config.run_wall_seconds):
             raise ContractError('initial comparison requires the left operating/storage/inference profile and common exact D/panel')
@@ -467,16 +507,21 @@ async def compare_trials(common: LoadedHPOConfig, left_path: Path, right_path: P
                     for left_seed in left.config.learning_seeds:
                         left_training = verify_training_receipt(left_store, left, left_campaign, left_proposal, left_seed,
                             deadline=time.monotonic() + common.config.run_wall_seconds)
+                        check_run_destination(left.config.storage, campaign_dir=left_store.directory,
+                                              originals_root=_originals(left), directory=Path(left_training['run_path']))
                         for right_seed in right.config.learning_seeds:
                             right_training = verify_training_receipt(right_store, right, right_campaign, right_proposal, right_seed,
                                 deadline=time.monotonic() + common.config.run_wall_seconds)
+                            check_run_destination(right.config.storage, campaign_dir=right_store.directory,
+                                                  originals_root=_originals(right), directory=Path(right_training['run_path']))
                             owner.emit({'phase':'evaluate','left_seed':left_seed,'right_seed':right_seed,
                                 'left_model':left_proposal.settings.model.model_id,'right_model':right_proposal.settings.model.model_id})
                             _storage_boundary(store, common, operation_id=str(uuid.uuid4()))
                             panel = await evaluate_comparison(store, left, right, left_proposal, right_proposal,
                                 left_training, right_training, comparison_id=comparison_id, conditions_sha256=condition_sha,
                                 output=output / 'evaluations' / str(uuid.uuid4()),
-                                evaluation_runtime=evaluation_runtime(common.config),progress=owner.emit)
+                                evaluation_runtime=evaluation_runtime(common.config), progress=owner.emit,
+                                diagnostics=storage.hpo_diagnostics if isinstance(storage, HPODiagnosticStorageConfig) else None)
                             panels.append(panel)
                             if hasattr(common.config,'runtime'):
                                 matchup_receipts[f'{left_seed}-{right_seed}'] = store.get(f'matchups/{left_seed}-{right_seed}/receipt.json')[1]
@@ -501,7 +546,7 @@ def main(argv: list[str] | None = None) -> int:
     run = commands.add_parser('run')
     run.add_argument('--config', type=Path, required=True)
     run.add_argument('--mode', choices=('fresh', 'resume'), required=True)
-    run.add_argument('--campaign-dir', type=Path, required=True)
+    run.add_argument('--campaign-dir', type=Path)
     run.add_argument('--seed-settings', type=Path, nargs='+', default=[])
     inspection = commands.add_parser('inspect')
     inspection.add_argument('--campaign-dir', type=Path, required=True)
@@ -555,19 +600,27 @@ def main(argv: list[str] | None = None) -> int:
                 result = asdict(confirm_environment_restart(expected_ticket=args.ticket, operator=args.operator,
                     confirmation=RESTART_CONFIRMATION))
         else:
-            loaded = load_hpo_config(args.config)
+            loaded = (load_hpo_config(args.config, _new_storage_defaults=False)
+                      if args.command == 'run' and args.mode == 'resume' else load_hpo_config(args.config))
             if args.command == 'validate':
-                result = validate(loaded)
+                result = validate(loaded, storage_probe=False)
             elif args.command == 'run':
+                directory = campaign_directory(loaded, args.campaign_dir)
+                if args.mode == 'resume':
+                    recorded = read_campaign_manifest(directory, max_owned_bytes=loaded.config.operating.parent_budget_bytes)
+                    loaded = load_hpo_config(args.config, expected_sha256=recorded['loaded_config_sha256'])
+                    directory = campaign_directory(loaded, args.campaign_dir)
                 if loaded.config.schema_version == 6:
                     from gf_cli.rust_player_campaign import exec_campaign
-                    exec_campaign(loaded, args.campaign_dir.resolve(), mode=args.mode,
+                    exec_campaign(loaded, directory, mode=args.mode,
                         seed_paths=tuple(path.resolve() for path in args.seed_settings), progress=args.progress)
                     raise ContractError('fixed campaign supervisor exec unexpectedly returned')
-                result = asyncio.run(run_campaign(loaded, args.campaign_dir.resolve(), mode=args.mode,
+                result = asyncio.run(run_campaign(loaded, directory, mode=args.mode,
                     seed_paths=tuple(path.resolve() for path in args.seed_settings),progress=args.progress))
             else:
-                result = asyncio.run(compare_trials(loaded, args.left.resolve(), args.right.resolve(), args.output.resolve(),progress=args.progress))
+                left, right, output = (Path(destination_path(str(path), Path.cwd()))
+                                       for path in (args.left, args.right, args.output))
+                result = asyncio.run(compare_trials(loaded, left, right, output, progress=args.progress))
         print(canonical(result))
         return 2 if result.get('status') == 'blocked' else 0
     except (OSError, ValueError, RuntimeError, TimeoutError) as error:

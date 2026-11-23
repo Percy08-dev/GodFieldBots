@@ -6,6 +6,7 @@ filesystem-capacity validation or optional learning-library imports.
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 import tomllib
 import uuid
@@ -21,6 +22,8 @@ from gf_cli.config import (
     RustPlayerPublicHpoRunConfigV2,
     RustPPODataHpoRun,
     RustPPODataPublicHpoRun,
+    StagedGroupPackStorageConfig,
+    group_pack_storage,
     load_config,
 )
 from gf_common.card_instance import (
@@ -32,6 +35,14 @@ from gf_common.card_instance import (
 )
 from gf_common.domain import ContractError, Json, canonical, clone, closed, digest, integer
 from gf_common.hpo_resident import resident_runtime
+from gf_common.hpo_storage import (
+    GF_DATA_ROOT,
+    HPO_STORAGE_EXTENSIONS,
+    WINDOWS_D_ROOT,
+    HPODiagnosticsConfig,
+    check_storage_extensions,
+    hpo_diagnostics,
+)
 from gf_common.rust_player import player_runtime
 from gf_common.shared_inference import shared_runtime
 from gf_common.structured_layout import CORRECTED_CARD_INSTANCE_LAYOUT, StructuredLayout
@@ -95,6 +106,16 @@ class HPOStorageConfig:
     admission_reservation_bytes: int = GIB
     windows_c_min_free_bytes: int = GIB
     ext4_control_required: bool = True
+
+
+@dataclass(frozen=True, kw_only=True)
+class HPODiagnosticStorageConfig(HPOStorageConfig):
+    hpo_diagnostics: HPODiagnosticsConfig
+
+
+@dataclass(frozen=True, kw_only=True)
+class HPOCampaignDirectoryStorageConfig(HPODiagnosticStorageConfig):
+    campaign_dir: str
 
 
 @dataclass(frozen=True)
@@ -391,7 +412,8 @@ def normalized_rust_player_hpo(effective: Json, *, inputs: tuple[Json, ...]) -> 
         raise ContractError("complete materialized HPO experiment required")
     spec = rust_player_hpo_spec(effective)
     _operating(spec["operating"], rust_player=True)
-    storage = closed(spec["storage"], set(HPOStorageConfig.__dataclass_fields__))
+    storage = closed(spec["storage"], set(HPOStorageConfig.__dataclass_fields__), HPO_STORAGE_EXTENSIONS)
+    check_storage_extensions(storage)
     for name in ("parent_root", "numeric_root", "optuna_path", "windows_c_root", "originals_root"):
         if storage[name] is not None and not Path(storage[name]).is_absolute():
             raise ContractError("normalized HPO paths must remain absolute")
@@ -448,7 +470,7 @@ def normalized_rust_player_hpo(effective: Json, *, inputs: tuple[Json, ...]) -> 
         opponent=opponent,
         evaluation=EvaluationConfig(**effective["evaluation"]), training=training,
         preprocessing=preprocessing,
-        storage=GroupPackStorageConfig(**effective["storage"]), hpo_spec=clone(spec))
+        storage=group_pack_storage(effective["storage"]), hpo_spec=clone(spec))
     return LoadedConfig(config, clone(asdict(config)), digest(asdict(config)), inputs)
 
 
@@ -478,19 +500,56 @@ def _path(value: Any, origin: Path) -> str:
     return str((origin / value).resolve())
 
 
-def _storage(value: Any, origin: Path) -> HPOStorageConfig:
-    raw = _merge(asdict(HPOStorageConfig()), value)
+def destination_path(value: Any, origin: Path, *, historical: bool = False) -> str:
+    """Keep a destination's mount spelling through validation."""
+    resolved = _path(value, origin)
+    lexical = Path(os.path.abspath(origin / value))
+    if historical and not any(lexical.is_relative_to(root) for root in (GF_DATA_ROOT, WINDOWS_D_ROOT)):
+        return resolved
+    if Path(resolved) != lexical or any(path.is_symlink() for path in (lexical, *lexical.parents)):
+        raise ContractError('symlink in HPO destination ancestry')
+    return resolved
+
+
+def _storage(value: Any, origin: Path, *, defaults: bool) -> HPOStorageConfig:
+    if type(value) is not dict:
+        raise ContractError('HPO storage table required')
+    extended = defaults or bool(HPO_STORAGE_EXTENSIONS & value.keys())
+    raw = _merge(asdict(HPOStorageConfig()), {key: item for key, item in value.items()
+                                            if key not in HPO_STORAGE_EXTENSIONS})
     for name in ("parent_root", "numeric_root", "optuna_path", "windows_c_root"):
-        raw[name] = _path(raw[name], origin)
+        raw[name] = destination_path(raw[name], origin, historical=not extended)
     if raw["originals_root"] is not None:
-        raw["originals_root"] = _path(raw["originals_root"], origin)
+        raw["originals_root"] = destination_path(raw["originals_root"], origin, historical=not extended)
     for name in ("destination_capacity_bytes", "admission_reservation_bytes", "windows_c_min_free_bytes"):
         integer(raw[name], 1, 2**63 - 1)
     if raw["ext4_control_required"] is not True:
         raise ContractError("HPO parent/numeric/Optuna controls require ext4")
     if raw["admission_reservation_bytes"] > raw["destination_capacity_bytes"]:
         raise ContractError("storage admission reservation exceeds destination capacity")
-    return HPOStorageConfig(**raw)
+    if not extended:
+        return HPOStorageConfig(**raw)
+    diagnostic = _merge(asdict(HPODiagnosticsConfig(
+        http_log_ram_root='/dev/shm/godfieldbots/http-logs',
+        http_log_archive_root=str(Path(raw['parent_root']) / 'http-logs'))),
+        value.get('hpo_diagnostics', {}))
+    for key in ('http_log_ram_root', 'http_log_archive_root'):
+        diagnostic[key] = destination_path(diagnostic[key], origin)
+    raw['hpo_diagnostics'] = diagnostic
+    if 'campaign_dir' in value:
+        raw['campaign_dir'] = destination_path(value['campaign_dir'], origin)
+    check_storage_extensions(raw)
+    raw['hpo_diagnostics'] = hpo_diagnostics(raw)
+    if 'campaign_dir' in raw:
+        return HPOCampaignDirectoryStorageConfig(**raw)
+    return HPODiagnosticStorageConfig(**raw)
+
+
+def sealed_storage(value: Json) -> HPOStorageConfig:
+    storage = _storage(value, Path('/'), defaults=False)
+    if asdict(storage) != value:
+        raise ContractError('noncanonical sealed HPO storage configuration')
+    return storage
 
 
 def _seeds(value: Any, *, games: bool) -> tuple[Any, ...]:
@@ -515,7 +574,8 @@ def _seeds(value: Any, *, games: bool) -> tuple[Any, ...]:
     return tuple(result)
 
 
-def campaign_config(value: Json, *, origin: Path, _pinned_base: LoadedConfig | None = None) -> LoadedHPOConfig:
+def campaign_config(value: Json, *, origin: Path, _pinned_base: LoadedConfig | None = None,
+                    _new_storage_defaults: bool = False) -> LoadedHPOConfig:
     required = {"schema_version", "kind", "base_experiment", "model_id", "stage", "trial_count",
                 "decision_budget", "learning_seeds", "evaluation_game_seeds", "sampler_seed",
                 "startup_trials", "session_seconds", "run_wall_seconds", "space"}
@@ -565,7 +625,7 @@ def campaign_config(value: Json, *, origin: Path, _pinned_base: LoadedConfig | N
         raise ContractError("HPO neural inference requires GPU")
     if not rust_player:
         operating = _operating(value.get("operating", {}))
-    storage = _storage(value.get("storage", {}), origin)
+    storage = _storage(value.get("storage", {}), origin, defaults=_new_storage_defaults)
     base_path = _path(value["base_experiment"], origin)
     # Only after all caller experiment fields pass do we read the legacy base.
     if _pinned_base is None:
@@ -576,6 +636,8 @@ def campaign_config(value: Json, *, origin: Path, _pinned_base: LoadedConfig | N
                 or digest(_pinned_base.effective) != _pinned_base.sha256):
             raise ContractError('explicit unchanged pinned native campaign base required')
         base = _pinned_base
+    if not rust_player and isinstance(getattr(base.config, "storage", None), StagedGroupPackStorageConfig):
+        raise ContractError("collection_work_root requires a native HPO6 campaign")
     if 'ppo_update' in base.effective['training']:
         raise ContractError('HPO base must not declare ordinary training.ppo_update')
     if 'ppo_source' in base.effective['run']:
@@ -659,14 +721,20 @@ def joint_resource_admission(config: HPOCampaignConfig, *, layout: StructuredLay
     return hpo_training_admission(model,config.inference,recipe.tbptt_length,asdict(limits),layout=layout)
 
 
-def load_hpo_config(path: str | Path) -> LoadedHPOConfig:
+def load_hpo_config(path: str | Path, *, expected_sha256: str | None = None,
+                    _new_storage_defaults: bool = True) -> LoadedHPOConfig:
     source = Path(path).resolve()
     raw = source.read_bytes()
     try:
         value = tomllib.loads(raw.decode())
     except (UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
         raise ContractError("invalid HPO TOML") from exc
-    loaded = campaign_config(value, origin=source.parent)
+    loaded = campaign_config(value, origin=source.parent,
+                             _new_storage_defaults=_new_storage_defaults and expected_sha256 is None)
+    if expected_sha256 is not None and loaded.sha256 != expected_sha256:
+        loaded = campaign_config(value, origin=source.parent, _new_storage_defaults=True)
+        if loaded.sha256 != expected_sha256:
+            raise ContractError('recorded HPO configuration differs from the provided TOML')
     if not isinstance(loaded.config, RustPlayerHPOCampaignConfig):
         joint_resource_admission(loaded.config, layout=CORRECTED_CARD_INSTANCE_LAYOUT)
     receipt = {"path": str(source), "sha256": hashlib.sha256(raw).hexdigest(), "kind": "ppo-hpo"}

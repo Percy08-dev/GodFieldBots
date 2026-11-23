@@ -230,7 +230,9 @@ class CardInstanceSimulatorEnvironment(SimulatorEnvironment):
             elif server.process.returncode is None:
                 return False
         process = result.health.get("process", {})
+        diagnostic = result.health.get("http_diagnostics", {})
         return (not process.get("reap_failure")
+            and diagnostic.get("status") not in ("stop_unconfirmed", "settlement_unconfirmed")
             and not result.health.get("cleanup_failure")
             and not any(episode.health.get("worker_cleanup_failure") for episode in result.episodes))
 

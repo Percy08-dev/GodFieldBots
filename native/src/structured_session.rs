@@ -469,6 +469,9 @@ impl Sources {
             json::parse(bytes, &self.budget, &self.control)
         }
     }
+    pub(crate) fn json_limit(&self) -> usize {
+        self.max_json
+    }
     pub fn checked_json(&mut self, path: &Path, expected: &Value) -> Result<Document> {
         let value = self.json(path)?;
         let actual = self.verified_sha(path)?;

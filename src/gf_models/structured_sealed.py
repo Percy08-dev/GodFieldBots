@@ -21,6 +21,7 @@ from typing import Any, BinaryIO
 
 import numpy as np
 
+from gf_common import hpo_update_bytes
 from gf_common.action_contract import ActionContract
 from gf_common.card_instance import ActionConfigV3, CardInstanceContract
 from gf_common.card_instance_rules import CardInstanceRules
@@ -90,6 +91,13 @@ def _identity(value: os.stat_result) -> tuple[int, ...]:
     return value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns, value.st_ctime_ns
 
 
+def parse_sealed_object(raw: bytes | bytearray) -> Json:
+    value = json.loads(raw, object_pairs_hook=_pairs, parse_constant=lambda _: (_ for _ in ()).throw(ContractError('nonfinite sealed JSON')))
+    if not isinstance(value, dict):
+        raise ContractError('sealed object required')
+    return value
+
+
 class SealedScan:
     """One cumulative metadata + bounded shard/scratch admission and snapshot owner."""
     def __init__(self, *, max_owned_bytes: int, deadline: float) -> None:
@@ -120,7 +128,7 @@ class SealedScan:
             self.retained += size
 
     @contextmanager
-    def file(self, path: Path, expected: str | None = None) -> Iterator[tuple[BinaryIO, os.stat_result]]:
+    def _opened_file(self, path: Path) -> Iterator[tuple[BinaryIO, os.stat_result]]:
         self.check()
         if path.parent.is_symlink():
             raise ContractError('symlink sealed artifact directory')
@@ -129,39 +137,70 @@ class SealedScan:
             before = os.fstat(source.fileno())
             if not stat.S_ISREG(before.st_mode):
                 raise ContractError('sealed regular file required')
-            self.charge(min(before.st_size + 1, 1024**2), temporary=True)
-            value = hashlib.sha256()
-            while block := source.read(1024**2):
-                self.check()
-                value.update(block)
-            sha = value.hexdigest()
-            if expected is not None and sha != checksum(expected):
-                raise ContractError('sealed file hash mismatch')
             prior = self.files.get(path)
-            snapshot = (_identity(before), sha)
-            if prior is not None and prior != snapshot:
+            if prior is not None and _identity(before) != prior[0]:
                 raise ContractError('sealed source changed since verified snapshot')
-            if prior is None:
-                self.charge(512 + len(str(path).encode()))
-                self.files[path] = snapshot
-            source.seek(0)
             yield source, before
             after, current = os.fstat(source.fileno()), path.lstat()
             if _identity(after) != _identity(before) or not stat.S_ISREG(current.st_mode) or _identity(current) != _identity(before):
                 raise ContractError('sealed file/path changed while inspecting')
 
+    def _remember_file(self, path: Path, before: os.stat_result, sha: str, expected: str | None) -> None:
+        if expected is not None and sha != checksum(expected):
+            raise ContractError('sealed file hash mismatch')
+        prior = self.files.get(path)
+        snapshot = (_identity(before), sha)
+        if prior is not None and prior != snapshot:
+            raise ContractError('sealed source changed since verified snapshot')
+        if prior is None:
+            self.charge(512 + len(str(path).encode()))
+            self.files[path] = snapshot
+
+    @contextmanager
+    def file(self, path: Path, expected: str | None = None, *,
+             max_bytes: int | None = None) -> Iterator[tuple[BinaryIO, os.stat_result]]:
+        with self._opened_file(path) as (source, before):
+            if max_bytes is not None and before.st_size > max_bytes:
+                raise ContractError('stored sealed file size exceeds bound')
+            self.charge(min(before.st_size + 1, 1024**2), temporary=True)
+            value = hashlib.sha256()
+            left = before.st_size
+            while block := source.read(min(left + 1, 1024**2)):
+                self.check()
+                left -= len(block)
+                if left < 0:
+                    raise ContractError('sealed input grew during hashing')
+                value.update(block)
+            if left:
+                raise ContractError('sealed input truncated during hashing')
+            self._remember_file(path, before, value.hexdigest(), expected)
+            source.seek(0)
+            yield source, before
+
+    def hpo_zstd_object(self, path: Path, expected: str) -> Json:
+        """Read a checked original whose HPO spec explicitly declares zstd."""
+        expected = checksum(expected)
+        with self._opened_file(path) as (source, before):
+            if before.st_size > hpo_update_bytes.UPDATE_MAX_BYTES:
+                raise ContractError('stored HPO update size exceeds bound')
+            self.charge(before.st_size + 1, temporary=True)
+            stored = source.read(before.st_size + 1)
+            if len(stored) != before.st_size:
+                raise ContractError('stored HPO update length changed')
+            self._remember_file(path, before, hashlib.sha256(stored).hexdigest(), expected)
+        decoded = hpo_update_bytes.decode_zstd_update(stored,
+            charge=lambda amount: self.charge(amount, temporary=True), check=self.check)
+        del stored
+        self.charge(32 * len(decoded) + 65536)
+        return parse_sealed_object(decoded)
+
     def object(self, path: Path, expected: str | None = None) -> Json:
-        with self.file(path, expected) as (source, info):
-            if info.st_size > MAX_MANIFEST_BYTES:
-                raise ContractError('sealed JSON exceeds64MiB')
+        with self.file(path, expected, max_bytes=MAX_MANIFEST_BYTES) as (source, info):
             self.charge(32 * info.st_size + 65536)
             raw = source.read(info.st_size + 1)
             if len(raw) != info.st_size:
                 raise ContractError('sealed JSON length changed')
-            value = json.loads(raw, object_pairs_hook=_pairs, parse_constant=lambda _: (_ for _ in ()).throw(ContractError('nonfinite sealed JSON')))
-            if not isinstance(value, dict):
-                raise ContractError('sealed object required')
-            return value
+            return parse_sealed_object(raw)
 
     def directories(self, path: Path, expected: set[str]) -> None:
         self.check()

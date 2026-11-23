@@ -31,6 +31,7 @@ from gf_common.validation import (
     result,
     validate_events,
 )
+from gf_simulator_client.http_diagnostics import HttpFacts
 
 INFO_KEYS = {"schema_version", "server_kind", "server_instance_id", "seed_mode", "seed_fingerprint",
              "seed_use_limit", "max_invalid_attempts_per_decision", "waiting_for_players_timeout_secs",
@@ -93,7 +94,8 @@ class AttestedClient:
                  expected_effective: Json, startup_info: Json | None = None,
                  request_seconds: float = 10, retries: int = 2,
                  transport: httpx.AsyncBaseTransport | None = None, deadline: float = float("inf"),
-                 contract: CardInstanceContract | None = None) -> None:
+                 contract: CardInstanceContract | None = None,
+                 http_facts: HttpFacts | None = None) -> None:
         if not fixed_seed_experiment or not expected_fingerprint or type(retries) is not int or not 0 <= retries <= 2:
             raise AttestationError("explicit fixed-seed experiment and bounded retries required")
         if contract is not None:
@@ -103,8 +105,10 @@ class AttestedClient:
             parse_card_instance_contract(asdict(contract))
         self.contract = contract
         self._gameplay_api = "v1" if contract is None else "v2"
+        self.http_facts = http_facts
         self.http = httpx.AsyncClient(base_url=base_url, timeout=request_seconds, transport=transport,
-                                     follow_redirects=False, trust_env=False)
+                                     follow_redirects=False, trust_env=False,
+                                     event_hooks={"response": [self._observe_response]} if http_facts else None)
         self.expected_fingerprint = expected_fingerprint
         self.expected_effective = clone(expected_effective)
         self.startup_info = validate_info(startup_info) if startup_info is not None else None
@@ -120,6 +124,14 @@ class AttestedClient:
         self.performance_metrics = (PhaseMetrics(scope=self._performance.current_scope or self._performance.scope(phase="idle"),
             start_ns=time.monotonic_ns(), counters=("event_page_successes", "event_page_failures", "event_transport_attempts"),
             histograms=("event_page",)) if self._performance is not None else None)
+
+    async def _observe_response(self, response: httpx.Response) -> None:
+        assert self.http_facts is not None
+        self.http_facts.observe_response(response.status_code)
+
+    def _observe_transport_error(self) -> None:
+        if self.http_facts is not None:
+            self.http_facts.transport_errors += 1
 
     async def close(self) -> None:
         await self.http.aclose()
@@ -154,6 +166,8 @@ class AttestedClient:
             return clone(value)
         except BaseException as exc:
             self.poisoned = True
+            if isinstance(exc, (httpx.TransportError, TimeoutError)):
+                self._observe_transport_error()
             if isinstance(exc, asyncio.CancelledError):
                 raise
             if isinstance(exc, AttestationError):
@@ -179,6 +193,7 @@ class AttestedClient:
                         self.performance_metrics.increment("event_transport_attempts")
                     response = await self.http.request(method, path, json=body)
             except (httpx.TransportError, TimeoutError) as exc:
+                self._observe_transport_error()
                 self.needs_reattest = True
                 if retry and index < self.retries:
                     continue

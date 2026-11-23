@@ -18,6 +18,7 @@ from gf_common.domain import ContractError, Json, canonical, clone, closed, dige
 from gf_common.hpo import require_owned_record_version, selected_locations
 from gf_common.ram_bank import MAX_BANK_BYTES, ReadonlyRamBankSet
 from gf_models.structured_sealed import SealedScan, checksum
+from gf_training.hpo_update_storage import check_update_inventory, read_hpo_update
 from gf_training.lineage import checkpoint_path, generation_path, require_hpo_run_owner
 
 _TOKEN=object()
@@ -30,7 +31,7 @@ class _ColdScan(SealedScan):
         self.phase=phase
         self._charges: list[Any]=[]
         self._scratch=0
-        self._objects: dict[Path,Json]={}
+        self._objects: dict[tuple[Path, bool], Json] = {}
         self._directories: dict[Path,tuple[Any,...]]={}
         super().__init__(max_owned_bytes=phase.limit,deadline=deadline)
 
@@ -41,12 +42,20 @@ class _ColdScan(SealedScan):
         if temporary: self._scratch=max(self._scratch,size)
 
     def object(self, path: Path, expected: str | None=None) -> Json:
-        if path in self._objects:
+        return self._cached_object(path, expected, compressed=False)
+
+    def hpo_zstd_object(self, path: Path, expected: str) -> Json:
+        return self._cached_object(path, checksum(expected), compressed=True)
+
+    def _cached_object(self, path: Path, expected: str | None, *, compressed: bool) -> Json:
+        key = (path, compressed)
+        if key in self._objects:
             if expected is not None and self.verified_digest(path)!=expected:
                 raise ContractError('cold cached original hash mismatch')
-            return self._objects[path]
-        value=super().object(path,expected)
-        self._objects[path]=value
+            return self._objects[key]
+        value = (super().hpo_zstd_object(path, checksum(expected)) if compressed else
+            super().object(path, expected))
+        self._objects[key] = value
         return value
 
     def finalize(self) -> None:
@@ -397,8 +406,8 @@ def _read_owned_metadata(scan: Any, *, require_complete: bool=False) -> tuple[Js
         scan.directories(scan.root/'artifacts',{f'{number:06}' for number in range(count+1)})
         for namespace in ('collections','numeric'):
             scan.directories(scan.root/namespace,{f'batch-{number:06}' for number in range(count)})
-    for directory,numbers in (('generations',range(count+1)),('updates',range(1,count+1))):
-        scan.inventory(scan.root/directory,{f'{number:06}.json' for number in numbers})
+    scan.inventory(scan.root/'generations', {f'{number:06}.json' for number in range(count+1)})
+    check_update_inventory(scan.root, count, state, scan)
     latest=closed(scan.object(scan.root/'latest.json'),{'generation','sha256'})
     if latest!={'generation':count,'sha256':state['generation_sha256']}: raise ContractError('owned latest/run mismatch')
     records: list[Json]=[]
@@ -407,7 +416,7 @@ def _read_owned_metadata(scan: Any, *, require_complete: bool=False) -> tuple[Js
         record=scan.object(generation_path(scan.root,number))
         pool=_generation(record,state,number,parent,records[-1] if records else None,pool)
         if number:
-            update=scan.object(scan.root/'updates'/f'{number:06}.json',record['update_sha256'])
+            update=read_hpo_update(scan.root, number, state, record['update_sha256'], scan=scan)
             _owned_update_metadata(update,state,records[-1],record)
             for namespace in ('collections','numeric'):
                 path=scan.root/namespace/f'batch-{number-1:06}'
@@ -424,7 +433,7 @@ def _read_owned_metadata(scan: Any, *, require_complete: bool=False) -> tuple[Js
     _initial_schedule(state,records)
     for number in range(count):
         plan,_label,after=recorded_hpo_plan(scan.root,state,records,number,scan.deadline)
-        update=scan.object(scan.root/'updates'/f'{number+1:06}.json',records[number+1]['update_sha256'])
+        update=read_hpo_update(scan.root, number + 1, state, records[number+1]['update_sha256'], scan=scan)
         if (after!=records[number+1]['parent_controls']['schedule_opponent_rng']
                 or canonical(update['policy_bindings'])!=canonical({label:asdict(binding) for label,binding in plan.bindings.items()})
                 or update['learner_seats']!=plan.linkage['learner_seats']):
@@ -947,7 +956,7 @@ def _audit_owned_cohort(scan: Any, state: Json, records: list[Json], number: int
     anchor.collection(collection)
     manifest=collection.manifest
     _check_collection_parent(manifest,state,plan)
-    update=scan.object(scan.root/'updates'/f'{number+1:06}.json',records[number+1]['update_sha256'])
+    update=read_hpo_update(scan.root, number + 1, state, records[number+1]['update_sha256'], scan=scan)
     if original.files['manifest.json']['sha256']!=update['collection_manifest_sha256']:
         raise ContractError('owned archive manifest differs from saved update')
     selected=tuple(row.records for row in collection.episodes if plan.linkage['learner_seats'][row.episode_id]==row.viewer)

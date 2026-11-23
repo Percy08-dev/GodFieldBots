@@ -787,6 +787,10 @@ class RustGameOperations:
     def close_batch(self) -> None:
         if self.registry is not None and self.registry.pending is not None:
             self.registry.pending.close()
+        elif self.collector is not None and self.collector.current is not None:
+            # An accounting failure between collect and project can leave the
+            # actual collected batch unclaimed by a Source transaction.
+            self.collector.current.close()
 
     def retain(self, directory: Path, generation: int, config: Any, deadline: float) -> None:
         if directory != self.registry.directory or generation != self.registry.state['updates']:
@@ -847,8 +851,16 @@ class RustGameOperations:
         servers = []
         for item in self.collector.server_history:
             server, receipt = item['server'], item['runtime_evidence']
+            capture = getattr(server, 'http_capture', None)
             try:
                 health = await server.stop()
+                if capture is not None:
+                    diagnostic = await self.collector._matches.settle_http(server,
+                        deadline=min(deadline, self.collector.cleanup_deadline), abnormal=True)
+                    if diagnostic is not None and diagnostic['status'] in (
+                            'stop_unconfirmed', 'settlement_unconfirmed'):
+                        raise ContractError('original HTTP pair settlement remains unconfirmed at '
+                            + diagnostic['residual'])
                 if (not server.stopped or server.process is None or server.process.returncode is None
                         or health.get('log_error') is not None or health.get('reap_failure') is not None
                         or any(not task.done() or task.cancelled() or task.exception() is not None for task in server.drainers)):
@@ -860,6 +872,11 @@ class RustGameOperations:
                     'exit_code': code if code >= 0 else None, 'signal': -code if code < 0 else None,
                     'logs_closed': True})
             except BaseException as failure:  # noqa: BLE001 -- one failed server cannot skip another original.
+                if capture is not None and capture.directory is not None:
+                    note = 'original HTTP pair stage: ' + str(capture.directory)
+                    failure.add_note(note)
+                    if error is not None:
+                        error.add_note(note)
                 failed('server', failure)
         self.host_health['servers_joined'] = len(servers) == len(self.collector.server_history)
         writers = []
@@ -874,6 +891,10 @@ class RustGameOperations:
             except BaseException as failure:  # noqa: BLE001 -- keep actual writer and attempt native retirement.
                 failed('writer', failure)
         self.host_health['writers_joined'] = len(writers) == len(self.collector.writer_history)
+        try:
+            self.collector.retire_work(error or (failures[0] if failures else None))
+        except BaseException as failure:  # noqa: BLE001 - other original owners still need retirement.
+            failed('collection-tmpfs', failure)
         try:
             runtime.quiesce()
             report = await asyncio.to_thread(runtime.join)
@@ -1126,6 +1147,7 @@ def _run_local(control: Any, operation: Json, *, loaded: Any, hpo: bool,
     from types import SimpleNamespace
 
     from gf_common.domain import canonical, digest
+    from gf_common.hpo_storage import check_staged_collection_destinations
     from gf_common.rust_player import runtime_binding
     from gf_models.rust_player import sampling_runtime_identity
     from gf_training.lineage import run_lock, transfer_run_lock
@@ -1136,6 +1158,10 @@ def _run_local(control: Any, operation: Json, *, loaded: Any, hpo: bool,
             or canonical(loaded.effective) != canonical(asdict(loaded.config))):
         raise ContractError('actual known operation2/LoadedConfig required')
     config = loaded.config
+    parent = Path(operation['parent_directory'])
+    work = getattr(config.storage, 'collection_work_root', None)
+    if work is not None:
+        check_staged_collection_destinations(Path(work), parent, catalog_root=Path(config.storage.db_root))
     declaration = config.hpo_spec['runtime'] if hpo else config.run.player_runtime
     gpu = _configure_device_environment(config)
     # This is actual kernel-observed original supervisor data, not a substitute
@@ -1152,7 +1178,6 @@ def _run_local(control: Any, operation: Json, *, loaded: Any, hpo: bool,
         'max_batch_size': declaration['max_batch_size'], 'storage_bytes': config.storage.settings().budget_bytes,
         'source_workspace_bytes': config.preprocessing.memory_budget_mib * 1024**2}
     request = operation['execution_request']
-    parent = Path(operation['parent_directory'])
     inherited = 'parent' in control._borrowed
     campaign_mode = any(value is not None for value in (_campaign_parent_scope, _campaign_owner, _campaign_admitted))
     scope: Any

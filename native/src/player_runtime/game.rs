@@ -778,10 +778,18 @@ pub async fn run(
         banks: [(&actor.seats[0]).into(), (&actor.seats[1]).into()],
     };
     let deadline = actor.spec.cleanup_deadline;
+    let http_diagnostics = storage::TerminalHttpDiagnostics {
+        facts: actor.http.facts,
+        abnormal: actor.report.end_kind != "natural"
+            || actor.report.error.is_some()
+            || !actor.report.cleanup_errors.is_empty()
+            || !actor.report.inference_released,
+    };
     // Cancellation/failure still reports the explicit final diagnostics through
     // the seam if it remains open; no manufactured archive success.
     match storage
-        .publish_with_training("terminal", &episode, game, &terminal, release_key, deadline, training)
+        .publish_with_training("terminal", &episode, game, &terminal, release_key, deadline,
+            training, Some(http_diagnostics))
         .await
     {
         Ok(()) => actor.report.storage_accepted = true,

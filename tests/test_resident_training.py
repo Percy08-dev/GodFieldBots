@@ -17,7 +17,7 @@ def test_actual_source_update_save_commit_pin_sync_order_with_parked_workers(glo
     run_actual_source_case(global_root,tmp_path,monkeypatch,packed=packed,failed_post_commit_observation=failed_post_commit_observation)
 
 
-def run_actual_source_case(global_root,tmp_path,monkeypatch,*,packed,failed_post_commit_observation=False,kind='mlp',native_backend=None,games=8,precollection_probe=None):
+def run_actual_source_case(global_root,tmp_path,monkeypatch,*,packed,failed_post_commit_observation=False,kind='mlp',native_backend=None,games=8,precollection_probe=None,diagnostic_storage=None):
     from gf_models.arrays import sha256
     from gf_models.card_instance_artifacts import RetainedGameArtifacts
     from gf_models.structured_binding import configured_model_v4
@@ -41,7 +41,7 @@ def run_actual_source_case(global_root,tmp_path,monkeypatch,*,packed,failed_post
         assert state['device']=='cpu' and state['run_id']=='2de8b1c1-6db1-5cc9-a2e7-933ce3d10001'
     monkeypatch.setattr('gf_training.hpo_source.require_hpo_production',require_cpu_fixture)
     root=tmp_path/'parent'
-    state,records,learner=variable_initial_hpo_chain(root,games=games,decision_budget=games*3//2,resident=True,packed=packed,model_id=kind,native=native_backend)
+    state,records,learner=variable_initial_hpo_chain(root,games=games,decision_budget=games*3//2,resident=True,packed=packed,model_id=kind,native=native_backend,diagnostic_storage=diagnostic_storage)
     from gf_models.arrays import atomic_json
     state['run_id']=records[0]['run_id']='2de8b1c1-6db1-5cc9-a2e7-933ce3d10001'
     atomic_json(root/'generations/000000.json',records[0])

@@ -3791,6 +3791,7 @@ fn build_info() -> Vec<(&'static str, &'static str)> {
         ("card_instance_refresh", "baseline1;options1;identity1"),
         ("card_instance_refresh_opponents", "mixed16-v1;ordinary1;hpo2"),
         ("card_instance_hpo", structured_controls::hpo::CAPABILITY),
+        ("card_instance_hpo_update_storage", "hpo-update-zstd-v1"),
         ("card_instance_hpo_resident", structured_controls::resident::CAPABILITY),
         (
             "card_instance_group_pack",

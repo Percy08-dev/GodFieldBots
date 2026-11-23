@@ -15,6 +15,7 @@ from gf_common.rust_ppo_source import source_encoder
 from gf_models.rust_player import serialized_torch
 from gf_training.group_pack_source import OriginalFile
 from gf_training.hpo_owned_lineage import OwnedControlWriter
+from gf_training.hpo_update_storage import compressed_updates, update_name
 from gf_training.lineage import require_hpo_run_owner
 from gf_training.rust_player_lineage import validate_record_shape
 from gf_training.rust_player_supervision import HostAdmission
@@ -378,8 +379,11 @@ class RustRunRegistry:
                         or actual_plan != self.local.last_device_plan.record()):
                     raise ContractError('update plan differs from SAME local immutable operation')
                 validate_record_shape(update, "update", hpo=self.hpo)
-                row["update_sha256"] = self.writer.write(self.directory / "updates" / f"{generation:06}.json",
-                    update, deadline=deadline, immutable=True)
+                compressed = self.hpo and compressed_updates(self.state)
+                row["update_sha256"] = self.writer.write(
+                    self.directory / "updates" / update_name(generation, compressed=compressed),
+                    update, deadline=deadline, immutable=True,
+                    update_compression=compressed if self.hpo else None)
             validate_record_shape(row, "generation", hpo=self.hpo)
             path = self.directory / "generations" / f"{generation:06}.json"
             checksum = self.writer.write(path, row, deadline=deadline, immutable=True)

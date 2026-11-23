@@ -53,15 +53,12 @@ def install_component_execution(monkeypatch, *, cpu_processes=True):
             process.wait(timeout=5)
             lease.reaped(process)
             self._component_worker = worker
-            server = ManagedServer.__new__(ManagedServer)
+            server = ManagedServer(sys.executable, self.settings.server_config, group.seed, len(group.episodes),
+                                   self.settings.output_dir / 'component-server', shutdown_seconds=5,
+                                   cleanup_deadline=time.monotonic() + 10)
             server.process = await asyncio.create_subprocess_exec(sys.executable, '-I', '-c',
                 "print('CPU component only')", stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE)
             server.drainers = [asyncio.create_task(server.process.stdout.read())]
-            server.stopped = False
-            server.health = {'exit_code': None, 'shutdown': None, 'log_error': None}
-            server.cleanup_deadline = time.monotonic() + 10
-            server.strict_cleanup_deadline = False
-            server.shutdown_seconds = 5
             self._managed_server = server
             await server.stop()
         self.artifact_sink.write(group.episodes[0].episode_id + '/component.txt', b'CPU unqualified fixture')

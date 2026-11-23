@@ -28,6 +28,7 @@ bytemuck = "=1.25.2"
 rayon = "=1.12.0"
 tokio = { version = "=1.53.1", features = ["rt-multi-thread", "sync", "time", "net", "macros"] }
 reqwest = { version = "=0.13.5", default-features = false, features = ["json"] }
+zstd = "=0.13.3"
 mimalloc = { version = "=0.1.52", optional = true, features = ["local_dynamic_tls"] }
 
 [build-dependencies]

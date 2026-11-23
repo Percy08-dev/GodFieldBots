@@ -1,6 +1,7 @@
 //! HPO metadata only. Original owners remain in the existing Source/session.
 //! No sampler, reward, GAE, normalization or numerical optimizer lives here.
 use super::*;
+use std::io::{Cursor, Read};
 
 pub(crate) const SELECTION_VERSION: &str = "hpo-endpoint-selection-v1";
 pub(crate) const CAPABILITY: &str = "model4;collection6;proof3;numeric5;selection1;provider1";
@@ -33,6 +34,8 @@ const STORAGE: &[&str] = &[
     "windows_c_min_free_bytes",
     "ext4_control_required",
 ];
+const UPDATE_MAX_BYTES: usize = 64 << 20;
+const UPDATE_WINDOW_LOG_MAX: u32 = 23;
 
 fn absolute(value: &Value) -> Result<()> {
     let raw = value.string()?;
@@ -42,6 +45,119 @@ fn absolute(value: &Value) -> Result<()> {
         ));
     }
     Ok(())
+}
+
+fn normalized_storage_path(value: &Value) -> Result<&Path> {
+    absolute(value)?;
+    let raw = value.string()?;
+    if raw != "/" && raw[1..].split('/').any(|part| matches!(part, "" | "." | "..")) {
+        return Err(Error::contract("absolute normalized HPO storage path required"));
+    }
+    Ok(Path::new(raw))
+}
+
+fn checked_storage_extensions(storage: &Value) -> Result<()> {
+    if let Some(value) = storage.get("campaign_dir") {
+        let campaign = normalized_storage_path(value)?;
+        let parent = normalized_storage_path(storage.require("parent_root")?)?;
+        if campaign == parent || !campaign.starts_with(parent) {
+            return Err(Error::contract("HPO campaign_dir must be beneath parent_root"));
+        }
+    }
+    if let Some(diagnostics) = storage.get("hpo_diagnostics") {
+        diagnostics.closed(&["http_log_ram_root", "http_log_archive_root", "http_log_retention",
+            "http_log_compression", "update_compression"], &[])?;
+        let ram = normalized_storage_path(diagnostics.require("http_log_ram_root")?)?;
+        let archive = normalized_storage_path(diagnostics.require("http_log_archive_root")?)?;
+        if ram.starts_with(archive) || archive.starts_with(ram)
+            || !matches!(text(diagnostics, "http_log_retention")?, "errors" | "all")
+            || !matches!(text(diagnostics, "http_log_compression")?, "zstd" | "none")
+            || !matches!(text(diagnostics, "update_compression")?, "zstd" | "none")
+        {
+            return Err(Error::contract("invalid HPO diagnostic storage settings"));
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn compressed_updates(state: &Value) -> Result<bool> {
+    let storage = state.require("effective_config")?.require("hpo_spec")?.require("storage")?;
+    storage.get("hpo_diagnostics")
+        .map_or(Ok(false), |value| Ok(text(value, "update_compression")? == "zstd"))
+}
+
+fn update_name(generation: usize, compressed: bool) -> String {
+    let suffix = if compressed { ".json.zst" } else { ".json" };
+    format!("{generation:06}{suffix}")
+}
+
+pub(crate) fn read_update(s: &mut Sources, generation: usize, compressed: bool, sha: &Value) -> Result<Document> {
+    checksum(sha)?;
+    let path = s.root.join("updates").join(update_name(generation, compressed));
+    let cap = s.json_limit().min(UPDATE_MAX_BYTES);
+    let stored = s.bytes(&path, cap)?;
+    if s.verified_sha(&path)? != sha.string()? {
+        return Err(Error::contract("structured HPO update SHA256 mismatch"));
+    }
+    let document = if compressed {
+        let decoded = decode_update(&stored, cap, &s.budget, &s.control)?;
+        drop(stored);
+        s.parse_json(&decoded)?
+    } else {
+        s.parse_json(&stored)?
+    };
+    document.root.object()?;
+    Ok(document)
+}
+
+fn decode_update(stored: &[u8], cap: usize, budget: &Arc<Budget>, control: &Control) -> Result<BudgetVec<u8>> {
+    let length = zstd::zstd_safe::get_frame_content_size(stored)
+        .map_err(|_| Error::contract("invalid HPO update zstd frame header"))?;
+    if length.is_some_and(|size| size > cap as u64) {
+        return Err(Error::resource("expanded HPO update exceeds JSON bound"));
+    }
+    if !stored.starts_with(&[0x28, 0xb5, 0x2f, 0xfd]) {
+        return Err(Error::contract("HPO update requires a data frame"));
+    }
+    let window = if stored[4] & 0x20 != 0 {
+        length.ok_or_else(|| Error::contract("HPO single-segment zstd frame has no size"))?
+    } else {
+        let descriptor = stored[5];
+        let base = 1u64 << (10 + (descriptor >> 3));
+        base + (base >> 3) * u64::from(descriptor & 7)
+    };
+    // Zstandard's one-pass stream shortcut can skip the decoder window check.
+    if window > 1 << UPDATE_WINDOW_LOG_MAX {
+        return Err(Error::resource("HPO update zstd window exceeds bound"));
+    }
+    const BLOCK: usize = 128 << 10; // Zstandard maximum block size.
+    let window = window as usize;
+    let block_bytes = BLOCK.min(1024.max(window));
+    let _scratch = budget.reserve(window + 3 * block_bytes + BLOCK + 32768)?;
+    let mut decoder = zstd::stream::read::Decoder::with_buffer(Cursor::new(stored))?.single_frame();
+    decoder.window_log_max(UPDATE_WINDOW_LOG_MAX)?;
+    let mut decoded = match length {
+        Some(size) => BudgetVec::with_capacity(budget, size as usize + 1)?,
+        None => BudgetVec::new(budget),
+    };
+    let mut block = [0; 32768];
+    loop {
+        control.check()?;
+        let limit = block.len().min(cap + 1 - decoded.len());
+        let size = decoder.read(&mut block[..limit])?;
+        if size == 0 {
+            break;
+        }
+        if decoded.len() + size > cap {
+            return Err(Error::resource("expanded HPO update exceeds JSON bound"));
+        }
+        decoded.extend_from_slice(&block[..size])?;
+    }
+    if decoder.finish().position() != stored.len() as u64 || length.is_some_and(|size| size != decoded.len() as u64) {
+        return Err(Error::contract("HPO update requires exactly one complete zstd frame"));
+    }
+    control.check()?;
+    Ok(decoded)
 }
 
 pub(crate) fn spec<'a>(state: &'a Value, b: &Arc<Budget>, c: &Control) -> Result<&'a Value> {
@@ -97,7 +213,8 @@ pub(crate) fn spec<'a>(state: &'a Value, b: &Arc<Budget>, c: &Control) -> Result
     n(operating, "trial_concurrency", 1, 1)?;
     n(operating, "resume_latest", 2, 1024)?;
     let storage = value.require("storage")?;
-    storage.closed(STORAGE, &[])?;
+    storage.closed(STORAGE, &["campaign_dir", "hpo_diagnostics"])?;
+    checked_storage_extensions(storage)?;
     for key in [
         "parent_root",
         "numeric_root",
@@ -1950,6 +2067,7 @@ pub(crate) fn parent(s: &mut Sources, packed: bool) -> Result<Document> {
         ));
     }
     let count = n(r, "updates", 0, i64::MAX as i128)? as usize;
+    let compressed = compressed_updates(r)?;
     let control_bytes = count
         .checked_add(1)
         .and_then(|n| n.checked_mul(4096))
@@ -1962,7 +2080,7 @@ pub(crate) fn parent(s: &mut Sources, packed: bool) -> Result<Document> {
     )?;
     s.inventory(
         &root.join("updates"),
-        (1..=count).map(|n| format!("{n:06}.json")).collect(),
+        (1..=count).map(|n| update_name(n, compressed)).collect(),
         false,
     )?;
     s.inventory(
@@ -2106,10 +2224,7 @@ pub(crate) fn parent(s: &mut Sources, packed: bool) -> Result<Document> {
             )?;
         }
         if number != 0 {
-            let update = s.checked_json(
-                &root.join("updates").join(format!("{number:06}.json")),
-                current.require("update_sha256")?,
-            )?;
+            let update = read_update(s, number, compressed, current.require("update_sha256")?)?;
             let policy =
                 frozen_registry(&root, r, &records, number - 1, &model, &update.root, &b, &c)?;
             let (a, u, delta) = update_metadata(
@@ -2388,6 +2503,44 @@ pub(crate) fn selection(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hpo_update_reader_authenticates_physical_bytes_and_exact_frame() {
+        let root = std::env::temp_dir().join(format!("gf-update-zstd-{}", std::process::id()));
+        std::fs::create_dir(&root).unwrap();
+        std::fs::create_dir(root.join("updates")).unwrap();
+        let budget = Budget::new(32 << 20);
+        let control = Control::new(crate::budget::monotonic() + 10.).unwrap();
+        let expected = b"{\"count\":12}\n";
+        // Canonical Python compression.zstd.compress bytes, including frame size.
+        let compressed: Vec<u8> = [0x28, 0xb5, 0x2f, 0xfd, 0x20, 13, 105, 0, 0]
+            .into_iter().chain(expected.iter().copied()).collect();
+        let mut bad_window = vec![0x28, 0xb5, 0x2f, 0xfd, 0, 0x70, 105, 0, 0];
+        bad_window.extend_from_slice(expected);
+        let mut trailing = compressed.clone();
+        trailing.extend_from_slice(&compressed);
+        for (i, raw, extension, valid) in [
+            (1, expected.to_vec(), false, true),
+            (2, compressed.clone(), true, true),
+            (3, compressed[..compressed.len() - 1].to_vec(), true, false),
+            (4, trailing, true, false),
+            (5, bad_window, true, false),
+        ] {
+            let path = root.join("updates").join(update_name(i, extension));
+            std::fs::write(path, &raw).unwrap();
+            let mut sources = Sources::new(&root, budget.clone(), control.clone(), 1024).unwrap();
+            let sha = json::text(&format!("{:x}", Sha256::digest(raw)));
+            let actual = read_update(&mut sources, i, extension, &sha);
+            if valid {
+                assert_eq!(actual.unwrap().root["count"], json::integer(12));
+                assert!(read_update(&mut sources, i, extension, &json::text(&"0".repeat(64))).is_err());
+            } else {
+                assert!(actual.is_err());
+            }
+        }
+        std::fs::remove_dir_all(&root).unwrap();
+        assert_eq!(budget.used(), 0);
+    }
 
     #[test]
     #[ignore = "actual held CPU bytes, explicitly unqualified; requires GFB_HPO_NATIVE_LIVE_FIXTURE"]

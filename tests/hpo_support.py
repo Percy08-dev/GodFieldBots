@@ -225,7 +225,7 @@ def _unqualified_numeric_components_for_native(source, directory):
     return manifest, decoded
 
 
-def variable_initial_hpo_chain(directory, *, games=24, model_id=None, decision_budget=3, numeric_budget_bytes=None, packed=False, training_opponents=None, native=None, resident=False):
+def variable_initial_hpo_chain(directory, *, games=24, model_id=None, decision_budget=3, numeric_budget_bytes=None, packed=False, training_opponents=None, native=None, resident=False, diagnostic_storage=None):
     """Override only the controlled fixture constructor BEFORE its real save."""
     from unittest.mock import patch
 
@@ -243,6 +243,8 @@ def variable_initial_hpo_chain(directory, *, games=24, model_id=None, decision_b
                 **{name:getattr(model,name) for name in model.__dataclass_fields__}, inference=binding))
         recipe = replace(recipe, collection_games=games)
         spec = state['effective_config']['hpo_spec']
+        if diagnostic_storage is not None:
+            spec['storage']['hpo_diagnostics'] = diagnostic_storage
         if training_opponents is not None:
             spec.update(schema_version=2, training_opponents=copy.deepcopy(training_opponents))
         if packed:

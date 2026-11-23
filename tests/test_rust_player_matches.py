@@ -16,7 +16,7 @@ class Controls:
     value: int
 
 
-def pump_fixture(tmp_path, monkeypatch, *, failure=None, concurrency=2):
+def pump_fixture(tmp_path, monkeypatch, *, failure=None, concurrency=2, http_diagnostics=None):
     from gf_training import rust_player_matches as module
     events, servers = [], []
     execution, cleanup = time.monotonic()+30, time.monotonic()+40
@@ -34,6 +34,8 @@ def pump_fixture(tmp_path, monkeypatch, *, failure=None, concurrency=2):
         def __init__(self):
             self.bundles = [SimpleNamespace(id=i, kind=kind, episode=ep, game='game-'+ep,
                 transport_sha256=str(i), reserved_bytes=i+1, written=False) for i, (kind, ep) in enumerate(arrivals)]
+            for bundle in self.bundles:
+                bundle._http_diagnostics = lambda: (1, 0, 1, False)
             self.started = []
             self.start_batches = []
             self.condition = threading.Condition()
@@ -75,6 +77,7 @@ def pump_fixture(tmp_path, monkeypatch, *, failure=None, concurrency=2):
             self.index, self.stopped = len(servers), False
             self.process, self.expected = object(), {'seed': seed}
             self.health = {'exit_code': 0}
+            self.http_capture = kwargs.pop('http_capture', None)
             assert binary == 'binary' and config == 'config' and count == 2
             assert kwargs == {'startup_seconds': 5., 'shutdown_seconds': 7.,
                 'cleanup_deadline': cleanup, 'strict_cleanup_deadline': True}
@@ -88,6 +91,11 @@ def pump_fixture(tmp_path, monkeypatch, *, failure=None, concurrency=2):
         async def stop(self):
             self.stopped = True; events.append(('stop', self.index))
             return self.health
+        async def settle_http(self, **facts):
+            assert self.stopped and facts == {'deadline': cleanup, 'abnormal': False,
+                'responses': 2, 'error_responses': 0, 'transport_errors': 2}
+            events.append(('http-settle', self.index))
+            return {'status': 'archived'}
     class Evidence:
         def preflight(self): raise AssertionError('preflight belongs to caller before try')
         def verify_executed(self, process):
@@ -113,7 +121,8 @@ def pump_fixture(tmp_path, monkeypatch, *, failure=None, concurrency=2):
     def execute(*, batch_id='batch', output=tmp_path):
         return pump.execute(groups, contexts, writer, server=server_config, actions=actions,
             max_decisions=11, output=output, execution_deadline=execution, cleanup_deadline=cleanup,
-            game_concurrency=concurrency, run_id='run', batch_id=batch_id, evidence=Evidence())
+            game_concurrency=concurrency, run_id='run', batch_id=batch_id, evidence=Evidence(),
+            **({} if http_diagnostics is None else {'http_diagnostics': http_diagnostics}))
     return pump, runtime, writer, contexts, servers, events, execute
 
 
@@ -137,6 +146,21 @@ def test_match_pump_preserves_slots_write_ack_arrival_and_plan_report_order(tmp_
     spec = runtime.started[0]
     assert spec['numeric_costs'] is contexts['e00']['numeric_costs']
     assert spec['policies'][0] is contexts['e00']['policies'][0].native
+
+
+def test_http_pair_facts_settle_after_terminal_ack_without_changing_capture_receipts(tmp_path, monkeypatch):
+    from gf_common.hpo_storage import HPODiagnosticsConfig
+
+    config = HPODiagnosticsConfig(str(tmp_path / 'ram'), str(tmp_path / 'archive'))
+    pump, _, _, _, servers, events, execute = pump_fixture(tmp_path, monkeypatch, http_diagnostics=config)
+    result = asyncio.run(execute())
+    assert all(server.http_capture is not None for server in servers)
+    assert events.index(('ack', 3)) < events.index(('stop', 1)) < events.index(('http-settle', 1))
+    assert events.index(('http-settle', 1)) < events.index(('acquire', 2))
+    assert all(group['http_diagnostics'] == {'status': 'archived'} for group in result.completed_groups.values())
+    assert all(item['http_diagnostics'] == {'status': 'archived'} for item in pump.server_history)
+    assert all(set(row) == {'id', 'kind', 'episode', 'game', 'transport_sha256', 'bytes'}
+               for row in result.accepted)
 
 
 @pytest.mark.parametrize('concurrency', [6, 8])
@@ -184,7 +208,7 @@ def test_match_pump_retains_same_runtime_handle_map_and_original_history_across_
     assert len(history) == len(servers) == 6 and all(server.stopped for server in servers)
     assert [handles[i] for i in range(3)] == servers[3:]
     assert all(key[1] == 'next-batch' for key in result.keys)
-    assert set(vars(pump)) == {'runtime', 'servers', 'server_history'}
+    assert not pump._pending_http
 
 
 def test_match_pump_keeps_draining_originals_during_server_stop(tmp_path, monkeypatch):
@@ -319,7 +343,7 @@ def test_match_pump_failure_keeps_original_handles_and_error_for_caller_cleanup(
     assert not any(event[0] in ('ack', 'stop', 'wait', 'reports') for event in events)
     if failure in ('start', 'receipt'):
         assert pump.server_history[0]['runtime_evidence'] is None
-    assert set(vars(pump)) == {'runtime', 'servers', 'server_history'}
+    assert not pump._pending_http
 
 
 @pytest.mark.parametrize('cleanup_failure', [False, True])
@@ -378,11 +402,13 @@ def test_collector_keeps_original_preflight_try_cleanup_order_aliases_and_loans(
     collector.writer_history, collector.current = [], None
     collector.mode = None
     collector.settings, collector.cleanup_deadline = StorageSettings(), deadline+10
-    collector.declaration = {'game_concurrency': 1}
+    collector.declaration = {'game_concurrency': 1, 'max_batch_size': 1}
     collector.config = SimpleNamespace(storage=SimpleNamespace(db_root=str(tmp_path/'db')),
         server=SimpleNamespace(binary='binary', source_dir='source'), actions=SimpleNamespace(action_contract='contract'),
         run=SimpleNamespace(max_decisions=10))
     collector.registry = SimpleNamespace(require=lambda: None, budget=budget, state={'updates': 0, 'run_id': 'run'},
+        current=SimpleNamespace(files={'inference.json': 'current'}),
+        service=SimpleNamespace(bind_collection=lambda *args, **kwargs: None),
         admission=SimpleNamespace(observation={'deadlines': {'execution_bits': deadline_bits(deadline)}}))
     monkeypatch.setattr(collector, '_contexts', lambda plan: {})
     monkeypatch.setattr(collector, '_counters', dict)
